@@ -11,6 +11,8 @@ from certora_autosetup.solidity_ast import (
     ContractDefinition,
     EventDefinition,
     FunctionDefinition,
+    Identifier,
+    ImportDirective,
     Return,
     SourceUnit,
     VariableDeclaration,
@@ -118,3 +120,40 @@ def test_file_level_event_definition_is_typed() -> None:
     )
     [event] = unit.nodes
     assert isinstance(event, EventDefinition)
+
+
+def test_pre_06_symbol_alias_foreign_is_a_bare_declaration_id() -> None:
+    # solc writes an Identifier node from 0.6.1 on; 0.4 and 0.5 write the id of
+    # the declaration being imported. Whole compilation units used to fall back
+    # to an untyped AST over this one field.
+    directive = ImportDirective.model_validate(
+        {
+            "id": 4, "src": "0:30:0", "nodeType": "ImportDirective",
+            "absolutePath": "contracts/B.sol", "file": "./B.sol",
+            "scope": 20, "sourceUnit": 19, "unitAlias": "",
+            "symbolAliases": [{"foreign": 3, "local": None}],
+        }
+    )
+    assert directive.symbolAliases[0].foreign == 3
+
+
+def test_symbol_alias_foreign_is_still_typed_from_06_on() -> None:
+    directive = ImportDirective.model_validate(
+        {
+            "id": 4, "src": "0:30:0", "nodeType": "ImportDirective",
+            "absolutePath": "contracts/B.sol", "file": "./B.sol",
+            "scope": 20, "sourceUnit": 19, "unitAlias": "",
+            "symbolAliases": [
+                {
+                    "foreign": {
+                        "id": 3, "src": "9:1:0", "nodeType": "Identifier",
+                        "name": "B", "overloadedDeclarations": [],
+                        "typeDescriptions": {},
+                    },
+                    "nameLocation": "-1:-1:-1",
+                }
+            ],
+        }
+    )
+    foreign = directive.symbolAliases[0].foreign
+    assert isinstance(foreign, Identifier) and foreign.name == "B"
