@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import logging
+import os
 import pathlib
 import uuid
 from contextlib import asynccontextmanager
@@ -23,6 +24,7 @@ from composer.pipeline.ecosystem import EVM
 from composer.spec.source.pipeline import ProverBackend, GeneratedCVL
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.prover.core import make_prover_options
+from composer.certora_env import CERTORA_HOME_OVERRIDE_ENV
 from composer.spec.source.source_env import build_source_env
 from composer.spec.source.author import SourceEditing
 from composer.spec.source.live_explorer import setup_live_edits
@@ -60,6 +62,7 @@ class AutoProveArgs(ExtendedModelOptions, RAGDBOptions, Protocol):
     max_bug_rounds: int
     budget: str | None
     time_budget: float | None
+    certora_run_command: str | None
 
 
 # ---------------------------------------------------------------------------
@@ -90,8 +93,30 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
     parser.add_argument("--max-bug-rounds", type=int, default=3, help="Maximum number of bug-extraction rounds run per component during property analysis (default: 3)")
     parser.add_argument("--budget", default=None, help="Path to a run-budget file (JSON or YAML): {total: USD, caps: {phase: USD, ...}}. Omit to run unbudgeted.")
     parser.add_argument("--time-budget", default=None, type=float, help="Total wall time to run the entire execution. Omit to run without in process limit")
+    parser.add_argument(
+        "--certora-run-command",
+        default=None,
+        help="Which Certora install AutoProver resolves certoraRun / Typechecker.jar from, "
+        "overriding $CERTORA for this run. Pass 'certoraRun' (or 'pip') to use the pip-installed "
+        "certora_cli — required to dispatch cloud jobs while $CERTORA points at a local source "
+        "build (a checkout is not a pip distribution, so a cloud submission cannot infer its "
+        "version). Or pass a path to a source checkout. Omit to honor $CERTORA.",
+    )
 
     args = cast(AutoProveArgs, parser.parse_args())
+    # Translate the flag into the env override certora_env reads. The wrapper
+    # subprocesses (certoraRunWrapper / certoraTypeCheck) inherit this env, so
+    # setting it here covers every certoraRun/jar resolution for the run.
+    if args.certora_run_command is not None:
+        cmd = args.certora_run_command.strip()
+        # A bare command that names the pip CLI selects the pip package; anything
+        # else is treated as a path to a source checkout (its directory).
+        if pathlib.Path(cmd).name in ("certoraRun", "certoraRun.py", "pip"):
+            os.environ[CERTORA_HOME_OVERRIDE_ENV] = "pip"
+        else:
+            p = pathlib.Path(cmd)
+            os.environ[CERTORA_HOME_OVERRIDE_ENV] = str(p.parent if p.name == "certoraRun.py" else p)
+
     async with autoprove_executor(args, summary) as runner:
         yield runner
 
