@@ -52,6 +52,13 @@ _API_KEY_ENV = "OPENROUTER_API_KEY"
 
 _PROBE_TIMEOUT_SECONDS = 15
 
+# How long a stream may go quiet before it is treated as dead. langchain's guard
+# measures the gap between *content* chunks and defaults to 120s, which assumes the
+# provider streams its reasoning; OpenRouter does not forward reasoning deltas for
+# every route, so a thinking model goes silent for the whole reasoning phase — over
+# 200s on a kimi-k3 burst — and a working request looks stalled.
+_STREAM_QUIET_SECONDS = 900.0
+
 
 def matches(model: str) -> bool:
     """OpenRouter ids are vendor-qualified (``moonshotai/kimi-k2.5``,
@@ -472,6 +479,7 @@ class OpenRouterModelProvider:
             # Unstreamed, OpenRouter holds the whole generation and an upstream
             # pause trips its gateway idle timeout, failing the request.
             streaming=True,
+            stream_chunk_timeout=_STREAM_QUIET_SECONDS,
             # OpenRouter is stateless: store=True is a 400, not a no-op.
             store=False,
             # langchain renames this to `max_output_tokens` for the Responses API.
