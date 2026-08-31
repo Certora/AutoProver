@@ -191,7 +191,7 @@ class SanityResult(Enum):
 
 
 # Per-job prover timeout (seconds) applied to the exploratory sanity runs.
-SANITY_GLOBAL_TIMEOUT = 1200
+SANITY_GLOBAL_TIMEOUT = 300
 
 
 @dataclass
