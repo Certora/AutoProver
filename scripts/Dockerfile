@@ -50,12 +50,13 @@ RUN git clone --depth 1 https://github.com/Certora/Documentation.git docs
 RUN python -m venv /venv \
  && /venv/bin/pip install --no-cache-dir -r /build/docs/requirements.txt
 
-# cvl -> the base rag_db (scripts/populate_rag.sh); solana -> the cvlr_kb corpus, via the
-# manifest producer run in the final stage (docs/cvlr-capture-plan.md §4.7).
+# cvl -> the base rag_db (scripts/populate_rag.sh). The Solana manual is deliberately NOT built
+# here: it feeds the cvlr_kb corpus, and that manifest is produced in the certora-cvlr-kb repo
+# (docs/cvlr-capture-plan.md §8.2) rather than at image build time.
 # TODO: Include extended_rag for sanity analyzer
 RUN set -eux; \
     mkdir -p /out; \
-    for name in cvl solana; do \
+    for name in cvl; do \
         target="/build/docs/docs/$name"; \
         cp /build/docs/conf.py "$target/"; \
         ( cd "$target" && /venv/bin/sphinx-build -M singlehtml . tmp ); \
@@ -154,20 +155,14 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
       --extra cpu --extra ml --extra "$CERTORA_CLI_PACKAGE" --group ragbuild
 
 # Pre-built documentation HTML — the entrypoint's setup-db reads cvl.html to populate rag_db.
-# PROVENANCE names the docs revision, and is read into the cvlr_kb manifest's source field.
-COPY --from=docs-builder /out/cvl.html /out/solana.html /out/PROVENANCE $AUTOPROVE_HOME/prover-docs/
+# PROVENANCE names the docs revision it came from.
+COPY --from=docs-builder /out/cvl.html /out/PROVENANCE $AUTOPROVE_HOME/prover-docs/
 
-# The documentation half of the cvlr_kb corpus, baked at build time: the producer needs only bs4,
-# and doing it here rather than in setup-db means the manifest is part of the image (and its
-# provenance is fixed at build).
-#
-# Two other manifests share the `cvlr_kb` tag and both ship in the separate certora-cvlr-kb
-# package rather than being built here — the generated CVLR crate reference (its producer calls a
-# model and runs cargo, so rebuilding it needs an API key and a toolchain) and the project-derived
-# practice entries. An install with only the documentation half is a supported state.
-RUN python -m composer.scripts.cvlr_docs_manifest \
-        $AUTOPROVE_HOME/prover-docs/solana.html \
-        -o $AUTOPROVE_HOME/cvlr-docs/cvlr-docs.rag.json
+# No cvlr_kb manifest is baked into this image. All three of them — the published documentation,
+# the generated CVLR crate reference and the project-derived practice entries — are produced in the
+# private certora-cvlr-kb repo and ship in its package, so the entrypoint's setup-db finds them
+# through CVLR_KB_REPO or an installed `certora_cvlr_kb`. An image with neither has no CVLR corpus,
+# which the backend reports rather than crashes on.
 
 # The `run-confined` command-sandbox launcher is intentionally NOT baked in here
 # (not every AutoProver image needs it). Services that select the `launcher`

@@ -790,7 +790,7 @@ registration:
 |---|---|
 | Build the manuals | [gen_docs.sh](../scripts/gen_docs.sh) → `scripts/prover-docs/solana.html`, now also writing a `PROVENANCE` file naming the docs revision |
 | Parse | [composer/rag/html_manual.py](../composer/rag/html_manual.py) — sphinx HTML → a tree of typed blocks, bs4 only, no RAG dependencies |
-| Produce | [composer/scripts/cvlr_docs_manifest.py](../composer/scripts/cvlr_docs_manifest.py) → `scripts/cvlr-docs/cvlr-docs.rag.json` (147 embedded groups, 156 manual sections, 121 code blocks) |
+| Produce | `certora-cvlr-kb` `tools/docs_manifest.py` → `cvlr-docs.rag.json` (147 embedded groups, 156 manual sections, 121 code blocks). Built in AutoProver originally; moved with the other two producers (§8.2) |
 | Ingest | `composer.scripts.rag_import` → 148 chunks + 156 sections in the `cvlr_rag` schema |
 | Spot-check | 20 authoring-agent questions (§4.9): 20/20 returned a relevant section, `get_section` round-trips, keyword search resolves `cvlr_rules` at 0.998 |
 
@@ -1254,23 +1254,41 @@ written to eliminate; precedent 2 is the documented, tested path
 ([tests/test_rag_import.py](../tests/test_rag_import.py)) with both registries sitting empty
 awaiting a first entry. It also keeps every project-derived byte out of the main repo.
 
-### 8.2 Two manifests, one tag
+### 8.2 Three manifests, one tag
 
-Do **not** put the whole corpus behind the private repo. Split it by provenance:
+The corpus is split by provenance, and every part declares `knowledge_base: "cvlr_kb"`. Ingesting
+several manifests into one tag is supported and tested — `part` numbering continues across manifests
+sharing a DB (`test_part_numbering_continues_across_manifests_sharing_a_db`).
 
-| Manifest | Built in | Content | Needs project access? |
+| Manifest | Content | Public content? | Rebuilding it needs |
 |---|---|---|---|
-| `cvlr-docs.rag.json` | AutoProver | Published docs (§4.7) + generated crate reference | No |
-| `cvlr-practice.rag.json` | The private repo | Project-derived idioms (§4.6) | Yes |
+| `cvlr-docs.rag.json` | Published Solana/CVLR manual (§4.7) | Yes | A sphinx build of the public docs repo |
+| `cvlr-crates.rag.json` | Generated CVLR crate reference | Yes | An API key and a cargo toolchain |
+| `cvlr-practice.rag.json` | Project-derived idioms (§4.6) | **No** | Project checkouts |
 
-Both declare `knowledge_base: "cvlr_kb"`. Ingesting several manifests into one tag is supported
-and tested — `part` numbering continues across manifests sharing a DB
-(`test_part_numbering_continues_across_manifests_sharing_a_db`).
+**All three are produced in, and ship from, the private repo — which reverses this section's
+original instruction.** As written, it said not to put the whole corpus behind the private repo, and
+split it so a plain AutoProver checkout kept a working corpus: the docs half needed only bs4. That
+reasoning had one flaw and one thing it did not foresee.
 
-The payoff is **graceful degradation**: someone with a plain AutoProver checkout and no access to
-the private repo still gets a working CVLR corpus — API coverage without practice coverage. Given
-that §4.7 is also the fastest path to a non-empty DB, this makes the public half both the first
-thing built and the thing that never blocks anyone.
+The flaw: the fallback was not a *smaller* corpus but a differently-shaped one. Documentation covers
+CVLR's methodology well and its surface thinly — the §4.7 survey measured `cvlr-solana` at 4 of 28
+functions named — so a docs-only corpus advises an authoring agent about a language it cannot then be
+told the spelling of, which is the failure mode the crate reference was built to close.
+
+What it did not foresee: the third manifest. Once the crate reference existed, "public content" and
+"buildable anywhere" came apart — its content is derived entirely from published crates, but
+rebuilding it costs an API key. Confidentiality stopped being the axis that decided where a producer
+lives; **build cost** did. And once two of the three producers were in the private repo for that
+reason, the third's location was buying only a fallback that pointed at the wrong risk, at the price
+of a corpus whose three parts could each be a different vintage with nothing downstream able to tell.
+
+So the degradation is now all-or-nothing: no access to the private repo means no CVLR corpus, and the
+backend falls back to its static `backend_guidance`. That is still a supported state and still a
+logged skip rather than a setup failure. What the private repo owes in exchange is the distinction
+the axis change created — its `tools/README.md` names, per manifest, whether it is private because of
+what is *in* it or because of how it is *built*, so nobody later applies the sanitization machinery
+to a file derived from published crates.
 
 ### 8.3 The private repo's layout, and its internal boundary
 
@@ -1392,17 +1410,17 @@ done:**
 Both of the pieces this section used to list as *not* done are now done, and the shape they took
 is worth recording:
 
-5. **The public docs manifest producer** (§4.7.1) —
-   [cvlr_docs_manifest.py](../composer/scripts/cvlr_docs_manifest.py) over
+5. **The docs manifest producer** (§4.7.1) — `certora-cvlr-kb` `tools/docs_manifest.py` over
    [html_manual.py](../composer/rag/html_manual.py). The parser was extracted from `ragbuild.py`
    instead of written alongside it, with the CVL corpus verified unchanged; a second HTML parser
-   would have drifted within a release.
-6. **The corpus is baked into the image.** `docs-builder` now builds `solana.html` as well as
-   `cvl.html` and records the docs revision in a `PROVENANCE` file; the final stage runs the
-   producer, so the public manifest is part of the image. `setup-db` discovers the two halves
-   independently — the baked public one and, if installed, the private practice package — rather
-   than treating the second as a fallback for the first. An install with neither still degrades to
-   static guidance, which is why finding nothing is a logged skip and not a setup failure.
+   would have drifted within a release. That extraction is also what let the producer move to the
+   private repo later (§8.2) while the parser stayed here for the EVM corpus: the producer imports
+   it from an `AUTOPROVER_REPO` checkout, and reproduces the previous manifest byte-for-byte.
+6. **Nothing is baked into the image.** `docs-builder` builds only `cvl.html`, for the base
+   `rag_db`. All three `cvlr_kb` manifests ship in the `certora-cvlr-kb` package, so `setup-db`
+   finds them in one place — a checkout via `CVLR_KB_REPO`, else the installed package — instead of
+   discovering a baked half and a packaged half independently. An install with none of them degrades
+   to static guidance, which is why finding nothing is a logged skip and not a setup failure.
 
 Not verified by a real image build: the Dockerfile and entrypoint changes are checked by shell
 parse and by a simulation of the discovery block against all three cases (neither half, public

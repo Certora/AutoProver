@@ -54,40 +54,32 @@ if [[ "${1:-}" == "setup-db" ]]; then
   echo "[autoprove] populating LangGraph knowledge base ..."
   python -m composer.scripts.kb_populate
 
-  # The `cvlr_kb` corpus (CVLR reference + verification practice). Two manifests share the tag
-  # (docs/cvlr-capture-plan.md §8.2) and are discovered independently, because they come from
-  # different places and either can be absent:
+  # The `cvlr_kb` corpus (published docs + CVLR reference + verification practice). Three manifests
+  # share the tag and the importer numbers their sections apart (docs/cvlr-capture-plan.md §8.2).
+  # All three ship together in the separate certora-cvlr-kb package, so they are here only if that
+  # package is installed or CVLR_KB_REPO points at a checkout — nothing is baked into this image.
   #
-  #   public   — built from the Solana manual at image build time; present in this image.
-  #   private  — project-derived practice; ships in the separate certora-cvlr-kb package, so it is
-  #              here only if that package is installed or CVLR_KB_REPO points at a checkout.
-  #
-  # An install with neither is still supported (the backend falls back to its static guidance), so
+  # An install with none of them is supported (the backend falls back to its static guidance), so
   # finding nothing reports a skip rather than failing setup-db.
   cvlr_manifests=()
-  shopt -s nullglob
-  cvlr_manifests+=("$AUTOPROVE_HOME"/cvlr-docs/*.rag.json)
-  shopt -u nullglob
-  cvlr_public_only=("${cvlr_manifests[@]+"${cvlr_manifests[@]}"}")
-
   if [[ -n "${CVLR_KB_REPO:-}" && -d "${CVLR_KB_REPO%/}/src/certora_cvlr_kb/data" ]]; then
     shopt -s nullglob
     cvlr_manifests+=("${CVLR_KB_REPO%/}"/src/certora_cvlr_kb/data/*.rag.json)
     shopt -u nullglob
   fi
-  if [[ ${#cvlr_manifests[@]} -eq ${#cvlr_public_only[@]} ]]; then
+  # The installed package, consulted only when a checkout did not supply them, so a checkout you are
+  # actively editing always wins over an older installed copy.
+  if [[ ${#cvlr_manifests[@]} -eq 0 ]]; then
     pkg_probe='
 try:
-    from certora_cvlr_kb import practice_manifest
-    p = practice_manifest()
-    print(p if p.is_file() else "")
+    from certora_cvlr_kb import manifests
+    print("\n".join(str(p) for p in manifests()))
 except Exception:
-    print("")
+    pass
 '
-    pkg_manifest="$(python -c "$pkg_probe" 2>/dev/null || true)"
-    if [[ -n "$pkg_manifest" ]]; then
-      cvlr_manifests+=("$pkg_manifest")
-    fi
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && cvlr_manifests+=("$line")
+    done < <(python -c "$pkg_probe" 2>/dev/null || true)
   fi
   if [[ ${#cvlr_manifests[@]} -gt 0 ]]; then
     echo "[autoprove] populating cvlr_kb from ${#cvlr_manifests[@]} manifest(s) ..."

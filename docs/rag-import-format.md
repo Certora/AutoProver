@@ -334,12 +334,15 @@ What an adopting application adds, in one go: its committed `<kb>.rag.json`, bot
 DB role/schema in [`init-db.sql`](../composer/scripts/init-db.sql), and whatever container wiring
 populates it at `setup-db` time.
 
-4. The first real producer: [`cvlr_docs_manifest.py`](../composer/scripts/cvlr_docs_manifest.py),
-   which builds the public half of `cvlr_kb` from the published Solana manual over the shared
-   parser [`html_manual.py`](../composer/rag/html_manual.py) — no spaCy, no embedding model, no DB,
-   which is the producer/importer split working as intended. Covered by
-   [`tests/test_cvlr_docs_manifest.py`](../tests/test_cvlr_docs_manifest.py) and
-   [`tests/test_html_manual.py`](../tests/test_html_manual.py).
+4. The first real producers, all three of which live **outside this repo**, in the private
+   `certora-cvlr-kb` repo, and reach back into it for the pieces they must not restate. That is the
+   producer/importer split working as intended, and further than originally planned: a producer
+   needs the manifest model and — for the documentation one — the shared parser
+   [`html_manual.py`](../composer/rag/html_manual.py), and neither pulls in spaCy, an embedding
+   model or a DB. `html_manual.py` stays here because
+   [`ragbuild.py`](../composer/scripts/ragbuild.py) is its other consumer;
+   [`tests/test_html_manual.py`](../tests/test_html_manual.py) still covers it, and the tests for
+   each producer's own layout decisions moved with the producer.
 
 **Untouched:** `foundry_ragbuild.py`, its wrapper, and `refresh_rag.sh`. No runtime code changes —
 the search tools, `rag_env.py`, and the DB API are the same.

@@ -1,30 +1,27 @@
 #!/bin/bash
-# Ingest the `cvlr_kb` corpus — CVLR reference + verification practice.
+# Ingest the `cvlr_kb` corpus — published documentation + CVLR reference + verification practice.
 #
-# The corpus is fed by SEVERAL manifests sharing one knowledge-base tag
-# (docs/cvlr-capture-plan.md §8.2). This script ingests whichever of them it can find, because
-# the halves have deliberately different availability:
+# The corpus is fed by THREE manifests sharing one knowledge-base tag, and the importer numbers
+# their sections apart (docs/cvlr-capture-plan.md §8.2):
 #
-#   cvlr-docs.rag.json      the published Solana/CVLR documentation. Built HERE, offline, from a
-#                           docs checkout — so a plain AutoProver install always has this half.
+#   cvlr-docs.rag.json      the published Solana/CVLR manual — the corpus's methodology half.
 #   cvlr-crates.rag.json    the generated CVLR crate reference: every public item of the pinned
-#                           reference set, with compile-gated examples. Content is public (it is
-#                           derived from published crates), but REBUILDING it costs an API key and
-#                           a cargo toolchain, so it is generated in the `certora-cvlr-kb` repo and
-#                           ships with that package rather than being built here.
-#   cvlr-practice.rag.json  project-derived idioms, from the same private repo.
-# The last two are absent for anyone without access to that package — a SUPPORTED state, not a
-# failure: you get the documentation without the generated reference or the practice entries.
+#                           reference set, with compile-gated examples.
+#   cvlr-practice.rag.json  project-derived idioms.
 #
-# So a missing practice manifest is a warning, and a missing docs manifest is a warning, but
-# finding nothing at all is an error — that means the corpus would be empty and the caller almost
-# certainly did not mean to do that.
+# All three are PUBLIC content in two cases out of three, but all three are *produced* in the
+# private `certora-cvlr-kb` repo and ship in its package, because that is where the machinery to
+# rebuild them lives — an API key and cargo for the crate reference, a sphinx build for the docs.
+# So this script does not build anything: it finds manifests and ingests them.
+#
+# Without access to that package there is no CVLR corpus. That is a supported state — the backend
+# falls back to its static guidance — but it is not a state this script can do anything useful in,
+# so finding nothing is an error rather than a warning.
 #
 # Manifest resolution, in order:
 #   1. any paths given on the command line (before `--`), which override discovery entirely
 #   2. $CVLR_KB_REPO/src/certora_cvlr_kb/data/*.rag.json   (a checkout of the private repo)
 #   3. the installed `certora_cvlr_kb` package, if importable
-#   4. scripts/cvlr-docs/*.rag.json                        (locally built documentation manifest)
 #
 # Args after `--` are forwarded to rag_import, e.g.:
 #   ./populate_cvlr_rag.sh -- --print              # dry run, no DB writes
@@ -47,16 +44,6 @@ for arg in "$@"; do
     fi
 done
 
-# Always succeeds: a miss is the normal case (each manifest half is independently optional), and
-# under `set -e` a non-zero return from the last command in a loop body would kill the script.
-add_if_file() {
-    if [[ -f "$1" ]]; then
-        manifests+=("$1")
-        echo "  found $1" >&2
-    fi
-    return 0
-}
-
 # Unmatched globs must vanish rather than being passed through as literal patterns.
 shopt -s nullglob
 
@@ -66,43 +53,44 @@ if [[ ${#manifests[@]} -eq 0 ]]; then
     if [[ -n "${CVLR_KB_REPO:-}" ]]; then
         kb_data="${CVLR_KB_REPO%/}/src/certora_cvlr_kb/data"
         if [[ -d "$kb_data" ]]; then
-            for f in "$kb_data"/*.rag.json; do add_if_file "$f"; done
+            for f in "$kb_data"/*.rag.json; do
+                manifests+=("$f")
+                echo "  found $f" >&2
+            done
         else
             echo "  CVLR_KB_REPO is set but $kb_data does not exist" >&2
         fi
     fi
 
-    # The installed package, if present. Only consulted when a checkout did not supply it, so a
+    # The installed package, if present. Only consulted when a checkout did not supply them, so a
     # checkout you are actively editing always wins over an older installed copy.
     if [[ ${#manifests[@]} -eq 0 ]]; then
         probe='
 try:
-    from certora_cvlr_kb import practice_manifest
-    p = practice_manifest()
-    print(p if p.is_file() else "")
+    from certora_cvlr_kb import manifests
+    print("\n".join(str(p) for p in manifests()))
 except Exception:
-    print("")
+    pass
 '
-        pkg_manifest="$(cd "$parent" && uv run --no-sync python -c "$probe" 2>/dev/null || true)"
-        if [[ -n "$pkg_manifest" ]]; then
-            add_if_file "$pkg_manifest"
-        fi
+        while IFS= read -r line; do
+            [[ -n "$line" ]] || continue
+            manifests+=("$line")
+            echo "  found $line" >&2
+        done < <(cd "$parent" && uv run --no-sync python -c "$probe" 2>/dev/null || true)
     fi
-
-    for f in "$script_dir"/cvlr-docs/*.rag.json; do add_if_file "$f"; done
 fi
 
 if [[ ${#manifests[@]} -eq 0 ]]; then
     cat >&2 <<'MSG'
 Error: no cvlr_kb manifest found, so there is nothing to ingest.
 
-  - For the project-derived half: clone the private certora-cvlr-kb repo and point
-    CVLR_KB_REPO at it, or `pip install certora-cvlr-kb`.
-  - For the public half, which needs no private access:
-        ./scripts/gen_docs.sh                       # builds scripts/prover-docs/solana.html
-        uv run python -m composer.scripts.cvlr_docs_manifest scripts/prover-docs/solana.html
-    That writes scripts/cvlr-docs/cvlr-docs.rag.json, which this script then finds. The generated
-    crate reference and the practice entries both ship in the certora-cvlr-kb package.
+All three manifests ship in the certora-cvlr-kb package. To get them:
+
+  - clone the private certora-cvlr-kb repo and point CVLR_KB_REPO at it, or
+  - `pip install certora-cvlr-kb`.
+
+Rebuilding them from source is done in that repo (tools/README.md maps each manifest to its
+producer); nothing here builds a CVLR manifest any more.
 
 Pass manifest paths explicitly to bypass discovery.
 MSG
