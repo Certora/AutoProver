@@ -756,6 +756,29 @@ Worked around here rather than reproduced, and worth reporting upstream:
 | `mod.rs` never declares `utils.rs` | The file ships and is never compiled. Not emitted here |
 | `README` names `solana_inlining.txt` / `solana_summaries.txt` | The shipped files are `cvlr_*`; a reader following the README edits nothing |
 
+#### 7.4.4 The platform gate was blind to the generation that deleted its probe
+
+Found by pointing the preflight at a real Anchor 1.x program (§7.5.5), and worth its own section
+because the shape of the mistake generalizes.
+
+The gate asked whether the target resolves `solana-program` at a different major than the reference
+set names, and treated *absent* as *no opinion*. But Solana's v3 split moved `AccountInfo` into
+`solana-account-info` and stopped publishing `solana-program` — so a v3 target resolves none at all,
+and absence is the evidence of a mismatch rather than the absence of one.
+
+What made it worse than a missed diagnostic is that **every cheap check downstream still passes.**
+The scaffold contains no code bridging the project's accounts to a CVLR helper, so it compiles, and
+the preflight's fast-tier gate goes green on a workspace carrying two incompatible generations of
+`solana-account-info`. The failure lands on the first authored rule, as
+`expected AccountInfo, found AccountInfo` — an error the author cannot act on, because the fix is a
+dependency decision rather than a code one. It would have spent its whole budget discovering that.
+
+`PlatformGeneration` now carries `witnesses` separately from `crates`. The two roles disagree exactly
+where it matters: `crates` names what *this* generation declares, so it can only ever mention crates
+this generation has, while a newer generation is detected precisely by the crate this one **lacks**.
+The general lesson for any version gate: *a probe that only exists in the versions you already
+support cannot detect the versions you do not.*
+
 ### 7.5 Phase 4 — The authoring loop
 
 The `Formalizer`, mirroring [source/author.py](../composer/spec/source/author.py): author →
