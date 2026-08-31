@@ -36,7 +36,7 @@ from composer.prover.ptypes import RuleResult, RulePath
 from graphcore.graph import LLM
 
 from composer.prover.core import (
-    ProverOptions, ProverReport, declared_rules_list, run_prover, DefaultCexHandler
+    ProverOptions, ProverReport, RuleListingError, declared_rules_list, run_prover, DefaultCexHandler
 )
 from composer.prover.callbacks import ProverEventCallbacks
 from composer.prover.ptypes import StatusCodes
@@ -844,10 +844,18 @@ def get_prover_tool(
                 exclude_rule=None,
                 msg=""
             ) as (config_path, _ignored):
-                all_rules = await declared_rules_list(
-                    folder=Path(run_root),
-                    args=[config_path]
-                )
+                try:
+                    all_rules = await declared_rules_list(
+                        folder=Path(run_root),
+                        args=[config_path]
+                    )
+                except RuleListingError as e:
+                    # The spec doesn't compile/type-check, so the prover can't run. Return the compiler
+                    # output to the author as feedback (fix-and-retry) rather than crashing the run.
+                    return (
+                        "The spec failed to compile / type-check, so the prover could not run. "
+                        "Fix the error(s) below and call verify_spec again:\n\n" + e.detail
+                    )
             # Partition into verification groups from the agent's declaration, if any.
             # No declaration => one shared-spec group, which routes to the unchanged
             # single-run path below. A declaration yields multiple groups (or a group

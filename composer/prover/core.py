@@ -449,6 +449,16 @@ async def run_prover_inner(
         run_result = cast(ProverResult, json.load(output_file))
         return run_result, stdout
 
+class RuleListingError(Exception):
+    """The pre-verify rule-listing build failed — almost always a CVL syntax/type error in the spec
+    (the ``--compilation_steps_only`` build or the ``-listRules`` typecheck returned non-zero). Carries
+    the compiler/typechecker output so the caller can surface it to the author as recoverable feedback
+    (fix-and-retry) rather than crashing the whole run. See ``declared_rules_list``."""
+    def __init__(self, detail: str):
+        super().__init__(detail or "type check failed")
+        self.detail = detail
+
+
 async def declared_rules_list(
     folder: Path,
     args: list[str]
@@ -459,8 +469,11 @@ async def declared_rules_list(
     the generated build dir, and then manually invoke the typechecker with `-listRules`
     ourselves against that build dir.
 
-    Not great, obviously, but lets us work on this AP feature while waiting for support for this to 
+    Not great, obviously, but lets us work on this AP feature while waiting for support for this to
     land upstream in certora-cli and the pip distribution channels.
+
+    Raises ``RuleListingError`` (carrying the compiler output) when the spec fails to compile/typecheck,
+    so the caller can return it to the author instead of letting the run crash.
     """
     if any(m == "--msg" for m in args):
         raise ValueError("This unholy black magic only works if you don't pass msg")
@@ -472,9 +485,11 @@ async def declared_rules_list(
         stderr=asyncio.subprocess.PIPE
     )
 
-    rc = await proc.wait()
-    if rc != 0:
-        raise ValueError("Type check failed?")
+    build_out, build_err = await proc.communicate()
+    if proc.returncode != 0:
+        detail = "\n".join(s for s in (build_out.decode(errors="replace"),
+                                       build_err.decode(errors="replace")) if s.strip()).strip()
+        raise RuleListingError(detail)
     from importlib.resources import files
 
     tc_jar = files("certora_jars") / "Typechecker.jar"
@@ -508,9 +523,11 @@ async def declared_rules_list(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        tc_rc = await proc.wait()
-        if tc_rc != 0:
-            raise ValueError("Nope, no dice")
+        tc_out, tc_err = await proc.communicate()
+        if proc.returncode != 0:
+            detail = "\n".join(s for s in (tc_out.decode(errors="replace"),
+                                           tc_err.decode(errors="replace")) if s.strip()).strip()
+            raise RuleListingError(detail)
         all_rules = f.read()
     return [s for r in all_rules.split() if (s := r.strip()) and s != "envfreeFuncsStaticCheck"]
 
