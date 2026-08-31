@@ -50,6 +50,9 @@ from composer.spec.system_model import (
 from composer.spec.util import combine_digests
 from composer.spec.types import PropertyFormulation, ArtifactIdentifier, VerificationArtifact
 from composer.spec.system_analysis import run_component_analysis
+from composer.spec.prioritize import (
+    Candidate, PropertyRanking, Selection, build_candidates, rank_properties, select,
+)
 from composer.spec.prop_inference import (
     run_property_inference, AnyPropertyGenerationInput, CacheablePropertyGenerationInput,
 )
@@ -58,18 +61,20 @@ from composer.input.files import Document
 from composer.spec.source.report.build import build_report
 from composer.spec.source.report.collect import ReportComponentInput, Verdict, EvidenceFetcher, Formalized
 from composer.spec.source.report.schema import (
-    AutoProverReport, RuleName, ReportBackend, SourceEditRecord, VerificationArtifactRecord,
+    AutoProverReport, DeprioritizedProperty, RuleName, ReportBackend, SourceEditRecord,
+    VerificationArtifactRecord,
 )
 from composer.spec.source.report import build as report_build
 from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_ID
 from composer.pipeline.ecosystem import Ecosystem
 from .keys import (
     COMPONENT_KEY, FINAL_PROPERTIES_KEY, FORMALIZATION_KEY, PLUGIN_ARTIFACTS_KEY,
-    POST_PROPERTY_KEY, PRE_PROPERTY_KEY, PROPERTIES_KEY, SYSTEM_ANALYSIS_KEY,
-    PLUGIN_FORMALIZATION_KEY
+    POST_PROPERTY_KEY, PRE_PROPERTY_KEY, PRIORITIZATION_KEY, PROPERTIES_KEY,
+    SYSTEM_ANALYSIS_KEY, PLUGIN_FORMALIZATION_KEY, candidates_digest
 )
 from composer.diagnostics.budget import total_budget, named_budget_or_nop, time_budget
 
+from .run_mode import RunMode
 from .ptypes import (
     DEFAULT_MAX_CPU_TASKS,
     BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult,
@@ -548,6 +553,20 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     if not batches:
         raise ValueError("No properties extracted from any component.")
 
+    # 3b. Prioritized runs formalize one property, not every component's. Ranking happens
+    #     here because this is the first and only point where every component's candidates
+    #     exist together — inference never sees more than the unit it was given, and the
+    #     per-component plugin hook cannot compare across units either. Pruning before
+    #     ``begin`` also means a backend that authors a shared artifact from the batches
+    #     authors it from the focus.
+    deprioritized: list[DeprioritizedProperty] = []
+    if run.run_mode is RunMode.PRIORITIZED:
+        with named_budget_or_nop("property_extraction"):
+            batches, deprioritized = await _prioritize(
+                backend.analysis_spec.properties_key, backend.artifact_store,
+                batches, run, phases["extraction"], threat_model, extra_context,
+            )
+
     # 4. A backend whose units share an artifact handed back a ``StagedFormalizer`` instead of a
     #    formalizer: the artifact is authored HERE — once, from every unit's properties — and the
     #    formalizer it yields is the only one that exists (see :class:`StagedFormalizer`).
@@ -592,6 +611,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 threat_model.to_digest() if threat_model is not None else None,
                 interactive,
                 combine_digests([d.to_digest() for d in extra_context]),
+                run.run_mode.value,
             )
         ).cache_put(FinalProperties(items=batch.props, tool_plugins=contributing_plugins))
 
@@ -706,7 +726,8 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 # Findings only when the backend supplies evidence — skip the heavy model otherwise.
                 findings_llm=run.env.llm_heavy() if findings_evidence else None,
                 fetch_evidence=findings_evidence,
-
+                run_mode=run.run_mode.value,
+                deprioritized=deprioritized,
             )
         report = await run.runner(
             job=_report,
@@ -718,7 +739,94 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
             raise
         _log.warning("report phase failed (continuing)", exc_info=True)
 
-    return _tally(outcomes)
+    return _tally(outcomes, run.run_mode, len(deprioritized))
+
+
+#: The driver-owned task id for the ranking step. Backend-agnostic, like the per-unit
+#: ``extract-{i}`` / ``formalize-{i}`` ids, so it lives here rather than in a backend's registry.
+PRIORITIZE_TASK_ID = "prioritize"
+
+
+async def _prioritize[P: enum.Enum, H, U: FeatureUnit](
+    prop_key: str,
+    store: ArtifactStore,
+    batches: list[_Batch[U]],
+    run: PipelineRun[P, H],
+    phase: P,
+    threat_model: Document | None,
+    extra_context: Sequence[Document],
+) -> tuple[list[_Batch[U]], list[DeprioritizedProperty]]:
+    """Rank every extracted property and cut the run down to one component's focus.
+
+    Returns the surviving batch list — always exactly one entry, so the driver's
+    "no properties extracted" guard cannot fire on our account — alongside every candidate it
+    set aside, which the report carries so a reader can see what this run did not look at.
+
+    The winning batch keeps its own ``feat`` and ``feat_ctx``: unit identity, task ids and
+    the artifact-store stem are all unchanged, so only ``FORMALIZATION_KEY`` — which is
+    derived from the property list — forks away from a comprehensive run's cache. The
+    extraction subtree is shared, and a prioritized run replays it.
+
+    An unusable ranking raises. Quietly widening back to every component would spend the
+    budget this mode exists to save, on a run that asked to be cheap.
+    """
+    candidates: list[Candidate] = build_candidates(
+        [(b.feat.unit_index, b.feat.display_name, b.props) for b in batches]
+    )
+    tm_digest = threat_model.to_digest() if threat_model is not None else None
+    xc_digest = combine_digests([d.to_digest() for d in extra_context]) or None
+    ctx = run.ctx.child(PROPERTIES_KEY(prop_key)).child(
+        PRIORITIZATION_KEY(
+            candidates_digest([(b.feat, b.props) for b in batches]), tm_digest, xc_digest,
+        )
+    )
+
+    ranking = await ctx.cache_get(PropertyRanking)
+    if ranking is None:
+        ranking = await run.runner(
+            TaskInfo(PRIORITIZE_TASK_ID, "Property Prioritization", phase),
+            lambda: rank_properties(
+                llm=run.env.llm_heavy(),
+                contract_name=run.source.contract_name,
+                candidates=candidates,
+                design_doc=run.source.content,
+                threat_model=threat_model,
+                extra_context=extra_context,
+            ),
+        )
+        await ctx.cache_put(ranking)
+
+    store.write_ranking(ranking)
+
+    selection: Selection = select(candidates, ranking)
+    chosen = next(b for b in batches if b.feat.unit_index == selection.unit_index)
+    by_title = {p.title: p for p in chosen.props}
+    props = [by_title[t] for t in selection.titles]
+
+    pursued = {(c.label, t) for c in candidates if c.unit_index == selection.unit_index
+               for t in selection.titles}
+    detail = {(c.label, p.title): p for c in candidates for p in c.props}
+    deprioritized = [
+        DeprioritizedProperty(
+            component=rp.key[0],
+            title=rp.key[1],
+            sort=detail[rp.key].sort,
+            description=detail[rp.key].description,
+            score=rp.score,
+            rationale=rp.rationale,
+        )
+        for rp in ranking.ranked
+        if rp.key not in pursued
+    ]
+
+    _log.info(
+        "prioritized: %s / %s (+%d supporting); %d propert(ies) across %d other component(s) "
+        "deprioritized",
+        chosen.feat.display_name, props[0].title, len(props) - 1,
+        len(deprioritized), len(batches) - 1,
+    )
+    return [_Batch(chosen.feat, props, chosen.feat_ctx)], deprioritized
+
 
 async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
     prop_key: str,
@@ -816,7 +924,9 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
 
 
 def _tally[FormT: BackendResult, U: FeatureUnit](
-    outcomes: list[ComponentOutcome[FormT, U]]
+    outcomes: list[ComponentOutcome[FormT, U]],
+    run_mode: RunMode = RunMode.COMPREHENSIVE,
+    n_deprioritized: int = 0,
 ) -> CorePipelineResult[FormT]:
     failures: list[str] = []
     for o in outcomes:
@@ -836,4 +946,5 @@ def _tally[FormT: BackendResult, U: FeatureUnit](
     return CorePipelineResult(
         len(outcomes), sum(len(o.props) for o in outcomes),
         cast(list[ComponentOutcome[FormT, FeatureUnit]], outcomes), failures,
+        run_mode, n_deprioritized,
     )

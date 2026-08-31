@@ -27,6 +27,7 @@ def validate(
     gave_up: list[GaveUpComponent],
     curtailed: list[CurtailedComponent],
     dropped_orphan_rules: int,
+    deprioritized_count: int = 0,
 ) -> CoverageReport:
     """Cross-check the grouping against the property set; produce a `CoverageReport`.
 
@@ -70,8 +71,15 @@ def validate(
         )
 
     sizes = [len(g.members) for g in groups]
+    if deprioritized_count:
+        warnings.append(
+            f"{deprioritized_count} inferred propert(ies) were deprioritized before "
+            "formalization; this run pursued a focus, not the whole property set."
+        )
+
     return CoverageReport(
         total_properties=len(properties),
+        deprioritized_count=deprioritized_count,
         total_rules=len(rules),
         total_groups=len(groups),
         properties_per_group_min=min(sizes) if sizes else 0,

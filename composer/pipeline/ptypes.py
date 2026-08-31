@@ -19,6 +19,7 @@ from composer.spec.types import (
     Curtailed, PropertyFormulation, FormalResult, VerificationArtifact,
 )
 from composer.spec.source.report.collect import ReportableResult
+from .run_mode import RunMode
 
 
 class BackendResult(FormalResult, ReportableResult, Protocol):
@@ -81,6 +82,11 @@ class TaskRunnerHost[P: enum.Enum, H, S: SourceFields, C]:
 @dataclass
 class PipelineRun[P: enum.Enum, H](TaskRunnerHost[P, H, SourceCode, None]):
     env: ServiceHost
+    #: How much of the inferred property set this run pursues. It rides here rather than
+    #: through the driver's signature because it is read in two places on opposite sides of
+    #: the backend seam — the driver, which prunes the batches, and the author, whose exits
+    #: tighten — and this object already reaches both.
+    run_mode: RunMode = RunMode.COMPREHENSIVE
 
 
 class CorePhases[P: enum.Enum](TypedDict):
@@ -181,6 +187,10 @@ class CorePipelineResult[FormT: BackendResult]:
     n_properties: int
     outcomes: list[ComponentOutcome[FormT, FeatureUnit]]
     failures: list[str]
+    run_mode: RunMode = RunMode.COMPREHENSIVE
+    #: How many inferred properties the run chose not to pursue. Non-zero only under
+    #: ``PRIORITIZED``; ``n_properties`` counts only the ones it did.
+    n_deprioritized: int = 0
 
     @property
     def n_delivered(self) -> int:

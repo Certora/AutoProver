@@ -16,6 +16,8 @@ import asyncio
 
 import pytest
 
+from composer.pipeline.run_mode import RunMode
+from composer.spec.prioritize import PropertyRanking, RankedProperty
 import composer.pipeline.core as core
 from composer.pipeline.core import run_pipeline
 from composer.pipeline.ecosystem import EVM
@@ -28,6 +30,7 @@ class _Store:
     def write_properties(self, *_a, **_kw): ...
     def write_artifact(self, *_a, **_kw): return "artifact"
     def write_report(self, *_a, **_kw): ...
+    def write_ranking(self, *_a, **_kw): return "property_ranking.json"
 
 
 class _Unit:
@@ -125,6 +128,10 @@ class _Ctx:
 
     def child(self, *_a, **_kw): return self
 
+    async def cache_get(self, _ty): return None
+
+    async def cache_put(self, _v): ...
+
 
 class _FeatCtx:
     def child(self, key, tags = None):
@@ -138,11 +145,19 @@ class _FeatCtx:
 class _Source:
     contract_name = "Vault"
     relative_path = "programs/vault/src/lib.rs"
+    content = None
+
+
+class _Env:
+    """Only the model accessor the ranker's call site reaches for."""
+
+    def llm_heavy(self): return None
 
 
 class _Run:
     source = _Source()
-    env = None
+    run_mode = RunMode.COMPREHENSIVE
+    env = _Env()
     ctx = _Ctx()
 
     async def runner(self, task_info, job):
@@ -154,7 +169,9 @@ def _prop(title: str) -> PropertyFormulation:
 
 
 async def _drive[F: (_Staged, _Formalizer)](
-    monkeypatch, units: dict[str, list[str]], formalizer: F
+    monkeypatch, units: dict[str, list[str]], formalizer: F, *,
+    run_mode: RunMode = RunMode.COMPREHENSIVE,
+    ranking=None,
 ) -> F:
     async def fake_analysis(*_a, **_kw): return "analyzed"
 
@@ -169,7 +186,13 @@ async def _drive[F: (_Staged, _Formalizer)](
     monkeypatch.setattr(core, "run_component_analysis", fake_analysis)
     monkeypatch.setattr(core, "_extract_all", fake_extract_all)
     monkeypatch.setattr(core, "build_report", fake_report)
-    await run_pipeline(_Backend(_Prepared(formalizer)), _Run(), max_bug_rounds=1, ecosystem=EVM)  # type: ignore[arg-type]
+    if ranking is not None:
+        async def fake_rank(**_kw): return ranking
+        monkeypatch.setattr(core, "rank_properties", fake_rank)
+
+    run = _Run()
+    run.run_mode = run_mode  # type: ignore[misc]
+    await run_pipeline(_Backend(_Prepared(formalizer)), run, max_bug_rounds=1, ecosystem=EVM)  # type: ignore[arg-type]
     return formalizer
 
 
@@ -200,3 +223,58 @@ async def test_an_unstaged_formalizer_is_formalized_directly(monkeypatch):
     # and the driver must fan out over exactly that object rather than looking for a staging step.
     f = await _drive(monkeypatch, {"deposits": ["a"], "admin": ["b"]}, _Formalizer())
     assert sorted(c[0] for c in f.calls) == ["formalize:admin", "formalize:deposits"]
+
+
+
+# ---------------------------------------------------------------------------
+# Prioritized mode: the cut, and what it must leave alone
+# ---------------------------------------------------------------------------
+
+
+def _ranking(primary, supporting, order):
+    return PropertyRanking(
+        ranked=[
+            RankedProperty(key=k, score=100 - i, critical_match=False, rationale="r")
+            for i, k in enumerate(order)
+        ],
+        primary=primary,
+        supporting=supporting,
+        justification="j",
+    )
+
+
+async def test_prioritized_formalizes_one_batch_and_begin_still_sees_only_it(monkeypatch):
+    # The whole saving: three components' properties are extracted, one batch is formalized.
+    # ``begin`` is handed the pruned list too, so a backend that authors a shared artifact from
+    # the batches authors it from the focus rather than from everything.
+    units = {"deposits": ["a", "b"], "admin": ["c"], "farms": ["d"]}
+    order = [("deposits", "a"), ("deposits", "b"), ("admin", "c"), ("farms", "d")]
+    s = await _drive(
+        monkeypatch, units, _Staged(), run_mode=RunMode.PRIORITIZED,
+        ranking=_ranking(("deposits", "a"), [("deposits", "b")], order),
+    )
+    assert s.calls[0] == ("begin", ["a", "b"])
+    assert [c[0] for c in s.calls[1:]] == ["formalize:deposits"]
+
+
+async def test_prioritized_leaves_the_pre_formalization_overlap_alone(monkeypatch):
+    # D2: the fixed prefix is not what this mode makes cheaper, and it must keep running —
+    # ``begin`` is still called exactly once, before any formalization.
+    units = {"deposits": ["a"], "admin": ["b"]}
+    order = [("deposits", "a"), ("admin", "b")]
+    s = await _drive(
+        monkeypatch, units, _Staged(), run_mode=RunMode.PRIORITIZED,
+        ranking=_ranking(("admin", "b"), [], order),
+    )
+    names = [c[0] for c in s.calls]
+    assert names.count("begin") == 1 and names[0] == "begin"
+    assert names[1:] == ["formalize:admin"]
+
+
+async def test_comprehensive_never_calls_the_ranker(monkeypatch):
+    def boom(**_kw):
+        raise AssertionError("the ranker must not run in comprehensive mode")
+
+    monkeypatch.setattr(core, "rank_properties", boom)
+    s = await _drive(monkeypatch, {"deposits": ["a"], "admin": ["b"]}, _Staged())
+    assert sorted(c[0] for c in s.calls) == ["begin", "formalize:admin", "formalize:deposits"]

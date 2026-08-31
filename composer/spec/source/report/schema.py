@@ -15,16 +15,14 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from composer.spec.types import ComponentName, PropertyFormulation, PropertyTitle, RuleName
+from composer.spec.types import (
+    ComponentName, PropertyFormulation, PropertyKey, PropertyTitle, PropertyType, RuleName,
+)
 
 type RuleRef = tuple[str, RuleName]
 """A rule's identity: ``(spec_file, name)``. A name is only unique within a spec, so the defining
 spec file disambiguates a rule re-stated under the same name in another spec (and collapses a single
 definition — e.g. an imported structural invariant — seen through several component runs)."""
-
-type PropertyKey = tuple[ComponentName, PropertyTitle]
-"""A property's identity: ``(component, title)`` — the cross-reference key groups use for members."""
-
 
 class Outcome(str, Enum):
     """Backend-agnostic per-unit (rule / test) result. Each backend's native analysis status maps
@@ -182,11 +180,18 @@ class PropertyGroup(BaseModel):
 class CoverageReport(BaseModel):
     """Validation outcomes after grouping (see :func:`coverage.validate`)."""
     total_properties: int
+    #: Properties this run inferred and then chose not to pursue — non-zero only in a
+    #: prioritized run, where formalization is deliberately narrowed to one focus. Read it
+    #: alongside ``total_properties``, which counts only what reached the groupings.
+    deprioritized_count: int = 0
     total_rules: int
     total_groups: int
     properties_per_group_min: int
     properties_per_group_max: int
     property_coverage_complete: bool
+    """Every property that reached formalization landed in a group. It says nothing about
+    whether every property the run *inferred* was pursued — a prioritized run drops most of
+    them before this point, and reports that in ``deprioritized_count``."""
     properties_in_no_group: list[PropertyKey] = Field(default_factory=list)
     #: rules whose properties span >1 group — expected (rules repeat), reported as a stat not an error
     rules_spanning_multiple_groups: list[RuleName] = Field(default_factory=list)
@@ -304,10 +309,30 @@ class Finding(BaseModel):
     provenance: FindingProvenance | None = None
 
 
+class DeprioritizedProperty(BaseModel):
+    """A property this run inferred and deliberately did not pursue, with the ranker's reason.
+
+    Present only for a prioritized run. The point of recording them is that a prioritized
+    report otherwise looks exactly like a contract with very few properties: this is the list
+    that says what was set aside, and why."""
+    component: ComponentName
+    title: PropertyTitle
+    sort: PropertyType
+    description: str
+    score: int
+    rationale: str
+
+
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
     schema_version: Literal["3.0", "3.1"] = "3.1"
     backend: ReportBackend = "prover"
+    #: How much of the inferred property set the run pursued ("comprehensive" or
+    #: "prioritized"). Absent on reports written before the mode existed, which are all
+    #: comprehensive.
+    run_mode: str | None = None
+    #: What a prioritized run set aside. Empty for a comprehensive run.
+    deprioritized: list[DeprioritizedProperty] = Field(default_factory=list)
     contract_name: str
     run_timestamp_utc: str | None = None
     #: component name (or "Structural Invariants") -> prover run link/path

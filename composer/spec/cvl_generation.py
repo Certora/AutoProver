@@ -26,7 +26,7 @@ from composer.authoring.judge import PropertyFeedbackProtocol, RebuttalBase
 from composer.authoring.state import (
     AuthoringExtra, MappingVocab, SkippedProperty, spec_digest, validate_check_mapping,
 )
-from composer.authoring.tools import skip_tools as _skip_pair
+from composer.authoring.tools import Titles, skip_tools as _skip_pair
 from composer.spec.context import (
     WorkflowContext, CacheKey, CVLGeneration, CVLJudge,
 )
@@ -292,23 +292,37 @@ _SKIP_DESCRIPTION = """
 _SKIP_REASON = "Justification for why this property cannot be formalized"
 
 
-def skip_tools(titles: list[PropertyTitle]) -> list[BaseTool]:
-    """The skip-management pair, bound to the batch's property titles."""
+def skip_tools(
+    titles: list[PropertyTitle],
+    *,
+    protected: Titles | Sequence[PropertyTitle] = (),
+) -> list[BaseTool]:
+    """The skip-management pair, bound to the batch's property titles. ``protected`` names the
+    titles ``record_skip`` must refuse."""
     return _skip_pair(
         titles,
         skip_description=_SKIP_DESCRIPTION,
         skip_reason=_SKIP_REASON,
+        protected=protected,
     )
 
 
-def property_tools(services: FeedbackServices) -> list[BaseTool]:
+def property_tools(
+    services: FeedbackServices,
+    *,
+    protected: Titles | Sequence[PropertyTitle] = (),
+) -> list[BaseTool]:
     """The full property-management suite with the vanilla feedback tool.
     Callers with a custom feedback tool (e.g. the editor-aware source author)
     bind their own :class:`FeedbackToolBase` subclass and use
-    :func:`skip_tools` directly."""
+    :func:`skip_tools` directly.
+
+    ``protected`` is forwarded to the skip pair — a caller reaching its skip tools through
+    here must be able to protect a focus just as one calling :func:`skip_tools` directly can,
+    or the ban silently depends on which branch built the suite."""
     return [
         VanillaFeedbackTool.bind(services).as_tool("feedback_tool"),
-        *skip_tools(services.titles),
+        *skip_tools(services.titles, protected=protected),
     ]
 
 

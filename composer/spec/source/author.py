@@ -19,7 +19,7 @@ from graphcore.tools.vfs import VFSAccessor, VFSState
 
 from composer.authoring.judge import PropertyFeedbackProtocol
 from composer.authoring.state import SkippedProperty, check_completion
-from composer.authoring.tools import give_up_tool
+from composer.authoring.tools import gated_give_up_tool, give_up_tool
 from composer.spec.cvl_generation import (
     static_tools, property_tools, skip_tools, CVLGenerationExtra, FEEDBACK_VALIDATION_KEY,
     validate_property_rules, CVL_JUDGE_KEY, run_cvl_generator,
@@ -177,6 +177,38 @@ _GIVE_UP_DESCRIPTION = """
     mechanisms to complete your task.
     """
 
+#: How many prover runs a prioritized author owes before an ``exhausted`` surrender is even
+#: considered. Three is enough to have compiled a spec, seen a real counterexample, and tried
+#: something about it — the shortest honest account of "I tried".
+FOCUS_MIN_GIVE_UP_ATTEMPTS = 3
+
+_FOCUS_GIVE_UP_DESCRIPTION = """
+    Call this tool to stop work on this task.
+
+    This run exists to establish the property you were given, so stopping is gated: an
+    `exhausted` stop is rejected until you have actually run the prover several times, and you
+    must enumerate what you tried. If the toolchain itself is unusable, stop immediately with
+    sort='environment' — that is not gated.
+    """
+
+
+@dataclass
+class FocusPolicy:
+    """The tightened exits a prioritized author runs under: the properties it may not retire,
+    and the prover-run floor under an ``exhausted`` give-up.
+
+    ``lifted`` is flipped by the budget monitor's wrap-up, whose order — delete what does not
+    work, skip the rest, publish — requires exactly the skips this forbids. Holding the
+    protection past that point would deadlock the session the budget was trying to end. It is
+    process-local rather than graph state deliberately: budget accounting is per-process too, so
+    a resumed session starts with a fresh budget and a fresh protection together."""
+    protected: tuple[PropertyTitle, ...]
+    min_give_up_attempts: int = FOCUS_MIN_GIVE_UP_ATTEMPTS
+    lifted: bool = False
+
+    def protected_titles(self) -> tuple[PropertyTitle, ...]:
+        return () if self.lifted else self.protected
+
 
 class ResourceView(TypedDict):
     """A CVLResource prepared for the prompt: ``import_path`` is the CVL import
@@ -192,6 +224,10 @@ class PropertyGenParams(TypedDict):
     resources: list[ResourceView]
     properties: list[PropertyFormulation]
     contract_name: str
+    #: Whether this batch is a prioritized run's focus rather than a component's full property
+    #: list. It changes what the agent is told to do when stuck: a focused batch has no other
+    #: work to fall back on, so the prompt directs it to decompose rather than to skip.
+    focused: bool
 
 class PropertyGenerationConfig(SummaryConfig[SourceCVLGenerationState]):
     def __init__(self, source_editing: bool = False):
@@ -697,14 +733,22 @@ a partial spec is better than going over budget. Concretely:
 """
 
 
-def _author_monitor() -> Callable[[SourceCVLGenerationState], MonitorReturn]:
+def _author_monitor(focus: FocusPolicy | None = None) -> Callable[[SourceCVLGenerationState], MonitorReturn]:
     """The author's monitor: budget wrap-up takes precedence; otherwise the
     usual reminders-channel drain. On the (single) turn the budget warning
     fires any pending reminders are dropped — moot, since the warning tells
-    the agent to ignore prover/feedback outcomes anyway."""
+    the agent to ignore prover/feedback outcomes anyway.
+
+    The wrap-up also lifts a prioritized run's focus protection: the order it gives is to skip
+    what does not work, which the protection would otherwise refuse."""
+    def _wrap_up(_s: SourceCVLGenerationState, _c: object) -> dict:
+        if focus is not None:
+            focus.lifted = True
+        return {"required_validations": [], "budget_curtailed": True}
+
     b_monitor = budget_monitor(
         warning_message=lambda _s, c: _BUDGET_WRAPUP_MESSAGE.format(resource=constraint_sort_to_noun(c)),
-        state_transformer=lambda _s, _c: {"required_validations": [], "budget_curtailed": True},
+        state_transformer=_wrap_up,
         on_overbudget=raise_budget_exceeded,
     )
 
@@ -729,6 +773,7 @@ async def batch_cvl_generation(
     spec_dir: Path,
     spec_stem: str,
     editing_tools: EditingTools | None,
+    focus: FocusPolicy | None = None,
 ) -> BatchGeneratedCVLResult:
     # *spec_dir* (project-root-relative) is where the caller will persist the spec
     # authored here. The prover resolves the spec's CVL imports relative to its own
@@ -749,7 +794,8 @@ async def batch_cvl_generation(
         "context": component,
         "properties": props,
         "contract_name": source.contract_name,
-        "sort": "existing"
+        "sort": "existing",
+        "focused": focus is not None,
     })
 
     sys_prompt : list[RawPromptInput | type[CacheMarker]] = [
@@ -826,9 +872,11 @@ async def batch_cvl_generation(
         "context": component,
         "source_editing": editing is not None,
     })
+    protected = focus.protected_titles if focus is not None else ()
     if editing is None:
         feedback_suite = property_tools(
-            property_feedback_judge(judge_ctx, env, judge_prompt, props)
+            property_feedback_judge(judge_ctx, env, judge_prompt, props),
+            protected=protected,
         )
     else:
         judge_impl = source_feedback_judge(
@@ -836,7 +884,7 @@ async def batch_cvl_generation(
         )
         feedback_suite = [
             EditorAwareFeedbackTool.bind(judge_impl).as_tool("feedback_tool"),
-            *skip_tools(titles),
+            *skip_tools(titles, protected=protected),
         ]
 
     # use "cache=long" to account for very long prover runs.
@@ -864,13 +912,18 @@ async def batch_cvl_generation(
         [prover_tool.lg_tool,
          ExpectRulePassage.as_tool("expect_rule_passage"),
          ExpectRuleFailure.as_tool("expect_rule_failure"),
-         give_up_tool(name="give_up", description=_GIVE_UP_DESCRIPTION, label="CVL generation"),
+         give_up_tool(name="give_up", description=_GIVE_UP_DESCRIPTION, label="CVL generation")
+         if focus is None else
+         gated_give_up_tool(
+             name="give_up", description=_FOCUS_GIVE_UP_DESCRIPTION, label="CVL generation",
+             min_attempts=focus.min_give_up_attempts,
+         ),
          PublishResultTool.bind(titles).as_tool("result"),
          ctx.get_memory_tool()]
     ).with_state(
         SourceCVLGenerationState
     ).with_monitor(
-        _author_monitor()
+        _author_monitor(focus)
     ).with_output_key(
         "result"
     ).with_input(

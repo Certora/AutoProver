@@ -16,7 +16,9 @@ traverses below the run root, in tree order::
         │   └── {props digest}                 FORMALIZATION_KEY    → backend result (FormT)
         │       └── plugin-artifacts           PLUGIN_ARTIFACTS_KEY → RegisteredArtifacts
         ├── {unit digest}-{plugin}-pre         PRE_PROPERTY_KEY     → PrePropertyInference
-        └── {unit digest}-{plugin}-{props}     POST_PROPERTY_KEY    → PostPropertyInference
+        ├── {unit digest}-{plugin}-{props}     POST_PROPERTY_KEY    → PostPropertyInference
+        └── prioritization-{all props}[-tm-…][-xc-…]
+                                               PRIORITIZATION_KEY   → PropertyRanking
 
 The extraction-layer families (bug analysis, agent rounds) are declared
 in ``composer.spec.prop_inference`` beside their cache models and
@@ -30,6 +32,7 @@ from typing import Any
 from composer.pipeline.ptypes import FinalProperties, RegisteredArtifacts
 from composer.spec.context import CacheKey, ComponentGroup, Properties
 from composer.spec.key_family import KeyFamily, PolyKeyFamily
+from composer.spec.prioritize import PropertyRanking
 from composer.spec.prop_inference import (
     AGENT_RESULT_KEY, AGENT_ROUND_KEY, BUG_ANALYSIS_KEY,
 )
@@ -49,6 +52,7 @@ __all__ = [
     "FORMALIZATION_KEY",
     "PLUGIN_ARTIFACTS_KEY",
     "POST_PROPERTY_KEY",
+    "PRIORITIZATION_KEY",
     "PRE_PROPERTY_KEY",
     "PROPERTIES_KEY",
     "SYSTEM_ANALYSIS_KEY",
@@ -99,6 +103,7 @@ def _final_properties_key(
     threat_model_digest: str | None,
     with_refinement: bool,
     extra_context_digest: str | None = None,
+    run_mode: str = "comprehensive",
 ) -> str:
     # Parameterized exactly like BUG_ANALYSIS_KEY: the component namespace is
     # shared across runs, so the entry must be keyed by what distinguishes one
@@ -111,6 +116,12 @@ def _final_properties_key(
         base_key += "-tm-" + threat_model_digest
     if extra_context_digest is not None:
         base_key += "-xc-" + extra_context_digest
+    if run_mode != "comprehensive":
+        # A prioritized run writes a *pruned* batch under this component. Without the mode
+        # in the key it would overwrite the comprehensive record at the same fixed leaf, and
+        # an offline walker reconstructing the formalization edge would read a one-property
+        # batch as if it were everything inference found.
+        base_key += "-mode-" + run_mode
     return base_key
 
 #: The property batch as it left the property pipeline (post-inference plugin
@@ -158,3 +169,33 @@ def _post_property_key(
 #: list entering the hook (each plugin in the post chain sees — and is keyed
 #: by — its predecessor's output).
 POST_PROPERTY_KEY = KeyFamily(Properties, PostPropertyInference, _post_property_key)
+
+
+def _prioritization_key(
+    candidates_digest: str,
+    threat_model_digest: str | None = None,
+    extra_context_digest: str | None = None,
+) -> str:
+    # Parameterized like the extraction leaves: the properties namespace is shared across
+    # runs, so the entry must be keyed by everything the ranker saw, or two runs over the
+    # same project with different guidance documents would be last-write-wins.
+    base_key = "prioritization-" + candidates_digest
+    if threat_model_digest is not None:
+        base_key += "-tm-" + threat_model_digest
+    if extra_context_digest is not None:
+        base_key += "-xc-" + extra_context_digest
+    return base_key
+
+
+def candidates_digest(batches: list[tuple[FeatureUnit, list[PropertyFormulation]]]) -> str:
+    """The ranker's whole input, as one digest: every unit paired with the properties it
+    contributed, in driver order."""
+    return string_hash(
+        "|".join(f"{component_digest(feat)}:{_props_digest(props)}" for feat, props in batches)
+    )
+
+
+#: The run-wide property ranking, a sibling of the per-unit extraction subtrees: it is the
+#: one step that sees every component at once, so it hangs off ``Properties`` rather than off
+#: any single component.
+PRIORITIZATION_KEY = KeyFamily(Properties, PropertyRanking, _prioritization_key)

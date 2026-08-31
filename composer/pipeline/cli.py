@@ -32,6 +32,7 @@ from composer.spec.service_host import ModelProvider
 from composer.spec.types import SourceIdentifier
 from composer.pipeline.ecosystem import Ecosystem
 from .core import PipelineBackend, run_pipeline
+from .run_mode import RunMode
 from .plugins import applicable_plugin_manifest
 from .run_tags import AutoProveCacheTags, CACHE_ROOT_RECORD
 from composer.io.multi_job import HandlerFactory, run_task, TaskInfo
@@ -229,6 +230,7 @@ async def cli_pipeline[P: enum.Enum, H](
     task_handler: HandlerFactory[P, H],
     design_doc_phase: P,
     at_exit: AtExit | None = None,
+    run_mode: RunMode = RunMode.COMPREHENSIVE,
     **metadata
 ) -> AsyncIterator[tuple[StagedPipeline, Continuation[P, H]]]:
     project_root = pathlib.Path(args.project_root).resolve()
@@ -378,6 +380,7 @@ async def cli_pipeline[P: enum.Enum, H](
                     threat_model_digest=threat_model.to_digest() if threat_model is not None else None,
                     extra_context_digests=[d.to_digest() for d in extra_context],
                     interactive=args.interactive,
+                    run_mode=run_mode.value,
                 ).model_dump())
                 full_ctx = WorkflowContext.create(
                     services=conns.memory,
@@ -391,6 +394,7 @@ async def cli_pipeline[P: enum.Enum, H](
                     ctx=full_ctx,
                     source=full_source,
                     env=env,
+                    run_mode=run_mode,
                     _agent_semaphore=semaphore,
                     _cpu_semaphore=cpu_semaphore,
                     _handler_factory=task_handler

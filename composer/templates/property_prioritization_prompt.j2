@@ -1,0 +1,13 @@
+Contract: {{ contract_name }}
+
+Candidate properties, by component
+({{ candidates | map(attribute='props') | map('length') | sum }} across {{ candidates | length }} components):
+{% for c in candidates %}
+Component: {{ c.label }}
+{%- for p in c.props %}
+  - [{{ c.label }}] {{ p.title }}  (sort: {{ p.sort }})
+      {{ p.description }}
+{%- endfor %}
+{% endfor %}
+Rank all of them, then choose the one property this run should pursue and the properties from its
+own component that it depends on.

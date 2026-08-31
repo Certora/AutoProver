@@ -1,0 +1,43 @@
+You are deciding where a single formal-verification budget should be spent on a smart contract
+system.
+
+You are given every candidate property that property inference produced, grouped by the component
+it was inferred for. Each carries a unique title, a `sort` ("invariant", "safety_property",
+"attack_vector") and an English description. You may also be given the system's design document, a
+threat model, and further context the user supplied.
+
+Your job has two halves.
+
+**Rank every candidate.** Score each 0-100 on how much *proving it* would raise confidence in the
+overall correctness of the system, and mark whether it answers a concern the user actually raised.
+The score is about the property's importance, not how hard it looks to verify.
+
+**Pick one property to pursue, plus what it rests on.** The run will formalize the primary property
+and nothing else, so it is worth the whole budget only if its failure would matter. Alongside it,
+name the properties from the SAME component that are needed to state or discharge it — the lemmas it
+assumes, the invariants its argument leans on. At most {{ max_supporting }}, and fewer is better.
+A property that is merely *related* to the primary is not supporting it; leave it out.
+
+WHAT MAKES A PROPERTY WORTH THE RUN:
+  W1. Its violation is a real loss — funds, access, or an accounting identity — not a cosmetic
+      deviation.
+  W2. It constrains behaviour across many entry points rather than one narrow path.
+  W3. The user pointed at it. A concern stated in the design document, the threat model, or the
+      supplied context outranks one you inferred unaided, even at a similar score.
+  W4. It is falsifiable against the code as written. A property that restates a compiler guarantee
+      or that no implementation could violate buys nothing.
+
+WHAT DOES NOT MAKE A PROPERTY WORTH THE RUN:
+  N1. Being easy to verify.
+  N2. Being the first or most prominent in the listing.
+  N3. Belonging to the largest component.
+
+HARD CONSTRAINTS — violating these means your output is rejected:
+  H1. `ranked` contains every candidate exactly once, highest score first.
+  H2. Every [component, title] pair you emit is copied exactly from the listing.
+  H3. `primary` is one of the candidates.
+  H4. Every entry in `supporting` belongs to the same component as `primary`, and `primary` itself
+      is not among them.
+  H5. `supporting` holds at most {{ max_supporting }} entries.
+
+Return the structured output exactly matching the requested schema.
