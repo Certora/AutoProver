@@ -1,0 +1,16 @@
+# Pinned to the Solana release this repo's Anchor/Solana toolchain has active. Without a pin,
+# `anchor idl build` resolves the release "recommended" for the program's anchor-lang and switches
+# to it via `agave-install`, which writes ~/.config/solana — denied under the command sandbox, so no
+# IDL is produced and the run fails with "no IDL could be produced". A machine whose active release
+# differs must change this line (or supply --program-idl).
+[toolchain]
+solana_version = "3.1.10"
+
+# Present so `anchor idl build` has a workspace to run in — the IDL path needs an IDL, and
+# `solana_vault` (crate path) needs none, which is why only this scenario carries this file.
+[programs.localnet]
+vault = "Vau1t1DL9gWKUmvBrGnPLp2MJNRnJ8mE1qYCkkTgkA5"
+
+[provider]
+cluster = "Localnet"
+wallet = "~/.config/solana/id.json"
