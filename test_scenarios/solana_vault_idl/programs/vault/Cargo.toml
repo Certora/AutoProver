@@ -1,0 +1,25 @@
+[package]
+name = "vault"
+version = "0.1.0"
+description = "Lamports vault example program, IDL path (AutoProver Crucible gate)"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "vault"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build"]
+test-sbf = []
+
+[dependencies]
+# DELIBERATELY not the harness stack's Anchor (`crucible-app`'s `ANCHOR_VERSION`). `0.31` and `1.0`
+# are different Cargo compatibility units, so `crate_dep_usable` is false and the run takes the IDL
+# path. Bumping this to the harness's major silently converts this scenario into a duplicate of
+# `solana_vault` and stops covering the path every pre-1.0 target uses.
+anchor-lang = "0.31.1"
