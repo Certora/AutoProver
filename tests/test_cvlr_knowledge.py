@@ -19,7 +19,8 @@ from composer.pipeline.ecosystem import SOLANA, SOLANA_PROPERTY_SYSTEM_TEMPLATE,
 from composer.spec.code_explorer import code_explorer_sys_prompt
 from composer.spec.cvlr.crates import CvlrSources
 from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE
-from composer.spec.cvlr.source_tools import MAX_MATCHES, MountedCrates, mount
+from composer.spec.cvlr.crate_mount import MAX_MATCHES, MountedCrates, mount
+from composer.spec.cvlr.source_tools import cvlr_source_tools
 from composer.spec.prop_inference import PropertySystemPromptParams
 from composer.templates.loader import load_jinja_template
 
@@ -132,7 +133,7 @@ def test_the_statement_names_every_resolved_version(family: MountedCrates):
 def test_the_tools_are_named_for_the_tree_they_read(family: MountedCrates):
     """A second ``get_file`` would collide with the project's, and an agent would have no way to say
     which tree it meant."""
-    assert [t.name for t in family.tools()] == [
+    assert [t.name for t in cvlr_source_tools(family)] == [
         "cvlr_source_files",
         "cvlr_source_read",
         "cvlr_source_search",
@@ -168,7 +169,7 @@ async def test_a_name_the_build_does_not_have_is_reported_as_do_not_use(family: 
     """The failure this whole mount exists to prevent: an agent reaching for a helper that belongs
     to a different CVLR line. Silence would read as "search is unreliable"; the answer has to say
     what the absence means."""
-    search = {t.name: t for t in family.tools()}["cvlr_source_search"]
+    search = {t.name: t for t in cvlr_source_tools(family)}["cvlr_source_search"]
     answer = await search.ainvoke({"name": "acc_infos_with_mem_layout"})
     assert "different CVLR version" in answer and "do not use it" in answer
 

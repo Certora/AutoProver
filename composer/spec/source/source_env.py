@@ -28,7 +28,7 @@ class LibrarySource:
     The two fields travel together because binding one without the other is the failure this type
     exists to prevent: tools with no statement leaves an agent unaware that authoritative source is
     reachable, and a statement with no tools invites it to fabricate reads. Built from
-    :meth:`composer.spec.cvlr.source_tools.MountedCrates.tools` and ``.statement()``."""
+    ``composer.spec.cvlr.source_tools.cvlr_source_tools`` and the mount's ``.statement()``."""
 
     tools: tuple[BaseTool, ...]
     statement: str

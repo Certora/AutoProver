@@ -528,9 +528,9 @@ that most directly attacks the hallucination risk.
 | Corpus registration (tools module · `KNOWLEDGE_BASES` · importer target) | **Done** — [cvlr_rag.py](../composer/tools/cvlr_rag.py), [rag_env.py](../composer/tools/rag_env.py), [db.py](../composer/rag/db.py). `cvlr_kb` is the first corpus AutoProver has ever registered |
 | Published docs import | **Done** — [cvlr_docs_manifest.py](../composer/scripts/cvlr_docs_manifest.py) → `scripts/cvlr-docs/cvlr-docs.rag.json` (156 sections, 147 groups) |
 | First KB articles from real projects | **Done, shipping from the private repo** — 83 entries + 15 recipes under the second manifest sharing the `cvlr_kb` tag ([capture plan](./cvlr-capture-plan.md) §8.2) |
-| CVLR-source tool set (§5.5) | **Done** — [source_tools.py](../composer/spec/cvlr/source_tools.py), reaching the explorer through `build_source_tools(library_source=…)` |
+| CVLR-source tool set (§5.5) | **Done** — [crate_mount.py](../composer/spec/cvlr/crate_mount.py) (the tree) + [source_tools.py](../composer/spec/cvlr/source_tools.py) (the tools), reaching the explorer through `build_source_tools(library_source=…)` |
 | `backend_guidance` | **Done** — [guidance.py](../composer/spec/cvlr/guidance.py) |
-| Generated crate reference | **Built and run** — [cvlr_crate_reference.py](../composer/scripts/cvlr_crate_reference.py) → `scripts/cvlr-crates/cvlr-crates.rag.json` (175 sections, 117 groups, 310/310 items covered) |
+| Generated crate reference | **Built and run**, in the private repo — `certora-cvlr-kb` `tools/crate_reference.py` → `cvlr-crates.rag.json` (175 sections, 117 groups, 310/310 items covered) |
 
 Two things about the source mount are worth stating, because they are what make it more than a
 convenience.
@@ -567,6 +567,25 @@ that are reached for constantly:
 | A macro that generates macros | `impl_bin_assert!(cvlr_assert_le, <=, $)` | The exported name exists only as an *argument*. Four of these emit 24 names in `cvlr-asserts` alone |
 | A renamed re-export | `pub use super::log::cvlr_log as clog` | The name every project writes is an alias; the definition carries a different one |
 | Test code | `#[cfg(test)] mod tests { pub fn … }` | Indistinguishable from API on any single line |
+
+**Where the producer lives, and why not here.** Every other public-corpus producer in this repo is
+cheap and offline — the docs scrape needs only bs4, so anyone with a checkout rebuilds it. The crate
+reference calls a model and runs cargo, so rebuilding costs an API key and a few dollars, which is
+the same shape as the capture plan's abstraction pass. It therefore lives in the private
+`certora-cvlr-kb` repo beside that machinery, and its output ships in that package like every other
+generated manifest. Two consequences worth stating plainly:
+
+- **A plain AutoProver install gets the documentation half only.** The generated reference and the
+  practice entries both arrive with the `certora-cvlr-kb` package; `populate_cvlr_rag.sh` and the
+  Docker entrypoint already discover them there, and finding neither is a supported state.
+- **The manifest's *content* is public** — it is derived entirely from published crates. It sits in a
+  private repo because of how it is *built*, not because of what is in it. Anything that treats
+  everything under that repo's `data/` as client-derived would be wrong about this file.
+
+What stayed here is what the *backend* needs at run time: [crate_mount.py](../composer/spec/cvlr/crate_mount.py)
+is imported by the producer from an `AUTOPROVER_REPO` checkout, the same way that repo already reads
+the manifest schema and the reference set, so there is one definition of "the crate trees this build
+resolved" rather than two.
 
 **Two gates, both properties.** Every example compiles against the reference set, and every
 inventoried item must be *named* by some entry. The second is what makes "grouped" coverage honest:
