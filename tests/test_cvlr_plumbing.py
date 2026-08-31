@@ -55,8 +55,18 @@ _METADATA = {
             "source": None,
             "features": {"certora": [], "no-entrypoint": []},
             "targets": [
-                {"name": "example_lending", "kind": ["cdylib"], "crate_types": ["cdylib"]},
-                {"name": "bench", "kind": ["bench"], "crate_types": ["bin"]},
+                {
+                    "name": "example_lending",
+                    "kind": ["cdylib"],
+                    "crate_types": ["cdylib"],
+                    "src_path": "/w/programs/lending/src/lib.rs",
+                },
+                {
+                    "name": "bench",
+                    "kind": ["bench"],
+                    "crate_types": ["bin"],
+                    "src_path": "/w/programs/lending/benches/b.rs",
+                },
             ],
         },
         {
@@ -66,7 +76,7 @@ _METADATA = {
             "manifest_path": "/w/Cargo.toml",
             "source": None,
             "features": {},
-            "targets": [{"name": "root", "kind": ["lib"], "crate_types": ["lib"]}],
+            "targets": [{"name": "root", "kind": ["lib"], "crate_types": ["lib"], "src_path": "/w/src/lib.rs"}],
         },
         {
             "id": "registry+https://github.com/rust-lang/crates.io-index#cvlr@0.6.1",
@@ -75,7 +85,7 @@ _METADATA = {
             "manifest_path": "/home/u/.cargo/registry/src/idx/cvlr-0.6.1/Cargo.toml",
             "source": "registry+https://github.com/rust-lang/crates.io-index",
             "features": {},
-            "targets": [{"name": "cvlr", "kind": ["lib"], "crate_types": ["lib"]}],
+            "targets": [{"name": "cvlr", "kind": ["lib"], "crate_types": ["lib"], "src_path": "/reg/cvlr/src/lib.rs"}],
         },
         {
             "id": "registry+https://github.com/rust-lang/crates.io-index#cvlr-log@0.6.1",
@@ -84,7 +94,7 @@ _METADATA = {
             "manifest_path": "/home/u/.cargo/registry/src/idx/cvlr-log-0.6.1/Cargo.toml",
             "source": "registry+https://github.com/rust-lang/crates.io-index",
             "features": {},
-            "targets": [{"name": "cvlr_log", "kind": ["lib"], "crate_types": ["lib"]}],
+            "targets": [{"name": "cvlr_log", "kind": ["lib"], "crate_types": ["lib"], "src_path": "/reg/cvlr-log/src/lib.rs"}],
         },
     ],
 }
@@ -94,8 +104,9 @@ def test_the_lib_target_is_the_one_an_artifact_is_named_after():
     """A package's bench and bin targets are not what a verification build produces."""
     lend = parse_metadata(_METADATA).member("example-lending")
     assert lend is not None
-    assert lend.lib_target == "example_lending"
-    assert lend.artifact_stem == "example_lending"
+    assert lend.lib is not None
+    assert lend.lib.name == "example_lending"
+    assert lend.lib.artifact_stem == "example_lending"
 
 
 def test_a_dash_in_a_lib_name_becomes_an_underscore_in_the_artifact():
@@ -104,7 +115,8 @@ def test_a_dash_in_a_lib_name_becomes_an_underscore_in_the_artifact():
     payload = json.loads(json.dumps(_METADATA))
     payload["packages"][0]["targets"][0]["name"] = "example-lending"
     lend = parse_metadata(payload).member("example-lending")
-    assert lend is not None and lend.artifact_stem == "example_lending"
+    assert lend is not None and lend.lib is not None
+    assert lend.lib.artifact_stem == "example_lending"
 
 
 def test_the_owning_crate_is_the_deepest_one_containing_the_file():

@@ -144,6 +144,17 @@ def sbf_arch(conf: dict) -> str | None:
     return str(raw) if isinstance(raw, str) else None
 
 
+#: The cargo feature that compiles the verification module into the program. Every surveyed project
+#: and the recommended starting point agree on the name (``certora = ["no-entrypoint", "dep:cvlr",
+#: …]``); it is a default rather than a constant because a project is free to call it something else
+#: and ``cargo_features`` below is where a conf would say so.
+#:
+#: Here rather than beside the submission that uses it, because the scaffold that *creates* the
+#: feature and the submission that *enables* it must agree on the name, and this module is the one
+#: they both already read.
+DEFAULT_FEATURE = "certora"
+
+
 def cargo_features(conf: dict) -> tuple[str, ...]:
     return tuple(_str_list(conf.get("cargo_features")))
 

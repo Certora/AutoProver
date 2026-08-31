@@ -37,6 +37,7 @@ from composer.prover.core import (
     run_prover,
 )
 from composer.spec.cvlr.conf import (
+    DEFAULT_FEATURE,
     InheritRules,
     RuleSelection,
     RunOverlay,
@@ -54,11 +55,6 @@ _log = logging.getLogger(__name__)
 #: shared and a reader who knows one backend should not have to learn a second place to look.
 CONF_DIR = Path("certora") / "confs"
 
-#: The cargo feature that compiles the verification module into the program. Every surveyed project
-#: and the recommended starting point agree on the name (``certora = ["no-entrypoint", "dep:cvlr",
-#: …]``); it is a default rather than a constant because a project is free to call it something else
-#: and the conf's ``cargo_features`` is where it would say so.
-DEFAULT_FEATURE = "certora"
 
 
 @dataclasses.dataclass(frozen=True)
