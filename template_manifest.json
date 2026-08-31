@@ -113,6 +113,30 @@
     "template_name": "cvl_research_system_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
+  "composer.spec.cvlr.author:_JudgeTemplate": {
+    "module": "composer.spec.cvlr.author",
+    "qualname": "_JudgeTemplate",
+    "template_name": "cvlr_feedback_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.cvlr.author:_JudgeSystemTemplate": {
+    "module": "composer.spec.cvlr.author",
+    "qualname": "_JudgeSystemTemplate",
+    "template_name": "cvlr_property_judge_system_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.cvlr.author:_PropertyGenSysTemplate": {
+    "module": "composer.spec.cvlr.author",
+    "qualname": "_PropertyGenSysTemplate",
+    "template_name": "cvlr_property_generation_system_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.cvlr.author:_PropertyGenTemplate": {
+    "module": "composer.spec.cvlr.author",
+    "qualname": "_PropertyGenTemplate",
+    "template_name": "cvlr_property_generation_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
   "composer.spec.feedback:FeedbackTemplate": {
     "module": "composer.spec.feedback",
     "qualname": "FeedbackTemplate",

@@ -1,0 +1,311 @@
+"""The CVLR backend: the pipeline's Solana-with-the-Prover entry point.
+
+``docs/cvlr-backend-plan.md`` §7.5. Structurally this is ``NullSolanaBackend`` with a real formalizer:
+the front half — the Solana model, the analysis and property prompts, ``locate_main`` — is the
+ecosystem's and is reused verbatim, which is the whole reason §2 could say the front half was already
+built. What this module adds is the four things that differ: a preflight that scaffolds and gates
+the workspace, a staged formalizer that declares the harness modules, the per-unit authoring loop,
+and verdicts read back from the prover.
+
+**Why the formalizer is staged.** ``specs/mod.rs`` needs a ``mod`` line per unit, and a module
+declared without a file is a compile error — so a unit whose sibling has not been written yet would
+fail *its own* compile gate for a reason that has nothing to do with it. The declaration therefore
+has to happen once, when every unit is known, which is exactly what
+:class:`~composer.pipeline.core.StagedFormalizer` exists for. §5.6 predicted this shape ("one shared
+certora harness module, many rules") before there was any code to hang it on.
+
+**Why each unit gets its own workdir.** This closes open question 3, and the answer is forced rather
+than preferred. The compile gate is whole-crate: ``cargo check`` on the package compiles *every*
+unit's module, so in a shared workdir unit A's gate fails whenever unit B's draft is momentarily
+broken — a gate that fails for another unit's reason, nondeterministically. That is worse than a slow
+gate, because it is not reproducible. The cost is one dependency graph per unit, which makes the
+shared read-only cargo cache §5.1 held in reserve load-bearing rather than optional; the alternatives
+considered and rejected are in §7.5.2.
+"""
+
+import asyncio
+import dataclasses
+import enum
+import logging
+import shutil
+from pathlib import Path
+from typing import Sequence, override
+
+from langchain_core.tools import BaseTool
+
+from composer.cargo.session import CargoSession, WarmFailed
+from composer.pipeline.core import (
+    CorePhases,
+    Formalizer,
+    PipelineRun,
+    PreparedSystem,
+    StagedFormalizer,
+    SystemAnalysisSpec,
+    ToolBinder,
+)
+from composer.pipeline.ptypes import BackendJob, Curtailed, GaveUp
+from composer.prover.core import ProverOptions
+from composer.sandbox.config import SandboxConfig
+from composer.spec.context import CvlrGeneration, WorkflowContext
+from composer.spec.cvlr.author import batch_cvlr_generation
+from composer.spec.cvlr.conf import DEFAULT_FEATURE, load_base
+from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE
+from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness, HarnessModule
+from composer.spec.cvlr.preflight import CvlrPreflight, gate_workspace, prepare_workspace
+from composer.spec.cvlr.prover import Submission
+from composer.spec.cvlr.scaffold import SPECS_DIR
+from composer.spec.cvlr.source_tools import cvlr_source_tools, mount
+from composer.spec.cvlr.state import PROVER_VALIDATION_KEY
+from composer.spec.cvlr.verify import HarnessTarget, VerifyDeps, prover_stamper
+from composer.spec.solana.model import (
+    SolanaApplication,
+    SolanaComponentInstance,
+    SolanaProgramInstance,
+)
+from composer.io.multi_job import TaskInfo
+from composer.spec.source.report.collect import Formalized, Verdict
+from composer.spec.source.report_prover import ProverOutputAPI
+from composer.spec.source.report_prover import _fetch as fetch_prover_verdicts
+from composer.spec.source.report.schema import RuleName
+from composer.spec.types import PropertyFormulation
+
+_log = logging.getLogger(__name__)
+
+#: Where per-unit workdirs go. Under the internal dir rather than a temp dir: a failed authoring
+#: session's workspace is the most useful thing to look at afterwards, and a temp dir is gone by the
+#: time anyone asks.
+WORK_DIR = Path(".certora_internal") / "cvlr" / "work"
+
+#: Never copied into a unit's workdir. ``target`` is regenerable and enormous; ``.git`` is neither
+#: needed nor ours to duplicate.
+_NOT_COPIED = shutil.ignore_patterns("target", ".git", ".certora_internal", "certora_out")
+
+
+class CvlrPhase(enum.Enum):
+    ANALYSIS = "analysis"
+    EXTRACTION = "extraction"
+    PREFLIGHT = "preflight"
+    FORMALIZATION = "formalization"
+    REPORT = "report"
+
+
+def _copy_workspace(source: Path, dest: Path) -> None:
+    """A unit's own copy of the workspace.
+
+    Synchronous and called off the event loop by the caller. Re-copying an existing workdir is
+    skipped rather than merged: a resumed run should find the workspace it left, including whatever
+    the last session staged."""
+    if dest.exists():
+        _log.info("cvlr: reusing the existing workdir at %s", dest)
+        return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source, dest, ignore=_NOT_COPIED, symlinks=True)
+
+
+@dataclasses.dataclass(frozen=True)
+class CvlrDeps:
+    """What every unit's authoring session needs, decided once for the run."""
+
+    store: CvlrArtifactStore
+    prover_opts: ProverOptions
+    sandbox: SandboxConfig
+    preflight: CvlrPreflight
+    #: The verified package's directory, relative to the project root.
+    package_dir: Path
+    #: ``cvlr 0.6.1, cvlr-solana 0.5.0, …`` — stated in the prompt, so a reader of a transcript can
+    #: tell which release the advice in it was about.
+    versions: str
+    crate_tools: tuple[BaseTool, ...]
+
+
+@dataclasses.dataclass
+class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
+    deps: CvlrDeps
+
+    @override
+    async def formalize(
+        self,
+        label: str,
+        feat: SolanaComponentInstance,
+        props: list[PropertyFormulation],
+        ctx: WorkflowContext[GeneratedHarness],
+        run: PipelineRun,
+        extra_tools: ToolBinder[SolanaComponentInstance],
+    ) -> GeneratedHarness | Curtailed[GeneratedHarness] | GaveUp:
+        identity = HarnessModule(feat.slug)
+        project = Path(run.source.project_root)
+        workdir = project / WORK_DIR / identity.module
+        await asyncio.to_thread(_copy_workspace, project, workdir)
+
+        session = CargoSession(workdir=workdir, sandbox=self.deps.sandbox)
+        warmed = await session.warm()
+        if isinstance(warmed, WarmFailed):
+            # Not a give-up by the agent: nothing it could author would build. Reported as one so
+            # the run continues with the other units and the report says why this one has nothing.
+            return GaveUp(
+                reason=(
+                    f"could not fetch the dependency graph for {workdir} "
+                    f"(exit {warmed.exit_code}):\n{warmed.diagnostics}"
+                )
+            )
+
+        package_root = workdir / self.deps.package_dir
+        target = HarnessTarget(
+            session=session,
+            module_path=package_root / SPECS_DIR / identity.artifact_file,
+            package=self.deps.preflight.package,
+        )
+        verify = VerifyDeps(
+            target=target,
+            submission=Submission(
+                manifest_path=package_root / "Cargo.toml",
+                base_conf=load_base(None),
+                msg=f"{self.deps.preflight.package}: {label}",
+                stem=identity.stem,
+                features=(DEFAULT_FEATURE,),
+            ),
+            prover_opts=self.deps.prover_opts,
+            stamper=prover_stamper(),
+        )
+        return await batch_cvlr_generation(
+            ctx.abstract(CvlrGeneration),
+            props=props,
+            component=feat,
+            env=run.env,
+            description=label,
+            program=self.deps.preflight.package,
+            module=identity.module,
+            cvlr_versions=self.deps.versions,
+            target=target,
+            verify=verify,
+            crate_tools=self.deps.crate_tools,
+        )
+
+    @override
+    async def fetch_verdicts(
+        self, formalized: Formalized[GeneratedHarness]
+    ) -> dict[RuleName, Verdict]:
+        """Verdicts for the report, read from the job the author's stamping run produced.
+
+        Deliberately not carried out of the authoring loop. The loop's results are what the *agent*
+        reasoned about; the report should state what the job says now, and where the two disagree the
+        job is right.
+
+        The shared fetcher reads nothing but ``run_link``, so it works for any reportable result —
+        its annotation names the CVL type only because that was its only caller."""
+        if formalized.run_link is None:
+            return {}
+        return await asyncio.to_thread(fetch_prover_verdicts, ProverOutputAPI(), formalized.run_link)
+
+
+@dataclasses.dataclass
+class CvlrStagedFormalizer(StagedFormalizer[GeneratedHarness, SolanaComponentInstance]):
+    """Declares every unit's harness module before any unit authors one."""
+
+    deps: CvlrDeps
+
+    @override
+    async def begin(
+        self, jobs: Sequence[BackendJob[SolanaComponentInstance]], run: PipelineRun
+    ) -> Formalizer[GeneratedHarness, SolanaComponentInstance]:
+        modules = [HarnessModule(job.feat.slug) for job in jobs]
+        mod_rs = await asyncio.to_thread(self.deps.store.declare_modules, modules)
+        _log.info("cvlr: declared %d harness module(s) in %s", len(modules), mod_rs)
+        return CvlrFormalizer(GeneratedHarness, "prover", self.deps)
+
+
+@dataclasses.dataclass
+class CvlrPrepared(
+    PreparedSystem[GeneratedHarness, SolanaComponentInstance, SolanaProgramInstance]
+):
+    deps: CvlrDeps
+
+    @override
+    async def prepare_formalization(
+        self, run: PipelineRun
+    ) -> StagedFormalizer[GeneratedHarness, SolanaComponentInstance]:
+        return CvlrStagedFormalizer(self.deps)
+
+
+@dataclasses.dataclass
+class CvlrBackend:
+    """``PipelineBackend[CvlrPhase, GeneratedHarness, None, HarnessModule, SolanaComponentInstance,
+    SolanaProgramInstance, SolanaApplication, CvlrPreflight]`` (P, FormT, H, A, Unit, Main, App, Pre)
+    — structural."""
+
+    artifact_store: CvlrArtifactStore
+    prover_opts: ProverOptions
+    sandbox: SandboxConfig
+    #: The package to verify. ``None`` lets preflight pick it when there is only one candidate; a
+    #: workspace with several is refused rather than guessed at.
+    package: str | None = None
+
+    backend_guidance = SOLANA_CVLR_GUIDANCE
+    analysis_spec = SystemAnalysisSpec("solana-analysis", "solana-properties")
+    core_phases = CorePhases(
+        {
+            "analysis": CvlrPhase.ANALYSIS,
+            "extraction": CvlrPhase.EXTRACTION,
+            "formalization": CvlrPhase.FORMALIZATION,
+            "report": CvlrPhase.REPORT,
+        }
+    )
+
+    async def preflight(self, run: PipelineRun[CvlrPhase, None]) -> CvlrPreflight:
+        """Scaffold the project, then prove it compiles with a harness in.
+
+        Shares the driver's task group with system analysis, so a workspace that cannot be prepared
+        stops the run having spent at most one partial analysis agent instead of surfacing as
+        unfixable compiler errors after the whole extraction phase. The gate is a build, so it goes
+        on the run's CPU budget rather than its agent budget."""
+        pre = await prepare_workspace(Path(run.source.project_root), package=self.package)
+
+        async def gate() -> None:
+            await gate_workspace(pre, sandbox=self.sandbox)
+
+        await run.cpu_runner(
+            TaskInfo(
+                task_id="cvlr-preflight", label="CVLR preflight", phase=CvlrPhase.PREFLIGHT
+            ),
+            gate,
+        )
+        return pre
+
+    async def prepare_system(
+        self,
+        analyzed: SolanaApplication,
+        run: PipelineRun[CvlrPhase, None],
+        preflight: CvlrPreflight,
+    ) -> PreparedSystem[GeneratedHarness, SolanaComponentInstance, SolanaProgramInstance]:
+        # Imported lazily: the ecosystem registry imports the model layer, and importing it at module
+        # scope would put a cycle between the backend and the ecosystem that names it.
+        from composer.pipeline.ecosystem import SOLANA
+
+        project = Path(run.source.project_root)
+        crates = mount(preflight.sources)
+        crate_tools = tuple(cvlr_source_tools(crates)) if crates is not None else ()
+        if crates is None:
+            # Not fatal, but worth a loud line: §9 lists reading the wrong CVLR as worse than
+            # reading none, and reading *nothing* is the state where every helper name is a guess.
+            _log.warning(
+                "cvlr: no CVLR sources resolved for %s — the author will have no crate source to "
+                "check against, which is the condition the hallucination risk is about",
+                preflight.package,
+            )
+        versions = ", ".join(f"{c.name} {c.version}" for c in preflight.sources.crates)
+        for gap in preflight.gaps:
+            _log.info("cvlr: %s", gap.describe())
+
+        deps = CvlrDeps(
+            store=self.artifact_store,
+            prover_opts=self.prover_opts,
+            sandbox=self.sandbox,
+            preflight=preflight,
+            package_dir=preflight.package_dir,
+            versions=versions,
+            crate_tools=crate_tools,
+        )
+        return CvlrPrepared(SOLANA.locate_main(analyzed, run.source), deps)
+
+    def to_artifact_id(self, c: SolanaComponentInstance) -> HarnessModule:
+        return HarnessModule(c.slug)

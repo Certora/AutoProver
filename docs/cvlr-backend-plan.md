@@ -60,7 +60,8 @@ source ─analyze─▶ App model ─extract─▶ properties ─formalize─▶
 | RAG corpus registry (`KNOWLEDGE_BASES`, `rag_env`) | **`cvlr_kb` registered** — the first corpus in either map | [rag/db.py](../composer/rag/db.py), [tools/rag_env.py](../composer/tools/rag_env.py) |
 | CVLR corpus · CVLR KB articles | **Three manifests under one tag** (§7.3.1): published docs, generated crate reference, project-derived idioms — all produced in and shipped from the private repo | [rag/import_format.py](../composer/rag/import_format.py), [rag/html_manual.py](../composer/rag/html_manual.py) |
 | Preflight scaffold | **Done** (§7.4): deterministic, idempotent, refuses two decisions rather than guessing | [cvlr/scaffold.py](../composer/spec/cvlr/scaffold.py), [cvlr/preflight.py](../composer/spec/cvlr/preflight.py) |
-| Authoring loop · Solana CEX analysis | **Nothing** | — |
+| Authoring loop | **Built** (§7.5), not yet exercised end to end | [cvlr/author.py](../composer/spec/cvlr/author.py), [cvlr/pipeline.py](../composer/spec/cvlr/pipeline.py) |
+| Solana CEX analysis | **Nothing** — the author reads raw counterexample dumps until §7.7 | — |
 
 **Phase 0 (hands-on experience) is done.** Several team members have completed real Solana
 verification projects. What that changes: the first phase is not discovery, it is **capture** —
@@ -763,6 +764,97 @@ and skipped-property accounting reused. `clog!` discipline enforced in prompt an
 authoring env binds the CVLR-source tools from Phase 2, and the authoring prompt states that
 the crate source is present and authoritative — check it rather than guess.
 
+#### 7.5.1 State
+
+| Piece | State |
+|---|---|
+| The `Formalizer` and the loop | **Done** — [author.py](../composer/spec/cvlr/author.py): buffer, skips, expected failures, two gate tiers, judge, publish, give-up, budget wrap-up |
+| `PipelineBackend` | **Done** — [pipeline.py](../composer/spec/cvlr/pipeline.py). The front half is the Solana ecosystem's, reused verbatim; §2's claim that it was already built is now cashed |
+| The staged formalizer | **Done** — declares every unit's module before any unit authors, which §5.6 predicted |
+| Rule-name ground truth | **Done** — [rules.py](../composer/spec/cvlr/rules.py), validated against the two public examples' hand-written conf `rule` lists |
+| `clog!` discipline | **In the prompt and in the judge's checklist**, not in a lint. See below |
+| Crate source in the authoring env | **Done** — bound to the author *and* the judge, and named as authoritative in both system prompts |
+| Property-feedback judge, skip accounting | **Reused** — `composer/authoring/` is already backend-neutral; this backend supplies wording, prompts and the mapping vocabulary |
+| Exercised end to end | **No.** Every gate and every deterministic part is unit-tested; nothing has yet authored a rule against a live prover |
+
+**The loop is not a loop.** Worth recording because it is the most misleading thing about §7.5's own
+wording: "author → compile → build → prover → analyze → revise" describes what the *agent* does, not
+this code's control flow. There is no attempt counter. The graph runs until the agent publishes or
+gives up, and the gate is a **digest stamp** — a prover run and a judge acceptance each stamp the hash
+of the draft they saw, and `result` is refused unless both stamps equal the hash of the draft as it
+now stands. An edit after a green run therefore invalidates that run with nothing having to remember
+to clear it. That machinery is `composer/authoring/`'s and predates this backend.
+
+**Two tiers, one stamp.** `cargo_check` is seconds and free and is *not* a required stamp; only
+`verify_rules` is. That is not laxity — a prover run builds first and returns the compiler's message
+without submitting when the build fails, so requiring both would gate one fact twice while making the
+cheap tool feel like a formality. What the prompt does instead is tell the author to run the cheap one
+after every edit, which is where it pays.
+
+**"Accounted for", not "all green".** A rule the author has marked with `expect_rule_failure` is
+excluded from the gate. This is the one place the CVLR backend deliberately diverges from foundry's
+instinct, and the reason is incentive: a gate that demanded green would push the author to weaken a
+rule until the bug disappeared. Marking makes the finding an explicit, recorded claim, and the gate
+also reports the opposite case — a rule marked expected-to-fail that *verified*, which means either
+the defect is not there or the rule does not test for it.
+
+**Ground truth from the draft, not from the run.** `validate_check_mapping` gets the both-direction
+check that forge's caller gets — no property claiming a rule that does not exist, no rule left untied
+to a property — without waiting for a submission, because both CVLR declaration forms name their rules
+deterministically (§7.5.3). It therefore also works in the budget wrap-up window, where no run is
+available at all.
+
+#### 7.5.2 Open question 3 is answered, and the answer is forced
+
+**Each unit gets its own workdir.** Not a preference — the compile gate is whole-crate. `cargo check`
+on the package compiles *every* unit's harness module, so in a shared workdir unit A's gate fails
+whenever unit B's draft is momentarily broken: a gate that fails for another unit's reason,
+nondeterministically. That is worse than a slow gate, because it is not reproducible.
+
+Three alternatives were considered and rejected:
+
+| Alternative | Why not |
+|---|---|
+| One workdir, a run-wide lock around stage-and-check | The lock does not help: the *sibling file* is still broken on disk while A checks. Emptying siblings first makes concurrent units clobber each other |
+| A `--cfg` or cargo feature per unit, so each build compiles only its own module | Sound, and cheap on disk. But feature- and flag-varying builds get separate fingerprints anyway, so the cache cost is the same one it was meant to avoid — and it puts per-unit features into the target's own manifest |
+| Author units sequentially | Not this backend's call; the driver batches them |
+
+The cost is one dependency graph per unit, which promotes the **shared read-only cargo cache** §5.1
+held in reserve from an optimization to something load-bearing. It is not built: the confinement
+policy forces a private per-run `CARGO_HOME`, so sharing one needs a policy that grants a read-only
+mount of a common cache. That is the next real performance decision on this backend.
+
+#### 7.5.3 What building it found
+
+**A CVLR harness names its rules deterministically, so the publish gate needs no run.** `#[rule]`
+adds nothing but `#[no_mangle]`, so the symbol is the function name; `cvlr_rules!` and
+`cvlr_invariant_rules!` expand to `snake_case(name) + "_" + base` with a `base_` prefix stripped.
+[rules.py](../composer/spec/cvlr/rules.py) ports the crate's own `to_snake_case` rather than
+approximating it, and reproduces the `rule` lists in both public examples' hand-written confs exactly
+— 7 and 4 rules, no misses and no extras. That is ground truth nobody derived from this code.
+
+**The grouping is kept rather than flattened**, which is the beginning of an answer to open question 5:
+one parametric invocation is one authored construct that becomes several rules, and it changes both
+prover cost and counterexample attribution. A reader of a report needs to see that six verdicts came
+from one three-line invocation.
+
+**The template fuzzer caught a real bug immediately.** The author and judge prompts had
+`application_context_new.j2` — the EVM context partial — included for a Solana unit, which raises on
+`context.contract`. It would have failed on the first real component and passed every test that did
+not render the template. The manifest has to be regenerated for a new template to be covered at all;
+that is worth knowing before trusting a green fuzz run.
+
+#### 7.5.4 What is deliberately not here
+
+* **No source editing.** The CVL author's ~450 lines of VFS-overlay edit machinery are for munging the
+  target, which is §7.6. Neither foundry nor the Rust wheel backend has it either, and every shared
+  gate degrades cleanly without it by design.
+* **No counterexample analysis.** The author reads whatever `UnanalyzedCexHandler` renders — the raw
+  dump. §5.3 says half of CEX handling is free because the reports are the same shape; the other half
+  is §7.7, and until then the `clog!` discipline in the prompt is doing all of the work. This is the
+  biggest known limiter on loop quality right now.
+* **No entry point.** Nothing constructs a `CvlrBackend` yet; `console-solana` / `tui-solana` are §7.8.
+
 ### 7.6 Phase 5 — Munge (parallel with 4)
 
 Reuse the munge agent spine with a CVLR compile check and a Solana munge charter, plus the
@@ -804,6 +896,9 @@ whether any of these pieces deserve to be bundled after all.**
 | Compile gate | Two tiers (fast `cargo check` per edit, full build per submission) |
 | Conf style | From-sources, through a `build_script` the backend generates — it builds inside the sandbox and the prover reruns that same command (§7.2.2) |
 | Setup | Templated preflight; no AutoSetup — and it turned out to need no agent at all (§7.4.1) |
+| Authoring gate | Two checker tiers, one stamp: the cheap compile is ungated and the prover run is the gate, because a prover run builds first (§7.5.1) |
+| Rule granularity | Both forms offered, and the *generated* names are the unit of attribution; a parametric invocation stays grouped in the record (§7.5.3) |
+| Workdir lifetime | Per unit, forced by the whole-crate compile gate rather than chosen (§7.5.2) |
 | Scaffold shape | From `Certora/solana-spec-template`, the recommended starting point, not from a vote over client layouts; the public examples break ties about what actually runs |
 | Scaffold safety | Never overwrite, compute every manifest change from the parsed manifest, and refuse rather than guess where a decision changes how the project builds for everyone |
 | Env (inlining/summaries) files | Vendored with a provenance stamp naming the upstream commit, in the template's three-layer split so the project's own layer is never a canonical file |
@@ -825,13 +920,18 @@ whether any of these pieces deserve to be bundled after all.**
    found `build_script` in 15 of 16 projects and `[package.metadata.certora]` with exactly three
    keys, and the implementation found the harder half of the reason: the `files` path collects no
    Rust sources into `.certora_sources`, and the CLI's own from-sources path builds unconfined.
-3. **Warm-workdir lifetime** — per authoring session (planned) vs. per unit vs. per run, and
-   whether the shared read-only cargo cache optimization is needed on day one. One constraint
-   discovered while measuring: a workdir may not switch confinement posture mid-run without losing
-   its incremental cache (§5.1).
+3. ~~**Warm-workdir lifetime**~~ **Answered: per unit, and forced** (§7.5.2). The compile gate is
+   whole-crate, so a shared workdir makes one unit's gate fail on another unit's half-written module —
+   nondeterministically. The follow-on is no longer a question but a task: the shared read-only cargo
+   cache is now load-bearing rather than an optimization, and needs a confinement policy that grants
+   a read-only mount of a common cache. One constraint still holds: a workdir may not switch
+   confinement posture mid-run without losing its incremental cache (§5.1).
 4. **Where the munge give-up boundary sits**, in edits or in wall-clock.
 5. **Rule granularity per property** — one `#[rule]` per property, or parametric rules /
-   `cvlr_rules!` batching, which changes both prover cost and CEX attribution.
+   `cvlr_rules!` batching. *Partially answered* (§7.5.3): both forms are offered, the prompt says to
+   prefer parametric when one property spans handlers, and the *generated* names are what the mapping
+   and the report speak — so attribution is per generated rule while the record keeps the grouping.
+   What is still open is whether the prover cost actually favours it in practice, which needs runs.
 
 ---
 

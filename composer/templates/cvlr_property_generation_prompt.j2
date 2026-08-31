@@ -1,0 +1,159 @@
+<background>
+You have been tasked with authoring CVLR rules for a set of security properties of a Solana program,
+to be checked by the Certora Solana Prover.
+</background>
+
+<task>
+You must write a single harness module — `src/certora/specs/{{ module }}.rs` — covering the following
+properties of the program `{{ program }}`:
+
+{% for prop in properties %}
+<{{ prop.sort }}>
+  Property {{ loop.index }} (`{{ prop.title }}`): {{ prop.description }}
+  {% if prop.sort == "attack_vector" %}
+  Goal: demonstrate that this attack cannot occur. If it *can*, the rule that shows it must fail —
+  see the expected-failure instructions below.
+  {% else %}
+  Goal: demonstrate that this property holds.
+  {% endif %}
+</{{ prop.sort }}>
+{% endfor %}
+
+Follow this procedure.
+
+## Step 0 — gather context
+
+Read the parts of the program each property is about: the handler, the account layout it reads and
+writes, and the invariants the code already assumes. You cannot state a postcondition about state
+you have not read.
+
+When you need a CVLR macro or helper you are not certain about, **read the crate source**
+(`cvlr_source_search` / `cvlr_source_read`). It is mounted at the versions this build resolves:
+{{ cvlr_versions }}. Guessing a helper name is the single most common way a draft fails to compile,
+and the answer is on disk.
+
+Do not speculate about whether a property is true. Your job is to state it precisely; the prover
+decides.
+
+## Step 1 — author the module
+
+Write the complete module and put it on the buffer with `put_harness`. For each property:
+
+* Choose the rule form. One `#[rule]` per property when the property is about one handler; a
+  `cvlr_rules!` invocation when the same specification applies across several handlers — that is
+  cheaper to write and gives you a separate verdict per handler.
+* Create the inputs with `nondet()` and constrain them with `cvlr_assume!` — as little as you can.
+* `clog!` every value the assertion depends on, *before* asserting. A counterexample shows you only
+  what you logged.
+* Assert the postcondition.
+* Name the property's `title` in a comment above the rule, so the mapping is traceable by a reader.
+
+You may call `put_harness` as often as you like; each call replaces the buffer, so emit the whole
+file every time.
+
+## Step 2 — compile
+
+Call `cargo_check()`. It is fast and free; do it after every `put_harness` rather than saving up
+errors. Fix compile errors before anything else — a draft that does not build teaches you nothing
+about the properties.
+
+If an item does not exist, do not try a different spelling from memory: read the crate source and
+find what does exist.
+
+## Step 3 — verify
+
+Call `verify_rules()`. This builds for the chain and submits to the prover; it takes minutes and
+costs prover time, so arrive with a draft that compiles.
+
+Read the outcome:
+
+* **Every rule accounted for** → the publish gate is stamped; go to Step 4.
+* **A compile error** → the chain build caught something the host check did not. Fix and retry.
+* **A rule VIOLATED** → read the counterexample. Then decide which of these it is:
+  - your rule is wrong (over-strong assertion, missing assumption, wrong state read) — fix it;
+  - the property does not hold and you have found a defect — mark the rule with
+    `expect_rule_failure(rule_name, reason)`, saying why you believe the violation is real, and
+    re-run. Marked rules are excluded from the gate, so a run can be complete with a genuine
+    violation in it. **Do not invert the rule so that it passes.**
+* **A rule reported vacuous / sanity-failing** → your assumptions contradict, so the rule proves
+  nothing. Weaken them.
+* **A timeout** → the rule is too hard as stated. Bound a loop, split the rule, or summarize a call
+  the property does not depend on. Re-running an unchanged timing-out rule will time out again.
+
+A later `put_harness` invalidates the prover stamp, so finish with a clean `verify_rules()` after
+your *last* edit.
+
+## Step 4 — seek feedback
+
+Call `feedback_tool()`. The judge sees every property in this batch and will reject a draft that
+leaves one unaddressed and unskipped, or whose skip justification does not hold. Address its points
+and re-invoke until it is satisfied.
+
+If a suggestion was tried and provably does not work, file a rebuttal with evidence — a compiler
+error, a prover verdict, or a citation from the crate source. Do not rebut points you merely
+disagree with.
+
+## Step 5 — publish
+
+Call `result(commentary, property_rules)`. The gate requires:
+
+* `verify_rules` stamped the current buffer;
+* the feedback judge accepted the current buffer;
+* every non-skipped property is claimed by at least one rule, every claimed rule is one your draft
+  actually declares, and every rule you declared is claimed by some property. Skipped properties
+  must not appear.
+
+Note the last part: a rule you wrote and never tied to a property will be rejected. Either map it or
+remove it — an unattributed rule costs prover time nobody chose to spend.
+
+For a `cvlr_rules!` invocation, name the *generated* rules, not the invocation: `name: "solvency"`
+over `bases: [base_deposit, base_withdraw]` declares `solvency_deposit` and `solvency_withdraw`.
+
+<skipping>
+If you genuinely cannot express a property as a rule after serious effort, use
+`record_skip(property_title, reason)`.
+
+Attempt every property before considering any skip. Legitimate reasons look like: the property needs
+an account model no published crate provides; it is about off-chain behaviour or transaction
+ordering the prover does not see; it needs a loop the prover cannot bound.
+
+**Do not skip a property because it is universally quantified.** `nondet()` is the universal
+quantifier and the prover reasons over every value — that shape is what this tool exists for.
+
+**Do not skip a property because the program appears to violate it.** That is a finding: write the
+rule, let it fail, and mark it.
+
+If an environment problem blocks all progress — the crate will not build for reasons unrelated to
+your module, the prover is unreachable — call `give_up(reason)` with specifics so it can be fixed and
+the task re-run.
+</skipping>
+</task>
+
+{% if context %}
+<context>
+  {% include "solana/component_context.j2" %}
+</context>
+{% endif %}
+
+<state>
+Use the memory tools to track your progress: the property→rule mapping you intend to declare, any
+skips and expected-failure markings with their reasons, and — most valuably — the CVLR helper names
+and paths you confirmed by reading the source, so a context reset does not send you looking them up
+again. Update memory before calling `verify_rules` (so a reset can rebuild) and certainly before
+`result`.
+</state>
+
+## Rerun
+
+If your memory indicates this task already completed and you have the prior draft, nothing has
+changed since. Then:
+
+1. `put_harness` your last-attempt module source.
+2. Reapply the skips your memory recorded.
+3. Reapply the `expect_rule_failure` markings your memory recorded.
+4. Run `verify_rules` to re-stamp the gate.
+5. Re-invoke `feedback_tool` to re-stamp the judge (it retains its memory of prior rounds, so
+   re-accepting an unchanged draft is cheap).
+6. Publish with `result`.
+
+Do not skip steps 4 and 5: the gate requires both stamps on the *current* buffer.
