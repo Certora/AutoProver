@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from composer.cargo.metadata import CratePackage
+from composer.cargo.metadata import CratePackage, LibTarget
 from composer.pipeline.ecosystem import SOLANA, SOLANA_PROPERTY_SYSTEM_TEMPLATE, SOROBAN
 from composer.spec.code_explorer import code_explorer_sys_prompt
 from composer.spec.cvlr.crates import CvlrSources
@@ -36,7 +36,11 @@ def _crate(root: Path, name: str, version: str, files: dict[str, str]) -> CrateP
         name=name,
         version=version,
         manifest_path=crate_dir / "Cargo.toml",
-        lib_target=name.replace("-", "_"),
+        lib=LibTarget(
+            name=name.replace("-", "_"),
+            src_path=crate_dir / "src" / "lib.rs",
+            crate_types=("lib",),
+        ),
         features=(),
         source="registry+https://github.com/rust-lang/crates.io-index",
     )
@@ -155,7 +159,11 @@ def test_a_crate_whose_sources_were_pruned_is_dropped_rather_than_faked(tmp_path
         name="cvlr-solana",
         version="0.5.0",
         manifest_path=tmp_path / "gone-0.5.0" / "Cargo.toml",
-        lib_target="cvlr_solana",
+        lib=LibTarget(
+            name="cvlr_solana",
+            src_path=tmp_path / "gone-0.5.0" / "src" / "lib.rs",
+            crate_types=("lib",),
+        ),
         features=(),
         source="registry+x",
     )
