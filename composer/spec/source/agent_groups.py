@@ -194,3 +194,55 @@ def groups_from_specs(
         summary_palette=summary_palette,
         cap=cap,
     )
+
+
+def render_group_plan_for_judge(
+    specs: list["VerificationGroupSpec"], summary_palette: dict[str, str]
+) -> str | None:
+    """A judge-facing note describing the verification-group plan, or ``None`` when
+    no groups are declared.
+
+    The feedback judge reviews the *base* spec (``curr_spec``), which deliberately
+    leaves the hostile summaries OUT of its ``methods{}`` block — each group installs
+    its own summaries at prover time via :func:`append_summaries`. Without this note
+    the judge sees hostile functions used-but-not-summarized and false-flags them as
+    unsound/HAVOCing. The note makes the per-group install concrete: it shows the
+    shared summary palette and, for each group, exactly which palette entries that
+    group installs (palette minus ``keep_precise``) and which it keeps precise — so
+    the judge evaluates the spec as it is actually verified, not as a monolith."""
+    if not specs:
+        return None
+    lines: list[str] = [
+        "// ============================================================================",
+        "// Verification-group plan (informational — NOT part of the base spec above)",
+        "// ============================================================================",
+        "// This spec is NOT verified as a monolith. It is split into parallel prover",
+        "// runs ('verification groups'), each with its OWN methods{} block installing",
+        "// sound summaries from the shared palette below, keeping precise only what",
+        "// that group's rules need exact. A hostile function that appears",
+        "// un-summarized in the base spec above IS summarized in every group that does",
+        "// not list it under 'keeps precise' — treat those palette entries as installed",
+        "// (not HAVOCing) when judging soundness and coverage.",
+        "//",
+    ]
+    if summary_palette:
+        lines.append("// Summary palette (sound summaries applied per-group):")
+        for func in sorted(summary_palette):
+            lines.append(f"//   {func}: {summary_palette[func].strip()}")
+        lines.append("//")
+    for s in specs:
+        props = [str(m.property_title) for m in s.property_rules]
+        rules = [str(r) for m in s.property_rules for r in m.rules]
+        precise = frozenset(s.keep_precise)
+        installs = [f for f in sorted(summary_palette) if f not in precise]
+        lines.append(f"// Group \"{s.name}\":")
+        lines.append(f"//   properties: {', '.join(props) if props else '(none)'}")
+        lines.append(f"//   rules: {', '.join(rules) if rules else '(none)'}")
+        lines.append(f"//   keeps precise: {', '.join(sorted(precise)) if precise else '(none)'}")
+        lines.append(
+            f"//   installs summaries for: {', '.join(installs) if installs else '(none)'}"
+        )
+        if s.conf_overlay:
+            lines.append(f"//   conf overrides: {s.conf_overlay}")
+        lines.append("//")
+    return "\n".join(lines)

@@ -27,7 +27,7 @@ from composer.spec.cvl_generation import (
 )
 from composer.prover.core import run_prover, CexHandler, ProverCallbacks, ProverReport
 from composer.spec.source.autosetup import read_summarization_candidates
-from composer.spec.source.agent_groups import VerificationGroupSpec
+from composer.spec.source.agent_groups import VerificationGroupSpec, render_group_plan_for_judge
 from summarization_detector.schema import HostileCandidate
 from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools, WIPE_HISTORY
 from composer.spec.source.prover import setup_prover_config_in
@@ -706,7 +706,16 @@ class EditorAwareFeedbackTool(
                 vfs=self.state["vfs"],
                 version_history=self.state["version_history"],
             )
-            return await judge(snap, spec, skipped, self.rebuttals, self.tool_call_id)
+            # The judge reviews the base spec, whose methods{} block deliberately omits
+            # the hostile summaries — each verification group installs its own at prover
+            # time (append_summaries). Surface that plan so the judge does not false-flag
+            # those functions as un-summarized / HAVOCing.
+            plan = render_group_plan_for_judge(
+                self.state.get("verification_groups") or [],
+                self.state.get("summary_palette") or {},
+            )
+            judged_spec = spec if plan is None else f"{spec.rstrip()}\n\n{plan}\n"
+            return await judge(snap, judged_spec, skipped, self.rebuttals, self.tool_call_id)
 
     @override
     def _version_history(self) -> Sequence[str]:

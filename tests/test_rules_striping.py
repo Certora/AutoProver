@@ -25,7 +25,7 @@ from langchain_core.tools import InjectedToolCallId, tool
 from langgraph.types import Command
 
 from composer.authoring.state import check_completion, spec_digest
-from composer.prover.core import ProverReport, declared_rules_list
+from composer.prover.core import ProverReport, RuleListingError, declared_rules_list
 from composer.prover.ptypes import RulePath, StatusCodes
 from composer.spec.cvl_generation import PropertyRuleMapping, validate_property_rules
 from composer.spec.source.author import ExpectRuleFailure
@@ -195,9 +195,16 @@ class TestCompletionHistory:
 class _FakeProc:
     def __init__(self, rc: int):
         self._rc = rc
+        self.returncode = rc
 
     async def wait(self) -> int:
         return self._rc
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        # declared_rules_list reads returncode + the (stdout, stderr) pair; a nonzero
+        # rc carries compiler output into RuleListingError.detail.
+        err = b"" if self._rc == 0 else b"fake compiler error"
+        return (b"", err)
 
 
 def _install_fake_prover_procs(
@@ -246,12 +253,12 @@ class TestDeclaredRulesList:
 
     async def test_build_failure_raises(self, tmp_path, monkeypatch):
         _install_fake_prover_procs(monkeypatch, certora_rc=1)
-        with pytest.raises(ValueError):
+        with pytest.raises(RuleListingError):
             await declared_rules_list(tmp_path, ["x.conf"])
 
     async def test_typechecker_failure_raises(self, tmp_path, monkeypatch):
         _install_fake_prover_procs(monkeypatch, java_rc=1)
-        with pytest.raises(ValueError):
+        with pytest.raises(RuleListingError):
             await declared_rules_list(tmp_path, ["x.conf"])
 
     async def test_unmatched_build_dir_raises(self, tmp_path, monkeypatch):

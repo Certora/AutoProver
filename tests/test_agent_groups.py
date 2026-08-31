@@ -125,3 +125,51 @@ def test_build_caps_and_merges_keeping_partition():
     assert len(groups) == 2
     owned = [r for g in groups for r in g.owned_rules]
     assert sorted(owned) == sorted(r for rs in PROP_RULES.values() for r in rs)
+
+
+# --- judge-facing group plan rendering --------------------------------------
+
+from composer.spec.source.agent_groups import (
+    VerificationGroupSpec,
+    render_group_plan_for_judge,
+)
+from composer.spec.cvl_generation import PropertyRuleMapping
+
+
+def _spec(name, prop_rules, keep=(), conf=None):
+    return VerificationGroupSpec(
+        name=name,
+        property_rules=[
+            PropertyRuleMapping(property_title=p, rules=rs) for p, rs in prop_rules
+        ],
+        keep_precise=list(keep),
+        conf_overlay=conf or {},
+    )
+
+
+def test_render_plan_none_when_no_groups():
+    assert render_group_plan_for_judge([], PALETTE) is None
+
+
+def test_render_plan_shows_palette_and_per_group_installs():
+    specs = [
+        _spec("bitmap", [("P-bitmap", ["r_borrow", "r_collat"])], keep=["sortByKey"]),
+        _spec("acct", [("P-accounting", ["r_supply"])], conf={"loop_iter": 2}),
+    ]
+    out = render_group_plan_for_judge(specs, PALETTE)
+    assert out is not None
+    # The palette is shown so the judge sees the sound summaries that exist.
+    assert "Summary palette" in out
+    assert "sortByKey" in out and "uncheckedExp" in out
+    # The group keeping sortByKey precise installs only the OTHER palette entry.
+    bitmap = out.split('Group "bitmap"')[1].split('Group "acct"')[0]
+    assert "keeps precise: sortByKey" in bitmap
+    assert "installs summaries for: uncheckedExp" in bitmap
+    assert "sortByKey" not in bitmap.split("installs summaries for:")[1]
+    # The group keeping nothing precise installs the whole palette + shows conf overrides.
+    acct = out.split('Group "acct"')[1]
+    assert "keeps precise: (none)" in acct
+    assert "installs summaries for: sortByKey, uncheckedExp" in acct
+    assert "loop_iter" in acct
+    # It is clearly marked informational so the judge does not treat it as spec text.
+    assert "informational" in out.lower()
