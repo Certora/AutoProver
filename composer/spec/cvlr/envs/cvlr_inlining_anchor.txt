@@ -1,0 +1,44 @@
+;; By default we don't inline anything from anchor.
+#[inline(never)] ^.*anchor_lang.*$
+
+;; except these functions
+
+#[inline] ^anchor_lang::accounts::account_loader::AccountLoader<T>::load(_[0-9][0-9]*)*$
+#[inline] ^anchor_lang::accounts::account_loader::AccountLoader<T>::load_mut(_[0-9][0-9]*)*$
+
+#[inline] ^<anchor_lang::accounts::account::Account<T> as core::clone::Clone>::clone(_[0-9][0-9]*)*$
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; try_from and try_from_unchecked might call to deserialize so we need to check case by case
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+#[inline] ^anchor_lang::accounts::account_loader::AccountLoader<T>::try_from(_[0-9][0-9]*)*$
+#[inline] ^anchor_lang::accounts::account_loader::AccountLoader<T>::try_from_unchecked(_[0-9][0-9]*)*$
+#[inline] ^anchor_lang::accounts::account::Account<T>::try_from_unchecked(_[0-9][0-9]*)*$
+#[inline] ^anchor_lang::accounts::account::Account<T>::try_from(_[0-9][0-9]*)*$
+#[inline] ^anchor_lang::accounts::signer::Signer::try_from$
+#[inline] ^<anchor_lang::accounts::program::Program<T> as core::convert::TryFrom<&solana_program::account_info::AccountInfo>>::try_from$
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+#[inline] ^<anchor_lang::accounts::unchecked_account::UncheckedAccount as core::convert::AsRef<solana_program::account_info::AccountInfo>>::as_ref$
+#[inline] ^<anchor_lang::accounts::unchecked_account::UncheckedAccount as anchor_lang::ToAccountInfos>::to_account_infos$
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; These are needed to include the code for key()
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+#[inline] ^<anchor_lang::accounts::unchecked_account::UncheckedAccount as anchor_lang::Key>::key$
+#[inline] ^<solana_program::pubkey::Pubkey as anchor_lang::Key>::key$
+#[inline] ^.*::ZeroCopyAccessor<solana_program::pubkey::Pubkey>>::get$
+#[inline] ^anchor_lang::accounts::account_info::<impl anchor_lang::Key for solana_program::account_info::AccountInfo>::key$
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; These do conversion between error codes 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+#[inline] ^<anchor_lang::error::Error as core::convert::From<anchor_lang::error::AnchorError>>::from$
+#[inline] ^<anchor_lang::error::Error as core::convert::From<anchor_lang::error::ErrorCode>>::from$
+#[inline] ^<anchor_lang::error::Error as core::convert::From<solana_program::program_error::ProgramError>>::from$           
+#[inline] ^anchor_lang::error::<impl core::convert::From<anchor_lang::error::ErrorCode> for u32>::from$
+#[inline] ^squads_multisig_program::errors::<impl core::convert::From<squads_multisig_program::errors::MultisigError> for anchor_lang::error::Error>::from$
+
+#[inline] ^<.+ as anchor_lang::AccountDeserialize>::try_deserialize$
+#[inline] ^<.+ as anchor_lang::AccountDeserialize>::try_deserialize_unchecked$
+#[inline] ^anchor_lang::accounts::interface_account::InterfaceAccount<T>::try_from(_\d+)?$
+

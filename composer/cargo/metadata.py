@@ -43,18 +43,46 @@ class CargoUnavailable(RuntimeError):
 
 
 @dataclasses.dataclass(frozen=True)
-class CratePackage:
-    """One package in the resolved graph.
+class LibTarget:
+    """A package's library target — the thing a ``.so`` is built from.
 
-    ``lib_target`` is the ``[lib]`` target's name, which is *not* always the package name — cargo
-    lets them differ, and it is the target name that the built artifact is named after (with ``-``
-    normalized to ``_``). ``None`` for a package with no library target.
+    One object rather than three optional fields on :class:`CratePackage`, because the three are
+    all present or all absent together: a package either has a library target, with a name, a
+    source file and crate types, or it has none.
+
+    ``name`` is *not* always the package name — cargo lets them differ, and it is the target name
+    the built artifact is named after. ``src_path`` comes from cargo rather than the ``src/lib.rs``
+    convention, because ``[lib] path`` can move it and a scaffold that guesses wrong writes a
+    module declaration into a file nothing compiles.
     """
+
+    name: str
+    src_path: Path
+    crate_types: tuple[str, ...]
+
+    @property
+    def artifact_stem(self) -> str:
+        """The file stem cargo gives the artifact (``<stem>.so`` for sbf)."""
+        return self.name.replace("-", "_")
+
+    @property
+    def builds_shared_object(self) -> bool:
+        """Whether this target produces the loadable object the Solana prover needs.
+
+        A package that is only an ``rlib`` compiles fine and produces nothing to verify, which is
+        a fact about the target worth reporting before a build rather than after one."""
+        return "cdylib" in self.crate_types
+
+
+@dataclasses.dataclass(frozen=True)
+class CratePackage:
+    """One package in the resolved graph."""
 
     name: str
     version: str
     manifest_path: Path
-    lib_target: str | None
+    #: ``None`` for a package with no library target.
+    lib: LibTarget | None
     features: tuple[str, ...]
     #: ``None`` for a workspace member or a path dependency; the registry/git URL for a fetched one.
     #: The distinction is what separates "code in this project" from "code the project depends on",
@@ -69,11 +97,6 @@ class CratePackage:
     @property
     def is_local(self) -> bool:
         return self.source is None
-
-    @property
-    def artifact_stem(self) -> str | None:
-        """The file stem cargo gives this package's library artifact (``<stem>.so`` for sbf)."""
-        return self.lib_target.replace("-", "_") if self.lib_target is not None else None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -119,20 +142,22 @@ class Workspace:
         )
 
 
+def _lib_target(raw: dict) -> LibTarget | None:
+    for target in raw.get("targets", ()):
+        kinds = tuple(target.get("crate_types") or target.get("kind") or ())
+        if _LIB_CRATE_TYPES.intersection(kinds):
+            return LibTarget(
+                name=target["name"], src_path=Path(target["src_path"]), crate_types=kinds
+            )
+    return None
+
+
 def _package(raw: dict) -> CratePackage:
-    lib = next(
-        (
-            t["name"]
-            for t in raw.get("targets", ())
-            if _LIB_CRATE_TYPES.intersection(t.get("crate_types") or t.get("kind") or ())
-        ),
-        None,
-    )
     return CratePackage(
         name=raw["name"],
         version=raw["version"],
         manifest_path=Path(raw["manifest_path"]),
-        lib_target=lib,
+        lib=_lib_target(raw),
         features=tuple(sorted(raw.get("features") or {})),
         source=raw.get("source"),
     )
@@ -154,7 +179,9 @@ def parse_metadata(payload: dict) -> Workspace:
     )
 
 
-def _cargo_metadata(project_root: Path, *, offline: bool, timeout_s: int) -> dict | None:
+def _cargo_metadata(
+    project_root: Path, *, offline: bool, features: tuple[str, ...], timeout_s: int
+) -> dict | None:
     """Run ``cargo metadata`` and return its payload, or ``None`` with the reason logged."""
     if shutil.which("cargo") is None:
         raise CargoUnavailable(
@@ -163,6 +190,8 @@ def _cargo_metadata(project_root: Path, *, offline: bool, timeout_s: int) -> dic
     args = ["cargo", "metadata", "--format-version", "1"]
     if offline:
         args.append("--offline")
+    if features:
+        args += ["--features", ",".join(features)]
     try:
         completed = subprocess.run(
             args, cwd=project_root, capture_output=True, text=True, timeout=timeout_s
@@ -174,7 +203,9 @@ def _cargo_metadata(project_root: Path, *, offline: bool, timeout_s: int) -> dic
         _log.warning("cargo metadata in %s could not run: %r", project_root, exc)
         return None
     if completed.returncode != 0:
-        _log.info(
+        # Warning rather than info: this is the one `None` a caller cannot diagnose from the return
+        # value, and the preflight gate's whole value is a legible early failure.
+        _log.warning(
             "cargo metadata in %s failed (%s): %s",
             project_root,
             completed.returncode,
@@ -189,7 +220,11 @@ def _cargo_metadata(project_root: Path, *, offline: bool, timeout_s: int) -> dic
 
 
 def read_workspace_sync(
-    project_root: Path, *, offline: bool = False, timeout_s: int = METADATA_TIMEOUT_S
+    project_root: Path,
+    *,
+    offline: bool = False,
+    features: tuple[str, ...] = (),
+    timeout_s: int = METADATA_TIMEOUT_S,
 ) -> Workspace | None:
     """The workspace containing ``project_root``, or ``None`` when there is none to read.
 
@@ -203,11 +238,23 @@ def read_workspace_sync(
     graph that is not already fetched. Pass it where a warm cache is guaranteed (inside a session
     that has warmed) and leave it off for the first read of an unseen project.
 
+    ``features`` selects the graph the *verification* build resolves rather than the default one,
+    and passing it is not optional wherever the answer is about CVLR. A scaffolded project declares
+    its CVLR crates ``optional = true`` behind the ``certora`` feature — which is what keeps them
+    out of a release build — so a default-feature read reports them as absent. Discovered by
+    scaffolding a real project: the version-gap report said ``cvlr-solana is not a dependency`` for a
+    project that had just been given one, and the source mount §5.5 depends on would have found
+    nothing to mount. Features resolve against the package cargo considers current, so pass the
+    *package* directory as ``project_root`` when naming one; ``workspace_root`` in the payload is
+    the workspace either way.
+
     Synchronous because :meth:`composer.rustapp.toolchain.ProjectToolchain.source_unit` is, and a
     blocking primitive with an async wrapper is the only arrangement that serves both callers
     without one of them running an event loop it does not have.
     """
-    payload = _cargo_metadata(project_root, offline=offline, timeout_s=timeout_s)
+    payload = _cargo_metadata(
+        project_root, offline=offline, features=features, timeout_s=timeout_s
+    )
     if payload is None:
         return None
     try:
@@ -218,9 +265,17 @@ def read_workspace_sync(
 
 
 async def read_workspace(
-    project_root: Path, *, offline: bool = False, timeout_s: int = METADATA_TIMEOUT_S
+    project_root: Path,
+    *,
+    offline: bool = False,
+    features: tuple[str, ...] = (),
+    timeout_s: int = METADATA_TIMEOUT_S,
 ) -> Workspace | None:
     """:func:`read_workspace_sync`, off the event loop."""
     return await asyncio.to_thread(
-        read_workspace_sync, project_root, offline=offline, timeout_s=timeout_s
+        read_workspace_sync,
+        project_root,
+        offline=offline,
+        features=features,
+        timeout_s=timeout_s,
     )

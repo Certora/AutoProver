@@ -85,12 +85,23 @@ class ChainReference:
     """What "current CVLR" means for one chain."""
 
     core: CrateRelease
-    chain_crates: tuple[CrateRelease, ...]
+    #: The chain crate every project on this chain declares.
+    chain: CrateRelease
     platform: PlatformGeneration
+    #: Chain crates that model one specific on-chain program rather than the chain itself, so a
+    #: target declares them only if it verifies that program. Separate from :attr:`chain` because
+    #: the two answer different questions: the corpus is compiled against all of them, while a
+    #: scaffold that declared all of them would add a dependency nobody uses.
+    specializations: tuple[CrateRelease, ...] = ()
     unpublished: tuple[UnpublishedCapability, ...] = ()
 
     def crates(self) -> tuple[CrateRelease, ...]:
-        return (self.core, *self.chain_crates)
+        """Every CVLR crate in the reference set — what the corpus was written against."""
+        return (self.core, self.chain, *self.specializations)
+
+    def scaffold_crates(self) -> tuple[CrateRelease, ...]:
+        """What a fresh project declares in its ``Cargo.toml``."""
+        return (self.core, self.chain)
 
     def cargo_dependencies(self) -> str:
         """A ``[dependencies]`` body pinning this reference set, for a probe or scaffold crate.
@@ -109,10 +120,8 @@ _CORE = CrateRelease("cvlr", "0.6.1")
 
 SOLANA = ChainReference(
     core=_CORE,
-    chain_crates=(
-        CrateRelease("cvlr-solana", "0.5.0"),
-        CrateRelease("cvlr-solana-stake", "0.5.0"),
-    ),
+    chain=CrateRelease("cvlr-solana", "0.5.0"),
+    specializations=(CrateRelease("cvlr-solana-stake", "0.5.0"),),
     platform=PlatformGeneration(
         label="solana-program 2.x (the last monolithic line)",
         crates=(CrateRequirement("solana-program", "2.2"),),
@@ -132,10 +141,10 @@ SOLANA = ChainReference(
 
 SOROBAN = ChainReference(
     core=_CORE,
-    chain_crates=(
-        CrateRelease("cvlr-soroban", "0.4.0"),
-        CrateRelease("cvlr-soroban-derive", "0.4.0"),
-    ),
+    chain=CrateRelease("cvlr-soroban", "0.4.0"),
+    # The derive crate is a companion rather than a specialization, but it is declared the same
+    # way: a target reaches for it only when it writes the attribute macros.
+    specializations=(CrateRelease("cvlr-soroban-derive", "0.4.0"),),
     platform=PlatformGeneration(
         label="soroban-sdk 22.x",
         crates=(CrateRequirement("soroban-sdk", "22"),),

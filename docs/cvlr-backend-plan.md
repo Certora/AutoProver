@@ -59,7 +59,8 @@ source ─analyze─▶ App model ─extract─▶ properties ─formalize─▶
 | `certoraSolanaProver` / `certoraSorobanProver` CLIs | **Already installed in the venv** | `certora_cli` |
 | RAG corpus registry (`KNOWLEDGE_BASES`, `rag_env`) | **`cvlr_kb` registered** — the first corpus in either map | [rag/db.py](../composer/rag/db.py), [tools/rag_env.py](../composer/tools/rag_env.py) |
 | CVLR corpus · CVLR KB articles | **Three manifests under one tag** (§7.3.1): published docs, generated crate reference, project-derived idioms — all produced in and shipped from the private repo | [rag/import_format.py](../composer/rag/import_format.py), [rag/html_manual.py](../composer/rag/html_manual.py) |
-| Project scaffold · authoring loop · Solana CEX analysis | **Nothing** | — |
+| Preflight scaffold | **Done** (§7.4): deterministic, idempotent, refuses two decisions rather than guessing | [cvlr/scaffold.py](../composer/spec/cvlr/scaffold.py), [cvlr/preflight.py](../composer/spec/cvlr/preflight.py) |
+| Authoring loop · Solana CEX analysis | **Nothing** | — |
 
 **Phase 0 (hands-on experience) is done.** Several team members have completed real Solana
 verification projects. What that changes: the first phase is not discovery, it is **capture** —
@@ -675,6 +676,85 @@ intended shape, plus canonical `*_core` inlining and summaries files and a conf 
 client layouts as evidence of what varies in the wild — useful for making the scaffold tolerant —
 not as candidates for what it should emit.
 
+#### 7.4.1 State
+
+| Piece | State |
+|---|---|
+| Templated project shape | **Done** — [scaffold.py](../composer/spec/cvlr/scaffold.py): the harness module tree, the cargo feature, the three `Cargo.toml` stanzas, `.gitignore` |
+| Cargo feature wiring | **Done** — `certora = ["no-entrypoint", "dep:cvlr", "dep:cvlr-solana"]`, with `no-entrypoint` included only when the package has it and the CVLR deps `optional` so a release build never sees them |
+| Env (inlining / summaries) files | **Done** — the template's three-layer split, vendored with a provenance stamp; [refresh_cvlr_envs.py](../composer/scripts/refresh_cvlr_envs.py) re-vendors and records the upstream commit |
+| Conf | **Already done in phase 1b** — the run owns its conf ([conf.py](../composer/spec/cvlr/conf.py)); the scaffold writes none, so there is no second opinion about prover flags |
+| Preflight step and its gate | **Done** — [preflight.py](../composer/spec/cvlr/preflight.py), split into `prepare_workspace` and `gate_workspace` so only the compile lands on the run's CPU budget |
+| Validated against a non-reference project | **Done** — the public examples' `vault_application`, stripped back to plain program code and scaffolded from nothing: it compiles with the harness in, and vanishes cleanly without the feature |
+| Agent assistance | **None needed.** See below |
+
+**Where a template cannot decide, it refuses.** §7.4 asked for agent assistance "only where a
+template genuinely cannot decide", and the honest answer is nowhere: every decision is read from
+`cargo metadata` or from the reference set. The two cases that are not decidable turn out to want a
+*human*, not a model, because each is a change to how the project builds for everyone:
+
+- **A package that builds no `cdylib`.** Adding one changes how that library builds everywhere.
+- **A CVLR pin that contradicts the project's platform generation** (§7.4.2).
+
+Both are `Blocked`, and a plan carrying either applies *nothing* — a half-scaffolded project turns
+the next build failure into a question with two candidate answers.
+
+**Idempotence is the property that mattered most**, because a scaffold gets re-run whenever anyone
+is unsure whether it ran. Nothing is ever overwritten, and every manifest change is computed from
+the *parsed* manifest, so a second run is a no-op. That is also the one thing the template's own
+`certora-setup.py` gets wrong: it appends to `Cargo.toml` unconditionally, so running it twice
+leaves a manifest cargo will not parse. One change cannot be an append — re-opening `[features]` at
+the end of a manifest is a duplicate-table error — so that key is inserted into the table the
+package already has, and the project's comments and ordering survive because the manifest is never
+reserialized.
+
+#### 7.4.2 What building it found
+
+**The platform pairing fails to compile, and does so illegibly.** The reference set already said a
+CVLR chain crate *implies* a platform generation; what was missing was anywhere that could notice
+the implication is false for a given project. Given `cvlr-solana` 0.5.0 on a `solana-program` 1.18
+project, rustc says:
+
+```
+expected `[AccountInfo<'_>; 8]`, found `[AccountInfo<'_>; 16]`
+note: `solana_account_info::AccountInfo<'_>` and `AccountInfo<'_>` have similar names,
+      but are actually distinct types
+```
+
+Two independent mismatches — the type *and* the arity — and the note is the only clue that there are
+two `AccountInfo`s in the build. That was measured rather than assumed, and it is why the check runs
+before the pin is written rather than after.
+
+**An optional dependency is invisible to `cargo metadata`.** The scaffold declares CVLR
+`optional = true`, which is what keeps it out of a release build — and a default-feature
+`cargo metadata` therefore reports it absent. Found by reading the first real preflight's output: the
+version-gap report said `cvlr-solana is not a dependency` for a project that had just been given one,
+and [crates.py](../composer/spec/cvlr/crates.py)`.roots()` — the CVLR **source mount** that §5.5 calls
+the cheaper half of the answer to the hallucination risk — would have found nothing to mount. The
+whole §5.5 mitigation would have been silently empty on every scaffolded project. `read_workspace`
+now takes `features`, and preflight resolves the graph the verification build actually gets, from the
+package's own directory (feature selection resolves against the package cargo considers current).
+
+**`cargo metadata` reports where the library's source is**, and the scaffold reads it instead of
+assuming `src/lib.rs`, because `[lib] path` can move it and a module declaration appended to a file
+nothing compiles is a scaffold that reports success and changes nothing.
+
+**Open question 1 is now answered.** The `certora` feature the fast tier was measured against in
+§5.1 was empty; the scaffolded project's is not — `["no-entrypoint", "dep:cvlr", "dep:cvlr-solana"]`
+— and the host-target `cargo check` accepts it, catches a deliberate error inside the harness, and
+confirms the whole subtree disappears without the feature.
+
+#### 7.4.3 Four gaps in the recommended starting point
+
+Worked around here rather than reproduced, and worth reporting upstream:
+
+| Gap | Consequence |
+|---|---|
+| `[package.metadata.certora] sources` omits `Cargo.toml` | `.certora_sources` — what the report and the CEX analyzer read — has no manifest, so the collected tree cannot be rebuilt. The public examples include it |
+| `[workspace.dependencies]` pins CVLR 0.4 by hand | Two places decide which release "current" means. The scaffold uses the reference set, which is the one place that should |
+| `mod.rs` never declares `utils.rs` | The file ships and is never compiled. Not emitted here |
+| `README` names `solana_inlining.txt` / `solana_summaries.txt` | The shipped files are `cvlr_*`; a reader following the README edits nothing |
+
 ### 7.5 Phase 4 — The authoring loop
 
 The `Formalizer`, mirroring [source/author.py](../composer/spec/source/author.py): author →
@@ -723,17 +803,23 @@ whether any of these pieces deserve to be bundled after all.**
 | macOS | Unconfined local builds allowed for dev via an explicit opt-out; never in production or CI |
 | Compile gate | Two tiers (fast `cargo check` per edit, full build per submission) |
 | Conf style | From-sources, through a `build_script` the backend generates — it builds inside the sandbox and the prover reruns that same command (§7.2.2) |
-| Setup | Templated preflight; no AutoSetup |
+| Setup | Templated preflight; no AutoSetup — and it turned out to need no agent at all (§7.4.1) |
+| Scaffold shape | From `Certora/solana-spec-template`, the recommended starting point, not from a vote over client layouts; the public examples break ties about what actually runs |
+| Scaffold safety | Never overwrite, compute every manifest change from the parsed manifest, and refuse rather than guess where a decision changes how the project builds for everyone |
+| Env (inlining/summaries) files | Vendored with a provenance stamp naming the upstream commit, in the template's three-layer split so the project's own layer is never a canonical file |
 | RAG | A single `cvlr_kb` corpus with chain-tagged sections, fed by three manifests — published docs, generated crate reference, project-derived practice — all produced in and shipped from a separate private repo, because *build cost* rather than confidentiality is what decides where a producer lives ([capture plan](./cvlr-capture-plan.md) §8.2) |
 | CVLR source | Mounted read-only as its own tool set (not a project-VFS layer), version resolved by the host from `cargo metadata`, available to the code explorer and the author, and named as authoritative in the prompt |
 | Ship order | Solana end-to-end first; Soroban pack after |
 
 ### Open — to close during Phase 1
 
-1. **Is a host-target `cargo check --features certora` a faithful proxy for the SBF build?**
-   Measure; if not, the fast tier becomes a cheaper SBF-target check. *Partially answered* (§5.1):
-   both tiers accept the public examples, but that fixture's `certora` feature is empty, so the
-   `no-entrypoint` case the question is actually about is still untested.
+1. ~~**Is a host-target `cargo check --features certora` a faithful proxy for the SBF build?**~~
+   **Answered, for the case the question was about** (§7.4.2). §5.1 measured both tiers against a
+   fixture whose `certora` feature was empty; the scaffolded project's enables `no-entrypoint` and
+   two optional CVLR crates, and the host-target check accepts it, rejects a deliberate error inside
+   the harness, and confirms the subtree compiles away without the feature. What a host check still
+   cannot catch is what only the SBF target can, which is why the slow tier remains the
+   pre-submission gate rather than an optimization.
 2. ~~**Conf style: `[package.metadata.certora]` from-sources, or explicit pre-built `.so`?**~~
    **Settled: from-sources, through a build script the backend owns** (§7.2.2). The capture survey
    found `build_script` in 15 of 16 projects and `[package.metadata.certora]` with exactly three
