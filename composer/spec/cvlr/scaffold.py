@@ -387,32 +387,38 @@ def _check_platform(workspace: Workspace, reference: ChainReference) -> list[Blo
     reference set already says a chain crate *implies* a generation
     (:class:`~composer.spec.cvlr_reference.PlatformGeneration`); this is the one place that can
     notice the implication is false for a given project, and it can only notice before writing.
+
+    The first witness the project resolves decides, and no later one is consulted: the witnesses
+    are ordered most-specific-first precisely because a target on a newer generation resolves only
+    the specific one. Falling through to a broader witness after a specific one has answered would
+    re-introduce the hole the ordering exists to close.
     """
-    blocked = []
-    for requirement in reference.platform.crates:
-        resolved = workspace.resolved(requirement.name)
+    for witness in reference.platform.witnesses:
+        resolved = workspace.resolved(witness.name)
         if resolved is None:
             continue
-        if _generation(resolved.version) == _generation(requirement.line):
-            continue
-        blocked.append(
+        if _generation(resolved.version) == _generation(witness.line):
+            return []
+        return [
             Blocked(
                 path=Path("Cargo.toml"),
                 problem=(
-                    f"this project builds {requirement.name} {resolved.version}, but the CVLR "
+                    f"this project builds {witness.name} {resolved.version}, but the CVLR "
                     f"releases the reference set names are bound to {reference.platform.label} — "
                     f"and each generation has its own AccountInfo type, so the pairing does not "
-                    f"compile rather than merely warning"
+                    f"compile rather than merely warning. The scaffold itself would still build; "
+                    f"what fails is the first authored rule that hands one of this project's "
+                    f"accounts to a CVLR helper"
                 ),
                 resolution=(
-                    f"either move the project to {requirement.name} {requirement.line}, or pin the "
+                    f"either move the project to {witness.name} {witness.line}, or pin the "
                     f"CVLR line that matches {resolved.version} by hand (the project's own pin is "
                     f"always respected) — picking one of those is a decision about the project, "
                     f"not about the scaffold"
                 ),
             )
-        )
-    return blocked
+        ]
+    return []
 
 
 def _plan_workspace_manifest(

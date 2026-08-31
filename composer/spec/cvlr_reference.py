@@ -63,6 +63,20 @@ class PlatformGeneration:
 
     label: str
     crates: tuple[CrateRequirement, ...]
+    #: The crates whose presence in a *target's* graph reveals which generation it is already on,
+    #: most specific first — the scaffold's platform gate resolves the first one it finds and
+    #: compares generations.
+    #:
+    #: A separate list from :attr:`crates` because the two roles disagree at exactly the moment
+    #: that matters. :attr:`crates` names what *this* generation declares, so it can only ever
+    #: mention crates this generation has; but a target on a *newer* generation is detected
+    #: precisely by the crate this one lacks. Solana's v3 split moved ``AccountInfo`` out of
+    #: ``solana-program`` and stopped publishing that crate, so a v3 target resolves no
+    #: ``solana-program`` at all — and a gate that only asked about ``solana-program`` read that
+    #: absence as "the project has no opinion" and waved the target through. Naming the crate that
+    #: actually carries the type, and that survived the split, is what makes the answer legible
+    #: across it.
+    witnesses: tuple[CrateRequirement, ...]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -125,6 +139,14 @@ SOLANA = ChainReference(
     platform=PlatformGeneration(
         label="solana-program 2.x (the last monolithic line)",
         crates=(CrateRequirement("solana-program", "2.2"),),
+        # ``solana-account-info`` first: it defines ``AccountInfo`` itself and exists on both 2.x
+        # and 3.x, so it answers the question across the split that ``solana-program`` cannot.
+        # ``solana-program`` remains as the fallback for the 1.18 line, which predates the split
+        # and defines the type inside the monolith.
+        witnesses=(
+            CrateRequirement("solana-account-info", "2.3"),
+            CrateRequirement("solana-program", "2.2"),
+        ),
     ),
     unpublished=(
         UnpublishedCapability(
@@ -148,6 +170,10 @@ SOROBAN = ChainReference(
     platform=PlatformGeneration(
         label="soroban-sdk 22.x",
         crates=(CrateRequirement("soroban-sdk", "22"),),
+        # Soroban ships one SDK crate rather than a family, so declaring it and witnessing it are
+        # the same crate. Spelled out rather than defaulted: they coincide here as a fact about
+        # this platform, not as a rule, and Solana is the proof that the two can diverge.
+        witnesses=(CrateRequirement("soroban-sdk", "22"),),
     ),
 )
 
