@@ -29,4 +29,3 @@ test_scenarios/**/lib/forge-std
 # committing them would create a second copy that silently goes stale.
 scripts/prover-docs/PROVENANCE
 scripts/cvlr-docs/
-scripts/cvlr-crates/
