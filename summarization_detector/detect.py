@@ -134,6 +134,10 @@ class Candidate:
 class DetectionReport:
     candidates: list[Candidate] = field(default_factory=list)
     dropped: int = 0   # candidates cut by the per-category caps (0 = the whole ranked list is present)
+    # The CUT's own prover-hostile EXTERNAL methods (the rules' subjects): (qualified name, % nonlinear ops),
+    # highest-% first. They are never summarized themselves, but detect_url descends each to its shallowest
+    # sound inner boundary and adds THAT as a `toxic-entrypoint` candidate. Not serialized (consumed in-process).
+    toxic_entrypoints: list[tuple[str, float]] = field(default_factory=list)
 
     def is_empty(self) -> bool:
         return not self.candidates
@@ -715,6 +719,7 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
     #                              keeping the highest-contribution instance (hotspots are pct-sorted).
     surviving_bare = {raw.split("(", 1)[0].rpartition(".")[2] for raw in (surviving or {})}
     seen_internal: set[str] = set()
+    toxic_entrypoints: list[tuple[str, float]] = []
     for h in hotspots:                                       # already excludes CVL/Ghost
         if h.pct < NONLINEAR_MIN_PCT:                        # drop the long, low-contribution tail
             continue
@@ -723,6 +728,7 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
         contract = _contract_of(fn)
         bare = fn.rpartition(".")[2]
         if contract == cut and not internal:                # the CUT's own external method (rule subject)
+            toxic_entrypoints.append((fn, float(h.pct)))     # not summarizable itself; descend to a boundary later
             continue
         if bare in surviving_bare:                          # already a correctly-named surviving candidate
             continue
@@ -782,7 +788,10 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
         if per_cat.get(cat, 0) < MAX_PER_CATEGORY.get(cat, 0):
             per_cat[cat] = per_cat.get(cat, 0) + 1
             kept.append(c)
-    return DetectionReport(candidates=kept, dropped=len(ranked) - len(kept))
+    return DetectionReport(
+        candidates=kept, dropped=len(ranked) - len(kept),
+        toxic_entrypoints=sorted(toxic_entrypoints, key=lambda t: -t[1])[:5],  # top 5 by nonlinear-ops %
+    )
 
 
 def _survives(function: str, surviving_set: set[str], survivors_bare: set[str]) -> bool:
@@ -872,6 +881,23 @@ def detect(job_url: str | None = None, *, ast_path: str | Path | None = None,
                     if not expressible:      # a shared primitive we can't express as a value is no target
                         continue
                     c.boundaries.append(Boundary(p, d, sig, mutating, direction="down", shared=fanin.get(p, 1)))
+        # Prover-toxic CUT entrypoints (the rules' own external subjects) can't be summarized themselves, but
+        # their shallowest sound inner boundary can. Surface that boundary as a candidate — this is what a
+        # human summarizes when the method under test times out (e.g. liquidationCall ->
+        # _calculateLiquidationAmounts), which no leaf-primitive signal catches.
+        present = {c.function for c in report.candidates}
+        for ep, pct in report.toxic_entrypoints:
+            boundary = _shallowest_view_boundary(edges, sigs, ep, bounds_reach)
+            if boundary is None or boundary in present:
+                continue
+            present.add(boundary)
+            report.candidates.append(Candidate(
+                function=boundary, signals=("toxic-entrypoint",), score=float(pct),
+                evidence=f"shallowest summarizable boundary of prover-toxic {ep} ({pct:.0f}% of nonlinear "
+                         f"ops) — the method under test can't be summarized, but this internal view can, "
+                         f"cutting its whole subtree",
+            ))
+        report.candidates.sort(key=lambda c: (-c.score, c.function))     # re-rank with the new candidates
     # attach each candidate's source location (file always; line when the source is readable)
     locations = _function_locations(ast, sources_root)
     for c in report.candidates:
@@ -1182,6 +1208,61 @@ _NONLINEAR_PRIMS = {
 
 def _is_nonlinear_prim(qual: str) -> bool:
     return qual.rpartition(".")[2] in _NONLINEAR_PRIMS
+
+
+def _entrypoint_in_edges(edges: dict, entrypoint: str) -> str | None:
+    """Locate a difficulty-reported entrypoint (`SpokeInstance.liquidationCall`) among the AST call-graph
+    keys, which are keyed by the DECLARING contract (`Spoke.liquidationCall` when the CUT inherits it).
+    Exact match first, else the unique bare-name match; None if absent or ambiguous."""
+    if entrypoint in edges:
+        return entrypoint
+    bare = entrypoint.rpartition(".")[2]
+    hits = [k for k in edges if k.rpartition(".")[2] == bare]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _shallowest_view_boundary(edges: dict, sigs: dict, entrypoint: str,
+                              reachable: set[str] | None, max_depth: int = 6) -> str | None:
+    """The SHALLOWEST sound summarization boundary inside a prover-toxic entrypoint's call subtree.
+
+    Walks DOWN from `entrypoint` and returns the first internal function that is safe to replace with a
+    value: `view`/`pure` (no state to erase), CVL-expressible return, internal (not itself a rule subject),
+    not a bare nonlinear primitive (those are already curated), and an AGGREGATOR — its own subtree reaches
+    a nonlinear primitive, so it dominates real cost rather than being a trivial getter. Shallowest = the
+    highest such boundary = cuts the most subtree in one entry (e.g. liquidationCall ->
+    _calculateLiquidationAmounts). Ties at a depth: the one aggregating the most primitives. None if the
+    subtree has no such boundary."""
+    start = _entrypoint_in_edges(edges, entrypoint)
+    if start is None:
+        return None
+    seen = {start}
+    frontier, depth = {start}, 0
+    while frontier and depth < max_depth:
+        depth += 1
+        at_depth: list[tuple[str, int]] = []
+        nxt: set[str] = set()
+        for f in frontier:
+            for callee in edges.get(f, ()):
+                if callee in seen:
+                    continue
+                seen.add(callee)
+                nxt.add(callee)
+                sg = sigs.get(callee)
+                if sg is None:
+                    continue
+                _sig, expressible, mutating, is_external = sg
+                if expressible and not mutating and not is_external and not _is_nonlinear_prim(callee):
+                    # Ungated prim-descent: a toxic entrypoint is a difficulty hotspot (it reached SMT), so
+                    # its whole subtree is live — the reachability BFS would wrongly exclude it when the
+                    # entrypoint is inherited (declared on a parent, CUT is the child), which is the common case.
+                    prims = _descend_to_prims(edges, callee, None)
+                    if prims:                                # an aggregator of expensive math, not a getter
+                        at_depth.append((callee, len(prims)))
+        if at_depth:                                         # shallowest depth with a boundary wins
+            at_depth.sort(key=lambda kv: (-kv[1], kv[0]))
+            return at_depth[0][0]
+        frontier = nxt
+    return None
 
 
 def _descend_to_prims(edges: dict, method: str, reachable: set[str] | None,

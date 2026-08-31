@@ -507,3 +507,70 @@ def test_function_locations_normalizes_absolute_ast_paths():
         locs = _function_locations(ap, sources_root=root)
     assert locs["MathUtils.uncheckedExp"] == ("src/math/MathUtils.sol", 3)   # absolute key -> relative
     assert locs["LibBit.fls"][0] == "src/dep/LibBit.sol"                      # relative key -> unchanged
+
+
+# --- toxic-entrypoint -> shallowest inner boundary ---------------------------
+
+from summarization_detector.detect import (  # noqa: E402
+    _shallowest_view_boundary, _entrypoint_in_edges,
+)
+
+
+def test_detect_from_collects_toxic_entrypoints_top5_by_pct():
+    # Six CUT-external hotspots (rule subjects) -> not candidates, but retained as toxic entrypoints,
+    # highest-% first, capped at 5.
+    diff = DifficultyReport(hotspots=[
+        Hotspot("C.liquidationCall", 78, "C.sol:1"),
+        Hotspot("C.setUsingAsCollateral", 70, "C.sol:2"),
+        Hotspot("C.updateUserRiskPremium", 70, "C.sol:3"),
+        Hotspot("C.borrow", 58, "C.sol:4"),
+        Hotspot("C.withdraw", 54, "C.sol:5"),
+        Hotspot("C.getUserAccountData", 40, "C.sol:6"),   # 6th -> dropped by top-5
+    ])
+    rep = detect_from([], diff, cut="C")
+    assert [f for f, _ in rep.toxic_entrypoints] == [
+        "C.liquidationCall", "C.setUsingAsCollateral", "C.updateUserRiskPremium", "C.borrow", "C.withdraw",
+    ]
+    assert rep.candidates == []  # the external subjects themselves are never candidates
+
+
+def _sig(sig, expressible, mutating, external):
+    return (sig, expressible, mutating, external)
+
+
+def test_shallowest_view_boundary_picks_aggregating_view():
+    # liquidationCall -> liquidateUser (mutating) -> _calculateLiquidationAmounts (view, expressible,
+    # reaches mulDiv) -> mulDiv (primitive). The boundary is _calculateLiquidationAmounts.
+    edges = {
+        "C.liquidationCall": {"C.liquidateUser", "C.getConfig"},
+        "C.liquidateUser": {"C._calculateLiquidationAmounts"},
+        "C._calculateLiquidationAmounts": {"M.mulDiv"},
+        "C.getConfig": set(),  # a trivial view getter, reaches no primitive
+        "M.mulDiv": set(),
+    }
+    sigs = {
+        "C.liquidationCall": _sig("liquidationCall()", True, True, True),      # external subject
+        "C.liquidateUser": _sig("liquidateUser()", True, True, False),         # mutating -> not a boundary
+        "C.getConfig": _sig("getConfig()->uint", True, False, False),          # view but no prim -> skip
+        "C._calculateLiquidationAmounts": _sig("_calc()->Amounts", True, False, False),  # THE boundary
+        "M.mulDiv": _sig("mulDiv()->uint", True, False, False),
+    }
+    reach = set(edges) | {"M.mulDiv"}
+    assert _shallowest_view_boundary(edges, sigs, "C.liquidationCall", reach) == "C._calculateLiquidationAmounts"
+
+
+def test_shallowest_view_boundary_none_when_no_view_aggregator():
+    edges = {"C.f": {"M.mulDiv"}, "M.mulDiv": set()}
+    sigs = {"C.f": _sig("f()", True, True, True), "M.mulDiv": _sig("mulDiv()", True, False, False)}
+    # f is mutating+external; mulDiv is a bare primitive (excluded) -> no boundary
+    assert _shallowest_view_boundary(edges, sigs, "C.f", set(edges)) is None
+
+
+def test_entrypoint_in_edges_bare_name_fallback():
+    # difficulty names it by the CUT; the AST call graph keys it by the declaring (inherited) contract.
+    edges = {"Spoke.liquidationCall": {"x"}}
+    assert _entrypoint_in_edges(edges, "SpokeInstance.liquidationCall") == "Spoke.liquidationCall"
+    assert _entrypoint_in_edges(edges, "Spoke.liquidationCall") == "Spoke.liquidationCall"
+    # ambiguous bare name -> None
+    edges2 = {"A.f": set(), "B.f": set()}
+    assert _entrypoint_in_edges(edges2, "C.f") is None
