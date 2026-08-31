@@ -5,11 +5,12 @@ tag to this module's :func:`get_tools`. Structurally a sibling of
 :mod:`composer.tools.foundry_rag`: the same three retrieval styles over the same
 :class:`~composer.rag.db.ComposerRAGDB` API.
 
-The corpus is fed by **two manifests sharing this one tag** (``docs/cvlr-capture-plan.md`` §8.2):
-a public one built from the published Solana/CVLR documentation plus a generated CVLR crate
-reference, and a project-derived one carrying idioms extracted from completed verification
-projects. Which manifests a given database was loaded from is deliberately invisible here — the
-tag is the unit of resolution, and an install with only the public half is a supported state.
+The corpus is fed by **three manifests sharing this one tag** (``docs/cvlr-capture-plan.md`` §8.2):
+the published Solana/CVLR documentation, a generated reference for every public item of the pinned
+CVLR release set, and a project-derived manifest carrying idioms extracted from completed
+verification projects. Which manifests a given database was loaded from is deliberately invisible
+here — the tag is the unit of resolution, and an install with only some of them is a supported
+state.
 
 One thing the tool surface *does* expose: a project-derived entry can be marked unreviewed
 (``docs/cvlr-capture-plan.md`` §4.8 — ``proposed`` status, pending expert sign-off). The
