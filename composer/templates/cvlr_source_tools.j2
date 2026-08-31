@@ -1,0 +1,25 @@
+{#-
+  Guidance for the mounted CVLR crate source (cvlr_source_files / cvlr_source_read /
+  cvlr_source_search). Backend plan §5.5: the host resolves the version, the agent never
+  guesses it.
+-#}
+The complete source of the CVLR crates this project builds against is mounted read-only, at the
+versions this build resolves: **{{ cvlr_versions }}**.
+
+* `cvlr_source_files(pattern)` -- list the mounted files.
+* `cvlr_source_read(path)` -- read one.
+* `cvlr_source_search(query)` -- search across them.
+
+**This is the authority.** Every macro definition and every helper signature is on disk, in the
+exact version that will compile. If you are unsure whether `nondet_option` exists, what
+`cvlr_assert_le!` expands to, or which module a name is re-exported from, read it — do not infer it
+from a corpus entry, from another project, or from memory. Every path carries its version
+(`cvlr-asserts-0.6.1/src/core.rs`), so an answer you take from here cannot be about a different
+release than the one being built.
+
+Two habits that pay for themselves:
+
+* The facade re-exports almost everything, so a name you reach as `cvlr::x::y` is usually *defined*
+  in a sibling crate. Search the whole mount, not just `cvlr`.
+* `lib.rs` of a crate tells you what is public and what is behind a feature. A helper that exists
+  but is gated is a compile error that reads like a missing item.

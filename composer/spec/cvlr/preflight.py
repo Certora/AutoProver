@@ -62,6 +62,10 @@ class CvlrPreflight:
 
     workspace_root: Path
     package: str
+    #: The package's directory relative to the workspace root — where the harness module goes, and
+    #: which crate the build names. Carried rather than recomputed: the scaffold already resolved it
+    #: against this same workspace, and a second derivation is a second chance to disagree.
+    package_dir: Path
     #: The library target's file stem, which is what the built ``.so`` is named after.
     artifact_stem: str
     scaffold: ScaffoldPlan
@@ -153,6 +157,7 @@ async def prepare_workspace(
     return CvlrPreflight(
         workspace_root=resolved_in.root,
         package=fresh.name,
+        package_dir=fresh.root.resolve().relative_to(resolved_in.root.resolve()),
         artifact_stem=fresh.lib.artifact_stem,
         scaffold=plan,
         applied=applied,

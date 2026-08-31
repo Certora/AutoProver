@@ -1,0 +1,17 @@
+{#-
+  Shared guidance for the cvlr_kb RAG tools (cvlr_manual_search /
+  cvlr_keyword_search / cvlr_get_section). One corpus, three manifests: the published
+  Solana/CVLR manual, a generated reference for every public item of the CVLR crates,
+  and idioms abstracted from real verification projects.
+-#}
+* `cvlr_manual_search(query, ...)` -- natural-language search across the CVLR corpus. Prefer it
+  for conceptual questions ("how do I model a token account?", "when should a rule be
+  parametric?").
+* `cvlr_keyword_search(query, ...)` -- full-text search over the same corpus. Prefer it when you
+  already know the identifier you want; it returns section titles to feed to `cvlr_get_section`.
+* `cvlr_get_section(section_names)` -- fetch a section in full when you need its signature,
+  examples or caveats.
+
+The corpus is advice and reference. It is **not** the authority on what exists: it was written
+against particular CVLR releases, and this project may resolve different ones. When the two
+disagree, the crate source wins — see below.

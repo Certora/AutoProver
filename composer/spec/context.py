@@ -121,10 +121,16 @@ class CVLGeneration:
 class FoundryGeneration:
     """Abstraction for the foundry test-generation pipeline."""
 
+class CvlrJudge:
+    """CVLR harness feedback judge step."""
+
+class CvlrGeneration:
+    """Abstraction for the CVLR harness-generation pipeline."""
+
 class Contract:
     """An individual contract"""
 
-type Abstraction = CVLGeneration | FoundryGeneration
+type Abstraction = CVLGeneration | FoundryGeneration | CvlrGeneration
 
 class EditorAgent:
     """editor for a single property"""
@@ -135,7 +141,7 @@ class EditorJudge:
 
 type Marker = (
     Properties | ComponentGroup
-    | CVLJudge | FoundryJudge | Abstraction | Contract | EditorAgent | EditorJudge
+    | CVLJudge | FoundryJudge | CvlrJudge | Abstraction | Contract | EditorAgent | EditorJudge
 )
 
 # ---------------------------------------------------------------------------
