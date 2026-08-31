@@ -127,7 +127,7 @@ def _final_properties_key(
 #: The property batch as it left the property pipeline (post-inference plugin
 #: rewrites applied) plus the tool-contributing plugin ids — the exact
 #: derivation inputs of the FORMALIZATION_KEY sibling. Written by the driver;
-#: read by offline walkers (``composer.meta.run``) to reconstruct that edge.
+#: read by the offline cache walker (``composer.cli.cache_autoprove``) to reconstruct that edge.
 FINAL_PROPERTIES_KEY = KeyFamily(ComponentGroup, FinalProperties, _final_properties_key)
 
 

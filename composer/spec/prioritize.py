@@ -11,6 +11,11 @@ not an agent: an agent here would re-import the per-component cost the mode exis
 remove. Its output is validated in Python before anything acts on it — an unvalidated
 ranking would silently redirect the run's entire formalization budget.
 
+The model scores; it does not choose. Which property the run pursues falls out of those
+scores here (:func:`priority`, :func:`select`), so the ranking the artifact records and the
+property the run actually spends itself on are the same thing by construction rather than
+by agreement.
+
 The models live here rather than beside the cache key so ``pipeline/keys.py`` can
 import them without a cycle (see ``spec/key_family.py``: registries import producers,
 never the reverse), and the selection helper takes plain data so this module never
@@ -33,14 +38,19 @@ from composer.templates.loader import load_jinja_template
 
 _log = logging.getLogger(__name__)
 
-#: Ceiling on the supporting cluster. The primary property plus its lemmas is meant to
-#: stay a focused unit of work; past a handful of neighbours the batch is a component
-#: again and the mode has bought nothing.
-MAX_SUPPORTING = 4
+#: Ceiling on the supporting cluster. The primary property plus its lemmas is meant to stay a
+#: focused unit of work; past a couple of neighbours the batch is a component again and the mode
+#: has bought nothing.
+MAX_SUPPORTING = 2
+
+#: What a property the user actually raised is worth against one we inferred unaided. A bounded
+#: boost rather than a tiebreak or a dominator: a flagged concern should win at a comparable
+#: score, but should not drag a trivial property past a critical one.
+CRITICAL_MATCH_BONUS = 15
 
 
 class RankedProperty(BaseModel):
-    """One candidate's place in the ranking."""
+    """One candidate's place in the ranking, and what it rests on."""
     key: PropertyKey = Field(
         description="The [component, title] pair identifying the property, copied exactly "
         "from the candidate listing."
@@ -49,11 +59,18 @@ class RankedProperty(BaseModel):
         ge=0, le=100,
         description="How much proving this property would contribute to confidence in the "
         "overall correctness of the system, 0-100. Reserve the top of the range for "
-        "properties whose violation would be a critical bug.",
+        "properties whose violation would be a critical bug. Score the property's importance, "
+        "not how hard it looks to verify.",
     )
     critical_match: bool = Field(
         description="True if this property corresponds to a concern the user explicitly "
         "raised in the design document, threat model, or supplied context."
+    )
+    depends_on: list[PropertyTitle] = Field(
+        default_factory=list,
+        description="Titles of properties IN THIS PROPERTY'S OWN COMPONENT that would be needed "
+        "to state or discharge it: the lemmas it assumes, the invariants its argument leans on. "
+        "Not properties that are merely related to it. Leave empty if it stands alone.",
     )
     rationale: str = Field(
         description="One or two sentences justifying the score. Say what breaks if the "
@@ -62,24 +79,22 @@ class RankedProperty(BaseModel):
 
 
 class PropertyRanking(BaseModel):
-    """The full ranking plus the focus drawn from it."""
+    """Every candidate, scored. Which one the run pursues is derived from this, not stated
+    alongside it: see :func:`priority` and :func:`select`."""
     ranked: list[RankedProperty] = Field(
-        description="Every candidate property, highest score first. Each candidate must "
-        "appear exactly once."
-    )
-    primary: PropertyKey = Field(
-        description="The single property the run will pursue: the best combination of "
-        "contribution to overall correctness and match to the user's stated concerns."
-    )
-    supporting: list[PropertyKey] = Field(
-        description="Properties from the SAME component as the primary that are needed to "
-        "state or discharge it — lemmas it rests on, invariants it assumes. Not merely "
-        f"related properties. Leave empty if the primary stands alone. At most {MAX_SUPPORTING}."
+        description="Every candidate property, each appearing exactly once."
     )
     justification: str = Field(
-        description="Two to four sentences on why this property is the one worth the run's "
-        "whole verification budget, and what the supporting properties contribute to it."
+        description="Two to four sentences on which properties came out on top and why they are "
+        "the ones worth a verification budget."
     )
+
+
+def priority(rp: RankedProperty) -> int:
+    """What the run actually sorts on. The scoring model reports two things it can judge — how much
+    the property matters, and whether the user asked for it — and this is the one place their
+    trade-off is decided, so it is reviewable and the artifact can never disagree with the pick."""
+    return rp.score + (CRITICAL_MATCH_BONUS if rp.critical_match else 0)
 
 
 @dataclass(frozen=True)
@@ -107,20 +122,31 @@ class Selection:
 def build_candidates(
     units: Sequence[tuple[int, ComponentName, list[PropertyFormulation]]]
 ) -> list[Candidate]:
-    """Label every unit uniquely for the prompt. A name shared by two components gets a
-    disambiguating suffix rather than being silently merged."""
-    seen: Counter[str] = Counter()
+    """Label every unit for the prompt, uniquely.
+
+    Counting repeats is not enough: a component may itself be named ``Vault (2)``, and then a
+    second ``Vault`` numbered by count collides with it. Since the label is what the ranking names
+    a property by, a collision resolves a ranked entry onto the wrong component's batch. Suffix
+    until the label is actually unused instead, and assert it."""
+    taken: set[str] = set()
     out: list[Candidate] = []
     for unit_index, name, props in units:
-        seen[name] += 1
-        label = name if seen[name] == 1 else f"{name} ({seen[name]})"
+        label, n = name, 1
+        while label in taken:
+            n += 1
+            label = f"{name} ({n})"
+        taken.add(label)
         out.append(Candidate(unit_index, ComponentName(label), props))
+    assert len({c.label for c in out}) == len(out), "component labels must be unique"
     return out
 
 
 def validate_ranking(candidates: Sequence[Candidate], r: PropertyRanking) -> str | None:
     """``None`` if the ranking is usable, else the reason it is not — phrased for the model,
-    since it is fed straight back as the retry prompt."""
+    since it is fed straight back as the retry prompt.
+
+    There is no "did it pick the right one" check here, because nothing picks: the focus is
+    derived from these scores by :func:`select`."""
     by_key: dict[PropertyKey, Candidate] = {
         (c.label, p.title): c for c in candidates for p in c.props
     }
@@ -140,38 +166,40 @@ def validate_ranking(candidates: Sequence[Candidate], r: PropertyRanking) -> str
             "Every candidate must be ranked, including the ones you consider unimportant."
         )
 
-    primary = r.primary
-    if primary not in by_key:
-        return f"`primary` {primary} is not one of the candidate properties."
-
-    home = by_key[primary]
-    for key in r.supporting:
-        if key not in by_key:
-            return f"`supporting` entry {key} is not one of the candidate properties."
-        if by_key[key].unit_index != home.unit_index:
-            return (
-                f"`supporting` entry {key} belongs to a different component than the primary "
-                f"({home.label}). A run pursues one component's properties, so every supporting "
-                "property must come from the primary's own component."
-            )
+    for rp in r.ranked:
+        home = by_key[rp.key]
+        siblings = {p.title for p in home.props}
+        for dep in rp.depends_on:
+            if dep == rp.key[1]:
+                return (
+                    f"{rp.key} lists itself in `depends_on`. A property does not depend on itself."
+                )
+            if dep not in siblings:
+                return (
+                    f"{rp.key} lists {dep!r} in `depends_on`, which is not a property of its own "
+                    f"component ({home.label}). A run pursues one component's properties, so a "
+                    "dependency must come from the same component as the property that needs it."
+                )
     return None
 
 
 def select(candidates: Sequence[Candidate], r: PropertyRanking) -> Selection:
-    """Turn a *validated* ranking into the focus. Deduplicates the supporting cluster,
-    drops the primary from it, and truncates to :data:`MAX_SUPPORTING`."""
-    primary = r.primary
-    home = next(
-        c for c in candidates if any((c.label, p.title) == primary for p in c.props)
-    )
+    """Derive the focus from a *validated* ranking: the highest-priority property, plus what it
+    said it rests on, deduplicated and truncated to :data:`MAX_SUPPORTING`.
 
-    titles: list[PropertyTitle] = [primary[1]]
-    for key in r.supporting:
+    ``max`` keeps the first of equal-priority entries, so the model's own ordering still breaks
+    ties, but the choice itself is ours — which is what makes ``property_ranking.json`` and the
+    run's actual subject the same thing by construction."""
+    primary = max(r.ranked, key=priority)
+    home = next(c for c in candidates if c.label == primary.key[0])
+
+    titles: list[PropertyTitle] = [primary.key[1]]
+    for dep in primary.depends_on:
         if len(titles) - 1 == MAX_SUPPORTING:
             break
-        if key[1] in titles:
+        if dep in titles:
             continue
-        titles.append(key[1])
+        titles.append(dep)
 
     # Emit them in the component's own order so the author reads them as it would any
     # batch, with the primary first.

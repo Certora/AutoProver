@@ -621,6 +621,23 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
         )
         artifacts_ctx = child.child(PLUGIN_ARTIFACTS_KEY)
         cached_result: FormT | None = await child.cache_get(formalizer.formalized_type)
+        # A prioritized batch is usually a strict subset, so it usually forks this key — but not
+        # when the focus happens to be the component's whole list (a single-property component
+        # always). There the hit may be a comprehensive result that retired the very property this
+        # run exists to establish, and a replay never runs the author's tools, so none of the
+        # protections around the focus apply to it. Re-formalize instead; the fresh result
+        # overwrites the stale entry. This cannot loop: the live tools refuse to retire the focus,
+        # and the one path that overrides them (a budget wrap-up) yields a Curtailed, never cached.
+        if (
+            cached_result is not None
+            and run.run_mode is RunMode.PRIORITIZED
+            and not _focus_satisfied(cached_result, batch.props)
+        ):
+            _log.info(
+                "%s: cached formalization does not establish the focus; re-running",
+                batch.feat.display_name,
+            )
+            cached_result = None
         result : FormT | Curtailed[FormT] | GaveUp
         if cached_result is None:
             label = f"{batch.feat.display_name} ({len(batch.props)} properties)"
@@ -744,6 +761,17 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
 
 #: The driver-owned task id for the ranking step. Backend-agnostic, like the per-unit
 #: ``extract-{i}`` / ``formalize-{i}`` ids, so it lives here rather than in a backend's registry.
+def _focus_satisfied(result: BackendResult, props: Sequence[PropertyFormulation]) -> bool:
+    """Does this formalization actually establish every property of a prioritized batch?
+
+    Backend-agnostic: ``BackendResult`` carries the skip declarations and the property->checks
+    mapping, and an author excuses a property from that mapping precisely by skipping it. So
+    "mapped to at least one check, and not retired" is the whole test."""
+    checks = {title: names for title, names in result.property_checks()}
+    retired = {s.property_title for s in result.skipped}
+    return all(p.title not in retired and checks.get(p.title) for p in props)
+
+
 PRIORITIZE_TASK_ID = "prioritize"
 
 

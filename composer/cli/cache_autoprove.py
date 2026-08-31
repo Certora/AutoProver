@@ -44,9 +44,11 @@ from composer.spec.source.harness import (
 from composer.pipeline.cli import root_cache_key, user_ns
 from composer.pipeline.keys import (
     AGENT_RESULT_KEY, AGENT_ROUND_KEY, BUG_ANALYSIS_KEY,
-    COMMON_SYSTEM_CACHE_KEY, COMPONENT_KEY, FORMALIZATION_KEY,
+    COMMON_SYSTEM_CACHE_KEY, COMPONENT_KEY, FINAL_PROPERTIES_KEY, FORMALIZATION_KEY,
     PRE_PROPERTY_KEY, PROPERTIES_KEY, SYSTEM_ANALYSIS_KEY,
 )
+from composer.pipeline.ptypes import FinalProperties
+from composer.spec.types import PropertyFormulation
 from composer.pipeline.plugins import applicable_plugin_manifest, manifest_digest
 from composer.pipeline.run_tags import AutoProveCacheTags, CACHE_ROOT_RECORD
 from composer.core.user import get_uid
@@ -191,6 +193,34 @@ async def _resolve_bug_key(
     )
 
 
+async def _resolve_formalization_key(
+    feat_ctx: WorkflowContext,
+    tags: AutoProveCacheTags,
+    bug_items: list[PropertyFormulation],
+) -> CacheKey:
+    """The formalization edge, rebuilt the way the driver derived it.
+
+    ``FinalProperties`` exists for exactly this: it records the batch as it entered
+    formalization, after any post-inference plugin rewrote it and after a prioritized run pruned
+    it, together with the plugin ids that suffix the key. Reconstructing from the raw
+    property-inference output instead misses all three, and lands on a namespace that holds
+    nothing.
+
+    Falls back to the inference output for records written before that entry existed."""
+    xc_digest = combine_digests(tags.extra_context_digests)
+    final = await feat_ctx.child(
+        FINAL_PROPERTIES_KEY(
+            tags.threat_model_digest,
+            bool(tags.interactive),
+            xc_digest,
+            tags.run_mode or "comprehensive",
+        )
+    ).cache_get(FinalProperties)
+    if final is not None:
+        return FORMALIZATION_KEY(GeneratedCVL, final.items, final.tool_plugins)
+    return FORMALIZATION_KEY(GeneratedCVL, bug_items)
+
+
 async def _build_cvl_gen_nodes(
     ctx: WorkflowContext[CVLGeneration],
 ) -> AsyncGenerator[CacheTreeNode[AutoProveCachedValue], None]:
@@ -235,7 +265,7 @@ async def _build_component_nodes(
         bug_cache = await feat_ctx.child(bug_key).cache_get(_BugAnalysisCache)
         if bug_cache is None:
             return
-        batch_key = FORMALIZATION_KEY(GeneratedCVL, bug_cache.items)
+        batch_key = await _resolve_formalization_key(feat_ctx, tags, bug_cache.items)
         async with node_for(feat_ctx, batch_key, "CVL Generation", GeneratedCVL) as cvl_ctx:
             async for n in _build_cvl_gen_nodes(cvl_ctx.abstract(CVLGeneration)):
                 yield n

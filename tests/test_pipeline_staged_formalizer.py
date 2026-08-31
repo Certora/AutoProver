@@ -17,6 +17,7 @@ import asyncio
 import pytest
 
 from composer.pipeline.run_mode import RunMode
+from composer.authoring.state import SkippedProperty
 from composer.spec.prioritize import PropertyRanking, RankedProperty
 import composer.pipeline.core as core
 from composer.pipeline.core import run_pipeline
@@ -231,14 +232,19 @@ async def test_an_unstaged_formalizer_is_formalized_directly(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _ranking(primary, supporting, order):
+def _ranking(winner, deps, order):
+    """Score ``winner`` above everything else, so the derived focus is deterministic."""
     return PropertyRanking(
         ranked=[
-            RankedProperty(key=k, score=100 - i, critical_match=False, rationale="r")
-            for i, k in enumerate(order)
+            RankedProperty(
+                key=k,
+                score=90 if k == winner else 10,
+                critical_match=False,
+                depends_on=deps if k == winner else [],
+                rationale="r",
+            )
+            for k in order
         ],
-        primary=primary,
-        supporting=supporting,
         justification="j",
     )
 
@@ -251,7 +257,7 @@ async def test_prioritized_formalizes_one_batch_and_begin_still_sees_only_it(mon
     order = [("deposits", "a"), ("deposits", "b"), ("admin", "c"), ("farms", "d")]
     s = await _drive(
         monkeypatch, units, _Staged(), run_mode=RunMode.PRIORITIZED,
-        ranking=_ranking(("deposits", "a"), [("deposits", "b")], order),
+        ranking=_ranking(("deposits", "a"), ["b"], order),
     )
     assert s.calls[0] == ("begin", ["a", "b"])
     assert [c[0] for c in s.calls[1:]] == ["formalize:deposits"]
@@ -278,3 +284,40 @@ async def test_comprehensive_never_calls_the_ranker(monkeypatch):
     monkeypatch.setattr(core, "rank_properties", boom)
     s = await _drive(monkeypatch, {"deposits": ["a"], "admin": ["b"]}, _Staged())
     assert sorted(c[0] for c in s.calls) == ["begin", "formalize:admin", "formalize:deposits"]
+
+
+# ---------------------------------------------------------------------------
+# A cache hit must not smuggle a retired focus past the protections
+# ---------------------------------------------------------------------------
+
+
+class _Result:
+    """The two members ``_focus_satisfied`` reads off a backend result."""
+
+    def __init__(self, mapped: list[str], skipped: list[str] = []):
+        self._mapped = mapped
+        self.skipped = [SkippedProperty(property_title=t, reason="r") for t in skipped]
+
+    def property_checks(self):
+        return [(t, ["rule_" + t]) for t in self._mapped]
+
+
+def _props(*titles):
+    return [PropertyFormulation(title=t, sort="invariant", description="d") for t in titles]
+
+
+def test_a_result_that_maps_every_focus_property_satisfies_the_focus():
+    assert core._focus_satisfied(_Result(["a", "b"]), _props("a", "b"))  # type: ignore[arg-type]
+
+
+def test_a_skipped_focus_property_does_not_satisfy_the_focus():
+    # The exact hazard: a cached comprehensive result that retired the property a prioritized run
+    # exists to establish. A replay never runs the author's tools, so nothing else would catch it.
+    assert not core._focus_satisfied(  # type: ignore[arg-type]
+        _Result(["b"], skipped=["a"]), _props("a", "b")
+    )
+
+
+def test_an_unmapped_focus_property_does_not_satisfy_the_focus():
+    assert not core._focus_satisfied(_Result(["a"]), _props("a", "b"))  # type: ignore[arg-type]
+    assert not core._focus_satisfied(_Result([]), _props("a"))  # type: ignore[arg-type]

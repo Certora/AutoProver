@@ -122,7 +122,7 @@ class FinalProperties(BaseModel):
     every post-inference plugin rewrite — plus the tool-contributing plugin
     ids the driver gated in. Together these are exactly the inputs
     ``FORMALIZATION_KEY`` is derived from, so an offline walker
-    (``composer.meta.run``) can reconstruct the formalization edge without
+    (``composer.cli.cache_autoprove``) can reconstruct the formalization edge without
     sniffing the store. Written by the driver at formalization time; the
     pre-rewrite batch remains ``_BugAnalysisCache``."""
     items: list[PropertyFormulation]
