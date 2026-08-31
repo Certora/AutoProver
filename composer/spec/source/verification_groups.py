@@ -1,0 +1,204 @@
+"""General-purpose partitioning of a spec's rules into independent Certora
+verification runs ("verification groups").
+
+A *verification group* is a subset of a spec's rules verified in its own prover
+run, under its own spec / conf configuration. Groups exist so that different
+rules can run under verification setups a single run cannot express. The
+hard driver is CVL itself: every imported ``methods{}`` block is merged globally
+within one spec, so giving different rules different summarization *requires*
+splitting them into different spec files (hence different confs, hence different
+runs). But splitting is deliberately not summarization-specific — a group may
+equally carry its own ``loop_iter``, link/dispatch setup, ``global_timeout`` or
+``prover_args``, or exist only to isolate one expensive rule.
+
+This module is policy-neutral. It owns:
+  * the group model (:class:`VerificationGroup`),
+  * the group-count cap and its env override,
+  * the cap-driven greedy merge (:func:`cap_groups`), and
+  * result aggregation across groups (:func:`merge_group_results`).
+
+It does NOT decide *why* rules are split — which rules share a group, and each
+group's spec/conf configuration. That is a populating policy's job (e.g. the
+summarization-footprint clustering), which constructs the groups this module
+then bounds and whose results it recombines. With a single group covering every
+rule, this machinery is a behavior-preserving pass-through of the current
+one-spec/one-run model.
+"""
+
+import logging
+import os
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
+
+from composer.prover.ptypes import RulePath, StatusCodes
+
+_logger = logging.getLogger("composer.prover")
+
+
+# A group count above this is merged down (see cap_groups). Each group is a
+# separate prover run, so the cap bounds run fan-out (cost / parallelism) and the
+# worst case of one-group-per-rule; at 1 the whole spec runs as a single group,
+# i.e. exactly today's behavior. Overridable per run via the env var, mirroring
+# the AUTOPROVER_* prover-config knobs.
+DEFAULT_MAX_VERIFICATION_GROUPS = 4
+MAX_VERIFICATION_GROUPS_ENV = "AUTOPROVER_MAX_VERIFICATION_GROUPS"
+
+
+def resolved_max_groups() -> int:
+    """The verification-group cap: ``DEFAULT_MAX_VERIFICATION_GROUPS``, or the
+    integer value of ``$AUTOPROVER_MAX_VERIFICATION_GROUPS`` when set. Values
+    below 1, and non-integers, are ignored with a warning (a cap of 0 groups is
+    meaningless)."""
+    raw = os.environ.get(MAX_VERIFICATION_GROUPS_ENV)
+    if raw is None:
+        return DEFAULT_MAX_VERIFICATION_GROUPS
+    try:
+        value = int(raw)
+    except ValueError:
+        _logger.warning("Ignoring non-integer %s=%r", MAX_VERIFICATION_GROUPS_ENV, raw)
+        return DEFAULT_MAX_VERIFICATION_GROUPS
+    if value < 1:
+        _logger.warning("Ignoring %s=%r (must be >= 1)", MAX_VERIFICATION_GROUPS_ENV, raw)
+        return DEFAULT_MAX_VERIFICATION_GROUPS
+    return value
+
+
+@dataclass(frozen=True)
+class VerificationGroup:
+    """One independent verification run over a subset of a spec's rules.
+
+    Groups partition the rule set: every rule is *owned* by exactly one group,
+    and that group's run is authoritative for its verdict (:func:`merge_group_results`).
+    A run may still instantiate more rules than it owns — e.g. a spec whose
+    invariants reference each other — but only the owned rules' verdicts are kept.
+    """
+
+    #: Stable identifier, used in conf/spec names and logs.
+    name: str
+    #: Rules whose verdict is taken from this group's run. Partition-disjoint
+    #: across groups.
+    owned_rules: frozenset[str]
+    #: Per-group spec text. ``None`` means "use the shared spec unchanged" — the
+    #: single-group / behavior-preserving case. A populating policy sets this when
+    #: the group needs a distinct spec (e.g. a different ``methods{}`` block).
+    spec_contents: str | None = None
+    #: Per-group conf overlay merged onto the base config for this group's run
+    #: (e.g. ``{"loop_iter": 2}``). Empty means no overlay.
+    conf_overlay: Mapping[str, object] = field(default_factory=dict)
+    #: Opaque precision requirement that produced this group, used only to score
+    #: similarity when merging to the cap (see :func:`cap_groups`). Policy-defined
+    #: tokens — e.g. the functions this group's rules need kept precise. Two groups
+    #: with heavily overlapping footprints are the cheapest to merge.
+    footprint: frozenset[str] = frozenset()
+
+
+def single_group(
+    all_rules: Sequence[str],
+    *,
+    name: str = "all",
+    spec_contents: str | None = None,
+) -> list[VerificationGroup]:
+    """The trivial partition: one group owning every rule, no per-group spec/conf.
+
+    This is the behavior-preserving default — routing a run through
+    ``single_group`` reproduces the current one-spec/one-run model exactly."""
+    return [VerificationGroup(name=name, owned_rules=frozenset(all_rules), spec_contents=spec_contents)]
+
+
+def plan_verification_groups(
+    all_rules: Sequence[str],
+    *,
+    spec_contents: str | None = None,
+) -> list[VerificationGroup]:
+    """Partition this run's rules into verification groups.
+
+    The seam a splitting policy plugs into. The default — and, until a policy is
+    wired, the only — partition is the trivial one: a single group owning every
+    rule under the shared spec, i.e. the current one-spec/one-run behavior. A
+    populating policy (e.g. summarization-footprint clustering) replaces this to
+    return multiple groups with distinct specs/confs, then bounds them with
+    :func:`cap_groups`; the run loop and :func:`merge_group_results` treat the
+    result as N-way, so turning a policy on needs no change to callers here.
+    """
+    return single_group(all_rules, spec_contents=spec_contents)
+
+
+def _default_merge_pair(a: VerificationGroup, b: VerificationGroup) -> VerificationGroup:
+    """Combine two groups when neither carries a distinct spec: union the owned
+    rules and footprints, keep the shared spec, and merge conf overlays (``b``
+    wins on key conflicts). A policy that gives groups distinct ``spec_contents``
+    must pass its own merge (it alone knows how to combine two methods blocks);
+    this default is correct for footprint-only or conf-overlay-only groups."""
+    merged_overlay: dict[str, object] = {**a.conf_overlay, **b.conf_overlay}
+    return replace(
+        a,
+        name=f"{a.name}+{b.name}",
+        owned_rules=a.owned_rules | b.owned_rules,
+        footprint=a.footprint | b.footprint,
+        conf_overlay=merged_overlay,
+    )
+
+
+def cap_groups(
+    groups: Sequence[VerificationGroup],
+    cap: int,
+    merge_pair: Callable[[VerificationGroup, VerificationGroup], VerificationGroup] = _default_merge_pair,
+) -> list[VerificationGroup]:
+    """Merge ``groups`` down to at most ``cap`` groups, cheapest merges first.
+
+    Each group is a prover run, so an unbounded partition (worst case: one group
+    per rule) must be bounded. When there are more groups than ``cap``, this
+    repeatedly merges the pair whose footprints are most similar — the pair whose
+    merged footprint is smallest — via ``merge_pair``. Merging keeps the *union*
+    of both groups' footprints precise, so it only ever removes summarization
+    (adds precision): sound, but slower. Merging the most-similar pair first sheds
+    the least precision per step. At ``cap == 1`` everything collapses into one
+    group (today's monolith). A partition already within ``cap`` is returned as-is
+    (a fresh list).
+    """
+    if cap < 1:
+        raise ValueError(f"cap must be >= 1, got {cap}")
+    remaining = list(groups)
+    if len(remaining) <= cap:
+        return remaining
+
+    def merge_cost(a: VerificationGroup, b: VerificationGroup) -> int:
+        # Size of the union the merged group must keep precise: smaller = less
+        # precision lost. Ties broken by combined rule count (prefer merging the
+        # smaller groups, so no single run grows unnecessarily large).
+        return len(a.footprint | b.footprint) * 100_000 + len(a.owned_rules) + len(b.owned_rules)
+
+    while len(remaining) > cap:
+        best: tuple[int, int, int] | None = None  # (cost, i, j)
+        for i in range(len(remaining)):
+            for j in range(i + 1, len(remaining)):
+                cost = merge_cost(remaining[i], remaining[j])
+                if best is None or cost < best[0]:
+                    best = (cost, i, j)
+        assert best is not None  # len(remaining) > cap >= 1 => at least 2 groups
+        _cost, i, j = best
+        merged = merge_pair(remaining[i], remaining[j])
+        # Remove the higher index first so the lower stays valid.
+        remaining.pop(j)
+        remaining.pop(i)
+        remaining.append(merged)
+    return remaining
+
+
+def merge_group_results(
+    per_group: Sequence[tuple[VerificationGroup, Mapping[RulePath, StatusCodes]]],
+) -> dict[RulePath, StatusCodes]:
+    """Recombine per-group prover verdicts into one verdict map.
+
+    For each group, keep only the statuses of the rules that group *owns* (a run
+    may instantiate more rules than it owns, but a non-owned rule's verdict there
+    is under the wrong precision setup and must be ignored). The union over groups
+    is the authoritative status of every rule. With one group owning all rules,
+    this returns that group's map unchanged.
+    """
+    combined: dict[RulePath, StatusCodes] = {}
+    for group, statuses in per_group:
+        for path, status in statuses.items():
+            if path.rule in group.owned_rules:
+                combined[path] = status
+    return combined
