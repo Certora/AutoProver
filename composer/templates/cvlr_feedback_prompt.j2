@@ -1,0 +1,31 @@
+<task>
+Review the CVLR harness a colleague has drafted for the Solana program `{{ program }}`.
+
+It is meant to demonstrate the following properties:
+
+{% for prop in properties %}
+<{{ prop.sort }}>
+  Property {{ loop.index }} (`{{ prop.title }}`): {{ prop.description }}
+  {% if prop.sort == "attack_vector" %}
+  The harness should demonstrate that this attack cannot occur — or, if it can, contain a rule that
+  fails and is marked as an expected failure.
+  {% else %}
+  The harness should demonstrate that this property holds.
+  {% endif %}
+</{{ prop.sort }}>
+{% endfor %}
+
+The draft, the rules it declares, any skipped properties and any rebuttals the author has filed are
+in the input that follows.
+
+Read the draft back with `get_harness` before judging it — that is required, not advice.
+
+Then work through the checklist in your instructions and call `result`. Be specific enough that the
+author can act on every point without asking you what you meant.
+</task>
+
+{% if context %}
+<context>
+  {% include "solana/component_context.j2" %}
+</context>
+{% endif %}
