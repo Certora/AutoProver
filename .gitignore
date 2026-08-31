@@ -24,8 +24,6 @@ test_scenarios/**/lib/forge-std
 **/target/
 
 # Generated documentation artifacts. scripts/gen_docs.sh builds the manuals (*.html is already
-# ignored above) plus a PROVENANCE stamp; composer.scripts.cvlr_docs_manifest turns the Solana
-# manual into the public cvlr_kb manifest. Both are rebuildable from the public docs repo, and
-# committing them would create a second copy that silently goes stale.
+# ignored above) plus a PROVENANCE stamp naming the docs revision. Rebuildable from the public docs
+# repo, and committing them would create a second copy that silently goes stale.
 scripts/prover-docs/PROVENANCE
-scripts/cvlr-docs/
