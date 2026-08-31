@@ -58,7 +58,7 @@ source ─analyze─▶ App model ─extract─▶ properties ─formalize─▶
 | Prover result parsing (treeView JSON → `RuleResult`), cloud polling, callbacks | **Built, chain-neutral** | [prover/results.py](../composer/prover/results.py), [prover/cloud.py](../composer/prover/cloud.py) |
 | `certoraSolanaProver` / `certoraSorobanProver` CLIs | **Already installed in the venv** | `certora_cli` |
 | RAG corpus registry (`KNOWLEDGE_BASES`, `rag_env`) | **`cvlr_kb` registered** — the first corpus in either map | [rag/db.py](../composer/rag/db.py), [tools/rag_env.py](../composer/tools/rag_env.py) |
-| CVLR corpus · CVLR KB articles | **Two manifests under one tag** (§7.3.1): published docs here, project-derived idioms from the private repo | [scripts/cvlr_docs_manifest.py](../composer/scripts/cvlr_docs_manifest.py) |
+| CVLR corpus · CVLR KB articles | **Three manifests under one tag** (§7.3.1): published docs, generated crate reference, project-derived idioms — all produced in and shipped from the private repo | [rag/import_format.py](../composer/rag/import_format.py), [rag/html_manual.py](../composer/rag/html_manual.py) |
 | Project scaffold · authoring loop · Solana CEX analysis | **Nothing** | — |
 
 **Phase 0 (hands-on experience) is done.** Several team members have completed real Solana
@@ -526,8 +526,8 @@ that most directly attacks the hallucination risk.
 | Piece | State |
 |---|---|
 | Corpus registration (tools module · `KNOWLEDGE_BASES` · importer target) | **Done** — [cvlr_rag.py](../composer/tools/cvlr_rag.py), [rag_env.py](../composer/tools/rag_env.py), [db.py](../composer/rag/db.py). `cvlr_kb` is the first corpus AutoProver has ever registered |
-| Published docs import | **Done** — [cvlr_docs_manifest.py](../composer/scripts/cvlr_docs_manifest.py) → `scripts/cvlr-docs/cvlr-docs.rag.json` (156 sections, 147 groups) |
-| First KB articles from real projects | **Done, shipping from the private repo** — 83 entries + 15 recipes under the second manifest sharing the `cvlr_kb` tag ([capture plan](./cvlr-capture-plan.md) §8.2) |
+| Published docs import | **Done**, then moved out — `certora-cvlr-kb` `tools/docs_manifest.py` → `cvlr-docs.rag.json` (156 sections, 147 groups). Built here originally; see §7.3.3 for why it moved |
+| First KB articles from real projects | **Done, shipping from the private repo** — 83 entries + 15 recipes under one of the three manifests sharing the `cvlr_kb` tag ([capture plan](./cvlr-capture-plan.md) §8.2) |
 | CVLR-source tool set (§5.5) | **Done** — [crate_mount.py](../composer/spec/cvlr/crate_mount.py) (the tree) + [source_tools.py](../composer/spec/cvlr/source_tools.py) (the tools), reaching the explorer through `build_source_tools(library_source=…)` |
 | `backend_guidance` | **Done** — [guidance.py](../composer/spec/cvlr/guidance.py) |
 | Generated crate reference | **Built and run**, in the private repo — `certora-cvlr-kb` `tools/crate_reference.py` → `cvlr-crates.rag.json` (175 sections, 117 groups, 310/310 items covered) |
@@ -568,19 +568,13 @@ that are reached for constantly:
 | A renamed re-export | `pub use super::log::cvlr_log as clog` | The name every project writes is an alias; the definition carries a different one |
 | Test code | `#[cfg(test)] mod tests { pub fn … }` | Indistinguishable from API on any single line |
 
-**Where the producer lives, and why not here.** Every other public-corpus producer in this repo is
-cheap and offline — the docs scrape needs only bs4, so anyone with a checkout rebuilds it. The crate
-reference calls a model and runs cargo, so rebuilding costs an API key and a few dollars, which is
-the same shape as the capture plan's abstraction pass. It therefore lives in the private
-`certora-cvlr-kb` repo beside that machinery, and its output ships in that package like every other
-generated manifest. Two consequences worth stating plainly:
-
-- **A plain AutoProver install gets the documentation half only.** The generated reference and the
-  practice entries both arrive with the `certora-cvlr-kb` package; `populate_cvlr_rag.sh` and the
-  Docker entrypoint already discover them there, and finding neither is a supported state.
-- **The manifest's *content* is public** — it is derived entirely from published crates. It sits in a
-  private repo because of how it is *built*, not because of what is in it. Anything that treats
-  everything under that repo's `data/` as client-derived would be wrong about this file.
+**Where the producer lives, and why not here.** Rebuilding this manifest calls a model and runs
+cargo, so it costs an API key and a few dollars — the same shape as the capture plan's abstraction
+pass. It therefore lives in the private `certora-cvlr-kb` repo beside that machinery, and its output
+ships in that package like every other generated manifest. One consequence is worth stating plainly:
+**the manifest's *content* is public**, derived entirely from published crates. It sits in a private
+repo because of how it is *built*, not because of what is in it, and anything that treats everything
+under that repo's `data/` as client-derived would be wrong about this file.
 
 What stayed here is what the *backend* needs at run time: [crate_mount.py](../composer/spec/cvlr/crate_mount.py)
 is imported by the producer from an `AUTOPROVER_REPO` checkout, the same way that repo already reads
@@ -632,6 +626,38 @@ where `cvlr_rules!` fans one property across a grid of handlers for the price of
 cross-handler property is *cheaper* than several per-handler restatements, and the extractor should
 be told to prefer it. The text is therefore mostly about **shape** (what a property must look like
 for a rule to exist) and reserves exclusion for the few things that genuinely have no rule.
+
+#### 7.3.3 Why the documentation manifest followed it out
+
+The docs producer was the one piece of the corpus this repo could rebuild alone, and that was the
+argument for keeping it: bs4 and a public docs checkout, so an install with no access to the private
+repo still assembled *some* CVLR corpus. The property was real. It bought less than it looked like.
+
+A corpus of methodology with no API surface and no project practice advises an authoring agent about
+a language it cannot then be told the spelling of — and the surface is precisely the half the manual
+covers thinly (§7.3.2), which is why the crate reference exists at all. The fallback was therefore
+not a smaller corpus but a differently-shaped one, aimed at the risk it is worst at.
+
+The second reason is provenance. Three manifests built in three places can each be a different
+vintage, and nothing downstream can tell: the corpus carries one tag, and `part` numbering hides the
+seam by design. Building all three in one repo makes the corpus one artifact with one story about
+what produced it.
+
+So all three now ship in the `certora-cvlr-kb` package, and **a plain AutoProver install has no CVLR
+corpus** — a supported state (the backend falls back to `backend_guidance`) but no longer a partial
+one. What this repo keeps is the piece with two consumers:
+[html_manual.py](../composer/rag/html_manual.py) stays, because the EVM corpus builder uses it, and
+the docs producer imports it from an `AUTOPROVER_REPO` checkout like everything else that repo reads
+rather than restates. The moved producer reproduces the previous manifest byte-for-byte from the same
+manual, which is the check that the move changed only where the code lives.
+
+The one thing that got *simpler* is discovery. `populate_cvlr_rag.sh` had a four-tier ladder because
+one manifest came from this repo's tree and the others from a package; both it and the Docker
+entrypoint are now two tiers over one source — a checkout, else the installed package. The
+installed-package tier had a real bug that the collapse removed: it called
+`certora_cvlr_kb.practice_manifest()`, the only accessor the package exposed, so an install found the
+practice manifest and silently missed the crate reference. The package now answers `manifests()`,
+which is the question a caller actually has.
 
 ### 7.4 Phase 3 — Preflight scaffold
 
@@ -698,7 +724,7 @@ whether any of these pieces deserve to be bundled after all.**
 | Compile gate | Two tiers (fast `cargo check` per edit, full build per submission) |
 | Conf style | From-sources, through a `build_script` the backend generates — it builds inside the sandbox and the prover reruns that same command (§7.2.2) |
 | Setup | Templated preflight; no AutoSetup |
-| RAG | A single `cvlr_kb` corpus with chain-tagged sections, fed by two manifests: a public docs+crate-reference one built in this repo, and a project-derived one from a separate private repo ([capture plan](./cvlr-capture-plan.md) §8) |
+| RAG | A single `cvlr_kb` corpus with chain-tagged sections, fed by three manifests — published docs, generated crate reference, project-derived practice — all produced in and shipped from a separate private repo, because *build cost* rather than confidentiality is what decides where a producer lives ([capture plan](./cvlr-capture-plan.md) §8.2) |
 | CVLR source | Mounted read-only as its own tool set (not a project-VFS layer), version resolved by the host from `cargo metadata`, available to the code explorer and the author, and named as authoritative in the prompt |
 | Ship order | Solana end-to-end first; Soroban pack after |
 
