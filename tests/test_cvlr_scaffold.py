@@ -50,12 +50,18 @@ def _project(
     package_dir: str = "",
     crate_types: tuple[str, ...] = ("cdylib",),
     platform: str | None = "2.2.1",
+    platform_crate: str = "solana-program",
     cvlr_resolved: dict[str, str] | None = None,
 ) -> tuple[Workspace, CratePackage]:
     """A project on disk plus the ``Workspace`` cargo would report for it.
 
     ``platform`` and ``cvlr_resolved`` stand in for the resolved graph, which is what the platform
     gate and the version-gap report read; the manifests on disk are what the planner parses.
+
+    ``platform_crate`` is a parameter because which crate carries ``AccountInfo`` is itself a fact
+    about the generation: Solana's v3 split moved it out of ``solana-program`` and stopped
+    publishing that crate, so a target on the newest line resolves a platform crate the older line
+    has never heard of.
     """
     package_root = root / package_dir if package_dir else root
     # Write-if-absent, so calling this a second time reports the project as the scaffold left it
@@ -84,9 +90,9 @@ def _project(
     if platform is not None:
         resolved.append(
             CratePackage(
-                name="solana-program",
+                name=platform_crate,
                 version=platform,
-                manifest_path=root / "vendor" / "solana-program" / "Cargo.toml",
+                manifest_path=root / "vendor" / platform_crate / "Cargo.toml",
                 lib=None,
                 features=(),
                 source="registry+https://github.com/rust-lang/crates.io-index",
@@ -264,6 +270,37 @@ def test_a_platform_generation_the_reference_set_cannot_be_paired_with_is_refuse
         tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE, platform="1.18.26"
     )
     assert any("1.18.26" in b.problem for b in plan.blocked)
+
+
+def test_a_platform_newer_than_the_reference_set_is_refused_though_it_deleted_the_probe(tmp_path):
+    # The regression that motivated the witness list. Solana's v3 split moved `AccountInfo` into
+    # `solana-account-info` and stopped publishing `solana-program`, so a v3 target resolves *no*
+    # `solana-program` at all — and a gate that asked only about that crate read the absence as
+    # "this project has no opinion" and pinned CVLR 0.5 against it. The scaffold then compiles,
+    # because it contains nothing that bridges the two; the failure surfaces on the first authored
+    # rule, as `expected AccountInfo, found AccountInfo`. Observed on a real Anchor 1.x program.
+    plan, _ = _plan(
+        tmp_path,
+        manifest=STANDALONE,
+        workspace_manifest=STANDALONE,
+        platform="3.1.1",
+        platform_crate="solana-account-info",
+    )
+    assert any("3.1.1" in b.problem for b in plan.blocked)
+
+
+def test_a_project_on_the_reference_generation_passes_on_the_specific_witness(tmp_path):
+    # The other side of the ordering: a 2.x target resolves `solana-account-info` too, and the
+    # specific witness is consulted first. It has to *accept* on a match rather than merely not
+    # blocking, or the fix above would refuse every project it was written to admit.
+    plan, _ = _plan(
+        tmp_path,
+        manifest=STANDALONE,
+        workspace_manifest=STANDALONE,
+        platform="2.3.0",
+        platform_crate="solana-account-info",
+    )
+    assert not plan.blocked
 
 
 def test_the_platform_is_not_second_guessed_when_the_project_pins_cvlr_itself(tmp_path):
