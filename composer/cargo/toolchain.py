@@ -72,7 +72,7 @@ class SolanaToolchain:
         if workspace is None:
             return {}
         owner = workspace.owning(root / source.relative_path)
-        if owner is None or owner.lib_target is None:
+        if owner is None or owner.lib is None:
             return {}
         try:
             relative = owner.root.resolve().relative_to(root.resolve())
@@ -84,7 +84,7 @@ class SolanaToolchain:
         return {
             "dir": str(relative),
             "package": owner.name,
-            "lib": owner.lib_target,
+            "lib": owner.lib.name,
         }
 
     async def prepare(
