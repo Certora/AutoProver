@@ -27,6 +27,7 @@ from composer.spec.cvl_generation import (
 )
 from composer.prover.core import run_prover, CexHandler, ProverCallbacks, ProverReport
 from composer.spec.source.autosetup import read_summarization_candidates
+from composer.spec.source.agent_groups import VerificationGroupSpec
 from summarization_detector.schema import HostileCandidate
 from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools, WIPE_HISTORY
 from composer.spec.source.prover import setup_prover_config_in
@@ -169,6 +170,89 @@ class PublishResultTool(
             result=self.commentary,
             property_rules=self.property_rules,
             failed=False,
+        )
+
+
+@tool_display(lambda p: f"Declaring {len(p['groups'])} verification group(s)", None)
+class DeclareVerificationGroups(
+    WithAsyncDependencies[Command | str, list[PropertyTitle]],
+    WithInjectedState[SourceCVLGenerationState],
+    WithInjectedId,
+):
+    """
+    Split verification into independent, PARALLEL prover runs ("verification groups").
+
+    Use this when one combined run is (or would be) intractable — typically a timeout from
+    having to keep too much of the code precise at once. Each group verifies a subset of the
+    properties under its OWN summarization and configuration, so different groups can keep
+    DIFFERENT functions precise: a function summarized in one group can stay exact in another.
+    This breaks the "one global methods block forces the intersection of every rule's precision
+    needs" bottleneck.
+
+    A valid declaration:
+    - Every non-skipped property appears in exactly ONE group (via that group's `property_rules`).
+      Coverage is checked exactly as at publish time.
+    - `keep_precise` lists the hostile functions THIS group's rules genuinely need exact; every
+      other function in `summary_palette` is summarized in this group's spec.
+    - `summary_palette` (provide once) maps each hostile function name to the CVL methods-block
+      entry that summarizes it. The base spec you put on the VFS must define any ghosts/CVL
+      functions those entries use, and must itself leave the palette functions UNsummarized (the
+      group machinery adds the summaries each group can afford).
+    - `conf_overlay` is optional per-group prover config for non-summarization needs
+      (e.g. {"loop_iter": 2, "global_timeout": 4000}).
+
+    Groups run in parallel; already-verified rules are not re-run. Call again to REPLACE the whole
+    partition; pass an empty `groups` list to revert to a single combined run. If you declare more
+    groups than the run's cap, the most-similar are merged automatically.
+    """
+    groups: list[VerificationGroupSpec] = Field(
+        description="The verification groups to split into. Empty list reverts to one combined run."
+    )
+    summary_palette: dict[str, str] = Field(
+        default_factory=dict,
+        description="Hostile function name -> the CVL methods-block entry that summarizes it. "
+        "Shared across all groups; each group summarizes the palette minus its keep_precise.",
+    )
+
+    @override
+    async def run(self) -> Command | str:
+        specs = self.groups
+        if not specs:
+            return tool_state_update(
+                self.tool_call_id,
+                "Reverted to a single combined verification run.",
+                verification_groups=[], summary_palette={},
+            )
+        names = [s.name for s in specs]
+        if len(set(names)) != len(names):
+            return "Group names must be unique."
+        # Coverage: the union of the groups' property->rule mappings must cover every
+        # non-skipped property — the same check applied at publish.
+        combined = [m for s in specs for m in s.property_rules]
+        with self.tool_deps() as titles:
+            if (err := validate_property_rules(combined, self.state["skipped"], titles)) is not None:
+                return err
+        # Partition: a property must not be claimed by more than one group.
+        seen: set[str] = set()
+        dup: set[str] = set()
+        for s in specs:
+            for m in s.property_rules:
+                (dup if m.property_title in seen else seen).add(m.property_title)
+        if dup:
+            return f"Each property must belong to exactly one group; these appear in more than one: {sorted(dup)}"
+        # Every kept-precise / to-be-summarized function must be in the palette.
+        missing = {f for s in specs for f in s.keep_precise if f not in self.summary_palette}
+        if missing:
+            return (
+                f"keep_precise names functions absent from summary_palette: {sorted(missing)}. "
+                "Add each to summary_palette (with its CVL summary entry) or remove it."
+            )
+        return tool_state_update(
+            self.tool_call_id,
+            f"Declared {len(specs)} verification group(s): {', '.join(names)}. "
+            "Subsequent verify_spec runs split the rules across them and run in parallel.",
+            verification_groups=specs,
+            summary_palette=self.summary_palette,
         )
 
 
@@ -868,6 +952,7 @@ async def batch_cvl_generation(
         [prover_tool.lg_tool,
          ExpectRulePassage.as_tool("expect_rule_passage"),
          ExpectRuleFailure.as_tool("expect_rule_failure"),
+         DeclareVerificationGroups.bind(titles).as_tool("declare_verification_groups"),
          give_up_tool(name="give_up", description=_GIVE_UP_DESCRIPTION, label="CVL generation"),
          PublishResultTool.bind(titles).as_tool("result"),
          ctx.get_memory_tool()]
