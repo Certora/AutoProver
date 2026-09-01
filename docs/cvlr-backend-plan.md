@@ -1207,21 +1207,86 @@ failure instead of leaving it looking like coverage. The other pins the alias ta
 real Anchor program built for SBF — the only test here that can catch an alias being *wrong* rather
 than merely stale, which matters because both failures are equally silent.
 
-**How to confirm, and what it costs.** The symbol check proves the directives are inert; it does not
-prove that is what [3006] reports. One targeted submission settles it — and not through the authoring
-loop, which has three recorded instances of an error the author cannot reach consuming its entire
-budget. The instrument is a hand-written fixture: a three-rule harness that calls `crate::entry` and
-asserts one post-state property, run against the pipeline backend with the paths corrected. If [3006]
-clears, this was it. If it does not, the next candidate is the memory model, and there the lever is
-the six `solanaOptimistic*` flags that every surveyed conf sets to `"true"` and `TEMPLATE_BASE` omits
-(§7.2) — including `solanaOptimisticJoinWithStackPtr`, whose corpus entry leaves open, in its own
-`unknowns`, "what the observable failure mode looks like when the flag is absent." Those flags are
-quarantined as dropping obligations by construction, so they are a localization instrument and not a
-fix; turning one on to make an error disappear is exactly the unsound use the quarantine names.
+**Confirmed, and it is not the path rewrite.** The probe is
+[`test_cvlr_anchor_reach.py`](../tests/test_cvlr_anchor_reach.py) with the harness in
+[`anchor_reach_probe.rs`](../tests/data/anchor_reach_probe.rs): three hand-written rules against the
+scaffolded vault scenario, graded by how much of Anchor they traverse so that a failure names a
+boundary instead of merely happening. Hand-written because this phase has three recorded instances of
+an error the author cannot act on consuming its whole budget — a loop run would measure the loop.
 
-Held in reserve, and further down than it looked: patching `anchor-lang` through `[patch.crates-io]`.
-It is Phase 5's own mechanism and it would work, but it forks a dependency to fix what the symbol
-table says is a rename.
+The prover names its own source, which settles the question the file reading could not:
+
+```
+[3006] illegal store of a stack pointer
+source: .../rust/library/alloc/src/boxed.rs:218
+  from: anchor-lang-0.31.1/src/error.rs:296     <- Self::AnchorError(Box::new(ae))
+  from: anchor-lang-0.31.1/src/error.rs:21      <- #[error_code(offset = 0)] pub enum ErrorCode
+help: A stack pointer escapes by being stored into an illegal memory segment
+Dev: Pointer domain: stack is escaping: Node[Stack:RX,16256) into Node[Heap:X,112)
+```
+
+So **`Box::new` was the cause, and this section's first draft was wrong to rule it out.** The argument
+it made — that the construct is byte-identical in anchor-lang 0.29, 0.30 and 0.31, so it cannot be
+what separates our runs from a working corpus — was a bad inference twice over. The version was never
+the variable; and "a working corpus" was an assumption, not an observation. The two `from:` lines are
+exactly `cvlr_inlining_anchor.txt:35` and `:36`, the allowlist entries that force-*inline* those
+conversions so the prover analyzes their bodies at all. The original agent diagnosis was right and
+this document argued it down twice: once by mis-reading the file, once by reasoning about versions.
+
+The path-rewrite work above stands on its own measurements and is a **separate** defect. It was not
+this one.
+
+| rule | traverses | result |
+|---|---|---|
+| `rule_vault_state_deserializes` | `Account::try_from`, borsh, arithmetic on real account data | **VERIFIED** |
+| `rule_deposit_credits_exactly_the_amount` | the handler and its account-creating CPI | ERROR [3006] |
+| `rule_dispatch_is_reachable` | `crate::entry`, the whole dispatch path | ERROR [3006] |
+
+The boundary is sharp and it is not where the earlier diagnosis put it. Reading and deserializing
+real account data works, and post-state arithmetic over it verifies. What fails is **any path that can
+construct an Anchor error** — which is why the control tier passes despite also calling
+`Account::try_from`: it uses `.unwrap()`, and a panic is assumed away by `-solanaAssertOnPanic false`,
+while `deposit`'s `?` actually builds an `Error`.
+
+**Three workarounds, all ruled out by measurement.**
+
+* *Drop the two `#[inline]` entries* so the blanket leaves the conversions un-inlined. The prover
+  starts and exits after **3.6 seconds** with `jobStatus: FAILED`, no `errorString` and no output —
+  reproduced twice. That is a second upstream defect, distinct from [3006] and arguably worse, since
+  it discards the configuration rather than reporting a problem with it.
+* *`-solanaOptimisticJoinWithStackPtr`.* No effect. Which is what the mechanism predicted: the flag
+  concerns *joining* paths whose stack pointers diverge, and [3006] is a *store*. Recorded because the
+  corpus entry's own `unknowns` asks what the absent flag's failure mode looks like, and the answer
+  is that it is not this.
+* *Summarize both conversions* in `cvlr_summaries_anchor.txt`, the layer upstream ships empty —
+  `Error` is a 16-byte enum, so an 8-byte tag and a `ptr_heap` at offset 8. No effect, and the PTA
+  node identifiers come back byte-identical to the baseline run (`Node605`/`Node620`), which is proof
+  the summary was never applied rather than applied and insufficient.
+
+**Two side findings, both worth reporting upstream.** `solanaOptimisticJoinWithStackPtr` is not a conf
+attribute on certora-cli 8.18.0 — it is rejected as "not a known attribute" before upload and must be
+passed through `prover_args` — so the corpus entry showing it as a top-level conf key is transcribed
+wrong, as are the surveyed confs it was drawn from, unless an older CLI accepted it. And the
+un-inlining crash above.
+
+**So [3006] is not reachable from the configuration surface this backend controls.** `Box::new` of a
+struct built on the stack is ordinary Rust, the prover's pointer analysis rejects it, and every Anchor
+program constructs an error that way on every failing path. That leaves three options and only one of
+them is ours:
+
+* **File it upstream**, which is now a crisp report: a minimal reproducer, the exact source line, the
+  prover's own dev message, and three attempted workarounds with evidence that none works. This is the
+  highest-value action and it is not a code change.
+* **Munge `anchor-lang`** through `[patch.crates-io]`: a variant of `Error` that does not box under a
+  `certora` cfg. Heavier than §7.5.6's first draft estimated, and now the only workaround inside our
+  reach — which promotes Phase 5 from "parallel with 4" to the thing Anchor support depends on.
+* **Scope the backend to what verifies.** Weaker but not nothing: the control tier shows real account
+  data, deserialization and post-state arithmetic all work. A rule that avoids error-constructing
+  paths is real evidence about a real program. It is not most of what a client wants.
+
+The probe test asserts all three tiers verify, so it is **red today on purpose** — the same choice
+§7.5.5's gate makes. A test that encoded the current breakage would go green on a run that fixed
+nothing.
 
 ### 7.6 Phase 5 — Munge (parallel with 4)
 
