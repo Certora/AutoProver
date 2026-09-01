@@ -954,6 +954,30 @@ independent defect. The tell was available and I passed it — a job link existe
 those failures, and [core.py](../composer/prover/core.py)'s message discarded it while
 `CloudJobError` carried it. That is now fixed too: a failure names its job.
 
+**An ampersand in a component name failed every submission for two of three units.** The `msg` a run
+sends is built from the component's display name, and `certoraRun`'s `validate_msg` *raises* on any
+character outside letters, digits and a short punctuation list — before a single rule is read. The
+components were named "Deposit & Balance Tracking" and "Withdrawal & Fee Distribution".
+
+The cost is the clearest measurement this phase has produced of the unfixable-error pattern. One unit
+spent 6 submissions on it, the other 13+, and the second reported:
+
+> The harness is complete (10 rules covering all 10 properties), compiles successfully, and has been
+> accepted by the feedback judge. Three rules (properties 8, 9, 10) are marked as expected failures
+> for genuine program defects.
+
+A finished ten-rule harness with three claimed findings, lost to one character. Both authors
+diagnosed it exactly and both said the same thing — the name is not in the harness, so they could not
+fix it. That is the third instance in this phase of an error an author cannot act on consuming its
+whole budget (the others: the platform generation gate, §7.4.4, and the module name, §7.5.5), and it
+is worth stating as a design rule: **anything the pipeline derives from model-written prose and hands
+to a validating tool must be sanitized at that boundary, because the agent cannot reach it.**
+
+`safe_msg` reduces the name to a deliberate *subset* of the CLI's accepted set — a subset so that a
+future narrowing upstream stays valid without an edit here, and the test asserts the subset relation
+rather than round-tripping examples. The first cut of it included `;`, which the CLI does not accept;
+only the subset check caught that.
+
 **A blocked author assumes the conclusion, and the publish gate cannot tell.** The most substantive
 thing the run produced was a diagnosis the author wrote into its own harness: Anchor's
 `Account::exit` is not inlined, so handler state changes are never written back observably, and

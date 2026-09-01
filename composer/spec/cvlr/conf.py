@@ -26,6 +26,8 @@ import dataclasses
 import io
 import json
 import logging
+import re
+import string
 from pathlib import Path
 
 import json5
@@ -212,6 +214,30 @@ class RunOverlay:
     extra: dict[str, object] = dataclasses.field(default_factory=dict)
 
 
+#: Characters ``certoraRun`` accepts in ``msg`` — a deliberate subset of what its own
+#: ``certoraValidateFuncs.validate_msg`` permits, so that if the CLI ever narrows its set this stays
+#: valid without an edit. The CLI *raises* on anything outside it, before a single rule is
+#: processed, which is why this is a hard gate and not a nicety.
+_MSG_SAFE = set(string.ascii_letters) | set(string.digits) | set(" ,.:_-()[]'/")
+
+
+def safe_msg(msg: str) -> str:
+    """``msg`` reduced to what the prover will accept.
+
+    The ``msg`` a run sends is built from a component's display name, and a display name is prose
+    written by a model — so it carries whatever prose carries. An ampersand is enough:
+    ``"Deposit & Balance Tracking"`` made ``certoraRun`` raise
+    ``{'&'} not allowed in 'msg'`` and every submission for that unit failed before any rule was
+    read. The author cannot fix it, because the name is not in the harness; two units in one run
+    spent 6 and 13+ submissions on it, one of them holding a finished ten-rule harness.
+
+    Offending characters become spaces rather than being dropped, so words do not run together, and
+    runs of whitespace collapse. Length is left to the CLI, which truncates with a warning rather
+    than raising.
+    """
+    return re.sub(r"\s+", " ", "".join(c if c in _MSG_SAFE else " " for c in msg)).strip()
+
+
 def solana_conf(base: dict, overlay: RunOverlay) -> dict:
     """The conf for one ``certoraSolanaProver`` submission.
 
@@ -222,7 +248,7 @@ def solana_conf(base: dict, overlay: RunOverlay) -> dict:
     """
     conf = {k: v for k, v in base.items() if k not in OVERLAY_OWNED_KEYS}
     conf["build_script"] = overlay.build_script
-    conf["msg"] = overlay.msg
+    conf["msg"] = safe_msg(overlay.msg)
     match overlay.rules:
         case SelectRules(names):
             conf["rule"] = list(names)
