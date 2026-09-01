@@ -449,9 +449,6 @@ async def run_prover_inner(
         run_result = cast(ProverResult, json.load(output_file))
         return run_result, stdout
 
-# How much of a failed compile to hand back. Trimmed from the end because the errors come last.
-_COMPILE_OUTPUT_TAIL_CHARS = 8_000
-
 
 class SpecCompilationError(Exception):
     """The spec did not compile.
@@ -480,7 +477,7 @@ async def _run_captured(*argv: str, cwd: Path) -> tuple[int, str]:
     output = b"".join(part for part in (stdout, stderr) if part).decode(
         "utf-8", errors="replace"
     )
-    return proc.returncode or 0, output[-_COMPILE_OUTPUT_TAIL_CHARS:]
+    return proc.returncode or 0, output
 
 
 async def declared_rules_list(
