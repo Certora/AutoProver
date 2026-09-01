@@ -1024,7 +1024,7 @@ the vendored tuning files, three of its four claims hold exactly:
 
 | claim | verdict |
 |---|---|
-| `Account::exit` / `AccountSerialize::try_serialize` not inlined | holds — absent from the `#[inline]` allowlist |
+| `Account::exit` / `AccountSerialize::try_serialize` not inlined | holds — absent from the `#[inline]` allowlist, **and not a limitation on post-state verification: see §7.6.2** |
 | `invoke_signed_unchecked` summarized, so `init`'s account-creating CPI is a no-op | holds — `cvlr_summaries_core.txt:95` |
 | `find_program_address` summarized | holds — `cvlr_summaries_core.txt:84,92` |
 | a blanket `#[inline(never)] ^.*anchor_lang.*$` is what excludes them | holds — `cvlr_inlining_anchor.txt:2`, the file's first directive |
@@ -1042,8 +1042,13 @@ path it names was renamed out from under it — so that CPI is analyzed in full 
 approximated, the opposite of what the row implies. Row three survives, but for a reason outside it:
 `find_program_address` is summarized on this target only because upstream added a second block under
 the split spelling (§7.5.6). A directive checked by reading the file it lives in has been confirmed
-to exist, not to take effect. **On an Anchor program this puts most post-state
-properties out of reach**, which is most of the Solana market.
+to exist, not to take effect.
+
+The agent's conclusion from all this — that post-state properties are therefore out of reach on an
+Anchor program, which would be most of the Solana market — is **wrong**, and §7.6.2 shows why: a rule
+that retains a handle to the account observes the handler's effect without any write-back, and one
+such property is now verified. Recorded here rather than deleted because the inference was repeated
+three times in this document before anybody tested it.
 
 What the author then did is the finding. It kept one rule:
 
@@ -1335,7 +1340,7 @@ is the fork, through the real scaffold path, and is the one to quote:
 | rule | crates.io Anchor | forked Anchor | fork + `optimistic_loop` + `-solanaAggressiveGlobalDetection` |
 |---|---|---|---|
 | `rule_vault_state_deserializes` | VERIFIED | VERIFIED | **VERIFIED** |
-| `rule_deposit_credits_exactly_the_amount` | ERROR [3006] | VIOLATED — *loop unwinding* | **VIOLATED — the real property** |
+| `rule_deposit_credits_exactly_the_amount` | ERROR [3006] | VIOLATED — *loop unwinding* | **VIOLATED — then VERIFIED once the rule observed post-state correctly** |
 | `rule_dispatch_is_reachable` | ERROR [3006] | ERROR [3308] | ERROR [3308] |
 
 **[3006] is gone on both rules that hit it, confirmed end-to-end** — the scaffold wrote the
@@ -1365,11 +1370,46 @@ borsh deserialization, instruction-data building — violates before the rule's 
 projects that set it true; this measurement says the template's position is unusable for
 handler-level rules, and `TEMPLATE_BASE` now sets it true.
 
-With that fixed the counterexample is the property: `CVT_nondet_u64: '1'`, then
+With that fixed the counterexample was the property: `CVT_nondet_u64: '1'`, then
 `vault::vault_program::deposit(...)`, then a re-read through `Account::try_from_0` →
-`try_deserialize`, then `assert FAIL`. Deposit of 1 lamport, and the re-read does not see it —
-**demonstrating** the `Account::exit` inlining gap that §7.5.5 could only infer. That is the next
-thing to fix and the first genuinely program-level finding this backend has produced.
+`try_deserialize`, then `assert FAIL`. A one-lamport deposit the re-read does not see.
+
+**That looked like proof of §7.5.5's `Account::exit` inlining gap, and it was a defect in the rule.**
+`Account<T>` is a *deserialized copy*; a handler's mutation of it reaches the account's bytes only in
+`exit`, and nothing calls `exit` when a rule invokes a handler directly rather than through dispatch.
+So re-deserializing after the call reads the pre-state, and the property fails against a program that
+is behaving correctly.
+
+The reference project does not do that. Its integrity rules retain a handle to the account before the
+call — `let token_reserve = accounts.token_reserve.clone();` — read pre-state through it, call the
+handler, and read post-state **through the same handle**. They also `Box` the nondet account array,
+matching the documented advice about stack-allocated arrays. Rewriting the probe's handler tier to
+observe through the handle the context borrowed, and to heap the array:
+
+| rule | result |
+|---|---|
+| `rule_vault_state_deserializes` | VERIFIED |
+| `rule_deposit_credits_exactly_the_amount` | **VERIFIED** |
+| `rule_dispatch_is_reachable` | ERROR [3308] (ungated — see below) |
+
+**A post-state property about an Anchor handler's own code, proved.** That is the first thing this
+backend has established about a target's real behaviour, and it took no prover setting and no
+inlining change — only writing the rule the way specs are written.
+
+Which retracts a claim that has been in this document since §7.5.5 and was repeated three times:
+that Anchor's un-inlined `Account::exit` puts most post-state properties out of reach. It does not.
+The authoring loop's agent inferred it, and the inference was reasonable and wrong; observing through
+the retained handle needs no write-back at all. §7.5.5's table row about `exit` is accurate as a
+reading of the tuning file and is not a limitation on post-state verification.
+
+**The real finding is a capture gap, and it is Phase 1a's.** The probe was wrong in three ways that a
+reader of the reference project would not have been: it called `entry`, it re-deserialized to observe
+post-state, and it built the account array on the stack. All three are visible in that project's
+harness, none of them is in the `backend_guidance` the authoring loop hands its agent, and the agent's
+own output made the same mistakes. §7.1 exists to extract exactly this and has extracted the conf
+shape and the munge but not the *rule idioms*. That is now the highest-value work in the plan:
+retaining handles, `Box`ing the account array, `Context::new` over dispatch, and the parametric-rule
+and account-construction helpers that project keeps in its own library.
 
 **[3308] is not fixed by the remedy the prover recommends.** `-solanaAggressiveGlobalDetection true`
 reached the jar (confirmed in `jarSettings`) and changed nothing. Its trace runs from the vault's own
