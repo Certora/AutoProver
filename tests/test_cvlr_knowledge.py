@@ -258,3 +258,85 @@ def test_no_soroban_guidance_has_been_guessed():
     import composer.spec.cvlr.guidance as guidance
 
     assert not [name for name in vars(guidance) if "SOROBAN" in name]
+
+
+# --------------------------------------------------------------------------------------------
+# Anchor harness idioms in the author's system prompt
+# --------------------------------------------------------------------------------------------
+
+
+def _author_system_prompt() -> str:
+    """The author's system prompt, rendered.
+
+    Separate from :func:`_property_system_prompt`: that one is the *extraction* agent's, which
+    decides which properties to state, and this one is the agent that writes the Rust.
+    """
+    from composer.spec.cvlr.author import (
+        CvlrAuthorSystemParams,
+        _PropertyGenSysTemplate,
+    )
+
+    params: CvlrAuthorSystemParams = {"cvlr_versions": "cvlr 0.6.1", "module": "spec"}
+    return _PropertyGenSysTemplate.bind(params).render_to(load_jinja_template)
+
+
+def test_the_author_is_told_to_call_the_handler_not_anchors_dispatch():
+    """A rule starting at ``entry`` is both the expensive shape and, on the current prover, one that
+    does not analyze at all — the program's own ``#[error_code]`` reaches string formatting the
+    pointer analysis rejects (``docs/upstream-defects.md`` P4). The authoring loop's first real run
+    produced rules that did neither: they reimplemented the handler rather than calling anything."""
+    prompt = _author_system_prompt()
+    assert "Call the handler, not the dispatcher" in prompt
+    assert "crate::entry" in prompt
+
+
+def test_the_author_is_warned_that_re_reading_an_account_yields_pre_state():
+    """The idiom that silently produces a *wrong answer* rather than an error, so it is the one worth
+    guarding. An Anchor ``Account<T>`` is a deserialized copy written back only in ``exit``, which
+    nothing calls when a rule invokes a handler directly — so a rule that re-deserializes to observe
+    post-state fails against a correct program, and the failure looks like a finding.
+
+    Measured both ways on a real Anchor handler: re-reading gave a counterexample, and reading
+    through the borrowed struct verified the same property (``docs/cvlr-backend-plan.md`` §7.6.2).
+    """
+    prompt = _author_system_prompt()
+    assert "never by deserializing the account" in prompt
+    assert "pre-state" in prompt
+    assert "looks exactly like a real finding" in prompt
+
+
+def test_the_author_is_told_to_heap_the_account_array_without_pinning_its_lifetime():
+    """Two halves, and the second was found by the first draft of the prompt's own example failing
+    to compile: heap the array, and do not annotate its lifetime. A wrapper returning
+    ``[AccountInfo<'static>; 16]`` forces the borrow to be ``'static`` too and the accounts struct
+    then will not build."""
+    prompt = _author_system_prompt()
+    assert "Box::new(cvlr_deserialize_nondet_accounts())" in prompt
+    assert "do not annotate that array's lifetime" in prompt
+
+
+def test_the_author_gets_a_worked_anchor_rule_rather_than_only_rules():
+    """Four idioms stated as prose is a checklist somebody can satisfy individually and still get
+    wrong together. The example is what shows them composing — construction, the pre-read, the
+    borrow, and the post-read through the same struct.
+
+    **The example compiles.** Verified 2026-09-01 against ``test_scenarios/solana_vault_idl``
+    scaffolded with the Anchor fork; to re-verify, paste it into that project's
+    ``src/certora/specs/mod.rs`` inside a ``#[rule] pub fn`` with
+    ``use anchor_lang::prelude::*; use cvlr::prelude::*;`` and
+    ``use cvlr_solana::cvlr_deserialize_nondet_accounts;``, then ``cargo check --features certora``.
+    A worked example that does not compile is worse than none, and the first draft of this one did
+    not — see the lifetime caution it now carries."""
+    prompt = _author_system_prompt()
+    assert "Context::new(&crate::ID" in prompt
+    # the pre-read and the post-read must both go through the same binding
+    assert "let before = ix.vault.balance;" in prompt
+    assert "cvlr_assert!(ix.vault.balance == before + amount);" in prompt
+
+
+def test_the_author_is_told_a_cpi_is_a_stand_in_and_that_this_is_inherited():
+    """Flagged as inherited rather than measured, because it is: nothing here has tested a property
+    about a CPI's effect. Saying which claims are measured is what keeps the rest trustworthy."""
+    prompt = _author_system_prompt()
+    assert "not measured here" in prompt
+    assert "unconstrained stand-in" in prompt

@@ -98,6 +98,80 @@ the universal quantifier.
 For account inputs, `cvlr-solana` provides the nondet account machinery; read its source for the
 current spelling rather than guessing, since it has changed across releases.
 
+## Reaching a handler on an Anchor program
+
+Most Solana targets are Anchor programs, and getting a rule *into* one has four idioms. Each of them
+is the difference between a rule that says something about the program and a rule that fails — or
+passes — for reasons unrelated to its property. These are not style preferences; every one of them was
+established by a rule that behaved wrongly without it.
+
+**Call the handler, not the dispatcher.** `crate::entry` and `process_instruction` go through Anchor's
+generated dispatch. Do not start a rule there: it is where the cost is, and on the current prover it
+does not analyze at all — the program's own `#[error_code]` enum reaches string formatting that the
+pointer analysis rejects. A rule that names one handler is also the shape the extraction guidance asks
+for. Build the accounts struct and call `crate::<program_module>::<handler>(ctx, ..)`.
+
+**Build the accounts struct field by field, from nondet account infos.** `cvlr-solana` hands you an
+array of unconstrained `AccountInfo`s; each field of the handler's `#[derive(Accounts)]` struct is
+then constructed from one of them — `Account::try_from`, `Signer::try_from`, `Program::try_from`,
+`AccountLoader::try_from` for a zero-copy account. Read `cvlr-solana`'s source for the current
+spelling of the nondet-accounts helper rather than guessing; it has changed across releases.
+
+**Put the account array on the heap.** `let accounts = Box::new(cvlr_deserialize_nondet_accounts());`
+The prover does not fully support stack-allocated arrays, and this one is large. The same advice
+applies anywhere a rule indexes a fixed-size array with a non-constant index: use `Vec` or `Box`.
+
+And **do not annotate that array's lifetime.** The helper is generic over it; writing a wrapper that
+returns `[AccountInfo<'static>; 16]` forces the *borrow* to be `'static` too, and the struct literal
+below then fails with "does not live long enough". Let inference pick it.
+
+**Observe post-state through the handle the context borrowed — never by deserializing the account
+again.** This is the one that silently produces a wrong answer, so it is worth understanding rather
+than memorising.
+
+An Anchor `Account<T>` is a *deserialized copy* of the account's bytes. A handler mutates that copy.
+The copy is written back to the account only in `exit`, which Anchor's dispatch calls after the
+handler returns — and which nothing calls when your rule invokes the handler directly. So if you
+re-read the account after the call, you read the **pre-state**, your postcondition fails, and the
+program was correct all along. That failure looks exactly like a real finding.
+
+The whole shape, on a deposit handler whose accounts struct is `Deposit`:
+
+```rust
+let accounts = Box::new(cvlr_deserialize_nondet_accounts());
+let mut ix = crate::Deposit {
+    vault: Account::try_from(&accounts[0]).unwrap(),
+    depositor: Signer::try_from(&accounts[1]).unwrap(),
+    system_program: Program::try_from(&accounts[2]).unwrap(),
+};
+
+let before = ix.vault.balance;                  // read through the struct you are about to lend
+let amount: u64 = nondet();
+cvlr_assume!(before.checked_add(amount).is_some());
+clog!(before, amount);
+
+let ctx = Context::new(&crate::ID, &mut ix, &[], Default::default());
+if crate::vault_program::deposit(ctx, amount).is_ok() {
+    cvlr_assert!(ix.vault.balance == before + amount);   // and after, through the same struct
+}
+```
+
+The names in that example are the example's — the accounts struct, the program module and the handler
+all come from the program you are given. `Context::new(program_id, &mut accounts, remaining_accounts,
+bumps)`; `bumps` is the generated `<Name>Bumps` struct and `Default::default()` is almost always
+right. The context borrows the accounts
+struct, so the borrow ends with the call and the struct is yours to read afterwards.
+
+A zero-copy `AccountLoader` field behaves differently and more conveniently: `load()` reads the
+account's bytes directly, so a handler's writes through its own loader are visible through yours with
+no write-back involved. Retain the loader before the call — `let reserve = ix.reserve.clone();` — and
+`load()` it before and after.
+
+**One inherited caution, not measured here:** a cross-program invocation is replaced by an
+unconstrained stand-in, so a property about what the CPI *did* — lamports actually moved, a token
+balance actually changed — is an assumption your rule makes rather than something it checks. Assert
+over the program's own recorded state, which is the part it is responsible for.
+
 ## Overflow is a real property class here
 
 Unlike EVM, a Solana release build does *not* check arithmetic by default, and the prover has
