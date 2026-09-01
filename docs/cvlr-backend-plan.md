@@ -954,6 +954,40 @@ independent defect. The tell was available and I passed it — a job link existe
 those failures, and [core.py](../composer/prover/core.py)'s message discarded it while
 `CloudJobError` carried it. That is now fixed too: a failure names its job.
 
+**A blocked author assumes the conclusion, and the publish gate cannot tell.** The most substantive
+thing the run produced was a diagnosis the author wrote into its own harness: Anchor's
+`Account::exit` is not inlined, so handler state changes are never written back observably, and
+`find_program_address` is summarized, so a PDA cannot be re-derived across calls. Both are
+checkable against the vendored tuning files and both hold — `cvlr_inlining_anchor.txt` covers
+`try_from`, `try_deserialize` and the error conversions, and has nothing for `exit` or
+`AccountSerialize`. **On an Anchor program that puts most post-state properties out of reach**, which
+is most of the Solana market.
+
+What the author then did is the finding. It kept one rule:
+
+```rust
+cvlr_assume!(*accounts[0].key == expected_pda);
+...
+cvlr_assert!(vault_key == expected_pda);
+```
+
+That assumes its conclusion. It VERIFIES, it maps to a property, and it passes **both** halves of the
+publish gate. This is not a hole in the mapping check — it is the direct consequence of §7.5's
+"accounted for, not all green", which exists so a genuine violation need not be smoothed away and
+therefore gives the gate no notion of rule *strength*. A blocked author will always find this move,
+because it is the only one that always works.
+
+The fix is vacuity checking, which both public examples enable and `TEMPLATE_BASE` had omitted:
+`rule_sanity: "basic"`. `SANITY_FAILED` is already a first-class parsed status and is not
+`VERIFIED`, so it reaches the author through the accounting gate as unfinished work. Everything
+needed was present; only the conf key was missing.
+
+Two follow-ups this opens, neither done: the vendored Anchor inlining needs `exit` /
+`AccountSerialize` before Anchor post-state properties are provable at all — which is a
+prerequisite for this backend being useful on Anchor, not a refinement — and
+`cvlr_inlining_anchor.txt` line 39 carries an inlining rule naming one specific program, which is
+upstream's to remove from a file that claims to be canonical.
+
 **The mount covers CVLR's API but not the target's generated one.** A draft named
 `crate::__client_accounts_withdraw::WithdrawBumps`, an Anchor-generated path. §5.5 mounts the CVLR
 crates and the source tools expose the target's own code, but a harness must also name what the
