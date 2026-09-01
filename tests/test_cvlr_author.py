@@ -285,3 +285,24 @@ async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeyp
     # And the selection actually reaches the conf as a `rule` entry.
     conf = solana_conf({}, RunOverlay(build_script="/w/b.py", rules=captured["rules"]))
     assert conf["rule"] == ["rule_balance_conserved", "rule_only_authority_withdraws"]
+
+
+def test_the_unit_workdir_is_not_inside_a_prover_internal_directory():
+    """Where the per-unit workspace lives changes what the prover receives.
+
+    The collector skips paths under ``.certora_internal``, so a workspace placed there uploads its
+    ``.so`` and tuning files and none of its Rust. Nothing reports it: the job still runs and still
+    returns verdicts, and only the report and the counterexample analyzer — which read
+    ``.certora_sources`` — come up empty, much later. Confirmed by moving one project between the
+    two paths with nothing else changed: seven ``.rs`` files collected from a plain path, zero from
+    under ``.certora_internal``.
+
+    Also pins the two places the directory's name has to appear, because forgetting either is its
+    own quiet failure: uncopied, or a unit's workspace nests inside another's on the next run.
+    """
+    from composer.spec.cvlr.pipeline import WORK_DIR, _NOT_COPIED
+    from composer.spec.cvlr.scaffold import GITIGNORE_LINES
+
+    assert ".certora_internal" not in WORK_DIR.parts
+    assert WORK_DIR.name in GITIGNORE_LINES
+    assert _NOT_COPIED("anywhere", [WORK_DIR.name, "src"]) == {WORK_DIR.name}

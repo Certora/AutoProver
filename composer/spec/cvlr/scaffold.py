@@ -60,8 +60,10 @@ HARNESS_DIR = Path("src") / "certora"
 SPECS_DIR = HARNESS_DIR / "specs"
 ENVS_DIR = HARNESS_DIR / "envs"
 
-#: Build output the prover leaves in the project. From the template's ``certora-setup.py``.
-GITIGNORE_LINES = (".certora", ".certora_internal", "certora_out")
+#: Build output the prover leaves in the project, plus this backend's own per-unit workspaces
+#: (``composer.spec.cvlr.pipeline.WORK_DIR``). The first three are from the template's
+#: ``certora-setup.py``; the last is ours and is ignored for the same reason.
+GITIGNORE_LINES = (".certora", ".certora_internal", "certora_out", ".cvlr_work")
 
 #: The crate type a Solana program's library target must have. Without it cargo produces no
 #: loadable object and there is nothing for the prover to read.
