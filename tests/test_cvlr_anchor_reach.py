@@ -19,7 +19,11 @@ happening:
   so ``try_accounts`` is skipped, asserting the post-state property the loop reported as out of
   reach. This one goes through the account-creating CPI.
 * ``rule_dispatch_is_reachable`` — ``crate::entry``, the whole dispatch path. What [3006] was
-  attributed to.
+  attributed to, and now the tier whose verdict is least understood.
+
+The configuration is no longer a variable: the scaffold points the target at the Anchor fork
+(:mod:`composer.spec.cvlr.munge`), which is what production does, so this test exercises the same
+dependency graph a real project verifies against.
 
 Marked ``expensive``: it submits a real cloud job, and it needs a Rust and Solana platform toolchain.
 It skips — naming the missing piece — rather than failing when one is absent.
@@ -136,8 +140,14 @@ async def test_a_rule_that_reaches_an_anchor_program_can_be_analyzed(project, ca
         case Checked(build=build, report=report):
             assert isinstance(build.verdict, Built)
 
+    # Written to a file as well as printed. The prover's per-rule message is the only place the
+    # reason for a non-VERIFIED verdict appears, it is not among the artifacts the job's output URL
+    # exposes, and it is gone once the process ends — a run invoked through a `tail` has already
+    # cost one submission's worth of that message.
+    saved = project / "anchor_reach_report.txt"
+    saved.write_text(f"{report.link}\n\n{report.result_str}\n")
     with capsys.disabled():
-        print(f"\nprover run: {report.link}\n{report.result_str}")
+        print(f"\nprover run: {report.link}\nfull report saved to {saved}\n{report.result_str}")
 
     # The property, weakest tier first. A rule the prover cannot analyze is not VERIFIED, so this is
     # the same assertion for "[3006]" as for any other failure to produce a verdict — which is the
@@ -148,10 +158,11 @@ async def test_a_rule_that_reaches_an_anchor_program_can_be_analyzed(project, ca
     assert unreached == [], (
         f"rules that could not be verified against the program itself: {unreached}. Weakest tier "
         f"first, so the first entry is where the boundary is. Report: {report.link}\n"
-        f"Red today for a known upstream reason (§7.5.6): [3006] fires on "
-        f"`Self::AnchorError(Box::new(ae))` at anchor-lang error.rs:296, so every path that can "
-        f"construct an Anchor error is rejected. Un-inlining, summarizing and "
-        f"-solanaOptimisticJoinWithStackPtr were all measured and none of them helps. This asserts "
-        f"the property rather than the breakage on purpose: a test written around the current "
-        f"failure would pass a run that fixed nothing."
+        f"Red today for two known reasons, both narrower than the [3006] this used to fail on — "
+        f"that one is fixed, by the Anchor fork the scaffold now points at (§7.6). What remains: "
+        f"the handler tier is VIOLATED because Anchor writes a modified `Account` back only in "
+        f"`exit`, which is absent from the inlining allowlist, so the rule's re-read cannot see the "
+        f"change (§7.5.5); and the dispatch tier is UNKNOWN for a reason not yet established. "
+        f"This asserts the property rather than the breakage on purpose: a test written around the "
+        f"current failure would pass a run that fixed nothing."
     )
