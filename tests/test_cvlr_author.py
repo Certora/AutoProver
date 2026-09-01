@@ -322,3 +322,47 @@ def test_the_default_conf_enables_vacuity_checking():
     # And it survives into a submission's conf rather than being dropped as run-owned.
     conf = solana_conf(dict(TEMPLATE_BASE), RunOverlay(build_script="/w/b.py"))
     assert conf["rule_sanity"] == "basic"
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        # The one that actually happened, twice in one run.
+        ("vault: Deposit & Balance Tracking (8 properties)",
+         "vault: Deposit Balance Tracking (8 properties)"),
+        ("Withdrawal & Fee Distribution", "Withdrawal Fee Distribution"),
+        # Other prose a display name can carry. Non-ASCII is dropped rather than transliterated.
+        ("A#B+C;D?E!F", "A B C D E F"),
+        ("Café — naïve", "Caf na ve"),
+        # Already safe: unchanged, punctuation and all.
+        ("ok-name_1.2 [x]", "ok-name_1.2 [x]"),
+    ],
+)
+def test_a_display_name_is_reduced_to_what_the_prover_accepts(raw, expected):
+    """``msg`` is built from a component's display name, which is prose written by a model.
+
+    ``certoraRun`` *raises* on a character outside its set, before reading a single rule, so an
+    ampersand is enough to fail every submission a unit ever makes — and the author cannot fix it,
+    because the name is not in the harness. Two units in one run spent 6 and 13+ submissions on
+    exactly this, one of them holding a finished ten-rule harness with three claimed findings.
+    """
+    from composer.spec.cvlr.conf import safe_msg
+
+    assert safe_msg(raw) == expected
+
+
+def test_the_accepted_character_set_stays_a_subset_of_the_cli_s():
+    """Ours must be a subset of ``certoraValidateFuncs.validate_msg``'s, not merely similar.
+
+    A subset is what makes drift safe in the direction that matters: if the CLI ever *narrows* its
+    set, a strict subset stays valid with no edit here. Being a superset by even one character —
+    ``;`` was, on the first cut of this — reintroduces the whole failure for the inputs containing
+    it, and the test that would catch it is this one rather than any round-trip.
+    """
+    import string
+
+    from composer.spec.cvlr.conf import _MSG_SAFE
+
+    cli_extra = {"(", " ", ",", "/", "[", "'", "-", '"', "_", "]", ".", ")", ":", "\\", "=", "*", "$"}
+    cli = set(string.ascii_letters) | set(string.digits) | cli_extra
+    assert _MSG_SAFE <= cli, f"not accepted by the CLI: {_MSG_SAFE - cli}"
