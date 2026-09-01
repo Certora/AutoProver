@@ -39,6 +39,7 @@ from graphcore.tools.schemas import (
 from composer.authoring.state import ValidationStamper, make_validation_stamper
 from composer.cargo.session import CargoSession, CompileFailed, Compiled
 from composer.prover.core import CexHandler, ProverCallbacks, ProverOptions
+from composer.spec.cvlr.conf import SelectRules
 from composer.spec.cvlr.prover import (
     BuildRejected,
     Checked,
@@ -176,7 +177,13 @@ class VerifyRules(
                 deps.target.stage(draft)
                 outcome = await submit(
                     deps.target.session,
-                    dataclasses.replace(deps.submission, rules=deps.submission.rules),
+                    # Name exactly the rules this draft declares. Not a refinement: a conf with no
+                    # `rule` entry makes the cloud job end in FAILED, with no report and nothing on
+                    # disk to read, so *every* submission this backend made failed until this line
+                    # named them. Not `AllRules` either — the build is whole-crate, so "everything
+                    # the artifact declares" is every unit's rules, and this unit would be graded on
+                    # its siblings' drafts.
+                    dataclasses.replace(deps.submission, rules=SelectRules(tuple(declared))),
                     prover_opts=deps.prover_opts,
                     callbacks=ProverCallbacks(),
                     cex=deps.cex,
