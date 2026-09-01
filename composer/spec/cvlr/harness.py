@@ -17,6 +17,7 @@ Two consequences that are not obvious from the CVL side:
 """
 
 import dataclasses
+import re
 from pathlib import Path
 from typing import override
 
@@ -40,9 +41,20 @@ def module_name(slug: str) -> str:
 
     Rust accepts ``[A-Za-z_][A-Za-z0-9_]*``; a slug may carry ``-`` and, in principle, a leading
     digit. Both are fixed here rather than assumed away, because the failure is a module path the
-    compiler rejects long after the name was chosen."""
-    cleaned = "".join(c if c.isalnum() or c == "_" else "_" for c in slug)
-    return cleaned if cleaned[:1].isalpha() or cleaned[:1] == "_" else f"spec_{cleaned}"
+    compiler rejects long after the name was chosen.
+
+    The result is also lowercased, and runs of separators collapse. Validity is not the only bar for
+    a name this code writes into somebody else's repository: a component slug like
+    ``Vault_Initialization`` is a legal module path, but ``mod Vault_Initialization;`` earns a
+    ``non_snake_case`` warning and reads as though nobody looked. A crate that denies that lint — or
+    a CI that passes ``-D warnings`` — turns the same name into a compile error the *author* cannot
+    do anything about, since the module name is chosen here and not in the draft.
+    """
+    cleaned = "".join(c if c.isalnum() or c == "_" else "_" for c in slug).lower()
+    collapsed = re.sub(r"_+", "_", cleaned).strip("_")
+    if not collapsed:
+        return "spec"
+    return collapsed if collapsed[:1].isalpha() else f"spec_{collapsed}"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -123,7 +135,25 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
         — so a unit whose sibling has not been written yet would fail its own compile gate for a
         reason that has nothing to do with it. The placeholder is a doc comment: an empty module
         compiles and declares no rules, which is exactly the right starting state.
+
+        Two units whose slugs reduce to one module name are refused here rather than tolerated.
+        This is the only place that sees every name at once, and the alternative is silent: they
+        would share a file, so one unit's harness would overwrite the other's, both compile gates
+        would pass, and the report would claim two delivered units on one body of work — a false
+        verification claim rather than a crash. A duplicate ``mod`` line would not compile anyway;
+        failing here is the same outcome with a message that names the cause.
         """
+        by_module: dict[str, list[str]] = {}
+        for module in modules:
+            by_module.setdefault(module.module, []).append(module.slug)
+        clashes = {name: slugs for name, slugs in by_module.items() if len(slugs) > 1}
+        if clashes:
+            detail = "; ".join(f"{sorted(s)} all become {name!r}" for name, s in clashes.items())
+            raise ValueError(
+                f"two or more components share a harness module name ({detail}). Module names are "
+                f"lowercased and separator-collapsed, so slugs differing only in case or "
+                f"punctuation collide; rename the components so they differ in more than that."
+            )
         target = self._artifact_dir()
         for module in modules:
             path = target / module.artifact_file
