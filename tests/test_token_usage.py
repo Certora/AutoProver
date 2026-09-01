@@ -132,14 +132,14 @@ async def test_token_usage_persisted_to_run_meta_tags():
 def _fake_model(callbacks):
     resp = AIMessage(
         content="ok",
-        response_metadata={
-            "model_name": "claude-test",
-            "usage": {
-                "input_tokens": 100,
-                "output_tokens": 10,
-                "cache_read_input_tokens": 5,
-                "cache_creation_input_tokens": 2,
-            },
+        response_metadata={"model_name": "claude-test"},
+        # langchain's normalized shape. `input_tokens` is the inclusive total
+        # (100 fresh + 5 read + 2 written); the buckets come apart downstream.
+        usage_metadata={
+            "input_tokens": 107,
+            "output_tokens": 10,
+            "total_tokens": 117,
+            "input_token_details": {"cache_read": 5, "cache_creation": 2},
         },
     )
     return FakeMessagesListChatModel(responses=[resp, resp], callbacks=callbacks)

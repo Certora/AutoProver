@@ -23,7 +23,7 @@ authors = [
 ]
 
 dependencies = [
-    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@54a6852eac72896d17d3bc4f3068a775f9200d1f",
+    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@d11a2169f9ddfa034345762d85612f6c1ef5e7a4",
     "aiohttp>=3.13",
     "attrs>=26.1",
     "Jinja2>=3.1",
@@ -244,3 +244,4 @@ certora_autosetup = [
 [project.entry-points."certora.autoprove.llm_provider"]
 openai = "composer.llm.openai:OPEN_AI_SPEC"
 anthropic = "composer.llm.anthropic:ANTHROPIC_SPEC"
+openrouter = "composer.llm.openrouter:OPENROUTER_SPEC"

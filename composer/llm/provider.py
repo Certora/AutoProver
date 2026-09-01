@@ -9,16 +9,18 @@ registry, or ``composer.input.files`` — so both ``composer.input.files`` and
 the per-provider modules can import it without an import cycle.
 """
 
-from typing import Protocol, TYPE_CHECKING, Callable
+from typing import Protocol, TYPE_CHECKING, Callable, Literal
 from dataclasses import dataclass
 from functools import cached_property
 from composer.input.files import FileUploader
 from composer.input.types import ModelConfiguration
+from .pricing import PriceProvider
 from .types import CacheLevel
 from abc import ABC, abstractmethod
 
 
 if TYPE_CHECKING:
+    from langchain_core.callbacks import BaseCallbackHandler
     from langchain_core.language_models.chat_models import BaseChatModel
     from graphcore.tools.memory import AsyncPostgresBackend
     from graphcore.graph import RawMessageType
@@ -110,3 +112,34 @@ _PROMPT_TOKEN_SHARE = 0.5
 def compaction_threshold(context_window: int) -> int:
     """The prompt-token budget to allow a model with a ``context_window``-token window."""
     return int(context_window * _PROMPT_TOKEN_SHARE)
+
+
+# Thresholds for the three-step effort knob the OpenAI-shaped providers take in
+# place of a thinking-token count. Shared so a retune can't reach one backend and
+# miss another — the same budget has to mean the same effort on every route.
+_MEDIUM_EFFORT_FROM_TOKENS = 2048
+_HIGH_EFFORT_FROM_TOKENS = 8192
+
+
+def reasoning_effort(thinking_tokens: int) -> Literal["low", "medium", "high"]:
+    """Map a thinking-token budget onto the three-step effort knob."""
+    if thinking_tokens <= _MEDIUM_EFFORT_FROM_TOKENS:
+        return "low"
+    if thinking_tokens <= _HIGH_EFFORT_FROM_TOKENS:
+        return "medium"
+    return "high"
+
+
+def standard_callbacks(
+    price_provider: PriceProvider, *, long_cache: bool = False
+) -> list["BaseCallbackHandler"]:
+    """The usage + cost instrumentation to attach at model construction.
+
+    Shared because a provider that forgets either one produces an unmetered or
+    uncosted run rather than an error. ``long_cache`` selects the 1-hour
+    cache-write rate; providers with no cache-TTL knob leave it False. Imported
+    lazily to keep this module a dependency-free leaf."""
+    from composer.diagnostics.usage_callback import UsageCallback
+    from composer.diagnostics.cost_callback import CostAccumulator
+
+    return [UsageCallback(), CostAccumulator(price_provider, long_cache=long_cache)]

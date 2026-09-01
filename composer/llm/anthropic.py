@@ -12,7 +12,7 @@ import anthropic
 from composer.input.files import UploaderBase, ContentRenderer
 from composer.input.types import ModelConfiguration
 from composer.llm.provider import (
-    ProviderServiceBase, ProviderSpec, compaction_threshold
+    ProviderServiceBase, ProviderSpec, compaction_threshold, standard_callbacks
 )
 from composer.llm.pricing import PriceProvider, price_provider_for
 from .types import CacheLevel
@@ -137,7 +137,9 @@ class AnthropicRenderer:
             }
         return to_ret
 
-    def file_block(self, file_id: str, *, cache_level: CacheLevel = CacheLevel.NONE) -> dict:
+    def file_block(
+        self, file_id: str, *, cache_level: CacheLevel = CacheLevel.NONE
+    ) -> dict:
         to_ret : dict[str, Any] = {
             "type": "document",
             "source": {
@@ -151,6 +153,14 @@ class AnthropicRenderer:
                 "ttl": ttl
             }
         return to_ret
+
+    def inline_file_block(
+        self, basename: str, contents: bytes, mime: str,
+        *, cache_level: CacheLevel = CacheLevel.NONE
+    ) -> dict:
+        raise NotImplementedError(
+            "Anthropic content is uploaded to the Files API, not inlined."
+        )
 
 @cache
 def _get_service():
@@ -263,8 +273,6 @@ class AnthropicModelProvider:
         self, *, cache_level: CacheLevel = CacheLevel.NONE, disable_thinking: bool = False
     ) -> "BaseChatModel":
         from langchain_anthropic import ChatAnthropic
-        from composer.diagnostics.usage_callback import UsageCallback
-        from composer.diagnostics.cost_callback import CostAccumulator
 
         opts = self.options
         thinking: dict[str, Any] | None
@@ -299,12 +307,9 @@ class AnthropicModelProvider:
             betas=betas,
             thinking=thinking,
             model_kwargs=model_kwargs,
-            callbacks=[
-                UsageCallback(),
-                CostAccumulator(
-                    self.price_provider, long_cache=cache_level == CacheLevel.LONG
-                ),
-            ],
+            callbacks=standard_callbacks(
+                self.price_provider, long_cache=cache_level == CacheLevel.LONG
+            ),
         )
 
 ANTHROPIC_SPEC = ProviderSpec(
