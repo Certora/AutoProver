@@ -47,15 +47,24 @@ OVERLAY_OWNED_KEYS: frozenset[str] = frozenset({"build_script", "files", "msg"})
 #: — the repository Certora recommends cloning to start a new Solana spec, and therefore the only
 #: project-shaped source here that is *advice* rather than evidence of what somebody once did.
 #:
-#: Two of its positions are worth knowing before changing them. ``optimistic_loop`` is ``false``
-#: although twelve of sixteen surveyed projects set it true. And the five ``-solanaOptimistic*``
-#: prover flags — set in every surveyed project that has a ``prover_args`` baseline — are absent;
-#: the template's latest commit removed prover options, so their absence is a position rather than
-#: an oversight. Both are cases where counting what projects do promotes exactly the wrong answer.
+#: One of its positions was followed here and then reversed by measurement. The template sets
+#: ``optimistic_loop`` to ``false`` where twelve of sixteen surveyed projects set it true, and that
+#: was originally copied on the reasoning that counting what projects do promotes the wrong answer.
+#: With ``loop_iter: "1"``, ``false`` makes **any** loop inside a handler fail before the rule's own
+#: property is reached: a rule calling an Anchor deposit handler came back VIOLATED on
+#: *"Unwinding condition in a loop. We recommend to run with --optimistic_loop"*, against a loop in
+#: the handler's own borsh path (``docs/cvlr-backend-plan.md`` §7.6.2). So it is true here — and the
+#: soundness cost is real and stated: the prover then assumes loops finish within the bound instead
+#: of proving it, which can hide a violation that needs more iterations to reach.
+#:
+#: The five ``-solanaOptimistic*`` memory-model flags remain absent, which is still the template's
+#: position rather than an oversight: its latest commit removed prover options, and none of them has
+#: been shown to be needed here. ``-solanaOptimisticJoinWithStackPtr`` was measured and does nothing
+#: for the error it looks like it should address (``docs/upstream-defects.md`` P3).
 TEMPLATE_BASE: dict[str, object] = {
     "msg": "Certora Verification Rules",
     "loop_iter": "1",
-    "optimistic_loop": False,
+    "optimistic_loop": True,
     "java_args": ["-Dlevel.sbf=info"],
     "prover_args": [
         "-unsatCoresForAllAsserts true",
