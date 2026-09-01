@@ -226,7 +226,7 @@ async def test_the_backend_authors_cvlr_rules_for_the_vault(langgraph_db, projec
             for title, rules in harness.property_checks():
                 print(f"  [{title}] -> {', '.join(rules) or '(none)'}")
             for skip in harness.skipped:
-                print(f"  skipped [{skip.title}]: {skip.reason}")
+                print(f"  skipped [{skip.property_title}]: {skip.reason}")
 
     assert result.n_properties > 0, "no properties extracted"
     assert result.n_delivered > 0, f"no unit delivered a harness: {result.failures}"
