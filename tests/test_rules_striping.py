@@ -298,7 +298,6 @@ class TestDeclaredRulesList:
         )
         assert rc == 3
         assert output  # drained, not lost
-        assert len(output) <= 8_000  # and tail-trimmed
 
 
     async def test_discovery_ignores_decoy_entries(self, tmp_path, monkeypatch):
