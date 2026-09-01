@@ -119,13 +119,31 @@ def test_a_skipped_property_may_be_absent_but_not_mapped():
         ("deposit", "deposit"),
         ("token-transfer", "token_transfer"),
         ("2fa_check", "spec_2fa_check"),
-        ("_internal", "_internal"),
+        ("_internal", "internal"),
+        # The three the first live run against a real program actually produced. They were valid
+        # module paths and every one of them earned a `non_snake_case` warning.
+        ("Deposits", "deposits"),
+        ("Vault_Initialization", "vault_initialization"),
+        ("Withdrawals_Fee_Distribution", "withdrawals_fee_distribution"),
+        # Separator runs collapse rather than producing `a__b`.
+        ("Withdrawals & Fees", "withdrawals_fees"),
     ],
 )
-def test_a_slug_becomes_a_rust_identifier(slug, expected):
+def test_a_slug_becomes_an_idiomatic_rust_identifier(slug, expected):
     # A component slug is not constrained to Rust's identifier grammar, and a module path the
-    # compiler rejects is discovered long after the name was chosen.
+    # compiler rejects is discovered long after the name was chosen. Validity is not the only bar,
+    # though: this name is written into someone else's crate, so it also has to be snake_case — a
+    # crate that denies `non_snake_case` turns the warning into an error the author cannot fix.
     assert module_name(slug) == expected
+
+
+def test_two_slugs_that_reduce_to_one_module_are_refused(tmp_path):
+    # Silent is the failure mode to avoid: they would share a file, so one unit's harness would
+    # overwrite the other's, both gates would pass, and the report would claim two delivered units
+    # on one body of work.
+    store = CvlrArtifactStore(tmp_path, Path("programs/prog"))
+    with pytest.raises(ValueError, match="share a harness module name"):
+        store.declare_modules([HarnessModule("Fee-Split"), HarnessModule("fee_split")])
 
 
 def test_every_unit_gets_a_module_and_a_file_before_any_unit_authors(tmp_path):
