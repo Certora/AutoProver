@@ -71,14 +71,23 @@ from composer.spec.types import PropertyFormulation
 
 _log = logging.getLogger(__name__)
 
-#: Where per-unit workdirs go. Under the internal dir rather than a temp dir: a failed authoring
-#: session's workspace is the most useful thing to look at afterwards, and a temp dir is gone by the
+#: Where per-unit workdirs go. A real directory rather than a temp dir, because a failed authoring
+#: session's workspace is the most useful thing to look at afterwards and a temp dir is gone by the
 #: time anyone asks.
-WORK_DIR = Path(".certora_internal") / "cvlr" / "work"
+#:
+#: **Deliberately not under ``.certora_internal``**, which is where this started. The prover's source
+#: collector skips paths inside that directory, so a unit whose whole workspace lived there uploaded
+#: its ``.so`` and tuning files and *none* of its Rust — silently, with the job still succeeding.
+#: Confirmed by moving one project between the two paths with nothing else changed: seven ``.rs``
+#: files collected from a plain path, zero from under ``.certora_internal``.
+WORK_DIR = Path(".cvlr_work")
 
 #: Never copied into a unit's workdir. ``target`` is regenerable and enormous; ``.git`` is neither
-#: needed nor ours to duplicate.
-_NOT_COPIED = shutil.ignore_patterns("target", ".git", ".certora_internal", "certora_out")
+#: needed nor ours to duplicate; :data:`WORK_DIR` is where the copies themselves go, so copying it
+#: would nest one unit's workspace inside another's.
+_NOT_COPIED = shutil.ignore_patterns(
+    "target", ".git", ".certora_internal", "certora_out", WORK_DIR.name
+)
 
 
 class CvlrPhase(enum.Enum):

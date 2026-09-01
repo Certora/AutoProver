@@ -931,12 +931,15 @@ every *unit's* rules, and a unit would be graded on its siblings' drafts.
 **Two findings this run appeared to produce were symptoms of that one bug, and are retracted.**
 Recording them because the mis-diagnoses were confident and each cost real time:
 
-* *"`.certora_sources` receives no Rust, so §7.2.2's premise is false."* Wrong. With no rule
-  selection the CLI stops before collecting sources, which looked identical to never collecting
-  them. The same workspace, once the rules are named, collects seven `.rs` files including `lib.rs`
-  and the harness modules. `sources` is consumed, the `**` glob expands, and the workspace layout is
-  fine. What survives is small and upstream: `Cargo.toml` is not collected for *either* project,
-  which is §7.4.3's row, not a new defect.
+* *"`sources` is not consumed by certora-cli 8.18.0."* Wrong about the cause, right that something
+  was broken — and the retraction itself then over-corrected, so this took three passes to land.
+  `sources` **is** consumed and the `**` glob **does** expand. What suppresses it is where this
+  backend put the per-unit workspace: the collector skips paths under `.certora_internal`, and
+  `WORK_DIR` was `.certora_internal/cvlr/work/<unit>`, so the whole project under verification sat
+  inside a directory it refuses to walk. One project, one warm build, one `SelectRules`, moved
+  between two paths: **7 `.rs` from a plain path, 0 from under `.certora_internal`** — and the job
+  VERIFIED either way, which is why nothing complained. `WORK_DIR` is now `.cvlr_work`. What
+  remains upstream is one row: `Cargo.toml` is collected for neither project, per §7.4.3.
 * *"Without CEX analysis the loop burns its budget on tautologies."* The behaviour was real — all
   three units wrote competent 8–10 rule harnesses and collapsed to probes, one of them
   `cvlr_assume!(x > y); cvlr_assert!(x != y)`, which does not touch the program — but the stated
