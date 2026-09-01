@@ -878,6 +878,39 @@ that is worth knowing before trusting a green fuzz run.
   biggest known limiter on loop quality right now.
 * **No entry point.** Nothing constructs a `CvlrBackend` yet; `console-solana` / `tui-solana` are §7.8.
 
+#### 7.5.5 What the first live run found
+
+[tests/test_cvlr_gate.py](../tests/test_cvlr_gate.py) drives the real backend over the Anchor vault
+with real models, cargo and cloud submissions. Two defects fixed, three findings recorded.
+
+**The loop works, and the source mount earns its keep.** The tool census over one run — 30
+`put_harness`, 28 `cargo_check`, **23 real prover submissions**, and 50 combined
+`cvlr_source_read`/`cvlr_source_search` — is the evidence §5.5 was asking for. The author checks
+helper names against the mounted crate rather than guessing them, which was the whole argument for
+putting the source in front of it.
+
+**Recursion exhaustion discards finished work — and this is not CVLR's to fix.** The first run set
+`recursion_limit` to 100 (copied from `test_solana_gate`, where it is ample because that test runs
+only the front half); all three units exhausted it, each holding a compiling draft. A budget stop
+returns `Curtailed`, which preserves the draft and marks it unreliable; a `GraphRecursionError`
+propagates and the draft is lost. Same class of event, opposite handling — and **no backend anywhere
+catches `GraphRecursionError`**, so this is pre-existing shared behaviour. Fixing it in this backend
+alone would make CVLR diverge from every other for no principled reason; it belongs to
+`run_to_completion`'s callers as one change.
+
+**Units share no knowledge, and the isolation that forces is not free.** Each unit independently
+rediscovers how to invoke the program at all — one had a working `crate::entry` dispatch with the
+right Anchor discriminator while a sibling was still probing with `cvlr_assert!(true)`. §7.5.2's
+per-unit workdir was forced by compile-gate correctness, but it isolates *learning* too, and the cost
+grows linearly in component count. A shared, append-only note of "how this program is driven",
+written once and read by every unit, is the obvious answer and is not built.
+
+**The mount covers CVLR's API but not the target's generated one.** A draft named
+`crate::__client_accounts_withdraw::WithdrawBumps`, an Anchor-generated path. §5.5 mounts the CVLR
+crates and the source tools expose the target's own code, but a harness must also name what the
+target's *macros* generate — `Accounts` structs, `Bumps` types, the discriminants — and nothing puts
+that surface in front of the author. `cargo expand` output, or the Anchor crate source, would.
+
 ### 7.6 Phase 5 — Munge (parallel with 4)
 
 Reuse the munge agent spine with a CVLR compile check and a Solana munge charter, plus the
