@@ -5,8 +5,10 @@ programs, and every entry is reproducible. Nothing here is filed anywhere yet �
 so that routing is a decision somebody makes rather than one I guess at, since the two groups below
 belong in different places and one of them cannot be public.
 
-**Group P — the Solana Prover.** Closed source, so these can only be reported. Both are blocking:
-together they mean an Anchor program's own code cannot currently be verified.
+**Group P — the Solana Prover.** Closed source, so these can only be reported. **None of them blocks
+Anchor verification in practice**, and an earlier draft of this file said P1 did. Production verifies
+Anchor programs by depending on `Certora/anchor`, a maintained fork whose `Error` is unboxed — see P1
+for how that was missed and what is left of the defect.
 
 **Group T — the recommended starting template.** A public repository, and every one of these has a
 concrete fix we have already verified locally. `composer/spec/cvlr/env_paths.py` works around T1 at
@@ -18,15 +20,16 @@ the write-up gives the line number rather than the name.
 
 | id | defect | severity |
 |---|---|---|
-| [P1](#p1) | `Box::new` of a stack-built struct rejected as an illegal stack-pointer store | blocking |
-| [P2](#p2) | Un-inlining a call with no summary kills the job in 3.6s with no diagnostic | blocking |
+| [P1](#p1) | `Box::new` of a stack-built struct rejected as an illegal stack-pointer store | worked around upstream |
+| [P2](#p2) | Un-inlining a call with no summary kills the job in 3.6s with no diagnostic | major |
 | [P3](#p3) | `solanaOptimisticJoinWithStackPtr` is documented as a conf key and is not one | minor |
-| [T1](#t1) | Tuning files are spelled for pre-2.2 `solana-program` paths | blocking |
+| [T1](#t1) | Tuning files are spelled for pre-2.2 `solana-program` paths | major |
 | [T2](#t2) | A canonical tuning file names one specific on-chain program | hygiene |
 | [T3](#t3) | `[package.metadata.certora] sources` omits `Cargo.toml` | major |
 | [T4](#t4) | `README` names files the template does not ship | minor |
 | [T5](#t5) | `certora/mod.rs` never declares `utils.rs` | minor |
 | [T6](#t6) | `[workspace.dependencies]` pins CVLR by hand | minor |
+| [T7](#t7) | Nothing points a new project at the Anchor fork it needs | **major** |
 
 ---
 
@@ -34,8 +37,25 @@ the write-up gives the line number rather than the name.
 
 ### `Box::new` of a stack-built struct is rejected as an illegal store of a stack pointer
 
-**Effect: no Anchor program can be verified on any path that can return an error.** Which is every
-path through Anchor's dispatch, and every handler that uses `?` or `require!`.
+**This is already solved in practice, and the first draft of this entry did not know that.** The
+effect is real — no path that constructs an Anchor error can be analyzed — but it applies to the
+*crates.io* `anchor-lang`, and production does not use it. `Certora/anchor` carries a branch per
+upstream release (`certora-v0.26.0` … `certora-v0.32.1`) whose `Error` is unboxed, and a verification
+project depends on that. The reference project's verification branch pins exactly that fork at
+`certora-v0.31.1`; its non-verification branch uses crates.io, which is why a glance at the wrong
+branch shows no fork at all.
+
+So this is a defect with a maintained workaround, not a blocker. Still worth reporting — `Box::new` of
+a stack-built value is ordinary Rust, and rejecting it means every Anchor project carries a forked
+dependency in perpetuity — but the severity is "upstream should not need a fork", not "Anchor cannot
+be verified".
+
+**How the mistake happened, since it is the more useful finding.** The scaffold this backend writes
+depends on crates.io Anchor, because the template it follows does. So the backend reproduced a
+condition no real project is in, hit the resulting error, and I wrote it up as a property of the
+prover without checking what real projects depend on — which was one `grep` over the local checkouts.
+Generalised: *before reporting that a tool cannot do something, check what the people who do it every
+day actually run.*
 
 Reproduced against a minimal Anchor 0.31.1 lamports vault
 (`test_scenarios/solana_vault_idl` in this repository), harness
@@ -93,8 +113,9 @@ assumed away under `-solanaAssertOnPanic false` — while the handler's `?` actu
 `Error`. So account deserialization and post-state arithmetic over real account data both work. The
 only thing that fails is error *construction*.
 
-**Three workarounds attempted, none of which works.** Each was a separate cloud submission; details
-under P2, P3 and below.
+**Three workarounds attempted from inside the configuration, none of which works.** Each was a
+separate cloud submission; details under P2, P3 and below. All three are beside the point given the
+fork, and are kept because two of them turned up separate defects.
 
 1. Removing the two `#[inline]` allowlist entries, so the blanket leaves the conversions
    un-inlined — see P2. Worse than the original.
@@ -108,10 +129,13 @@ under P2, P3 and below.
    inlining allowlist, that is a fourth defect; if they are not, the interaction is worth
    documenting.
 
-**What would resolve it**, in preference order from a caller's point of view: treat a
-stack-to-heap *move* as distinct from a stack pointer *escaping*; or give the tuning files a way to
-say "do not analyze this body, and here is its result" that works on a function in the allowlist; or
-publish a supported way to keep error codes observable without analyzing the boxing.
+**What would resolve it** so that no fork is needed: treat a stack-to-heap *move* as distinct from a
+stack pointer *escaping*. Failing that, give the tuning files a way to say "do not analyze this body,
+and here is its result" that works on a function in the inlining allowlist — the summary attempt above
+suggests they cannot today, which is arguably the more tractable ask.
+
+**And a fourth workaround, which is the one that works.** Depend on the fork. This backend now writes
+that `[patch.crates-io]` itself ([munge.py](../composer/spec/cvlr/munge.py)); the gap it fills is T7.
 
 ---
 
@@ -276,6 +300,22 @@ arguably a fourth prover defect rather than a template one; it is recorded here 
 found together.
 
 ---
+
+## T7
+
+### Nothing points a new project at the Anchor fork it needs
+
+The template is the recommended way to start a Solana spec, and it does not mention
+`Certora/anchor`. A project scaffolded from it depends on crates.io `anchor-lang`, and the first rule
+that calls a handler fails with [3006] — a message about pointer analysis, with no indication that a
+fork exists or that every real Anchor verification uses one.
+
+This is the defect that actually cost time here, and it is a template and documentation gap rather
+than a technical one. Two things would close it: a `[patch.crates-io]` stanza in the template's
+workspace manifest carrying the branch table, and a line in the README saying why.
+
+Major because of the shape of the failure, not its difficulty: somebody hitting it has no path from
+the symptom to the answer.
 
 ## T4
 
