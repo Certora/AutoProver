@@ -306,3 +306,19 @@ def test_the_unit_workdir_is_not_inside_a_prover_internal_directory():
     assert ".certora_internal" not in WORK_DIR.parts
     assert WORK_DIR.name in GITIGNORE_LINES
     assert _NOT_COPIED("anywhere", [WORK_DIR.name, "src"]) == {WORK_DIR.name}
+
+
+def test_the_default_conf_enables_vacuity_checking():
+    """A blocked author's escape route is to assume the conclusion, and only sanity catches it.
+
+    Both halves of the publish gate pass such a rule: it VERIFIES, and it maps to its property. That
+    is not an oversight in the gate — "accounted for, not all green" exists so a violated rule need
+    not be smoothed away, and the same choice means the gate has no notion of rule *strength*.
+    Vacuity checking is what supplies it, both public examples enable it, and this default had not.
+    """
+    from composer.spec.cvlr.conf import TEMPLATE_BASE, solana_conf, RunOverlay
+
+    assert TEMPLATE_BASE["rule_sanity"] == "basic"
+    # And it survives into a submission's conf rather than being dropped as run-owned.
+    conf = solana_conf(dict(TEMPLATE_BASE), RunOverlay(build_script="/w/b.py"))
+    assert conf["rule_sanity"] == "basic"

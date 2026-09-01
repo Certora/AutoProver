@@ -64,6 +64,15 @@ TEMPLATE_BASE: dict[str, object] = {
     ],
     "smt_timeout": "6000",
     "cargo_tools_version": "v1.43",
+    # Vacuity checking, which both public examples enable and this default had omitted. It is the
+    # only thing that catches the rule a *blocked* author writes: when the properties in a batch
+    # turn out to be unprovable — an un-inlined serialization path, a summarized helper — the way
+    # forward that always works is to assume the conclusion. Such a rule VERIFIES, maps cleanly to
+    # its property, and passes both halves of the publish gate, because "accounted for, not all
+    # green" (§7.5) is designed to avoid *rewarding* weakened rules and cannot *detect* one.
+    # Observed doing exactly that: a rule that assumed `vault.key == expected_pda` and then
+    # asserted it. A sanity failure is not VERIFIED, so it reaches the author as unaccounted work.
+    "rule_sanity": "basic",
 }
 
 
