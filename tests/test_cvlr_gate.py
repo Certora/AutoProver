@@ -38,6 +38,7 @@ from typing import Any, cast
 import pytest
 
 from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, platform_tools_installed
+from composer.input.types import DEFAULT_RECURSION_LIMIT
 from composer.llm.registry import get_provider_for
 from composer.pipeline.core import run_pipeline
 from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ, SOLANA
@@ -144,7 +145,7 @@ async def test_the_backend_authors_cvlr_rules_for_the_vault(langgraph_db, projec
             models,
             conns.indexed_store,
             ("cvlr_gate", "src"),
-            recursion_limit=100,
+            recursion_limit=DEFAULT_RECURSION_LIMIT,
             ecosystem=SOLANA,
         )
         # rag_tools=() on purpose for this first run: the corpus is declared optional by design
@@ -156,7 +157,12 @@ async def test_the_backend_authors_cvlr_rules_for_the_vault(langgraph_db, projec
             services=conns.memory,
             thread_id="cvlr_gate",
             store=conns.store,
-            recursion_limit=100,
+            # Production's default, not a smaller test-scale number. The authoring loop is not the
+            # front half: a unit that compiles, submits, reads a counterexample and revises spends
+            # graph steps at a rate `test_solana_gate`'s analysis-only run never approaches. At 100
+            # every unit here exhausted the limit mid-iteration with a compiling draft on disk, and
+            # a recursion abort — unlike a budget stop — discards it rather than curtailing it.
+            recursion_limit=DEFAULT_RECURSION_LIMIT,
             cache_namespace=None,
             memory_namespace=None,
         )
