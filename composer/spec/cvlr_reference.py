@@ -11,10 +11,18 @@ current core with a stale chain crate and still look right. Recording exact rele
 is a visible edit here, with the compile gate as its test.
 
 **A chain crate implies a platform generation.** ``cvlr-solana`` is pinned to one Solana platform
-line (0.4.x → ``solana-program`` 1.18, 0.5.0 → 2.2, the unreleased 0.6 line → the split
-``solana-*`` v3 crates), and each generation has its *own* ``AccountInfo`` type. Two crates that
-disagree do not merely warn — a helper from one cannot be passed to a handler from the other, so
+line (0.4.x → ``solana-program`` 1.18, 0.5.0 → 2.2, the unreleased 0.6 line → the ``solana-*`` v3
+crates), and each generation has its *own* ``AccountInfo`` type. Two crates that disagree do not
+merely warn — a helper from one cannot be passed to a handler from the other, so
 :attr:`ChainReference.platform` is part of the reference set rather than a detail of the target.
+
+**The split is not where the major version is.** ``solana-program`` stopped *defining* the platform
+types at **2.2**, not at 3.0: 1.17 and 1.18 carry a real ``account_info`` module, while 2.2.1, 2.3.0
+and 3.0.0 all re-export ``solana-account-info``. So the generation pinned above is already
+post-split, and a path written as ``solana_program::account_info::AccountInfo`` names a re-export
+whose *defining* path — the one a demangled symbol carries — is ``solana_account_info::AccountInfo``.
+:class:`PathAlias` is how that difference reaches the tuning files; ``docs/cvlr-backend-plan.md``
+§7.5.6 is what it cost to find out.
 
 This module deliberately imports nothing: a script that only needs to know which version to write
 into a probe crate should not pay for the pipeline (importing ``ChainTag``'s home costs ~2.5s and
@@ -55,6 +63,51 @@ class CrateRequirement:
 
 
 @dataclasses.dataclass(frozen=True)
+class PathAlias:
+    """A path prefix as the canonical tuning files spell it, and this generation's spellings of it.
+
+    Matched as a literal substring of a directive's pattern, so a concept is renamed wherever it
+    appears — several upstream directives name two or three of them in one regex.
+
+    ``actual`` is a tuple because a platform split is not always a rename. ``solana-program`` kept a
+    real ``invoke_signed_unchecked`` of its own while the one that ends up on the call path is
+    ``solana-cpi``'s, so a summary that must cover the concept has to be emitted under both
+    spellings. A spelling whose crate the target does not resolve is dropped, which is what keeps
+    these safe to declare against a target that predates the split.
+    """
+
+    canonical: str
+    actual: tuple[str, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class NamespacePattern:
+    """A blanket over one crate's whole namespace, widened to the family that replaced that crate.
+
+    The canonical spelling is ``<crate>::.*`` — the pattern upstream writes to set a default for a
+    whole layer, as in ``#[inline(never)] ^solana_program::.*$``. On a generation that split the
+    monolith into a family, that blanket covers almost nothing: the layer moved to
+    ``solana_account_info``, ``solana_pubkey``, ``solana_cpi`` and a dozen more, so the default it was
+    setting silently stopped applying to them.
+
+    Two things make this its own type rather than a :class:`PathAlias`.
+
+    It must not touch a path that merely *starts* with the crate:
+    ``solana_program::instruction::get_stack_height`` names a function that still lives in the
+    monolith, and rewriting it would point a directive at a symbol that does not exist. The literal
+    ``.*`` in the canonical spelling is what separates the blanket from every other directive.
+
+    And it is unconditional, where a :class:`PathAlias` is dropped unless the target resolves the
+    crate it names. The replacement matches crate *names* rather than naming one crate, so it is a
+    superset of the canonical spelling and stays correct on a target that predates the split — which
+    is also why it cannot go stale when the next crate is split out.
+    """
+
+    canonical: str
+    actual: str
+
+
+@dataclasses.dataclass(frozen=True)
 class PlatformGeneration:
     """The chain-platform release line a CVLR chain crate is bound to.
 
@@ -77,6 +130,11 @@ class PlatformGeneration:
     #: actually carries the type, and that survived the split, is what makes the answer legible
     #: across it.
     witnesses: tuple[CrateRequirement, ...]
+    #: How this generation spells the paths the canonical tuning files name, for
+    #: :mod:`composer.spec.cvlr.env_paths` to emit. Empty for a generation whose spelling *is* the
+    #: canonical one — the files are vendored verbatim from upstream and upstream writes them in the
+    #: monolith's spelling, so "no aliases" means "upstream's paths are already right here".
+    path_aliases: tuple[PathAlias | NamespacePattern, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -146,6 +204,45 @@ SOLANA = ChainReference(
         witnesses=(
             CrateRequirement("solana-account-info", "2.3"),
             CrateRequirement("solana-program", "2.2"),
+        ),
+        # Every entry here was checked against a demangled symbol table, not against the crates'
+        # documentation: `solana-program` is a *partial* facade, so which side of the split a symbol
+        # lives on is a per-symbol fact and reading it off the module was wrong twice.
+        path_aliases=(
+            # Modules that became whole-crate aliases (`pub use solana_x as x`), so every path
+            # under them moved together.
+            PathAlias("solana_program::account_info", ("solana_account_info",)),
+            PathAlias("solana_program::pubkey", ("solana_pubkey",)),
+            PathAlias("solana_program::program_error", ("solana_program_error",)),
+            PathAlias("solana_program::program_pack", ("solana_program_pack",)),
+            PathAlias("solana_program::rent", ("solana_rent",)),
+            PathAlias("solana_program::clock", ("solana_clock",)),
+            PathAlias("solana_program::sysvar", ("solana_sysvar",)),
+            PathAlias("solana_program::hash", ("solana_hash",)),
+            # These two went to one crate that is not named after either of them.
+            PathAlias("solana_program::system_program", ("solana_sdk_ids::system_program",)),
+            PathAlias("solana_program::incinerator", ("solana_sdk_ids::incinerator",)),
+            # `program` is the partial facade. `invoke`, `invoke_signed` and `set_return_data` are
+            # real functions there and keep the canonical spelling — they are in the symbol table
+            # under it — so only the symbol that moved is aliased, and it is aliased to *both*:
+            # `solana-program` still defines one of that name, and the one that ends up on the call
+            # path is `solana-cpi`'s.
+            PathAlias(
+                "solana_program::program::invoke_signed_unchecked",
+                (
+                    "solana_program::program::invoke_signed_unchecked",
+                    "solana_cpi::invoke_signed_unchecked",
+                ),
+            ),
+            # Deliberately absent: `solana_program::instruction::get_stack_height`, a real function
+            # in the monolith on this generation, and `solana_program::poseidon`, which the
+            # generation does not have under any spelling — no rewrite makes an absent symbol
+            # present, and pretending otherwise would hide that the directive is inapplicable.
+            #
+            # Last, and the one that matters most: the blanket that gives the whole platform layer
+            # its never-inline default. It matched two symbols on the first real target this backend
+            # was pointed at, because the layer had moved out from under it.
+            NamespacePattern("solana_program::.*", "solana_[a-z0-9_]*::.*"),
         ),
     ),
     unpublished=(

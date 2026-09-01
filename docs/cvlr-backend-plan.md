@@ -1027,12 +1027,23 @@ the vendored tuning files, three of its four claims hold exactly:
 | `Account::exit` / `AccountSerialize::try_serialize` not inlined | holds — absent from the `#[inline]` allowlist |
 | `invoke_signed_unchecked` summarized, so `init`'s account-creating CPI is a no-op | holds — `cvlr_summaries_core.txt:95` |
 | `find_program_address` summarized | holds — `cvlr_summaries_core.txt:84,92` |
-| a blanket `#[inline(never)] ^.*anchor_lang.*$` is what excludes them | **wrong** — no such directive; they are simply not in the allowlist |
+| a blanket `#[inline(never)] ^.*anchor_lang.*$` is what excludes them | holds — `cvlr_inlining_anchor.txt:2`, the file's first directive |
 
-Recorded with the wrong one included, because the mechanism it names does not exist and the
-conclusion is right anyway: an agent's diagnosis of prover behaviour is evidence worth checking, not
-evidence worth quoting. **On an Anchor program this puts most post-state properties out of reach**,
-which is most of the Solana market.
+All four hold, and this table said otherwise until §7.5.6 went looking: the fourth row was recorded
+as **wrong** — "no such directive" — on a reading of the file that missed its opening line. The
+correction matters more than the row does, because it inverts the shape of the fix. Anchor is
+`#[inline(never)]` by default with a named allowlist of exceptions, so the lever is *subtracting from
+the allowlist*, not adding a suppression; and the allowlist is therefore an exact statement of which
+`anchor_lang` code the prover ever analyzes.
+
+Row two wants a second warning: it is true of the file and false of the target. The
+`invoke_signed_unchecked` summary is present exactly as cited and does not *apply* here, because the
+path it names was renamed out from under it — so that CPI is analyzed in full rather than
+approximated, the opposite of what the row implies. Row three survives, but for a reason outside it:
+`find_program_address` is summarized on this target only because upstream added a second block under
+the split spelling (§7.5.6). A directive checked by reading the file it lives in has been confirmed
+to exist, not to take effect. **On an Anchor program this puts most post-state
+properties out of reach**, which is most of the Solana market.
 
 What the author then did is the finding. It kept one rule:
 
@@ -1070,6 +1081,147 @@ upstream's to remove from a file that claims to be canonical.
 crates and the source tools expose the target's own code, but a harness must also name what the
 target's *macros* generate — `Accounts` structs, `Bumps` types, the discriminants — and nothing puts
 that surface in front of the author. `cargo expand` output, or the Anchor crate source, would.
+
+#### 7.5.6 Addressing [3006]
+
+The attribution on record — Anchor 0.31's `Error::AnchorError(Box::new(e))` — survives inspection as
+a description of the code and fails as an explanation. `impl From<AnchorError> for Error` is
+byte-identical in anchor-lang 0.29.0, 0.30.1 and 0.31.1 (`src/error.rs:242` / `:296` / `:296`), and so
+are its three siblings. Whatever separates our runs from a corpus of projects that verify Anchor
+programs, it is not that construct's existence. Something else moved, and it is findable without
+spending a submission: build the scenario for SBF, demangle the symbol table, and ask which of the
+vendored tuning directives match anything at all.
+
+That build takes 45 seconds and needs no cloud time. Its answer:
+
+**Fourteen tuning directives have no working spelling on this target, and the blanket that sets the
+default for the whole platform layer is one of them.** The scenario resolves `solana-program 2.3.0`,
+where `account_info` is `pub use solana_account_info::{self as account_info, …}` (`src/lib.rs:587`)
+and `pubkey`, `rent`, `clock`, `program_error` and `program_pack` are aliases of the same shape.
+Demangled Rust symbols carry the *defining* crate path, so a directive anchored on `solana_program::…`
+cannot match. The split landed at **solana-program 2.2**, not at v3: 1.17 and 1.18 have a real
+`account_info` module and 2.2.1, 2.3.0 and 3.0.0 all re-export. The reference set pins
+`solana-program 2.2` as its platform, so the generation it names is already post-split while the
+vendored files are written pre-split.
+
+The headline is `cvlr_inlining_core.txt:7`:
+
+```text
+#[inline(never)] ^solana_program::.*$
+```
+
+Two symbols in `vault.so` match it — `solana_program::program::{invoke, invoke_signed}` — and nothing
+else. Every split crate (`solana_account_info`, `solana_pubkey`, `solana_cpi`, `solana_rent`, …) falls
+outside it, so for the entire platform layer **the default silently flipped from never-inline to
+inline**. That is a larger change than any individual dead exception: upstream's file is a blanket
+suppression plus a named allowlist, and on this generation the blanket covers almost nothing while the
+allowlist entries that would have carved out the parts that must be inlined are themselves dead.
+
+| directive | names | symbol emitted |
+|---|---|---|
+| `cvlr_inlining_core.txt:7` | `solana_program::.*` (blanket never-inline) | matches 2 of the platform layer's symbols |
+| `cvlr_summaries_core.txt:95` | `solana_program::program::invoke_signed_unchecked` | `solana_cpi::invoke_signed_unchecked` |
+| `cvlr_summaries_core.txt:60` | `…account_info::AccountInfo::realloc` | `solana_account_info::AccountInfo::realloc` |
+| `cvlr_inlining_core.txt:116–122, 129` | the eight `AccountInfo` data / lamports accessors | `solana_account_info::AccountInfo::…` |
+| `cvlr_inlining_core.txt:133–134, 138` | `Rent::minimum_balance`, `Sysvar for Rent`, `ProgramError::from` | `solana_rent::`, `solana_sysvar::`, `solana_program_error::` |
+| `cvlr_inlining_anchor.txt:37` | `…From<solana_program::program_error::ProgramError>>::from` | `…From<solana_program_error::ProgramError>>::from` |
+
+**Upstream has met this and patched two symbols.** `cvlr_summaries_core.txt` carries duplicate blocks
+for `solana_pubkey::Pubkey::create_program_address` (`:76`) and `find_program_address` (`:92`)
+alongside the `solana_program::` originals — the only two split spellings anywhere in the four files.
+So those two summaries *do* apply here, upstream's method was to duplicate the block that bit them,
+and the other fourteen were never revisited. That is corroboration rather than a counterexample: the
+problem is known at exactly the two places somebody hit it.
+
+It also settles two of §7.5.5's rows against each other, and against what this section first claimed.
+`find_program_address` **is** summarized on this target, so the author agent was right and the first
+draft of this section was wrong to invert it. `invoke_signed_unchecked` is **not** summarized — it has
+no twin — so the agent's reading of the file was right and its conclusion ("`init`'s account-creating
+CPI is a no-op") was wrong in the other direction: nothing approximates that call, and the prover
+analyzes it in full.
+
+Which makes it the sharpest candidate for [3006] that this investigation has produced. Signer seeds
+arrive as `&[&[&[u8]]]` — an array of arrays of pointers, built as stack locals by the caller and
+marshalled by the callee into a buffer for the syscall. Writing those element pointers into memory is
+literally storing stack pointers, `solana_cpi::invoke_signed_unchecked` is neither summarized nor
+excluded from inlining here, and the vault's `init` reaches it through Anchor's account-creating CPI.
+Nothing in the corpus predicts this because every entry is provenanced
+`platform_generation: solana-program 2.x (the last monolithic line)`: the whole body of practice
+predates the split, and the regexes were correct when they were written.
+
+**The fix, and what shape it takes.** Not a code change and not a flag: a path rewrite. Two designs
+were on the table — patch the vendored files to carry both spellings as alternations, or keep the
+directives keyed on *concepts* and emit the paths for the target's generation. The second is what is
+built, because the first is wrong again at the next split and this is already the second defect in two
+phases traceable to this one.
+
+So the vendored files stay byte-identical to upstream and become the **concept keys**, and the
+platform generation says how to spell those concepts:
+
+* [`cvlr_reference.py`](../composer/spec/cvlr_reference.py) gains `PathAlias` — a canonical path
+  prefix and this generation's spellings of it — and `NamespacePattern` for the one directive that is
+  a blanket rather than a path. `PlatformGeneration.path_aliases` is where Solana's twelve are
+  declared.
+* [`env_paths.py`](../composer/spec/cvlr/env_paths.py) is the seam: `dialect_for(workspace,
+  reference)` resolves the declarations against the target's own graph, and `PathDialect.render`
+  rewrites a tuning file line by line. The scaffold threads a dialect into `canonical_env` and
+  `compose_env`, and the composite says in its header that paths were rewritten — the alternative is
+  a reader diffing it against upstream and concluding somebody hand-edited it.
+
+Four properties of the design are load-bearing, and each of them is something a naive substitution
+gets wrong:
+
+* **A concept can have more than one spelling.** `solana-program` kept a real
+  `invoke_signed_unchecked` while the one on the call path is `solana-cpi`'s, so that summary is
+  emitted twice. A rewrite that picked one would leave the other fully analyzed — the exact state
+  under investigation.
+* **A spelling only counts if the target resolves the crate.** Aliases are declared against the
+  newest generation and dropped when the crate is absent, so applying the dialect to a 1.18 target
+  returns one that changes nothing. No version condition, no second gate to keep in sync.
+* **Longest canonical wins.** `solana_program::program` is a *partial* facade — `invoke`,
+  `invoke_signed`, `set_return_data` and `get_stack_height` are real functions there and appear in
+  the symbol table under the canonical spelling — so the module gets one answer and the one symbol
+  that disagrees gets another. Deciding per module rather than per symbol produced two wrong answers
+  during this investigation before the symbol table settled it.
+* **The blanket is widened, not renamed.** `^solana_program::.*$` becomes
+  `^solana_[a-z0-9_]*::.*$`: a superset, so it is correct on either generation and cannot go stale
+  when the next crate splits out. Widening is only safe because the directive is a *suppression* —
+  over-matching a never-inline default errs toward analyzing less library code.
+
+Deliberately not aliased, and recorded so the absence reads as a decision:
+`solana_program::instruction::get_stack_height`, real in the monolith on this generation, and
+`solana_program::poseidon`, which the generation does not have under any spelling. No rewrite makes an
+absent symbol present, and pretending otherwise would hide that the directive is inapplicable.
+
+Measured against the checked-in symbol fixture, directives that match something in the binary go
+4 → 15 (core inlining), 6 → 7 (anchor inlining) and 2 → 6 (core summaries); symbols reached go 6 → 35,
+26 → 26 and 2 → 4, with **no symbol losing coverage**. The anchor row is why both counts are pinned:
+its revived directive sits inside the `^.*anchor_lang.*$` blanket, so it changes how a symbol is
+treated without changing whether anything reaches it.
+
+The tests are [`test_cvlr_env_paths.py`](../tests/test_cvlr_env_paths.py), and two of them exist
+because of how this defect fails. One asserts every declared alias still names a directive that
+appears in the vendored files, so an upstream refresh that removes one turns dead weight into a
+failure instead of leaving it looking like coverage. The other pins the alias table against
+[`tests/data/vault_sbf_symbols.txt`](../tests/data/vault_sbf_symbols.txt), 70 demangled symbols from a
+real Anchor program built for SBF — the only test here that can catch an alias being *wrong* rather
+than merely stale, which matters because both failures are equally silent.
+
+**How to confirm, and what it costs.** The symbol check proves the directives are inert; it does not
+prove that is what [3006] reports. One targeted submission settles it — and not through the authoring
+loop, which has three recorded instances of an error the author cannot reach consuming its entire
+budget. The instrument is a hand-written fixture: a three-rule harness that calls `crate::entry` and
+asserts one post-state property, run against the pipeline backend with the paths corrected. If [3006]
+clears, this was it. If it does not, the next candidate is the memory model, and there the lever is
+the six `solanaOptimistic*` flags that every surveyed conf sets to `"true"` and `TEMPLATE_BASE` omits
+(§7.2) — including `solanaOptimisticJoinWithStackPtr`, whose corpus entry leaves open, in its own
+`unknowns`, "what the observable failure mode looks like when the flag is absent." Those flags are
+quarantined as dropping obligations by construction, so they are a localization instrument and not a
+fix; turning one on to make an error disappear is exactly the unsound use the quarantine names.
+
+Held in reserve, and further down than it looked: patching `anchor-lang` through `[patch.crates-io]`.
+It is Phase 5's own mechanism and it would work, but it forks a dependency to fix what the symbol
+table says is a rename.
 
 ### 7.6 Phase 5 — Munge (parallel with 4)
 

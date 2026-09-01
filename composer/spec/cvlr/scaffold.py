@@ -41,6 +41,7 @@ from pathlib import Path
 
 from composer.cargo.metadata import CratePackage, Workspace
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
+from composer.spec.cvlr.env_paths import PathDialect, dialect_for
 from composer.spec.cvlr_reference import ChainReference
 
 _log = logging.getLogger(__name__)
@@ -218,9 +219,13 @@ class ScaffoldBlocked(RuntimeError):
 # the content
 
 
-def canonical_env(name: str) -> str:
-    """One vendored upstream tuning file."""
-    return (ENV_DIR / name).read_text()
+def canonical_env(name: str, dialect: PathDialect = PathDialect()) -> str:
+    """One vendored upstream tuning file, spelled for the target's platform generation.
+
+    The default dialect changes nothing, which is the right answer for a caller that only wants to
+    see what was vendored — the refresh script's round-trip, and any test comparing against upstream.
+    """
+    return dialect.render((ENV_DIR / name).read_text())
 
 
 def env_provenance() -> str:
@@ -232,16 +237,32 @@ def env_provenance() -> str:
     return stamp.read_text().strip() if stamp.is_file() else f"{TEMPLATE_REPO} (unrecorded)"
 
 
-def compose_env(family: EnvFamily, *, package_layer: str) -> str:
+def compose_env(
+    family: EnvFamily, *, package_layer: str, dialect: PathDialect = PathDialect()
+) -> str:
     """The generated composite: header, then the three layers, the way the template's justfile does.
 
     ``package_layer`` is passed in rather than read from disk so recomposing after the authoring
-    loop has added a directive is the same function call, with no hidden state."""
+    loop has added a directive is the same function call, with no hidden state. It is the one layer
+    the dialect does not touch: it is the project's own file, written against the project's own
+    symbols, so its paths are already whatever the project resolves.
+    """
     header = _GENERATED_HEADER.format(
         core=family.core, anchor=family.anchor, package=family.package
     )
     parts = [header, f";;; Canonical layers vendored from {env_provenance()}\n"]
-    parts += [canonical_env(family.core), canonical_env(family.anchor), package_layer]
+    if dialect.aliases:
+        # Said in the file, because the alternative is a reader diffing it against upstream and
+        # concluding it was hand-edited. Which paths moved is the whole subject of §7.5.6.
+        parts.append(
+            f";;; Platform paths rewritten for this target's generation "
+            f"({len(dialect.aliases)} aliases) — see composer/spec/cvlr/env_paths.py\n"
+        )
+    parts += [
+        canonical_env(family.core, dialect),
+        canonical_env(family.anchor, dialect),
+        package_layer,
+    ]
     return "\n".join(p.rstrip("\n") for p in parts) + "\n"
 
 
@@ -567,7 +588,9 @@ def _plan_harness(package: CratePackage, relative: Path) -> tuple[list[Change], 
     return changes, satisfied
 
 
-def _plan_envs(package: CratePackage, relative: Path) -> tuple[list[Change], list[str]]:
+def _plan_envs(
+    package: CratePackage, relative: Path, dialect: PathDialect
+) -> tuple[list[Change], list[str]]:
     changes: list[Change] = []
     satisfied: list[str] = []
     for family in ENV_FAMILIES:
@@ -579,12 +602,20 @@ def _plan_envs(package: CratePackage, relative: Path) -> tuple[list[Change], lis
             else _PACKAGE_ENV_HEADER.format(kind=kind, repo=TEMPLATE_REPO)
         )
         planned = (
-            (family.core, canonical_env(family.core), f"canonical {kind.lower()}, from upstream"),
-            (family.anchor, canonical_env(family.anchor), f"Anchor {kind.lower()}, from upstream"),
+            (
+                family.core,
+                canonical_env(family.core, dialect),
+                f"canonical {kind.lower()}, from upstream",
+            ),
+            (
+                family.anchor,
+                canonical_env(family.anchor, dialect),
+                f"Anchor {kind.lower()}, from upstream",
+            ),
             (family.package, package_layer, f"this package's own {kind.lower()} — yours to edit"),
             (
                 family.composite,
-                compose_env(family, package_layer=package_layer),
+                compose_env(family, package_layer=package_layer, dialect=dialect),
                 "the composite the build reports to the prover",
             ),
         )
@@ -639,7 +670,7 @@ def plan_scaffold(
     for planned, notes in (
         _plan_workspace_manifest(workspace, reference),
         _plan_harness(package, relative),
-        _plan_envs(package, relative),
+        _plan_envs(package, relative, dialect_for(workspace, reference)),
         _plan_gitignore(workspace),
     ):
         changes += planned
