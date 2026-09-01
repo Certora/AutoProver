@@ -449,6 +449,37 @@ async def run_prover_inner(
         run_result = cast(ProverResult, json.load(output_file))
         return run_result, stdout
 
+
+class SpecCompilationError(Exception):
+    """The spec did not compile.
+
+    Carries the compiler's own output, which names the offending lines. An authoring
+    agent can repair a spec from that, so callers driving one should surface
+    ``output`` rather than treat this as a run-ending fault."""
+
+    def __init__(self, output: str) -> None:
+        super().__init__(output or "no output captured")
+        self.output = output
+
+
+async def _run_captured(*argv: str, cwd: Path) -> tuple[int, str]:
+    """Run ``argv``, returning its exit code and combined output.
+
+    ``communicate`` rather than ``wait``: the pipes have to be drained, or a child
+    that outfills the buffer blocks forever waiting for someone to read it."""
+    proc = await asyncio.subprocess.create_subprocess_exec(
+        *argv,
+        cwd=str(cwd),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    output = b"".join(part for part in (stdout, stderr) if part).decode(
+        "utf-8", errors="replace"
+    )
+    return proc.returncode or 0, output
+
+
 async def declared_rules_list(
     folder: Path,
     args: list[str]
@@ -459,22 +490,18 @@ async def declared_rules_list(
     the generated build dir, and then manually invoke the typechecker with `-listRules`
     ourselves against that build dir.
 
-    Not great, obviously, but lets us work on this AP feature while waiting for support for this to 
+    Not great, obviously, but lets us work on this AP feature while waiting for support for this to
     land upstream in certora-cli and the pip distribution channels.
     """
     if any(m == "--msg" for m in args):
         raise ValueError("This unholy black magic only works if you don't pass msg")
     tc_key = uuid.uuid4().hex
-    proc = await asyncio.subprocess.create_subprocess_exec(
+    rc, output = await _run_captured(
         "certoraRun", *args, "--msg", tc_key, "--compilation_steps_only",
-        cwd=str(folder),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
+        cwd=folder,
     )
-
-    rc = await proc.wait()
     if rc != 0:
-        raise ValueError("Type check failed?")
+        raise SpecCompilationError(output)
     from importlib.resources import files
 
     tc_jar = files("certora_jars") / "Typechecker.jar"
@@ -502,15 +529,13 @@ async def declared_rules_list(
     if found is None:
         raise ValueError("Couldn't find build dir")
     with tempfile.NamedTemporaryFile("r") as f:
-        proc = await asyncio.subprocess.create_subprocess_exec(
-            "java", "-jar", str(tc_jar), "-buildDirectory", str(found), "-typeCheck", "true", "-listRules", f.name,
-            cwd=str(folder),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+        tc_rc, tc_output = await _run_captured(
+            "java", "-jar", str(tc_jar), "-buildDirectory", str(found),
+            "-typeCheck", "true", "-listRules", f.name,
+            cwd=folder,
         )
-        tc_rc = await proc.wait()
         if tc_rc != 0:
-            raise ValueError("Nope, no dice")
+            raise SpecCompilationError(tc_output)
         all_rules = f.read()
     return [s for r in all_rules.split() if (s := r.strip()) and s != "envfreeFuncsStaticCheck"]
 
