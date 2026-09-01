@@ -1288,10 +1288,99 @@ The probe test asserts all three tiers verify, so it is **red today on purpose**
 §7.5.5's gate makes. A test that encoded the current breakage would go green on a run that fixed
 nothing.
 
-### 7.6 Phase 5 — Munge (parallel with 4)
+### 7.6 Phase 5 — Munge
 
-Reuse the munge agent spine with a CVLR compile check and a Solana munge charter, plus the
-give-up boundary.
+Planned as parallel with Phase 4 and reordered by §7.5.6: on an Anchor target the munge is not a
+refinement, it is the thing that makes any rule analyzable at all. What is built is the mechanical
+half — a declared patch applied to a copy of a resolved dependency. The agent half (a munge charter,
+an LLM deciding *what* to change, the give-up boundary) is not started, and the first real case did
+not need it.
+
+#### 7.6.1 What is built
+
+[munge.py](../composer/spec/cvlr/munge.py). `plan_munge(workspace)` → `apply_munge(plan, root)`,
+following the scaffold's shape so a caller reviews before anything is written, and
+`manifest_additions` emits the `[patch.crates-io]` that redirects the graph.
+
+`ANCHOR_UNBOX` is the one declared patch: eight exact replacements in `anchor-lang`'s `src/error.rs`
+removing the boxing from `Error`. Nothing else changes — the enum's match arms bind the payload by
+name and `Box<T>` derefs to `T`, so unboxing is invisible to them, and the macro crates need no patch
+because `anchor-attribute-error` constructs `AnchorError { .. }` and relies on `From` (there is no
+`Box::new` anywhere in `anchor-syn`'s codegen).
+
+**Measured: this is what clears [3006].** With the boxing, a rule that calls a handler cannot be
+analyzed. With it removed, the same rule is analyzed and returns a counterexample — §7.6.2.
+
+Three decisions, each the alternative to something that fails quietly:
+
+* **The source comes from the target's own resolved graph.** `cargo metadata` reports each
+  dependency's manifest path, which for a registry crate is the unpacked source directory. So the
+  munge patches the exact version the target builds against, ships no Rust in the wheel, and cannot
+  drift from what the project resolves. A vendored copy here would be a second version to keep
+  current and silently wrong the moment a target pinned another.
+* **An edit that does not apply is an error, never a skip.** Every replacement states how many times
+  it must match; a mismatch blocks the whole munge and writes nothing. A half-applied patch produces a
+  build that looks munged and is not, and the failure it then produces is the *original* defect —
+  which reads as "the munge does not work" rather than "the munge did not happen". The match count is
+  a count rather than a flag so it catches the other direction too, a pattern that starts matching
+  twice after an upstream refactor.
+* **Versions are declared, not assumed.** `applies_to` names the release lines the patch was written
+  against, and a resolved version outside them blocks with its version named. This is not
+  hypothetical: the list started as 0.29–0.32 and
+  `test_the_patch_matches_the_real_crate_if_it_is_on_this_machine` — which checks every declared edit
+  against every anchor-lang in the local registry — took 0.29 off it. 0.29 has no
+  `From<TryFromIntError> for Error`, so two of the eight edits match nothing there, and without that
+  test the patch would have half-applied to a 0.29 target.
+
+The copies live in `.cvlr_munge/`, gitignored, next to a generated `README.md` naming each patch and
+its reason. That file's job is to be found: a munged dependency is the least obvious thing in a
+verification project, and its first sentence has to say that a property proved against a munged copy
+is a property of the copy.
+
+**The cost, stated because it must not be glossed.** `Error` grows from 16 bytes to the size of
+`AnchorError` — 160 on this line — so every `Result<(), Error>` in the program gets bigger. That is a
+real change to the code under verification. It is acceptable because the verification build is not the
+deployed build, and it must never be reported as though the deployed program had this shape.
+
+#### 7.6.2 What the munge revealed
+
+The same three-tier probe, with the munge applied:
+
+| rule | before | after |
+|---|---|---|
+| `rule_vault_state_deserializes` | VERIFIED | VERIFIED |
+| `rule_deposit_credits_exactly_the_amount` | ERROR [3006] | **VIOLATED, with a counterexample** |
+| `rule_dispatch_is_reachable` | ERROR [3006] | ERROR **[3308]** |
+
+The middle row is the result this phase exists for. The counterexample's call trace runs through
+`cvlr_solana::layout::cvlr_deserialize_nondet_accounts`, `Account<T>::try_from_0`, and then
+`vault::vault_program::deposit(...)` — **the program's own handler** — to `assert FAIL`. That is the
+first time this backend has produced evidence about a target's real code.
+
+And the violation is almost certainly honest rather than a rule bug: the rule re-reads the account
+with `Account::try_from` after the handler returns, and Anchor writes a modified `Account` back only
+in `exit`, which §7.5.5 established is *absent from the inlining allowlist*. So the write-back is
+invisible and the balance appears unchanged. That is exactly the gap the authoring loop's agent
+diagnosed and could not act on, now reproduced deterministically with a hand-written rule.
+
+The third row is a new error at a new place. [3308] "illegal dereference of an absolute address",
+reached from the vault's own `#[error_code]` enum through `format!` → `String` → `Vec::extend`. Note
+`cvlr_summaries_core.txt:104` summarizes `alloc::fmt::format::format_inner`, and §7.5.6's symbol check
+found that directive matches nothing in this binary — so the `format!` path is unsummarized, which is
+consistent. The prover names its own remedies this time (`-solanaAggressiveGlobalDetection true`, or a
+summary), which makes it the next thing to try rather than the next thing to investigate.
+
+So the ordering constraint has moved twice in this document and now reads: **[3006] is fixed by the
+munge; [3308] and the `Account::exit` inlining gap are what stand between this backend and a
+post-state property on an Anchor program.** Both are narrower than what they replaced, and neither is
+a loop defect.
+
+#### 7.6.3 Not started
+
+The agent half. A munge charter, a give-up boundary (open question 4), and an LLM deciding what to
+patch. The first real case was a declared patch derived by hand from a prover error message, and it is
+worth noticing that no agent was involved in the phase's first success — the give-up boundary is a
+question about cases nobody has met yet.
 
 ### 7.7 Phase 6 — Counterexamples and report
 
