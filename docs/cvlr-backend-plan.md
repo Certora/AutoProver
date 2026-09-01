@@ -1269,17 +1269,20 @@ passed through `prover_args` — so the corpus entry showing it as a top-level c
 wrong, as are the surveyed confs it was drawn from, unless an older CLI accepted it. And the
 un-inlining crash above.
 
-**So [3006] is not reachable from the configuration surface this backend controls.** `Box::new` of a
-struct built on the stack is ordinary Rust, the prover's pointer analysis rejects it, and every Anchor
-program constructs an error that way on every failing path. That leaves three options and only one of
-them is ours:
+**So [3006] is not reachable from the configuration surface this backend controls — and it did not
+need to be.** `Certora/anchor` has carried an unboxed `Error` for years, on a branch per upstream
+release. Production verifies Anchor programs by depending on that fork; the reference project's
+verification branch pins `certora-v0.31.1`. This investigation reproduced a condition no real project
+is in, because the scaffold follows a template that depends on crates.io Anchor, and then reasoned
+about the prover instead of checking what real projects resolve. §7.6.4 is that correction, and the
+options below are what it superseded:
 
 * **File it upstream**, which is now a crisp report: a minimal reproducer, the exact source line, the
   prover's own dev message, and three attempted workarounds with evidence that none works. This is the
   highest-value action and it is not a code change.
-* **Munge `anchor-lang`** through `[patch.crates-io]`: a variant of `Error` that does not box under a
-  `certora` cfg. Heavier than §7.5.6's first draft estimated, and now the only workaround inside our
-  reach — which promotes Phase 5 from "parallel with 4" to the thing Anchor support depends on.
+* **Munge `anchor-lang`** through `[patch.crates-io]`: a variant of `Error` that does not box. Right
+  mechanism, and §7.6 built it as a local textual patch before discovering the maintained fork does
+  exactly this — so the promotion of Phase 5 stands and the implementation did not.
 * **Scope the backend to what verifies.** Weaker but not nothing: the control tier shows real account
   data, deserialization and post-state arithmetic all work. A rule that avoids error-constructing
   paths is real evidence about a real program. It is not most of what a client wants.
@@ -1291,62 +1294,43 @@ nothing.
 ### 7.6 Phase 5 — Munge
 
 Planned as parallel with Phase 4 and reordered by §7.5.6: on an Anchor target the munge is not a
-refinement, it is the thing that makes any rule analyzable at all. What is built is the mechanical
-half — a declared patch applied to a copy of a resolved dependency. The agent half (a munge charter,
-an LLM deciding *what* to change, the give-up boundary) is not started, and the first real case did
-not need it.
+refinement, it is what makes any rule analyzable at all. What is built is the *wiring* — pointing a
+target at `Certora/anchor`, the verification fork production already uses. The agent half (a munge
+charter, an LLM deciding what to change, the give-up boundary) is not started, and the first real case
+needed neither an agent nor a patch of our own: §7.6.4.
 
 #### 7.6.1 What is built
 
-[munge.py](../composer/spec/cvlr/munge.py). `plan_munge(workspace)` → `apply_munge(plan, root)`,
-following the scaffold's shape so a caller reviews before anything is written, and
-`manifest_additions` emits the `[patch.crates-io]` that redirects the graph.
+[munge.py](../composer/spec/cvlr/munge.py). `plan_munge(workspace)` resolves which dependencies a
+target needs replaced and `manifest_additions(plan)` emits the `[patch.crates-io]` that does it. That
+is the whole module — no source copying, no patch table.
 
-`ANCHOR_UNBOX` is the one declared patch: eight exact replacements in `anchor-lang`'s `src/error.rs`
-removing the boxing from `Error`. Nothing else changes — the enum's match arms bind the payload by
-name and `Box<T>` derefs to `T`, so unboxing is invisible to them, and the macro crates need no patch
-because `anchor-attribute-error` constructs `AnchorError { .. }` and relies on `From` (there is no
-`Box::new` anywhere in `anchor-syn`'s codegen).
+`ANCHOR_FORK` is the one declared override: `anchor-lang` → `Certora/anchor` at the branch matching the
+resolved version. **This is what clears [3006]** (§7.6.2), and it is what production has always done.
 
-**Measured: this is what clears [3006].** With the boxing, a rule that calls a handler cannot be
-analyzed. With it removed, the same rule is analyzed and returns a counterexample — §7.6.2.
+Three decisions:
 
-Three decisions, each the alternative to something that fails quietly:
+* **Versions are listed, not derived.** The branch names do follow `certora-v{version}`, but the case
+  that matters is a version with *no* branch: the fork covers 0.30.1 and not 0.30.0. Deriving would
+  send cargo after a branch that does not exist, and the error would be about git rather than about
+  Anchor coverage. Listing means that case blocks with a sentence naming the alternative — including
+  "do not verify against the unforked crate", because the failure mode otherwise is a green-looking
+  build that cannot analyze a handler.
+* **A branch, not a pinned commit.** What the reference project does: the lockfile records the commit,
+  so the build is reproducible without this manifest needing an edit whenever the fork picks up a fix.
+* **A project that already sources Anchor itself is left alone.** A path or git dependency means
+  somebody decided where Anchor comes from — quite possibly this same fork. Overriding that would
+  replace a deliberate choice with a guess.
 
-* **The source comes from the target's own resolved graph.** `cargo metadata` reports each
-  dependency's manifest path, which for a registry crate is the unpacked source directory. So the
-  munge patches the exact version the target builds against, ships no Rust in the wheel, and cannot
-  drift from what the project resolves. A vendored copy here would be a second version to keep
-  current and silently wrong the moment a target pinned another.
-* **An edit that does not apply is an error, never a skip.** Every replacement states how many times
-  it must match; a mismatch blocks the whole munge and writes nothing. A half-applied patch produces a
-  build that looks munged and is not, and the failure it then produces is the *original* defect —
-  which reads as "the munge does not work" rather than "the munge did not happen". The match count is
-  a count rather than a flag so it catches the other direction too, a pattern that starts matching
-  twice after an upstream refactor.
-* **Versions are declared, not assumed.** `applies_to` names the release lines the patch was written
-  against, and a resolved version outside them blocks with its version named. This is not
-  hypothetical: the list started as 0.29–0.32 and
-  `test_the_patch_matches_the_real_crate_if_it_is_on_this_machine` — which checks every declared edit
-  against every anchor-lang in the local registry — took 0.29 off it. 0.29 has no
-  `From<TryFromIntError> for Error`, so two of the eight edits match nothing there, and without that
-  test the patch would have half-applied to a 0.29 target.
-
-The copies live in `.cvlr_munge/`, gitignored, next to a generated `README.md` naming each patch and
-its reason. That file's job is to be found: a munged dependency is the least obvious thing in a
-verification project, and its first sentence has to say that a property proved against a munged copy
-is a property of the copy.
-
-**The cost, stated because it must not be glossed.** `Error` grows from 16 bytes to the size of
-`AnchorError` — 160 on this line — so every `Result<(), Error>` in the program gets bigger. That is a
-real change to the code under verification. It is acceptable because the verification build is not the
-deployed build, and it must never be reported as though the deployed program had this shape.
+The emitted manifest section leads with the fact that these are *not* the deployed program's
+dependencies, because that section is where somebody will be standing when the question occurs to
+them.
 
 #### 7.6.2 What the munge revealed
 
-The same three-tier probe, with the munge applied:
+The same three-tier probe, before and after:
 
-| rule | before | after |
+| rule | crates.io Anchor | forked Anchor |
 |---|---|---|
 | `rule_vault_state_deserializes` | VERIFIED | VERIFIED |
 | `rule_deposit_credits_exactly_the_amount` | ERROR [3006] | **VIOLATED, with a counterexample** |
@@ -1370,10 +1354,10 @@ found that directive matches nothing in this binary — so the `format!` path is
 consistent. The prover names its own remedies this time (`-solanaAggressiveGlobalDetection true`, or a
 summary), which makes it the next thing to try rather than the next thing to investigate.
 
-So the ordering constraint has moved twice in this document and now reads: **[3006] is fixed by the
-munge; [3308] and the `Account::exit` inlining gap are what stand between this backend and a
-post-state property on an Anchor program.** Both are narrower than what they replaced, and neither is
-a loop defect.
+Both measurements above were taken with the local textual patch described next, whose output is
+byte-identical to the fork's `Error` for the two lines that matter. The fork additionally carries
+changes we had not derived, so the numbers should be re-taken against it before being quoted as the
+fork's.
 
 #### 7.6.3 Not started
 
@@ -1381,6 +1365,43 @@ The agent half. A munge charter, a give-up boundary (open question 4), and an LL
 patch. The first real case was a declared patch derived by hand from a prover error message, and it is
 worth noticing that no agent was involved in the phase's first success — the give-up boundary is a
 question about cases nobody has met yet.
+
+#### 7.6.4 The detour, and what it cost
+
+Worth recording because the mistake is repeatable and the correction came from a question, not from a
+measurement.
+
+This module was first built the hard way: `[3006]` was diagnosed from the prover's own output, the
+unboxing was derived by hand as eight exact textual replacements, applied to a *copy of the registry
+source* found through `cargo metadata`, with a version table, a match-count check per edit, and a
+generated README. It worked — the probe went from ERROR to a counterexample — and it was tested, and
+none of that was the point. `Certora/anchor` already existed, with a branch per release from 0.26.0 to
+0.32.1, doing the same unboxing plus a simplified `require!`, a silenced `emit!` and public
+constructors that we had not derived and did not know we needed.
+
+Two things went wrong, and only the second is interesting.
+
+The small one: a locally-derived patch is a second answer to a solved question, and it drifts. It was
+deleted.
+
+The real one is the reasoning. §7.5.6 concluded "[3006] is not reachable from the configuration
+surface this backend controls" and wrote it up as a blocking prover defect. Every measurement in that
+conclusion was correct. What was never checked was the premise — *does anyone verify Anchor programs
+today, and if so, how?* — and the answer was one `grep` over the local checkouts. The tell was
+available and stronger than a tell: the reference project's own verification branch pins the fork, and
+an earlier note in this repository's own memory says the gold-standard spec lives on that branch. A
+first pass over that project read `main` instead, saw crates.io Anchor, and recorded "no fork" as
+evidence *against* the fork existing.
+
+Stated as a rule, because §7.5.5 already has three instances of a related failure: **an error
+reproduced in a scaffold this backend wrote is evidence about the scaffold until somebody checks it
+against a project the scaffold did not create.** The scaffold follows a template, the template does
+not mention the fork (`docs/upstream-defects.md` T7), and so the backend faithfully reproduced a
+condition no real project is in.
+
+The cost was five cloud submissions and a module written and deleted. The benefit, such as it is: T7
+is a real gap that nobody had written down, P2 and P3 are real defects found while probing for a
+non-defect, and the graded probe in §7.6.2 is a better instrument than the loop had.
 
 ### 7.7 Phase 6 — Counterexamples and report
 
