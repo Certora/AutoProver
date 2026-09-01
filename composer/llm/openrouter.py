@@ -333,9 +333,9 @@ def _price_provider_from(
     static table on the vendor's bare model name — which covers ``openai/*`` and
     ``anthropic/*``, and yields None (an uncosted run, not a wrong one) elsewhere.
 
-    TODO: this is the roster's *model-level* card, which is the modal price across the
-    serving pool rather than a bound — kimi-k3's providers span $2.55-$6.00 in and
-    $12.75-$22.50 out per MTok, so a run can be off by ~2x in either direction. Two
+    TODO: this is the roster's *model-level* card, which is one price point inside the
+    serving pool rather than a bound on it — kimi-k3's providers span $2.55-$6.00 in
+    and $12.75-$22.50 out per MTok, so a run can be off by ~2x either way. Two
     ways out: price from the max among ``_Pool.routable`` (already fetched, makes the
     figure an upper bound), or read the exact cost OpenRouter returns under
     ``usage: {"include": true}`` — which langchain currently drops, since its
