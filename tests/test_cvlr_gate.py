@@ -49,8 +49,9 @@ from composer.rustapp.frontend import GenericRustConsoleHandler
 from composer.sandbox.config import SandboxConfig
 from composer.spec.context import SourceCode, WorkflowContext
 from composer.spec.cvlr.conf import TEMPLATE_BASE, tools_version
-from composer.spec.cvlr.harness import CvlrArtifactStore
+from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness
 from composer.spec.cvlr.pipeline import CvlrBackend
+from composer.pipeline.ptypes import Curtailed, Delivered
 from composer.spec.cvlr.rules import rule_names
 from composer.spec.service_host import ModelProvider, PureServiceHost
 from composer.spec.source.source_env import build_basic_source_tools, build_source_tools
@@ -109,6 +110,32 @@ def _model_args() -> object:
         memory_tool=False,
         interleaved_thinking=False,
     )
+
+
+def _harness(result: object) -> GeneratedHarness | None:
+    """The published harness inside an outcome, or ``None`` if the unit delivered nothing.
+
+    ``Delivered`` carries it as ``result``, and a budget-curtailed publish wraps a ``Delivered`` in a
+    ``Curtailed``. Written out rather than reached for with ``getattr(..., "value")``, which silently
+    returned ``None`` for every unit in a run where all three had in fact published — the report read
+    "no deliverable" three times while the deliverables sat on disk.
+    """
+    if isinstance(result, Curtailed):
+        result = result.value
+    return result.result if isinstance(result, Delivered) else None
+
+
+def _reaches_program(harness: GeneratedHarness, package: str) -> bool:
+    """Whether the harness invokes the program under verification at all.
+
+    Comment lines are excluded, which is the whole difficulty: the harness that prompted this check
+    mentioned ``crate::entry()`` only in a doc comment explaining why it could not call it.
+    """
+    code = [
+        line for line in harness.harness.splitlines()
+        if not line.lstrip().startswith(("//", "/*", "*"))
+    ]
+    return any("crate::entry" in line or f"crate::{package}" in line for line in code)
 
 
 async def test_the_backend_authors_cvlr_rules_for_the_vault(langgraph_db, project, capsys):
@@ -191,7 +218,7 @@ async def test_the_backend_authors_cvlr_rules_for_the_vault(langgraph_db, projec
         )
         for outcome in result.outcomes:
             print(f"\n== {outcome.feat.display_name} ==")
-            harness = getattr(outcome.result, "value", None)
+            harness = _harness(outcome.result)
             if harness is None:
                 print(f"  no deliverable: {outcome.result}")
                 continue
@@ -208,9 +235,30 @@ async def test_the_backend_authors_cvlr_rules_for_the_vault(langgraph_db, projec
     # harness claims must actually be declared in the source it shipped. The publish gate enforces
     # this, so a violation here means the gate did not run, not that the model misbehaved.
     for outcome in result.outcomes:
-        harness = getattr(outcome.result, "value", None)
+        harness = _harness(outcome.result)
         if harness is None:
             continue
         declared = set(rule_names(harness.harness))
         claimed = {rule for _, rules in harness.property_checks() for rule in rules}
         assert claimed <= declared, f"{outcome.feat.display_name}: {claimed - declared} not declared"
+
+    # The claim this test's name makes. Everything above checks that the harness is internally
+    # consistent and that the prover agreed with it — and all of it passes for a harness that
+    # reimplements the handler inside the spec module and verifies the copy. That is what happened:
+    # three units published 19 rules between them and not one invoked the vault, two of the three
+    # never naming the crate at all. The mapping gate cannot see it, and no verdict-shaped check can,
+    # because the verdicts are honest; they are about the wrong program.
+    #
+    # Expected to fail on an Anchor target while prover error [3006] stands (§7.5.5): `Box::new` in
+    # Anchor 0.31's error path is on every route through dispatch, so an author cannot reach the
+    # program even when it wants to. Asserted anyway — a green run that certifies rules which never
+    # touch the program is worse than a red one that says so.
+    unreached = [
+        o.feat.display_name
+        for o in result.outcomes
+        if (h := _harness(o.result)) is not None and not _reaches_program(h, _PACKAGE)
+    ]
+    assert not unreached, (
+        f"delivered harnesses that never invoke the program: {unreached}. Their rules verify "
+        f"whatever the harness itself defines, so they are not evidence about {_PACKAGE}."
+    )

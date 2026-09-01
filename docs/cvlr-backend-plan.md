@@ -954,6 +954,44 @@ independent defect. The tell was available and I passed it — a job link existe
 those failures, and [core.py](../composer/prover/core.py)'s message discarded it while
 `CloudJobError` carried it. That is now fixed too: a failure names its job.
 
+**The first published harness verifies a replica of the program, not the program — and every gate
+passed it.** Run 4 met §7.5's exit criterion: `deposit_management` published five properties mapped
+one-to-one onto five rules, with both stamps on one draft digest. What it published does not verify
+the vault.
+
+Every rule calls `deposit_logic`, a ten-line reimplementation of
+`vault.balance.checked_add(amount)` written inside the harness. Nothing calls `crate::entry` or
+`vault_program::deposit`; the harness's only reference into the crate is `crate::VaultState`, a
+*type*. So the rules establish that the author's own copy of the logic has these properties, and
+would pass unchanged if the real handler disagreed. Two of the five are weaker still:
+`rule_deposit_open_access` proves the depositor cannot influence the result *because `deposit_logic`
+takes no depositor parameter* — the function was written without it and then proved not to need it —
+and `rule_deposit_overflow_must_fail` proves that `u64::checked_add` returns `None` on overflow,
+which is a test of the standard library.
+
+All five VERIFY. All five pass vacuity checking, because they are not vacuous — there is real content
+being proved, about the wrong program. All five pass the mapping gate and the accounting gate.
+
+**This is a third gate gap and it is not the vacuity gap.** Sanity catches "assume the conclusion";
+nothing catches "verify a copy instead of the original", and no verdict-shaped check can, because the
+verdicts are honest. The missing check is about *what the rule touches*: a rule is evidence about the
+program only if its call graph reaches the program's own code. Two ways to get it, neither built:
+statically, refuse a draft in which no rule reaches a function defined outside the harness module; or
+from the run, require the program's code in the job's coverage.
+
+**Its cause is a blocker larger than the inlining gaps.** Both units that got that far reported prover
+error **[3006] "illegal store of a stack pointer"**, attributed to Anchor 0.31's
+`Error::AnchorError(Box::new(e))`, which lies on every path through Anchor dispatch — `entry()`,
+`try_accounts()`, `Account::try_from()`. If that holds, an Anchor program cannot currently be
+*invoked* under the prover at all, which is a stronger claim than any property being unprovable. It
+also means a reach-the-program gate added today would convert this backend's output from "confidently
+wrong" to "always empty" on Anchor targets. Both changes are needed and the gate is the safety
+property, but the order matters: **[3006] first.**
+
+Worth recording in the backend's favour: the author was transparent. The replica, the reason for it,
+and the skipped property are all documented in the module header and the published commentary. It did
+not hide the weakening — nothing asked.
+
 **An ampersand in a component name failed every submission for two of three units.** The `msg` a run
 sends is built from the component's display name, and `certoraRun`'s `validate_msg` *raises* on any
 character outside letters, digits and a short punctuation list — before a single rule is read. The
