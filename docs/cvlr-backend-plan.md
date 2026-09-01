@@ -1332,23 +1332,56 @@ The same three-tier probe, measured three ways. The middle column is the locally
 patch of §7.6.4, kept because it is what the fork's two lines were checked against; the right column
 is the fork, through the real scaffold path, and is the one to quote:
 
-| rule | crates.io Anchor | local unbox patch | **forked Anchor** |
+| rule | crates.io Anchor | forked Anchor | fork + `optimistic_loop` + `-solanaAggressiveGlobalDetection` |
 |---|---|---|---|
 | `rule_vault_state_deserializes` | VERIFIED | VERIFIED | **VERIFIED** |
-| `rule_deposit_credits_exactly_the_amount` | ERROR [3006] | VIOLATED, with a counterexample | **VIOLATED, with a counterexample** |
-| `rule_dispatch_is_reachable` | ERROR [3006] | ERROR [3308] | **UNKNOWN** |
+| `rule_deposit_credits_exactly_the_amount` | ERROR [3006] | VIOLATED — *loop unwinding* | **VIOLATED — the real property** |
+| `rule_dispatch_is_reachable` | ERROR [3006] | ERROR [3308] | ERROR [3308] |
 
 **[3006] is gone on both rules that hit it, confirmed end-to-end** — the scaffold wrote the
 `[patch.crates-io]`, cargo resolved `certora-v0.31.1#3ebe7595`, and the prover analyzed code it
 previously refused. That is the phase's result.
 
-The third row moved, which is why the fork had to be measured rather than assumed equivalent. The
-patch produced [3308] out of `#[error_code]` → `format!` → `String`; the fork, whose commits include a
-simplified error macro and a silenced `emit!`, produces `UNKNOWN` instead. Prover wall clock was **17
-seconds** with `smt_timeout` at 6000, and the recorded solving times are milliseconds, so it is not a
-timeout. *Why* it is UNKNOWN is not established: the message is in the treeView, and the run that
-would have shown it was invoked through a `tail` that truncated the report. Recovering it costs one
-submission, and it is the smallest open question this phase has left.
+Two corrections to an earlier draft of this table, both from reading the report properly.
+
+**`output.json` renders ERROR as `UNKNOWN`.** The middle column's third row was recorded as UNKNOWN
+from `Reports/output.json`; the treeView says `ERROR` and carries the message, which is [3308] with a
+trace identical to the local patch's. So the fork did not change that row at all, and the paragraph
+speculating about its simplified error macro was explaining a difference that did not exist.
+
+**A lost report is free to recover, so nothing here needed a resubmission.** `Reports/treeView/` is
+not among the paths under the job's `output/` URL, but the whole results tree is:
+`https://prover.certora.com/v1/domain/jobs/<jobId>/f/outputs?anonymousKey=<key>` returns a **gzipped
+tar** — despite the name — containing `Reports/treeView/treeViewStatus_*.json`, the per-rule
+`rule_output_*.json` counterexamples, and `statsdata.json`. That is where every message in this
+section came from.
+
+**The handler tier was failing for a configuration reason that masked the real one.** Its first
+verdict was VIOLATED on an assertion reading *"Unwinding condition in a loop. We recommend to run with
+`--optimistic_loop`, or increase `--loop_iter`"*, on a loop inside `vault_program::deposit` itself.
+`TEMPLATE_BASE` shipped `loop_iter: "1"` with `optimistic_loop: false`, so **any** loop in a handler —
+borsh deserialization, instruction-data building — violates before the rule's own property is reached.
+§7.2 recorded that as a deliberate choice to follow the template over the twelve of sixteen surveyed
+projects that set it true; this measurement says the template's position is unusable for
+handler-level rules, and `TEMPLATE_BASE` now sets it true.
+
+With that fixed the counterexample is the property: `CVT_nondet_u64: '1'`, then
+`vault::vault_program::deposit(...)`, then a re-read through `Account::try_from_0` →
+`try_deserialize`, then `assert FAIL`. Deposit of 1 lamport, and the re-read does not see it —
+**demonstrating** the `Account::exit` inlining gap that §7.5.5 could only infer. That is the next
+thing to fix and the first genuinely program-level finding this backend has produced.
+
+**[3308] is not fixed by the remedy the prover recommends.** `-solanaAggressiveGlobalDetection true`
+reached the jar (confirmed in `jarSettings`) and changed nothing. Its trace runs from the vault's own
+`#[error_code]` enum through `ToString`/`Display` into `String::push_str` → `Vec::extend` →
+`copy_nonoverlapping`. Note `cvlr_summaries_core.txt:104` summarizes
+`alloc::fmt::format::format_inner`, and that symbol *is* present in this binary — so the summary
+applies and the failing path is not the one it covers. Recorded as `docs/upstream-defects.md` P4.
+
+**And it matters less than it looks.** The reference project's spec never calls `entry` at all — zero
+occurrences across its harness, against four of `Context::new`. Invoking a handler with a hand-built
+context is the practice; going through Anchor's dispatch is something this probe invented. So [3308]
+bounds an edge case rather than the supported path, and the tier that matters is the middle one.
 
 The middle row is the result this phase exists for. The counterexample's call trace runs through
 `cvlr_solana::layout::cvlr_deserialize_nondet_accounts`, `Account<T>::try_from_0`, and then
