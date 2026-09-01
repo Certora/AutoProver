@@ -42,6 +42,7 @@ from pathlib import Path
 from composer.cargo.metadata import CratePackage, Workspace
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.env_paths import PathDialect, dialect_for
+from composer.spec.cvlr import munge
 from composer.spec.cvlr_reference import ChainReference
 
 _log = logging.getLogger(__name__)
@@ -628,6 +629,55 @@ def _plan_envs(
     return changes, satisfied
 
 
+def _plan_munge(workspace: Workspace) -> tuple[list[Change], list[str], list[Blocked]]:
+    """Point the target at the verification forks of its dependencies.
+
+    A workspace-manifest append rather than its own step, because ``[patch.crates-io]`` is a
+    workspace-level table and the scaffold already owns one review-then-apply cycle. Anchor is the
+    only case today, and it is not optional: without it a rule that reaches a handler cannot be
+    analyzed at all (:mod:`composer.spec.cvlr.munge`).
+
+    A version the fork does not cover becomes a :class:`Blocked` on the manifest, so the run stops
+    with a sentence about Anchor coverage instead of proceeding to a build that looks fine and then
+    reports a pointer-analysis error.
+    """
+    plan = munge.plan_munge(workspace)
+    blocked = [
+        Blocked(path=Path("Cargo.toml"), problem=b.problem, resolution=b.resolution)
+        for b in plan.blocked
+    ]
+    if blocked or not plan.overrides:
+        note = (
+            [f"{c} is not a dependency of this project" for c in plan.inapplicable]
+            if not blocked
+            else []
+        )
+        return [], note, blocked
+
+    existing = (workspace.root / "Cargo.toml").read_text()
+    already = [o for o in plan.overrides if f"[patch.crates-io.{o.crate}]" in existing]
+    if already:
+        return (
+            [],
+            [f"{o.crate} is already redirected in Cargo.toml" for o in already],
+            [],
+        )
+    return (
+        [
+            AppendSection(
+                path=Path("Cargo.toml"),
+                contents=munge.manifest_additions(plan),
+                why=(
+                    "verify against the forks that can be analyzed: "
+                    + ", ".join(f"{o.crate} {o.version} -> {o.branch}" for o in plan.overrides)
+                ),
+            )
+        ],
+        [],
+        [],
+    )
+
+
 def _plan_gitignore(workspace: Workspace) -> tuple[list[Change], list[str]]:
     path = workspace.root / ".gitignore"
     header = "# Certora Prover build output\n"
@@ -676,6 +726,10 @@ def plan_scaffold(
         changes += planned
         satisfied += notes
 
+    munge_changes, munge_notes, munge_blocked = _plan_munge(workspace)
+    changes += munge_changes
+    satisfied += munge_notes
+
     manifest_changes, manifest_notes, blocked = _plan_package_manifest(
         package, relative, reference, inherit=inherit
     )
@@ -685,6 +739,7 @@ def plan_scaffold(
     # whose own pin is perfectly consistent.
     if _introduced(workspace, package, reference):
         blocked += _check_platform(workspace, reference)
+    blocked += munge_blocked
 
     return ScaffoldPlan(
         package=package.name,
