@@ -42,6 +42,7 @@ from pathlib import Path
 from composer.cargo.metadata import CratePackage, Workspace
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.env_paths import PathDialect, dialect_for
+from composer.spec.cvlr.munge import MUNGE_DIR
 from composer.spec.cvlr_reference import ChainReference
 
 _log = logging.getLogger(__name__)
@@ -62,9 +63,18 @@ SPECS_DIR = HARNESS_DIR / "specs"
 ENVS_DIR = HARNESS_DIR / "envs"
 
 #: Build output the prover leaves in the project, plus this backend's own per-unit workspaces
-#: (``composer.spec.cvlr.pipeline.WORK_DIR``). The first three are from the template's
-#: ``certora-setup.py``; the last is ours and is ignored for the same reason.
-GITIGNORE_LINES = (".certora", ".certora_internal", "certora_out", ".cvlr_work")
+#: (``composer.spec.cvlr.pipeline.WORK_DIR``) and munged dependencies
+#: (``composer.spec.cvlr.munge.MUNGE_DIR``). The first three are from the template's
+#: ``certora-setup.py``; the last two are ours and are ignored for the same reason — both are derived
+#: from the project plus this backend, so committing them would commit a copy of somebody's
+#: dependency tree.
+GITIGNORE_LINES = (
+    ".certora",
+    ".certora_internal",
+    "certora_out",
+    ".cvlr_work",
+    str(MUNGE_DIR),
+)
 
 #: The crate type a Solana program's library target must have. Without it cargo produces no
 #: loadable object and there is nothing for the prover to read.
