@@ -881,11 +881,12 @@ that is worth knowing before trusting a green fuzz run.
 #### 7.5.5 What the first live run found
 
 [tests/test_cvlr_gate.py](../tests/test_cvlr_gate.py) drives the real backend over the Anchor vault
-with real models, cargo and cloud submissions. Two defects fixed, three findings recorded.
+with real models, cargo and cloud submissions.
 
-**The loop works, and the source mount earns its keep.** The tool census over one run — 30
-`put_harness`, 28 `cargo_check`, **23 real prover submissions**, and 50 combined
-`cvlr_source_read`/`cvlr_source_search` — is the evidence §5.5 was asking for. The author checks
+**The source mount earns its keep.** The tool census over one run — 30 `put_harness`, 28
+`cargo_check`, 23 `verify_rules`, and 50 combined `cvlr_source_read`/`cvlr_source_search` — is
+the evidence §5.5 was asking for. (Those `verify_rules` calls all *failed*, for the reason
+below; the census measures where the author chose to spend turns, not what came back.) The author checks
 helper names against the mounted crate rather than guessing them, which was the whole argument for
 putting the source in front of it.
 
@@ -905,44 +906,50 @@ per-unit workdir was forced by compile-gate correctness, but it isolates *learni
 grows linearly in component count. A shared, append-only note of "how this program is driven",
 written once and read by every unit, is the obvious answer and is not built.
 
-**`.certora_sources` receives no Rust at all, and §7.2.2's premise does not hold.** Every submission
-this backend makes uploads the built `.so`, the two tuning files and the confs — and not one line of
-source. Established, not inferred:
+**Every submission failed, and the cause was one no-op line.** `verify_rules` computed
+`declared = rule_names(draft)`, used it only to reject an empty draft, and then submitted with
+`dataclasses.replace(submission, rules=submission.rules)` — a self-assignment. So the conf inherited
+from a base that names no rules, and **a Solana cloud job with no rule selection ends in `FAILED`**,
+with no report and nothing on disk to read. Every submission this backend had ever made failed this
+way.
 
-* `cargo certora-sbf --json` emits
-  `sources = ["programs/vault/Cargo.toml", "programs/vault/src/**/*.rs", "Cargo.toml"]`, correctly
-  re-rooted from package-relative to workspace-relative.
-* `.certora_sources` contains **none** of them — including the two that exist as literal files. So
-  this is not the `**` glob going unexpanded; `sources` is not consumed at all.
-* The fields that *are* consumed all work: `executables` → the `.so`, `solana_inlining` /
-  `solana_summaries` → the env files. So the manifest is being read; `sources` is being ignored.
-* Observed across 30+ submissions and three units, on certora-cli **8.18.0**.
+Proved by construction rather than argued. On one workspace, one build, one harness of
+`cvlr_assert!(true)`, the only change being the rule list:
 
-[sbf.py](../composer/cargo/sbf.py)'s own docstring gives this as the reason for taking the
-build-script path — "``set_rust_build_directory`` only collects the project's Rust sources into
-``.certora_sources`` on the build-script path". That is the premise §7.2.2 rests on, and it is false
-on the pinned CLI. Consequences: §7.7's analyzer will have no source to map a counterexample onto,
-the report cannot show rule text, a run is not reproducible from what it uploaded, and the `sources`
-improvement §7.4.3 credits this scaffold with over the template is **inert**.
+| `rules` | outcome |
+|---|---|
+| `InheritRules()` (the bug) | `POSTED → QUEUED → RUNNABLE → RUNNING → FAILED`, no report |
+| `SelectRules(("rule_probe",))` | `Checked`, `rule_probe: VERIFIED` |
 
-Not yet established, and cheap to check before filing upstream: whether 8.19.1 fixes it, and whether
-a flag enables the collection. `scratchpad/manifest_probe.py` reproduces the manifest with no LLM in
-the loop and is the artifact to attach.
+The control that isolated it is [test_cvlr_end_to_end.py](../tests/test_cvlr_end_to_end.py): the
+public examples pass in 71 seconds on the same machine, credentials and CLI. Their conf names its
+rules explicitly, which is exactly the difference.
 
-**Without counterexample analysis the loop spends its budget on tautologies.** §7.5.4 called the
-missing CEX analysis "the biggest known limiter on loop quality"; this run shows what that costs.
-All three units wrote competent 8–10 rule harnesses, then collapsed to probes — `cvlr_assert!(true)`,
-and in one case `cvlr_assume!(x > y); cvlr_assert!(x != y)`, which does not touch the program at all
-— and submitted those to the cloud. Deposit_Management oscillated 8 → 1 → 8 → 1 rules across 16
-submissions without converging.
+`SelectRules`, not `AllRules`: the build is whole-crate, so "every rule the artifact declares" is
+every *unit's* rules, and a unit would be graded on its siblings' drafts.
 
-The behaviour is *rational*: a raw counterexample dump does not distinguish "the rule is wrong" from
-"an assumption made it vacuous" from "the harness never reached the program", so retreating to a
-probe that isolates the third is the correct move. It is simply an expensive one, at minutes and
-dollars per submission. **§7.7 is therefore not a quality layer on a working loop — without it the
-loop rediscovers that the toolchain works, repeatedly, at cloud prices.** That the source-collection
-defect above also denies the report the rule text compounds it: neither channel back to the author
-carries what it needs.
+**Two findings this run appeared to produce were symptoms of that one bug, and are retracted.**
+Recording them because the mis-diagnoses were confident and each cost real time:
+
+* *"`.certora_sources` receives no Rust, so §7.2.2's premise is false."* Wrong. With no rule
+  selection the CLI stops before collecting sources, which looked identical to never collecting
+  them. The same workspace, once the rules are named, collects seven `.rs` files including `lib.rs`
+  and the harness modules. `sources` is consumed, the `**` glob expands, and the workspace layout is
+  fine. What survives is small and upstream: `Cargo.toml` is not collected for *either* project,
+  which is §7.4.3's row, not a new defect.
+* *"Without CEX analysis the loop burns its budget on tautologies."* The behaviour was real — all
+  three units wrote competent 8–10 rule harnesses and collapsed to probes, one of them
+  `cvlr_assume!(x > y); cvlr_assert!(x != y)`, which does not touch the program — but the stated
+  cause was wrong. They never received a counterexample to fail to interpret. They received
+  `"status FAILED"` and simplified the harness looking for something the submitter would accept.
+  §7.5.4's claim that missing CEX analysis is the biggest limiter on loop quality is **untested**:
+  no run has yet reached the point where it would bind.
+
+The general lesson, and the reason both mis-diagnoses landed: when the first thing in a pipeline is
+broken, every later stage reports its own starvation, and each of those reports looks like an
+independent defect. The tell was available and I passed it — a job link existed for every one of
+those failures, and [core.py](../composer/prover/core.py)'s message discarded it while
+`CloudJobError` carried it. That is now fixed too: a failure names its job.
 
 **The mount covers CVLR's API but not the target's generated one.** A draft named
 `crate::__client_accounts_withdraw::WithdrawBumps`, an Anchor-generated path. §5.5 mounts the CVLR

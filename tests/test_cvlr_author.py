@@ -16,9 +16,14 @@ what makes it testable in the routine env — and the machinery is where the int
 
 from pathlib import Path
 
+import asyncio
+from types import SimpleNamespace
+
 import pytest
 
 from composer.authoring.state import SkippedProperty
+from composer.spec.cvlr.conf import RunOverlay, SelectRules, solana_conf
+from composer.spec.cvlr.prover import Submission as CvlrSubmission
 from composer.spec.cvlr.harness import (
     CvlrArtifactStore,
     GeneratedHarness,
@@ -198,3 +203,85 @@ def test_the_published_result_reports_the_rules_it_read_off_the_draft():
     assert harness.artifact_text == DRAFT
     assert harness.output_link == "https://prover.certora.com/output/1/abc"
     assert harness.property_checks() == [("solvency_holds", ["rule_solvency"])]
+
+
+# ---------------------------------------------------------------------------
+# The prover submission names the draft's rules
+# ---------------------------------------------------------------------------
+
+class _StopProbe(Exception):
+    """Cuts the tool off once the submission is captured; no prover is involved."""
+
+
+_DRAFT_TWO_RULES = """
+use cvlr::prelude::*;
+
+#[rule]
+fn rule_balance_conserved() { cvlr_assert!(true); }
+
+#[rule]
+fn rule_only_authority_withdraws() { cvlr_assert!(true); }
+"""
+
+
+def _verify_state(draft: str) -> dict:
+    return {
+        "messages": [],
+        "curr_spec": draft,
+        "expected_failures": {},
+        "skipped": [],
+        "property_rules": [],
+        "required_validations": [],
+        "validations": {},
+        "failed": None,
+        "budget_curtailed": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeypatch):
+    """The conf must carry a ``rule`` entry, and it must be this draft's rules.
+
+    A regression guard on a real outage, not a hypothetical. This line was once
+    ``rules=deps.submission.rules`` — a self-assignment — so every submission inherited from a base
+    conf that names no rules. A cloud job with no rule selection ends in FAILED with no report and
+    nothing on disk, so the authoring loop saw only "status FAILED" and simplified its harness
+    until it was a tautology, which failed identically. Nothing else in the suite would notice: the
+    conf machinery is correct, the build is correct, and the bug lives entirely in what is handed
+    across.
+
+    Also pins *which* selection. ``AllRules`` would look right and be wrong — the build is
+    whole-crate, so it would grade this unit on every sibling unit's rules.
+    """
+    from composer.spec.cvlr import verify as verify_mod
+
+    captured: dict = {}
+
+    async def fake_submit(session, submission, **kwargs):
+        captured["rules"] = submission.rules
+        raise _StopProbe
+
+    monkeypatch.setattr(verify_mod, "submit", fake_submit)
+
+    deps = SimpleNamespace(
+        lock=asyncio.Lock(),
+        target=SimpleNamespace(session=None, stage=lambda draft: None),
+        submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), base_conf={}),
+        prover_opts=None,
+        cex=None,
+        stamper=None,
+    )
+    token = verify_mod.VerifyRules._dep_ctx.set(deps)
+    try:
+        tool = verify_mod.VerifyRules(state=_verify_state(_DRAFT_TWO_RULES), tool_call_id="tc")
+        with pytest.raises(_StopProbe):
+            await tool.run()
+    finally:
+        verify_mod.VerifyRules._dep_ctx.reset(token)
+
+    assert captured["rules"] == SelectRules(
+        ("rule_balance_conserved", "rule_only_authority_withdraws")
+    )
+    # And the selection actually reaches the conf as a `rule` entry.
+    conf = solana_conf({}, RunOverlay(build_script="/w/b.py", rules=captured["rules"]))
+    assert conf["rule"] == ["rule_balance_conserved", "rule_only_authority_withdraws"]
