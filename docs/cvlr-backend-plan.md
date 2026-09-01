@@ -957,11 +957,20 @@ those failures, and [core.py](../composer/prover/core.py)'s message discarded it
 **A blocked author assumes the conclusion, and the publish gate cannot tell.** The most substantive
 thing the run produced was a diagnosis the author wrote into its own harness: Anchor's
 `Account::exit` is not inlined, so handler state changes are never written back observably, and
-`find_program_address` is summarized, so a PDA cannot be re-derived across calls. Both are
-checkable against the vendored tuning files and both hold — `cvlr_inlining_anchor.txt` covers
-`try_from`, `try_deserialize` and the error conversions, and has nothing for `exit` or
-`AccountSerialize`. **On an Anchor program that puts most post-state properties out of reach**, which
-is most of the Solana market.
+`find_program_address` is summarized, so a PDA cannot be re-derived across calls. Checked against
+the vendored tuning files, three of its four claims hold exactly:
+
+| claim | verdict |
+|---|---|
+| `Account::exit` / `AccountSerialize::try_serialize` not inlined | holds — absent from the `#[inline]` allowlist |
+| `invoke_signed_unchecked` summarized, so `init`'s account-creating CPI is a no-op | holds — `cvlr_summaries_core.txt:95` |
+| `find_program_address` summarized | holds — `cvlr_summaries_core.txt:84,92` |
+| a blanket `#[inline(never)] ^.*anchor_lang.*$` is what excludes them | **wrong** — no such directive; they are simply not in the allowlist |
+
+Recorded with the wrong one included, because the mechanism it names does not exist and the
+conclusion is right anyway: an agent's diagnosis of prover behaviour is evidence worth checking, not
+evidence worth quoting. **On an Anchor program this puts most post-state properties out of reach**,
+which is most of the Solana market.
 
 What the author then did is the finding. It kept one rule:
 
@@ -982,9 +991,15 @@ The fix is vacuity checking, which both public examples enable and `TEMPLATE_BAS
 `VERIFIED`, so it reaches the author through the accounting gate as unfinished work. Everything
 needed was present; only the conf key was missing.
 
-Two follow-ups this opens, neither done: the vendored Anchor inlining needs `exit` /
-`AccountSerialize` before Anchor post-state properties are provable at all — which is a
-prerequisite for this backend being useful on Anchor, not a refinement — and
+The honest end state is worth recording too: given a full budget the author did **not** ship the
+tautology. It skipped all six properties with the diagnosis above as its reason, which is what the
+skip mechanism is for and the right answer when a batch genuinely cannot be verified. The vacuity fix
+matters for the case where an author is blocked and does not notice.
+
+Three follow-ups this opens, none done: the vendored tuning needs `exit` / `AccountSerialize`
+inlined and needs `invoke_signed_unchecked` to model account creation before Anchor post-state
+properties are provable at all — a prerequisite for this backend being useful on Anchor rather than
+a refinement — and
 `cvlr_inlining_anchor.txt` line 39 carries an inlining rule naming one specific program, which is
 upstream's to remove from a file that claims to be canonical.
 
