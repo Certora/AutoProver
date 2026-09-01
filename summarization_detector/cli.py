@@ -51,5 +51,5 @@ def main(argv: list[str] | None = None) -> int:
         report = detect(a.job_url, ast_path=a.ast, conf=a.conf, cut=a.cut, solc_dir=a.solc_dir,
                         external_call_graph=a.external_call_graph,
                         include_dependencies=a.include_dependencies)
-    print(json.dumps(report.to_dict(), indent=2) if a.json else report.format())
+    print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False) if a.json else report.format())
     return 0

@@ -305,14 +305,14 @@ def test_caller_boundaries_keeps_only_expressible_internal_callers():
         "M.pureFar": {"M.mutClose"},
         "C.borrow": {"computeBaseHash"},
     }
-    sigs = {                                        # (signature, expressible, mutating, is_external)
-        "L.encodeFromData": ("encodeFromData(uint256, bytes) -> C", False, False, False),  # opaque -> dropped
-        "M.mutClose": ("mutClose(PositionId[]) -> C", True, True, False),                   # clean but mutating
-        "M.pureFar": ("pureFar(PositionId[]) -> C", True, False, False),                    # clean + pure
-        "C.borrow": ("borrow(uint256) -> uint256", True, True, True),                       # external -> dropped
+    facts = {
+        "L.encodeFromData": FnFacts("encodeFromData(uint256, bytes) -> C", expressible=False),  # opaque -> dropped
+        "M.mutClose": FnFacts("mutClose(PositionId[]) -> C", expressible=True, mutating=True),   # clean but mutating
+        "M.pureFar": FnFacts("pureFar(PositionId[]) -> C", expressible=True, mutating=False),    # clean + pure
+        "C.borrow": FnFacts("borrow(uint256) -> uint256", expressible=True, external=True),      # external -> dropped
     }
     reach = {"computeBaseHash", "L.encodeFromData", "M.mutClose", "M.pureFar", "C.borrow"}
-    b = _caller_boundaries(edges, sigs, "computeBaseHash", reach)
+    b = _caller_boundaries(edges, facts, "computeBaseHash", reach)
     # opaque + external-entry both dropped; pure+clean wins over mutating-clean (view-preference beats distance)
     assert [x.function for x in b] == ["M.pureFar", "M.mutClose"]
     assert not b[0].mutating and b[1].mutating
@@ -320,9 +320,9 @@ def test_caller_boundaries_keeps_only_expressible_internal_callers():
 
 def test_caller_boundaries_filters_to_reachable():
     edges = {"C.caller": {"computeBaseHash"}}
-    sigs = {"C.caller": ("caller(uint256) -> bytes32", True, False, False)}   # expressible, pure, internal
-    assert _caller_boundaries(edges, sigs, "computeBaseHash", reachable={"computeBaseHash"}) == []  # caller unreached
-    assert _caller_boundaries(edges, sigs, "computeBaseHash", reachable=None)                       # no filter -> kept
+    facts = {"C.caller": FnFacts("caller(uint256) -> bytes32", expressible=True)}   # expressible, pure, internal
+    assert _caller_boundaries(edges, facts, "computeBaseHash", reachable={"computeBaseHash"}) == []  # caller unreached
+    assert _caller_boundaries(edges, facts, "computeBaseHash", reachable=None)                       # no filter -> kept
 
 
 def test_boundary_format_flags_mutating_vs_pure():
@@ -475,8 +475,8 @@ def test_surviving_score_is_flat_regardless_of_reach():
     assert "reaches 20" in by["L.wide"].evidence      # count still reported in evidence
 
 
-def test_signatures_gives_signature_and_mutating_with_bare_fallback():
-    from summarization_detector.detect import _signatures
+def test_fn_facts_gives_signature_and_mutating_with_bare_fallback():
+    from summarization_detector.detect import _fn_facts, _by_qual_or_bare
     merged = {
         "1": {"nodeType": "ContractDefinition", "src": "0:200:1", "name": "AssetLogic"},
         "2": {"nodeType": "FunctionDefinition", "src": "10:80:1", "name": "calcRay", "stateMutability": "view",
@@ -489,12 +489,14 @@ def test_signatures_gives_signature_and_mutating_with_bare_fallback():
               "parameters": {"parameters": [{"typeDescriptions": {"typeString": "uint256"}}]},
               "returnParameters": {"parameters": []}},
     }
-    sigs = _signatures(merged)                      # (signature, expressible, mutating, is_external)
-    assert sigs["AssetLogic.calcRay"][0] == "calcRay(uint256) -> uint256" and sigs["AssetLogic.calcRay"][2] is False
-    assert sigs["Hub.add"][0] == "add(uint256)" and sigs["Hub.add"][2] is True          # nonpayable -> mutating
+    facts = _fn_facts(merged)
+    assert facts["AssetLogic.calcRay"].signature == "calcRay(uint256) -> uint256"
+    assert facts["AssetLogic.calcRay"].mutating is False
+    assert facts["Hub.add"].signature == "add(uint256)" and facts["Hub.add"].mutating is True  # nonpayable
+    assert facts["Hub.add"].external is True                                     # external -> a rule subject
     # the attach's bare-name fallback: a caller-attributed hotspot resolves by bare name
-    bare = {q.rpartition(".")[2]: v for q, v in sigs.items()}
-    assert bare["calcRay"][0] == "calcRay(uint256) -> uint256" and bare["calcRay"][2] is False
+    hit = _by_qual_or_bare(facts, "X.calcRay")
+    assert hit is not None and hit.signature == "calcRay(uint256) -> uint256"
 
 
 def test_function_locations_normalizes_absolute_ast_paths():
@@ -546,7 +548,7 @@ def test_detect_from_collects_toxic_entrypoints_top5_by_pct():
 
 
 def _sig(sig, expressible, mutating, external):
-    return (sig, expressible, mutating, external)
+    return FnFacts(sig, expressible=expressible, mutating=mutating, external=external)
 
 
 def test_shallowest_view_boundary_picks_aggregating_view():
@@ -566,15 +568,14 @@ def test_shallowest_view_boundary_picks_aggregating_view():
         "C._calculateLiquidationAmounts": _sig("_calc()->Amounts", True, False, False),  # THE boundary
         "M.mulDiv": _sig("mulDiv()->uint", True, False, False),
     }
-    reach = set(edges) | {"M.mulDiv"}
-    assert _shallowest_view_boundary(edges, sigs, "C.liquidationCall", reach) == "C._calculateLiquidationAmounts"
+    assert _shallowest_view_boundary(edges, sigs, "C.liquidationCall") == "C._calculateLiquidationAmounts"
 
 
 def test_shallowest_view_boundary_none_when_no_view_aggregator():
     edges = {"C.f": {"M.mulDiv"}, "M.mulDiv": set()}
     sigs = {"C.f": _sig("f()", True, True, True), "M.mulDiv": _sig("mulDiv()", True, False, False)}
     # f is mutating+external; mulDiv is a bare primitive (excluded) -> no boundary
-    assert _shallowest_view_boundary(edges, sigs, "C.f", set(edges)) is None
+    assert _shallowest_view_boundary(edges, sigs, "C.f") is None
 
 
 def test_entrypoint_in_edges_bare_name_fallback():
@@ -585,3 +586,126 @@ def test_entrypoint_in_edges_bare_name_fallback():
     # ambiguous bare name -> None
     edges2 = {"A.f": set(), "B.f": set()}
     assert _entrypoint_in_edges(edges2, "C.f") is None
+
+
+# --- branching / path-count signal (the extension) ---------------------------
+
+from summarization_detector.detect import BRANCHING_MIN_PCT, FnFacts, _is_reference_typename
+from summarization_detector.difficulty import _parse_hotspots, _BRANCHING_NODE_LABEL, _BRANCHING_PCT_RE
+
+
+def test_difficulty_parses_path_count_hotspots_separately_from_nonlinearity():
+    tree = {"label": "root", "children": [
+        {"label": "path count hotspots", "children": [
+            {"label": "function: (internal) Router._insertLeg",
+             "value": "contrib. to branching: 39 %",
+             "jumpToDefinition": {"file": "Router.sol", "start": {"line": 433}}},
+            {"label": "function: CombinatorialModule.getLegs", "value": "contrib. to branching: 9 %"},
+        ]},
+        {"label": "nonlinearity hotspots", "children": [
+            {"label": "function: Lib.mulDiv", "value": "contrib. to nonlinear ops: 50 %"},
+        ]},
+    ]}
+    br = {}
+    _parse_hotspots(tree, br, _BRANCHING_NODE_LABEL, _BRANCHING_PCT_RE)
+    assert br["(internal) Router._insertLeg"].pct == 39
+    assert br["(internal) Router._insertLeg"].location == "Router.sol:433"
+    assert br["CombinatorialModule.getLegs"].pct == 9
+    assert not any("mulDiv" in k for k in br)          # the nonlinearity node is NOT collected as branching
+
+
+def test_detect_from_emits_branching_candidates():
+    diff = DifficultyReport(branching=[
+        Hotspot("(internal) Router._insertLeg", 39, "Router.sol:433"),
+        Hotspot("CombinatorialModule._storeLegsFromMemory", 20, "M.sol:1092"),
+        Hotspot("Router.inject", 30, "Router.sol:1"),                  # CUT's own external = subject -> skip
+        Hotspot("(internal) Router._tiny", BRANCHING_MIN_PCT - 1, ""),  # below the floor -> dropped
+    ])
+    by = {c.function: c for c in detect_from([], diff, cut="Router").candidates}
+    ins = by["Router._insertLeg"]
+    assert "branching" in ins.signals and "branching" in ins.evidence.lower()
+    assert "CombinatorialModule._storeLegsFromMemory" in by
+    assert "Router.inject" not in by                                   # the CUT external subject is skipped
+    assert not any("_tiny" in f for f in by)                          # below the floor is dropped
+
+
+def test_is_reference_typename_gates_nondet():
+    m = {}
+    arr = {"nodeType": "ArrayTypeName", "baseType": {"nodeType": "ElementaryTypeName", "name": "uint256"}}
+    assert _is_reference_typename(arr, m) is True                     # PositionId[] -> not NONDET-able
+    assert _is_reference_typename({"nodeType": "ElementaryTypeName", "name": "uint256"}, m) is False
+    assert _is_reference_typename({"nodeType": "ElementaryTypeName", "name": "bytes"}, m) is True
+    assert _is_reference_typename({"nodeType": "Mapping"}, m) is True
+    m = {"5": {"nodeType": "StructDefinition"}, "6": {"nodeType": "EnumDefinition"}}
+    assert _is_reference_typename({"nodeType": "UserDefinedTypeName", "referencedDeclaration": 5}, m) is True   # struct
+    assert _is_reference_typename({"nodeType": "UserDefinedTypeName", "referencedDeclaration": 6}, m) is False  # enum
+
+
+def test_caller_boundaries_nondet_filter_keeps_value_void_containers():
+    # leaf `_insertLeg` (array return) is called by `_storeLegs` (value return) and `_derive` (array return);
+    # with the nondet_ok filter, only the value/void container `_storeLegs` is offered as a boundary.
+    edges = {"C._storeLegs": {"C._insertLeg"}, "C._derive": {"C._insertLeg"}}
+    facts = {
+        "C._insertLeg": FnFacts("_insertLeg(...) -> PositionId[]", expressible=True, mutating=False, nondet_ok=False),
+        "C._storeLegs": FnFacts("_storeLegs(...) -> ConditionId", expressible=True, mutating=False, nondet_ok=True),
+        "C._derive": FnFacts("_derive(...) -> PositionId[]", expressible=True, mutating=False, nondet_ok=False),
+    }
+    bs = _caller_boundaries(edges, facts, "C._insertLeg", None, nondet=True)
+    names = {b.function for b in bs}
+    assert "C._storeLegs" in names and "C._derive" not in names
+
+
+def test_path_count_value_parses_pow2_and_int():
+    from summarization_detector.difficulty import _path_count_value
+    assert _path_count_value("approx. 2^51") == 2.0 ** 51
+    assert _path_count_value("200") == 200.0
+    assert _path_count_value("1") == 1.0
+    assert _path_count_value("n/a") == 0.0
+
+
+def test_scan_max_path_count_keeps_worst_incl_list_values():
+    from summarization_detector.difficulty import _scan_max_path_count
+    tree = {"children": [
+        {"label": "path count", "value": "1"},
+        {"label": "call #1", "children": [{"label": "path count", "value": "approx. 2^51"}]},
+        {"label": "path count", "value": ["200"]},          # list-valued (as some nodes serialize)
+    ]}
+    best = [0.0, ""]
+    _scan_max_path_count(tree, best)
+    assert best[1] == "approx. 2^51"
+
+
+def test_detect_from_branching_evidence_carries_absolute_path_count():
+    diff = DifficultyReport(branching=[Hotspot("(internal) C._loop", 40, "")], max_path_count="approx. 2^51")
+    by = {c.function: c for c in detect_from([], diff, cut="C").candidates}
+    assert "2^51" in by["C._loop"].evidence and "branching" in by["C._loop"].evidence.lower()
+
+
+def test_caller_boundaries_nondet_ranks_view_pure_before_mutating():
+    # both callers are value/void-return (NONDET-able), so both are offered — but the view/pure one ranks
+    # first, since only it is unconditionally sound to `=> NONDET` (a mutating boundary drops writes).
+    edges = {"C._pureWrap": {"C._loop"}, "C._mutWrap": {"C._loop"}}
+    facts = {
+        "C._loop": FnFacts("_loop(...) -> uint256[]", expressible=True, mutating=False, nondet_ok=False),
+        "C._pureWrap": FnFacts("_pureWrap(...) -> uint256", expressible=True, mutating=False, nondet_ok=True),
+        "C._mutWrap": FnFacts("_mutWrap(...) -> uint256", expressible=True, mutating=True, nondet_ok=True),
+    }
+    bs = _caller_boundaries(edges, facts, "C._loop", None, nondet=True)
+    names = [b.function for b in bs]
+    assert names[0] == "C._pureWrap" and bs[0].mutating is False       # unconditionally-sound boundary first
+    assert any(b.function == "C._mutWrap" and b.mutating for b in bs)  # mutating one still offered (flagged)
+
+
+def test_candidate_schema_parity_locks_typeddicts_to_dataclasses():
+    # schema.py's TypedDicts are a hand-written mirror of the Candidate/Boundary dataclasses; this pins
+    # them so they cannot silently drift (the "keep them in step" hazard). Also checks that to_dict's
+    # default-pruning (NotRequired keys) matches the fields that actually carry a default.
+    from dataclasses import MISSING, fields
+    from summarization_detector.detect import Candidate, Boundary
+    from summarization_detector.schema import HostileCandidate, HostileBoundary
+    assert set(HostileCandidate.__annotations__) == {f.name for f in fields(Candidate)}
+    assert set(HostileBoundary.__annotations__) == {f.name for f in fields(Boundary)}
+    opt = {f.name for f in fields(Candidate)
+           if f.default is not MISSING or f.default_factory is not MISSING}
+    assert set(HostileCandidate.__optional_keys__) == opt          # NotRequired == fields with a default
+    assert set(HostileBoundary.__optional_keys__) == set()         # Boundary has no defaults -> all required

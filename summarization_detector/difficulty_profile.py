@@ -19,17 +19,19 @@ does; best-effort and tolerant of schema drift.
 import re
 from dataclasses import asdict, dataclass, field
 
+from .difficulty import _BRANCHING_NODE_LABEL, _HOTSPOT_FN_RE as _FN_RE, _HOTSPOTS_NODE_LABEL, _loc
+
 # `duration` in treeViewStatus nodes is WALL SECONDS. A rule is "slow" (and gets profiled) when its
 # duration reaches this threshold OR its status is TIMEOUT — the TIMEOUT check catches a rule that hit the
 # run's global timeout whatever that cap was. Overridable via --min-minutes.
 _DEFAULT_MIN_SECONDS = 300           # 5 min
 _MAX_HOTSPOTS_PER_RULE = 4           # a ranked pointer per rule, not a dump
+_MEMORY_NODE_LABEL = "memory complexity hotspots"     # profiler-only (the static detector doesn't fetch it)
 _HOTSPOT_PARENTS = {                 # difficulty-tree nodes whose children are per-function hotspots
-    "nonlinearity hotspots": "nl",
-    "path count hotspots": "path",
-    "memory complexity hotspots": "mem",
+    _HOTSPOTS_NODE_LABEL: "nl",      # "nonlinearity hotspots"
+    _BRANCHING_NODE_LABEL: "path",   # "path count hotspots"
+    _MEMORY_NODE_LABEL: "mem",
 }
-_FN_RE = re.compile(r"function:\s*(?P<fn>.+)", re.S)
 _PCT_RE = re.compile(r"(\d+)\s*%")
 # procId of an applied CVL summary, e.g. "CVL/Ghost Function 'cvlPrice(id)'".
 _CVL_PREFIXES = ("CVL/", "CVL ", "cvl")
@@ -93,15 +95,6 @@ class ProfileReport:
         for f in self.by_function[:12]:
             out.append(f"      {f.nl_pct_sum:5d}%  [{f.klass:9}] {f.function}  ({f.rules} rules)  {f.location}")
         return "\n".join(out)
-
-
-def _loc(node: dict) -> str:
-    jd = node.get("jumpToDefinition")
-    if isinstance(jd, dict):
-        return f"{jd.get('file')}:{jd.get('start', {}).get('line')}"
-    if isinstance(jd, list) and jd:
-        return f"{jd[0].get('file')}:{jd[0].get('start', {}).get('line')}"
-    return ""
 
 
 def _classify(function: str, cut: str, scene_contracts: set[str]) -> tuple[str, str]:

@@ -43,12 +43,13 @@ import json
 import re
 import subprocess
 import sys
-from dataclasses import asdict, dataclass, field
+from collections.abc import Callable
+from dataclasses import MISSING, asdict, dataclass, field, fields
 from pathlib import Path
 
 from certora_autosetup.solidity_ast import stream_raw_units
 
-from .difficulty import DifficultyReport, fetch_difficulty
+from .difficulty import DifficultyReport, Hotspot, fetch_difficulty
 
 # ---------------------------------------------------------------- signal 2: AST hashing/encoding calls
 # The TRIGGER is an actual hash builtin — a global `Identifier` callee. Yul (assembly) calls are
@@ -82,8 +83,9 @@ class HashSignal:
 # WITHIN a signal category (nonlinear = % of the rule's nonlinear ops; surviving = flat; hashing = fixed),
 # so each category is capped on its own rather than by a single cross-category top-N (which would let the
 # nonlinear %s crowd out the surviving/hashing targets).
-MAX_PER_CATEGORY = {"primitive": 10, "nonlinear": 10, "hashing": 10, "already-summarised": 10}
+MAX_PER_CATEGORY = {"primitive": 10, "nonlinear": 10, "hashing": 10, "already-summarised": 10, "branching": 10}
 NONLINEAR_MIN_PCT = 15       # drop difficulty hotspots below this % of the rule's nonlinear ops (long tail)
+BRANCHING_MIN_PCT = 15       # drop path-count hotspots below this % of the rule's branching (long tail)
 # An ALREADY-SUMMARISED (CVL/Ghost) hotspot still contributing nonlinear ops means its summary is itself
 # still nonlinear (an EXACT mulDiv / ray-math summary, say) — a per-group coarsening target that the raw
 # signal cannot see, because the moment a function has any summary it stops appearing as raw hostile code.
@@ -123,9 +125,10 @@ class Candidate:
     function: str                 # "Contract.fn" (the contract prefix is part of the identifier)
     signals: tuple[str, ...]      # why flagged: "nonlinear" (difficulty %), "hashing" (AST), "external"
                                   # (cross-contract modifier), "already-summarised" (a CVL/ghost summary
-                                  # still contributing nonlinear ops -> coarsen it), or a catalog hard-op
-                                  # class naming the exact primitive: "in-memory-sort" / "bitwise-scan" /
-                                  # "symbolic-exp" / "nonlinear-mulDiv". No liveness label — every candidate reaches SMT.
+                                  # still contributing nonlinear ops -> coarsen it), "branching" (a
+                                  # path-count/loop hotspot -> NONDET the loop, or its value/void container),
+                                  # or a catalog hard-op class naming the exact primitive: "in-memory-sort" /
+                                  # "bitwise-scan" / "symbolic-exp" / "nonlinear-mulDiv". No liveness label — every candidate reaches SMT.
     score: float                  # rank key (higher = summarize first)
     evidence: str                 # human-readable justification
     file: str = ""                # source file of the function ("" if unresolved)
@@ -136,6 +139,17 @@ class Candidate:
     summarizable: bool = True     # the prover's own `summarizable` flag (surviving graph)
     candidate_summary: str = ""   # suggested summary (curated EXACT or generic over-approx)
     boundaries: list[Boundary] = field(default_factory=list)   # caller boundaries to summarize at instead
+
+
+#: Per-field default of every OPTIONAL `Candidate` field (one with a default / default_factory), derived
+#: from the dataclass itself — the single source of truth for `to_dict`'s default-pruning. Required fields
+#: (function/signals/score/evidence) have no default and so are absent here, hence never pruned. Add or
+#: rename a `Candidate` field and this tracks it automatically (see `test_candidate_schema_parity`).
+_CANDIDATE_DEFAULTS = {
+    f.name: (f.default if f.default is not MISSING else f.default_factory())  # type: ignore[misc]
+    for f in fields(Candidate)
+    if f.default is not MISSING or f.default_factory is not MISSING
+}
 
 
 @dataclass
@@ -155,12 +169,12 @@ class DetectionReport:
         and rank) with its caller-boundary shortlist. Fields left at their default (unresolved location,
         no reach, no summary, no boundaries, summarizable) are OMITTED — the consumer assumes the default,
         and the prompt this renders into stays lean. The emitted shape is the `schema.py` TypedDicts
-        (`HostileCandidate` / `HostileBoundary`) — keep those in step with this and the `Candidate` fields."""
-        defaults = {"file": "", "line": None, "signature": "", "mutating": None, "reaching_count": 0,
-                    "summarizable": True, "candidate_summary": "", "boundaries": []}
+        (`HostileCandidate` / `HostileBoundary`); `test_candidate_schema_parity` locks those to the
+        `Candidate`/`Boundary` fields so they cannot silently drift from this."""
         candidates = []
         for c in self.candidates:
-            d = {k: v for k, v in asdict(c).items() if defaults.get(k, object()) != v}
+            d = {k: v for k, v in asdict(c).items()
+                 if k not in _CANDIDATE_DEFAULTS or _CANDIDATE_DEFAULTS[k] != v}
             candidates.append(d)
         return {"candidates": candidates, "dropped": self.dropped}
 
@@ -189,16 +203,22 @@ class DetectionReport:
 
 # ---------------------------------------------------------------- signal 2 core: the AST walk
 def _span(node: dict) -> tuple[int, int] | None:
-    """The node's `src` = "offset:length:fileId" -> (start, end) byte offsets. All nodes within one
+    """The node's `src` byte span `(start, end)` — `_span3` without the fileId. All nodes within one
     source file share a fileId, so containment by (start, end) alone attributes a call to its function."""
-    src = node.get("src")
-    if not isinstance(src, str):
-        return None
-    try:
-        off, length, _fid = src.split(":")
-        return int(off), int(off) + int(length)
-    except ValueError:
-        return None
+    r = _span3(node)
+    return (r[0], r[1]) if r else None
+
+
+def _min_span(off: int, spans: list, bounds: Callable[[tuple], tuple[int, int]]) -> tuple | None:
+    """The smallest entry in `spans` whose `(start, end) = bounds(entry)` contains `off` — the innermost
+    enclosing span. Shared scan behind `_tightest` and `_enclosing` (they differ only in tuple shape)."""
+    best: tuple | None = None
+    best_w = 0
+    for entry in spans:
+        s, e = bounds(entry)
+        if s <= off < e and (best is None or (e - s) < best_w):
+            best, best_w = entry, e - s
+    return best
 
 
 def _classify_call(call: dict) -> tuple[str, str] | None:
@@ -277,12 +297,7 @@ def _dynamic_input(sites: list, param_ids: set) -> bool:
 def _tightest(off: int, spans: list) -> tuple | None:
     """The smallest span in `spans` (each `((start,end), *payload)`) that contains offset `off` — the
     innermost enclosing function/contract."""
-    best = None
-    for entry in spans:
-        (s, e) = entry[0]
-        if s <= off < e and (best is None or (e - s) < (best[0][1] - best[0][0])):
-            best = entry
-    return best
+    return _min_span(off, spans, lambda entry: entry[0])
 
 
 def scan_ast(ast_path: str | Path) -> list[HashSignal]:
@@ -483,7 +498,6 @@ class CuratedEntry:
     category: str                # one of the GENERIC_RULES keys
     summary: str                 # the concrete summary text, INCLUDING any soundness caveat — a curated
                                  # entry may be exact, or a documented over-/under-approximation
-    note: str = ""
 
 
 # CURATED overlay — specific PUBLIC libraries → a known-good, concrete summary. Only public, widely-used
@@ -680,6 +694,15 @@ def _strip_procid(function: str) -> str:
     return re.sub(r"^\((?:internal|external)\)\s*", "", function.strip())
 
 
+def _decode_hotspot(h: Hotspot) -> tuple[bool, str, str, str]:
+    """Decode a difficulty hotspot's procId into `(internal, fn, contract, bare)` — the shared prefix of
+    the nonlinear and branching signal loops. `internal` = the prover's `(internal)` inlined-fn marker;
+    `fn` = `Contract.fn` (marker stripped); `contract` = its host; `bare` = the name after the last `.`."""
+    internal = h.function.strip().startswith("(internal)")
+    fn = _strip_procid(h.function)
+    return internal, fn, _contract_of(fn), fn.rpartition(".")[2]
+
+
 def _parse_location(loc: str) -> tuple[str, int | None]:
     """Split a difficulty hotspot location (`file:line`, or just `file`) into `(file, line)`. `line` is
     `None` when it is absent or non-numeric. Source paths carry no `:`, so the last segment is the line."""
@@ -697,6 +720,8 @@ def _bucket(c: Candidate) -> str:
         return "primitive"
     if "already-summarised" in c.signals:
         return "already-summarised"
+    if "branching" in c.signals and "nonlinear" not in c.signals:
+        return "branching"
     if "nonlinear" in c.signals:
         return "nonlinear"
     return "hashing"
@@ -754,10 +779,7 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
             continue
         if h.pct < NONLINEAR_MIN_PCT:                        # drop the long, low-contribution tail
             continue
-        internal = h.function.strip().startswith("(internal)")
-        fn = _strip_procid(h.function)
-        contract = _contract_of(fn)
-        bare = fn.rpartition(".")[2]
+        internal, fn, contract, bare = _decode_hotspot(h)
         if contract == cut and not internal:                # the CUT's own external method (rule subject)
             toxic_entrypoints.append((fn, float(h.pct)))     # not summarizable itself; descend to a boundary later
             continue
@@ -773,6 +795,28 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
             cand[fn].file, cand[fn].line = _parse_location(h.location)
         if contract and contract != cut and not internal:   # a genuine cross-contract external call
             _bump(fn, "external", 10.0, f"resolved external in {contract} (not the CUT)")
+
+    # signal 5 (branching / path count): the SIBLING difficulty node. When a rule times out on loop/path
+    # explosion rather than math, the nonlinearity node can be empty (the math is already summarized) while
+    # this one names the loop-heavy functions. Same procId conventions as the nonlinear loop. The CUT's own
+    # external method (the rule subject) is skipped — its internal loop callees carry the actionable signal.
+    # The value/void-return soundness gate (a reference-returning branch fn can't be `=> NONDET`ed) is
+    # applied in `detect()`, where the AST return types are available.
+    seen_branch: set[str] = set()
+    pc_ctx = f", in a rule with up to {difficulty.max_path_count} paths" if difficulty.max_path_count else ""
+    for h in difficulty.branching:
+        if h.pct < BRANCHING_MIN_PCT:                        # drop the long, low-contribution tail
+            continue
+        internal, fn, contract, bare = _decode_hotspot(h)
+        if contract == cut and not internal:                # CUT's own external method = rule subject -> skip
+            continue
+        if bare in seen_branch:                             # caller-attribution dup -> keep the top one
+            continue
+        seen_branch.add(bare)
+        _bump(fn, "branching", float(h.pct),
+              f"{h.pct}% of branching (loop/path count){pc_ctx}" + (f" @{h.location}" if h.location else ""))
+        if h.location and cand[fn].file == "":              # keep the nonlinear location if already set
+            cand[fn].file, cand[fn].line = _parse_location(h.location)
 
     # signal 2 (hashing/encoding): the AST scan. Dynamic-input hashing (unbounded bytes/string/array) is
     # the costly kind; a fixed-size digest (typical EIP-712) is bounded — score it far lower so the noise
@@ -865,7 +909,7 @@ def detect(job_url: str | None = None, *, ast_path: str | Path | None = None,
     cone: dict[str, int] = {}
     reachable: set[str] = set()
     edges: dict[str, set[str]] = {}
-    sigs: dict[str, tuple[str, bool, bool, bool]] = {}
+    facts: dict[str, FnFacts] = {}
     merged = _unit_declaring(ast, cut)                     # the CUT's compilation unit, built once
     if merged is not None:
         edges, roots, by_name, sizes = _ast_call_graph(merged, cut)
@@ -873,7 +917,7 @@ def detect(job_url: str | None = None, *, ast_path: str | Path | None = None,
             _add_external_edges(edges, by_name, external_call_graph)
         reachable = _bfs(edges, roots)                     # for cone (rank) + the ecg fallback gate
         cone = _cone_weights(edges, reachable, sizes)
-        sigs = _signatures(merged)                         # for caller-boundary expressibility
+        facts = _fn_facts(merged)                          # signature/expressible/mutating/nondet-ok, one walk
     if surviving_set:                                     # authoritative: exactly what reached SMT
         survivors_bare = {n.rpartition(".")[2] for n in surviving_set}
         hash_signals = [h for h in hash_signals if _survives(h.function, surviving_set, survivors_bare)]
@@ -902,23 +946,45 @@ def detect(job_url: str | None = None, *, ast_path: str | Path | None = None,
                 fanin[p] = fanin.get(p, 0) + 1
         for c in report.candidates:
             if "hashing" in c.signals or any(s in _PRIMITIVE_CATEGORIES for s in c.signals):  # walk UP to a caller
-                c.boundaries = _caller_boundaries(edges, sigs, c.function, bounds_reach)
+                c.boundaries = _caller_boundaries(edges, facts, c.function, bounds_reach)
             elif "nonlinear" in c.signals:                 # descend DOWN to the shared nonlinear primitive
                 targets = sorted(prim_reach.get(c.function, {}).items(),
                                  key=lambda kv: (-fanin.get(kv[0], 0), kv[1], kv[0]))[:4]
                 c.boundaries = []
                 for p, d in targets:
-                    sig, expressible, mutating, _ext = sigs.get(p, (p, False, False, False))
-                    if not expressible:      # a shared primitive we can't express as a value is no target
+                    f = facts.get(p) or FnFacts(p)
+                    if not f.expressible:    # a shared primitive we can't express as a value is no target
                         continue
-                    c.boundaries.append(Boundary(p, d, sig, mutating, direction="down", shared=fanin.get(p, 1)))
+                    c.boundaries.append(Boundary(p, d, f.signature, f.mutating, direction="down",
+                                                 shared=fanin.get(p, 1)))
+            elif "branching" in c.signals:                 # path-count: NONDET the loop, gated on return + writes
+                f = _by_qual_or_bare(facts, c.function)
+                ok = f.nondet_ok if f else False           # value/void return => NONDET-able
+                mutating = f.mutating if f else True       # unknown -> assume mutating (conservative)
+                # Offer summarizable boundaries for EVERY branching candidate (value/void-return callers
+                # that wrap the loop, ranked view/pure-first), the same way the nonlinear/hashing/toxic
+                # signals do — a reference-returning OR state-mutating hotspot can often be replaced by a
+                # cleanly-sound (view/pure, value/void) boundary. Only view/pure value/void is
+                # unconditionally sound to `=> NONDET`.
+                c.boundaries = _caller_boundaries(edges, facts, c.function, bounds_reach, nondet=True)
+                if ok and not mutating:                    # value/void return AND view/pure -> unconditionally sound
+                    c.candidate_summary = ("=> NONDET (view/pure, value/void return): sound over-approximation, "
+                                           "deletes the loop/path subproblem")
+                elif ok:                                   # value/void return but STATE-MUTATING: NONDET drops writes
+                    c.candidate_summary = ("state-MUTATING: `=> NONDET` drops its writes, so it is sound ONLY if "
+                                           "the property does not read the state it mutates; prefer a view/pure "
+                                           "value/void boundary below if one is offered, else verify")
+                else:                                      # reference return -> the prover rejects NONDET here
+                    c.candidate_summary = ("returns a reference type (the prover rejects `=> NONDET` on it): "
+                                           "NONDET a value/void caller/container that wraps its loop instead "
+                                           "(see boundaries)")
         # Prover-toxic CUT entrypoints (the rules' own external subjects) can't be summarized themselves, but
         # their shallowest sound inner boundary can. Surface that boundary as a candidate — this is what a
         # human summarizes when the method under test times out (e.g. liquidationCall ->
         # _calculateLiquidationAmounts), which no leaf-primitive signal catches.
         present = {c.function for c in report.candidates}
         for ep, pct in report.toxic_entrypoints:
-            boundary = _shallowest_view_boundary(edges, sigs, ep, bounds_reach)
+            boundary = _shallowest_view_boundary(edges, facts, ep)
             if boundary is None or boundary in present:
                 continue
             present.add(boundary)
@@ -938,11 +1004,10 @@ def detect(job_url: str | None = None, *, ast_path: str | Path | None = None,
     # `mutating` to know a value-summary would erase side effects) — the same AST map the boundaries use.
     # Exact qualified match, else bare name: the difficulty report attributes an inlined fn to its CALLING
     # contract (`HubInstanceHarness.calculatePremiumRay`), which resolves by the bare `calculatePremiumRay`.
-    bare_sigs = {q.rpartition(".")[2]: v for q, v in sigs.items()}
     for c in report.candidates:
-        s = sigs.get(c.function) or bare_sigs.get(c.function.rpartition(".")[2])
-        if s:
-            c.signature, _expr, c.mutating, _ext = s
+        f = _by_qual_or_bare(facts, c.function)
+        if f:
+            c.signature, c.mutating = f.signature, f.mutating
     return report
 
 
@@ -968,12 +1033,9 @@ def _span3(node: dict) -> tuple[int, int, int] | None:
 
 
 def _enclosing(off: int, spans: list) -> str | None:
-    """The tightest (start, end, name) span containing `off` — the enclosing contract/function name."""
-    best = None
-    for s, e, name in spans:
-        if s <= off < e and (best is None or (e - s) < (best[1] - best[0])):
-            best = (s, e, name)
-    return best[2] if best else None
+    """The name of the tightest (start, end, name) span containing `off` — the enclosing contract/function."""
+    t = _min_span(off, spans, lambda entry: (entry[0], entry[1]))
+    return t[2] if t else None
 
 
 def _unit_declaring(ast_path: str | Path, cut: str) -> dict | None:
@@ -1002,13 +1064,7 @@ def _ast_call_graph(merged: dict, cut: str):
     """From the CUT's merged compilation unit build: internal call edges (caller qual -> callee qual via
     FunctionCall `referencedDeclaration`), the CUT's external/public entry points (BFS roots), and a
     name->quals index (to resolve dispatch selectors to scene methods). `qual` = "Contract.fn"."""
-    contracts_by_fid: dict[int, list] = {}
-    for node in merged.values():
-        if node.get("nodeType") == "ContractDefinition":
-            sp = _span3(node)
-            if sp:
-                contracts_by_fid.setdefault(sp[2], []).append((sp[0], sp[1], node.get("name") or ""))
-
+    contracts_by_fid = _contracts_by_fid(merged)
     fndefs_by_fid: dict[int, list] = {}
     qual_by_id: dict[str, str] = {}
     roots: set[str] = set()
@@ -1101,10 +1157,7 @@ def _cone_weights(edges: dict, reachable: set, sizes: dict) -> dict[str, int]:
     """Per reachable function, the total body size of its TRANSITIVE CONSUMERS — the code that (transitively)
     calls it, hence reasons about its output. Invert the edges (callee -> callers) and walk from f toward its
     callers, staying inside `reachable`."""
-    consumers: dict[str, set[str]] = {}
-    for caller, callees in edges.items():
-        for callee in callees:
-            consumers.setdefault(callee, set()).add(caller)
+    consumers = _invert(edges)
     out: dict[str, int] = {}
     for f in reachable:
         seen: set[str] = set()
@@ -1158,19 +1211,61 @@ def _expressible_typename(tn: object, merged: dict, seen: frozenset = frozenset(
     return False                                          # unknown node -> conservative
 
 
-def _signatures(merged: dict) -> dict[str, tuple[str, bool, bool, bool]]:
-    """qual -> (readable `fn(pt,..) -> rt,..` signature, is-CVL-expressible, is-mutating, is-external).
-    Expressible = has a return AND every param/return type is CVL-expressible (see `_expressible_typename`);
-    a void function has no value to model, so it is not expressible. Mutating = stateMutability not
-    view/pure (summarizing it as a value erases side effects). External = public/external visibility — an
-    entry point (the rule's subject), never an internal summarization boundary."""
-    contracts_by_fid: dict[int, list] = {}
+def _is_reference_typename(tn: object, merged: dict) -> bool:
+    """Whether a solc return `typeName` is a REFERENCE type — one the prover REFUSES `=> NONDET` on
+    ("using a NONDET summary for reference types causes unsoundness"): dynamic/fixed arrays, dynamic
+    `bytes`/`string`, structs, mappings, function types. Value types (elementary except bytes/string,
+    enums, UDVTs, contracts) are NONDET-able. A function is NONDET-summarizable iff it is void OR every
+    return type is a value type."""
+    if not isinstance(tn, dict):
+        return False
+    nt = tn.get("nodeType")
+    if nt == "ElementaryTypeName":
+        return (tn.get("name") or "") in _NON_EXPRESSIBLE_ELEM     # bytes / string
+    if nt == "ArrayTypeName":
+        return True
+    if nt == "UserDefinedTypeName":
+        ref = tn.get("referencedDeclaration")
+        decl = merged.get(str(ref)) if ref is not None else None
+        return isinstance(decl, dict) and decl.get("nodeType") == "StructDefinition"
+    if nt in ("Mapping", "FunctionTypeName"):
+        return True
+    return False
+
+
+@dataclass(frozen=True)
+class FnFacts:
+    """The AST facts about a function the detector needs to place a summary. ``signature`` = readable
+    ``fn(pt,..) -> rt,..``. ``expressible`` = has a return AND all param/return types are CVL-clean (can be
+    a typed value summary; a void fn has no value to model). ``mutating`` = stateMutability not view/pure
+    (a value summary erases its writes). ``external`` = public/external (an entry point / rule subject,
+    never an internal boundary). ``nondet_ok`` = void OR every return type is a VALUE type (the prover
+    rejects ``=> NONDET`` on a reference return). ``FnFacts(qual)`` — all-conservative defaults — stands in
+    for an unknown function."""
+    signature: str
+    expressible: bool = False
+    mutating: bool = True
+    external: bool = False
+    nondet_ok: bool = False
+
+
+def _contracts_by_fid(merged: dict) -> dict[int, list]:
+    """fileId -> [(start, end, contract_name)] for every ContractDefinition, so a function's enclosing
+    contract resolves by source containment within its file."""
+    out: dict[int, list] = {}
     for node in merged.values():
         if node.get("nodeType") == "ContractDefinition":
             sp = _span3(node)
             if sp:
-                contracts_by_fid.setdefault(sp[2], []).append((sp[0], sp[1], node.get("name") or ""))
-    out: dict[str, tuple[str, bool, bool, bool]] = {}
+                out.setdefault(sp[2], []).append((sp[0], sp[1], node.get("name") or ""))
+    return out
+
+
+def _iter_functions(merged: dict):
+    """Yield ``(qual, node)`` for every FunctionDefinition in the merged unit — ``qual`` = "Contract.fn"
+    (bare fn when host-less). The shared enumeration behind `_fn_facts` (the call-graph builder keeps its
+    own loop because it also needs each node's id)."""
+    contracts_by_fid = _contracts_by_fid(merged)
     for node in merged.values():
         if node.get("nodeType") != "FunctionDefinition":
             continue
@@ -1179,48 +1274,86 @@ def _signatures(merged: dict) -> dict[str, tuple[str, bool, bool, bool]]:
             continue
         cname = _enclosing(sp[0], contracts_by_fid.get(sp[2], [])) or ""
         fname = node.get("name") or ""
-        qual = f"{cname}.{fname}" if cname else fname
+        yield (f"{cname}.{fname}" if cname else fname), node
+
+
+def _fn_facts(merged: dict) -> dict[str, FnFacts]:
+    """qual -> FnFacts for every function — ONE AST walk, replacing the former `_signatures` + `_nondet_ok`
+    passes that each re-enumerated the same functions."""
+    out: dict[str, FnFacts] = {}
+    for qual, node in _iter_functions(merged):
+        fname = qual.rpartition(".")[2]
         params = _param_infos(node, "parameters")
         rets = _param_infos(node, "returnParameters")
         sig = f"{fname}({', '.join(t for t, _ in params)})" + (
             f" -> {', '.join(t for t, _ in rets)}" if rets else "")
-        has_return = bool(rets)
-        types_ok = all(_expressible_typename(tn, merged) for _, tn in params + rets)
-        mutating = (node.get("stateMutability") or "") not in ("view", "pure")
-        is_external = (node.get("visibility") or "") in ("external", "public")
-        out[qual] = (sig, has_return and types_ok, mutating, is_external)
+        out[qual] = FnFacts(
+            signature=sig,
+            expressible=bool(rets) and all(_expressible_typename(tn, merged) for _, tn in params + rets),
+            mutating=(node.get("stateMutability") or "") not in ("view", "pure"),
+            external=(node.get("visibility") or "") in ("external", "public"),
+            nondet_ok=not any(_is_reference_typename(tn, merged) for _, tn in rets),
+        )
     return out
 
 
-def _caller_boundaries(edges: dict, sigs: dict, leaf: str, reachable: set[str] | None,
-                       max_hops: int = 4, limit: int = 4) -> list[Boundary]:
-    """Walk UP the call graph from `leaf` (a detected hasher) and return caller boundaries — places to
-    summarize instead of the leaf — ranked expressible-first then nearest. Restricted to `reachable`
-    (host-less free functions matched by bare name, as in the gate) when given, so suggestions are real."""
+def _by_qual_or_bare(mapping: dict, qual: str):
+    """`mapping[qual]`, else the first entry whose bare name (after the last '.') matches — the difficulty
+    report attributes an inlined fn to its CALLING contract (`HubInstanceHarness.calcRay`), which resolves
+    by the bare `calcRay`. None if neither hits."""
+    if qual in mapping:
+        return mapping[qual]
+    tail = qual.rpartition(".")[2]
+    return next((v for k, v in mapping.items() if k.rpartition(".")[2] == tail), None)
+
+
+def _invert(edges: dict[str, set[str]]) -> dict[str, set[str]]:
+    """callee -> {callers}: the reverse adjacency of the call graph."""
     consumers: dict[str, set[str]] = {}
     for caller, callees in edges.items():
         for callee in callees:
             consumers.setdefault(callee, set()).add(caller)
-    bare = {n.rpartition(".")[2] for n in reachable} if reachable is not None else set()
-    hops: dict[str, int] = {}
-    frontier, depth = {leaf}, 0
-    while frontier and depth < max_hops:
+    return consumers
+
+
+def _bfs_depths(adj: dict[str, set[str]], start: str, max_depth: int) -> dict[str, int]:
+    """{node -> min hop distance from `start`} over adjacency `adj`, excluding `start`, bounded by
+    `max_depth`. The shared bounded-BFS behind the up/down call-graph walkers."""
+    depths: dict[str, int] = {}
+    frontier, depth = {start}, 0
+    while frontier and depth < max_depth:
         depth += 1
         nxt: set[str] = set()
         for f in frontier:
-            for c in consumers.get(f, ()):
-                if c not in hops and c != leaf:
-                    hops[c] = depth
+            for c in adj.get(f, ()):
+                if c not in depths and c != start:
+                    depths[c] = depth
                     nxt.add(c)
         frontier = nxt
+    return depths
+
+
+def _caller_boundaries(edges: dict, facts: dict, leaf: str, reachable: set[str] | None,
+                       max_hops: int = 4, limit: int = 4, nondet: bool = False) -> list[Boundary]:
+    """Walk UP the call graph from `leaf` and return caller boundaries — places to summarize instead of
+    the leaf — ranked view/pure-first then nearest. Restricted to `reachable` (host-less free functions
+    matched by bare name, as in the gate) when given, so suggestions are real. When `nondet` (the branching
+    case), keep internal callers that are `=> NONDET`-summarizable (value/void return) — the value/void
+    CONTAINER that wraps the leaf's loop — instead of the default `expressible` filter."""
+    bare = {n.rpartition(".")[2] for n in reachable} if reachable is not None else set()
     out: list[Boundary] = []
-    for q, h in hops.items():
+    for q, h in _bfs_depths(_invert(edges), leaf, max_hops).items():
         if reachable is not None and not _survives(q, reachable, bare):
             continue
-        sig, expressible, mutating, is_external = sigs.get(q, (q, False, False, False))
-        if not expressible or is_external:   # keep only internal, value-expressible (actionable) boundaries
+        f: FnFacts = facts.get(q) or FnFacts(q)
+        if f.external:                       # an entry point is the rule's subject, never a boundary
             continue
-        out.append(Boundary(q, h, sig, mutating))
+        if nondet:
+            if not f.nondet_ok:              # branching: keep value/void-return (NONDET-able) containers
+                continue
+        elif not f.expressible:              # nonlinear/hashing: keep value-expressible boundaries
+            continue
+        out.append(Boundary(q, h, f.signature, f.mutating))
     # view/pure over state-changing, then nearest — the cleanest, safest boundary first
     out.sort(key=lambda b: (b.mutating, b.hops, b.function))
     return out[:limit]
@@ -1252,8 +1385,7 @@ def _entrypoint_in_edges(edges: dict, entrypoint: str) -> str | None:
     return hits[0] if len(hits) == 1 else None
 
 
-def _shallowest_view_boundary(edges: dict, sigs: dict, entrypoint: str,
-                              reachable: set[str] | None, max_depth: int = 6) -> str | None:
+def _shallowest_view_boundary(edges: dict, facts: dict, entrypoint: str, max_depth: int = 6) -> str | None:
     """The SHALLOWEST sound summarization boundary inside a prover-toxic entrypoint's call subtree.
 
     Walks DOWN from `entrypoint` and returns the first internal function that is safe to replace with a
@@ -1278,11 +1410,10 @@ def _shallowest_view_boundary(edges: dict, sigs: dict, entrypoint: str,
                     continue
                 seen.add(callee)
                 nxt.add(callee)
-                sg = sigs.get(callee)
-                if sg is None:
+                f = facts.get(callee)
+                if f is None:
                     continue
-                _sig, expressible, mutating, is_external = sg
-                if expressible and not mutating and not is_external and not _is_nonlinear_prim(callee):
+                if f.expressible and not f.mutating and not f.external and not _is_nonlinear_prim(callee):
                     # Ungated prim-descent: a toxic entrypoint is a difficulty hotspot (it reached SMT), so
                     # its whole subtree is live — the reachability BFS would wrongly exclude it when the
                     # entrypoint is inherited (declared on a parent, CUT is the child), which is the common case.
@@ -1302,23 +1433,8 @@ def _descend_to_prims(edges: dict, method: str, reachable: set[str] | None,
     primitives it (transitively) inlines. Restricted to `reachable` (free functions bare-name matched, as
     in the gate) so dead code is never suggested."""
     bare = {n.rpartition(".")[2] for n in reachable} if reachable is not None else set()
-    prims: dict[str, int] = {}
-    seen = {method}
-    frontier, depth = {method}, 0
-    while frontier and depth < max_depth:
-        depth += 1
-        nxt: set[str] = set()
-        for f in frontier:
-            for callee in edges.get(f, ()):
-                if callee in seen:
-                    continue
-                seen.add(callee)
-                nxt.add(callee)
-                if (_is_nonlinear_prim(callee) and callee not in prims
-                        and (reachable is None or _survives(callee, reachable, bare))):
-                    prims[callee] = depth
-        frontier = nxt
-    return prims
+    return {q: d for q, d in _bfs_depths(edges, method, max_depth).items()
+            if _is_nonlinear_prim(q) and (reachable is None or _survives(q, reachable, bare))}
 
 
 def reachable_from_main(ast_path: str | Path, cut: str, external_call_graph: str | Path | None = None) -> set[str]:
