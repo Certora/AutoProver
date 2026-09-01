@@ -31,32 +31,35 @@ pub fn rule_dispatch_is_reachable() {
 ///
 /// Deposit's post-state property: the recorded balance grows by exactly `amount`. This is the
 /// shape of property the loop reported as unreachable, and the one that matters commercially.
+///
+/// Post-state is read **through the handle the context borrowed**, not by re-deserializing the
+/// account. That is how the reference project's integrity rules observe a handler's effect, and the
+/// distinction is load-bearing: Anchor's `Account<T>` is a deserialized copy, and a handler's
+/// mutation of it reaches the account's bytes only in `exit` — which nothing calls when a rule
+/// invokes the handler directly. Re-deserializing therefore reads the *pre-state* and the property
+/// fails against a correct program. Measured: it did.
 #[rule]
 pub fn rule_deposit_credits_exactly_the_amount() {
-    let accounts = cvlr_deserialize_nondet_accounts();
+    // Heaped, as the reference project heaps its own account array: the prover does not fully
+    // support stack-allocated arrays, and this one is large.
+    let accounts = Box::new(cvlr_deserialize_nondet_accounts());
     let vault_info = &accounts[0];
     let depositor_info = &accounts[1];
     let system_info = &accounts[2];
 
-    let vault: Account<VaultState> = Account::try_from(vault_info).unwrap();
-    let before = vault.balance;
+    let mut deposit = crate::Deposit {
+        vault: Account::try_from(vault_info).unwrap(),
+        depositor: Signer::try_from(depositor_info).unwrap(),
+        system_program: Program::try_from(system_info).unwrap(),
+    };
+
+    let before = deposit.vault.balance;
     let amount: u64 = nondet();
     cvlr_assume!(before.checked_add(amount).is_some());
 
-    let ctx = Context {
-        program_id: vault_info.owner,
-        accounts: &mut crate::Deposit {
-            vault,
-            depositor: Signer::try_from(depositor_info).unwrap(),
-            system_program: Program::try_from(system_info).unwrap(),
-        },
-        remaining_accounts: &[],
-        bumps: Default::default(),
-    };
-
+    let ctx = Context::new(&crate::ID, &mut deposit, &[], Default::default());
     if vault_program::deposit(ctx, amount).is_ok() {
-        let after: Account<VaultState> = Account::try_from(vault_info).unwrap();
-        cvlr_assert!(after.balance == before + amount);
+        cvlr_assert!(deposit.vault.balance == before + amount);
     }
 }
 
