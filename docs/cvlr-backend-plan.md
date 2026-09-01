@@ -905,6 +905,45 @@ per-unit workdir was forced by compile-gate correctness, but it isolates *learni
 grows linearly in component count. A shared, append-only note of "how this program is driven",
 written once and read by every unit, is the obvious answer and is not built.
 
+**`.certora_sources` receives no Rust at all, and §7.2.2's premise does not hold.** Every submission
+this backend makes uploads the built `.so`, the two tuning files and the confs — and not one line of
+source. Established, not inferred:
+
+* `cargo certora-sbf --json` emits
+  `sources = ["programs/vault/Cargo.toml", "programs/vault/src/**/*.rs", "Cargo.toml"]`, correctly
+  re-rooted from package-relative to workspace-relative.
+* `.certora_sources` contains **none** of them — including the two that exist as literal files. So
+  this is not the `**` glob going unexpanded; `sources` is not consumed at all.
+* The fields that *are* consumed all work: `executables` → the `.so`, `solana_inlining` /
+  `solana_summaries` → the env files. So the manifest is being read; `sources` is being ignored.
+* Observed across 30+ submissions and three units, on certora-cli **8.18.0**.
+
+[sbf.py](../composer/cargo/sbf.py)'s own docstring gives this as the reason for taking the
+build-script path — "``set_rust_build_directory`` only collects the project's Rust sources into
+``.certora_sources`` on the build-script path". That is the premise §7.2.2 rests on, and it is false
+on the pinned CLI. Consequences: §7.7's analyzer will have no source to map a counterexample onto,
+the report cannot show rule text, a run is not reproducible from what it uploaded, and the `sources`
+improvement §7.4.3 credits this scaffold with over the template is **inert**.
+
+Not yet established, and cheap to check before filing upstream: whether 8.19.1 fixes it, and whether
+a flag enables the collection. `scratchpad/manifest_probe.py` reproduces the manifest with no LLM in
+the loop and is the artifact to attach.
+
+**Without counterexample analysis the loop spends its budget on tautologies.** §7.5.4 called the
+missing CEX analysis "the biggest known limiter on loop quality"; this run shows what that costs.
+All three units wrote competent 8–10 rule harnesses, then collapsed to probes — `cvlr_assert!(true)`,
+and in one case `cvlr_assume!(x > y); cvlr_assert!(x != y)`, which does not touch the program at all
+— and submitted those to the cloud. Deposit_Management oscillated 8 → 1 → 8 → 1 rules across 16
+submissions without converging.
+
+The behaviour is *rational*: a raw counterexample dump does not distinguish "the rule is wrong" from
+"an assumption made it vacuous" from "the harness never reached the program", so retreating to a
+probe that isolates the third is the correct move. It is simply an expensive one, at minutes and
+dollars per submission. **§7.7 is therefore not a quality layer on a working loop — without it the
+loop rediscovers that the toolchain works, repeatedly, at cloud prices.** That the source-collection
+defect above also denies the report the rule text compounds it: neither channel back to the author
+carries what it needs.
+
 **The mount covers CVLR's API but not the target's generated one.** A draft named
 `crate::__client_accounts_withdraw::WithdrawBumps`, an Anchor-generated path. §5.5 mounts the CVLR
 crates and the source tools expose the target's own code, but a harness must also name what the
