@@ -98,11 +98,6 @@ class OpenRouterModelFeatures:
 # rest, which is most of the ~690KB payload. Prices arrive as decimal *strings*,
 # which pydantic coerces to float on the way in.
 
-class _TopProvider(BaseModel):
-    context_length: PositiveInt | None = None
-    max_completion_tokens: PositiveInt | None = None
-
-
 class _PriceCard(BaseModel):
     """Per-token USD prices. A missing bucket is not a zero — it means the route
     publishes no separate rate for it (see :func:`_price_tier`)."""
@@ -129,8 +124,9 @@ class _Pricing(_PriceCard):
 
 class _ModelRecord(BaseModel):
     id: str
+    # A fallback window for when the per-endpoint fetch fails; the pool is the
+    # better source when it is reachable.
     context_length: PositiveInt | None = None
-    top_provider: _TopProvider = Field(default_factory=_TopProvider)
     supported_parameters: set[str] = Field(default_factory=set)
     pricing: _Pricing | None = None
 
@@ -182,6 +178,82 @@ def _fetch_catalog() -> dict[str, _ModelRecord]:
     return catalog
 
 
+class _Endpoint(BaseModel):
+    # `tag` carries the provider slug `provider.only` wants, sometimes with a
+    # quantization suffix: `deepinfra/bf16` -> `deepinfra`.
+    tag: str
+    context_length: PositiveInt | None = None
+    max_completion_tokens: PositiveInt | None = None
+
+    @property
+    def provider(self) -> str:
+        return self.tag.partition("/")[0]
+
+
+class _EndpointsEnvelope(BaseModel):
+    class _Data(BaseModel):
+        endpoints: list[_Endpoint]
+
+    data: _Data
+
+
+@dataclass(frozen=True)
+class _Pool:
+    """What the providers serving one route can do, per provider. The roster only
+    summarises its best one, so the limits a request actually meets live here."""
+
+    # Highest cap in the pool: asking beyond it can't be served by anyone.
+    output_cap: int | None = None
+    # Smallest window among the providers routing is confined to.
+    context_window: int | None = None
+    # Provider slugs to confine routing to, or None for OpenRouter's own choice.
+    routable: list[str] | None = None
+
+
+def _pool_for(model_name: str, requested_output: int) -> _Pool:
+    """The serving pool's real limits, and who to route to.
+
+    A model is served by a pool OpenRouter load-balances across, whose caps can
+    differ by orders of magnitude, so the roster's per-model figures are the best
+    case rather than what a given request gets. Confining routing to the providers
+    that can serve the ask keeps the balancing, minus the ones a request would have
+    failed on — and the window then follows from that narrowed set."""
+    try:
+        with httpx.Client(timeout=_PROBE_TIMEOUT_SECONDS) as client:
+            response = client.get(f"{_MODELS_URL}/{model_name}/endpoints")
+            response.raise_for_status()
+            endpoints = _EndpointsEnvelope.model_validate_json(
+                response.content
+            ).data.endpoints
+    except (httpx.HTTPError, ValidationError) as exc:
+        logger.warning(
+            "Could not fetch OpenRouter endpoints for %s (%s); falling back to the "
+            "roster's own limits and leaving provider routing unrestricted.",
+            model_name, exc,
+        )
+        return _Pool()
+
+    caps = [e.max_completion_tokens for e in endpoints if e.max_completion_tokens]
+    cap = min(requested_output, max(caps)) if caps else requested_output
+    serving = [e for e in endpoints if (e.max_completion_tokens or 0) >= cap]
+    if not serving:
+        logger.warning(
+            "No OpenRouter provider for %s publishes an output cap of %d tokens; "
+            "leaving routing unrestricted so the rejection comes from them.",
+            model_name, cap,
+        )
+        serving = endpoints
+
+    able = {e.provider for e in serving}
+    windows = [e.context_length for e in serving if e.context_length]
+    return _Pool(
+        output_cap=max(caps) if caps else None,
+        context_window=min(windows) if windows else None,
+        # Nothing to exclude: say nothing rather than pin the whole pool.
+        routable=sorted(able) if able < {e.provider for e in endpoints} else None,
+    )
+
+
 def _record_for(model_name: str) -> _ModelRecord | None:
     catalog = _catalog()
     if (exact := catalog.get(model_name)) is not None:
@@ -192,7 +264,9 @@ def _record_for(model_name: str) -> _ModelRecord | None:
     return catalog.get(base) if variant else None
 
 
-def _features_from(record: _ModelRecord | None) -> OpenRouterModelFeatures:
+def _features_from(
+    record: _ModelRecord | None, pool: _Pool = _Pool()
+) -> OpenRouterModelFeatures:
     if record is None:
         # Only reachable when the fetch itself failed — an id absent from a roster
         # that did load is rejected in `create`.
@@ -202,16 +276,10 @@ def _features_from(record: _ModelRecord | None) -> OpenRouterModelFeatures:
             reasoning=True,
         )
     return OpenRouterModelFeatures(
-        # Two windows are published: the model's own and the serving provider's. The
-        # smaller is the one a request actually has to fit in.
-        context_window=min(
-            (
-                w for w in (record.context_length, record.top_provider.context_length)
-                if w is not None
-            ),
-            default=_FALLBACK_CONTEXT_WINDOW,
+        context_window=(
+            pool.context_window or record.context_length or _FALLBACK_CONTEXT_WINDOW
         ),
-        max_output_tokens=record.top_provider.max_completion_tokens,
+        max_output_tokens=pool.output_cap,
         reasoning="reasoning" in record.supported_parameters,
     )
 
@@ -263,7 +331,15 @@ def _price_provider_from(
 ) -> PriceProvider:
     """The route's pricing curve, live from the catalog where possible, else the
     static table on the vendor's bare model name — which covers ``openai/*`` and
-    ``anthropic/*``, and yields None (an uncosted run, not a wrong one) elsewhere."""
+    ``anthropic/*``, and yields None (an uncosted run, not a wrong one) elsewhere.
+
+    TODO: this is the roster's *model-level* card, which is the modal price across the
+    serving pool rather than a bound — kimi-k3's providers span $2.55-$6.00 in and
+    $12.75-$22.50 out per MTok, so a run can be off by ~2x in either direction. Two
+    ways out: price from the max among ``_Pool.routable`` (already fetched, makes the
+    figure an upper bound), or read the exact cost OpenRouter returns under
+    ``usage: {"include": true}`` — which langchain currently drops, since its
+    Responses ``response_metadata`` whitelist has no ``usage`` key."""
     pricing = record.pricing if record is not None else None
     if pricing is None or (short := _price_tier(pricing)) is None:
         return price_provider_for(_bare_model_name(model_name))
@@ -415,6 +491,8 @@ class OpenRouterModelProvider:
     price_provider: PriceProvider
     api_key: str
     provider: OpenRouterService = field(default_factory=_openrouter_service)
+    # Provider slugs to confine routing to, or None for OpenRouter's own choice.
+    routable_providers: list[str] | None = None
 
     @staticmethod
     def create(model_name: str, options: ModelConfiguration) -> "OpenRouterModelProvider":
@@ -429,12 +507,14 @@ class OpenRouterModelProvider:
                 f"{model_name!r} is not an OpenRouter model; see "
                 f"https://openrouter.ai/models for the roster."
             )
+        pool = _pool_for(model_name, options.tokens)
         return OpenRouterModelProvider(
             model_name=model_name,
             options=options,
-            features=_features_from(record),
+            features=_features_from(record, pool),
             price_provider=_price_provider_from(record, model_name),
             api_key=api_key,
+            routable_providers=pool.routable,
         )
 
     @property
@@ -469,6 +549,10 @@ class OpenRouterModelProvider:
             # Ask for the encrypted chain of thought, which is what langchain echoes
             # back with the next tool result so the model can resume it.
             kwargs["include"] = ["reasoning.encrypted_content"]
+
+        if self.routable_providers is not None:
+            # OpenRouter's own routing field; the SDK has no parameter for it.
+            kwargs["extra_body"] = {"provider": {"only": self.routable_providers}}
 
         return ChatOpenAI(
             model=self.model_name,
