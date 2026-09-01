@@ -27,6 +27,7 @@ from composer.cargo.metadata import CratePackage, LibTarget, Workspace, parse_me
 from composer.spec.cvlr import preflight, scaffold
 from composer.spec.cvlr.scaffold import (
     INLINING,
+    AppendSection,
     InsertInTable,
     NewFile,
     ScaffoldBlocked,
@@ -523,3 +524,92 @@ async def test_a_blocked_plan_stops_preflight_with_the_resolution_in_the_message
     with pytest.raises(preflight.PreflightFailed, match="crate-type"):
         await preflight.prepare_workspace(tmp_path, package="prog")
     assert not (tmp_path / "src" / "certora").exists()
+
+
+# ---------------------------------------------------------------------------------------------
+# pointing the target at the Anchor fork
+
+
+ANCHOR_MANIFEST = """\
+[package]
+name = "prog"
+version = "0.1.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anchor-lang = "0.31.1"
+"""
+
+
+def test_an_anchor_target_is_redirected_at_the_verification_fork(tmp_path):
+    """Not a refinement: without it a rule that reaches an Anchor handler cannot be analyzed at all,
+    because upstream's boxed `Error` trips [3006]. The scaffold is the only place that knows the
+    resolved version, so it is the only place that can pick the branch."""
+    workspace, package = _project(
+        tmp_path,
+        manifest=ANCHOR_MANIFEST,
+        workspace_manifest='[workspace]\nmembers = ["."]\n',
+        cvlr_resolved={"anchor-lang": "0.31.1"},
+    )
+    plan = plan_scaffold(workspace, package, SOLANA)
+    assert plan.blocked == ()
+    appended = [
+        c
+        for c in plan.changes
+        if isinstance(c, AppendSection)
+        and c.path == Path("Cargo.toml")
+        and "patch.crates-io" in c.contents
+    ]
+    assert len(appended) == 1, [type(c).__name__ for c in plan.changes]
+    contents = appended[0].contents
+    assert 'branch = "certora-v0.31.1"' in contents
+    assert 'git = "https://github.com/Certora/anchor.git"' in contents
+
+
+def test_redirecting_twice_is_a_no_op(tmp_path):
+    """The scaffold's central property, applied to the one change that is a manifest *append*: a
+    second run must not add the table again, because two `[patch.crates-io.anchor-lang]` entries is a
+    manifest cargo will not parse."""
+    kwargs = dict(
+        manifest=ANCHOR_MANIFEST,
+        workspace_manifest='[workspace]\nmembers = ["."]\n',
+        cvlr_resolved={"anchor-lang": "0.31.1"},
+    )
+    workspace, package = _project(tmp_path, **kwargs)
+    apply(plan_scaffold(workspace, package, SOLANA), tmp_path)
+
+    workspace, package = _project(tmp_path, **kwargs)
+    again = plan_scaffold(workspace, package, SOLANA)
+    assert not [c for c in again.changes if "patch.crates-io" in getattr(c, "contents", "")]
+    assert any("already redirected" in note for note in again.satisfied)
+    assert (tmp_path / "Cargo.toml").read_text().count("[patch.crates-io.anchor-lang]") == 1
+    tomllib.loads((tmp_path / "Cargo.toml").read_text())
+
+
+def test_an_anchor_version_the_fork_does_not_cover_blocks_the_whole_plan(tmp_path):
+    """0.30.0 is the real gap — the fork has a branch for 0.30.1 and not 0.30.0. Blocking beats
+    scaffolding a project that builds, submits, and then reports a pointer-analysis error with
+    nothing connecting it to Anchor."""
+    workspace, package = _project(
+        tmp_path,
+        manifest=ANCHOR_MANIFEST.replace("0.31.1", "0.30.0"),
+        workspace_manifest='[workspace]\nmembers = ["."]\n',
+        cvlr_resolved={"anchor-lang": "0.30.0"},
+    )
+    plan = plan_scaffold(workspace, package, SOLANA)
+    assert any("0.30.0" in b.problem for b in plan.blocked), plan.blocked
+    with pytest.raises(ScaffoldBlocked):
+        apply(plan, tmp_path)
+    # A blocked plan applies nothing at all, including the parts that were fine.
+    assert not (tmp_path / "src" / "certora").exists()
+
+
+def test_a_non_anchor_target_gets_no_patch_section(tmp_path):
+    workspace, package = _project(
+        tmp_path, manifest=STANDALONE, workspace_manifest='[workspace]\nmembers = ["."]\n'
+    )
+    plan = plan_scaffold(workspace, package, SOLANA)
+    assert not [c for c in plan.changes if "patch.crates-io" in getattr(c, "contents", "")]
+    assert any("anchor-lang is not a dependency" in note for note in plan.satisfied)

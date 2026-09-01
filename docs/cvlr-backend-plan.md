@@ -1328,13 +1328,27 @@ them.
 
 #### 7.6.2 What the munge revealed
 
-The same three-tier probe, before and after:
+The same three-tier probe, measured three ways. The middle column is the locally-derived textual
+patch of §7.6.4, kept because it is what the fork's two lines were checked against; the right column
+is the fork, through the real scaffold path, and is the one to quote:
 
-| rule | crates.io Anchor | forked Anchor |
-|---|---|---|
-| `rule_vault_state_deserializes` | VERIFIED | VERIFIED |
-| `rule_deposit_credits_exactly_the_amount` | ERROR [3006] | **VIOLATED, with a counterexample** |
-| `rule_dispatch_is_reachable` | ERROR [3006] | ERROR **[3308]** |
+| rule | crates.io Anchor | local unbox patch | **forked Anchor** |
+|---|---|---|---|
+| `rule_vault_state_deserializes` | VERIFIED | VERIFIED | **VERIFIED** |
+| `rule_deposit_credits_exactly_the_amount` | ERROR [3006] | VIOLATED, with a counterexample | **VIOLATED, with a counterexample** |
+| `rule_dispatch_is_reachable` | ERROR [3006] | ERROR [3308] | **UNKNOWN** |
+
+**[3006] is gone on both rules that hit it, confirmed end-to-end** — the scaffold wrote the
+`[patch.crates-io]`, cargo resolved `certora-v0.31.1#3ebe7595`, and the prover analyzed code it
+previously refused. That is the phase's result.
+
+The third row moved, which is why the fork had to be measured rather than assumed equivalent. The
+patch produced [3308] out of `#[error_code]` → `format!` → `String`; the fork, whose commits include a
+simplified error macro and a silenced `emit!`, produces `UNKNOWN` instead. Prover wall clock was **17
+seconds** with `smt_timeout` at 6000, and the recorded solving times are milliseconds, so it is not a
+timeout. *Why* it is UNKNOWN is not established: the message is in the treeView, and the run that
+would have shown it was invoked through a `tail` that truncated the report. Recovering it costs one
+submission, and it is the smallest open question this phase has left.
 
 The middle row is the result this phase exists for. The counterexample's call trace runs through
 `cvlr_solana::layout::cvlr_deserialize_nondet_accounts`, `Account<T>::try_from_0`, and then
@@ -1354,10 +1368,6 @@ found that directive matches nothing in this binary — so the `format!` path is
 consistent. The prover names its own remedies this time (`-solanaAggressiveGlobalDetection true`, or a
 summary), which makes it the next thing to try rather than the next thing to investigate.
 
-Both measurements above were taken with the local textual patch described next, whose output is
-byte-identical to the fork's `Error` for the two lines that matter. The fork additionally carries
-changes we had not derived, so the numbers should be re-taken against it before being quoted as the
-fork's.
 
 #### 7.6.3 Not started
 
