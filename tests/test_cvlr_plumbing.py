@@ -220,7 +220,22 @@ def test_the_recommended_starting_point_is_the_base_when_a_project_has_no_conf()
     verifies differently rather than neutrally."""
     base = cvlr_conf.load_base(None)
     assert base["loop_iter"] == "1"
-    assert base["optimistic_loop"] is False
+
+
+def test_loops_are_bounded_optimistically_because_the_alternative_verifies_nothing():
+    """The one place this base departs from the template it follows, and it is a soundness-relevant
+    departure so it gets its own test rather than a line in another one.
+
+    With ``loop_iter: "1"`` and ``optimistic_loop: false`` — the template's position — *any* loop
+    inside a handler fails before the rule's own property is reached. Measured: a rule calling an
+    Anchor deposit handler came back VIOLATED on "Unwinding condition in a loop", against a loop in
+    the handler's own borsh path, with the property never evaluated
+    (``docs/cvlr-backend-plan.md`` §7.6.2). Twelve of sixteen surveyed projects set it true.
+
+    The cost, so that flipping it back is an informed choice: the prover assumes loops finish within
+    the bound instead of proving it, which can hide a violation only reachable after more iterations.
+    """
+    assert cvlr_conf.load_base(None)["optimistic_loop"] is True
 
 
 def test_the_recommended_starting_point_enables_no_optimistic_solana_flags():

@@ -6,7 +6,7 @@ so that routing is a decision somebody makes rather than one I guess at, since t
 belong in different places and one of them cannot be public.
 
 **Group P — the Solana Prover.** Closed source, so these can only be reported. **None of them blocks
-Anchor verification in practice**, and an earlier draft of this file said P1 did. Production verifies
+Anchor verification on the path real specs use**, and an earlier draft of this file said P1 did. Production verifies
 Anchor programs by depending on `Certora/anchor`, a maintained fork whose `Error` is unboxed — see P1
 for how that was missed and what is left of the defect.
 
@@ -23,6 +23,7 @@ the write-up gives the line number rather than the name.
 | [P1](#p1) | `Box::new` of a stack-built struct rejected as an illegal stack-pointer store | worked around upstream |
 | [P2](#p2) | Un-inlining a call with no summary kills the job in 3.6s with no diagnostic | major |
 | [P3](#p3) | `solanaOptimisticJoinWithStackPtr` is documented as a conf key and is not one | minor |
+| [P4](#p4) | `-solanaAggressiveGlobalDetection` does not fix the [3308] it is recommended for | major |
 | [T1](#t1) | Tuning files are spelled for pre-2.2 `solana-program` paths | major |
 | [T2](#t2) | A canonical tuning file names one specific on-chain program | hygiene |
 | [T3](#t3) | `[package.metadata.certora] sources` omits `Cargo.toml` | major |
@@ -192,6 +193,51 @@ The same question applies to the five `solanaOptimistic*` memory-model flags and
 only tested the one.
 
 ---
+
+## P4
+
+### `-solanaAggressiveGlobalDetection` does not fix the [3308] it is recommended for
+
+[3308] "illegal dereference of an absolute address" comes with the prover's own remedy in the help
+text:
+
+```
+help: To resolve this error consider one of the following:
+	(1) add prover option "-solanaAggressiveGlobalDetection true"
+```
+
+It does not work. Measured on the P1 reproducer with the Anchor fork in place: the flag reached the
+jar (confirmed in the job's `jarSettings` as `['-solanaAggressiveGlobalDetection', 'true']`) and the
+error is byte-identical with and without it, same trace and same dev message.
+
+The trace starts in the program's own `#[error_code]` enum and runs through `ToString` / `Display`
+into `String::push_str` → `Vec::extend` → `copy_nonoverlapping`:
+
+```
+[3308] illegal dereference of an absolute address
+source: .../core/src/intrinsics.rs:2978
+  from: .../alloc/src/vec/mod.rs:2147          (Vec::extend_from_slice)
+  from: .../alloc/src/string.rs:1065           (String::push_str)
+  from: .../core/src/fmt/mod.rs:1627
+  from: programs/vault/src/lib.rs:133          <- #[error_code] pub enum VaultError
+  from: programs/vault/src/lib.rs:75           <- the `?` that builds the error
+Dev message(0xd840): dereference of an absolute address 1 (0x1) at *(u32 *) (r2 + 15) = r3
+```
+
+Worth noting what is *not* the cause, since it was the first guess: `cvlr_summaries_core.txt:104`
+summarizes `alloc::fmt::format::format_inner`, and that symbol is present in this binary, so the
+summary does apply. The failing path reaches `String` through `ToString`/`Display` rather than
+through `format_inner`, which the summaries do not cover.
+
+**Two asks**, either of which resolves it: make the flag actually identify the `#[msg("...")]` string
+literals as globals, or ship a summary for the `ToString`/`Display`-into-`String` path in the core
+env file, alongside the `format_inner` one that is already there.
+
+**Severity, honestly.** Major rather than blocking, because it only bites a rule that goes through
+Anchor's full `entry` dispatch, and that is not how specs are written: the reference project's harness
+has zero occurrences of `entry` and four of `Context::new`. A rule that builds a context and calls the
+handler directly — the practice — does not reach this path. So it bounds an edge case, and the reason
+it is worth reporting is the misleading remedy rather than the error.
 
 ## T1
 
