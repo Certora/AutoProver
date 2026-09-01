@@ -175,16 +175,27 @@ def test_detect_from_fuses_and_classifies():
     assert rep.candidates == sorted(rep.candidates, key=lambda c: (-c.score, c.function))   # ranked
 
 
-def test_detect_from_drops_cvl_ghost_hotspots():
-    # a CVL/ghost hotspot is an ALREADY-APPLIED summary — must never be a candidate (it IS the summary)
+def test_detect_from_surfaces_hot_cvl_ghost_but_drops_cheap_one():
+    # A CVL/ghost hotspot is an already-applied summary. A cheap one is dropped (it IS the summary and no
+    # longer a problem); one STILL contributing nonlinear ops means its summary is itself nonlinear (e.g. an
+    # exact mulDiv summary) and is surfaced as an `already-summarised` coarsening target.
+    from summarization_detector.detect import ALREADY_SUMMARISED_MIN_PCT
     diff = DifficultyReport(hotspots=[
-        Hotspot("CVL/Ghost Function 'mulDivDownSummary(x,y,denominator)'", 86, ""),   # already a summary
-        Hotspot("AmountConverter.getExpectedOut", 20, "contracts/AmountConverter.sol:134"),  # external callee
+        Hotspot("CVL/Ghost Function 'mulDivDownSummary(x,y,denominator)'", 86, ""),           # still hot
+        Hotspot("CVL/Ghost Function 'edgeGhost(a)'", ALREADY_SUMMARISED_MIN_PCT, ""),          # at floor -> kept
+        Hotspot("CVL/Ghost Function 'cheapGhost(a,b)'", ALREADY_SUMMARISED_MIN_PCT - 1, ""),   # below -> dropped
+        Hotspot("AmountConverter.getExpectedOut", 20, "contracts/AmountConverter.sol:134"),    # external callee
     ])
     rep = detect_from([], diff, cut="Stonks")
-    fns = {c.function for c in rep.candidates}
-    assert "AmountConverter.getExpectedOut" in fns                                    # real math kept
-    assert not any("Ghost" in f or "CVL" in f for f in fns)                           # ghost summary dropped
+    by = {c.function: c for c in rep.candidates}
+    assert "AmountConverter.getExpectedOut" in by                                    # real raw math still kept
+    # the hot ghost is surfaced under its summary name, flagged already-summarised, with coarsen guidance
+    hot = by["mulDivDownSummary(x,y,denominator)"]
+    assert hot.signals == ("already-summarised",)
+    assert "coarsen" in hot.evidence.lower()
+    assert hot.file == "" and hot.line is None                                        # a ghost has no source loc
+    assert "edgeGhost(a)" in by                                                       # exactly at the floor -> kept
+    assert not any("cheapGhost" in f for f in by)                                     # below the floor -> dropped
 
 
 def test_detect_from_keeps_cut_internal_math_but_drops_cut_external_method():

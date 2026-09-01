@@ -82,8 +82,15 @@ class HashSignal:
 # WITHIN a signal category (nonlinear = % of the rule's nonlinear ops; surviving = flat; hashing = fixed),
 # so each category is capped on its own rather than by a single cross-category top-N (which would let the
 # nonlinear %s crowd out the surviving/hashing targets).
-MAX_PER_CATEGORY = {"primitive": 10, "nonlinear": 10, "hashing": 10}
+MAX_PER_CATEGORY = {"primitive": 10, "nonlinear": 10, "hashing": 10, "already-summarised": 10}
 NONLINEAR_MIN_PCT = 15       # drop difficulty hotspots below this % of the rule's nonlinear ops (long tail)
+# An ALREADY-SUMMARISED (CVL/Ghost) hotspot still contributing nonlinear ops means its summary is itself
+# still nonlinear (an EXACT mulDiv / ray-math summary, say) — a per-group coarsening target that the raw
+# signal cannot see, because the moment a function has any summary it stops appearing as raw hostile code.
+# Gated LOWER than NONLINEAR_MIN_PCT: the prover also attributes a summary's cost to its callers, so a ghost
+# under-reports as a standalone proc, and recoarsening an existing summary is a safe, cheap win — so a hot
+# ghost clears a lower bar than a raw candidate would.
+ALREADY_SUMMARISED_MIN_PCT = 10
 
 # Flat score for a surviving hostile primitive (signal 4). It does NOT scale with how many entry methods
 # reach it: reach is breadth, not summarization priority, so a primitive reached by 2 methods ranks with one
@@ -115,9 +122,10 @@ class Candidate:
     """A function worth summarizing, with WHY (`signals`) and, for a curated match, HOW (`candidate_summary`)."""
     function: str                 # "Contract.fn" (the contract prefix is part of the identifier)
     signals: tuple[str, ...]      # why flagged: "nonlinear" (difficulty %), "hashing" (AST), "external"
-                                  # (cross-contract modifier), or a catalog hard-op class naming the exact
-                                  # primitive: "in-memory-sort" / "bitwise-scan" / "symbolic-exp" /
-                                  # "nonlinear-mulDiv". No liveness label — every candidate reaches SMT.
+                                  # (cross-contract modifier), "already-summarised" (a CVL/ghost summary
+                                  # still contributing nonlinear ops -> coarsen it), or a catalog hard-op
+                                  # class naming the exact primitive: "in-memory-sort" / "bitwise-scan" /
+                                  # "symbolic-exp" / "nonlinear-mulDiv". No liveness label — every candidate reaches SMT.
     score: float                  # rank key (higher = summarize first)
     evidence: str                 # human-readable justification
     file: str = ""                # source file of the function ("" if unresolved)
@@ -652,6 +660,17 @@ def _is_cvl_ghost(function: str) -> bool:
     return function.lstrip().startswith(("CVL/Ghost", "CVL Function", "Ghost"))
 
 
+_GHOST_NAME_RE = re.compile(r"""['"](?P<name>[^'"]+)['"]""")
+
+
+def _ghost_summary_name(procid: str) -> str:
+    """The readable summary name inside a ``CVL/Ghost Function '<name>'`` procId (e.g.
+    ``mulDivUpSummary256(a,b,10^27)``), used as the key of an already-summarised candidate. Falls back to
+    the stripped procId when there is no quoted name."""
+    m = _GHOST_NAME_RE.search(procid)
+    return m.group("name").strip() if m else procid.strip()
+
+
 def _strip_procid(function: str) -> str:
     """Normalize a prover procId to `Contract.fn` for the detector: drop a leading `(internal)` /
     `(external)` marker the prover prefixes to inlined-function hotspots. Without this the marker leaks
@@ -676,6 +695,8 @@ def _bucket(c: Candidate) -> str:
     bucket of its own."""
     if any(s in _PRIMITIVE_CATEGORIES for s in c.signals):
         return "primitive"
+    if "already-summarised" in c.signals:
+        return "already-summarised"
     if "nonlinear" in c.signals:
         return "nonlinear"
     return "hashing"
@@ -693,9 +714,10 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
     verified contract (its own methods are NOT "external"). Dependency-tree functions (lib/) are dropped
     from the hashing signal unless `include_dependencies` (surviving primitives are kept regardless — they
     are in the real problem). `cone_weight` re-weights the build-phase hashing signal by how much code
-    consumes the result. CVL/ghost hotspots (already-applied summaries) are excluded — they are the
-    summary, not a summarization target."""
-    hotspots = [h for h in difficulty.hotspots if not _is_cvl_ghost(h.function)]
+    consumes the result. CVL/ghost hotspots are already-applied summaries: a cheap one is dropped (it IS
+    the summary), but one still contributing nonlinear ops is surfaced as an `already-summarised` candidate
+    to coarsen (its summary is itself still nonlinear) — handled in-loop, not pre-filtered."""
+    hotspots = difficulty.hotspots
     cand: dict[str, Candidate] = {}
 
     def _bump(key: str, sig: str, score: float, evidence: str):
@@ -720,7 +742,16 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
     surviving_bare = {raw.split("(", 1)[0].rpartition(".")[2] for raw in (surviving or {})}
     seen_internal: set[str] = set()
     toxic_entrypoints: list[tuple[str, float]] = []
-    for h in hotspots:                                       # already excludes CVL/Ghost
+    for h in hotspots:
+        if _is_cvl_ghost(h.function):                        # an already-applied summary still in the problem
+            if h.pct < ALREADY_SUMMARISED_MIN_PCT:           # cheap ghost -> genuinely handled, drop
+                continue
+            name = _ghost_summary_name(h.function)
+            _bump(name, "already-summarised", float(h.pct),
+                  f"already-applied summary still {h.pct}% of nonlinear ops — its summary is itself "
+                  f"nonlinear; coarsen it to an uninterpreted/NONDET summary where the property does not "
+                  f"read its result (a sound over-approximation), especially per verification-group")
+            continue
         if h.pct < NONLINEAR_MIN_PCT:                        # drop the long, low-contribution tail
             continue
         internal = h.function.strip().startswith("(internal)")
