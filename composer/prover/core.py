@@ -658,7 +658,16 @@ async def run_prover(
                     diagnoses=[],
                 )
     except CloudJobError as exc:
-        return f"Prover cloud job did not produce results (status {exc.status.value})."
+        # The link is the whole diagnosis. A job that fails server-side leaves nothing on disk —
+        # no report, no treeView, and certoraRun's own debug log stops after collecting sources —
+        # so a status with no link tells the reader only that something went wrong somewhere they
+        # cannot look. An authoring agent given that will assume its own draft is at fault and
+        # simplify until the harness is a tautology, which fails identically; a human given it has
+        # to reproduce the run just to obtain a URL the failure already had in hand.
+        return (
+            f"Prover cloud job did not produce results (status {exc.status.value}). "
+            f"The job and its failure output are at {exc.link}"
+        )
 
     prover_report: dict[str, bool] = {}
     for i in parsed.values():
