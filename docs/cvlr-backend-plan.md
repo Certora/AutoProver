@@ -1408,6 +1408,15 @@ observe through the handle the context borrowed, and to heap the array:
 | `rule_deposit_credits_exactly_the_amount` | **VERIFIED** |
 | `rule_dispatch_is_reachable` | ERROR [3308] (ungated — see below) |
 
+**A later correction, recorded here because this section is what everything downstream cited.** The
+[3308] that this probe's dispatch tier reported, and that later runs hit on handler-level rules, is
+*not* a property of Anchor. It depends on how the rule consumes the handler's `Result`: `.unwrap()`
+verifies, `if h(..).is_ok() { assert }` returns [3308], measured as two rules in one job differing in
+nothing else (`docs/upstream-defects.md` P4, the correction). The clue is in this very section — the
+control tier "passes, because it uses `.unwrap()`, and a panic is assumed away" — and the inference
+was not carried to the handler call. The `.is_ok()` form was in the author prompt's worked example, so
+every subsequent run reproduced it; the prompt now teaches `.unwrap()`.
+
 **A post-state property about an Anchor handler's own code, proved.** That is the first thing this
 backend has established about a target's real behaviour, and it took no prover setting and no
 inlining change — only writing the rule the way specs are written.
