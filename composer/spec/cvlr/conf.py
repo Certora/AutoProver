@@ -57,10 +57,15 @@ OVERLAY_OWNED_KEYS: frozenset[str] = frozenset({"build_script", "files", "msg"})
 #: soundness cost is real and stated: the prover then assumes loops finish within the bound instead
 #: of proving it, which can hide a violation that needs more iterations to reach.
 #:
-#: The five ``-solanaOptimistic*`` memory-model flags remain absent, which is still the template's
-#: position rather than an oversight: its latest commit removed prover options, and none of them has
-#: been shown to be needed here. ``-solanaOptimisticJoinWithStackPtr`` was measured and does nothing
-#: for the error it looks like it should address (``docs/upstream-defects.md`` P3).
+#: The five ``-solanaOptimistic*`` memory-model flags remain absent, and unlike ``optimistic_loop``
+#: this *is* a departure from the corpus: engagements carry them almost universally — 39 of 39 confs
+#: in one project, plus another's ``base.conf`` — alongside ``-solanaAggressiveGlobalDetection``,
+#: ``-solanaRemoveCFGDiamonds`` and ``-solanaSlicerIter``. They are absent here because the one thing
+#: they were wanted for, they do not do: a matched pair of submissions differing in nothing but those
+#: ten flags produced **byte-identical** [3308] errors (``docs/upstream-defects.md`` P4). They are
+#: also unsound by name, so adopting a block of them to fix nothing would be the worst of both.
+#: ``-solanaOptimisticJoinWithStackPtr`` was measured separately and does nothing for the error it
+#: looks like it should address (P3).
 TEMPLATE_BASE: dict[str, object] = {
     "msg": "Certora Verification Rules",
     "loop_iter": "1",
