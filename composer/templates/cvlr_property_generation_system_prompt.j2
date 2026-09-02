@@ -151,9 +151,44 @@ property in your batch is about, and all of which the prover pays for. A rule th
 is cheaper and is the shape the extraction guidance asks for. Build the accounts struct and call
 `crate::<program_module>::<handler>(ctx, ..)`.
 
-**The handler is the floor, not a waypoint.** Descending further — driving a private helper the
-handler calls, or reimplementing what the handler does — stops the rule being about the instruction,
-and the verdict stops being about the program.
+**Start at the handler, and descend only for a reason you can name.** A rule that drives the handler
+has the best fidelity: real account validation, the real `Context`, the real target. Prefer it.
+
+But a handler that performs a CPI and then updates its own state currently cannot carry a post-state
+property at all. The prover replaces a cross-program invocation with an unconstrained stand-in, and
+today that stand-in also havocs the *caller's* deserialized `Account<T>` — not just the account bytes
+the CPI could really reach. So fields the handler never writes come back changed, and any assertion
+comparing state across the call fails against a correct program. If you see a counterexample where a
+field the handler does not touch has changed across a CPI, that is this, and no assumption you add
+will fix it.
+
+When that happens, the move is to descend to **the program's own state-transition function** — the
+accounting core the handler wraps — and drive it with `nondet()` domain structs rather than accounts:
+
+```rust
+let mut order: BorrowOrder = nondet();
+let reserve: &mut Reserve = nondet();
+let before = order.clone();
+crate::borrow_order_operations::fill_borrow_order(&mut order, reserve, amount);
+cvlr_assert!(/* the property, over `before` and `order` */);
+```
+
+No `Context`, no accounts struct, no CPI in the way. This is what shipped verification projects do for
+exactly this reason.
+
+Three conditions on it, and they are what separate this from the failure it resembles:
+
+* **The function must be the program's.** Descending to `crate::<module>::<fn>` is narrowing scope;
+  writing your own version of that function in this module is not descending, it is reimplementing,
+  and it produces a verdict about your code. That is never acceptable, at any depth.
+* **Declare it.** The rule's declared subject is that function, not the handler, and the report says
+  so.
+* **Say what it costs, in the commentary.** Account validation, the CPI's effects and Anchor's
+  dispatch are outside a rule written this way. A bug in the handler's own glue is out of scope, and
+  a reader has to be told that rather than left to assume instruction-level coverage.
+
+If the handler has no such core to descend to — the accounting *is* the handler — then the property
+is not reachable today. Skip it and say so.
 
 **Build the accounts struct field by field, from nondet account infos.** `cvlr-solana` hands you an
 array of unconstrained `AccountInfo`s; each field of the handler's `#[derive(Accounts)]` struct is

@@ -426,10 +426,27 @@ def test_the_author_is_told_the_subject_of_a_rule_is_the_programs_code():
     assert "A rule that drives a function *you* wrote proves a property of your function" in prompt
 
 
-def test_the_handler_is_named_as_a_floor_and_not_a_waypoint():
-    """Ruling out ``entry`` from above is not enough. Both failing units went *below* the handler —
-    one into a private helper, one into a transcription — and nothing said that was a boundary."""
-    assert "The handler is the floor, not a waypoint" in _flat(_author_system_prompt())
+def test_descending_below_the_handler_is_allowed_only_into_the_program_s_own_code():
+    """This replaces a flat "the handler is the floor" rule, which over-shot.
+
+    That rule was written to stop rules driving a harness-authored *copy* of a handler, and it did —
+    but it also forbade the move every shipped verification project makes when a CPI is in the way:
+    drive the program's own accounting core with nondet domain structs. The prover's CPI stand-in
+    havocs the caller's deserialized ``Account<T>`` (``docs/upstream-defects.md`` P6), so a post-state
+    property cannot be carried at handler level at all, and forbidding the descent leaves the author
+    with only bad options.
+
+    What matters is authorship, not depth: ``crate::<module>::<fn>`` narrows scope honestly, a ``fn``
+    in the spec module verifies the author. So the prompt must keep prefering the handler, permit the
+    descent into program code, and require it be declared and its cost stated.
+    """
+    prompt = _flat(_author_system_prompt())
+    assert "Start at the handler, and descend only for a reason you can name" in prompt
+    assert "The function must be the program's" in prompt
+    assert "writing your own version of that function in this module is not descending" in prompt
+    # the descent has to reach the report, or it is a silent narrowing
+    assert "Declare it" in prompt
+    assert "Say what it costs, in the commentary" in prompt
 
 
 def test_avoiding_the_dispatcher_is_justified_by_cost_not_by_pointer_analysis():
@@ -440,7 +457,7 @@ def test_avoiding_the_dispatcher_is_justified_by_cost_not_by_pointer_analysis():
     paraphrase it. The reasons to prefer a handler are cost and scope; keep the technique out of
     them."""
     prompt = _flat(_author_system_prompt())
-    body = prompt.split("Call the handler, not the dispatcher")[1].split("The handler is the floor")[0]
+    body = prompt.split("Call the handler, not the dispatcher")[1].split("Start at the handler")[0]
     assert "pointer analysis" not in body
     assert "all of which the prover pays for" in body
 
