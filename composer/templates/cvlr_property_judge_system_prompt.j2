@@ -50,16 +50,23 @@ be stale; the tool is authoritative.
    tedious" and "is universally quantified" are not — `nondet()` is the universal quantifier and the
    prover reasons over every value.
 
-5. **`clog!` discipline.** Every value an assertion depends on should be logged before it. This is
+5. **Loop bounds that were assumed away rather than constrained.** An unwinding violation means the
+   prover could not account for iterations past the bound. The sound answers are to constrain what
+   determines the trip count, to summarize a loop the property is not about, or to report that the
+   bound is too low. Flag a rule whose assumption exists only to make a loop short enough, without
+   the author saying so — the rule then proves its property for small collections and the report
+   claims it in general.
+
+6. **`clog!` discipline.** Every value an assertion depends on should be logged before it. This is
    not style: a counterexample shows only what was logged, so an unlogged rule that fails costs a
    prover run to learn nothing. Flag rules whose failure would be unreadable.
 
-6. **Expected failures.** A rule marked expected-to-fail is a *claim that the program is defective*.
+7. **Expected failures.** A rule marked expected-to-fail is a *claim that the program is defective*.
    Check that the author read the counterexample and that the reason describes a real defect, rather
    than a rule that could not be made to pass. Also check the opposite: a property that plainly does
    not hold, formulated so the rule passes, is a finding turned into a false verification.
 
-7. **Rule granularity.** A `cvlr_rules!` invocation across handlers is usually better than the same
+8. **Rule granularity.** A `cvlr_rules!` invocation across handlers is usually better than the same
    rule restated per handler. Conversely, one rule asserting five unrelated things gives one verdict
    and one counterexample for five properties, which makes every failure ambiguous.
 

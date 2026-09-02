@@ -1366,9 +1366,25 @@ verdict was VIOLATED on an assertion reading *"Unwinding condition in a loop. We
 `--optimistic_loop`, or increase `--loop_iter`"*, on a loop inside `vault_program::deposit` itself.
 `TEMPLATE_BASE` shipped `loop_iter: "1"` with `optimistic_loop: false`, so **any** loop in a handler —
 borsh deserialization, instruction-data building — violates before the rule's own property is reached.
-§7.2 recorded that as a deliberate choice to follow the template over the twelve of sixteen surveyed
-projects that set it true; this measurement says the template's position is unusable for
-handler-level rules, and `TEMPLATE_BASE` now sets it true.
+§7.2 recorded that as a deliberate choice to follow the template over "twelve of sixteen surveyed
+projects that set it true", and `TEMPLATE_BASE` was changed to set it true.
+
+**Both halves of that were wrong, and it has been reversed.** The figure does not survive a recount:
+across 354 confs in fifteen Solana projects, `optimistic_loop` is set true in **one**, with 69
+explicitly false and 285 omitting it — which is false for this app, since the CLI's
+`true_by_default_attributes` covers `OPTIMISTIC_LOOP` only for Ranger and not for
+`SolanaProverAttributes`. No recorded survey supports the original figure; it appears to have counted
+omissions as assent.
+
+And the measurement did not implicate `optimistic_loop` in the first place — it implicated
+`loop_iter: "1"`. The corpus never pairs a bound of 1 with the unsound assumption; it raises the
+bound and leaves the assumption off, at 2 in 37 of one project's 39 confs and 3 in all 54 of
+another's. `TEMPLATE_BASE` now does the same: `optimistic_loop: false`, `loop_iter: "2"`.
+
+`optimistic_loop` assumes the loop halt conditions hold rather than proving them, so it hides a
+violation reachable only after further iterations. It is a last resort behind two better answers —
+constrain whatever determines the trip count, or munge the loop — and the author and judge prompts
+now say so, so a rule that shortens a loop by assumption has to admit it.
 
 With that fixed the counterexample was the property: `CVT_nondet_u64: '1'`, then
 `vault::vault_program::deposit(...)`, then a re-read through `Account::try_from_0` →
