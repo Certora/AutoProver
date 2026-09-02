@@ -35,7 +35,7 @@ def _prover_calls(n: int) -> list[AIMessage]:
 async def _give_up(sort: str, runs: int, floor: int = FLOOR) -> str:
     inst = _Gated(
         sort=sort, reason="r", attempts=["tried the obvious rule"],
-        state={"messages": _prover_calls(runs)}, tool_call_id="t",
+        state={"messages": _prover_calls(runs), "failed": None}, tool_call_id="t",
     )
     tok = _Gated._dep_ctx.set(floor)
     try:
@@ -107,7 +107,7 @@ async def test_the_reason_must_enumerate_attempts():
     with pytest.raises(pydantic.ValidationError):
         _Gated(
             sort="exhausted", reason="r", attempts=[],
-            state={"messages": []}, tool_call_id="t",
+            state={"messages": [], "failed": None}, tool_call_id="t",
         )
 
 

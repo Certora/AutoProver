@@ -905,7 +905,7 @@ async def batch_cvl_generation(
          if focus is None else
          gated_give_up_tool(
              name="give_up", description=_FOCUS_GIVE_UP_DESCRIPTION, label="CVL generation",
-             min_attempts=focus.min_give_up_attempts,
+             min_attempts=focus.min_give_up_attempts, state_ty=SourceCVLGenerationState,
          ),
          PublishResultTool.bind(titles).as_tool("result"),
          ctx.get_memory_tool()]

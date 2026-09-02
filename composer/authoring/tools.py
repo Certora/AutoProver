@@ -14,6 +14,8 @@ instantiate time. Unskip does not vary.
 from dataclasses import dataclass
 from typing import Callable, Literal, NotRequired, Sequence, override
 
+from typing_extensions import ReadOnly
+
 from langchain_core.messages import AIMessage, AnyMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph import MessagesState
@@ -233,10 +235,15 @@ def _gated_give_up_label(p: dict, *, description: str, reason: str, label: str) 
 
 
 class GatedGiveUpState(MessagesState):
-    """The authoring state :class:`GatedGiveUp` reads and writes: the message history it counts
-    prover attempts from, and the two fields a surrender records."""
-    result: NotRequired[str]
-    failed: NotRequired[bool]
+    """What a session must carry for :class:`GatedGiveUp` to run on it: the message history the
+    gate counts prover attempts from, and the two fields a surrender records.
+
+    ``result`` and ``failed`` are ``ReadOnly`` because the tool never writes them through the
+    state object; it returns a ``Command`` and the graph applies it. Declaring them anyway is
+    what makes the dependency visible, so a session missing them fails to typecheck rather than
+    at runtime."""
+    result: ReadOnly[NotRequired[str]]
+    failed: ReadOnly[bool | None]
 
 
 def _verify_attempts(state: GatedGiveUpState) -> int:
@@ -258,9 +265,9 @@ def _verify_attempts(state: GatedGiveUpState) -> int:
 
 @tool_family_display(_gated_give_up_label, None)
 @tool_family(GiveUpParams)
-class GatedGiveUp(
+class GatedGiveUp[S: GatedGiveUpState](
     WithInjectedId,
-    WithInjectedState[GatedGiveUpState],
+    WithInjectedState[S],
     WithAsyncDependencies[str | Command, int],
 ):
     """{description}"""
@@ -297,12 +304,13 @@ class GatedGiveUp(
         )
 
 
-def gated_give_up_tool(
+def gated_give_up_tool[S: GatedGiveUpState](
     *,
     name: str,
     description: str,
     label: str,
     min_attempts: int,
+    state_ty: type[S],
     reason_description: str = "The reason for giving up on your task",
 ) -> BaseTool:
     """:func:`give_up_tool` with a floor under it: an ``exhausted`` surrender is refused until
@@ -313,8 +321,12 @@ def gated_give_up_tool(
     The ``environment`` escape is not optional: a missing prover or compiler produces no prover
     run at all, so a bare attempt floor would be unsatisfiable and would hold the agent against
     its recursion limit instead of letting it report a broken toolchain."""
+    # The subscript comes after the render, not before: the family decorator hands back an
+    # already-specialized type, so ``GatedGiveUp[state_ty]`` is not a thing but
+    # ``GatedGiveUp.with_template(...)[state_ty]`` is. Naming the session's own state type here
+    # means the fields this tool reads are checked against the state it actually runs on.
     return GatedGiveUp.with_template(
         description=description,
         reason=reason_description,
         label=label,
-    ).bind(min_attempts).as_tool(name)
+    )[state_ty].bind(min_attempts).as_tool(name)
