@@ -89,7 +89,10 @@ Read the outcome:
     there. For the `#[error_code]` case the symbol is the program's own error type's `Display`
     impl — `^<vault::VaultError as core::fmt::Display>::fmt$` in shape — and summarizing it is sound
     for any property that does not assert over an error *message*. This invalidates the prover
-    stamp, so re-run `verify_rules` after it;
+    stamp, so re-run `verify_rules` after it — and read what that run says about your directives:
+    it names any that matched **no symbol in the build**, which is the common failure. A symbol
+    absent from the build was inlined away and no respelling will find it, so the report also names
+    symbols that *are* there; summarize one of those, usually the callee one level out;
   - **weaken the rule to a sub-property the prover can reach** — assume away the failing path if the
     program genuinely excludes it, or assert something strictly weaker, and say so;
   - **skip the property** with the error code and what you tried.
