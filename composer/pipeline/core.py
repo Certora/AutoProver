@@ -549,23 +549,32 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
             phases.get("extraction_plugin") or phases["extraction"],
         )
     )
-    staged = await staged_task
-    if not batches:
-        raise ValueError("No properties extracted from any component.")
-
-    # 3b. Prioritized runs formalize one property, not every component's. Ranking happens
-    #     here because this is the first and only point where every component's candidates
-    #     exist together — inference never sees more than the unit it was given, and the
-    #     per-component plugin hook cannot compare across units either. Pruning before
-    #     ``begin`` also means a backend that authors a shared artifact from the batches
-    #     authors it from the focus.
+    # 3b. Prioritized runs formalize one property, not every component's. This is the first
+    #     point where every component's candidates exist together — inference never sees more
+    #     than the unit it was given, and the per-component plugin hook cannot compare across
+    #     units either.
+    #
+    #     It sits *before* the ``staged_task`` await rather than after because the ranking
+    #     reads nothing that pre-formalization produces: it needs the extracted batches and
+    #     the guidance documents, both of which are already in hand. Awaiting the setup first
+    #     would queue the run's cheapest decision behind its most expensive step — on a real
+    #     contract that is hours during which the focus is knowable but unknown. It also puts
+    #     the focus in hand earlier than the setup finishes, which is what a pre-formalization
+    #     step would need in order to aim at it.
+    #     The empty-batch check deliberately stays *after* the await below rather than moving
+    #     up here to guard this: a setup that failed is the more useful error than "nothing was
+    #     extracted", and raising early would mask it.
     deprioritized: list[DeprioritizedProperty] = []
-    if run.run_mode is RunMode.PRIORITIZED:
+    if batches and run.run_mode is RunMode.PRIORITIZED:
         with named_budget_or_nop("property_extraction"):
             batches, deprioritized = await _prioritize(
                 backend.analysis_spec.properties_key, backend.artifact_store,
                 batches, run, phases["extraction"], threat_model, extra_context,
             )
+
+    staged = await staged_task
+    if not batches:
+        raise ValueError("No properties extracted from any component.")
 
     # 4. A backend whose units share an artifact handed back a ``StagedFormalizer`` instead of a
     #    formalizer: the artifact is authored HERE — once, from every unit's properties — and the

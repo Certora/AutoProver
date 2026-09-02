@@ -321,3 +321,49 @@ def test_a_skipped_focus_property_does_not_satisfy_the_focus():
 def test_an_unmapped_focus_property_does_not_satisfy_the_focus():
     assert not core._focus_satisfied(_Result(["a"]), _props("a", "b"))  # type: ignore[arg-type]
     assert not core._focus_satisfied(_Result([]), _props("a"))  # type: ignore[arg-type]
+
+
+async def test_ranking_does_not_wait_for_pre_formalization(monkeypatch):
+    """The ranking reads nothing ``prepare_formalization`` produces, so it must not queue
+    behind it. On a real contract that setup is hours of autosetup and invariant proving, and
+    the focus is knowable the moment extraction lands."""
+    order: list[str] = []
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _SlowPrepared(_Prepared):
+        async def prepare_formalization(self, run):
+            order.append("prep:start")
+            started.set()
+            await release.wait()
+            order.append("prep:done")
+            return await super().prepare_formalization(run)
+
+    async def fake_analysis(*_a, **_kw): return "analyzed"
+
+    async def fake_extract_all(*_a, **_kw):
+        await started.wait()  # the setup is in flight, exactly as in a real run
+        return [core._Batch(_Unit("deposits", 0), [_prop("a")], _FeatCtx())]  # type: ignore[arg-type]
+
+    async def fake_rank(**_kw):
+        order.append("rank")
+        release.set()  # only now let the setup finish; if the driver awaited it first, we deadlock
+        return _ranking(("deposits", "a"), [], [("deposits", "a")])
+
+    async def fake_report(*_a, **_kw): return object()
+
+    monkeypatch.setattr(core, "run_component_analysis", fake_analysis)
+    monkeypatch.setattr(core, "_extract_all", fake_extract_all)
+    monkeypatch.setattr(core, "rank_properties", fake_rank)
+    monkeypatch.setattr(core, "build_report", fake_report)
+
+    run = _Run()
+    run.run_mode = RunMode.PRIORITIZED  # type: ignore[misc]
+    formalizer = _Staged()
+    backend = _Backend(_SlowPrepared(formalizer))
+    async with asyncio.timeout(5):
+        await run_pipeline(backend, run, max_bug_rounds=1, ecosystem=EVM)  # type: ignore[arg-type]
+
+    assert order == ["prep:start", "rank", "prep:done"], (
+        f"ranking must run while pre-formalization is still in flight; got {order}"
+    )
