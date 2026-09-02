@@ -10,7 +10,9 @@ protection must stand down when the budget monitor orders a wrap-up.
 import pytest
 from langchain_core.messages import AIMessage
 
-from composer.authoring.tools import GatedGiveUp, RecordSkip, _verify_attempts, skip_tools
+from composer.authoring.tools import (
+    GatedGiveUp, RecordSkip, SkipScope, _verify_attempts, skip_tools,
+)
 from composer.spec.source.author import FocusPolicy
 from composer.spec.types import PropertyTitle
 
@@ -37,32 +39,38 @@ async def _give_up(sort: str, runs: int, floor: int = FLOOR) -> str:
     )
     tok = _Gated._dep_ctx.set(floor)
     try:
-        cmd = await inst.run()
+        out = await inst.run()
     finally:
         _Gated._dep_ctx.reset(tok)
-    return str(cmd.update["messages"][0].content)
+    # A refusal is a plain string; only an accepted surrender writes state.
+    return out if isinstance(out, str) else str(out.update["messages"][0].content)
 
 
-async def _skip_via(tools, title: str) -> str:
-    """Invoke the ``record_skip`` from a built tool list, as the graph would."""
-    tool = next(t for t in tools if t.name == "record_skip")
-    out = await tool.ainvoke(
-        {"name": "record_skip", "args": {"property_title": title, "reason": "cannot do it"},
-         "id": "t", "type": "tool_call"}
+async def _skip(scope: SkipScope, title: str, *, curtailed: bool = False) -> str:
+    """Run ``record_skip`` against the scope a builder produced, with the state it reads."""
+    inst = _Skip(
+        property_title=PropertyTitle(title), reason="cannot do it",
+        state={"messages": [], "budget_curtailed": curtailed}, tool_call_id="t",
     )
-    return str(out.update["messages"][0].content)
+    tok = _Skip._dep_ctx.set(scope)
+    try:
+        out = await inst.run()
+    finally:
+        _Skip._dep_ctx.reset(tok)
+    return out if isinstance(out, str) else str(out.update["messages"][0].content)
 
 
 TITLES = [PropertyTitle("solvency"), PropertyTitle("shares_sane")]
+PROTECT_SOLVENCY = [PropertyTitle("solvency")]
 
 
 def _direct(protected):
-    """The editing branch: ``skip_tools`` called directly (spec/source/author.py)."""
+    """The editing branch builds the pair with ``skip_tools`` (spec/source/author.py)."""
     return skip_tools(TITLES, skip_description="d", skip_reason="r", protected=protected)
 
 
 def _via_property_tools(protected):
-    """The non-editing branch: the same pair reached through ``property_tools``
+    """The non-editing branch reaches the same pair through ``property_tools``
     (spec/cvl_generation.py). Both must honour the protection, or the ban depends on which
     branch happened to build the suite."""
     from composer.spec.cvl_generation import property_tools
@@ -113,44 +121,39 @@ async def test_attempts_are_counted_from_tool_calls_not_prover_reports():
     assert _verify_attempts({}) == 0
 
 
-# --- the focus policy ------------------------------------------------------
+# --- the skip protection --------------------------------------------------
+
+
+@pytest.mark.parametrize("build", [_direct, _via_property_tools], ids=["skip_tools", "property_tools"])
+async def test_both_binding_paths_offer_record_skip(build):
+    # The author reaches its skip pair by either route; a protection wired into only one is
+    # silently bypassable from the other.
+    assert {"record_skip", "unskip_property"} <= {tool.name for tool in build(PROTECT_SOLVENCY)}
+
+
+async def test_a_protected_property_cannot_be_skipped():
+    scope = SkipScope(titles=lambda: TITLES, protected=frozenset(PROTECT_SOLVENCY))
+    assert "cannot be skipped" in await _skip(scope, "solvency")
+
+
+async def test_an_unprotected_property_can_still_be_skipped():
+    scope = SkipScope(titles=lambda: TITLES, protected=frozenset(PROTECT_SOLVENCY))
+    assert "Recorded skip" in await _skip(scope, "shares_sane")
+
+
+async def test_nothing_is_protected_by_default():
+    assert "Recorded skip" in await _skip(SkipScope(titles=lambda: TITLES), "solvency")
 
 
 async def test_the_budget_wrap_up_lifts_the_focus_protection():
-    # The wrap-up alert orders the agent to skip everything that does not work. A protection
-    # that outlived that order would deadlock the session the budget was trying to end.
-    focus = FocusPolicy(protected=(PropertyTitle("solvency"),))
-    assert focus.protected_titles() == ("solvency",)
-    focus.lifted = True
-    assert focus.protected_titles() == ()
+    # The wrap-up order is "skip everything that does not work", which the protection would
+    # otherwise refuse, deadlocking the session the budget was ending. The signal is
+    # ``budget_curtailed`` in the graph state, so it survives a checkpoint; a flag on the policy
+    # object would not, and could disagree with the state it shadows.
+    scope = SkipScope(titles=lambda: TITLES, protected=frozenset(PROTECT_SOLVENCY))
+    assert "cannot be skipped" in await _skip(scope, "solvency")
+    assert "Recorded skip" in await _skip(scope, "solvency", curtailed=True)
 
 
-# --- the skip protection, on both binding paths ----------------------------
-
-
-@pytest.mark.parametrize("build", [_direct, _via_property_tools], ids=["skip_tools", "property_tools"])
-async def test_a_protected_property_cannot_be_skipped(build):
-    out = await _skip_via(build(lambda: (PropertyTitle("solvency"),)), "solvency")
-    assert "cannot be skipped" in out
-
-
-@pytest.mark.parametrize("build", [_direct, _via_property_tools], ids=["skip_tools", "property_tools"])
-async def test_an_unprotected_property_can_still_be_skipped(build):
-    # The supporting cluster is protected too in a real run, but the mechanism must not be
-    # "refuse everything" — an unprotected title still goes through.
-    out = await _skip_via(build(lambda: (PropertyTitle("solvency"),)), "shares_sane")
-    assert "Recorded skip" in out
-
-
-@pytest.mark.parametrize("build", [_direct, _via_property_tools], ids=["skip_tools", "property_tools"])
-async def test_nothing_is_protected_by_default(build):
-    out = await _skip_via(build(()), "solvency")
-    assert "Recorded skip" in out
-
-
-async def test_the_lifted_policy_lets_the_budget_wrap_up_skip_the_focus():
-    focus = FocusPolicy(protected=(PropertyTitle("solvency"),))
-    tools = _direct(focus.protected_titles)
-    assert "cannot be skipped" in await _skip_via(tools, "solvency")
-    focus.lifted = True
-    assert "Recorded skip" in await _skip_via(tools, "solvency")
+async def test_the_focus_policy_holds_no_mutable_state():
+    assert not hasattr(FocusPolicy(protected=(PropertyTitle("solvency"),)), "lifted")

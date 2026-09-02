@@ -48,6 +48,7 @@ from composer.pipeline.keys import (
     PRE_PROPERTY_KEY, PROPERTIES_KEY, SYSTEM_ANALYSIS_KEY,
 )
 from composer.pipeline.ptypes import FinalProperties
+from composer.pipeline.run_mode import run_mode_name
 from composer.spec.types import PropertyFormulation
 from composer.pipeline.plugins import applicable_plugin_manifest, manifest_digest
 from composer.pipeline.run_tags import AutoProveCacheTags, CACHE_ROOT_RECORD
@@ -213,7 +214,7 @@ async def _resolve_formalization_key(
             tags.threat_model_digest,
             bool(tags.interactive),
             xc_digest,
-            tags.run_mode or "comprehensive",
+            run_mode_name(tags.run_mode),
         )
     ).cache_get(FinalProperties)
     if final is not None:

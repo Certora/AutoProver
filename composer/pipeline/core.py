@@ -74,7 +74,7 @@ from .keys import (
 )
 from composer.diagnostics.budget import total_budget, named_budget_or_nop, time_budget
 
-from .run_mode import RunMode
+from .run_mode import RunMode, run_mode_name
 from .ptypes import (
     DEFAULT_MAX_CPU_TASKS,
     BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult,
@@ -620,7 +620,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 threat_model.to_digest() if threat_model is not None else None,
                 interactive,
                 combine_digests([d.to_digest() for d in extra_context]),
-                run.run_mode.value,
+                run_mode_name(run.run_mode.value),
             )
         ).cache_put(FinalProperties(items=batch.props, tool_plugins=contributing_plugins))
 
@@ -793,7 +793,7 @@ async def _prioritize[P: enum.Enum, H, U: FeatureUnit](
     threat_model: Document | None,
     extra_context: Sequence[Document],
 ) -> tuple[list[_Batch[U]], list[DeprioritizedProperty]]:
-    """Rank every extracted property and cut the run down to one component's focus.
+    """Rank every extracted property and cut the run down to one claim's worth of them.
 
     Returns the surviving batch list — always exactly one entry, so the driver's
     "no properties extracted" guard cannot fire on our account — alongside every candidate it
@@ -857,9 +857,9 @@ async def _prioritize[P: enum.Enum, H, U: FeatureUnit](
     ]
 
     _log.info(
-        "prioritized: %s / %s (+%d supporting); %d propert(ies) across %d other component(s) "
-        "deprioritized",
-        chosen.feat.display_name, props[0].title, len(props) - 1,
+        "prioritized: %s — %r, stated by %d propert(ies); %d propert(ies) across %d other "
+        "component(s) deprioritized",
+        chosen.feat.display_name, selection.claim, len(props),
         len(deprioritized), len(batches) - 1,
     )
     return [_Batch(chosen.feat, props, chosen.feat_ctx)], deprioritized

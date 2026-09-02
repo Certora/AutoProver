@@ -12,10 +12,11 @@ instantiate time. Unskip does not vary.
 """
 
 from dataclasses import dataclass
-from typing import Callable, Literal, Sequence, override
+from typing import Callable, Literal, NotRequired, Sequence, override
 
 from langchain_core.messages import AIMessage, AnyMessage, ToolMessage
 from langchain_core.tools import BaseTool
+from langgraph.graph import MessagesState
 from langgraph.types import Command
 from pydantic import Field
 
@@ -42,17 +43,28 @@ def _as_titles(titles: Titles | Sequence[PropertyTitle]) -> Titles:
     return lambda: snapshot
 
 
+class CurtailableState(MessagesState):
+    """The authoring state :class:`RecordSkip` reads.
+
+    ``budget_curtailed`` is where the budget monitor records its wrap-up order, and the focus
+    protection stands down when it is set. Optional because only the prover and foundry authors
+    have a budget to be curtailed by; the natspec and rustapp sessions share this tool and carry
+    no such field, and absent reads as "still trying"."""
+    budget_curtailed: NotRequired[bool]
+
+
 @dataclass(frozen=True)
 class SkipScope:
     """What ``record_skip`` is allowed to retire: the batch's titles, and the subset it must
     refuse.
 
-    ``protected`` is a thunk, not a set, because the answer changes during a session — the
-    budget monitor's wrap-up order tells the agent to skip everything that does not work, so a
-    protection that outlived that order would deadlock the session it was meant to curtail.
-    A backend with nothing to protect passes a thunk returning ``()``."""
+    The protection is unconditional only while the run is still trying. Once the budget monitor
+    orders a wrap-up it tells the agent to skip everything that does not work, so a protection
+    that outlived that order would deadlock the session it was meant to curtail. That state lives
+    in ``budget_curtailed``, which is where the tool reads it — not in a flag on this object,
+    which would not survive a checkpoint and could disagree with the state it shadows."""
     titles: Titles
-    protected: Titles
+    protected: frozenset[PropertyTitle] = frozenset()
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +88,11 @@ def _skip_result(
 
 @tool_family_display(_skip_label, _skip_result)
 @tool_family(SkipParams)
-class RecordSkip(WithInjectedId, WithAsyncDependencies[Command, SkipScope]):
+class RecordSkip(
+    WithInjectedId,
+    WithInjectedState[CurtailableState],
+    WithAsyncDependencies[str | Command, SkipScope],
+):
     """{description}"""
     property_title: PropertyTitle = Field(
         description="The snake_case title of the property from the batch listing"
@@ -84,28 +100,24 @@ class RecordSkip(WithInjectedId, WithAsyncDependencies[Command, SkipScope]):
     reason: str = Field(description="{reason}")
 
     @override
-    async def run(self) -> Command:
+    async def run(self) -> str | Command:
         with self.tool_deps() as scope:
             known = scope.titles()
-            protected = scope.protected()
+            protected = scope.protected
         if self.property_title not in known:
-            return tool_state_update(
-                self.tool_call_id,
+            return (
                 f"Unknown property title {self.property_title!r}. Must be one "
-                f"of: {', '.join(known)}.",
+                f"of: {', '.join(known)}."
             )
-        if self.property_title in protected:
-            return tool_state_update(
-                self.tool_call_id,
+        if self.property_title in protected and not self.state.get("budget_curtailed"):
+            return (
                 f"Property {self.property_title!r} is the focus of this run and cannot be "
-                "skipped. Decompose it into lemmas, strengthen the harness, or formalize a "
-                "weaker core of it and say so in your commentary — but do not retire it.",
+                "skipped. Prove a smaller statement it is built out of, or formalize the "
+                "strongest version of it that holds and say what you could not prove — but do "
+                "not retire it."
             )
         if not self.reason.strip():
-            return tool_state_update(
-                self.tool_call_id,
-                "A non-empty justification is required when skipping a property.",
-            )
+            return "A non-empty justification is required when skipping a property."
         return tool_state_update(
             self.tool_call_id,
             f"Recorded skip for property {self.property_title}.",
@@ -145,15 +157,16 @@ def skip_tools(
     *,
     skip_description: str,
     skip_reason: str,
-    protected: Titles | Sequence[PropertyTitle] = (),
+    protected: Sequence[PropertyTitle] = (),
 ) -> list[BaseTool]:
     """The skip / unskip pair, bound to the batch's property titles.
 
     ``protected`` names titles ``record_skip`` must refuse — the focus of a prioritized run,
-    whose whole point is that it is pursued rather than retired. Unskip is deliberately not
-    constrained: un-retiring a property is always allowed."""
+    whose whole point is that it is pursued rather than retired. The refusal lifts on its own
+    once the run is budget-curtailed. Unskip is deliberately not constrained: un-retiring a
+    property is always allowed."""
     get = _as_titles(titles)
-    scope = SkipScope(titles=get, protected=_as_titles(protected))
+    scope = SkipScope(titles=get, protected=frozenset(protected))
     return [
         RecordSkip.with_template(description=skip_description, reason=skip_reason)
         .bind(scope)
@@ -219,7 +232,14 @@ def _gated_give_up_label(p: dict, *, description: str, reason: str, label: str) 
     return f"Giving up on {label}: {p['reason']}"
 
 
-def _verify_attempts(state: dict) -> int:
+class GatedGiveUpState(MessagesState):
+    """The authoring state :class:`GatedGiveUp` reads and writes: the message history it counts
+    prover attempts from, and the two fields a surrender records."""
+    result: NotRequired[str]
+    failed: NotRequired[bool]
+
+
+def _verify_attempts(state: GatedGiveUpState) -> int:
     """How many times this session has put a spec in front of the prover.
 
     Counted from the message history rather than from ``prover_history``: that list only grows
@@ -240,8 +260,8 @@ def _verify_attempts(state: dict) -> int:
 @tool_family(GiveUpParams)
 class GatedGiveUp(
     WithInjectedId,
-    WithInjectedState[dict],
-    WithAsyncDependencies[Command, int],
+    WithInjectedState[GatedGiveUpState],
+    WithAsyncDependencies[str | Command, int],
 ):
     """{description}"""
     sort: Literal["environment", "exhausted"] = Field(
@@ -257,17 +277,17 @@ class GatedGiveUp(
     )
 
     @override
-    async def run(self) -> Command:
+    async def run(self) -> str | Command:
         with self.tool_deps() as floor:
             if self.sort == "exhausted" and (ran := _verify_attempts(self.state)) < floor:
-                return tool_state_update(
-                    self.tool_call_id,
+                return (
                     f"Rejected: you have run the prover {ran} time(s) on this task, and this run "
                     f"requires at least {floor} before a property may be abandoned. This is the "
-                    "one property the run exists to establish. Decompose it into lemmas, add or "
-                    "strengthen a harness, or formalize a weaker core of it and state the gap — "
-                    "then verify. If the toolchain itself is broken, stop with "
-                    "sort='environment' instead.",
+                    "property the run exists to establish. Prove a smaller statement it is built "
+                    "out of, or formalize the strongest version of it that holds and state what "
+                    "you could not prove — then verify. Do not reach a passing rule by assuming "
+                    "away the states where the property is interesting. If the toolchain itself "
+                    "is broken, stop with sort='environment' instead."
                 )
         return tool_state_update(
             self.tool_call_id,

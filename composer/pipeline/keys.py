@@ -32,6 +32,7 @@ from typing import Any
 from composer.pipeline.ptypes import FinalProperties, RegisteredArtifacts
 from composer.spec.context import CacheKey, ComponentGroup, Properties
 from composer.spec.key_family import KeyFamily, PolyKeyFamily
+from composer.pipeline.run_mode import RunModeName
 from composer.spec.prioritize import PropertyRanking
 from composer.spec.prop_inference import (
     AGENT_RESULT_KEY, AGENT_ROUND_KEY, BUG_ANALYSIS_KEY,
@@ -102,8 +103,8 @@ COMPONENT_KEY = KeyFamily(Properties, ComponentGroup, _component_key)
 def _final_properties_key(
     threat_model_digest: str | None,
     with_refinement: bool,
-    extra_context_digest: str | None = None,
-    run_mode: str = "comprehensive",
+    extra_context_digest: str | None,
+    run_mode: RunModeName,
 ) -> str:
     # Parameterized exactly like BUG_ANALYSIS_KEY: the component namespace is
     # shared across runs, so the entry must be keyed by what distinguishes one

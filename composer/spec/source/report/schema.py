@@ -309,16 +309,13 @@ class Finding(BaseModel):
     provenance: FindingProvenance | None = None
 
 
-class DeprioritizedProperty(BaseModel):
+class DeprioritizedProperty(PropertyFormulation):
     """A property this run inferred and deliberately did not pursue, with the ranker's reason.
 
     Present only for a prioritized run. The point of recording them is that a prioritized
     report otherwise looks exactly like a contract with very few properties: this is the list
     that says what was set aside, and why."""
     component: ComponentName
-    title: PropertyTitle
-    sort: PropertyType
-    description: str
     score: int
     rationale: str
 

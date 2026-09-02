@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from typing import Sequence
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from composer.input.files import Document
@@ -38,10 +38,10 @@ from composer.templates.loader import load_jinja_template
 
 _log = logging.getLogger(__name__)
 
-#: Ceiling on the supporting cluster. The primary property plus its lemmas is meant to stay a
-#: focused unit of work; past a couple of neighbours the batch is a component again and the mode
-#: has bought nothing.
-MAX_SUPPORTING = 2
+#: Ceiling on the pursued group. A claim stated by more properties than this is either not one
+#: claim or not a focused unit of work; past it the batch is a component again and the mode has
+#: bought nothing. A backstop, not the target — the prompt asks for small groups.
+MAX_FOCUS_PROPERTIES = 3
 
 #: What a property the user actually raised is worth against one we inferred unaided. A bounded
 #: boost rather than a tiebreak or a dominator: a flagged concern should win at a comparable
@@ -50,27 +50,19 @@ CRITICAL_MATCH_BONUS = 15
 
 
 class RankedProperty(BaseModel):
-    """One candidate's place in the ranking, and what it rests on."""
+    """One candidate property, scored."""
     key: PropertyKey = Field(
         description="The [component, title] pair identifying the property, copied exactly "
         "from the candidate listing."
     )
     score: int = Field(
         ge=0, le=100,
-        description="How much proving this property would contribute to confidence in the "
-        "overall correctness of the system, 0-100. Reserve the top of the range for "
-        "properties whose violation would be a critical bug. Score the property's importance, "
-        "not how hard it looks to verify.",
+        description="How badly the protocol is hurt if this property does not hold. Score the "
+        "consequence of a violation, not how hard the property looks to verify.",
     )
     critical_match: bool = Field(
-        description="True if this property corresponds to a concern the user explicitly "
-        "raised in the design document, threat model, or supplied context."
-    )
-    depends_on: list[PropertyTitle] = Field(
-        default_factory=list,
-        description="Titles of properties IN THIS PROPERTY'S OWN COMPONENT that would be needed "
-        "to state or discharge it: the lemmas it assumes, the invariants its argument leans on. "
-        "Not properties that are merely related to it. Leave empty if it stands alone.",
+        description="True if this property corresponds to a concern the reader of the design "
+        "document, threat model, or supplied notes explicitly raised."
     )
     rationale: str = Field(
         description="One or two sentences justifying the score. Say what breaks if the "
@@ -78,21 +70,38 @@ class RankedProperty(BaseModel):
     )
 
 
+class PropertyGroup(BaseModel):
+    """Properties that together state one claim about the protocol."""
+    claim: str = Field(
+        description="The single thing these properties, taken together, establish about the "
+        "protocol. One or two sentences, in terms an auditor would use — not a restatement of "
+        "the property titles."
+    )
+    members: list[PropertyKey] = Field(
+        min_length=1,
+        description="The [component, title] pairs this claim is made of. All of them must "
+        "belong to the same component. Every candidate property appears in exactly one group.",
+    )
+
+
 class PropertyRanking(BaseModel):
-    """Every candidate, scored. Which one the run pursues is derived from this, not stated
-    alongside it: see :func:`priority` and :func:`select`."""
+    """Every candidate scored, and the claims they group into."""
     ranked: list[RankedProperty] = Field(
         description="Every candidate property, each appearing exactly once."
     )
+    groups: list[PropertyGroup] = Field(
+        description="The claims the candidates group into. Every candidate appears in exactly "
+        "one group."
+    )
     justification: str = Field(
-        description="Two to four sentences on which properties came out on top and why they are "
-        "the ones worth a verification budget."
+        description="Two to four sentences on which claim came out on top and why it is the one "
+        "worth proving."
     )
 
 
 def priority(rp: RankedProperty) -> int:
-    """What the run actually sorts on. The scoring model reports two things it can judge — how much
-    the property matters, and whether the user asked for it — and this is the one place their
+    """What the run sorts on. The scoring model reports two things it can judge — how much the
+    property matters, and whether the reader asked for it — and this is the one place their
     trade-off is decided, so it is reviewable and the artifact can never disagree with the pick."""
     return rp.score + (CRITICAL_MATCH_BONUS if rp.critical_match else 0)
 
@@ -101,11 +110,10 @@ def priority(rp: RankedProperty) -> int:
 class Candidate:
     """One component's extracted properties, as offered to the ranker.
 
-    ``label`` is what the model sees and names in a :class:`PropertyKey`. It is derived
-    from the component's display name but forced unique across the run: display names are
-    free text the analysis agent produced under no uniqueness constraint, so resolving a
-    ranking back onto components by name alone can land on the wrong one. ``unit_index``
-    is the identity the driver resolves against."""
+    ``label`` is what the model sees and names in a :class:`PropertyKey`: the component's own
+    display name, prefixed with ``unit_index`` so two components sharing a name are still
+    distinguishable in the prompt and in the persisted ranking. ``unit_index`` is the stable
+    per-run component id, and what the driver resolves against."""
     unit_index: int
     label: ComponentName
     props: list[PropertyFormulation]
@@ -113,99 +121,111 @@ class Candidate:
 
 @dataclass(frozen=True)
 class Selection:
-    """The focus: which unit survives, and which of its properties, in order."""
+    """The focus: which unit survives, which of its properties, and the claim they state."""
     unit_index: int
     titles: list[PropertyTitle]
+    claim: str
     ranking: PropertyRanking
 
 
 def build_candidates(
     units: Sequence[tuple[int, ComponentName, list[PropertyFormulation]]]
 ) -> list[Candidate]:
-    """Label every unit for the prompt, uniquely.
+    """Label every unit for the prompt.
 
-    Counting repeats is not enough: a component may itself be named ``Vault (2)``, and then a
-    second ``Vault`` numbered by count collides with it. Since the label is what the ranking names
-    a property by, a collision resolves a ranked entry onto the wrong component's batch. Suffix
-    until the label is actually unused instead, and assert it."""
-    taken: set[str] = set()
-    out: list[Candidate] = []
-    for unit_index, name, props in units:
-        label, n = name, 1
-        while label in taken:
-            n += 1
-            label = f"{name} ({n})"
-        taken.add(label)
-        out.append(Candidate(unit_index, ComponentName(label), props))
-    assert len({c.label for c in out}) == len(out), "component labels must be unique"
-    return out
+    The label carries ``unit_index``, the stable per-run component id, so a ranking always names
+    exactly one component even where two share a display name — and it needs no invented
+    uniquifying suffix to do it."""
+    return [
+        Candidate(unit_index, ComponentName(f"{unit_index}: {name}"), props)
+        for unit_index, name, props in units
+    ]
 
 
 def validate_ranking(candidates: Sequence[Candidate], r: PropertyRanking) -> str | None:
-    """``None`` if the ranking is usable, else the reason it is not — phrased for the model,
-    since it is fed straight back as the retry prompt.
+    """``None`` if the ranking is usable, else every reason it is not — phrased for the model,
+    since it is fed straight back as the correction.
 
-    There is no "did it pick the right one" check here, because nothing picks: the focus is
-    derived from these scores by :func:`select`."""
+    All problems are reported at once. Returning only the first means a badly malformed ranking
+    costs one attempt per mistake, and the attempts run out before the mistakes do.
+
+    There is no "did it pick the right one" check, because nothing picks: the focus is derived
+    from these scores by :func:`select`."""
     by_key: dict[PropertyKey, Candidate] = {
         (c.label, p.title): c for c in candidates for p in c.props
     }
+    problems: list[str] = []
 
     seen: Counter[PropertyKey] = Counter(rp.key for rp in r.ranked)
-    unknown = [k for k in seen if k not in by_key]
-    if unknown:
-        return (
-            "These ranked entries name properties that are not in the candidate listing: "
+    if (unknown := [k for k in seen if k not in by_key]):
+        problems.append(
+            f"These ranked entries name properties that are not in the candidate listing: "
             f"{unknown}. Use the [component, title] pairs exactly as given."
         )
     if (dupes := [k for k, n in seen.items() if n > 1]):
-        return f"These properties appear more than once in `ranked`: {dupes}. Rank each exactly once."
+        problems.append(
+            f"These properties appear more than once in `ranked`: {dupes}. Rank each exactly once."
+        )
     if (missing := [k for k in by_key if k not in seen]):
-        return (
+        problems.append(
             f"These candidate properties are missing from `ranked`: {missing}. "
             "Every candidate must be ranked, including the ones you consider unimportant."
         )
 
-    for rp in r.ranked:
-        home = by_key[rp.key]
-        siblings = {p.title for p in home.props}
-        for dep in rp.depends_on:
-            if dep == rp.key[1]:
-                return (
-                    f"{rp.key} lists itself in `depends_on`. A property does not depend on itself."
-                )
-            if dep not in siblings:
-                return (
-                    f"{rp.key} lists {dep!r} in `depends_on`, which is not a property of its own "
-                    f"component ({home.label}). A run pursues one component's properties, so a "
-                    "dependency must come from the same component as the property that needs it."
-                )
-    return None
+    grouped: Counter[PropertyKey] = Counter(k for g in r.groups for k in g.members)
+    if (unknown_g := [k for k in grouped if k not in by_key]):
+        problems.append(
+            f"These group members are not in the candidate listing: {unknown_g}."
+        )
+    if (dupes_g := [k for k, n in grouped.items() if n > 1]):
+        problems.append(
+            f"These properties are in more than one group: {dupes_g}. Each property belongs to "
+            "exactly one claim."
+        )
+    if (ungrouped := [k for k in by_key if k not in grouped]):
+        problems.append(
+            f"These candidate properties are in no group: {ungrouped}. Every property belongs to "
+            "exactly one claim, even if that claim has only one member."
+        )
+
+    for g in r.groups:
+        homes = {by_key[k].label for k in g.members if k in by_key}
+        if len(homes) > 1:
+            problems.append(
+                f"The group {g.claim!r} spans components {sorted(homes)}. A run pursues one "
+                "component's properties, so every member of a group must come from the same "
+                "component."
+            )
+
+    return "\n".join(problems) if problems else None
 
 
 def select(candidates: Sequence[Candidate], r: PropertyRanking) -> Selection:
-    """Derive the focus from a *validated* ranking: the highest-priority property, plus what it
-    said it rests on, deduplicated and truncated to :data:`MAX_SUPPORTING`.
+    """Derive the focus from a *validated* ranking: the group containing the highest-priority
+    property, which is the claim worth the run.
 
-    ``max`` keeps the first of equal-priority entries, so the model's own ordering still breaks
-    ties, but the choice itself is ours — which is what makes ``property_ranking.json`` and the
-    run's actual subject the same thing by construction."""
-    primary = max(r.ranked, key=priority)
-    home = next(c for c in candidates if c.label == primary.key[0])
+    A group is worth what its best member is worth, so the single most important property still
+    decides, and whatever else states the same claim comes with it. ``max`` keeps the first of
+    equal-priority entries, so the model's own ordering breaks ties — but the choice is ours,
+    which is what makes ``property_ranking.json`` and the run's actual subject the same thing by
+    construction."""
+    best = max(r.ranked, key=priority)
+    group = next(g for g in r.groups if best.key in g.members)
+    home = next(c for c in candidates if c.label == best.key[0])
 
-    titles: list[PropertyTitle] = [primary.key[1]]
-    for dep in primary.depends_on:
-        if len(titles) - 1 == MAX_SUPPORTING:
-            break
-        if dep in titles:
-            continue
-        titles.append(dep)
+    by_priority = {rp.key: priority(rp) for rp in r.ranked}
+    members = sorted(group.members, key=lambda k: -by_priority[k])
+    if len(members) > MAX_FOCUS_PROPERTIES:
+        # The claim this group named is no longer fully established once we cut it, so say so
+        # rather than quietly pursuing a subset under the group's name.
+        _log.warning(
+            "focus group %r has %d members; pursuing the top %d only, so the claim is not "
+            "established in full",
+            group.claim, len(members), MAX_FOCUS_PROPERTIES,
+        )
+        members = members[:MAX_FOCUS_PROPERTIES]
 
-    # Emit them in the component's own order so the author reads them as it would any
-    # batch, with the primary first.
-    order = {p.title: i for i, p in enumerate(home.props)}
-    head, tail = titles[0], sorted(titles[1:], key=lambda t: order[t])
-    return Selection(home.unit_index, [head, *tail], r)
+    return Selection(home.unit_index, [k[1] for k in members], group.claim, r)
 
 
 async def rank_properties(
@@ -228,7 +248,7 @@ async def rank_properties(
         "property_prioritization_prompt.j2",
         contract_name=contract_name,
         candidates=candidates,
-        max_supporting=MAX_SUPPORTING,
+        max_supporting=MAX_FOCUS_PROPERTIES,
     )
     docs = [d for d in (design_doc, threat_model, *extra_context) if d is not None]
     content: list[dict | str] = [
@@ -237,7 +257,7 @@ async def rank_properties(
     ]
     bound = llm.with_structured_output(PropertyRanking)
 
-    messages: list = [SystemMessage(system), HumanMessage(content=content)]
+    messages: list[BaseMessage] = [SystemMessage(system), HumanMessage(content=content)]
     problem: str | None = None
     for attempt in range(max_attempts):
         result = await bound.ainvoke(messages)
@@ -246,10 +266,13 @@ async def rank_properties(
         if problem is None:
             return result
         _log.warning("property ranking rejected (attempt %d): %s", attempt + 1, problem)
+        # Structured output hands back a parsed object and leaves no assistant turn behind, so
+        # without replaying it the model is asked to fix a ranking it has no memory of making.
         messages = [
             *messages,
+            AIMessage(content=result.model_dump_json()),
             HumanMessage(
-                f"Your ranking was rejected: {problem}\n\nProduce a corrected ranking."
+                f"That ranking was rejected:\n\n{problem}\n\nProduce a corrected ranking."
             ),
         ]
     raise ValueError(f"Property ranking did not validate after {max_attempts} attempts: {problem}")

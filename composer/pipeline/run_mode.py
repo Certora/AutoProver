@@ -15,6 +15,12 @@ takes into ``composer.prover.core``.
 
 import enum
 import os
+from typing import Literal
+
+
+type RunModeName = Literal["comprehensive", "prioritized"]
+"""The mode's wire form: what a cache key, a report field or an env var carries. Spelled as a
+closed literal so a key family cannot be handed an arbitrary string."""
 
 
 class RunMode(enum.StrEnum):
@@ -44,3 +50,11 @@ def resolve_run_mode(cli: str | None) -> RunMode:
         raise ValueError(
             f"Unknown run mode {raw!r} from {source}. Expected one of: {valid}."
         ) from None
+
+
+def run_mode_name(raw: str | None) -> RunModeName:
+    """Narrow a stored mode tag to the closed set.
+
+    Anything unrecognised, ``None`` included, reads as comprehensive: records written before the
+    mode existed carry no tag, and they were all comprehensive runs."""
+    return "prioritized" if raw == RunMode.PRIORITIZED.value else "comprehensive"

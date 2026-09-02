@@ -1,17 +1,20 @@
 """The prioritized run's decision: how the focus is derived, and the guards around it.
 
 Everything here is LLM-free. The ranker's *judgement* cannot be tested, but the arithmetic that
-turns its scores into a focus can be, and so can the validation that stands between a bad
-structured-output response and a run that formalizes the wrong thing (or nothing).
+turns its scores into a focus can be, and so can the validation standing between a bad
+structured-output response and a run that proves the wrong thing (or nothing).
 """
 
 import pytest
 
 from composer.spec.prioritize import (
-    CRITICAL_MATCH_BONUS, MAX_SUPPORTING, Candidate, PropertyRanking, RankedProperty,
-    build_candidates, priority, select, validate_ranking,
+    CRITICAL_MATCH_BONUS, MAX_FOCUS_PROPERTIES, Candidate, PropertyGroup, PropertyRanking,
+    RankedProperty, build_candidates, priority, select, validate_ranking,
 )
 from composer.spec.types import ComponentName, PropertyFormulation, PropertyTitle
+
+VAULT = "0: Vault"
+FEES = "1: Fees"
 
 
 def _prop(title: str) -> PropertyFormulation:
@@ -25,162 +28,204 @@ def _cands() -> list[Candidate]:
     ])
 
 
-def _entry(comp, title, score, *, critical=False, deps=()):
+def _e(comp, title, score, *, critical=False):
     return RankedProperty(
         key=(ComponentName(comp), PropertyTitle(title)),
-        score=score, critical_match=critical,
-        depends_on=[PropertyTitle(d) for d in deps], rationale="r",
+        score=score, critical_match=critical, rationale="r",
     )
 
 
-def _ranking(*entries) -> PropertyRanking:
-    return PropertyRanking(ranked=list(entries), justification="j")
+def _g(claim, *keys):
+    return PropertyGroup(claim=claim, members=[(ComponentName(c), PropertyTitle(t)) for c, t in keys])
 
 
-def _all(**overrides) -> PropertyRanking:
-    """Every candidate scored, low by default, with named overrides."""
-    base = {
-        ("Vault", "solvency"): 40, ("Vault", "no_free_mint"): 30,
-        ("Vault", "shares_sane"): 20, ("Fees", "fee_bounded"): 10,
-    }
-    return _ranking(*[
-        overrides.get(f"{c}.{t}") or _entry(c, t, s) for (c, t), s in base.items()
-    ])
+def _ranking(entries, groups):
+    return PropertyRanking(ranked=entries, groups=groups, justification="j")
+
+
+def _default(**score_overrides):
+    """Every candidate scored low, each in its own group, with named score overrides."""
+    base = [(VAULT, "solvency"), (VAULT, "no_free_mint"), (VAULT, "shares_sane"), (FEES, "fee_bounded")]
+    entries = [_e(c, t, score_overrides.get(t, 10)) for c, t in base]
+    return _ranking(entries, [_g(f"claim:{t}", (c, t)) for c, t in base])
 
 
 # --- labels ---------------------------------------------------------------
 
 
-def test_labels_are_unique_even_against_a_component_named_like_a_suffix():
-    # Numbering repeats is not enough: a real component may already be called "Vault (2)", and a
-    # second "Vault" numbered by count would collide with it and resolve onto the wrong batch.
+def test_labels_carry_the_component_index():
+    # Two components can share a display name; the index is the stable id, so it goes in the
+    # label rather than an invented suffix.
     cands = build_candidates([
         (0, ComponentName("Vault"), [_prop("a")]),
         (3, ComponentName("Vault"), [_prop("b")]),
-        (7, ComponentName("Vault (2)"), [_prop("c")]),
-        (9, ComponentName("Vault"), [_prop("d")]),
     ])
-    labels = [c.label for c in cands]
-    assert len(set(labels)) == len(labels)
-    assert [c.unit_index for c in cands] == [0, 3, 7, 9]
+    assert [c.label for c in cands] == ["0: Vault", "3: Vault"]
+    assert [c.unit_index for c in cands] == [0, 3]
 
 
 # --- deriving the focus ---------------------------------------------------
 
 
-def test_the_focus_is_the_highest_priority_entry_wherever_it_sits_in_the_list():
-    # The ranking carries no "primary" field, so the artifact and the run cannot disagree: the
-    # focus is computed from the same scores the artifact records, in any order.
+def test_the_focus_is_the_group_holding_the_highest_scoring_property():
     cands = _cands()
-    r = _all(**{"Fees.fee_bounded": _entry("Fees", "fee_bounded", 90)})
+    r = _ranking(
+        [_e(VAULT, "solvency", 90), _e(VAULT, "no_free_mint", 80),
+         _e(VAULT, "shares_sane", 20), _e(FEES, "fee_bounded", 10)],
+        [_g("the vault stays solvent", (VAULT, "solvency"), (VAULT, "no_free_mint")),
+         _g("shares are sane", (VAULT, "shares_sane")),
+         _g("fees are bounded", (FEES, "fee_bounded"))],
+    )
     assert validate_ranking(cands, r) is None
     sel = select(cands, r)
-    assert sel.unit_index == 1 and sel.titles == ["fee_bounded"]
+    assert sel.unit_index == 0
+    assert sel.claim == "the vault stays solvent"
+    assert sel.titles == ["solvency", "no_free_mint"]
+
+
+def test_a_lower_scoring_property_rides_along_in_the_winning_group():
+    # The point of grouping: a property that would never win alone is pursued because it is part
+    # of the claim that did win.
+    cands = _cands()
+    r = _ranking(
+        [_e(VAULT, "solvency", 90), _e(VAULT, "shares_sane", 1),
+         _e(VAULT, "no_free_mint", 80), _e(FEES, "fee_bounded", 10)],
+        [_g("the vault stays solvent", (VAULT, "solvency"), (VAULT, "shares_sane")),
+         _g("no free mint", (VAULT, "no_free_mint")),
+         _g("fees", (FEES, "fee_bounded"))],
+    )
+    assert validate_ranking(cands, r) is None
+    assert select(cands, r).titles == ["solvency", "shares_sane"]
 
 
 def test_a_flagged_concern_wins_at_a_comparable_score():
     cands = _cands()
-    r = _all(**{
-        "Vault.solvency": _entry("Vault", "solvency", 40),
-        "Vault.no_free_mint": _entry("Vault", "no_free_mint", 30, critical=True),
-    })
+    r = _default(solvency=40)
+    r.ranked[1] = _e(VAULT, "no_free_mint", 30, critical=True)
     # 30 + 15 beats 40.
     assert select(cands, r).titles == ["no_free_mint"]
 
 
 def test_a_flagged_concern_does_not_drag_a_trivial_property_past_a_critical_one():
     cands = _cands()
-    r = _all(**{
-        "Vault.solvency": _entry("Vault", "solvency", 90),
-        "Vault.no_free_mint": _entry("Vault", "no_free_mint", 30, critical=True),
-    })
-    # The bonus is bounded, so a 60-point gap survives it.
+    r = _default(solvency=90)
+    r.ranked[1] = _e(VAULT, "no_free_mint", 30, critical=True)
     assert select(cands, r).titles == ["solvency"]
-    assert priority(_entry("x", "y", 30, critical=True)) == 30 + CRITICAL_MATCH_BONUS
+    assert priority(_e(VAULT, "x", 30, critical=True)) == 30 + CRITICAL_MATCH_BONUS
 
 
-def test_the_focus_pulls_in_what_the_winner_says_it_rests_on():
-    cands = _cands()
-    r = _all(**{
-        "Vault.solvency": _entry("Vault", "solvency", 90, deps=["shares_sane"]),
-    })
-    assert validate_ranking(cands, r) is None
-    # The primary leads; dependencies follow in the component's own order.
-    assert select(cands, r).titles == ["solvency", "shares_sane"]
-
-
-def test_only_the_winner_s_dependencies_are_pursued():
-    cands = _cands()
-    r = _all(**{
-        "Vault.solvency": _entry("Vault", "solvency", 90),
-        "Vault.no_free_mint": _entry("Vault", "no_free_mint", 30, deps=["shares_sane"]),
-    })
-    assert select(cands, r).titles == ["solvency"]
-
-
-def test_dependencies_are_deduplicated_and_never_repeat_the_primary():
-    cands = _cands()
-    r = _all(**{
-        "Vault.solvency": _entry(
-            "Vault", "solvency", 90, deps=["shares_sane", "shares_sane"],
-        ),
-    })
-    assert select(cands, r).titles == ["solvency", "shares_sane"]
-
-
-def test_the_batch_is_the_primary_plus_at_most_the_cap():
-    props = [_prop(f"p{i}") for i in range(MAX_SUPPORTING + 5)]
+def test_an_over_large_group_is_truncated_to_its_best_members(caplog):
+    props = [_prop(f"p{i}") for i in range(MAX_FOCUS_PROPERTIES + 3)]
     cands = build_candidates([(0, ComponentName("Vault"), props)])
-    r = _ranking(
-        _entry("Vault", "p0", 90, deps=[p.title for p in props[1:]]),
-        *[_entry("Vault", p.title, 10) for p in props[1:]],
-    )
+    label = "0: Vault"
+    entries = [_e(label, p.title, 100 - i) for i, p in enumerate(props)]
+    r = _ranking(entries, [_g("everything at once", *[(label, p.title) for p in props])])
     assert validate_ranking(cands, r) is None
-    assert len(select(cands, r).titles) == MAX_SUPPORTING + 1
+
+    sel = select(cands, r)
+    assert sel.titles == [p.title for p in props[:MAX_FOCUS_PROPERTIES]]
+    # Truncating means the claim is no longer established in full; that must not be silent.
+    assert any("not established in full" in rec.message for rec in caplog.records)
 
 
 def test_selection_never_yields_an_empty_batch():
-    # The driver raises "No properties extracted from any component" on an empty batch list, so the
-    # cut must always leave at least the primary standing.
-    cands = _cands()
-    sel = select(cands, _all())
-    assert sel.titles
+    # The driver raises "No properties extracted from any component" on an empty batch list.
+    assert select(_cands(), _default()).titles
 
 
 # --- validation -----------------------------------------------------------
 
 
-def test_a_dependency_from_another_component_is_rejected():
-    # D1: one component's batch survives, so a dependency elsewhere could never be formalized.
+def test_a_group_spanning_components_is_rejected():
+    # A run formalizes one component's batch, so a cross-component claim could not be pursued.
     cands = _cands()
-    r = _all(**{"Vault.solvency": _entry("Vault", "solvency", 90, deps=["fee_bounded"])})
+    r = _ranking(
+        [_e(VAULT, "solvency", 90), _e(VAULT, "no_free_mint", 10),
+         _e(VAULT, "shares_sane", 10), _e(FEES, "fee_bounded", 10)],
+        [_g("everything", (VAULT, "solvency"), (FEES, "fee_bounded")),
+         _g("rest", (VAULT, "no_free_mint"), (VAULT, "shares_sane"))],
+    )
     problem = validate_ranking(cands, r)
-    assert problem is not None and "same component" in problem
+    assert problem is not None and "spans components" in problem
 
 
-def test_a_self_dependency_is_rejected():
+def test_a_property_in_no_group_is_rejected():
     cands = _cands()
-    r = _all(**{"Vault.solvency": _entry("Vault", "solvency", 90, deps=["solvency"])})
+    r = _default()
+    r.groups = r.groups[:-1]
     problem = validate_ranking(cands, r)
-    assert problem is not None and "itself" in problem
+    assert problem is not None and "in no group" in problem
+
+
+def test_a_property_in_two_groups_is_rejected():
+    cands = _cands()
+    r = _default()
+    r.groups.append(_g("again", (VAULT, "solvency")))
+    problem = validate_ranking(cands, r)
+    assert problem is not None and "more than one group" in problem
 
 
 def test_a_missing_candidate_is_rejected():
     cands = _cands()
-    r = _ranking(_entry("Vault", "solvency", 40))
+    r = _default()
+    r.ranked = r.ranked[:-1]
     problem = validate_ranking(cands, r)
     assert problem is not None and "missing from `ranked`" in problem
 
 
-def test_a_duplicated_candidate_is_rejected():
-    cands = _cands()
-    r = _ranking(*_all().ranked, _entry("Vault", "solvency", 40))
-    problem = validate_ranking(cands, r)
-    assert problem is not None and "more than once" in problem
-
-
 def test_an_invented_property_is_rejected():
     cands = _cands()
-    r = _ranking(*_all().ranked, _entry("Vault", "not_a_real_property", 99))
+    r = _default()
+    r.ranked.append(_e(VAULT, "not_a_real_property", 99))
+    r.groups.append(_g("invented", (VAULT, "not_a_real_property")))
     problem = validate_ranking(cands, r)
     assert problem is not None and "not in the candidate listing" in problem
+
+
+def test_every_problem_is_reported_at_once():
+    # One error per attempt would run out of attempts before it ran out of mistakes.
+    cands = _cands()
+    r = _default()
+    r.ranked = r.ranked[:-1]          # a candidate missing from `ranked`
+    r.groups = r.groups[:-1]          # and the same one in no group
+    r.ranked.append(_e(VAULT, "invented", 50))
+    r.groups.append(_g("invented", (VAULT, "invented")))
+    problem = validate_ranking(cands, r)
+    assert problem is not None
+    assert "not in the candidate listing" in problem
+    assert "missing from `ranked`" in problem
+    assert "in no group" in problem
+
+
+# --- the retry -------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_retry_shows_the_model_what_it_produced():
+    """Structured output hands back a parsed object and leaves no assistant turn behind, so
+    without replaying it the model is asked to fix a ranking it has no memory of making."""
+    import composer.spec.prioritize as prioritize
+
+    cands = _cands()
+    bad = _default()
+    bad.ranked = bad.ranked[:-1]          # a candidate missing from `ranked`
+    good = _default()
+    seen: list[list] = []
+
+    class _Bound:
+        async def ainvoke(self, messages):
+            seen.append(list(messages))
+            return bad if len(seen) == 1 else good
+
+    class _LLM:
+        def with_structured_output(self, _ty): return _Bound()
+
+    out = await prioritize.rank_properties(
+        llm=_LLM(), contract_name="Vault", candidates=cands,  # type: ignore[arg-type]
+        design_doc=None, threat_model=None, extra_context=[],
+    )
+    assert out is good
+    assert len(seen) == 2, "the invalid ranking should have been retried"
+
+    replayed = "".join(str(m.content) for m in seen[1])
+    assert "solvency" in replayed and "missing from `ranked`" in replayed

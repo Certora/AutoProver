@@ -192,22 +192,16 @@ _FOCUS_GIVE_UP_DESCRIPTION = """
     """
 
 
-@dataclass
+@dataclass(frozen=True)
 class FocusPolicy:
     """The tightened exits a prioritized author runs under: the properties it may not retire,
     and the prover-run floor under an ``exhausted`` give-up.
 
-    ``lifted`` is flipped by the budget monitor's wrap-up, whose order — delete what does not
-    work, skip the rest, publish — requires exactly the skips this forbids. Holding the
-    protection past that point would deadlock the session the budget was trying to end. It is
-    process-local rather than graph state deliberately: budget accounting is per-process too, so
-    a resumed session starts with a fresh budget and a fresh protection together."""
+    Both are static. Whether the skip protection currently applies is read from
+    ``budget_curtailed`` in the graph state, which the budget monitor already sets and which a
+    checkpoint carries — a flag here would shadow it and could disagree with it on resume."""
     protected: tuple[PropertyTitle, ...]
     min_give_up_attempts: int = FOCUS_MIN_GIVE_UP_ATTEMPTS
-    lifted: bool = False
-
-    def protected_titles(self) -> tuple[PropertyTitle, ...]:
-        return () if self.lifted else self.protected
 
 
 class ResourceView(TypedDict):
@@ -733,22 +727,17 @@ a partial spec is better than going over budget. Concretely:
 """
 
 
-def _author_monitor(focus: FocusPolicy | None = None) -> Callable[[SourceCVLGenerationState], MonitorReturn]:
+def _author_monitor() -> Callable[[SourceCVLGenerationState], MonitorReturn]:
     """The author's monitor: budget wrap-up takes precedence; otherwise the
     usual reminders-channel drain. On the (single) turn the budget warning
     fires any pending reminders are dropped — moot, since the warning tells
     the agent to ignore prover/feedback outcomes anyway.
 
-    The wrap-up also lifts a prioritized run's focus protection: the order it gives is to skip
-    what does not work, which the protection would otherwise refuse."""
-    def _wrap_up(_s: SourceCVLGenerationState, _c: object) -> dict:
-        if focus is not None:
-            focus.lifted = True
-        return {"required_validations": [], "budget_curtailed": True}
-
+    ``budget_curtailed`` is what lifts a prioritized run's focus protection, which the skip tool
+    reads directly, so the wrap-up needs no separate signal for it."""
     b_monitor = budget_monitor(
         warning_message=lambda _s, c: _BUDGET_WRAPUP_MESSAGE.format(resource=constraint_sort_to_noun(c)),
-        state_transformer=_wrap_up,
+        state_transformer=lambda _s, _c: {"required_validations": [], "budget_curtailed": True},
         on_overbudget=raise_budget_exceeded,
     )
 
@@ -872,7 +861,7 @@ async def batch_cvl_generation(
         "context": component,
         "source_editing": editing is not None,
     })
-    protected = focus.protected_titles if focus is not None else ()
+    protected = focus.protected if focus is not None else ()
     if editing is None:
         feedback_suite = property_tools(
             property_feedback_judge(judge_ctx, env, judge_prompt, props),
@@ -923,7 +912,7 @@ async def batch_cvl_generation(
     ).with_state(
         SourceCVLGenerationState
     ).with_monitor(
-        _author_monitor(focus)
+        _author_monitor()
     ).with_output_key(
         "result"
     ).with_input(

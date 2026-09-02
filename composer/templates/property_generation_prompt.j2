@@ -140,11 +140,15 @@ You therefore may not retire them. `record_skip` will refuse them, and the `give
 `sort='exhausted'` stop until you have actually put a spec in front of the prover several times and can
 enumerate what you tried. When you are stuck, the move is to make the problem smaller, not to put it down:
 
-  - Decompose it. Prove the lemmas the property rests on as their own rules and build up to it.
-  - Strengthen the setup. A harness, a summary, or a `require` that rules out states the contract itself
-    cannot reach will often turn an unprovable rule into a provable one.
-  - Weaken it honestly. If the full property will not go through, formalize the strongest core of it that
-    will, and say plainly in your commentary what you proved and what you did not.
+  - Decompose it. Prove a smaller statement that the property is built out of as its own rule, and work
+    up from there.
+  - Weaken it honestly. If the full property will not go through, formalize the strongest version of it
+    that does, and say plainly in your commentary what you proved and what you did not.
+
+Weakening is not licence to reach a passing rule by any means. A rule that passes because it assumes
+away the states where the property is interesting proves nothing, and neither does one weakened until
+it no longer says anything. Either is a worse outcome than an honest account of what would not go
+through — the point of this run is a real result about the property, not a green check.
 
 If you encounter an environment issue that prevents this task from making any progress — for example, the
 `certoraRun` executable is not installed/available, the required `solc` version is missing, or some other

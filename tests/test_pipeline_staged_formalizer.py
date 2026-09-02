@@ -18,7 +18,7 @@ import pytest
 
 from composer.pipeline.run_mode import RunMode
 from composer.authoring.state import SkippedProperty
-from composer.spec.prioritize import PropertyRanking, RankedProperty
+from composer.spec.prioritize import PropertyGroup, PropertyRanking, RankedProperty
 import composer.pipeline.core as core
 from composer.pipeline.core import run_pipeline
 from composer.pipeline.ecosystem import EVM
@@ -232,18 +232,20 @@ async def test_an_unstaged_formalizer_is_formalized_directly(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _ranking(winner, deps, order):
-    """Score ``winner`` above everything else, so the derived focus is deterministic."""
+def _ranking(winner, also, order):
+    """Score ``winner`` above everything else, so the derived focus is deterministic. ``also``
+    names the other titles sharing the winner's claim."""
+    with_winner = [winner, *((winner[0], t) for t in also)]
     return PropertyRanking(
         ranked=[
-            RankedProperty(
-                key=k,
-                score=90 if k == winner else 10,
-                critical_match=False,
-                depends_on=deps if k == winner else [],
-                rationale="r",
-            )
+            RankedProperty(key=k, score=90 if k == winner else 10, critical_match=False,
+                           rationale="r")
             for k in order
+        ],
+        groups=[
+            PropertyGroup(claim="the claim under test", members=with_winner),
+            *(PropertyGroup(claim=f"claim:{k[1]}", members=[k])
+              for k in order if k not in with_winner),
         ],
         justification="j",
     )
@@ -254,10 +256,10 @@ async def test_prioritized_formalizes_one_batch_and_begin_still_sees_only_it(mon
     # ``begin`` is handed the pruned list too, so a backend that authors a shared artifact from
     # the batches authors it from the focus rather than from everything.
     units = {"deposits": ["a", "b"], "admin": ["c"], "farms": ["d"]}
-    order = [("deposits", "a"), ("deposits", "b"), ("admin", "c"), ("farms", "d")]
+    order = [("0: deposits", "a"), ("0: deposits", "b"), ("1: admin", "c"), ("2: farms", "d")]
     s = await _drive(
         monkeypatch, units, _Staged(), run_mode=RunMode.PRIORITIZED,
-        ranking=_ranking(("deposits", "a"), ["b"], order),
+        ranking=_ranking(("0: deposits", "a"), ["b"], order),
     )
     assert s.calls[0] == ("begin", ["a", "b"])
     assert [c[0] for c in s.calls[1:]] == ["formalize:deposits"]
@@ -267,10 +269,10 @@ async def test_prioritized_leaves_the_pre_formalization_overlap_alone(monkeypatc
     # D2: the fixed prefix is not what this mode makes cheaper, and it must keep running —
     # ``begin`` is still called exactly once, before any formalization.
     units = {"deposits": ["a"], "admin": ["b"]}
-    order = [("deposits", "a"), ("admin", "b")]
+    order = [("0: deposits", "a"), ("1: admin", "b")]
     s = await _drive(
         monkeypatch, units, _Staged(), run_mode=RunMode.PRIORITIZED,
-        ranking=_ranking(("admin", "b"), [], order),
+        ranking=_ranking(("1: admin", "b"), [], order),
     )
     names = [c[0] for c in s.calls]
     assert names.count("begin") == 1 and names[0] == "begin"
@@ -348,7 +350,7 @@ async def test_ranking_does_not_wait_for_pre_formalization(monkeypatch):
     async def fake_rank(**_kw):
         order.append("rank")
         release.set()  # only now let the setup finish; if the driver awaited it first, we deadlock
-        return _ranking(("deposits", "a"), [], [("deposits", "a")])
+        return _ranking(("0: deposits", "a"), [], [("0: deposits", "a")])
 
     async def fake_report(*_a, **_kw): return object()
 
