@@ -36,7 +36,10 @@
 #[inline] ^<anchor_lang::error::Error as core::convert::From<anchor_lang::error::ErrorCode>>::from$
 #[inline] ^<anchor_lang::error::Error as core::convert::From<solana_program::program_error::ProgramError>>::from$           
 #[inline] ^anchor_lang::error::<impl core::convert::From<anchor_lang::error::ErrorCode> for u32>::from$
-#[inline] ^squads_multisig_program::errors::<impl core::convert::From<squads_multisig_program::errors::MultisigError> for anchor_lang::error::Error>::from$
+;; Any program's own error enum, not one named project's: this layer is canonical and is copied
+;; into every scaffold, so a concrete crate name here is a directive that matches nothing.
+#[inline] ^.+ for anchor_lang::error::Error>::from$
+#[inline] ^<anchor_lang::error::Error as core::convert::From<std::io::error::Error>>::from$
 
 #[inline] ^<.+ as anchor_lang::AccountDeserialize>::try_deserialize$
 #[inline] ^<.+ as anchor_lang::AccountDeserialize>::try_deserialize_unchecked$
