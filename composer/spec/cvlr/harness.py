@@ -17,6 +17,7 @@ Two consequences that are not obvious from the CVL side:
 """
 
 import dataclasses
+import json
 import re
 from pathlib import Path
 from typing import override
@@ -27,6 +28,7 @@ from composer.authoring.state import SkippedProperty
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.cvlr.scaffold import SPECS_DIR
 from composer.spec.cvlr.state import PropertyRuleMapping, RuleSubject
+from composer.spec.cvlr.tuning import SummaryDirective
 from composer.spec.types import CheckName, PropertyTitle, RuleName
 from composer.spec.util import ensure_dir
 
@@ -95,6 +97,10 @@ class GeneratedHarness(BaseModel):
     #: reasoning as ``expected_failures``: a verdict earned against a stand-in is worth something
     #: different from one earned against the program, and the report is where that has to be said.
     rule_subjects: list[RuleSubject] = Field(default_factory=list)
+    #: Points-to summaries the author added to make a path analyzable. Reported, because each one
+    #: replaced a function with an unconstrained stand-in: the verdicts are conditional on them
+    #: being sound for these properties, and the ``why`` is the only argument that they were.
+    summaries: list[SummaryDirective] = Field(default_factory=list)
     #: Every rule the draft declares, as read from the draft rather than transcribed by the model.
     declared_rules: list[RuleName] = Field(default_factory=list)
     final_link: str | None = None
@@ -131,6 +137,31 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
     @override
     def _artifact_dir(self) -> Path:
         return ensure_dir(Path(self._project_root) / self._package_dir / SPECS_DIR)
+
+    @override
+    def write_artifact(self, i: HarnessModule, artifact: GeneratedHarness) -> Path:
+        """The harness, plus the sidecar of things its verdicts are conditional on.
+
+        The base store writes the module, the commentary and the property→rule map. Neither of the
+        two claims this backend needs a reader to see survives that: which rules drive the program's
+        own code rather than a stand-in, and which functions the prover was told to stop analyzing.
+        Both were reaching the checkpoint and dying there — an end-to-end run published seven rules
+        with their subjects correctly declared and nothing on disk said so.
+        """
+        written = super().write_artifact(i, artifact)
+        self._write_assumptions(i.stem, artifact)
+        return written
+
+    def _write_assumptions(self, stem: str, artifact: GeneratedHarness) -> None:
+        (self._properties_dir() / f"{stem}.assumptions.json").write_text(
+            json.dumps(
+                {
+                    "rule_subjects": [s.model_dump() for s in artifact.rule_subjects],
+                    "summaries": [dataclasses.asdict(s) for s in artifact.summaries],
+                },
+                indent=2,
+            )
+        )
 
     def declare_modules(self, modules: list[HarnessModule]) -> Path:
         """Write ``specs/mod.rs`` declaring every unit's module, and create any that do not exist.

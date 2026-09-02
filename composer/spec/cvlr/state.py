@@ -11,6 +11,9 @@ the validation stamps and the digest gate. What is CVLR's own:
 * ``property_rules`` — the mapping the publish gate validates.
 * ``rule_subjects`` — per rule, what it actually drives: a function of the program, or harness-local
   code standing in for one. Carried into the report for the same reason ``expected_failures`` is.
+* ``summaries`` — the points-to summaries the author added (:mod:`composer.spec.cvlr.tuning`). These
+  feed the digest through ``version_history``, because a summary changes what the prover checked:
+  a stamp earned before one was added is about a different build.
 
 **The ground truth is the buffer, not the run.** ``validate_check_mapping``'s docstring notes that
 forge names every test it ran and a backend whose checker does not is passed ``None``; the prover
@@ -37,6 +40,7 @@ from composer.authoring.state import (
 )
 from composer.spec.context import CacheKey, CvlrGeneration, CvlrJudge
 from composer.spec.cvlr.rules import rule_names
+from composer.spec.cvlr.tuning import SummaryDirective, summary_history
 from composer.spec.types import CheckName, PropertyTitle, RuleName
 
 #: Stamped by the prover gate when a run comes back with every rule accounted for. There is
@@ -130,6 +134,9 @@ class CvlrGenerationExtra(AuthoringExtra):
     property_rules: list[PropertyRuleMapping]
     #: One entry per declared rule, naming what it drives. See :data:`RuleSubject`.
     rule_subjects: list[RuleSubject]
+    #: Points-to summaries the author added, in the order added. Replaced wholesale rather than
+    #: merged: the tool hands back the full list so the state and the file on disk cannot drift.
+    summaries: list[SummaryDirective]
     expected_failures: Annotated[dict[CheckName, str], merge_expected_failures]
     #: The job link from the most recent prover run that produced results, whether or not it was
     #: all green — a link to a failing run is still the most useful thing a report can offer.
@@ -149,9 +156,22 @@ class CvlrGenerationState(CvlrGenerationExtra, MessagesState):
     result: NotRequired[str]
 
 
+def tuning_history(state: CvlrGenerationExtra) -> tuple[str, ...]:
+    """The publish surface's non-harness half, as ``version_history`` tokens.
+
+    The generic digest already takes a history so that "a stamp earned before a source edit goes
+    stale with it"; a summary is such an edit, and the sharpest kind — it changes what the prover
+    analyzed without changing a character of the draft. Every stamp site passes this, so adding a
+    summary after a green run costs the run rather than silently keeping its verdicts.
+    """
+    return summary_history(tuple(state["summaries"]))
+
+
 def check_cvlr_completion(state: CvlrGenerationExtra) -> str | None:
     """None if the publish gate is satisfied, otherwise the reason."""
-    return check_completion(state, nothing_written="no harness written yet.")
+    return check_completion(
+        state, tuning_history(state), nothing_written="no harness written yet."
+    )
 
 
 #: How this backend words its publish-time mapping. ``ran_source`` names the *draft* rather than a

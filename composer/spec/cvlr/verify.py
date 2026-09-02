@@ -49,7 +49,12 @@ from composer.spec.cvlr.prover import (
     submit,
 )
 from composer.spec.cvlr.rules import rule_names
-from composer.spec.cvlr.state import PROVER_VALIDATION_KEY, CvlrGenerationState
+from composer.spec.cvlr.state import (
+    PROVER_VALIDATION_KEY,
+    CvlrGenerationState,
+    tuning_history,
+)
+from composer.spec.cvlr.tuning import SummaryDirective, TuningFiles
 from composer.spec.types import CheckName
 from composer.ui.tool_display import tool_display
 
@@ -69,6 +74,8 @@ class HarnessTarget:
     session: CargoSession
     module_path: Path
     package: str
+    #: The package's tuning files, which ``summarize_for_prover`` rewrites.
+    tuning: TuningFiles
 
     def stage(self, draft: str) -> None:
         self.module_path.parent.mkdir(parents=True, exist_ok=True)
@@ -163,10 +170,7 @@ class VerifyRules(
             return "No harness written yet — put a draft first."
         declared = rule_names(draft)
         if not declared:
-            return (
-                "Your draft declares no rules, so there is nothing to check. A rule is a `#[rule]` "
-                "function or a `cvlr_rules!` invocation."
-            )
+            return self._nothing_to_submit()
         with self.tool_deps() as deps:
             if deps.lock.locked():
                 return (
@@ -190,6 +194,34 @@ class VerifyRules(
                     tool_call_id=self.tool_call_id,
                 )
             return self._report(outcome, deps.stamper)
+
+    def _nothing_to_submit(self) -> Command | str:
+        """A draft with no rules: either unfinished, or a unit whose every property is blocked.
+
+        The second case has to be able to finish. A unit that skips everything — the honest outcome
+        when the prover cannot analyze the handler its properties are about — declares no rules, so
+        it could never earn this stamp, so ``result`` refused it and ``give_up`` was the only way
+        out. That reported a considered "nothing here is formalizable, and here is why" as a
+        failure, which is both wrong and the shape the skip guidance had just started encouraging.
+
+        Stamping is safe because it is not the only gate: ``result`` still requires every property to
+        be either skipped or mapped to a declared rule, and the judge still has to accept the skips.
+        A draft with no rules and no skips is the unfinished case and gets nothing.
+        """
+        if not self.state["skipped"]:
+            return (
+                "Your draft declares no rules and no property is skipped, so there is nothing to "
+                "check. A rule is a `#[rule]` function or a `cvlr_rules!` invocation."
+            )
+        with self.tool_deps() as deps:
+            return tool_state_update(
+                self.tool_call_id,
+                "No rules to submit — every property you have not skipped would need one, and you "
+                "have skipped them all. Nothing was submitted and no prover time was spent. The "
+                "prover gate is satisfied by that; the judge still has to accept your skip "
+                "reasons, so make each one name what blocked it.",
+                validations=deps.stamper(self.state, tuning_history(self.state)),
+            )
 
     def _report(self, outcome: CvlrOutcome, stamper: ValidationStamper) -> Command | str:
         expected = self.state["expected_failures"]
@@ -236,20 +268,97 @@ class VerifyRules(
                     self.tool_call_id,
                     "\n\n".join([*lines, "Every rule is accounted for. This draft is stamped."]),
                     prover_link=report.link,
-                    validations=stamper(self.state),
+                    validations=stamper(self.state, tuning_history(self.state)),
                 )
 
 
 def gate_tools(target: HarnessTarget, deps: VerifyDeps) -> list[BaseTool]:
-    """The two gate tools, named as the author's prompt refers to them."""
+    """The gate tools and the one tool that changes what they check, named as the prompt refers to
+    them."""
     return [
         CargoCheck.bind(target).as_tool("cargo_check"),
         VerifyRules.bind(deps).as_tool("verify_rules"),
+        SummarizeForProver.bind(target.tuning).as_tool("summarize_for_prover"),
     ]
 
 
 def prover_stamper() -> ValidationStamper:
     return make_validation_stamper(PROVER_VALIDATION_KEY)
+
+
+@tool_display(lambda p: f"Summarizing `{p['symbol_pattern']}` for the prover", "Summary")
+class SummarizeForProver(
+    WithInjectedState[CvlrGenerationState],
+    WithInjectedId,
+    WithAsyncDependencies[Command | str, TuningFiles],
+):
+    """Tell the prover to replace a function with an unconstrained stand-in instead of analyzing it.
+
+    This is the remedy for a rule that comes back with **no verdict** because the pointer analysis
+    refused something on one of its paths — [3308] on an Anchor program's ``#[error_code]`` enum
+    formatting its ``#[msg]`` string is the common case, and it is reached by any ``require!`` or
+    ``?`` in a handler you call. Summarizing that formatting code makes the rest of the handler
+    analyzable.
+
+    **A summary is unsound, and it does not fail loudly.** The prover stops reasoning about the
+    function and assumes anything could happen inside it, so summarizing the code your property is
+    actually about produces a rule that passes having checked nothing — with no trace in the
+    harness. Summarize only what your properties do not depend on. Never summarize a handler, or a
+    function that computes a value you assert over.
+
+    Adding one invalidates the prover stamp, because the previous run's verdicts were about a
+    different build: re-run ``verify_rules`` afterwards.
+    """
+
+    symbol_pattern: str = Field(
+        description="A regex over demangled symbols, spelled the way the tuning files do and "
+        "normally anchored — e.g. `^<vault::VaultError as core::fmt::Display>::fmt$`. The prover "
+        "error names the symbol; copy it from there rather than guessing."
+    )
+    why: str = Field(
+        description="Why analyzing it fails, and why replacing it with a stand-in is sound for the "
+        "properties in this batch. This is written into the project's tuning file and carried into "
+        "the report — it is the only account a reader gets of what was assumed."
+    )
+    returns: str | None = Field(
+        default=None,
+        description="The `#[type(...)]` body, without the wrapper, when the summarized function's "
+        "return value needs a shape — e.g. `(*i32)(r1+0):num`. Omit for an unconstrained return, "
+        "which is right for a function whose result nothing asserts over.",
+    )
+
+    @override
+    async def run(self) -> Command | str:
+        if not self.why.strip():
+            return (
+                "A non-empty `why` is required. A summary makes the prover stop reasoning about a "
+                "function, so an unexplained one is indistinguishable from a rule that proves "
+                "nothing."
+            )
+        with self.tool_deps() as tuning:
+            if absent := tuning.missing():
+                # The scaffold owns these files, so this is a scaffold failure surfacing late.
+                # Refused rather than written, because a summary in a file the conf does not name
+                # changes nothing and the author would read success and get an identical [3308].
+                return (
+                    f"This project has no {', '.join(absent)}, so the prover is not reading any "
+                    "tuning file and a summary would have no effect. Report this rather than "
+                    "working around it."
+                )
+            directive = SummaryDirective(
+                pattern=self.symbol_pattern, why=self.why, returns=self.returns
+            )
+            existing = tuple(self.state["summaries"])
+            if any(d.pattern == directive.pattern for d in existing):
+                return f"{directive.pattern} is already summarized."
+            updated = existing + (directive,)
+            tuning.write(updated)
+        return tool_state_update(
+            self.tool_call_id,
+            f"Summarized {directive.pattern}. {len(updated)} summary directive(s) now in effect. "
+            "This invalidated the prover stamp — re-run verify_rules.",
+            summaries=list(updated),
+        )
 
 
 @tool_display(lambda p: f"Expecting rule `{p['rule_name']}` to fail", None)

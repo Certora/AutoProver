@@ -77,6 +77,10 @@ formatting it by hand.
 * `verify_rules()` — build for the chain and run the Certora Solana Prover. **Minutes, and it costs
   real prover time.** Get `cargo_check` green first. A run whose every rule is accounted for stamps
   the publish gate. A failed chain build never submits, and comes back as the compiler's own message.
+* `summarize_for_prover(symbol_pattern, why, returns=None)` — tell the prover to replace a symbol
+  with an unconstrained stand-in rather than analyze it. The remedy for a rule that comes back with
+  no verdict because the pointer analysis refused something on one of its paths. Unsound by
+  construction, so it is for code your properties do not depend on; it invalidates the prover stamp.
 * `record_skip(property_title, reason)` / `unskip_property(property_title)` — declare a property
   unformalizable, with justification.
 * `expect_rule_failure(rule_name, reason)` / `expect_rule_passage(rule_name)` — mark a rule as

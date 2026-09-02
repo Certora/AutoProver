@@ -41,7 +41,7 @@ from composer.spec.source.report.schema import (
     PropertyGroup, RuleVerdict, SeverityTier, SkippedClaim,
 )
 from composer.spec.source.report_prover import job_input, make_prover_fetcher
-from composer.spec.source.report.collect import RuleEvidence
+from composer.spec.source.report.collect import Abandoned, RuleEvidence
 from composer.spec.source.report.findings import FindingDraft, build_findings
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.diagnostics.timing import RunSummary
@@ -100,10 +100,18 @@ def _input(
     name: str,
     unit_file: str,
     props: list[PropertyFormulation],
-    result: GeneratedCVL | None
+    result: GeneratedCVL | None,
+    gave_up_reason: str = "gave up",
 ) -> ReportComponentInput[GeneratedCVL]:
-    return ReportComponentInput(name=name, props=props,
-                                formalized=Delivered(result, pathlib.Path(unit_file)) if result is not None else None)
+    return ReportComponentInput(
+        name=name,
+        props=props,
+        formalized=(
+            Delivered(result, pathlib.Path(unit_file))
+            if result is not None
+            else Abandoned(gave_up_reason)
+        ),
+    )
 
 
 def _curtailed_input(
@@ -194,15 +202,21 @@ async def test_collect_splits_skipped_property_into_gap():
 
 
 @pytest.mark.asyncio
-async def test_collect_none_result_is_a_gap():
-    """A component with no result (the caller maps both give-up and crash to ``None``) is a
-    formalization gap — all its properties unimplemented, no per-property reason."""
+async def test_collect_abandoned_result_is_a_gap_that_says_why():
+    """A component that produced nothing (gave up, or crashed) is a formalization gap — all its
+    properties unimplemented, no per-property reason.
+
+    Its *component*-level reason is carried, which it was not until a CVLR run gave up twice on one
+    prover limitation, diagnosed it exactly, named the tuning directive that would have fixed it,
+    and had all of that discarded at this boundary because the input type was `None`."""
     props = [_prop("p1", "d1")]
     properties, rules, skipped, gave_up, curtailed, dropped = await collect(
-        [_input("C", "autospec_C.spec", props, None)], fetch_verdicts=_fetcher({}))
+        [_input("C", "autospec_C.spec", props, None, gave_up_reason="[3308] on VaultError")],
+        fetch_verdicts=_fetcher({}))
     assert properties == [] and rules == [] and skipped == [] and curtailed == [] and dropped == 0
     assert [g.component for g in gave_up] == ["C"]
     assert [p.title for p in gave_up[0].properties] == ["p1"]
+    assert gave_up[0].reason == "[3308] on VaultError"
 
 
 @pytest.mark.asyncio

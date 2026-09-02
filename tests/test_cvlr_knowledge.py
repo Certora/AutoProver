@@ -434,7 +434,7 @@ def test_the_ladder_has_a_rung_for_a_rule_the_prover_cannot_analyze():
 def test_the_three_remedies_are_named_and_reimplementation_is_not_one_of_them():
     prompt = _flat(_author_task_prompt())
     rung = prompt.split("A rule the prover could not analyze")[1].split("Step 4")[0]
-    assert "summarize the offending call" in rung
+    assert "summarize_for_prover(symbol_pattern, why)" in rung
     assert "weaken the rule to a sub-property" in rung
     assert "skip the property" in rung
     assert "Do not respond by moving the rule onto code the prover finds easier" in rung
@@ -468,3 +468,34 @@ def test_prover_evidence_does_not_license_verifying_a_copy_of_the_handler():
     author had a genuine [3308] transcript. Any objection would have been conceded away."""
     carve = _flat(_judge_system_prompt()).split("One carve-out")[1]
     assert "never binds you on *whether* the rule reaches the program" in carve
+
+
+def test_the_first_remedy_names_a_tool_that_exists():
+    """The gap that made the previous fix half-inert. The ladder told the author to "summarize the
+    offending call", and nothing could: the tuning files are written once by the scaffold and
+    `put_harness` writes the harness module. It worked that out itself — *"the only writing tool
+    available is put_harness (writes this module only)"* — and reimplemented the handler instead."""
+    prompt = _flat(_author_task_prompt())
+    assert "summarize_for_prover(symbol_pattern, why)" in prompt
+    assert "summarize_for_prover" in _flat(_author_system_prompt())
+
+
+def test_the_author_is_warned_that_a_summary_is_unsound():
+    """It is a sharper instrument than the mirror it replaces: summarizing the code a property is
+    about gives a passing rule that checked nothing, and unlike a mirror it leaves no trace in the
+    harness at all."""
+    prompt = _flat(_author_task_prompt())
+    assert "summarizing the code a property is *about*" in prompt
+    assert "never the handler" in prompt
+
+
+def test_the_judge_weighs_summaries_the_same_way_it_weighs_mirrors():
+    prompt = _flat(_judge_system_prompt())
+    item_one = prompt.split("2. **Vacuity")[0]
+    assert "check the summaries the same way" in item_one
+    assert "hollows out" in item_one
+
+
+def test_an_unanalyzable_handler_skip_names_the_tool_it_tried():
+    prompt = _flat(_author_task_prompt())
+    assert "`summarize_for_prover` and weakening both failed" in prompt

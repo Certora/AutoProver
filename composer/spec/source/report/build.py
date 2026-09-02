@@ -14,7 +14,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 
 from composer.spec.types import Curtailed
 from composer.spec.source.report.collect import (
-    EvidenceFetcher, ReportableResult, ReportComponentInput, VerdictFetcher, collect,
+    Abandoned, EvidenceFetcher, ReportableResult, ReportComponentInput, VerdictFetcher, collect,
 )
 from composer.spec.source.report.coverage import ValidationError, validate
 from composer.spec.source.report.findings import build_findings
@@ -110,8 +110,7 @@ async def build_report[R: ReportableResult](
     prover_links = {
         c.name: c.formalized.run_link
         for c in components
-        if c.formalized is not None and not isinstance(c.formalized, Curtailed)
-        and c.formalized.run_link
+        if not isinstance(c.formalized, (Abandoned, Curtailed)) and c.formalized.run_link
     }
     # Violated rules -> findings. Its own guard: findings synthesis must never fail the report
     # (the whole phase is also best-effort in the caller, but this keeps a working report even when

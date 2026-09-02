@@ -59,15 +59,23 @@ class Formalized[R: ReportableResult](Protocol):
 
 
 @dataclass(frozen=True)
+class Abandoned:
+    """The component produced nothing: no units formalized, no file written, no run.
+
+    A variant rather than a ``None``, so the account of *why* has somewhere to live. It used to be
+    ``None`` and the reason was discarded at the boundary."""
+    reason: str
+
+
+@dataclass(frozen=True)
 class ReportComponentInput[R: ReportableResult]:
     """One unit to collect: a component or the structural invariants. ``formalized`` carries the
     generation result and its unit file / run link; a `Curtailed` wrapper when the budget cut the
     generation short (its ``partial`` is the quarantined encoding, or ``None`` if nothing was
-    published); or ``None`` when the component gave up or crashed — in which case no units were
-    formalized, no file was written, and there is no run."""
+    published); or `Abandoned` when the component gave up or crashed."""
     name: ComponentName
     props: list[PropertyFormulation]
-    formalized: "Formalized[R] | Curtailed[Formalized[R]] | None"
+    formalized: "Formalized[R] | Curtailed[Formalized[R]] | Abandoned"
 
 
 @dataclass(frozen=True)
@@ -189,7 +197,7 @@ async def collect[R: ReportableResult](
     construction, so nothing is fetched for it.
     """
     async def _verdicts(inp: ReportComponentInput[R]) -> dict[RuleName, Verdict]:
-        if inp.formalized is None or isinstance(inp.formalized, Curtailed):
+        if isinstance(inp.formalized, (Abandoned, Curtailed)):
             return {}
         return await fetch_verdicts(inp.formalized)
 
@@ -203,9 +211,13 @@ async def collect[R: ReportableResult](
     referenced: set[RuleRef] = set()
 
     for inp, verdicts in zip(inputs, verdict_maps):
-        if inp.formalized is None:
+        if isinstance(inp.formalized, Abandoned):
             # Gave up or crashed: the whole component is a formalization gap.
-            gave_up.append(GaveUpComponent(component=inp.name, properties=inp.props))
+            gave_up.append(
+                GaveUpComponent(
+                    component=inp.name, properties=inp.props, reason=inp.formalized.reason or None
+                )
+            )
             continue
         if isinstance(inp.formalized, Curtailed):
             curtailed.append(_curtailed_component(inp.name, inp.props, inp.formalized))

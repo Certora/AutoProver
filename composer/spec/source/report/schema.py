@@ -124,10 +124,17 @@ class SkippedClaim(PropertyFormulation):
 
 
 class GaveUpComponent(BaseModel):
-    """A formalization gap at component granularity: the component's CVL generation gave up (or
-    crashed), so none of its inferred properties were formalized. No per-property reason."""
+    """A formalization gap at component granularity: the component's generation gave up (or
+    crashed), so none of its inferred properties were formalized. No per-property reason.
+
+    ``reason`` is the author's own account, or the exception text when the component crashed. It was
+    dropped until a CVLR run gave up twice on one prover limitation and diagnosed it precisely,
+    naming the tuning directive that would have unblocked it — an analysis that reached the
+    transcript and nothing else. Whatever stopped a component is usually the most actionable thing
+    a report carries."""
     component: ComponentName
     properties: list[PropertyFormulation]
+    reason: str | None = None
 
 
 class DraftedProperty(PropertyFormulation):
@@ -306,7 +313,7 @@ class Finding(BaseModel):
 
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
-    schema_version: Literal["3.0", "3.1"] = "3.1"
+    schema_version: Literal["3.0", "3.1", "3.2"] = "3.2"
     backend: ReportBackend = "prover"
     contract_name: str
     run_timestamp_utc: str | None = None

@@ -56,7 +56,7 @@ from composer.spec.prop_inference import (
 from composer.llm.types import CacheLevel
 from composer.input.files import Document
 from composer.spec.source.report.build import build_report
-from composer.spec.source.report.collect import ReportComponentInput, Verdict, EvidenceFetcher, Formalized
+from composer.spec.source.report.collect import Abandoned, ReportComponentInput, Verdict, EvidenceFetcher, Formalized
 from composer.spec.source.report.schema import (
     AutoProverReport, RuleName, ReportBackend, SourceEditRecord, VerificationArtifactRecord,
 )
@@ -459,6 +459,17 @@ async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: Artifact
         )
 
 # ---- the driver --------------------------------------------------------------
+def _abandonment(result: GaveUp | BaseException) -> str:
+    """What to record for a component that produced nothing.
+
+    A ``GaveUp`` carries the author's own account, which is the useful case — an authoring loop that
+    stops usually knows exactly what stopped it. An exception carries only its text, which is still
+    better than the silence this replaced."""
+    if isinstance(result, GaveUp):
+        return result.reason
+    return f"{type(result).__name__}: {result}"
+
+
 async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
     backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
     run: PipelineRun[P, H],
@@ -679,7 +690,11 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
         ReportComponentInput(
             name=o.feat.display_name,
             props=o.props,
-            formalized=o.result if isinstance(o.result, (Delivered, Curtailed)) else None,
+            formalized=(
+                o.result
+                if isinstance(o.result, (Delivered, Curtailed))
+                else Abandoned(_abandonment(o.result))
+            ),
         )
         for o in outcomes
     ] + formalizer.extra_report_inputs()

@@ -53,7 +53,8 @@ from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness, HarnessModule
 from composer.spec.cvlr.preflight import CvlrPreflight, gate_workspace, prepare_workspace
 from composer.spec.cvlr.prover import Submission
-from composer.spec.cvlr.scaffold import SPECS_DIR
+from composer.spec.cvlr.scaffold import ENVS_DIR, SPECS_DIR
+from composer.spec.cvlr.tuning import TuningFiles
 from composer.spec.cvlr.source_tools import cvlr_source_tools, mount
 from composer.spec.cvlr.state import PROVER_VALIDATION_KEY
 from composer.spec.cvlr.verify import HarnessTarget, VerifyDeps, prover_stamper
@@ -162,6 +163,10 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
             session=session,
             module_path=package_root / SPECS_DIR / identity.artifact_file,
             package=self.deps.preflight.package,
+            tuning=TuningFiles(
+                envs_dir=package_root / ENVS_DIR,
+                dialect=self.deps.preflight.scaffold.dialect,
+            ),
         )
         verify = VerifyDeps(
             target=target,
