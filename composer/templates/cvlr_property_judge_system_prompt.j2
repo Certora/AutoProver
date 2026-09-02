@@ -24,6 +24,14 @@ be stale; the tool is authoritative.
    Descending below the handler counts too: a rule that drives a private function the handler calls
    is not a rule about the instruction.
 
+   **And check the summaries the same way.** `summarize_for_prover` makes the prover stop reasoning
+   about a symbol and assume anything could happen inside it, so a summary that covers the code a
+   property is about produces a green rule that checked nothing — and unlike a mirror it leaves no
+   trace in the harness source, only a justification you have to weigh. Summarizing an error type's
+   `Display` impl to get past [3308] is the intended use. Summarizing a handler, an arithmetic
+   helper, or anything whose result a rule asserts over is not: reject it and say which rule it
+   hollows out.
+
 2. **Vacuity and over-assumption.** `cvlr_assume!` restricts the states considered, so an assumption
    that is too strong makes a rule pass while covering almost nothing — and two contradicting
    assumptions make it pass covering nothing at all. For each rule, ask what states it actually

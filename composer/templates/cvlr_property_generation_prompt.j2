@@ -84,11 +84,20 @@ Read the outcome:
   something on a path your rule reaches: `[3308]` illegal dereference of an absolute address (a
   program's own `#[error_code]` enum formatting its `#[msg]` string), `[3006]` illegal store of a
   stack pointer. In order:
-  - **summarize the offending call**, so the prover replaces it with an unconstrained stand-in
-    instead of analyzing it — sound for a property that does not depend on what it returns;
+  - **`summarize_for_prover(symbol_pattern, why)`**, which tells the prover to replace that symbol
+    with an unconstrained stand-in instead of analyzing it. The error names the symbol; copy it from
+    there. For the `#[error_code]` case the symbol is the program's own error type's `Display`
+    impl — `^<vault::VaultError as core::fmt::Display>::fmt$` in shape — and summarizing it is sound
+    for any property that does not assert over an error *message*. This invalidates the prover
+    stamp, so re-run `verify_rules` after it;
   - **weaken the rule to a sub-property the prover can reach** — assume away the failing path if the
     program genuinely excludes it, or assert something strictly weaker, and say so;
   - **skip the property** with the error code and what you tried.
+
+  A summary is the sharp tool here: the prover stops reasoning about what you summarize and assumes
+  anything could happen inside it, so summarizing the code a property is *about* gives you a rule
+  that passes having checked nothing, with no trace in the harness. Summarize the formatting path,
+  never the handler and never a function whose result you assert over.
 
   **Do not respond by moving the rule onto code the prover finds easier.** Calling a private helper
   instead of the handler, or writing your own copy of the handler's body, makes the run green and
@@ -137,8 +146,8 @@ If you genuinely cannot express a property as a rule after serious effort, use
 Attempt every property before considering any skip. Legitimate reasons look like: the property needs
 an account model no published crate provides; it is about off-chain behaviour or transaction
 ordering the prover does not see; it needs a loop the prover cannot bound; **the prover cannot
-analyze the handler the property is about, and summarizing and weakening both failed** — name the
-error code and what you tried.
+analyze the handler the property is about, and `summarize_for_prover` and weakening both failed** —
+name the error code, the symbol you summarized, and what you tried.
 
 That last one is a real and expected outcome on this backend, not an admission of defeat. A skipped
 property tells the reader the truth about what was and was not checked, which is the deliverable.
