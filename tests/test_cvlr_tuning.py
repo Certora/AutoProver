@@ -22,7 +22,12 @@ from composer.authoring.state import SkippedProperty, make_validation_stamper, s
 from composer.spec.cvlr.env_paths import PathDialect
 from composer.spec.cvlr.scaffold import ENV_FAMILIES, INLINING, SUMMARIES
 from composer.spec.cvlr.state import PROVER_VALIDATION_KEY, tuning_history
-from composer.spec.cvlr.tuning import SummaryDirective, TuningFiles, package_layer
+from composer.spec.cvlr.tuning import (
+    SummaryDirective,
+    TuningFiles,
+    merge_summaries,
+    package_layer,
+)
 
 _WHY = "[3308] on the #[error_code] Display impl; no property asserts over an error message"
 _DISPLAY = "^<vault::VaultError as core::fmt::Display>::fmt$"
@@ -172,3 +177,35 @@ def test_the_rendered_layer_ends_with_a_newline():
     would join the last directive to whatever follows it."""
     rendered = package_layer("; header", (SummaryDirective(pattern="^f$", why="w"),))
     assert rendered.endswith("\n")
+
+
+# ---------------------------------------------------------------------------------------------
+# two directives in one graph step
+
+
+def test_two_directives_recorded_in_one_step_both_survive():
+    """The bug that took two units down. `summaries` was a plain state key, so LangGraph refused the
+    second write in a step with `InvalidUpdateError: Can receive only one value per step` — and the
+    author was making several calls per turn while hunting for a pattern that matched.
+
+    The reducer is what makes concurrent calls correct rather than merely legal: each tool
+    contributes only its own directive, so neither has to have seen the other's."""
+    a = SummaryDirective(pattern="^a$", why="w")
+    b = SummaryDirective(pattern="^b$", why="w")
+    assert [d.pattern for d in merge_summaries([], [a])] == ["^a$"]
+    assert [d.pattern for d in merge_summaries([a], [b])] == ["^a$", "^b$"]
+
+
+def test_the_same_pattern_twice_is_recorded_once():
+    a = SummaryDirective(pattern="^a$", why="first")
+    again = SummaryDirective(pattern="^a$", why="second")
+    merged = merge_summaries([a], [again])
+    assert [d.why for d in merged] == ["first"]
+
+
+def test_the_merge_preserves_the_order_directives_were_added_in():
+    """Directives are line-oriented and the prover applies them in file order, so the order the
+    reducer settles on is the order the tuning file gets."""
+    ds = [SummaryDirective(pattern=f"^{c}$", why="w") for c in "abc"]
+    merged = merge_summaries(ds[:1], ds[1:])
+    assert [d.pattern for d in merged] == ["^a$", "^b$", "^c$"]

@@ -125,17 +125,50 @@ def _harness(result: object) -> GeneratedHarness | None:
     return result.result if isinstance(result, Delivered) else None
 
 
-def _reaches_program(harness: GeneratedHarness, package: str) -> bool:
-    """Whether the harness invokes the program under verification at all.
+def _reaches_program(harness: GeneratedHarness) -> bool:
+    """Whether any rule declares that it drives the program's own code.
 
-    Comment lines are excluded, which is the whole difficulty: the harness that prompted this check
-    mentioned ``crate::entry()`` only in a doc comment explaining why it could not call it.
+    ``rule_subjects`` is the author's per-rule statement of what a rule drives: a program function,
+    or harness-local code standing in for one. A harness where every rule is a stand-in is by
+    construction not evidence about the program.
+
+    This replaced a text scan for ``crate::entry`` / ``crate::<package>``, which was measured wrong
+    in both directions. It false-*passed* a harness that says ``crate::VaultState`` while driving a
+    reimplementation, and — the reason it is gone — it false-*failed* a harness that does
+    ``use crate::{..., vault_program};`` and then calls ``vault_program::initialize(ctx)``, because
+    the call site carries no ``crate::`` prefix. Reach is a question about name resolution, and the
+    declaration answers it without this test doing the compiler's job.
+
+    Not simply trusted: :func:`_undeclared_functions` fails a declaration the shipped source
+    contradicts.
     """
-    code = [
+    return any(s.subject == "program_function" for s in harness.rule_subjects)
+
+
+def _mirrored_rules(harness: GeneratedHarness) -> list[str]:
+    """Rules the author declared as driving a stand-in. Reported, not asserted on: a declared mirror
+    can be legitimate — [3308] leaves no alternative for some handlers — and the judge is what
+    weighs its reason. A reader of this test's output should still see which ones they are."""
+    return [s.rule for s in harness.rule_subjects if s.subject != "program_function"]
+
+
+def _undeclared_functions(harness: GeneratedHarness) -> list[str]:
+    """Declared program functions whose name does not appear in the harness source.
+
+    The declaration is the author's claim, so this is the part of it that can be checked cheaply: a
+    rule cannot be driving ``crate::vault_program::deposit`` if the shipped module never writes
+    ``deposit``. Matched on the final path segment, since the path may be reached through a ``use``.
+    """
+    code = "\n".join(
         line for line in harness.harness.splitlines()
         if not line.lstrip().startswith(("//", "/*", "*"))
+    )
+    return [
+        fn
+        for s in harness.rule_subjects
+        if (fn := getattr(s, "function", None)) is not None
+        and fn.rsplit("::", 1)[-1] not in code
     ]
-    return any("crate::entry" in line or f"crate::{package}" in line for line in code)
 
 
 async def test_the_backend_authors_cvlr_rules_for_the_vault(langgraph_db, project, capsys):
@@ -244,21 +277,30 @@ async def test_the_backend_authors_cvlr_rules_for_the_vault(langgraph_db, projec
 
     # The claim this test's name makes. Everything above checks that the harness is internally
     # consistent and that the prover agreed with it — and all of it passes for a harness that
-    # reimplements the handler inside the spec module and verifies the copy. That is what happened:
-    # three units published 19 rules between them and not one invoked the vault, two of the three
-    # never naming the crate at all. The mapping gate cannot see it, and no verdict-shaped check can,
-    # because the verdicts are honest; they are about the wrong program.
-    #
-    # Expected to fail on an Anchor target while prover error [3006] stands (§7.5.5): `Box::new` in
-    # Anchor 0.31's error path is on every route through dispatch, so an author cannot reach the
-    # program even when it wants to. Asserted anyway — a green run that certifies rules which never
-    # touch the program is worse than a red one that says so.
+    # reimplements the handler inside the spec module and verifies the copy. That is what happened
+    # once: three units published 19 rules between them and not one invoked the vault, two of the
+    # three never naming the crate at all. The mapping gate cannot see it, and no verdict-shaped
+    # check can, because the verdicts are honest; they are about the wrong program.
+    for outcome in result.outcomes:
+        harness = _harness(outcome.result)
+        if harness is None:
+            continue
+        phantom = _undeclared_functions(harness)
+        assert not phantom, (
+            f"{outcome.feat.display_name} declares rules driving {phantom}, but the harness it "
+            f"shipped never names them. The declaration is the report's account of what was "
+            f"verified, so one the source contradicts is worse than none."
+        )
+        if mirrors := _mirrored_rules(harness):
+            with capsys.disabled():
+                print(f"  {outcome.feat.display_name}: declared stand-ins — {', '.join(mirrors)}")
+
     unreached = [
         o.feat.display_name
         for o in result.outcomes
-        if (h := _harness(o.result)) is not None and not _reaches_program(h, _PACKAGE)
+        if (h := _harness(o.result)) is not None and not _reaches_program(h)
     ]
     assert not unreached, (
-        f"delivered harnesses that never invoke the program: {unreached}. Their rules verify "
+        f"delivered harnesses in which no rule drives the program: {unreached}. Their rules verify "
         f"whatever the harness itself defines, so they are not evidence about {_PACKAGE}."
     )
