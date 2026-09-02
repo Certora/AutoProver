@@ -184,7 +184,24 @@ an Anchor program that means the `#[error_code]` enum's generated `Display`, whi
 Measured directly: two rules in one job, same program, same property, differing only in this — the
 `.unwrap()` rule verified and its vacuity check passed, the `.is_ok()` rule errored with [3308].
 
-One coupling to be aware of, because it changes what your rule means. Pruning the panic depends on
+**What `.unwrap()` cannot do, and this is the important half.** It *assumes* the call succeeded. So it
+is right for a property of the form "**if** the handler succeeds, the state moved like this" — which
+is most integrity properties, and what the example above is. It cannot demonstrate that the handler
+succeeds. A property like "any signer may deposit" or "the handler accepts a zero amount" is a claim
+about *acceptance*, and `.unwrap()` assumes exactly what that property is trying to establish.
+
+Do not dress that up as a satisfy rule. `handler(..).unwrap(); cvlr_satisfy!(true);` shows only that
+*some* execution reaches the end — a reachability check — and it will pass whether or not the property
+holds for every input. A rule like that mapped to an acceptance property is a false verification of
+the kind the judge is there to reject.
+
+Stating an acceptance property properly needs the *failure* path to be observable, and on an Anchor
+program the prover currently refuses to analyze it (the error construction — see the tool notes on
+`summarize_for_prover`). So the honest move is `record_skip` naming that as the reason. That is a real
+limitation with a real cause, and a reviewer can act on it; a satisfy rule in its place is a green
+verdict about nothing.
+
+One further coupling, because it changes what your rule means. Pruning the panic depends on
 `assert_on_panic` being off, which is the default and what this conf uses. If it is ever on, an
 `.unwrap()` that can fail becomes an assertion violation — the rule then claims the handler *never*
 fails, which is a different and usually false claim. A panic-freedom property is a separate rule
