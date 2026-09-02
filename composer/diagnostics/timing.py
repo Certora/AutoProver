@@ -7,6 +7,7 @@ invocations) report their wall-clock numbers into it. At end-of-run the
 summary is formatted into a per-phase table.
 """
 
+import asyncio
 from contextlib import asynccontextmanager, contextmanager
 import os
 from logging import Logger
@@ -60,6 +61,11 @@ class TokenTotals:
             "cache_read": self.cache_read,
             "cache_write": self.cache_write,
         }
+
+
+#: ``PhaseRecord.error`` of a task stopped by a sibling's failure. It is an outcome worth showing
+#: per row, but not a failure of its own: the failure it was stopped for has its own row.
+CANCELLED = "cancelled"
 
 
 @dataclass
@@ -318,7 +324,7 @@ def _format_summary(summary: RunSummary) -> str:
         out.append("Final prover runs:")
         for p in linked:
             out.append(f"  {p.label}: {p.final_link}")
-    failures = [p for p in summary.phases if p.error is not None]
+    failures = [p for p in summary.phases if p.error is not None and p.error != CANCELLED]
     if failures:
         out.append("")
         out.append(f"Failures ({len(failures)}):")
@@ -352,12 +358,32 @@ async def task_logger(
     t_request = time.perf_counter()
     log = _TaskLog()
     tok = _current_task_id.set(task_id)
+
+    def timings() -> tuple[float, float]:
+        """Wall time so far, and how much of it was spent queued — all of it for a task that
+        never reached RUNNING."""
+        elapsed = time.perf_counter() - t_request
+        return elapsed, (log.t_running - t_request) if log.t_running is not None else elapsed
+
     try:
          yield log
+    except asyncio.CancelledError:
+        # A gated task is stopped by a sibling's failure with its tokens already spent, so it
+        # reports like any other outcome: record_phase is what folds a task's in-flight token
+        # bucket into the per-phase breakdown.
+        elapsed, queue_wait = timings()
+        logger.info(
+            f"task cancelled: phase={phase_name} task_id={task_id} "
+            f"wall={elapsed:.2f}s queue_wait={queue_wait:.2f}s"
+        )
+        summary.record_phase(
+            task_id=task_id, label=label, phase=phase_name,
+            wall_s=elapsed, queue_wait_s=queue_wait, error=CANCELLED,
+        )
+        raise
     except Exception as exc:
         err_name = type(exc).__name__
-        elapsed = time.perf_counter() - t_request
-        queue_wait = (log.t_running - t_request) if log.t_running is not None else elapsed
+        elapsed, queue_wait = timings()
         logger.exception(
             f"task failed: phase={phase_name} task_id={task_id} "
             f"wall={elapsed:.2f}s queue_wait={queue_wait:.2f}s error={err_name}"
@@ -368,8 +394,7 @@ async def task_logger(
         )
         raise exc
     else:
-        elapsed = time.perf_counter() - t_request
-        queue_wait = (log.t_running - t_request) if log.t_running is not None else 0.0
+        elapsed, queue_wait = timings()
         logger.info(
             f"task done: phase={phase_name} task_id={task_id} "
             f"wall={elapsed:.2f}s queue_wait={queue_wait:.2f}s"

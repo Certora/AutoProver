@@ -26,7 +26,7 @@ from typing import override, Sequence
 
 from langchain_core.tools import BaseTool
 
-from composer.io.multi_job import TaskInfo
+from composer.io.multi_job import TaskInfo, gated_group
 from composer.spec.context import WorkflowContext, CVLGeneration
 from composer.spec.types import PropertyFormulation, PropertyTitle
 from composer.spec.gen_types import CVLResource, SPECS_DIR, certora_relative_to_project
@@ -208,10 +208,14 @@ class ProverPrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance, Con
     @override
     async def prepare_formalization(self, run: PipelineRun) -> Formalizer[GeneratedCVL, ContractComponentInstance]:
         # AutoSetup (+ custom summaries) ∥ structural-invariant formulation; both
-        # depend only on the harnessed app, so they run concurrently.
-        (setup_config, resources), invariants = await asyncio.gather(
-            self._autosetup(run), self._invariants(run),
-        )
+        # depend only on the harnessed app, so they run concurrently. The two sides gate
+        # each other: every spec is written against AutoSetup's config, so an invariants
+        # agent with nowhere to deliver is stopped rather than left to spend, and a setup
+        # whose invariants have failed stops building a config nothing will use.
+        async with gated_group() as fanout:
+            setup_task = fanout.create_task(self._autosetup(run))
+            inv_task = fanout.create_task(self._invariants(run))
+        (setup_config, resources), invariants = setup_task.result(), inv_task.result()
 
         invariant: tuple[list[PropertyFormulation], InvariantResult] | None = None
         if invariants.inv:

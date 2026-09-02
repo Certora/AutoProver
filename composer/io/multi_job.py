@@ -79,6 +79,34 @@ async def maybe_semaphore(
         async with sem:
             yield
 
+
+@asynccontextmanager
+async def gated_group() -> AsyncIterator[asyncio.TaskGroup]:
+    """A task group whose members gate each other: the first failure cancels the rest.
+
+    Use it wherever concurrent work shares one fate — a failure on either side means the run
+    can no longer complete, so the sibling is stopped rather than left to spend on it.
+
+    The caller sees the failure itself rather than a wrapper: a cancelled member contributes
+    nothing to the group, so the usual case has a single exception to unwrap. Members that
+    fail at once (before either cancellation lands) are the one case with two real errors,
+    and there the group is raised as-is because neither is *the* cause.
+    """
+    unwrapped: BaseException | None = None
+    try:
+        async with asyncio.TaskGroup() as tg:
+            yield tg
+    except BaseExceptionGroup as eg:
+        if len(eg.exceptions) != 1:
+            raise
+        unwrapped = eg.exceptions[0]
+    # Raised outside the handler, where no exception is being handled: the member arrives at the
+    # caller with its own ``raise X from Y`` chain intact, which for a wrapper whose message only
+    # points at its cause is the whole of the diagnostic.
+    if unwrapped is not None:
+        raise unwrapped
+
+
 type TaskCallable[T] = Callable[[], Awaitable[T]] | Callable[[ConversationContextProvider], Awaitable[T]]
 
 async def run_task[P: HasName, T, H](
