@@ -85,14 +85,18 @@ Read the outcome:
   program's own `#[error_code]` enum formatting its `#[msg]` string), `[3006]` illegal store of a
   stack pointer. In order:
   - **`summarize_for_prover(symbol_pattern, why)`**, which tells the prover to replace that symbol
-    with an unconstrained stand-in instead of analyzing it. The error names the symbol; copy it from
-    there. For the `#[error_code]` case the symbol is the program's own error type's `Display`
-    impl — `^<vault::VaultError as core::fmt::Display>::fmt$` in shape — and summarizing it is sound
-    for any property that does not assert over an error *message*. This invalidates the prover
-    stamp, so re-run `verify_rules` after it — and read what that run says about your directives:
-    it names any that matched **no symbol in the build**, which is the common failure. A symbol
-    absent from the build was inlined away and no respelling will find it, so the report also names
-    symbols that *are* there; summarize one of those, usually the callee one level out;
+    with an unconstrained stand-in instead of analyzing it. A directive matches *demangled symbols
+    the build defines*, so it invalidates the prover stamp and `verify_rules` reports which of your
+    directives matched **no symbol at all** — read that, it is the common failure. Do not summarize
+    your program's own small functions: the compiler inlines them into their callers, so no spelling
+    of them exists to match. Aim at the library function one level out, which survives with a real
+    symbol; the report names candidates.
+
+    **Give up on this remedy after about three directives down one path.** Measured: one unit spent
+    nine submissions on eleven directives walking a formatting chain frame by frame — seven of them
+    matched real symbols — and the error never moved, because the code the prover objects to had
+    been inlined *into the handler itself* where no summary can reach it. If three have not cleared
+    it, it is not summarizable at this level; weaken or skip;
   - **weaken the rule to a sub-property the prover can reach** — assume away the failing path if the
     program genuinely excludes it, or assert something strictly weaker, and say so;
   - **skip the property** with the error code and what you tried.

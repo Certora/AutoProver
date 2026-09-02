@@ -27,7 +27,7 @@ the write-up gives the line number rather than the name.
 | [P1](#p1) | `Box::new` of a stack-built struct rejected as an illegal stack-pointer store | worked around upstream |
 | [P2](#p2) | Un-inlining a call with no summary kills the job in 3.6s with no diagnostic | major |
 | [P3](#p3) | `solanaOptimisticJoinWithStackPtr` is documented as a conf key and is not one | minor |
-| [P4](#p4) | `-solanaAggressiveGlobalDetection` does not fix the [3308] it is recommended for | **blocking**, worked around |
+| [P4](#p4) | `-solanaAggressiveGlobalDetection` does not fix the [3308] it is recommended for, and neither does any summary | **blocking** |
 | [U1](#u1) | `extract_job_id_from_url` cannot parse a Solana Prover job link | **major**, worked around |
 | [T1](#t1) | Tuning files are spelled for pre-2.2 `solana-program` paths | major |
 | [T2](#t2) | A canonical tuning file names one specific on-chain program | hygiene |
@@ -255,10 +255,27 @@ The misleading remedy is the smaller half of the report. The larger half is that
 is a summary for `<Error as Display>::fmt`, which means every Anchor project needs a hand-written
 tuning entry that nothing tells it to write (compare T7).
 
-Worked around here, not fixed: `composer/spec/cvlr/tuning.py` lets the authoring loop add that
-summary itself, so a run is no longer stopped by it. That trades a blocker for an unsoundness the
-run has to declare and the judge has to weigh, which is a worse deal than the prover shipping the
-summary in its core env file.
+**The summary remedy does not work either, and this is now measured rather than assumed.** An
+authoring run given a tool to add its own summaries spent nine submissions on eleven directives
+against one vault's `deposit`/`withdraw` error path. Seven of the eleven matched real symbols in the
+build — `core::fmt::write`, `<&T as core::fmt::Display>::fmt`,
+`<anchor_lang::error::ErrorCode as core::fmt::Display>::fmt`,
+`<alloc::string::String as core::fmt::Write>::write_str`/`write_char`, `ConvertVec::to_vec`,
+`drop_in_place<String>` — and **the error trace was byte-identical across all of them.** The other
+four named the program's own `VaultError::Display`, `ToString::to_string`, `String::push_str` and
+`Vec::spec_extend`, none of which is a symbol in any build of that program: rustc inlines them into
+the handler.
+
+That is the whole finding. The code the pointer analysis objects to ends up inlined *inside the
+handler function*, so there is no symbol to address and summaries cannot reach it at any level. A
+summary for the `ToString`/`Display`-into-`String` path in the core env file — this section's second
+ask — would very likely fail for the same reason. **The fix has to be in the pointer analysis, or in
+whatever controls inlining for the analyzed build.**
+
+`composer/spec/cvlr/tuning.py` gives the loop the tool anyway, because a project whose blocking
+symbol *does* survive is worth unblocking, and because a run that tries and reports precisely why it
+failed is worth more than one that gives up without evidence — the eleven-directive enumeration
+above is that run's own account, carried into its report.
 
 ## U1
 
