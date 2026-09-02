@@ -114,6 +114,30 @@ the universal quantifier.
 For account inputs, `cvlr-solana` provides the nondet account machinery; read its source for the
 current spelling rather than guessing, since it has changed across releases.
 
+## Loops are bounded, and the bound is not assumed away
+
+The conf unrolls loops a fixed number of times and does **not** set `optimistic_loop`. So a loop that
+can run longer than the bound comes back as a violated assertion reading *"Unwinding condition in a
+loop"* — a real result, not a configuration accident: the prover is telling you it cannot account for
+the remaining iterations.
+
+`optimistic_loop` would silence it by *assuming* the loop always finishes within the bound, which
+hides any violation that needs more iterations to reach. That is a last resort and it is not yours to
+reach for. In order:
+
+1. **Constrain what determines the trip count.** Usually the loop is over a collection whose length is
+   nondeterministic, so `cvlr_assume!` a bound on that length. This is the honest fix: the rule then
+   states the bound it proves under, and the report says so.
+2. **Ask whether the loop is even in your property's way.** A loop in a borsh deserialization path or
+   a logging helper is not what the property is about; a summary for that function is the same trade
+   as any other summary, with the same obligation to justify it.
+3. **Say the bound is too low, and why.** If the property genuinely needs more iterations than the
+   conf allows, that is worth reporting as a skip with the count you needed — not worked around.
+
+An unwinding violation reported as a property failure is a wrong answer, so read the counterexample
+before concluding the program is at fault: if the failing assertion is the unwinding condition rather
+than your own, the rule never reached its property.
+
 ## Reaching a handler on an Anchor program
 
 Most Solana targets are Anchor programs, and getting a rule *into* one has four idioms. Each of them
