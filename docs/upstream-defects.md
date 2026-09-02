@@ -10,6 +10,10 @@ Anchor verification on the path real specs use**, and an earlier draft of this f
 Anchor programs by depending on `Certora/anchor`, a maintained fork whose `Error` is unboxed — see P1
 for how that was missed and what is left of the defect.
 
+**Group U — `prover_output_utility`.** The library the report stack reads verdicts through. One
+entry, and unlike the others it was corrupting our own output rather than merely obstructing us;
+`composer/spec/source/report_prover.py` now works around it.
+
 **Group T — the recommended starting template.** A public repository, and every one of these has a
 concrete fix we have already verified locally. `composer/spec/cvlr/env_paths.py` works around T1 at
 emit time; the rest are worked around by not reproducing them.
@@ -23,7 +27,8 @@ the write-up gives the line number rather than the name.
 | [P1](#p1) | `Box::new` of a stack-built struct rejected as an illegal stack-pointer store | worked around upstream |
 | [P2](#p2) | Un-inlining a call with no summary kills the job in 3.6s with no diagnostic | major |
 | [P3](#p3) | `solanaOptimisticJoinWithStackPtr` is documented as a conf key and is not one | minor |
-| [P4](#p4) | `-solanaAggressiveGlobalDetection` does not fix the [3308] it is recommended for | major |
+| [P4](#p4) | `-solanaAggressiveGlobalDetection` does not fix the [3308] it is recommended for | **blocking** |
+| [U1](#u1) | `extract_job_id_from_url` cannot parse a Solana Prover job link | **major**, worked around |
 | [T1](#t1) | Tuning files are spelled for pre-2.2 `solana-program` paths | major |
 | [T2](#t2) | A canonical tuning file names one specific on-chain program | hygiene |
 | [T3](#t3) | `[package.metadata.certora] sources` omits `Cargo.toml` | major |
@@ -233,11 +238,59 @@ through `format_inner`, which the summaries do not cover.
 literals as globals, or ship a summary for the `ToString`/`Display`-into-`String` path in the core
 env file, alongside the `format_inner` one that is already there.
 
-**Severity, honestly.** Major rather than blocking, because it only bites a rule that goes through
-Anchor's full `entry` dispatch, and that is not how specs are written: the reference project's harness
-has zero occurrences of `entry` and four of `Context::new`. A rule that builds a context and calls the
-handler directly — the practice — does not reach this path. So it bounds an edge case, and the reason
-it is worth reporting is the misleading remedy rather than the error.
+**Severity — corrected, and it was wrong in the reassuring direction.** This section previously read
+"major rather than blocking, because it only bites a rule that goes through Anchor's full `entry`
+dispatch", and concluded that it "bounds an edge case". That was inferred from the reference project's
+harness — zero occurrences of `entry`, four of `Context::new` — and the inference does not hold.
+
+A rule that builds a context and calls the handler directly reaches this path whenever the handler's
+own error path constructs an `#[error_code]` value, which is what `require!` and `?` expand to. An
+end-to-end authoring run measured it: of three units against one small Anchor vault, two could
+formalize nothing at all. `deposits` skipped all five of its properties and `withdrawal_fee_distribution`
+ten of twelve, both blocked on exactly this, both calling `crate::vault_program::<handler>` directly
+and neither going anywhere near `entry`. 17 of 24 properties were lost to it.
+
+So: **blocking**, for any handler that can return a program-defined error — which is most of them.
+The misleading remedy is the smaller half of the report. The larger half is that the only workaround
+is a summary for `<Error as Display>::fmt`, which means every Anchor project needs a hand-written
+tuning entry that nothing tells it to write (compare T7).
+
+## U1
+
+### `extract_job_id_from_url` cannot parse a Solana Prover job link
+
+`prover_output_utility.api.url_utils.extract_job_id_from_url` recognizes two shapes:
+
+```python
+# https://prover.certora.com/output/userid/jobid/...
+# https://prover.certora.com/job/jobid
+```
+
+The Solana Prover emits neither. Its report link — the one `certoraSolanaProver` prints, and the one
+the CLI records — is:
+
+```
+https://prover.certora.com/jobStatus/<userId>/<jobHash>?anonymousKey=<key>
+```
+
+There is no `jobStatus` branch, so the function raises `ProverAPIError: Could not extract job ID from
+URL`. Reproduced directly against a green job:
+
+```
+File ".../prover_output_utility/api/url_utils.py", line 125, in extract_job_id_from_url
+    raise ProverAPIError(f"Could not extract job ID from URL: {url}")
+```
+
+**Why it mattered more than an obstruction.** `get_all_checks` is how the report reads per-rule
+verdicts, and the caller treats any failure as "no verdicts". So a CVLR run whose every rule VERIFIED
+produced a report in which every rule was `UNKNOWN`, with no line numbers and no durations — a
+false negative in the deliverable, arrived at silently, from a run that was green. The job's own
+`output.json` said `SUCCESS` for all seven rules at the same time as the report said `UNKNOWN`.
+
+**The fix upstream** is a `jobStatus` branch taking the segment after the user id. **The workaround
+here** is that POU's public entry points accept a bare job id as well as a URL, so
+`composer/spec/source/report_prover.py` extracts the id and hands that over, passing every shape POU
+already parses through untouched.
 
 ## T1
 
