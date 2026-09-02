@@ -57,16 +57,24 @@ be stale; the tool is authoritative.
    the author saying so — the rule then proves its property for small collections and the report
    claims it in general.
 
-6. **`clog!` discipline.** Every value an assertion depends on should be logged before it. This is
+6. **A satisfy rule standing in for a property that needs an assertion.** `cvlr_satisfy!` shows a path
+   exists; it proves nothing about all executions. Mapped to an *acceptance* property — "any signer
+   may deposit", "the handler accepts X" — it is a false verification, and the giveaway is a rule that
+   calls the handler with `.unwrap()` and then satisfies. `.unwrap()` assumes the call succeeded, so a
+   rule cannot both assume success and demonstrate it. Reject it and require either a real assertion
+   or a skip: acceptance properties need the failure path, which the prover will not analyze on an
+   Anchor program today, and that is a legitimate skip reason.
+
+7. **`clog!` discipline.** Every value an assertion depends on should be logged before it. This is
    not style: a counterexample shows only what was logged, so an unlogged rule that fails costs a
    prover run to learn nothing. Flag rules whose failure would be unreadable.
 
-7. **Expected failures.** A rule marked expected-to-fail is a *claim that the program is defective*.
+8. **Expected failures.** A rule marked expected-to-fail is a *claim that the program is defective*.
    Check that the author read the counterexample and that the reason describes a real defect, rather
    than a rule that could not be made to pass. Also check the opposite: a property that plainly does
    not hold, formulated so the rule passes, is a finding turned into a false verification.
 
-8. **Rule granularity.** A `cvlr_rules!` invocation across handlers is usually better than the same
+9. **Rule granularity.** A `cvlr_rules!` invocation across handlers is usually better than the same
    rule restated per handler. Conversely, one rule asserting five unrelated things gives one verdict
    and one counterexample for five properties, which makes every failure ambiguous.
 
