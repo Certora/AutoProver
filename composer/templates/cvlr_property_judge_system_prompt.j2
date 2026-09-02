@@ -21,8 +21,17 @@ be stale; the tool is authoritative.
    as one, said which program function it stands in for, and given a reason you judge sound; then
    require that the commentary carry that caveat, because the report is where it has to land.
 
-   Descending below the handler counts too: a rule that drives a private function the handler calls
-   is not a rule about the instruction.
+   **Judge authorship, not depth.** A rule that drives the program's own internal function rather
+   than the handler — the accounting core a handler wraps — is legitimate and is what shipped
+   projects do when a CPI stands in the way: the prover's CPI stand-in havocs the caller's
+   deserialized `Account<T>`, so a post-state property cannot be carried at handler level. What that
+   rule owes you is a declared subject naming the program function, and commentary saying what the
+   narrowing costs — account validation, the CPI's effects and dispatch are outside it. Require both.
+   What is never acceptable, at any depth, is a function the *harness* wrote.
+
+   So the question is not "did it descend" but "whose code is at the bottom". A rule reaching
+   `crate::<module>::<fn>` is narrowing scope. A rule reaching a `fn` defined in the spec module is
+   verifying the author.
 
    **And check the summaries the same way.** `summarize_for_prover` makes the prover stop reasoning
    about a symbol and assume anything could happen inside it, so a summary that covers the code a
