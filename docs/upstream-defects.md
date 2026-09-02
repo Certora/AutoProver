@@ -28,6 +28,7 @@ the write-up gives the line number rather than the name.
 | [P2](#p2) | Un-inlining a call with no summary kills the job in 3.6s with no diagnostic | major |
 | [P3](#p3) | `solanaOptimisticJoinWithStackPtr` is documented as a conf key and is not one | minor |
 | [P4](#p4) | `-solanaAggressiveGlobalDetection` does not fix the [3308] it is recommended for, and neither does any summary | **blocking** |
+| [P5](#p5) | A [3308] in the generated vacuity check is reported as a clean `VERIFIED` when `rule_sanity` is off | **critical** |
 | [U1](#u1) | `extract_job_id_from_url` cannot parse a Solana Prover job link | **major**, worked around |
 | [T1](#t1) | Tuning files are spelled for pre-2.2 `solana-program` paths | major |
 | [T2](#t2) | A canonical tuning file names one specific on-chain program | hygiene |
@@ -277,6 +278,79 @@ symbol *does* survive is worth unblocking, and because a run that tries and repo
 failed is worth more than one that gives up without evidence — the eleven-directive enumeration
 above is that run's own account, carried into its report.
 
+**And the flag set real engagements run does not fix it either — measured, matched pair.** The three
+Anchor projects verified against this prover carry a much larger `prover_args` than this backend's
+default: `klend-audit` has it in **39 of 39** confs and `smart-account-program-audit` in its
+`base.conf`. The full set adds the five `-solanaOptimistic*` memory-model flags,
+`-solanaAggressiveGlobalDetection true`, `-solanaRemoveCFGDiamonds true`, `-solanaSlicerIter 6`,
+`-solanaEnablePTAPseudoCanonicalize false` and `-solanaPrintDevMsg true`. Two jobs were submitted
+from one tree, one harness and one fork commit, differing in nothing but those ten flags:
+
+| rule | drives | baseline | engagement flags |
+|---|---|---|---|
+| `rule_withdraw_debits_exactly_the_amount` | `withdraw`, past `require!` | [3308] | [3308] |
+| `rule_prompt_example_verbatim` | `deposit` | [3308] | [3308] |
+
+**The error text is byte-identical between the two jobs** — same trace, same
+`dereference of an absolute address 1 (0x1) at *(u32 *) (r2 + 15) = r3`. The flags did reach the jar
+(they appear in the job's inputs, and the emitted TAC differs), so this is a negative result rather
+than a misconfiguration. `-solanaOptimisticMemcpyPromotion` was the specific hope, since the trace's
+innermost frame is a `copy_nonoverlapping`; it makes no difference.
+
+The two traces land on the two `?`-on-`VaultError` sites — `lib.rs:49` in `deposit` and `lib.rs:75`
+in `withdraw` — both by way of `lib.rs:133`, the `#[error_code]` enum, through
+`ToString::to_string` → `String` → `Vec::spec_extend` → `copy_nonoverlapping`. That is the same chain
+this section already describes, now confirmed from two independent handlers.
+
+
+## P5
+
+### A [3308] in the generated vacuity check is reported as a clean `VERIFIED` when `rule_sanity` is off
+
+The most consequential entry in this file, because it is the only one whose failure mode is a green
+result rather than an error, and it was found by accident while measuring P4.
+
+`rule_sanity` makes the prover generate a companion `rule_not_vacuous_cvlr` subrule per rule. When
+the pointer analysis fails with [3308] on the rule's path, **the failure is attributed to that
+generated subrule**, and the rule's own `Assertions` subrule comes back `VERIFIED` — "determined
+without running SMT solver (i.e. solely by static analysis)", `attempted 0 splits, proved a total
+weighing 0 %`. With `rule_sanity` on, the rule's roll-up status becomes `ERROR` and the [3308] is
+visible. With it off, there is no vacuity subrule to fail, and the same build on the same tree
+reports:
+
+```
+rule_prompt_example_verbatim  -> VERIFIED  (7ms)
+```
+
+with no error, no warning and no dev message anywhere in the results tarball.
+
+**Reproducer — a matched pair, identical but for `rule_sanity`.** One tree, one harness, one fork
+commit, the default `prover_args`:
+
+| `rule_sanity` | `Assertions` | vacuity subrule | rule status | [3308] anywhere in output |
+|---|---|---|---|---|
+| `none` | VERIFIED (7ms, 0 % proved) | not generated | **VERIFIED** | **no** |
+| `basic` | VERIFIED (6s, static only) | ERROR [3308] | ERROR | yes |
+
+Both rows reach the handler: the `basic` row's trace runs through the handler's own `?` on line 49.
+So the code was analyzed, the analysis failed, and in the first row the run reported success.
+
+**Why this is worse than an error.** A rule whose body is unreachable passes trivially, which is what
+"determined solely by static analysis, 0 % proved" describes — and the check designed to catch that
+is the one the [3308] disabled. The prover therefore cannot distinguish "your rule is vacuous" from
+"the analysis could not proceed", and off the sanity path it calls both of them verified.
+
+**What would resolve it**: report a [3308] raised while analyzing a rule against the *rule*, not
+only against whichever generated subrule happened to trigger it. Failing that, refuse to emit
+`VERIFIED` for a rule discharged at `0 %` with a pointer-analysis error recorded anywhere in its
+analysis.
+
+**Not worked around, and it does not need to be here**: this backend's conf default is
+`rule_sanity: "basic"` (`composer/spec/cvlr/conf.py`), which was added for an unrelated reason — to
+catch the rule a blocked author writes by assuming the conclusion. It is what makes this visible, and
+it is now load-bearing for soundness rather than merely useful. Any project that turns it off is
+exposed.
+
 ## U1
 
 ### `extract_job_id_from_url` cannot parse a Solana Prover job link
@@ -400,7 +474,13 @@ exactly where the template's own three-layer split says it should live.
 
 Fix: move it to the package layer, or drop it.
 
-Line number rather than the name because this repository is public.
+Line number rather than the name because this repository is public — and this backend had *copied*
+the line, name and all, into its own canonical layer, so the same name sat in this public repository
+until it was replaced with the generic
+`^.+ for anchor_lang::error::Error>::from$`. That generic form is not an invention: it is what the
+three engagement projects carry in place of the named line, so the template's version is behind its
+own users. The replacement is also strictly more useful, since the named line matches nothing on any
+other program while the generic one matches every program's own error conversion.
 
 ---
 
