@@ -47,15 +47,25 @@ OVERLAY_OWNED_KEYS: frozenset[str] = frozenset({"build_script", "files", "msg"})
 #: — the repository Certora recommends cloning to start a new Solana spec, and therefore the only
 #: project-shaped source here that is *advice* rather than evidence of what somebody once did.
 #:
-#: One of its positions was followed here and then reversed by measurement. The template sets
-#: ``optimistic_loop`` to ``false`` where twelve of sixteen surveyed projects set it true, and that
-#: was originally copied on the reasoning that counting what projects do promotes the wrong answer.
-#: With ``loop_iter: "1"``, ``false`` makes **any** loop inside a handler fail before the rule's own
-#: property is reached: a rule calling an Anchor deposit handler came back VIOLATED on
-#: *"Unwinding condition in a loop. We recommend to run with --optimistic_loop"*, against a loop in
-#: the handler's own borsh path (``docs/cvlr-backend-plan.md`` §7.6.2). So it is true here — and the
-#: soundness cost is real and stated: the prover then assumes loops finish within the bound instead
-#: of proving it, which can hide a violation that needs more iterations to reach.
+#: ``optimistic_loop`` stays **false**, which is both the template's position and the corpus's.
+#: A survey of 354 confs across fifteen Solana projects finds it set true in exactly **one**: 69 set
+#: it false explicitly and 285 omit it, which is false for this app (``true_by_default_attributes``
+#: covers ``OPTIMISTIC_LOOP`` only for Ranger, not for ``SolanaProverAttributes``). An earlier
+#: revision of this file set it true and justified that with "twelve of sixteen surveyed projects set
+#: it true" — a figure the survey above contradicts and that no recorded survey supports.
+#:
+#: It is a last resort, not a default, because it assumes the loop halt conditions hold rather than
+#: proving them, which hides any violation reachable only after more iterations. The preferred
+#: remedies are to constrain the loop intentionally — bound the inputs that determine the trip count,
+#: or munge the loop — and only then to raise ``loop_iter``.
+#:
+#: ``loop_iter`` is **2** rather than the template's 1 for the same reason the earlier revision
+#: reached for ``optimistic_loop``: with a bound of 1, *any* loop inside a handler fails before the
+#: rule's own property is reached, measured as a rule calling an Anchor deposit handler coming back
+#: VIOLATED on *"Unwinding condition in a loop"* against a loop in the handler's own borsh path
+#: (``docs/cvlr-backend-plan.md`` §7.6.2). Raising the bound answers that without assuming anything
+#: away. 2 is the corpus's own answer: of the confs that set both, the largest project uses 2 in 37
+#: of 39 and the next uses 3 in 54 of 54, and none pairs a bound of 1 with an unsound assumption.
 #:
 #: The five ``-solanaOptimistic*`` memory-model flags remain absent, and unlike ``optimistic_loop``
 #: this *is* a departure from the corpus: engagements carry them almost universally — 39 of 39 confs
@@ -68,8 +78,8 @@ OVERLAY_OWNED_KEYS: frozenset[str] = frozenset({"build_script", "files", "msg"})
 #: looks like it should address (P3).
 TEMPLATE_BASE: dict[str, object] = {
     "msg": "Certora Verification Rules",
-    "loop_iter": "1",
-    "optimistic_loop": True,
+    "loop_iter": "2",
+    "optimistic_loop": False,
     "java_args": ["-Dlevel.sbf=info"],
     "prover_args": [
         "-unsatCoresForAllAsserts true",
