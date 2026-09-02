@@ -64,8 +64,7 @@ from composer.spec.solana.model import (
 )
 from composer.io.multi_job import TaskInfo
 from composer.spec.source.report.collect import Formalized, Verdict
-from composer.spec.source.report_prover import ProverOutputAPI
-from composer.spec.source.report_prover import _fetch as fetch_prover_verdicts
+from composer.spec.source.report_prover import make_prover_fetcher
 from composer.spec.source.report.schema import RuleName
 from composer.spec.types import PropertyFormulation
 
@@ -200,11 +199,10 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
         reasoned about; the report should state what the job says now, and where the two disagree the
         job is right.
 
-        The shared fetcher reads nothing but ``run_link``, so it works for any reportable result —
-        its annotation names the CVL type only because that was its only caller."""
-        if formalized.run_link is None:
-            return {}
-        return await asyncio.to_thread(fetch_prover_verdicts, ProverOutputAPI(), formalized.run_link)
+        The shared fetcher reads nothing but ``run_link``, so one instance serves every backend with
+        a prover job behind it; this one is built per call because a formalizer is cheap to make and
+        holding an API client on it would outlive the run."""
+        return await make_prover_fetcher()(formalized)
 
 
 @dataclasses.dataclass
