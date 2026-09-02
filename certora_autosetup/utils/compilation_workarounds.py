@@ -1161,12 +1161,24 @@ class CompilationWorkaroundManager:
                 if pragma_spec:
                     version = resolve_pragma_to_version(pragma_spec)
                     if not version:
-                        self.log(f"Could not resolve pragma '{pragma_spec}' to concrete version", "WARNING")
+                        self.log(
+                            f"Could not resolve pragma '{pragma_spec}' in '{file_path}' to a "
+                            f"concrete version",
+                            "WARNING",
+                        )
                         return None
 
                     contract_name = self._get_contract_name_from_path(file_path, contracts)
                     if contract_name:
-                        self.log(f"Detected compiler version mismatch for {contract_name}: requires {version}")
+                        # The file and the raw spec are what the version was read off, and one
+                        # contract can be reported twice with different versions across a retry
+                        # loop — from two files in its compilation unit, or from two specs in
+                        # one file. Naming both makes the conf entry that follows traceable to
+                        # the line it came from.
+                        self.log(
+                            f"Detected compiler version mismatch for {contract_name}: requires "
+                            f"{version} (from '{pragma_spec}' in '{file_path}')"
+                        )
                         return (contract_name, version)
                     else:
                         self.log(f"Warning: Could not map path '{file_path}' to contract name", "WARNING")

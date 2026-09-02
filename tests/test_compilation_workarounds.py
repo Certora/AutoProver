@@ -685,6 +685,24 @@ def test_detects_single_line_compiler_version_mismatch(
     assert result == ("DummyERC20Impl", "0.8.30")
 
 
+def test_the_detection_names_the_file_and_spec_it_read(
+    manager: CompilationWorkaroundManager, resolve_pragma_offline, capsys
+) -> None:
+    # The conf entry that follows is keyed by contract, while the version is read off one
+    # file's pragma. When a retry loop reports the same contract at two versions, the file
+    # and the raw spec are what tell the two detections apart.
+    manager._detect_compiler_version_mismatch(
+        SINGLE_LINE_COMPILER_VERSION_MISMATCH, MISMATCH_CONTRACTS
+    )
+    detection = [
+        line for line in capsys.readouterr().out.splitlines()
+        if "compiler version mismatch" in line
+    ]
+    assert len(detection) == 1
+    assert "^0.8.0" in detection[0]
+    assert "certora/mocks/DummyERC20Impl.sol" in detection[0]
+
+
 def test_ignores_unrelated_compiler_version_mismatch(
     manager: CompilationWorkaroundManager,
 ) -> None:
