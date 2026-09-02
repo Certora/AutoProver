@@ -451,8 +451,29 @@ guarantees.
 
 **Why this one matters commercially.** Nearly every non-trivial Solana handler does a CPI — a token
 transfer, a system-program transfer, a sysvar read — and then updates its own state. That is the shape
-this defeats. It bounds a much larger class of programs than [3308] ever did, and unlike [3308] there
-is no harness idiom that works around it: the run tried three and said so.
+this defeats, and it bounds a much larger class of programs than [3308] ever did.
+
+**There is a workaround, and it is a scope reduction rather than a fix.** No harness idiom survives a
+CPI — the run tried three. What shipped verification projects do instead is not to cross it: their
+rules drive the program's own *accounting core* with `nondet()` domain structs, not the handler with
+deserialized accounts. A representative rule builds `BorrowOrder` and `&mut Reserve` by `nondet()` and
+calls `borrow_order_operations::fill_borrow_order` directly — no `Context`, no accounts struct, no
+CPI in the way. The function is the program's own; only the entry point differs.
+
+What it costs is real and has to reach the report: account validation, the CPI's effects and Anchor's
+dispatch are all outside such a rule, so a bug in the handler's own glue is out of scope. And it is
+only available to programs that *have* such a core — where the accounting is the handler, the
+property stays unreachable. The author and judge prompts now teach this as a declared, justified
+descent; the earlier "the handler is the floor" rule forbade it, which was written to stop harness-
+authored reimplementations and over-shot into forbidding the legitimate move as well.
+
+**CVLR does ship CPI models**, and they are worth knowing about even though they do not help here:
+`cvlr-spl-token`'s `cpis` module replaces `invoke` for SPL Token instructions with a modelled effect
+on the accounts (`cvlr_invoke_transfer` performs an actual `spl_token_transfer`), so a token CPI can
+be reasoned about rather than havocked. Two limits: the Anchor fork's `anchor-spl` is unmodified
+upstream and still calls `solana_program::program::invoke_signed`, so nothing wires the models in
+automatically; and there is **no model for a native-SOL system-program transfer** at all, which is
+what the reproducer here uses.
 
 ---
 
