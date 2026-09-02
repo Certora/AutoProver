@@ -25,7 +25,7 @@ This runs as a multi-round loop, and this is one round of it. If a `<prior_prope
 appears above, it is a record of what earlier rounds already found and already
 ruled out: in round your goal is to surface only what they *missed*. Read their reasoning before
 you start and do not re-propose a property prior rounds already listed, and do not reframe one of theirs as a
-different category (an attack vector restated as an invariant is the same property). If the
+different category (a safety property restated as an invariant is the same property). If the
 earlier rounds have already covered this component's meaningful surface, returning an empty list
 with reasoning that says so is the correct outcome.
 
@@ -45,18 +45,6 @@ Security properties fall into three categories:
    increases `to`'s by exactly `amount`, and leaves every other address's balance unchanged."
    Good: "No sequence of calls lets an address withdraw more than it deposited."
    Bad: "A user should not be able to hack the contract" (overly broad).
-
-3. **Attack vectors** — likely exploitable edge cases. Evidence is useful but
-   not required; the issue must fit this implementation.
-   Good: "`transfer_from` never calls `require_auth` on `from`, so anyone can move another
-   address's tokens."
-   Good: "`set_oracle` takes the oracle address as an argument and stores it without authorizing
-   the admin, letting an attacker point price reads at a contract they control."
-   Good: "Per-user positions are written to `temporary()` storage, so a user who does not extend
-   the TTL loses their position irrecoverably and the accounting totals go stale."
-   Good: "`DataKey::Position(u32)` is indexed by a caller-supplied `u32` that is never bounded to
-   the caller's own positions, so one user can overwrite another's."
-   Bad: "The contract could be exploited somehow" (overly broad).
 
 As a starting point, consider the following common failure modes. They are a prompt for your own
 reasoning, not a checklist to work through and not an exhaustive account of what can go wrong with
@@ -97,9 +85,6 @@ Output the results using the result tool.
     You need not prove the property holds; it only needs to be expected of a
     correct implementation.
   </hard_requirement>
-  <reminder>
-     Attack vectors need a credible reason, not proof.
-  </reminder>
   <reminder>
      Do not propose classic reentrancy properties. Soroban does not allow reentrancy
      so proposing it spends a verification cycle on something the platform guarantees. The

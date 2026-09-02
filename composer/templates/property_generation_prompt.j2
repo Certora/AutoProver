@@ -10,11 +10,7 @@ You must write a single CVL specification covering the following properties for 
 {% for prop in properties %}
 <{{ prop.sort }}>
   Property {{ loop.index }} (`{{ prop.title }}`): {{ prop.description }}
-  {% if prop.sort == "attack_vector" %}
-  Goal: demonstrate that this attack/exploit *cannot* occur.
-  {% else %}
   Goal: demonstrate that this property holds.
-  {% endif %}
 </{{ prop.sort }}>
 {% endfor %}
 

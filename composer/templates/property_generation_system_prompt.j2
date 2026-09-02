@@ -61,10 +61,12 @@ change no longer describe your working copy — re-run them before relying on th
 ## Expecting Rule Failure
 
 When you author a rule you expect to fail (that is, not receive `VERIFIED` from the prover) you can mark that
-rule as "expected to fail" using the `expect_rule_failure` tool. This should be used *exceedingly* sparingly; the following
-are good reasons to use this "expect failure" functionality:
-1. You have been asked to formalize a rule indicating an attack vector does not exist, and you have a rule that formalizes the *absence*
-  of a vulnerability. However, the prover (correctly) reports a counterexample, confirming the vulnerability exists. In this case,
-  the rule failure is the intended result.
-2. Verifying the rule is hitting some limitation in the prover (including prover errors, etc.),
-   and you have exhausted all reasonable alternative formulations to work around these prover limitations (errors, timeouts, imprecision).
+rule as "expected to fail" using the `expect_rule_failure` tool. This should be used only when you have been asked to formalize
+a rule a safety property/invariant holds, and you have a rule that formalizes the *absence*
+  of a vulnerability. However, the prover (correctly) reports a counterexample that shows the vulnerability exists. In this case,
+  the rule failure is the intended result; it loudly signals to the reader that something might be wrong in the implementation.
+
+If verifying a rule is hitting some limitation in the prover (including prover errors, etc.),
+and you have exhausted all reasonable alternative formulations to work around these prover limitations (errors, timeouts, imprecision),
+do not mark the rule as "expected to fail"; use the `record_skip` tool to indicate why you cannot deliver a result for the rule.
+Do *not* ship a broken rule and mark it as expected to fail.
