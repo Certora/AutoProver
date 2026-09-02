@@ -21,7 +21,9 @@ from composer.spec.cvlr.crates import CvlrSources
 from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE
 from composer.spec.cvlr.crate_mount import MAX_MATCHES, MountedCrates, mount
 from composer.spec.cvlr.source_tools import cvlr_source_tools
+from composer.spec.cvlr.author import CvlrMountParams
 from composer.spec.prop_inference import PropertySystemPromptParams
+from composer.spec.types import PropertyFormulation
 from composer.templates.loader import load_jinja_template
 
 
@@ -281,10 +283,13 @@ def _author_system_prompt() -> str:
 
 
 def test_the_author_is_told_to_call_the_handler_not_anchors_dispatch():
-    """A rule starting at ``entry`` is both the expensive shape and, on the current prover, one that
-    does not analyze at all — the program's own ``#[error_code]`` reaches string formatting the
-    pointer analysis rejects (``docs/upstream-defects.md`` P4). The authoring loop's first real run
-    produced rules that did neither: they reimplemented the handler rather than calling anything."""
+    """A rule starting at ``entry`` pays for Anchor's whole dispatch — discriminator matching,
+    account validation, serialization — to reach a handler it could have called directly, and no
+    property in a batch is about any of that.
+
+    The prover also cannot analyze ``entry`` on a program with an ``#[error_code]`` enum
+    (``docs/upstream-defects.md`` P4), but that is deliberately not the reason given: see
+    :func:`test_avoiding_the_dispatcher_is_justified_by_cost_not_by_pointer_analysis`."""
     prompt = _author_system_prompt()
     assert "Call the handler, not the dispatcher" in prompt
     assert "crate::entry" in prompt
@@ -340,3 +345,126 @@ def test_the_author_is_told_a_cpi_is_a_stand_in_and_that_this_is_inherited():
     prompt = _author_system_prompt()
     assert "not measured here" in prompt
     assert "unconstrained stand-in" in prompt
+
+
+# --------------------------------------------------------------------------------------------
+# What the rule is allowed to be about
+# --------------------------------------------------------------------------------------------
+#
+# The authoring loop's first real run delivered three units, and two of them formalized every
+# property against a hand-written mirror of the handler rather than the handler: a `fn
+# deposit_balance_update` and a `fn withdraw_logic`, each with a doc comment explaining that
+# `[3308]` made the real one unanalyzable, each transcribing the handler's arithmetic by hand. Both
+# passed the prover, both passed the judge, both published. Nothing downstream could tell.
+#
+# The author did not go off-script. Four things in these prompts left the door open, and these are
+# the tests for having closed them.
+
+
+def _flat(text: str) -> str:
+    """Prompt text with line wrapping collapsed.
+
+    These templates are hand-wrapped at 100 columns, so a phrase worth pinning routinely straddles a
+    newline and a literal substring check fails for a reason that has nothing to do with the prompt.
+    """
+    return " ".join(text.split())
+
+
+def _author_task_prompt() -> str:
+    from composer.spec.cvlr.author import CvlrPropertyGenParams, _PropertyGenTemplate
+
+    params: CvlrPropertyGenParams = {
+        "context": None,
+        "properties": [
+            PropertyFormulation(title="p", sort="invariant", description="the balance rises")
+        ],
+        "program": "vault",
+        "module": "spec",
+        "cvlr_versions": "cvlr 0.6.1",
+        "sort": "existing",
+    }
+    return _PropertyGenTemplate.bind(params).render_to(load_jinja_template)
+
+
+def _judge_system_prompt() -> str:
+    from composer.spec.cvlr.author import _JudgeSystemTemplate
+
+    params: CvlrMountParams = {"cvlr_versions": "cvlr 0.6.1"}
+    return _JudgeSystemTemplate.bind(params).render_to(load_jinja_template)
+
+
+def test_the_author_is_told_the_subject_of_a_rule_is_the_programs_code():
+    """The system prompt used to define a rule body as "call the code under test" and never say
+    whose code that was. The properties are stated behaviourally, so a faithful mirror satisfies
+    them on their own terms."""
+    prompt = _flat(_author_system_prompt())
+    assert "The code under test is the program's, always" in prompt
+    assert "A rule that drives a function *you* wrote proves a property of your function" in prompt
+
+
+def test_the_handler_is_named_as_a_floor_and_not_a_waypoint():
+    """Ruling out ``entry`` from above is not enough. Both failing units went *below* the handler —
+    one into a private helper, one into a transcription — and nothing said that was a boundary."""
+    assert "The handler is the floor, not a waypoint" in _flat(_author_system_prompt())
+
+
+def test_avoiding_the_dispatcher_is_justified_by_cost_not_by_pointer_analysis():
+    """The paragraph this replaces said not to start at ``entry`` because the program's own
+    ``#[error_code]`` reaches string formatting the pointer analysis rejects. That is true, and it
+    is a worked example of *routing around a pointer-analysis failure by moving the call target* —
+    which is exactly the move both failing units then made one level deeper, in headers that
+    paraphrase it. The reasons to prefer a handler are cost and scope; keep the technique out of
+    them."""
+    prompt = _flat(_author_system_prompt())
+    body = prompt.split("Call the handler, not the dispatcher")[1].split("The handler is the floor")[0]
+    assert "pointer analysis" not in body
+    assert "all of which the prover pays for" in body
+
+
+def test_the_ladder_has_a_rung_for_a_rule_the_prover_cannot_analyze():
+    """Step 3 enumerated four outcomes — compile error, VIOLATED, vacuous, timeout — and [3308] is
+    none of them: it is an error, not a verdict. Every listed remedy was "change your rule", so an
+    author facing an unnamed outcome generalized the pattern until the prover was happy."""
+    prompt = _flat(_author_task_prompt())
+    assert "A rule the prover could not analyze" in prompt
+    for code in ("[3308]", "[3006]"):
+        assert code in prompt
+
+
+def test_the_three_remedies_are_named_and_reimplementation_is_not_one_of_them():
+    prompt = _flat(_author_task_prompt())
+    rung = prompt.split("A rule the prover could not analyze")[1].split("Step 4")[0]
+    assert "summarize the offending call" in rung
+    assert "weaken the rule to a sub-property" in rung
+    assert "skip the property" in rung
+    assert "Do not respond by moving the rule onto code the prover finds easier" in rung
+
+
+def test_an_unanalyzable_handler_is_a_legitimate_skip():
+    """The deeper cause under all four gaps: with the honest exits closed — the skip guidance is a
+    list of discouragements, and an expected failure means "the program is defective", which was not
+    true here — the mirror was the only door left open."""
+    prompt = _flat(_author_task_prompt())
+    assert "the prover cannot analyze the handler the property is about" in prompt
+    assert "not an admission of defeat" in prompt
+
+
+def test_publishing_requires_saying_what_each_rule_drives():
+    assert "result(commentary, property_rules, rule_subjects)" in _author_task_prompt()
+    assert "rule_subjects" in _author_system_prompt()
+
+
+def test_the_judge_is_asked_what_code_is_under_test_before_anything_else():
+    """The six-item checklist had no item a mirror would fail. It is non-vacuous, its assertion
+    matches the property's words, coverage is complete, the logging is fine. Ordering is claimed to
+    be by frequency, and this is what actually went wrong most."""
+    prompt = _flat(_judge_system_prompt())
+    assert prompt.index("What code is actually under test") < prompt.index("Vacuity")
+    assert "proves a property of that helper" in prompt
+
+
+def test_prover_evidence_does_not_license_verifying_a_copy_of_the_handler():
+    """Without this the judge fix is inert: ``prover_output`` rebuttals are near-binding, and the
+    author had a genuine [3308] transcript. Any objection would have been conceded away."""
+    carve = _flat(_judge_system_prompt()).split("One carve-out")[1]
+    assert "never binds you on *whether* the rule reaches the program" in carve

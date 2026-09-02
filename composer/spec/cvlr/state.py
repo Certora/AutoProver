@@ -9,6 +9,8 @@ the validation stamps and the digest gate. What is CVLR's own:
 * ``prover_link`` — the job link from the stamping run, which is what the report links to and what
   ``fetch_verdicts`` re-reads verdicts from.
 * ``property_rules`` — the mapping the publish gate validates.
+* ``rule_subjects`` — per rule, what it actually drives: a function of the program, or harness-local
+  code standing in for one. Carried into the report for the same reason ``expected_failures`` is.
 
 **The ground truth is the buffer, not the run.** ``validate_check_mapping``'s docstring notes that
 forge names every test it ran and a backend whose checker does not is passed ``None``; the prover
@@ -18,7 +20,7 @@ declaration forms name their rules deterministically — and gets the both-direc
 including in the budget wrap-up window where no run is available at all.
 """
 
-from typing import Annotated, NotRequired
+from typing import Annotated, Literal, NotRequired
 
 from langgraph.graph import MessagesState
 from pydantic import BaseModel, Field
@@ -64,8 +66,70 @@ class PropertyRuleMapping(BaseModel):
     )
 
 
+class DrivesProgramFunction(BaseModel):
+    """The rule calls a function the program under verification defines."""
+
+    subject: Literal["program_function"] = "program_function"
+    rule: RuleName = Field(description="The rule this describes")
+    function: str = Field(
+        description="The path of the program function the rule calls, spelled as the harness "
+        "writes it — e.g. `crate::vault_program::deposit`."
+    )
+
+
+class DrivesHarnessMirror(BaseModel):
+    """The rule drives harness-local code that stands in for a program function.
+
+    A property checked this way is a property of the stand-in. Whether it is also a property of the
+    program depends on a transcription no tool checked, which is precisely why the claim has to be
+    declared rather than left in a doc comment.
+    """
+
+    subject: Literal["harness_mirror"] = "harness_mirror"
+    rule: RuleName = Field(description="The rule this describes")
+    mirrors: str = Field(
+        description="The program function the harness code stands in for, e.g. "
+        "`crate::vault_program::deposit`."
+    )
+    reason: str = Field(
+        description="Why the program function itself could not be called — the prover error it "
+        "produced, and what you tried before reimplementing it."
+    )
+
+
+#: What a rule actually drives. Declared per rule at publish time and carried into the report: a
+#: reader deciding how much a verdict is worth needs to know whether it came from the program's own
+#: code, and nothing else in the deliverable answers that.
+type RuleSubject = Annotated[
+    DrivesProgramFunction | DrivesHarnessMirror, Field(discriminator="subject")
+]
+
+
+def validate_rule_subjects(subjects: list[RuleSubject], draft: str) -> str | None:
+    """None if every declared rule has exactly one subject and no subject names an absent rule."""
+    declared = set(rule_names(draft))
+    seen: set[RuleName] = set()
+    errors: list[str] = []
+    for subject in subjects:
+        if subject.rule not in declared:
+            errors.append(
+                f"`rule_subjects` names {subject.rule!r}, which your draft does not declare."
+            )
+        elif subject.rule in seen:
+            errors.append(f"Rule {subject.rule!r} appears more than once in `rule_subjects`.")
+        seen.add(subject.rule)
+    for name in sorted(declared - seen):
+        errors.append(
+            f"Rule {name!r} has no entry in `rule_subjects`: say which program function it drives, "
+            "or declare it as a harness mirror and say why."
+        )
+    return "\n".join(errors) if errors else None
+
+
 class CvlrGenerationExtra(AuthoringExtra):
     property_rules: list[PropertyRuleMapping]
+    #: One entry per declared rule, naming what it drives. See :data:`RuleSubject`.
+    rule_subjects: list[RuleSubject]
     expected_failures: Annotated[dict[CheckName, str], merge_expected_failures]
     #: The job link from the most recent prover run that produced results, whether or not it was
     #: all green — a link to a failing run is still the most useful thing a report can offer.
