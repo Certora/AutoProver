@@ -41,7 +41,7 @@ from composer.spec.source.harness import (
     AgentSystemDescription,
     HarnessResult,
 )
-from composer.pipeline.cli import root_cache_key, user_ns
+from composer.pipeline.cli import autoprover_version, root_cache_key, user_ns
 from composer.pipeline.keys import (
     AGENT_RESULT_KEY, AGENT_ROUND_KEY, BUG_ANALYSIS_KEY,
     COMMON_SYSTEM_CACHE_KEY, COMPONENT_KEY, FORMALIZATION_KEY,
@@ -473,7 +473,7 @@ def _resolve_from_inputs(args: argparse.Namespace) -> AutoProveCacheTags | None:
 
     root_ns = user_ns(
         args.cache_ns,
-        root_cache_key(str(project_root), sys_path, relative_path, contract_name),
+        root_cache_key(str(project_root), sys_path, relative_path, contract_name, autoprover_version()),
     )
     memory_ns = args.memory_ns
     if memory_ns:
