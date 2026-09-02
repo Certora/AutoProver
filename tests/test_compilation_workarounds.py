@@ -9,6 +9,7 @@ import certora_autosetup.utils.remappings as remappings_mod
 from certora_autosetup.utils.compilation_workarounds import (
     VIA_IR_SCENE_THRESHOLD,
     CompilationWorkaroundManager,
+    ConflictingPragmaError,
     UnimplementedContractError,
     UnsatisfiableSolcPinError,
 )
@@ -703,6 +704,127 @@ def test_the_detection_names_the_file_and_spec_it_read(
     assert "certora/mocks/DummyERC20Impl.sol" in detection[0]
 
 
+# A contract's compilation unit spans several files, and two of them can declare pragmas no
+# single compiler satisfies. compiler_map is keyed by contract, so the conf has no way to give
+# the two files different compilers and the run stops instead of alternating between them.
+
+PRAGMA_CONFLICT_CONTRACTS = [
+    ContractHandle(contract_name="Widget", source_file="src/Widget.sol"),
+    # Both files answer to the one conf entry, which is what makes the split inexpressible.
+    ContractHandle(contract_name="Widget", source_file="src/Dep.sol"),
+]
+
+
+def _mismatch_output(source_path: str, current: str, spec: str) -> str:
+    """A failed pass compiling ``src/Widget.sol``, whose pragma solc read out of ``source_path``.
+
+    The compiled file is the same in every output on purpose: the unit is entered through the
+    contract the conf names, and which of its files declared the offending pragma is what the
+    ``ParserError`` location says.
+    """
+    return (
+        f"Compiling src/Widget.sol...\n"
+        f"solc{current} had an error:\n"
+        f"{source_path}:2:1: ParserError: Source file requires different compiler version "
+        f"(current compiler is {current}+commit.9bfce1f6.Linux.g++)\n"
+        f"pragma solidity {spec};\n"
+    )
+
+
+@pytest.fixture
+def resolve_pragma_by_spec(monkeypatch):
+    """resolve_pragma_to_version fetches soliditylang.org; answer from the spec itself."""
+    versions = {
+        "^0.8.20": "0.8.20",
+        "=0.7.6": "0.7.6",
+        ">=0.7.0": "0.7.0",
+        "^0.6.0 || ^0.8.0": "0.8.20",
+    }
+    monkeypatch.setattr(
+        "certora_autosetup.utils.compilation_workarounds.resolve_pragma_to_version",
+        lambda spec, **kwargs: versions[spec],
+    )
+
+
+def test_two_files_pinning_incompatible_compilers_stops_the_run(
+    manager, monkeypatch, tmp_path, resolve_pragma_by_spec
+) -> None:
+    # The two passes compile the same file and differ only in which file solc read the pragma
+    # out of — the alternation this is for, and the one thing that separates the readings.
+    outputs = [
+        _mismatch_output("src/Widget.sol", "0.7.6", "^0.8.20"),
+        _mismatch_output("src/Dep.sol", "0.8.20", "=0.7.6"),
+    ]
+    assert all(output.startswith("Compiling src/Widget.sol...") for output in outputs)
+
+    with pytest.raises(ConflictingPragmaError) as raised:
+        _run_loop(manager, monkeypatch, tmp_path, outputs, PRAGMA_CONFLICT_CONTRACTS)
+
+    message = str(raised.value)
+    assert "src/Widget.sol" in message and "src/Dep.sol" in message
+    assert "^0.8.20" in message and "=0.7.6" in message
+    assert "0.8.20" in message and "0.7.6" in message
+
+
+def test_converging_pragmas_let_the_workaround_pin_the_contract(
+    manager, monkeypatch, tmp_path, resolve_pragma_by_spec
+) -> None:
+    # ">=0.7.0" then "=0.7.6" names two versions and one satisfiable range: the specs decide,
+    # not the versions read off them.
+    success, updated, _, _ = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [
+            _mismatch_output("src/Widget.sol", "0.6.12", ">=0.7.0"),
+            _mismatch_output("src/Dep.sol", "0.7.0", "=0.7.6"),
+        ],
+        PRAGMA_CONFLICT_CONTRACTS,
+    )
+
+    assert success is True
+    # A one-contract map uniform in the end collapses back to the scalar on finalize.
+    assert updated["solc"] == "solc7.6"
+
+
+def test_two_specs_in_one_file_are_not_a_conflict(
+    manager, monkeypatch, tmp_path, resolve_pragma_by_spec
+) -> None:
+    # One file cannot be split across two compilers by any conf, so the pair is that file's own
+    # business — only a second file in the unit makes the contradiction this check is for.
+    success, _, _, _ = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [
+            _mismatch_output("src/Widget.sol", "0.7.6", "^0.8.20"),
+            _mismatch_output("src/Widget.sol", "0.8.20", "=0.7.6"),
+        ],
+        PRAGMA_CONFLICT_CONTRACTS,
+    )
+
+    assert success is True
+
+
+def test_a_spec_that_is_not_one_constraint_is_not_a_conflict(
+    manager, monkeypatch, tmp_path, resolve_pragma_by_spec
+) -> None:
+    # A disjunction parses into no single constraint, which is unknown rather than a
+    # contradiction.
+    success, _, _, _ = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [
+            _mismatch_output("src/Widget.sol", "0.7.6", "^0.6.0 || ^0.8.0"),
+            _mismatch_output("src/Dep.sol", "0.8.20", "=0.7.6"),
+        ],
+        PRAGMA_CONFLICT_CONTRACTS,
+    )
+
+    assert success is True
+
+
 def test_ignores_unrelated_compiler_version_mismatch(
     manager: CompilationWorkaroundManager,
 ) -> None:
@@ -1252,6 +1374,25 @@ def test_packages_come_from_the_nested_build_config_dir(tmp_path: Path, monkeypa
     assert "@pkg/" in keys, "nested foundry.toml remapping must reach the packages list"
     # Paths are absolute against the build config dir, so they stay valid from the run root.
     assert f"@pkg/={project / 'node_modules/@pkg/artifacts/src'}/" in packages
+
+
+def test_the_rebuild_keeps_the_other_projects_scoped(tmp_path: Path, monkeypatch) -> None:
+    # The retry loop rebuilds the packages list from the same sources, so it must reproduce the
+    # context-scoped entries the initial conf carries — otherwise the first workaround to fire
+    # replaces a scoped conf with a flat one and the sibling resolves through the anchor again.
+    _no_forge(monkeypatch)
+    app = tmp_path / "app"
+    other = tmp_path / "other"
+    for project in (app, other):
+        (project / "out").mkdir(parents=True)
+        (project / "foundry.toml").write_text("[profile.default]\n")
+        (project / "remappings.txt").write_text("@pkg/contracts/=node_modules/@pkg/contracts/\n")
+        (project / "node_modules" / "@pkg" / "contracts").mkdir(parents=True)
+
+    manager = CompilationWorkaroundManager(project_root=tmp_path, build_config_dir=app)
+    packages = manager._build_packages_from_remapping_sources()
+
+    assert f"other/:@pkg/contracts/={other / 'node_modules/@pkg/contracts'}/" in packages
 
 
 def test_build_config_dir_defaults_to_project_root(tmp_path: Path, monkeypatch) -> None:

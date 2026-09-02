@@ -5,6 +5,13 @@ and the *reactive* source-not-found workaround (``utils/compilation_workarounds.
 the same packages list — historically they diverged, which is what left the initial conf missing
 ``remappings.txt`` / auto-inferred ``lib/*`` entries and caused ``ParserError: Source "…" not
 found``. This module is the single source of truth both call.
+
+A run root often holds more than one project, and each of them declares its own import
+resolution. Every project other than the anchor therefore contributes *context-scoped* entries
+(``<project-rel-path>/:prefix=target``) next to the anchor's unscoped ones. solc matches a
+context against the importing file's source unit name and prefers the longest match, so a
+scoped entry governs the files of the project it names while the anchor's entries remain the
+default for every file no context claims.
 """
 
 import json
@@ -15,6 +22,9 @@ from pathlib import Path
 from typing import Callable, Dict, List, Literal, Optional, Tuple
 
 import tomllib
+
+from certora_autosetup.setup.solidity_utils import DEPENDENCIES
+from certora_autosetup.utils.project_dir import BUILD_CONFIG_FILENAMES
 
 # (message, level) -> None; matches BuildSystemManager.log / CompilationWorkaroundManager.log.
 LogFn = Callable[[str, str], None]
@@ -221,6 +231,37 @@ def build_packages_from_remapping_sources(
     2. foundry.toml — hand-curated source of truth for the build system
     3. remappings.txt — often partially auto-generated; may drift
     4. package.json — npm-style fallback
+
+    Every *other* project under ``run_root`` contributes its own resolution too, as
+    context-scoped entries (``<project-rel-path>/:prefix=target``). solc matches a context
+    against the importing file's source unit name and prefers the longest match, so such an
+    entry governs that project's files while the entries above stay the default for every file
+    no context claims (see ``_scope_other_projects``).
+    """
+    remapping_key_to_path, remapping_key_to_source = _collect_remapping_entries(
+        base_dir, log_fn, profile, run_root
+    )
+    _scope_other_projects(
+        remapping_key_to_path=remapping_key_to_path,
+        remapping_key_to_source=remapping_key_to_source,
+        base_dir=base_dir,
+        run_root=run_root,
+        log_fn=log_fn,
+    )
+    return [f"{key}={path}" for key, path in remapping_key_to_path.items()]
+
+
+def _collect_remapping_entries(
+    base_dir: Path,
+    log_fn: LogFn,
+    profile: str,
+    run_root: Optional[Path],
+) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """Read one project's four remapping sources into (key -> path, key -> source) maps.
+
+    The sources, their priority and the meaning of ``profile`` and ``run_root`` are the ones
+    ``build_packages_from_remapping_sources`` documents. The maps are handed back unformatted
+    so another project's resolution can be merged into them before the list is built.
     """
     # Data collection: key -> resolved path (first source to set a key wins) and key -> source
     # (for the mismatch warning). The packages list is formatted once at the end, preserving this
@@ -336,7 +377,122 @@ def build_packages_from_remapping_sources(
                     log_fn=log_fn,
                 )
 
-    return [f"{key}={path}" for key, path in remapping_key_to_path.items()]
+    return remapping_key_to_path, remapping_key_to_source
+
+
+def _projects_under(base_dir: Path, run_root: Optional[Path]) -> List[Path]:
+    """Every project under ``run_root`` other than ``base_dir`` and its ancestors.
+
+    A project is a directory holding one of ``BUILD_CONFIG_FILENAMES``. The config is what
+    declares the project's import resolution, and it declares it whether or not the project
+    ever compiled: a sibling whose own build failed has no artifacts, and a build that failed
+    for want of the right copy of a package is exactly the case these entries answer. The walk
+    prunes hidden directories and the vendored-dependency names in ``DEPENDENCIES``, whose
+    configs belong to a dependency rather than to the repo under analysis. A project nested
+    inside another is kept: its
+    context is longer, hence more specific, which is what solc should prefer for its files.
+
+    ``base_dir``, its ancestors and the run root are excluded. An ancestor's context prefixes
+    the anchor's own source unit names as well, and being longer than the empty context it
+    would outrank the anchor's global entries for exactly the files those entries are for.
+
+    Comparison is textual (``os.path.normpath``, never ``Path.resolve``), the contract
+    ``_ancestor_roots`` documents and depends on.
+    """
+    if run_root is None:
+        return []
+
+    excluded = {os.path.normpath(root) for root in _ancestor_roots(base_dir, run_root)}
+    projects: List[Path] = []
+    for dirpath, dirnames, filenames in os.walk(str(run_root)):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in DEPENDENCIES]
+        if os.path.normpath(dirpath) in excluded:
+            continue
+        if any(config in filenames for config in BUILD_CONFIG_FILENAMES):
+            projects.append(Path(dirpath))
+    return sorted(projects, key=lambda project: os.path.relpath(project, run_root))
+
+
+def _prefixed_log(prefix: str, log_fn: LogFn) -> LogFn:
+    """A log function tagging every message with ``prefix``, so a hoist or an unresolved
+    package read out of a sibling project is attributable to that project."""
+
+    def log(message: str, level: str) -> None:
+        log_fn(f"[{prefix}] {message}", level)
+
+    return log
+
+
+def _scope_other_projects(
+    *,
+    remapping_key_to_path: Dict[str, str],
+    remapping_key_to_source: Dict[str, str],
+    base_dir: Path,
+    run_root: Optional[Path],
+    log_fn: LogFn,
+) -> None:
+    """Merge every other project's resolution in, scoped to that project's files.
+
+    Each entry is keyed ``<project-rel-path>/:prefix``, which solc applies only to files whose
+    source unit name starts with that path — so a project pinned to its own copy of a package
+    keeps it while the anchor's unscoped entry stays the default everywhere else.
+    """
+    for project in _projects_under(base_dir, run_root):
+        rel = os.path.relpath(project, run_root)
+        # Siblings are read under the default profile because the reactive rebuild in
+        # `compilation_workarounds` passes no profile; the two writers must produce the same
+        # keys, or the first workaround to fire would rebuild the conf without the scoping.
+        project_paths, _ = _collect_remapping_entries(
+            base_dir=project,
+            log_fn=_prefixed_log(rel, log_fn),
+            profile="default",
+            run_root=run_root,
+        )
+        for key, path in project_paths.items():
+            # A key that already carries a context is one the project authored. `_rebase_context`
+            # expresses such a context run-root-relative when it names a directory in the
+            # project, and leaves it as authored when it names none — so only a context that
+            # lands inside the project is taken as it stands. Anything else is composed under
+            # the project, because a context reaching outside it would outrank the anchor's
+            # shorter entries for the anchor's own files. Composing `rel` needs no rebasing,
+            # since it is run-root-relative by construction.
+            if ":" in key:
+                context, prefix = key.split(":", 1)
+                normalized = os.path.normpath(context)
+                if normalized == rel or normalized.startswith(rel + os.sep):
+                    scoped_key = key
+                else:
+                    scoped_key = f"{os.path.join(rel, context.lstrip(os.sep))}:{prefix}"
+            else:
+                scoped_key = f"{rel}/:{key}"
+                prefix = key
+            # The same target under a longer context is the same binding spelled twice.
+            if remapping_key_to_path.get(prefix) == path:
+                continue
+            if not Path(path).exists():
+                # A scoped entry outranks the global one for every file under it, so binding
+                # the prefix to a directory already known to be absent would replace a
+                # resolution that may work with one that cannot.
+                governing = remapping_key_to_path.get(prefix)
+                keeps = (
+                    f"'{prefix}={governing}' keeps governing it"
+                    if governing
+                    else "the prefix stays unmapped"
+                )
+                log_fn(
+                    f"Project '{rel}' maps '{prefix}' to {path}, which does not exist; {keeps}",
+                    "WARNING",
+                )
+                continue
+            _record_entry(
+                key=scoped_key,
+                path=path,
+                source_name=f"{rel} remapping sources",
+                remapping_key_to_path=remapping_key_to_path,
+                remapping_key_to_source=remapping_key_to_source,
+                warn_on_mismatch=False,
+                log_fn=log_fn,
+            )
 
 
 def _rebase_context(context: str, base_dir: Path, run_root: Optional[Path], log_fn: LogFn) -> str:
@@ -470,6 +626,37 @@ def _merge_remapping_entry(
         if path and not path.endswith("/"):
             path += "/"
 
+    _record_entry(
+        key=key,
+        path=path,
+        source_name=source_name,
+        remapping_key_to_path=remapping_key_to_path,
+        remapping_key_to_source=remapping_key_to_source,
+        warn_on_mismatch=warn_on_mismatch,
+        log_fn=log_fn,
+    )
+
+
+def _record_entry(
+    *,
+    key: str,
+    path: str,
+    source_name: str,
+    remapping_key_to_path: Dict[str, str],
+    remapping_key_to_source: Dict[str, str],
+    warn_on_mismatch: bool,
+    log_fn: LogFn,
+) -> None:
+    """Record an already-canonical key/path pair under the first-wins rule.
+
+    On a key conflict (already populated by an earlier-priority source):
+    - if ``warn_on_mismatch`` and the stored path differs from the new one, log a warning naming
+      the actual earlier source from ``remapping_key_to_source``;
+    - otherwise silently skip.
+
+    Both halves are taken as given, which is what lets a caller holding a key and a target
+    already in canonical form record them without composing and re-parsing an entry string.
+    """
     if key in remapping_key_to_path:
         if warn_on_mismatch and remapping_key_to_path[key] != path:
             earlier_source = remapping_key_to_source[key]

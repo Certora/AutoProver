@@ -66,6 +66,12 @@ class UnsatisfiableSolcPinError(Exception):
     satisfies its pragma, so no substitution can make the project compile."""
 
 
+class ConflictingPragmaError(Exception):
+    """Raised when two files in one contract's compilation unit declare pragmas no single
+    compiler satisfies. ``compiler_map`` is keyed by contract, so no entry in it can give the
+    two files different compilers."""
+
+
 # The contract name is quoted by solc, so it survives the hard wrap that
 # ``_normalize_ws`` folds away; the source location that follows is optional
 # because only the diagnostic itself is guaranteed to be in the output.
@@ -80,6 +86,23 @@ class BlockedSolcPin:
     """A contract whose pragma no installed compiler can satisfy."""
 
     contract_name: str
+    pragma_spec: str
+
+
+@dataclass(frozen=True)
+class PragmaReading:
+    """One compiler version a contract was reported to need, and the pragma it was read off.
+
+    ``file_path`` is the file that was being compiled and ``source_path`` the file solc
+    attributed the pragma to — the compilation unit spans several files, so the pragma often
+    comes from one the compiled file imports. ``source_path`` is what tells two readings of the
+    same contract apart, ``compiler_map`` being keyed by contract alone. It is None when the
+    diagnostic carried no source location.
+    """
+
+    version: str
+    file_path: str
+    source_path: Optional[str]
     pragma_spec: str
 
 
@@ -182,6 +205,44 @@ def _find_compiling_path_before(lines: List[str], idx: int, max_lookback: Option
     return None
 
 
+def _diagnostic_source_path(output: str, lines: List[str], start: int, idx: int) -> Optional[str]:
+    """The file solc attributes the diagnostic starting at ``output[start]`` to, or None.
+
+    solc writes the location in one of two shapes and this reads both: the short one prefixes
+    the diagnostic on its own line (``<path>:<line>:<col>: ParserError: …``), the long one puts
+    it on an ``-->`` line under it and hard-wraps a long path across the lines that follow.
+
+    ``lines`` is ``output`` split on newlines and ``idx`` the index of the line ``start`` falls
+    on, both passed in because the caller already has them.
+    """
+    line_start = output.rfind("\n", 0, start) + 1
+    prefixed = re.match(r"^\s*(.+?):\d+:\d+:\s*$", output[line_start:start])
+    if prefixed:
+        return prefixed.group(1).strip()
+
+    for j in range(idx + 1, min(idx + 10, len(lines))):
+        if "-->" not in lines[j]:
+            continue
+        path_parts = []
+        arrow_line = lines[j].split("-->", 1)
+        if len(arrow_line) > 1:
+            path_parts.append(arrow_line[1].strip())
+
+        for k in range(j + 1, min(j + 5, len(lines))):
+            stripped = lines[k].strip()
+            if not stripped or stripped == "|":
+                break
+            path_parts.append(stripped)
+            if re.search(r":\d+:\d+:\s*$", stripped):
+                break
+
+        path_match = re.search(r"^(.+?):\d+:\d+:\s*$", "".join(path_parts))
+        if path_match:
+            return path_match.group(1).strip()
+        return None
+    return None
+
+
 @dataclass
 class CompilationWorkaround:
     """Represents a compilation workaround that can be applied to fix errors."""
@@ -224,6 +285,10 @@ class CompilationWorkaroundManager:
         # that failed, so it must describe *that* failure and never an earlier pass's.
         self.last_import_diagnostics: List[UnresolvedImport] = []
         self._remappings_workaround_applied = False
+        # contract name -> every compiler version mismatch reported for it in this run. A list
+        # because the test for a contradiction is pairwise and more than two passes can report
+        # the same contract.
+        self._pragma_readings: Dict[str, List[PragmaReading]] = {}
         # (consumer, lib) pairs already covered by a generated harness in this run.
         # Used as a loop guard — if the prover still reports the same pair after we
         # wrapped the consumer, the workaround stops firing to avoid spinning.
@@ -442,6 +507,10 @@ class CompilationWorkaroundManager:
         # Rebuilt from each failed output, before the workaround table runs.
         solc_fallback_plan: Optional[SolcFallbackPlan] = None
 
+        # Rebuilt from each failed output, before the workaround table runs: the reading is
+        # also what the terminal pragma-conflict check tests, so the pass detects once.
+        version_mismatch: Optional[Tuple[str, str]] = None
+
         # Initialize workarounds list
         workarounds = [
             CompilationWorkaround(
@@ -484,7 +553,9 @@ class CompilationWorkaroundManager:
             ),
             CompilationWorkaround(
                 name="compiler_version_mismatch",
-                detect_fn=lambda output: self._detect_compiler_version_mismatch(output, contracts),
+                # Detected once per pass below, because the same reading feeds the terminal
+                # check that has to run before this table.
+                detect_fn=lambda output: version_mismatch,
                 apply_fn=self._apply_compiler_version_workaround_to_config,
                 # Enabled even when a global solc is configured: the detector
                 # only fires when that compiler provably cannot parse a file
@@ -743,6 +814,7 @@ class CompilationWorkaroundManager:
             solc_fallback_plan = (
                 self._plan_solc_fallback(output, updated_config_dict, contracts) if solc_pinned else None
             )
+            version_mismatch = self._detect_compiler_version_mismatch(output, contracts)
             if solc_fallback_plan is not None and solc_fallback_plan.blocked:
                 self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
                 installed = ", ".join(binary for binary, _ in self._solc_fallback_candidates()) or "none"
@@ -752,6 +824,39 @@ class CompilationWorkaroundManager:
                     f"compiler satisfies the pragma of: {pins}. Installed compilers considered: "
                     f"{installed}. Install '{solc_fallback_plan.failed_solc}' to compile this project."
                 )
+
+            # Also terminal: this contract's compilation unit spans files whose pragmas no one
+            # compiler satisfies. Pinning it to either version leaves the other file rejecting
+            # it, and compiler_map is keyed by contract, so the conf cannot express the split.
+            # The specs decide it, not the versions read off them: ">=0.7.0" followed by
+            # "=0.7.6" names two versions and one satisfiable range.
+            if version_mismatch is not None:
+                contract_name, new_version = version_mismatch
+                readings = self._pragma_readings.get(contract_name, [])
+                newest = readings[-1]
+                for earlier in readings[:-1]:
+                    # The split needs two different files that solc named. Two specs read out
+                    # of one file are that file's own business, and a diagnostic carrying no
+                    # source location names nothing to weigh against the other reading.
+                    if not (earlier.source_path and newest.source_path):
+                        continue
+                    if earlier.source_path == newest.source_path:
+                        continue
+                    # `None` is "the spec parsed into no single constraint" (a disjunction, say)
+                    # — unknown, which is not a contradiction.
+                    if pragma_admits(earlier.pragma_spec, new_version) is False:
+                        self._finalize_compile_maps(
+                            compilation_config, updated_config_dict, config_file
+                        )
+                        raise ConflictingPragmaError(
+                            f"Contract '{contract_name}' is compiled together with files whose "
+                            f"pragmas cannot be satisfied by one compiler: "
+                            f"'{earlier.source_path}' declares '{earlier.pragma_spec}' "
+                            f"(compiler {earlier.version}) while '{newest.source_path}' declares "
+                            f"'{newest.pragma_spec}' (compiler {new_version}). compiler_map is "
+                            f"keyed by contract, so it cannot give the two files different "
+                            f"compilers — the sources have to agree on a version range."
+                        )
 
             # One pass over the failed output: apply EVERY applicable workaround
             # before recompiling — one full certoraRun per pass is expensive, so
@@ -1126,31 +1231,13 @@ class CompilationWorkaroundManager:
             # so context searches below start from where the marker begins.
             i = output.count("\n", 0, match.start())
 
-            # Try to find file_path from preceding "Compiling ..." line
-            file_path = _find_compiling_path_before(lines, i, max_lookback=15)
+            # The file the pragma was read out of, which solc names in the diagnostic's own
+            # source location. A compilation unit spans several files, so this is often not
+            # the file being compiled but one it imports.
+            pragma_source = _diagnostic_source_path(output, lines, match.start(), i)
 
-            # Fallback: Extract file_path from arrow line if not found above
-            if not file_path:
-                for j in range(i + 1, min(i + 10, len(lines))):
-                    if "-->" in lines[j]:
-                        path_parts = []
-                        arrow_line = lines[j].split("-->", 1)
-                        if len(arrow_line) > 1:
-                            path_parts.append(arrow_line[1].strip())
-
-                        for k in range(j + 1, min(j + 5, len(lines))):
-                            stripped = lines[k].strip()
-                            if not stripped or stripped == "|":
-                                break
-                            path_parts.append(stripped)
-                            if re.search(r":\d+:\d+:\s*$", stripped):
-                                break
-
-                        full_path = "".join(path_parts)
-                        path_match = re.search(r"^(.+?):\d+:\d+:\s*$", full_path)
-                        if path_match:
-                            file_path = path_match.group(1).strip()
-                            break
+            # The file being compiled, which is what maps to a contract in the conf.
+            file_path = _find_compiling_path_before(lines, i, max_lookback=15) or pragma_source
 
             if not file_path:
                 continue
@@ -1170,14 +1257,23 @@ class CompilationWorkaroundManager:
 
                     contract_name = self._get_contract_name_from_path(file_path, contracts)
                     if contract_name:
-                        # The file and the raw spec are what the version was read off, and one
-                        # contract can be reported twice with different versions across a retry
-                        # loop — from two files in its compilation unit, or from two specs in
-                        # one file. Naming both makes the conf entry that follows traceable to
-                        # the line it came from.
+                        # One contract can be reported twice with different versions across a
+                        # retry loop — from two files in its compilation unit, or from two
+                        # specs in one file. Naming the compiled file, the file the spec was
+                        # read out of and the raw spec tells those apart and makes the conf
+                        # entry that follows traceable to the line it came from.
                         self.log(
-                            f"Detected compiler version mismatch for {contract_name}: requires "
-                            f"{version} (from '{pragma_spec}' in '{file_path}')"
+                            f"Detected compiler version mismatch for {contract_name} while "
+                            f"compiling '{file_path}': requires {version} (from "
+                            f"'{pragma_spec}' in '{pragma_source}')"
+                        )
+                        self._pragma_readings.setdefault(contract_name, []).append(
+                            PragmaReading(
+                                version=version,
+                                file_path=file_path,
+                                source_path=pragma_source,
+                                pragma_spec=pragma_spec,
+                            )
                         )
                         return (contract_name, version)
                     else:
