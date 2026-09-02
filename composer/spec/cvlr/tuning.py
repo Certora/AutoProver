@@ -104,6 +104,11 @@ class TuningFiles:
         Rewritten wholesale from ``directives`` rather than appended to, so the state the run
         recorded and the file on disk cannot drift — and a run that ends up with no directives
         leaves the layer as the scaffold wrote it.
+
+        Called from the build path rather than from the tool that records a directive. One writer,
+        reading state the reducer has already merged: a tool writing its own view of the list would
+        race a concurrent sibling and drop one of the two, which is the same bug as the unreduced
+        state key and would not have raised.
         """
         layer = package_layer(self.read_header(), directives)
         self._layer_path(SUMMARIES).write_text(layer)
@@ -123,6 +128,30 @@ class TuningFiles:
             for family in ENV_FAMILIES
             if not (self.envs_dir / family.composite).is_file()
         )
+
+
+def merge_summaries(
+    left: list[SummaryDirective], right: list[SummaryDirective]
+) -> list[SummaryDirective]:
+    """State reducer for the summary list: append, in order, deduplicating by pattern.
+
+    A reducer rather than a plain field because two ``summarize_for_prover`` calls can land in one
+    graph step — the model routinely emits several tool calls per turn — and LangGraph refuses two
+    writes to an unreduced key. That is not a hypothetical: an end-to-end run made five calls while
+    hunting for a pattern that matched, two of them concurrent, and the step raised
+    ``InvalidUpdateError`` and took the whole unit down with it.
+
+    Deduplicating rather than replacing is what makes concurrent calls correct: each tool contributes
+    only its own directive, so neither has to have seen the other's.
+    """
+    merged = list(left)
+    seen = {d.pattern for d in merged}
+    for directive in right:
+        if directive.pattern in seen:
+            continue
+        merged.append(directive)
+        seen.add(directive.pattern)
+    return merged
 
 
 def summary_history(directives: tuple[SummaryDirective, ...]) -> tuple[str, ...]:

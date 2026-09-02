@@ -22,7 +22,7 @@ import asyncio
 import dataclasses
 import logging
 from pathlib import Path
-from typing import override
+from typing import Sequence, override
 
 from langchain_core.tools import BaseTool
 from pydantic import Field
@@ -77,9 +77,18 @@ class HarnessTarget:
     #: The package's tuning files, which ``summarize_for_prover`` rewrites.
     tuning: TuningFiles
 
-    def stage(self, draft: str) -> None:
+    def stage(self, draft: str, summaries: Sequence[SummaryDirective] = ()) -> None:
+        """Put the draft and the tuning directives on disk, ready to build.
+
+        Both, from one place, because both are inputs to the build and the prover reads the tuning
+        file through the conf. The summaries come from already-merged state rather than from the tool
+        that recorded one, so two concurrent ``summarize_for_prover`` calls cannot each write their
+        own view of the list and lose the other's.
+        """
         self.module_path.parent.mkdir(parents=True, exist_ok=True)
         self.module_path.write_text(draft)
+        if summaries:
+            self.tuning.write(tuple(summaries))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -131,7 +140,7 @@ class CargoCheck(
         if draft is None:
             return "No harness written yet — put a draft first."
         with self.tool_deps() as target:
-            target.stage(draft)
+            target.stage(draft, self.state["summaries"])
             run = await target.session.check(package=target.package, features=("certora",))
         match run.verdict:
             case Compiled():
@@ -178,7 +187,7 @@ class VerifyRules(
                     "starting a second one."
                 )
             async with deps.lock:
-                deps.target.stage(draft)
+                deps.target.stage(draft, self.state["summaries"])
                 outcome = await submit(
                     deps.target.session,
                     # Name exactly the rules this draft declares. Not a refinement: a conf with no
@@ -336,28 +345,27 @@ class SummarizeForProver(
                 "nothing."
             )
         with self.tool_deps() as tuning:
-            if absent := tuning.missing():
-                # The scaffold owns these files, so this is a scaffold failure surfacing late.
-                # Refused rather than written, because a summary in a file the conf does not name
-                # changes nothing and the author would read success and get an identical [3308].
-                return (
-                    f"This project has no {', '.join(absent)}, so the prover is not reading any "
-                    "tuning file and a summary would have no effect. Report this rather than "
-                    "working around it."
-                )
-            directive = SummaryDirective(
-                pattern=self.symbol_pattern, why=self.why, returns=self.returns
+            absent = tuning.missing()
+        if absent:
+            # The scaffold owns these files, so this is a scaffold failure surfacing late. Refused
+            # rather than recorded, because a summary in a file the conf does not name changes
+            # nothing and the author would read success and get an identical [3308].
+            return (
+                f"This project has no {', '.join(absent)}, so the prover is not reading any tuning "
+                "file and a summary would have no effect. Report this rather than working around it."
             )
-            existing = tuple(self.state["summaries"])
-            if any(d.pattern == directive.pattern for d in existing):
-                return f"{directive.pattern} is already summarized."
-            updated = existing + (directive,)
-            tuning.write(updated)
+        directive = SummaryDirective(
+            pattern=self.symbol_pattern, why=self.why, returns=self.returns
+        )
+        if any(d.pattern == directive.pattern for d in self.state["summaries"]):
+            return f"{directive.pattern} is already summarized."
+        # Only this directive: the state reducer merges, and the build path is what writes the
+        # tuning file. A tool that wrote the file itself would be racing its own siblings.
         return tool_state_update(
             self.tool_call_id,
-            f"Summarized {directive.pattern}. {len(updated)} summary directive(s) now in effect. "
-            "This invalidated the prover stamp — re-run verify_rules.",
-            summaries=list(updated),
+            f"Recorded a summary for {directive.pattern}. It takes effect on the next build, and it "
+            "invalidated the prover stamp — re-run verify_rules.",
+            summaries=[directive],
         )
 
 
