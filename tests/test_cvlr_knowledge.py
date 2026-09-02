@@ -499,3 +499,11 @@ def test_the_judge_weighs_summaries_the_same_way_it_weighs_mirrors():
 def test_an_unanalyzable_handler_skip_names_the_tool_it_tried():
     prompt = _flat(_author_task_prompt())
     assert "`summarize_for_prover` and weakening both failed" in prompt
+
+
+def test_the_author_is_told_a_directive_can_match_nothing():
+    """Otherwise the only feedback is a repeat of the same error, and the response to that is to
+    guess another spelling — which is what happened five times in one unit."""
+    prompt = _flat(_author_task_prompt())
+    assert "matched **no symbol in the build**" in prompt
+    assert "inlined away and no respelling will find it" in prompt
