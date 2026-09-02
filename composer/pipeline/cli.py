@@ -53,11 +53,28 @@ from composer.spec.util import fs_forbidden_read
 import hashlib
 
 
+def autoprover_version() -> str:
+    """The git commit recorded for a ``git+``-installed ``ai-composer`` (its ``direct_url.json``),
+    else the package version, else ``"unknown"``."""
+    try:
+        from importlib.metadata import distribution
+        dist = distribution("ai-composer")
+        raw = dist.read_text("direct_url.json")
+        if raw:
+            commit = json.loads(raw).get("vcs_info", {}).get("commit_id")
+            if commit:
+                return str(commit)
+        return dist.version
+    except Exception:
+        return "unknown"
+
+
 def root_cache_key(
     project_root: str,
     system_doc_path: pathlib.Path | None,
     relative_path: str,
     contract_name: str,
+    tool_version: str,
 ):
     # A source-only run (no design doc) hashes a fixed sentinel in place of the doc
     # bytes, so it gets a stable key that is distinct from any real document.
@@ -66,7 +83,7 @@ def root_cache_key(
         if system_doc_path is not None
         else "no-design-doc"
     )
-    combined = "|".join([project_root, doc_hash, relative_path, contract_name])
+    combined = "|".join([project_root, doc_hash, relative_path, contract_name, tool_version])
     return hashlib.sha256(combined.encode()).hexdigest()
 
 
@@ -334,7 +351,8 @@ async def cli_pipeline[P: enum.Enum, H](
                 project_root=str(project_root),
                 contract_name=contract_name,
                 relative_path=relative_path,
-                system_doc_path=system_doc
+                system_doc_path=system_doc,
+                tool_version=autoprover_version(),
             )
             cache_root = user_ns(args.cache_ns, root_key) if args.cache_ns is not None else None
 

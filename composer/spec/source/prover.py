@@ -35,7 +35,8 @@ from composer.prover.ptypes import RuleResult, RulePath
 from graphcore.graph import LLM
 
 from composer.prover.core import (
-    ProverOptions, declared_rules_list, run_prover, DefaultCexHandler
+    ProverOptions, SpecCompilationError, declared_rules_list, run_prover,
+    DefaultCexHandler
 )
 from composer.prover.callbacks import ProverEventCallbacks
 from composer.prover.ptypes import StatusCodes
@@ -529,11 +530,11 @@ def get_prover_tool(
 
         if rules is not None and exclude_rules is not None:
             return "Cannot invoke the prover with both `rules` and `exclude_rules` set to non-none"
-        
+
         spec = state["curr_spec"]
         if spec is None:
             return "Specification not yet put on VFS"
-        
+
         spec_hash = string_hash(
             spec
         )
@@ -574,10 +575,13 @@ def get_prover_tool(
                 exclude_rule=None,
                 msg=""
             ) as (config_path, _ignored):
-                all_rules = await declared_rules_list(
-                    folder=Path(run_root),
-                    args=[config_path]
-                )
+                try:
+                    all_rules = await declared_rules_list(
+                        folder=Path(run_root),
+                        args=[config_path]
+                    )
+                except SpecCompilationError as exc:
+                    return f"The spec failed to compile:\n{exc.output}"
             with setup_prover_config_in(
                 working_dir=run_root,
                 main_contract=main_contract,
@@ -630,7 +634,7 @@ def get_prover_tool(
                 curr_status=prover_results,
                 all_rules=all_rules
             )
-            
+
             prover_update : list[ProverHistoryItem] = [
                 ProverRunLog(
                     tool_call_id=tool_call_id,
@@ -644,7 +648,7 @@ def get_prover_tool(
                 )
             ]
             nag_channel = {
-                
+
             }
             if len(to_warn) > 0:
                 prover_update.append(NagMarker(
