@@ -244,22 +244,33 @@ async def test_the_backend_authors_cvlr_rules_for_the_vault(langgraph_db, projec
             backend, run, ecosystem=SOLANA, interactive=False, threat_model=None, max_bug_rounds=1
         )
 
-    with capsys.disabled():
-        print(
-            f"\nCVLR gate: {result.n_components} component(s), {result.n_properties} propert(ies), "
-            f"{result.n_delivered} delivered"
-        )
-        for outcome in result.outcomes:
-            print(f"\n== {outcome.feat.display_name} ==")
-            harness = _harness(outcome.result)
-            if harness is None:
-                print(f"  no deliverable: {outcome.result}")
-                continue
-            print(f"  {harness.final_link or 'no prover link'}")
-            for title, rules in harness.property_checks():
-                print(f"  [{title}] -> {', '.join(rules) or '(none)'}")
-            for skip in harness.skipped:
-                print(f"  skipped [{skip.property_title}]: {skip.reason}")
+    # Written to a file as well as printed. ``capsys.disabled()`` restores the stream pytest saved at
+    # session start, which is not the one a redirected or piped run is reading — a full gate run's
+    # summary was lost that way, and it is the only human-readable output this test produces.
+    summary_path = project / "certora" / "cvlr" / "reports" / "gate-summary.txt"
+
+    def emit(text: str) -> None:
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        with summary_path.open("a") as handle:
+            handle.write(text + "\n")
+        with capsys.disabled():
+            print(text)
+
+    emit(
+        f"\nCVLR gate: {result.n_components} component(s), {result.n_properties} propert(ies), "
+        f"{result.n_delivered} delivered"
+    )
+    for outcome in result.outcomes:
+        emit(f"\n== {outcome.feat.display_name} ==")
+        harness = _harness(outcome.result)
+        if harness is None:
+            emit(f"  no deliverable: {outcome.result}")
+            continue
+        emit(f"  {harness.final_link or 'no prover link'}")
+        for title, rules in harness.property_checks():
+            emit(f"  [{title}] -> {', '.join(rules) or '(none)'}")
+        for skip in harness.skipped:
+            emit(f"  skipped [{skip.property_title}]: {skip.reason}")
 
     assert result.n_properties > 0, "no properties extracted"
     assert result.n_delivered > 0, f"no unit delivered a harness: {result.failures}"
@@ -292,8 +303,7 @@ async def test_the_backend_authors_cvlr_rules_for_the_vault(langgraph_db, projec
             f"verified, so one the source contradicts is worse than none."
         )
         if mirrors := _mirrored_rules(harness):
-            with capsys.disabled():
-                print(f"  {outcome.feat.display_name}: declared stand-ins — {', '.join(mirrors)}")
+            emit(f"  {outcome.feat.display_name}: declared stand-ins — {', '.join(mirrors)}")
 
     unreached = [
         o.feat.display_name
