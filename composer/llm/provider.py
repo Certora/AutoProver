@@ -15,12 +15,13 @@ from functools import cached_property
 from composer.input.files import FileUploader
 from composer.input.types import ModelConfiguration
 from .types import CacheLevel
-from abc import ABC
+from abc import ABC, abstractmethod
 
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
     from graphcore.tools.memory import AsyncPostgresBackend
+    from graphcore.graph import RawMessageType
     from langchain_core.tools import BaseTool
 
 class ProviderService(Protocol):
@@ -30,6 +31,17 @@ class ProviderService(Protocol):
         ...
 
     def uploader(self) -> FileUploader:
+        ...
+
+    def cache_marker(self, payload: "RawMessageType", cache_level: CacheLevel) -> "RawMessageType":
+        ...
+
+    def should_retry(self, exc: Exception) -> bool:
+        """Whether ``exc`` is a transient provider-side failure worth retrying
+        (rate limits, overload, dropped connections) — as opposed to a
+        deterministic request error (an over-long prompt 400s identically
+        every time). The harness assembles this into the run-wide retry
+        policy (``composer.io.context.install_retry_policy``)."""
         ...
 
 class ProviderServiceBase(ABC):
@@ -51,6 +63,14 @@ class ProviderServiceBase(ABC):
         self, backend: "AsyncPostgresBackend"
     ) -> "BaseTool":
         return self.mem_fact(backend)
+
+    def cache_marker(self, payload: "RawMessageType", cache_level: CacheLevel) -> "RawMessageType":
+        return payload
+
+    def should_retry(self, exc: Exception) -> bool:
+        # Providers opt in to retryability explicitly; unknown exceptions are
+        # never worth an automatic re-run.
+        return False
 
 
 class ModelProvider(Protocol):

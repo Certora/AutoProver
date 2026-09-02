@@ -5,47 +5,45 @@ Creates a BaseTool that delegates focused source code questions to a
 sub-agent with file system tools (list_files, get_file, grep_files).
 """
 
-from typing import NotRequired, override, Protocol, Any
+from typing import Callable, Literal, NotRequired, override, Protocol, Any, TypedDict
 
 from pydantic import Field, BaseModel
 
-from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.checkpoint.memory import InMemorySaver
 
-from graphcore.graph import Builder, FlowInput, MessagesState
+from graphcore.graph import FlowInput, MessagesState, TemplateLoader
 from graphcore.tools.schemas import WithAsyncImplementation, WithInjectedId
-from graphcore.tools.vfs import fs_tools
 
+from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import bind_standard, run_to_completion
-from composer.templates.loader import load_jinja_template
 from composer.spec.tool_env import BaseSourceTools, BasicAgentTools
 from composer.spec.util import uniq_thread_id
-from composer.spec.agent_index import AgentIndex, IndexedTool, WithAgentIndex
+from composer.spec.agent_index import AgentIndex, IndexedTool
 from composer.ui.tool_display import tool_display_of, CommonTools
 
 
-CODE_EXPLORER_SYS_PROMPT = """\
-You are a code exploration assistant analyzing smart contract source code.
-You have access to file tools (list_files, get_file, grep_files) to explore the project.
+type PriorFindingsMode = Literal["none", "established", "versioned"]
 
-Your job is to answer a specific question about the codebase thoroughly and precisely.
 
-Guidelines:
-- Ground every claim in what you find in the source code.
-- Include relevant function signatures, state variable declarations, or code snippets in your answer.
-- If the question asks about behavior, trace through the actual implementation rather than speculating.
-- Be concise: the caller needs a dense, actionable answer, not a walkthrough of your exploration process.
-- If you discover you do not have enough information to fully answer the question, 
-  (e.g., there is a reference to code not available to you) *DO NOT GUESS*. Indicate in your final answer
-  that you cannot fully answer the question due to incomplete information.
+class CodeExplorerPromptParams(TypedDict):
+    """Kwargs for an ecosystem's code-explorer system prompt.
 
-If asked a question that cannot be answered by simply looking at the code (e.g., about some completely unrelated
-topic) you must decline to answer, indicating it is out of scope for what you're capable of answering.
+    ``prior_findings`` selects which index protocol is appended: none (a
+    fresh explorer), established facts from the frozen index, or the
+    versioned/possibly-stale protocol used by the live editor.
+    """
 
-When complete, deliver your answer via the `result` tool.
-"""
+    prior_findings: PriorFindingsMode
+
+
+def code_explorer_sys_prompt(
+    template: TypedTemplate[CodeExplorerPromptParams],
+    prior_findings: PriorFindingsMode,
+) -> Callable[[TemplateLoader], str]:
+    """The bound prompt as a deferred render, for `with_sys_prompt` to resolve
+    against the builder's own loader."""
+    return template.bind({"prior_findings": prior_findings}).render_to
 
 class _ExplorerST(MessagesState):
     result: NotRequired[str]
@@ -55,7 +53,7 @@ class CodeExplorerEnv(BaseSourceTools, BasicAgentTools, Protocol):
 
 def _code_explorer_graph(
     env: CodeExplorerEnv,
-    sys_prompt: str = CODE_EXPLORER_SYS_PROMPT
+    sys_prompt: Callable[[TemplateLoader], str],
 ) -> CompiledStateGraph[_ExplorerST, None, FlowInput, Any]:
     return bind_standard(
         env.builder, _ExplorerST, "Your findings about the source code"
@@ -83,24 +81,40 @@ class _ExploreCodeCommon(BaseModel):
     is roughly the slowest single answer instead of the sum.
     """
     question: str = Field(
-        description="A specific, focused question about the source code. "
-        "Good: 'What state variables does withdraw() modify and how?' "
-        "Bad: 'Tell me about the contract' "
-        "Bad: 'What is the definition of function X?' (read the source directly)"
+        description="""
+A specific, focused question about the source code. Do not ask questions about:
+* The current task you're working on
+* How to use other tools
+* Questions about CVL or the prover
+* Protocol related questions unrelated to the source code (e.g. expected deployment params, contract address seeds)
+* Questions about the source language itself
+
+Good: 'What state variables does withdraw() modify and how?'
+Bad: 'Tell me about the contract'
+Bad: 'What is the definition of function X?' (read the source directly)
+Bad: 'Is it realistic to expect deposits > 2^128?'
+"""
     )
 
 
-def code_explorer_tool(env: CodeExplorerEnv, recursion_limit: int) -> BaseTool:
+def code_explorer_tool(
+    env: CodeExplorerEnv,
+    recursion_limit: int,
+    explorer_prompt: TypedTemplate[CodeExplorerPromptParams],
+) -> BaseTool:
     """Create a code exploration sub-agent tool from a pre-configured builder.
 
     Args:
         env: Code explorer env with builder and tools bound.
         recursion_limit: LangGraph recursion limit for each sub-agent run.
+        explorer_prompt: Ecosystem-specific explorer system prompt.
 
     Returns:
         A BaseTool named ``explore_code``.
     """
-    graph = _code_explorer_graph(env)
+    graph = _code_explorer_graph(
+        env, sys_prompt=code_explorer_sys_prompt(explorer_prompt, "none")
+    )
 
     @tool_display_of(CommonTools.code_explorer)
     class ExploreCodeSchema(_ExploreCodeCommon, WithAsyncImplementation[str], WithInjectedId):
@@ -132,18 +146,10 @@ class ExtCodeExplorerEnv(CodeExplorerEnv, Protocol):
 def indexed_code_explorer_tool(
     env: ExtCodeExplorerEnv,
     recursion_limit: int,
+    explorer_prompt: TypedTemplate[CodeExplorerPromptParams],
 ) -> BaseTool:
-
-    extended_sys = CODE_EXPLORER_SYS_PROMPT + f"""
-You have access to findings from prior analyses of this codebase.
-These findings were produced by earlier agents investigating the same contracts
-and are established facts — do not re-derive or re-verify them.
-
-{AgentIndex.WITH_INDEX_SYS_COMMON}
-"""
-
     builder_graph = _code_explorer_graph(
-        env, sys_prompt=extended_sys
+        env, sys_prompt=code_explorer_sys_prompt(explorer_prompt, "established")
     )
 
     @tool_display_of(CommonTools.code_explorer)

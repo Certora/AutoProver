@@ -2,6 +2,8 @@
 You have been tasked with formalizing a set of security properties within the context of a larger Web3 application.
 </background>
 
+{% include "verification_charter.j2" %}
+
 <task>
 You must write a single CVL specification covering the following properties for the contract {{ contract_name }}:
 
@@ -74,25 +76,16 @@ feedback as soon as possible.
     or invariant, but reference your written justification rule
   + If the above two approaches fail, you may still consider adding `require` statements, but add comments
     that either document the trust assumption you are making and/or arguing for its Validity
-* If the failure is due to a HAVOC from an unresolved call:
-  + Was the call to a function whose implementation exists in the prover inputs? If so, it is likely the prover
-    could not resolve the callee contract and link to the extant implementation. In this case, you should consider
-    using a `DISPATCHER` summary. (with caveats, see below)
-  + If the call was to an function whose implementation doesn't exist in the scene, add a summary which
-    (soundly) models the behavior of the called function. In many cases, these summaries will have to model the
-    (unknown) callee contract's state, you should use "ghost variables" to model this.
-  + If the call was completely unresolved (no resolved selector/signature), consider using a "dispatch list"
-    summary. Analyze the location of the unresolved call, and consider what the callee functions might be.
-  + Do *NOT* try to mark ghost state as `persistent` to work around the HAVOC issue.
-  + Do *NOT* apply a `NONDET` summary to a side-effecting function to make the HAVOC "go away", this makes
-    the verification results useless.
+* If the failure is due to a HAVOC from an unresolved call: follow the triage ladder described in section B3 of the
+  "CVL Summarization — Knowledge Base" context document
 * If the counterexample appears to point to a potential issue in the code that should be reviewed by a security expert,
   use the "expect fail" tool to mark that the rule failure may be legitimate.
 * If you have a parametric rule or invariant that is persistently failing on a method, and that method should
   genuinely be excluded from the property/invariant being proven, use a `filtered` block to exclude it.
   + You should not use this strategy lightly; only do so when you are 95% certain that the method in question
     should be excluded from the property.
-* If the property or invariant is genuinely incorrect or actually invalid you may mark the property as "skipped" and
+  + Consult section 4 of the "CVL Invariants and Quantifiers" context document for the policy you should apply when skipping
+* If the property or invariant is genuinely incorrect or actually invalid, you may mark the property as "skipped" and
   remove your attempts to formalize it from the spec
 * If the rule is failing due to a `SANITY_FAILURE`, this is due to the assertion in the rule/invariant being unreachable.
   In other words, the preconditions in the rule and the logical encoding of the implementation's code are themselves
@@ -102,26 +95,29 @@ feedback as soon as possible.
   adaptive thinking and the cvl researcher to come to *principled* solutions. Do *NOT* try to brute force
   the solution by trying random changes.
 
-#### `DISPATCHER` Caveats
-
-The special `DISPATCHER` summary *unsoundly* assumes that the callee contract for an unresolved call exists in the prover
-input. This is acceptable if the callee contract is *definitely* one of the contracts in prover inputs. However,
-for something like an ERC20 token; the prover input may itself have some ERC20 token implementations in its inputs
-(e.g., a special token representing a voting share). If you use a `DISPATCHER` in this case, you will unsoundly
-assume *EVERY* token interacted with by *EVERY* contract must be one of the contracts in the prover inputs.
-
-Unless you can conclude that the DISPATCHER assumption is justified, use a hybrid summarization approach:
-within the generated summary, match the callee contract against known implementers in the prover input.
-For those callees, simply dispatch the call to the relevant implementation. For calls "outside" of the prover
-inputs, fall back on a sound model of the external behavior, using e.g., ghosts.
-
 ## Step 4
 
 Once all non-skipped properties have been approved by the feedback judge, AND all rules that are not expected
 as failing have been verified with the prover, deliver your result with the `result` tool. In order
-for your result to be accepted, you *must* have run the `verify_spec` tool *without* any `rule` arguments on
-the most recent version of the spec. Similarly, you *must* have received positive feedback from the feedback judge
-on the most recent change to your spec.
+for your result to be accepted, you *must* have run the `verify_spec` tool one or more times
+so that *all* rules/invariants in the specification file have been "covered" by at least one run
+of the prover. A rule/invariant is "covered" by a `verify_spec`
+invocation if the `exclude_rules`/`rule` flags you provide cause the rule/invariant to be checked
+by the prover. For example, `verify_spec(rule=["some_rule"])` followed by `verify_spec(exclude_rules=["some_rule"])`
+would cover all rules. Further, any rule/invariant not marked as "expected to fail" must
+be reported as `VERIFIED` in these most recent runs. NB That expected to fail rules must
+are not exempt from this coverage requirement.
+
+A single, final prover run that covers all rules should be your default mode.
+Splitting rules across multiple runs should only be used if one or more rule is particularly expensive in
+terms of solving time making it infeasible to verify alongside others in the spec file within the time limit of the prover.
+
+*Important*: If you change your state (via the skip declarations, spec edits, etc.) any validation results from your
+prover runs are *invalidated*.
+
+Similarly, you *must* have received positive feedback from the feedback judge on the most recent change to your spec.
+Like the prover tool, any changes to your state (include the spec, skip declarations, etc.) will invalidate
+the positive feedback result, and will necessitate "restamping".
 
 The `result` tool *also* requires a `property_rules` mapping: for every property you did NOT skip (referenced by
 its unique snake_case title from the batch listing above), list the name(s) of the rule(s)/invariant(s) in your
@@ -183,7 +179,6 @@ your current approach. Be sure to update your memory *before* calling the result
 {% endif %}
 
 <guidance>
-{% include "cvl_guidelines.j2" %}
 {% include "cvl_additions.j2" %}
 </guidance>
 

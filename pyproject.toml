@@ -1,6 +1,14 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+# Two constraints, the second binding. The ``templates/**/*.j2`` entry under
+# [tool.setuptools.package-data] needs 62.3+, which is where package-data globs
+# gained ``recursive=True``; below that ``**`` collapses to a single ``*`` and
+# every top-level template silently drops out of the wheel. But 67.0 is the
+# floor that actually applies: earlier releases import ``pkgutil.ImpImporter``,
+# removed in 3.12, so they cannot run on the Python this project requires.
+requires = ["setuptools>=67.0", "wheel"]
 build-backend = "setuptools.build_meta"
+
+# please let me land this stupid PR
 
 [project]
 name = "ai-composer"
@@ -15,7 +23,7 @@ authors = [
 ]
 
 dependencies = [
-    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@932cf73faad68266f5dd8b4d6943e82d2b3130ae",
+    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@54a6852eac72896d17d3bc4f3068a775f9200d1f",
     "aiohttp>=3.13",
     "attrs>=26.1",
     "Jinja2>=3.1",
@@ -38,6 +46,10 @@ dependencies = [
     # einops is provided by the [ml] extra; certora-prover-cli (above) ships the
     # prover_output_utility module AutoSetup imports.
     "tqdm>=4.65.0",
+    # keccak-256 for the editor's erc7201_slot tool (hashlib only has SHA-3).
+    "pycryptodome>=3.19",
+    # the report renderer's `markdown` jinja filter (also in the ragbuild group).
+    "markdown-it-py>=3.0",
     "anthropic>=0.18.0",
     "openai>=1.50.0",
     "wcmatch>=8.5.0",
@@ -61,7 +73,7 @@ s3 = ["s3fs>=2023.1.0"]
 # exactly one extra must be selected at install time (enforced via the
 # [tool.uv] conflicts block below). Each extra is named after the package it
 # pulls.
-certora-cli = ["certora-cli>=8.18.0"]
+certora-cli = ["certora-cli>=8.19.1"]
 certora-cli-beta = ["certora-cli-beta>=8.18.0"]
 certora-cli-beta-mirror = ["certora-cli-beta-mirror>=8.18.0"]
 # Back-compat alias: `prover` == stable channel.
@@ -89,8 +101,43 @@ ragbuild = [
     "markdown-it-py>=3.0",
     "mdit-py-plugins>=0.4",
 ]
+dev = [
+    "maturin>=1.14.1",
+    # `dev` is one of uv's default groups, so pulling `apps` in here means a bare
+    # `uv sync` builds the Rust artifacts — while the container image, which sets
+    # UV_NO_DEV=1, still gets neither (its final stage has no Rust toolchain).
+    { include-group = "apps" },
+]
+# Everything built out of the `rust/` workspace, declared as path deps below so
+# `uv sync` builds AND preserves them (a bare sync prunes hand-built wheels as
+# extraneous). Kept OUT of [project.dependencies] and reachable only via `dev` so
+# an install without cargo stays possible; each project carries `[tool.uv]
+# cache-keys` over its `.rs` sources, so uv rebuilds on `uv run` when the Rust
+# changes and there is no manual `maturin develop` / `cargo build` step.
+apps = [
+    # crucible_app is added in PR3 (its crate lives in rust/crucible-app, which lands there).
+    "echoprover",
+    # The command-sandbox launcher — a binary, not an extension module; the wheel
+    # lands it in `.venv/bin`, which is where composer.sandbox.launcher resolves it
+    # from. Landlock/seccomp are Linux-only, hence the marker.
+    "run-confined; sys_platform == 'linux'",
+    # Optional belt-and-braces: recompiles a changed crate at *import* time, which
+    # also covers running `python` directly in an activated venv (no `uv run`).
+    # Redundant with the cache-keys above; activate per venv if you want it:
+    #     python -m maturin_import_hook site install
+    "maturin-import-hook>=0.3.0",
+]
 
 [tool.uv]
+# The `apps` group builds several maturin crates. On a machine that does not have the
+# pinned toolchain yet, each one's cargo call asks rustup to install it, and rustup's
+# install path is not safe against concurrent invocations — whichever call wins clears
+# $RUSTUP_HOME/downloads and the others die renaming a half-downloaded component.
+# Costs next to nothing: the crates share one cargo workspace, so their builds already
+# serialize on rust/target's build-dir lock. This only covers builds uv itself drives;
+# installing the toolchain first (see README) also covers rust-analyzer and a second
+# terminal.
+concurrent-builds = 1
 conflicts = [
     [{ extra = "cpu" }, { extra = "cuda" }],
     [
@@ -102,6 +149,12 @@ conflicts = [
 
 [tool.uv.sources]
 graphcore = { path = "./graphcore", editable = true }
+# Wheels built from the local Rust workspace (see the `apps` group above).
+# crucible_app's source is added in PR3 (with its crate under rust/crucible-app).
+echoprover = { path = "rust/example-app", editable = true }
+# Not editable: a bin wheel has nothing to link back to a source tree — uv rebuilds
+# it from the cache-keys in rust/run-confined/pyproject.toml instead.
+run-confined = { path = "rust/run-confined" }
 torch = [
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cu128", extra = "cuda" },
@@ -120,7 +173,8 @@ explicit = true
 [tool.pytest.ini_options]
 markers = [
     "expensive: hits the real prover / network — deselect with -m 'not expensive'",
-    "fuzz: fuzz tests"
+    "fuzz: fuzz tests",
+    "wire: Rust/Python wire-protocol round trips — build a cargo binary at test time"
 ]
 # optional but recommended once you're registering marks:
 addopts = "--strict-markers"   # a typo'd mark becomes an error, not a silent no-match
@@ -133,6 +187,9 @@ console-autoprove = "composer.cli.console_autoprove:main"
 tui-autoprove = "composer.cli.tui_autoprove:main"
 console-foundry = "composer.cli.console_foundry:main"
 tui-foundry = "composer.cli.tui_foundry:main"
+# console-crucible / tui-crucible land in PR3, together with the `composer.crucible_launch`
+# module they name — an entry point pointing at a module that doesn't exist installs happily
+# and only fails, as an ImportError, when someone runs it.
 autoprove-report-render = "composer.spec.source.report.render:main"
 tui-natspec = "composer.cli.tui_pipeline:main"
 cache-natspec = "composer.cli.cache_natspec:main"
@@ -149,7 +206,7 @@ certora-fixconf = "certora_autosetup.fixconf:main"
 autosetup = "certora_autosetup.autosetup.cli:main"
 fixconf = "certora_autosetup.fixconf:main"
 
-# Command-sandbox providers, discovered by composer.sandbox.SandboxConfig.resolve_provider.
+# Command-sandbox providers, resolved by composer.sandbox.config.SandboxConfig.resolve_provider.
 # Adding a provider = adding a line here (and re-running the editable install so the
 # dist-info picks it up); the seam never imports a concrete mechanism itself.
 [project.entry-points."composer.sandbox_providers"]
@@ -163,7 +220,10 @@ include = ["composer*", "sanity_analyzer*", "analyzer*", "certora_autosetup*"]
 "" = "."
 
 [tool.setuptools.package-data]
-composer = ["templates/*.j2", "scripts/init-db.sql"]
+composer = [
+    "templates/**/*.j2", "templates/*.js", "scripts/init-db.sql",
+    "kb/resources/**/*.md", "kb/resources/*.yaml",
+]
 # Bundled CVL summaries, spec templates, mocks and conf templates the prover
 # reads directly off disk; ship them with the wheel.
 certora_autosetup = [

@@ -1,7 +1,7 @@
 
 import enum
 from dataclasses import dataclass, replace
-from typing import Protocol, Callable, Awaitable, Any, Iterable, AsyncIterator, Never
+from typing import Protocol, Callable, Awaitable, Any, Iterable, AsyncIterator, Never, cast
 import importlib.metadata
 from contextlib import AsyncExitStack, asynccontextmanager
 from functools import cached_property
@@ -12,19 +12,41 @@ from composer.spec.context import (
     WorkflowContext, SourceCode,
 )
 from composer.spec.service_host import ServiceHost
-from composer.spec.util import string_hash
+from composer.spec.system_model import FeatureUnit
+from composer.spec.util import combine_digests, string_hash
 from .ptypes import PipelineRun
-from .plugin_api import PipelinePluginLoader, PipelinePlugin, PluginContext
+from .plugin_api import (
+    AnyEcosystem, ArtifactRegistrar, ForEcosystem, PipelinePluginLoader, PipelinePlugin,
+    PluginContext, PluginRunContext, PluginScope, PluginToolContext,
+)
 
 class _RunnerFun(Protocol):
     async def __call__[T](self, label: str, job: Callable[[], Awaitable[T]]) -> T: ...
 
+
+def _with_plugin_loader(env: ServiceHost, plugin: PipelinePlugin[Any]) -> ServiceHost:
+    """The run's services with the plugin's own template loader swapped in, so the
+    plugin's prompts resolve against its package (falling back to the autoprover
+    namespace — see ``plugin_api.plugin_jinja_loader``)."""
+    return replace(env, models=replace(env.models, _loader=plugin.load_jinja_template))
+
+
 @dataclass
-class PluginRunner[C]:
+class _PluginServices[C]:
+    """The runner-less :class:`PluginRunContext` implementation."""
     ctx: WorkflowContext[C]
     env: ServiceHost
     source: SourceCode
 
+
+@dataclass
+class _PluginToolServices[C](_PluginServices[C]):
+    """The :class:`PluginToolContext` implementation — what tool-binding hooks
+    receive: run services plus the batch's artifact registrar."""
+    artifacts: ArtifactRegistrar
+
+@dataclass
+class PluginRunner[C](_PluginServices[C]):
     runner: _RunnerFun
 
 class DisplayStrings(tuple[str, str]):
@@ -44,10 +66,10 @@ class DisplayStrings(tuple[str, str]):
         return super().__new__(cls, (id, display))
 
 @dataclass
-class PluginPhaseRunner[P: enum.Enum]:
-    plugin: PipelinePlugin
+class PluginPhaseRunner[P: enum.Enum, U: FeatureUnit]:
+    plugin: PipelinePlugin[U]
     _run: PipelineRun[P, Any]
-    _phase: tuple[P, str]
+    _phase: P
     _sub_phase: DisplayStrings
     plugin_id: str
 
@@ -56,21 +78,18 @@ class PluginPhaseRunner[P: enum.Enum]:
         uid: str,
         ctxt: WorkflowContext[C]
     ) -> PluginContext[C]:
-        new_loader = self.plugin.load_jinja_template
-        env = self._run.env
-        env = replace(env, models=replace(env.models, _loader=new_loader))
         async def run[T](
             label: str,
             job: Callable[[], Awaitable[T]]
         ) -> T:
             label = f"(Plugin {self._sub_phase.display_str}) {self.plugin.NAME}: {label}"
             return await self._run.runner(
-                TaskInfo(f"{self._phase[0].name}-{self._sub_phase.id_str}-{self.plugin_id}-{uid}", label, self._phase[0]),
+                TaskInfo(f"{self._phase.name}-{self._sub_phase.id_str}-{self.plugin_id}-{uid}", label, self._phase),
                 job,
             )
         return PluginRunner(
             ctxt,
-            env,
+            _with_plugin_loader(self._run.env, self.plugin),
             self._run.source,
             run
         )
@@ -79,26 +98,53 @@ class PluginPhaseRunner[P: enum.Enum]:
 PLUGIN_ENTRY_POINT_GROUP = "certora.autoprove.plugins"
 
 
-def installed_plugin_manifest() -> list[str]:
-    """Sorted names of the autoprove plugins installed in this environment —
-    the manifest ``load_plugins`` will end up loading, computable without
-    initializing anything."""
+def _applies(scope: PluginScope[Any], unit_type: type) -> bool:
+    """Whether a plugin declaring ``scope`` applies to a run over ``unit_type``."""
+    match scope:
+        case AnyEcosystem():
+            return True
+        case ForEcosystem(unit=unit):
+            return issubclass(unit_type, unit)
+
+
+def _declared_loaders() -> Iterable[tuple[str, PipelinePluginLoader[Any]]]:
+    """Every installed plugin's (entry-point name, loader), scope not yet consulted. Constructing
+    a loader is documented to be trivial — resources belong in ``initialize`` — so this is safe to
+    do for plugins that turn out not to apply."""
+    seen: set[str] = set()
+    for ep in importlib.metadata.entry_points(group=PLUGIN_ENTRY_POINT_GROUP):
+        if ep.name in seen:
+            raise RuntimeError(f"Multiple plugins with name: {ep.name}, failing")
+        seen.add(ep.name)
+        loader = ep.load()
+        if not isinstance(loader, type) or not issubclass(loader, PipelinePluginLoader):
+            raise RuntimeError(f"Bad plugin declaration: {ep.name}: {ep.module}.{ep.attr} is not a PipelinePluginLoader")
+        yield ep.name, loader()
+
+
+def applicable_plugin_manifest[U: FeatureUnit](unit_type: type[U]) -> list[str]:
+    """Sorted names of the installed plugins that apply to a run over ``unit_type`` — the manifest
+    ``load_plugins`` will end up initializing, computable without initializing anything.
+
+    Scoped rather than merely *installed*: this manifest is what ``manifest_digest`` hashes into
+    every per-component cache key, so an installed-but-inapplicable plugin (a Solana plugin during
+    an EVM run) must not perturb those keys."""
     return sorted(
-        ep.name for ep in importlib.metadata.entry_points(group=PLUGIN_ENTRY_POINT_GROUP)
+        name for name, loader in _declared_loaders() if _applies(loader.scope, unit_type)
     )
 
 
 def manifest_digest(manifest: list[str]) -> str | None:
     """Digest of a sorted plugin manifest as suffixed onto per-component
     cache keys; ``None`` when no plugins are active."""
-    if not manifest:
-        return None
-    return string_hash("|".join(manifest))
+    return combine_digests(manifest)
 
 
 @dataclass
-class PluginManager[P: enum.Enum]:
-    _plugins: dict[str, PipelinePlugin]
+class PluginManager[P: enum.Enum, U: FeatureUnit]:
+    """The plugins that apply to this run, already narrowed to ones whose hooks accept ``U``."""
+
+    _plugins: dict[str, PipelinePlugin[U]]
     _run: PipelineRun[P, Any]
 
     @cached_property
@@ -108,38 +154,62 @@ class PluginManager[P: enum.Enum]:
     @cached_property
     def plugin_manifest(self) -> list[str]:
         return sorted(self._plugins.keys())
-        
+
+    def sorted_plugins(self) -> Iterable[tuple[str, PipelinePlugin[U]]]:
+        """Deterministic ``(plugin id, plugin)`` iteration — the order tool
+        contributions are bound in (injection order is prompt content)."""
+        return sorted(self._plugins.items(), key=lambda r: r[0])
+
+    def tool_context[C](
+        self,
+        plugin: PipelinePlugin[U],
+        ctxt: WorkflowContext[C],
+        artifacts: ArtifactRegistrar,
+    ) -> PluginToolContext[C]:
+        """The context a tool-binding hook receives: the run's services under the
+        plugin's template loader, the batch's artifact registrar, and deliberately
+        NO task runner — tool hooks bind tools, they don't run top-level tasks."""
+        return _PluginToolServices(
+            ctxt, _with_plugin_loader(self._run.env, plugin), self._run.source, artifacts
+        )
+
     def bind_phase(
-        self, phase: P, label: str
-    ) -> "PluginPhaseManager[P]":
+        self, phase: P
+    ) -> "PluginPhaseManager[P, U]":
         return PluginPhaseManager(
-            self._plugins, self._run, (phase, label)
+            self._plugins, self._run, phase
         )
 
 @dataclass
-class PluginPhaseManager[P: enum.Enum](PluginManager):
-    _phase: tuple[P, str]
+class PluginPhaseManager[P: enum.Enum, U: FeatureUnit](PluginManager[P, U]):
+    _phase: P
 
-    def runners(self, *, sub_phase_id: str, sub_phase_label: str, sorted_run: bool = False) -> Iterable[PluginPhaseRunner[P]]:
-        to_iter : Iterable[tuple[str, PipelinePlugin]] = sorted(
+    def runners(self, *, sub_phase_id: str, sub_phase_label: str, sorted_run: bool = False) -> Iterable[PluginPhaseRunner[P, U]]:
+        to_iter : Iterable[tuple[str, PipelinePlugin[U]]] = sorted(
             self._plugins.items(), key=lambda r: r[0]
         ) if sorted_run else self._plugins.items()
         for (k,v) in to_iter:
             yield PluginPhaseRunner(v, self._run, self._phase, DisplayStrings(sub_phase_id, sub_phase_label), k)
 
 @asynccontextmanager
-async def load_plugins[P: enum.Enum](run: PipelineRun[P, Never]) -> AsyncIterator[PluginManager[P]]:
-    plugins : dict[str, PipelinePluginLoader] = {}
-    for ep in importlib.metadata.entry_points(group=PLUGIN_ENTRY_POINT_GROUP):
-        if ep.name in plugins:
-            raise RuntimeError(f"Multiple plugins with name: {ep.name}, failing")
-        loader = ep.load()
-        if not isinstance(loader, type) or not issubclass(loader, PipelinePluginLoader):
-            raise RuntimeError(f"Bad plugin declaration: {ep.name}: {ep.module}.{ep.attr} is not a PipelinePluginLoader")
-        plugins[ep.name] = loader()
+async def load_plugins[P: enum.Enum, U: FeatureUnit](
+    run: PipelineRun[P, Never], unit_type: type[U]
+) -> AsyncIterator[PluginManager[P, U]]:
+    """Initialize the installed plugins that apply to a run over ``unit_type``.
+
+    Inapplicable plugins are dropped *before* ``initialize``, so a plugin for another ecosystem
+    never acquires its resources during this run."""
+    loaders: dict[str, PipelinePluginLoader[U]] = {}
+    for name, loader in _declared_loaders():
+        if not _applies(loader.scope, unit_type):
+            continue
+        # The one cast in this design. Entry points are resolved dynamically, so nothing static
+        # survives to here; the `_applies` check above is the runtime evidence that this loader's
+        # hooks accept `unit_type`. Everything downstream of this line is honestly typed.
+        loaders[name] = cast(PipelinePluginLoader[U], loader)
     async with AsyncExitStack() as stack:
         loaded_plugins = {
-            k: await stack.enter_async_context(v.initialize()) for (k, v) in plugins.items()
+            k: await stack.enter_async_context(v.initialize()) for (k, v) in loaders.items()
         }
         yield PluginManager(
             loaded_plugins, run

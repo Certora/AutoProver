@@ -22,6 +22,7 @@ class RuleNodeModel(BaseModel):
     status: Optional[str] = Field(description="The smt status")
     nodeType: str
     errors: list[RuleNotificationMessages]
+    LiveCheckInfo: str | None = Field(default=None)
 
 
 class TreeViewStatus(BaseModel):
@@ -96,12 +97,18 @@ def flatten_tree_view(context: Path, r: RuleNodeModel, path: RulePath, parent_ty
     if stat == "ERROR":
         messages : set[str] = set()
         _collect_child_errors(r, messages, lambda sev: sev == "error")
-        return [RuleResult(
-            path=effective_path,
-            cex_dump=None,
-            status=stat,
-            error_messages=list(messages)
-        )]
+        if all(
+            "timed-out" in err or ("did not run: BlockingCoroutine was cancelled") in err for err in messages
+        ):
+            # time out masquerading as an error...    
+            stat = "TIMEOUT"
+        else:
+            return [RuleResult(
+                path=effective_path,
+                cex_dump=None,
+                status=stat,
+                error_messages=list(messages)
+            )]
     elif stat == "SKIPPED":
         warning_message = [
             i.message for i in r.errors if i.severity == "error" or i.severity == "warning"
@@ -126,8 +133,8 @@ def flatten_tree_view(context: Path, r: RuleNodeModel, path: RulePath, parent_ty
             )]
 
     if stat == "TIMEOUT":
-        if len(r.children) == 0:
-            return [RuleResult(path=effective_path, cex_dump=None,status=stat)]
+        if all(tc.nodeType == "SANITY" for tc in r.children):
+            return [RuleResult(path=effective_path, cex_dump=None,status=stat, live_check_info=r.LiveCheckInfo)]
     assert stat == "TIMEOUT" or stat == "VIOLATED" or stat == "SANITY_FAILED"
     violated_assert_children = any([ c.nodeType == "VIOLATED_ASSERT" for c in r.children])
     if violated_assert_children:

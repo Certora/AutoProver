@@ -1,7 +1,7 @@
 """Env construction for the foundry test author.
 
 Builds an env that swaps the CVL-specific RAG surface (``cvl_research``,
-``cvl_manual_*``, ``scan_knowledge_base``, etc.) for the foundry cheatcode
+``cvl_manual_*``, ``get_cvl_recipe``, etc.) for the foundry cheatcode
 RAG tools, but otherwise reuses the same source-tools machinery the
 autoprove workflow uses — including the indexed ``code_explorer``
 sub-agent — so the analysis and authoring agents can navigate and ask
@@ -19,11 +19,13 @@ The resulting env satisfies four protocols the foundry workflow consumes:
 """
 
 
+from graphcore.tools.vfs import GlobalExcludeArg
 from langgraph.store.base import BaseStore
 from langgraph.types import Checkpointer
 
 
 from composer.rag.db import ComposerRAGDB
+from composer.pipeline.ecosystem import EVM
 from composer.spec.source.source_env import (
     build_basic_source_tools, build_source_tools,
 )
@@ -36,7 +38,7 @@ def build_foundry_env(
     *,
     model_provider: ModelProvider,
     project_root: str,
-    forbidden_read: str,
+    forbidden_read: GlobalExcludeArg,
     rag_db: ComposerRAGDB,
     store: BaseStore,
     source_question_ns: tuple[str, ...],
@@ -63,6 +65,7 @@ def build_foundry_env(
         store,
         source_question_ns,
         recursion_limit=recursion_limit,
+        ecosystem=EVM,
     )
 
     rag = tuple(foundry_cheatcode_tools(rag_db))

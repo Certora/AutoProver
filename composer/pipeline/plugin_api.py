@@ -1,22 +1,30 @@
-from typing import AsyncContextManager, Protocol, Callable, Awaitable, Any
+from typing import AsyncContextManager, Protocol, Callable, Awaitable, Any, Sequence
+from dataclasses import dataclass
 from functools import cached_property
 from abc import ABC, abstractmethod
-from graphcore.graph import TemplateLoader
+
+from langchain_core.tools import BaseTool
+
+from graphcore.graph import TemplateLoader, PromptInput
 from jinja2.loaders import BaseLoader, PackageLoader, ChoiceLoader, PrefixLoader
 
 from composer.templates.loader import base_loader, load_jinja_template, _autoescape
-from composer.spec.system_model import ContractComponentInstance
-from composer.pipeline.ptypes import PipelineRun
+from composer.spec.system_model import FeatureUnit
 from composer.spec.context import WorkflowContext, SourceCode
 from composer.spec.service_host import ServiceHost
-from composer.spec.types import PropertyFormulation
+from composer.spec.types import PropertyFormulation, VerificationArtifact
 from composer.spec.prop_inference import AnyPropertyGenerationInput
 
-class PluginContext[C](Protocol):
+class PluginRunContext[C](Protocol):
+    """The run's services, without the task runner: what a tool-binding hook gets.
+    Tool hooks bind tools into the backend's authoring graph — they don't run
+    top-level tasks, so the runner capability lives only on :class:`PluginContext`,
+    the task-hook context."""
+
     @property
     def ctx(self) -> WorkflowContext[C]:
         ...
-    
+
     @property
     def env(self) -> ServiceHost:
         ...
@@ -25,6 +33,7 @@ class PluginContext[C](Protocol):
     def source(self) -> SourceCode:
         ...
 
+class PluginContext[C](PluginRunContext[C], Protocol):
     async def runner[T](
         self,
         label: str,
@@ -32,10 +41,35 @@ class PluginContext[C](Protocol):
     ) -> T:
         ...
 
+
+class ArtifactRegistrar(Protocol):
+    """How a plugin's contributed tool reports a verification artifact it
+    produced (a Lean proof, an auxiliary certificate, …). Registration is
+    in-memory and synchronous — the driver persists registered artifacts via
+    the run's artifact store and records them in the report, attributed to the
+    registering plugin. Call it from tool bodies as they produce results; the
+    driver collects per formalization batch."""
+
+    def register(self, artifact: VerificationArtifact) -> None:
+        ...
+
+
+class PluginToolContext[C](PluginRunContext[C], Protocol):
+    """What a tool-binding hook receives: the run's services plus the artifact
+    registrar for the batch being formalized. Still no task runner — tool hooks
+    bind tools, they don't run top-level tasks."""
+
+    @property
+    def artifacts(self) -> ArtifactRegistrar:
+        ...
+
 class PrePropertyInference:
     pass
 
 class PostPropertyInference:
+    pass
+
+class FormalizationTool:
     pass
 
 import jinja2
@@ -67,7 +101,44 @@ class _PluginEnvironment(Environment):
             return prefix + template
         return template
 
-class PipelinePlugin(ABC):
+@dataclass
+class ProvidedTools:
+    tools: Sequence[BaseTool]
+    system_prompt_injection: PromptInput
+
+def plugin_jinja_loader(
+    loader: BaseLoader | None | type
+) -> TemplateLoader:
+    if loader is None:
+        return load_jinja_template
+
+    if isinstance(loader, type):
+        try:
+            loader = PackageLoader(loader.__module__)
+        except ValueError:
+            return load_jinja_template
+    
+    new_jinja_loader = ChoiceLoader([
+        loader,
+        _NonStrippingPrefixLoader({
+            "autoprover": base_loader
+        })
+    ])
+    compilation_env = _PluginEnvironment(loader=new_jinja_loader, autoescape=_autoescape)
+    def _load_jinja_template(template_name: str, **kwargs: Any) -> str:
+        """Load and render a Jinja template from the script directory"""
+        template = compilation_env.get_template(template_name)
+        return template.render(**kwargs)
+    return _load_jinja_template
+
+
+class PipelinePlugin[U: FeatureUnit](ABC):
+    """A pipeline plugin, parameterized by the unit type its hooks accept. Tool
+    contribution is not declared here: a plugin opts in by deriving from a
+    tool-provider subclass instead of this base directly — a backend's own
+    (``composer.spec.source.plugin.CertoraProverTools``,
+    ``composer.foundry.plugin.FoundryTools``) or :class:`AnyBackendTools` below."""
+
     NAME: str
 
     def plugin_loader(self) -> BaseLoader | None:
@@ -76,47 +147,112 @@ class PipelinePlugin(ABC):
             return PackageLoader(t)
         except ValueError:
             return None
-    
+
     @cached_property
     def load_jinja_template(self) -> TemplateLoader:
         loader = self.plugin_loader()
-        if loader is None:
-            return load_jinja_template
-        
-    
-        new_jinja_loader = ChoiceLoader([
-            loader,
-            _NonStrippingPrefixLoader({
-                "autoprover": base_loader
-            })
-        ])
-        compilation_env = _PluginEnvironment(loader=new_jinja_loader, autoescape=_autoescape)
-        def _load_jinja_template(template_name: str, **kwargs: Any) -> str:
-            """Load and render a Jinja template from the script directory"""
-            template = compilation_env.get_template(template_name)
-            return template.render(**kwargs)
-        return _load_jinja_template
-
+        return plugin_jinja_loader(loader)
 
     async def property_inference_input_hook(
         self,
-        comp: ContractComponentInstance,
+        comp: U,
         run: PluginContext[PrePropertyInference]
     ) -> AnyPropertyGenerationInput | None:
         return None
 
     async def post_process_property_inference(
         self,
-        comp: ContractComponentInstance,
+        comp: U,
         run: PluginContext[PostPropertyInference],
         props: list[PropertyFormulation]
     ) -> list[PropertyFormulation]:
         return props
 
 
-class PipelinePluginLoader(ABC):
+# ---------------------------------------------------------------------------
+# Tool contribution — deriving a tool-provider subclass IS the declaration
+# ---------------------------------------------------------------------------
+#
+# A plugin contributes formalization tools by deriving from a tool-provider
+# subclass of PipelinePlugin: each backend defines its own in its own package
+# (the prover's ``composer.spec.source.plugin.CertoraProverTools``, foundry's
+# ``composer.foundry.plugin.FoundryTools``) and hands it to the driver as a
+# ``ToolExtension`` (see ``composer.pipeline.core``) — this module stays
+# backend-agnostic. The driver dispatches — and perturbs the formalization
+# cache key for — exactly the plugins deriving the running backend's provider
+# class, so declaration and implementation cannot drift, and a plugin that
+# derives none (property-inference-only plugins) leaves every formalization
+# key plugin-free. Each hook returns one tool bundle, or None when it has
+# nothing for this particular unit/batch (None keeps the plugin in the cache
+# key: whether it yields is only knowable at dispatch time).
+
+
+class AnyBackendTools[U: FeatureUnit](PipelinePlugin[U]):
+    """The one backend-agnostic tool provider: the same tools for every backend,
+    present and future — so no staged backend state, since none is common across
+    backends. Always projected by the driver's binder, so it perturbs every
+    backend's formalization keys; prefer a backend's own provider class when the
+    tools are backend-specific. Composes with those: on a backend whose provider
+    class the plugin also derives, both hooks fire and both bundles are injected."""
+
+    @abstractmethod
+    async def backend_tools(
+        self,
+        comp: U,
+        prop: Sequence[PropertyFormulation],
+        tool_context: PluginToolContext[FormalizationTool],
+    ) -> ProvidedTools | None:
+        ...
+
+# ---------------------------------------------------------------------------
+# Scope — which runs a plugin applies to
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AnyEcosystem:
+    """The plugin's hooks accept :class:`~composer.spec.system_model.FeatureUnit`, so it runs on
+    every ecosystem. Carries no unit type: there is nothing to match against."""
+
+
+@dataclass(frozen=True)
+class ForEcosystem[U: FeatureUnit]:
+    """The plugin's hooks accept one ecosystem's concrete unit, so it runs only on runs whose
+    ``Ecosystem.unit_type`` is that unit (or a subclass of it).
+
+    The unit type is carried as a *value* because narrowing happens at the entry-point boundary,
+    where nothing static survives."""
+
+    unit: type[U]
+
+
+#: What a loader declares to say which runs its plugin applies to. A sum type rather than
+#: predicates or flags, so each variant carries exactly the fields its own matching needs —
+#: :class:`AnyEcosystem` has no unit to match, :class:`ForEcosystem` has one.
+#:
+#: Extension point for backend-specific plugins: add a ``ForBackend[U]`` variant here carrying
+#: both the ``unit`` and the backend type (``backend: type[PipelineBackend[..., U, ...]]``), and a
+#: matching case in ``composer.pipeline.plugins._applies`` that additionally does
+#: ``isinstance(backend, scope.backend)``. That needs the backend threaded into ``load_plugins``
+#: alongside ``unit_type``; ``run_pipeline`` already holds it, so the plumbing is one parameter.
+#: Checking the unit *as well as* the backend would be deliberate redundancy — it turns a
+#: mis-paired declaration into a startup no-match rather than a mid-run ``AttributeError``.
+type PluginScope[U: FeatureUnit] = AnyEcosystem | ForEcosystem[U]
+
+
+class PipelinePluginLoader[U: FeatureUnit](ABC):
+    """Declares a plugin's :data:`PluginScope` and builds it.
+
+    Scope lives here rather than on the plugin so the host can skip a plugin that doesn't apply
+    *without* running ``initialize``"""
+
+    @property
+    @abstractmethod
+    def scope(self) -> PluginScope[U]:
+        ...
+
     @abstractmethod
     def initialize(
         self
-    ) -> AsyncContextManager[PipelinePlugin]:
+    ) -> AsyncContextManager[PipelinePlugin[U]]:
         ...

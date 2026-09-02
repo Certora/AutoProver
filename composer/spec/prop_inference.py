@@ -9,20 +9,24 @@ from pydantic import BaseModel, Field
 from dataclasses import dataclass
 
 
-from langchain_core.messages import AnyMessage, HumanMessage
+from langchain_core.messages import AnyMessage
 
-from graphcore.graph import MessagesState, FlowInput, MessagePayloadType, RawMessageType
+from graphcore.graph import MessagesState, FlowInput, MessagePayloadType, RawMessageType, PromptInput
 
 from composer.input.files import Document
 from composer.llm.types import CacheLevel
 from composer.spec.gen_types import TypedTemplate
+from composer.spec.util import combine_digests
 from composer.spec.context import WorkflowContext, CacheKey, ComponentGroup
+from composer.spec.key_family import KeyFamily
+from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.types import PropertyFormulation
-from composer.spec.system_model import ContractComponentInstance, component_context
+from composer.spec.system_model import ContractComponentInstance, FeatureUnit, component_context
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 from composer.spec.service_host import Sort, ServiceHost
 from composer.io.conversation import ConversationContextProvider
+from composer.diagnostics.budget import budget_monitor, budget_pressure
 from composer.templates.loader import load_jinja_template
 from composer.spec.prop_refinement import user_property_refinement
 
@@ -62,36 +66,80 @@ class _AgentRoundResult(_BugAnalysisCache):
         "understand your reasoning. Be specific."
     )
 
+class PropertySystemPromptParams(TypedDict):
+    """Kwargs for the property-extraction agent's system prompt template.
+
+    ``backend_guidance`` lives here, not on the initial prompt: it is fixed for the whole
+    run, so putting it in the (rendered-once) system prompt keeps it inside the cached
+    prefix instead of re-sending it with every round's initial prompt."""
+    sort: Sort
+    backend_guidance: str
+
+
+#: Renders the property-extraction agent's per-round initial prompt for one ecosystem's unit
+#: type. A *renderer* rather than a ``TypedTemplate``, because the initial prompt's params carry
+#: the unit: each ecosystem declares its own param dict naming its concrete unit (so the template
+#: fuzzer can construct one — see :func:`~composer.spec.system_model.component_context`), and only
+#: code that knows that concrete type can bind the template. This agent stays generic over
+#: ``FeatureUnit`` and just asks for the string.
+type InitialPromptRenderer[U: FeatureUnit] = Callable[[U, Sort, list[_AgentRoundResult]], str]
+
+
+@component_context
+class EvmPropertyPromptParams(TypedDict):
+    """Kwargs for the EVM property-extraction agent's initial prompt template."""
+    context: ContractComponentInstance
+    sort: Sort
+    prior_properties: list[_AgentRoundResult]
+
+
+#: The EVM/Solidity property prompts.
+PROPERTY_SYSTEM_TEMPLATE = TypedTemplate[PropertySystemPromptParams]("property_analysis_system_prompt.j2")
+PROPERTY_INITIAL_TEMPLATE = TypedTemplate[EvmPropertyPromptParams]("property_analysis_prompt.j2")
+
+
+def render_evm_property_prompt(
+    context: ContractComponentInstance,
+    sort: Sort,
+    prior_properties: list[_AgentRoundResult],
+) -> str:
+    return PROPERTY_INITIAL_TEMPLATE.bind({
+        "context": context,
+        "sort": sort,
+        "prior_properties": prior_properties,
+    }).render_to(load_jinja_template)
+
+
 class _AgentRoundWithHistory(_AgentRoundResult):
     agent_conversation: list[AnyMessage]
 
-def bug_analysis_key_from_digest(
+def _bug_analysis_key(
     threat_model_digest: str | None,
-    with_refinement: bool
-) -> CacheKey[ComponentGroup, _BugAnalysisCache]:
+    with_refinement: bool,
+    extra_context_digest: str | None = None,
+) -> str:
     base_key = "bug_analysis"
     if with_refinement:
         base_key += "|refine"
-    if threat_model_digest is None:
-        return CacheKey[ComponentGroup, _BugAnalysisCache](base_key)
-    return CacheKey[ComponentGroup, _BugAnalysisCache](base_key + "-tm-" + threat_model_digest)
+    if threat_model_digest is not None:
+        base_key += "-tm-" + threat_model_digest
+    if extra_context_digest is not None:
+        base_key += "-xc-" + extra_context_digest
+    return base_key
 
-def bug_analysis_key(
-    threat_model: Document | None,
-    with_refinement: bool
-) -> CacheKey[ComponentGroup, _BugAnalysisCache]:
-    return bug_analysis_key_from_digest(
-        threat_model.to_digest() if threat_model is not None else None,
-        with_refinement,
-    )
+#: Parameterized on the *digests* of the documents that fed the prompt (not the
+#: documents) so a recorded digest — e.g. from a run's cache tags — can rebuild the key.
+#: Each input contributes a suffix only when present, so a run with neither document
+#: keeps the bare ``bug_analysis`` key.
+BUG_ANALYSIS_KEY = KeyFamily(ComponentGroup, _BugAnalysisCache, _bug_analysis_key)
 
 class _AgentResult(_BugAnalysisCache):
     final_history: list[AnyMessage]
 
-def agent_round_key(
-    i: int
-) -> CacheKey[_AgentResult, _AgentRoundWithHistory]:
-    return CacheKey[_AgentResult, _AgentRoundWithHistory](f"round-{i}")
+def _agent_round_key(i: int) -> str:
+    return f"round-{i}"
+
+AGENT_ROUND_KEY = KeyFamily(_AgentResult, _AgentRoundWithHistory, _agent_round_key)
 
 AGENT_RESULT_KEY = CacheKey[_BugAnalysisCache, _AgentResult]("agent_bug_analysis")
 
@@ -151,32 +199,6 @@ def _unique_titles_validator(
 
     return validate
 
-@component_context
-class PropertyAnalysisParams(TypedDict):
-    sort: Sort
-    context: ContractComponentInstance
-    prior_properties: list[_AgentRoundResult]
-
-class PropertyAnalysisSystemParams(TypedDict):
-    sort: Sort
-    backend_guidance: str
-
-property_analysis_template = TypedTemplate[PropertyAnalysisParams]("property_analysis_prompt.j2")
-
-property_analysis_system_template = TypedTemplate[PropertyAnalysisSystemParams]("property_analysis_system_prompt.j2")
-
-def _get_initial_prompt(
-    context: ContractComponentInstance,
-    sort: Sort,
-    prev_results: list[_AgentRoundResult],
-) -> str:
-    return property_analysis_template.bind({
-        "context": context,
-        "prior_properties": prev_results,
-        "sort": sort
-    }).render_to(load_jinja_template)
-
-
 def _partition[S](s: Sequence[S], pred: Callable[[S], bool]) -> tuple[list[S], list[S]]:
     a = []
     b = []
@@ -187,11 +209,12 @@ def _partition[S](s: Sequence[S], pred: Callable[[S], bool]) -> tuple[list[S], l
             b.append(t)
     return a, b
 
-def get_initial_prompt_builder(
+def get_initial_prompt_builder[U: FeatureUnit](
     sort: Sort,
     extra_inputs: Sequence[AnyPropertyGenerationInput],
-    component: ContractComponentInstance
-) -> Callable[[list[_AgentRoundResult]], MessagePayloadType]:
+    component: U,
+    render_initial: InitialPromptRenderer[U],
+) -> Callable[[list[_AgentRoundResult]], PromptInput]:
     # Order priority (to facilitate caching)
     # Generic-always -> generic-first -> component-always -> component-first -> initial-prompt
     # within each group we sort cacheable things last, and then within THOSE groups we sort by UID
@@ -229,12 +252,8 @@ def get_initial_prompt_builder(
 
     extend(later_round_prefix, stable_component_always, cache_last=True)
 
-    def renderer(prev_results: list[_AgentRoundResult]) -> MessagePayloadType:
-        rendered = _get_initial_prompt(
-            prev_results=prev_results,
-            context=component,
-            sort=sort
-        )
+    def renderer(prev_results: list[_AgentRoundResult]) -> PromptInput:
+        rendered = render_initial(component, sort, prev_results)
         if len(prev_results) == 0:
             # first round
             return [*first_round_prefix, rendered]
@@ -247,11 +266,11 @@ async def _run_bug_round(
     env: ServiceHost,
     ctx: WorkflowContext[_AgentResult],
     round: int,
-    prompt_render: Callable[[list[_AgentRoundResult]], MessagePayloadType],
+    prompt_render: Callable[[list[_AgentRoundResult]], PromptInput],
     prev: list[_AgentRoundResult],
     system_prompt: str
 ) -> _AgentRoundWithHistory:
-    round_ctx = ctx.child(agent_round_key(round))
+    round_ctx = ctx.child(AGENT_ROUND_KEY(round))
     if (cached := await round_ctx.cache_get(_AgentRoundWithHistory)) is not None:
         return cached
 
@@ -277,6 +296,8 @@ async def _run_bug_round(
         env.analysis_tools
     ).with_sys_prompt(
         system_prompt
+    ).with_monitor(
+        budget_monitor()
     ).compile_async()
 
     flow_input: BugAnalysisInput = BugAnalysisInput(
@@ -300,30 +321,37 @@ async def _run_bug_round(
     return to_ret
 
 
-async def _run_bug_analysis_inner(
+async def _run_bug_analysis_inner[U: FeatureUnit](
     agent_component_analysis: WorkflowContext[_AgentResult],
     env: ServiceHost,
-    component: ContractComponentInstance,
+    component: U,
     extra_input: Sequence[AnyPropertyGenerationInput],
     max_rounds: int,
     backend_guidance: str,
+    system_template: TypedTemplate[PropertySystemPromptParams],
+    render_initial: InitialPromptRenderer[U],
 ) -> _AgentResult:
     if (cached := await agent_component_analysis.cache_get(_AgentResult)) is not None:
         return cached
-    
+
     initial_prompt_builder = get_initial_prompt_builder(
-        extra_inputs=extra_input, component=component, sort=env.sort
+        extra_inputs=extra_input, component=component, sort=env.sort, render_initial=render_initial
     )
 
     prev_rounds : list[_AgentRoundResult] = []
     last_round_convo : list[AnyMessage] | None = None
 
-    system_prompt = property_analysis_system_template.bind({
+    system_prompt = system_template.bind({
         "sort": env.sort,
         "backend_guidance": backend_guidance
     }).render_to(load_jinja_template)
 
     for i in range(0, max_rounds):
+        # Under budget pressure a fresh round would be told to pack it in on
+        # its first monitor tick — don't bother launching it. Round 0 always
+        # runs (the loop's invariants require at least one round's history).
+        if i > 0 and budget_pressure():
+            break
         next_result = await _run_bug_round(
             env, agent_component_analysis, i, initial_prompt_builder, prev_rounds, system_prompt
         )
@@ -344,28 +372,40 @@ async def _run_bug_analysis_inner(
     await agent_component_analysis.cache_put(to_ret)
     return to_ret
 
-async def run_property_inference(
+async def run_property_inference[U: FeatureUnit](
     ctx: WorkflowContext[ComponentGroup],
     env: ServiceHost,
-    component: ContractComponentInstance,
+    component: U,
     extra_input : Sequence[AnyPropertyGenerationInput] = tuple(),
     threat_model: Document | None = None,
+    extra_context: Sequence[Document] = (),
     refinement: ConversationContextProvider | None = None,
     max_rounds: int = 3,
-    backend_guidance: str = CERTORA_BACKEND_GUIDANCE,
+    *,
+    backend_guidance: str,
+    system_template: TypedTemplate[PropertySystemPromptParams],
+    render_initial: InitialPromptRenderer[U],
 ) -> list[PropertyFormulation]:
     """
     Extract security properties for a component.
 
-    ``backend_guidance`` is inlined verbatim into the property-analysis
-    prompt as the "what's expressible in your downstream verification
-    tool" filter. Defaults to ``CERTORA_BACKEND_GUIDANCE`` so existing
-    callers (the autoprove pipeline) get the same prompt they always had;
-    other backends (e.g. foundry tests) pass their own string describing
-    what's a fit / not a fit for *their* verification surface.
+    ``backend_guidance`` is inlined verbatim into the property-analysis *system* prompt as the
+    "what's expressible in your downstream verification tool" filter — the Certora Prover, foundry
+    tests, each describing what is and isn't a fit for *their* verification surface. It lives in
+    the system prompt (rendered once) rather than the per-round initial prompt so it stays inside
+    the cached prefix.
+
+    ``extra_context`` is any number of documents the user supplied about the application.
+    Unlike ``threat_model`` they make no claim to be a list of *threats* — they are
+    presented as authoritative background, not a checklist. Rendered in the order given,
+    each labelled with its filename.
     """
 
-    component_analysis = ctx.child(bug_analysis_key(threat_model, refinement is not None))
+    component_analysis = ctx.child(BUG_ANALYSIS_KEY(
+        threat_model.to_digest() if threat_model is not None else None,
+        refinement is not None,
+        combine_digests([d.to_digest() for d in extra_context]),
+    ))
     if (cached := await component_analysis.cache_get(_BugAnalysisCache)) is not None:
         return cached.items
 
@@ -381,12 +421,39 @@ async def run_property_inference(
         actual_extra_input.append(CacheablePropertyGenerationInput(
             "certora:thread_model", "generic", "always",
             provide=lambda cache: [
-                "In addition, a coworker has already written a 'threat model' for this application, which may include vulnerabilities/issues that"
+                "In addition, a coworker has already written a 'threat model' for this application, which may include vulnerabilities/issues that "
                 "are common in this type of application. This threat model is written for the entire application (not just the component you are analyzing) "
                 "so some of the issues/vulnerabilities/attacks may not be relevant to your analysis. Do *NOT* overfit to this threat model; carefully "
                 "analyze what content of the provided threat model is worth considering vs out of scope. Further, this threat model is just a starting point, "
-                "you should ALSO look for threats *not* mentioned in this document.",
+                "you should ALSO look for threats *not* mentioned in this document.\n\n",
                 threat_model.to_dict(cache_level=to_cache_level(cache))
+            ]
+        ))
+    if extra_context:
+        def extra_context_blocks(cache: bool) -> list[RawMessageType]:
+            # Each document introduced by its filename, then its body. Only the final
+            # body carries the cache marker: a breakpoint is a prefix boundary, so
+            # marking an interior one spends one of the four without extending the
+            # cached prefix.
+            blocks: list[RawMessageType] = []
+            for i, doc in enumerate(extra_context):
+                is_last = i == len(extra_context) - 1
+                blocks.append(f"--- {doc.basename} ---\n\n")
+                blocks.append(doc.to_dict(cache_level=to_cache_level(cache and is_last)))
+            return blocks
+
+        actual_extra_input.append(CacheablePropertyGenerationInput(
+            "certora:extra_context", "generic", "always",
+            provide=lambda cache: [
+                f"In addition, the user requesting this analysis has provided the following extra context about "
+                f"the application ({len(extra_context)} document(s), each introduced by its filename below): "
+                "notes, assumptions, deployment details, or anything else they considered relevant. It was "
+                "written for the entire application (not just the component you are analyzing), so parts of it "
+                "may not bear on your analysis. Treat it as authoritative information about how the system is "
+                "intended to work and be deployed, and let it inform which behaviors count as violations. It "
+                "is *NOT* a list of the issues to look for and it is *NOT* exhaustive: keep looking for "
+                "problems it does not mention.\n\n",
+                *extra_context_blocks(cache),
             ]
         ))
 
@@ -398,6 +465,8 @@ async def run_property_inference(
         actual_extra_input,
         max_rounds=max_rounds,
         backend_guidance=backend_guidance,
+        system_template=system_template,
+        render_initial=render_initial,
     )
     if refinement is None:
         to_ret = agent_attempt.items

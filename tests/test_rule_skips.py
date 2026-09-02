@@ -10,8 +10,10 @@ from composer.spec.source.author import ExpectRuleFailure, ExpectRulePassage
 from composer.spec.source.prover import (
     StateWithSkips, VALIDATION_KEY,
 )
-from composer.spec.cvl_generation import check_completion
+from composer.authoring.state import check_completion
 from composer.prover.core import ProverReport
+from composer.prover.ptypes import RulePath
+from composer.prover.results import StatusCodes
 
 from graphcore.testing import Scenario, tool_call_raw, ToolCallDict
 from graphcore.tools.results import result_tool_generator
@@ -61,13 +63,27 @@ def _result(commentary: str) -> ToolCallDict:
 # ---------------------------------------------------------------------------
 
 
+def _spec_decls(*rules: str) -> str:
+    """A spec declaring exactly ``rules`` — the mocked ``declared_rules_list`` parses
+    these declarations back out, so a report's rules must be declared here for the
+    completion check to treat them as the spec's."""
+    return "\n".join(f"rule {r} {{ assert true; }}" for r in rules)
+
+
 def _raw_report(**rule_status: bool) -> ProverReport:
-    return ProverReport(rule_status=rule_status, result_str="Prover report output", link="local://test-run")
+    return ProverReport(result_str="Prover report output", link="local://test-run", raw_rule_status={
+            RulePath(rule=k): "VERIFIED" if v else "VIOLATED" for (k,v) in rule_status.items()
+        },
+        certora_run_stdout="certoraRun output"
+    )
 
 
 def _summarized_report(todo: str, **rule_status: bool) -> ProverReport:
     return ProverReport(
-        rule_status=rule_status, result_str=todo, link="local://test-run",
+        result_str=todo, link="local://test-run", raw_rule_status={
+            RulePath(rule=k): "VERIFIED" if v else "VIOLATED" for (k,v) in rule_status.items()
+        },
+        certora_run_stdout="certoraRun output"
     )
 
 
@@ -106,6 +122,10 @@ def _scenario(
         required_validations=required if required is not None else [VALIDATION_KEY],
         rule_skips=rule_skips or {},
         config={"files": ["src/Foo.sol"]},
+        reminders_channel=[],
+        # verify_spec's stamp is bound to the applied-edit history; the source
+        # pipeline always seeds it, so the test state must too.
+        version_history=[],
     )
 
 
@@ -155,6 +175,7 @@ class TestProverReportHandling:
         msg = await _scenario(
             certora_prover,
             _summarized_report("1. Fix rule foo\n2. Fix rule bar", foo=False, bar=False),
+            curr_spec=_spec_decls("foo", "bar"),
         ).turn(
             _verify()
         ).run_last_single_tool(_PROVER)
@@ -164,6 +185,7 @@ class TestProverReportHandling:
         assert await _scenario(
             certora_prover,
             _raw_report(foo=True, bar=False),
+            curr_spec=_spec_decls("foo", "bar"),
         ).turns(
             _verify(),
             _result("done"),
@@ -173,15 +195,19 @@ class TestProverReportHandling:
         assert await _scenario(
             certora_prover,
             _raw_report(foo=True, bar=True),
+            curr_spec=_spec_decls("foo", "bar"),
         ).turns(
             _verify(),
             _result("done"),
         ).map_run(_result_accepted) == "done"
 
-    async def test_filtered_rules_dont_stamp(self, certora_prover: ProverMock):
+    async def test_partial_coverage_doesnt_stamp(self, certora_prover: ProverMock):
+        # A rule-scoped run that verifies only part of the declared rules must not
+        # stamp — bar was never exercised against this spec.
         assert await _scenario(
             certora_prover,
             _raw_report(foo=True),
+            curr_spec=_spec_decls("foo", "bar"),
         ).turns(
             _verify_rules("foo"),
             _result("done"),
@@ -199,6 +225,7 @@ class TestRuleSkipProverInteraction:
         assert await _scenario(
             certora_prover,
             _raw_report(ruleA=False, ruleB=True),
+            curr_spec=_spec_decls("ruleA", "ruleB"),
         ).turn(
             _skip("ruleA", "known issue"),
         ).turns(
@@ -211,6 +238,7 @@ class TestRuleSkipProverInteraction:
         assert await _scenario(
             certora_prover,
             _raw_report(ruleA=False, ruleB=True),
+            curr_spec=_spec_decls("ruleA", "ruleB"),
         ).turn(
             _skip("ruleA", "temp"),
         ).turn(
@@ -225,6 +253,7 @@ class TestRuleSkipProverInteraction:
         assert await _scenario(
             certora_prover,
             _raw_report(ruleA=False, ruleB=False),
+            curr_spec=_spec_decls("ruleA", "ruleB"),
         ).turn(
             _skip("ruleA", "known"),
         ).turns(

@@ -1,0 +1,5 @@
+{% if prior_findings == "established" %}
+{% include "code_explorer/index_addendum_fragment.j2" %}
+{% elif prior_findings == "versioned" %}
+{% include "code_explorer/versioned_index_addendum_fragment.j2" %}
+{% endif %}

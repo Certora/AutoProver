@@ -26,6 +26,14 @@ in `certora/harnesses/TokenInstance1.sol`.
 The actual harness implementation should contain a minimal contract which simply extends the target contract. You should only add code necessary to satisfy the Solidity
 compiler/typechecker; e.g., code to invoke the parent contract's constructor.
 
+**Important**: a harness must be a *deployable* contract; the Prover has no instance for a contract the compiler refuses to instantiate. A target declared `abstract`
+(or one that leaves any function of an interface it inherits unimplemented) cannot be extended directly for this reason. When the target is such a contract, locate the
+concrete contract in the project that inherits from it — the one the protocol actually deploys — and extend *that* instead, keeping the harness itself just as minimal.
+Where several concrete contracts inherit from the target, pick the one the protocol's deployment scripts/configuration use. Determining whether a target is deployable
+requires looking at its whole inherited interface rather than the target's own file alone: a function may be declared in an interface the target inherits and implemented
+by a sibling contract that is only mixed in further down the hierarchy. Only if the project has no concrete contract inheriting from the target should the harness itself
+implement the functions that are missing.
+
 The harness contract will need to import the target contract; you should use the relative path of the target file. For example, if `TokenInstance1` is inheriting from `MyToken`
 declared at the path `src/contracts/token/MyToken.sol`, then `TokenInstance1` should use `import "src/contracts/token/MyToken.sol";`. Do NOT try to use imports with `..`.
 
@@ -36,9 +44,7 @@ Once all harness contracts have been generated, call the `result` tool to delive
 mapping keyed by each target contract's `solidity_identifier` (from the input list above) to the list of harness
 descriptions for that target. Each harness description contains the relative path to the generated file and the
 Solidity identifier you chose for the generated harness.
-In addition, specify the Solidity compiler to use when compiling these harnesses. You should specify this as `solcX.Y`, where `X` and `Y` are the major/minor version numbers.
-For example, to specify Solidity version 0.8.31, use `solc8.31` as the solidity compiler.
 
-As part of delivering your result your generated harnesses will be checked for syntactic/type validity. Upon rejection, the Solidity compiler error messages will be returned to you;
-repair any issues and re-invoke the result tool. 
+As part of delivering your result your generated harnesses are compiled with the project's own build settings and checked for syntactic/type validity.
+Upon rejection, the Solidity compiler error messages will be returned to you; repair any issues and re-invoke the result tool.
 </task>

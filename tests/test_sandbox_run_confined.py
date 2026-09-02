@@ -9,6 +9,7 @@ escape gate on the real Crucible build is step 5.
 
 import asyncio
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -139,6 +140,35 @@ async def test_none_provider_is_not_confined(tmp_path):
         outside.unlink(missing_ok=True)
     assert res.exit_code == 0
     assert "readable" in res.stdout
+
+
+def _pid_gone(pid: int, timeout_s: float = 2.0) -> bool:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.02)
+    return False
+
+
+@_needs_sandbox
+async def test_confined_timeout_kills_process_group(tmp_path):
+    """``run-confined`` execve's in place; the timeout must still kill fork children."""
+    res = await run_local_command(
+        "sh",
+        ["-c", "sleep 100 & echo $! > child.pid; exec sleep 100"],
+        {},
+        workdir=tmp_path,
+        timeout_s=1,
+        provider=_PROVIDER,
+        policy=_system_policy(tmp_path),
+    )
+    assert res.exit_code == -1, res.stderr
+    assert "timed out" in res.stderr
+    grandchild = int((tmp_path / "child.pid").read_text().strip())
+    assert _pid_gone(grandchild), f"grandchild {grandchild} still alive after timeout"
 
 
 async def test_unavailable_provider_fails_closed(tmp_path):

@@ -4,10 +4,12 @@ This driver covers the ``greenfield`` and ``update`` natspec workflows.
 ``existing`` (verify-as-is from source) lives in ``console_autoprove``.
 """
 
+from graphcore.tools.vfs import GlobalExcludeArg
 import composer.bind as _
 
 import argparse
 import asyncio
+import logging
 import json
 import pathlib
 import sys
@@ -23,21 +25,24 @@ from composer.rag.db import PostgreSQLRAGDatabase
 from composer.rag.models import get_model
 from composer.workflow.services import standard_connections
 from composer.spec.service_host import ModelProvider
-from composer.kb.knowledge_base import DefaultEmbedder, DEFAULT_KB_NS
+from composer.rag.models import DefaultEmbedder
 from composer.spec.services import build_rag_tool_env
 
 from composer.spec.context import (
     WorkflowContext, SystemDoc,
 )
 from composer.llm.registry import get_provider_for
+from composer.pipeline.ecosystem import EVM
 from composer.spec.natspec.pipeline import run_natspec_pipeline
 from composer.spec.natspec.run_tags import NatspecRunTags
-from composer.spec.util import FS_FORBIDDEN_READ
+from composer.spec.util import fs_forbidden_read
 from composer.spec.cvl_research import DEFAULT_CVL_AGENT_INDEX_NS
 from composer.ui.tool_display import async_tool_context
 
 from composer.ui.pipeline_app import NatspecPipelineApp
 from composer.cli.natspec_startup import build_mental_model, make_source_factory
+
+_log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -52,7 +57,7 @@ class PipelineArgs(ModelOptions, RAGDBOptions, Protocol):
     cache_ns: str | None
     memory_ns: str | None
     source_root: str | None
-    forbidden_read: str | None
+    forbidden_read: GlobalExcludeArg
     prover_conf: str | None
     output_root: str | None
     interactive: bool
@@ -92,7 +97,7 @@ async def _main() -> int:
     )
     parser.add_argument(
         "--forbidden-read", default=None,
-        help="Regex of paths source tools may not read. Defaults to FS_FORBIDDEN_READ "
+        help="Regex of paths source tools may not read. Overrides the default predicate "
              "when source-root is set.",
     )
     parser.add_argument(
@@ -150,7 +155,7 @@ async def _main() -> int:
 
         sort = "update" if source_root_path is not None else "greenfield"
         forbidden_read = (
-            args.forbidden_read or (FS_FORBIDDEN_READ if source_root_path else None)
+            args.forbidden_read or (fs_forbidden_read if source_root_path else None)
         )
 
         thread_id = f"pipeline_{uuid.uuid4().hex[:12]}"
@@ -178,7 +183,6 @@ async def _main() -> int:
                 ),
                 db=rag,
                 cvl_index_config=agent_index_config_from_env(DEFAULT_CVL_AGENT_INDEX_NS),
-                kb_ns=DEFAULT_KB_NS,
                 store=conn.indexed_store,
                 recursion_limit=args.recursion_limit,
             )
@@ -225,15 +229,19 @@ async def _main() -> int:
                         handler_factory=app.make_handler,
                         mental_model=mental_model,
                         source_factory=source_factory,
+                        # The only ecosystem natspec can run under; it authors Solidity and CVL.
+                        ecosystem=EVM,
                         max_concurrent=args.max_concurrent,
                         interactive=args.interactive,
                         max_bug_rounds=args.max_bug_rounds,
                     )
                     await app.on_pipeline_done(result)
                 except Exception as exc:
+                    # A toast alone loses the failure the moment it fades — and the traceback with it.
+                    _log.exception("pipeline failed")
                     app.notify(f"Pipeline failed: {exc}", severity="error")
                     await app.mount_error(exc)
-                    app._pipeline_done = True
+                    app.mark_pipeline_done()
 
             app.set_work(work)
             await app.run_async()

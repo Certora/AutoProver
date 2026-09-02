@@ -215,7 +215,7 @@ async def build_tree_inner(
     harnessed_app = _build_harnessed_app(sa_leaf.value, config_val)
 
     # Find the main contract. The pipeline matches the entry point by
-    # solidity_identifier (pipeline.core.main_instance), so the explorer does too.
+    # solidity_identifier (pipeline.ecosystem.main_instance), so the explorer does too.
     contract_ind = -1
     for i, c in enumerate(harnessed_app.contract_components):
         if c.solidity_identifier == contract_name:

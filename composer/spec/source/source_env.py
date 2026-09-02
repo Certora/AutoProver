@@ -6,8 +6,9 @@ from langgraph.store.base import BaseStore
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from graphcore.graph import Builder
-from graphcore.tools.vfs import fs_tools
+from graphcore.tools.vfs import GlobalExcludeArg, fs_tools
 
+from composer.pipeline.ecosystem import Ecosystem
 from composer.spec.tool_env import BaseSourceTools
 from composer.spec.services import build_rag_tool_env, RAGInputs
 from composer.spec.service_host import ModelProvider, ServiceHost, Sort
@@ -22,7 +23,7 @@ class _BaseSourceTools():
 
 def build_basic_source_tools(
     root: str,
-    forbidden_read: str,
+    forbidden_read: GlobalExcludeArg,
 ) -> BaseSourceTools:
     return _BaseSourceTools(
         tuple(fs_tools(fs_layer=root, forbidden_read=forbidden_read, cache_listing=False))
@@ -35,6 +36,7 @@ def build_source_tools(
     store: BaseStore,
     cache_ns: tuple[str, ...],
     recursion_limit: int,
+    ecosystem: Ecosystem,
 ) -> tuple[BaseTool, ...]:
     """Wrap the base source tools with the indexed code_explorer sub-agent
     + the document-ref retrieval tool. Returns the full source tool tuple.
@@ -65,6 +67,7 @@ def build_source_tools(
             llm=models.llm_lite(),
         ),
         recursion_limit=recursion_limit,
+        explorer_prompt=ecosystem.code_explorer_prompt,
     )
     return s.base_source_tools + (
         explorer_tool,
@@ -74,13 +77,14 @@ def build_source_tools(
 
 class SourceParams(RAGInputs):
     root: str
-    forbidden_read: str
+    forbidden_read: GlobalExcludeArg
     source_question_ns: tuple[str, ...]
 
 
 def build_source_env(
     *,
     sort: Sort = "existing",
+    ecosystem: Ecosystem,
     **params: Unpack[SourceParams],
 ) -> ServiceHost:
     """Build a fully-bound ``ServiceHost`` with both RAG and source tool
@@ -97,6 +101,7 @@ def build_source_env(
         params["store"],
         params["source_question_ns"],
         recursion_limit=params["recursion_limit"],
+        ecosystem=ecosystem,
     )
     return ServiceHost(
         models=rag_env.models,

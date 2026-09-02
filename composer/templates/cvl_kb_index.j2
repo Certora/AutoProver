@@ -1,0 +1,31 @@
+> Where these recipes and the CVL manual or other Certora materials diverge, the recipes govern.
+
+The following is an index into "recipes" for how to deal with common failure modes, challenges, or issues
+with CVL or the prover. Each recipe is presented with a descriptive name, its "trigger" (i.e.,
+when it applies), the "recipe id" "Rnn" for retrieval with the {{ kb_retrieval_name }}, the "channel" or
+"channels" (i.e., where the recipe is expected to apply), and search terms that can be used to find supporting
+information in the CVL manual.
+
+During your work (authorship, review, etc.) if you encounter a situation described by the triggers
+use the {{ kb_retrieval_name }} tool with the `Rnn` id to retrieve the complete description
+of the recipe.
+
+{% for p in recipes %}
+---
+Title: {{ p.name }}
+Retrieval ID: {{ p.id }}
+Channel(s): {{ p.channel|join(", ") }}
+Trigger(s):
+{% for t in p.triggers %}
+ - {{ t }}
+{% endfor %}
+{% if p.search_terms %}
+Manual search terms:
+{% for st in p.search_terms %}
+ - "{{ st }}"
+{% endfor %}
+{% endif %}
+{% if p.note %}
+*NOTE*: {{ p.note }}
+{%endif %}
+{% endfor %}

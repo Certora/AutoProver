@@ -57,7 +57,7 @@ class FoundryTaskHandler(MultiJobTaskHandler[None], NullEventHandler):
     """Per-task handler that doubles as its own ``EventHandler``.
 
     Streams ``forge_test_run`` summaries into a collapsible ``RichLog``
-    mounted under the task panel.
+    pinned at the top of the task panel.
     """
 
     def __init__(
@@ -81,9 +81,7 @@ class FoundryTaskHandler(MultiJobTaskHandler[None], NullEventHandler):
             log = RichLog(highlight=True, markup=False)
             log.styles.min_height = 15
             self._forge_log = log
-            await self._mount_to(
-                self._panel, Collapsible(log, title="Forge Test Runs"),
-            )
+            await self._mount_fixture(Collapsible(log, title="Forge Test Runs"))
         return self._forge_log
 
     @override
@@ -100,10 +98,12 @@ class FoundryTaskHandler(MultiJobTaskHandler[None], NullEventHandler):
         # The design-doc finder reports its choice as the discovery phase completes.
         evt = cast(DesignDocChosenEvent, payload)
         if evt["type"] == "design_doc_chosen":
-            await self.post_notice(
-                f"{evt['source']} design doc: {evt['path']}",
-                evt["reason"] or None,
+            title = (
+                "no design doc — proceeding source-only"
+                if evt["source"] == "none found"
+                else f"{evt['source']} design doc: {evt['path']}"
             )
+            await self.post_notice(title, evt["reason"] or None)
 
 
 # ---------------------------------------------------------------------------

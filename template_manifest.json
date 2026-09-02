@@ -11,10 +11,100 @@
     "template_name": "stub_generation_prompt.j2",
     "ty_sort": "PartialTemplate"
   },
+  "composer.foundry.author:_FoundryJudgeTemplate": {
+    "module": "composer.foundry.author",
+    "qualname": "_FoundryJudgeTemplate",
+    "template_name": "foundry_feedback_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.foundry.author:_FoundryJudgeSystemTemplate": {
+    "module": "composer.foundry.author",
+    "qualname": "_FoundryJudgeSystemTemplate",
+    "template_name": "foundry_property_judge_system_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
   "composer.foundry.author:_FoundryPropertyGenTemplate": {
     "module": "composer.foundry.author",
     "qualname": "_FoundryPropertyGenTemplate",
     "template_name": "foundry_property_generation_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.kb.kb_context:index_template": {
+    "module": "composer.kb.kb_context",
+    "qualname": "index_template",
+    "template_name": "cvl_kb_index.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.pipeline.ecosystem:EVM_CODE_EXPLORER_TEMPLATE": {
+    "module": "composer.pipeline.ecosystem",
+    "qualname": "EVM_CODE_EXPLORER_TEMPLATE",
+    "template_name": "code_explorer/solidity.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.pipeline.ecosystem:SOLANA_ANALYSIS_SYSTEM_TEMPLATE": {
+    "module": "composer.pipeline.ecosystem",
+    "qualname": "SOLANA_ANALYSIS_SYSTEM_TEMPLATE",
+    "template_name": "solana/analysis_system.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.pipeline.ecosystem:SOLANA_ANALYSIS_INITIAL_TEMPLATE": {
+    "module": "composer.pipeline.ecosystem",
+    "qualname": "SOLANA_ANALYSIS_INITIAL_TEMPLATE",
+    "template_name": "solana/analysis_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.pipeline.ecosystem:SOLANA_PROPERTY_SYSTEM_TEMPLATE": {
+    "module": "composer.pipeline.ecosystem",
+    "qualname": "SOLANA_PROPERTY_SYSTEM_TEMPLATE",
+    "template_name": "solana/property_system.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.pipeline.ecosystem:SOLANA_PROPERTY_INITIAL_TEMPLATE": {
+    "module": "composer.pipeline.ecosystem",
+    "qualname": "SOLANA_PROPERTY_INITIAL_TEMPLATE",
+    "template_name": "solana/property_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.pipeline.ecosystem:SOLANA_CODE_EXPLORER_TEMPLATE": {
+    "module": "composer.pipeline.ecosystem",
+    "qualname": "SOLANA_CODE_EXPLORER_TEMPLATE",
+    "template_name": "code_explorer/solana.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.pipeline.ecosystem:SOROBAN_ANALYSIS_SYSTEM_TEMPLATE": {
+    "module": "composer.pipeline.ecosystem",
+    "qualname": "SOROBAN_ANALYSIS_SYSTEM_TEMPLATE",
+    "template_name": "soroban/analysis_system.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.pipeline.ecosystem:SOROBAN_ANALYSIS_INITIAL_TEMPLATE": {
+    "module": "composer.pipeline.ecosystem",
+    "qualname": "SOROBAN_ANALYSIS_INITIAL_TEMPLATE",
+    "template_name": "soroban/analysis_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.pipeline.ecosystem:SOROBAN_PROPERTY_SYSTEM_TEMPLATE": {
+    "module": "composer.pipeline.ecosystem",
+    "qualname": "SOROBAN_PROPERTY_SYSTEM_TEMPLATE",
+    "template_name": "soroban/property_system.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.pipeline.ecosystem:SOROBAN_PROPERTY_INITIAL_TEMPLATE": {
+    "module": "composer.pipeline.ecosystem",
+    "qualname": "SOROBAN_PROPERTY_INITIAL_TEMPLATE",
+    "template_name": "soroban/property_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.pipeline.ecosystem:SOROBAN_CODE_EXPLORER_TEMPLATE": {
+    "module": "composer.pipeline.ecosystem",
+    "qualname": "SOROBAN_CODE_EXPLORER_TEMPLATE",
+    "template_name": "code_explorer/soroban.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.rustapp.session:ProtocolTemplate": {
+    "module": "composer.rustapp.session",
+    "qualname": "ProtocolTemplate",
+    "template_name": "authoring_protocol.j2",
     "ty_sort": "TypedTemplate"
   },
   "composer.spec.cvl_research:_ResearchSys": {
@@ -41,22 +131,28 @@
     "template_name": "nosource_property_generation_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
-  "composer.spec.prop_inference:property_analysis_template": {
+  "composer.spec.prop_inference:PROPERTY_SYSTEM_TEMPLATE": {
     "module": "composer.spec.prop_inference",
-    "qualname": "property_analysis_template",
-    "template_name": "property_analysis_prompt.j2",
+    "qualname": "PROPERTY_SYSTEM_TEMPLATE",
+    "template_name": "property_analysis_system_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
-  "composer.spec.prop_inference:property_analysis_system_template": {
+  "composer.spec.prop_inference:PROPERTY_INITIAL_TEMPLATE": {
     "module": "composer.spec.prop_inference",
-    "qualname": "property_analysis_system_template",
-    "template_name": "property_analysis_system_prompt.j2",
+    "qualname": "PROPERTY_INITIAL_TEMPLATE",
+    "template_name": "property_analysis_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
   "composer.spec.source.author:_PropertyGenTemplate": {
     "module": "composer.spec.source.author",
     "qualname": "_PropertyGenTemplate",
     "template_name": "property_generation_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.source.author:_PropertyGenSysTemplate": {
+    "module": "composer.spec.source.author",
+    "qualname": "_PropertyGenSysTemplate",
+    "template_name": "property_generation_system_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
   "composer.spec.source.design_doc_finder:_FINDER_PROMPT": {
@@ -77,6 +173,18 @@
     "template_name": "harness_generation_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
+  "composer.spec.source.report.findings:_FINDINGS_SYSTEM": {
+    "module": "composer.spec.source.report.findings",
+    "qualname": "_FINDINGS_SYSTEM",
+    "template_name": "autoprove_report_findings_system.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.source.report.findings:_FINDINGS_PROMPT": {
+    "module": "composer.spec.source.report.findings",
+    "qualname": "_FINDINGS_PROMPT",
+    "template_name": "autoprove_report_findings_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
   "composer.spec.source.report.render:_REPORT_TEMPLATE": {
     "module": "composer.spec.source.report.render",
     "qualname": "_REPORT_TEMPLATE",
@@ -93,6 +201,18 @@
     "module": "composer.spec.source.summarizer",
     "qualname": "_SummarizationTemplate",
     "template_name": "cvl_setup_summarization_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.system_analysis:ANALYSIS_SYSTEM_TEMPLATE": {
+    "module": "composer.spec.system_analysis",
+    "qualname": "ANALYSIS_SYSTEM_TEMPLATE",
+    "template_name": "application_analysis_system.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.system_analysis:ANALYSIS_INITIAL_TEMPLATE": {
+    "module": "composer.spec.system_analysis",
+    "qualname": "ANALYSIS_INITIAL_TEMPLATE",
+    "template_name": "application_analysis_prompt.j2",
     "ty_sort": "TypedTemplate"
   }
 }
