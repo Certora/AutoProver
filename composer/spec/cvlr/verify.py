@@ -37,9 +37,11 @@ from graphcore.tools.schemas import (
 )
 
 from composer.authoring.state import ValidationStamper, make_validation_stamper
+from composer.cargo.sbf import Built, PlatformToolsMissing, SbfRun
 from composer.cargo.session import CargoSession, CompileFailed, Compiled
+from composer.cargo.symbols import defined_functions, nearest, unmatched
 from composer.prover.core import CexHandler, ProverCallbacks, ProverOptions
-from composer.spec.cvlr.conf import SelectRules
+from composer.spec.cvlr.conf import SelectRules, tools_version
 from composer.spec.cvlr.prover import (
     BuildRejected,
     Checked,
@@ -202,7 +204,7 @@ class VerifyRules(
                     cex=deps.cex,
                     tool_call_id=self.tool_call_id,
                 )
-            return self._report(outcome, deps.stamper)
+            return self._report(outcome, deps)
 
     def _nothing_to_submit(self) -> Command | str:
         """A draft with no rules: either unfinished, or a unit whose every property is blocked.
@@ -232,7 +234,50 @@ class VerifyRules(
                 validations=deps.stamper(self.state, tuning_history(self.state)),
             )
 
-    def _report(self, outcome: CvlrOutcome, stamper: ValidationStamper) -> Command | str:
+    def _inert_summaries(self, build: SbfRun, submission: Submission) -> str | None:
+        """A note naming the summary directives this build's symbols do not match.
+
+        The failure it reports is total silence. A summary is a regex over demangled symbol names, so
+        one that names a symbol the build does not define changes nothing and produces no
+        diagnostic — the run reports the error it reported before. An end-to-end run wrote five
+        variants of one directive hunting for a spelling that took, and *all five* missed: the
+        program's own ``VaultError::Display`` had been inlined out of existence, so no spelling would
+        have worked, and the symbol it needed was Anchor's ``ErrorCode::Display``, which survives.
+
+        Best-effort, and silent when the symbols cannot be read: an unreadable artifact must not
+        become "your directives matched nothing", which is a different problem with a different fix.
+        """
+        directives = tuple(d.pattern for d in self.state["summaries"])
+        if not directives or not isinstance(build.verdict, Built):
+            return None
+        version = tools_version(submission.base_conf)
+        if version is None:
+            return None
+        try:
+            symbols = defined_functions(build.verdict.manifest.artifact, tools_version=version)
+        except (PlatformToolsMissing, OSError):
+            _log.warning("could not read symbols to check summary directives", exc_info=True)
+            return None
+        missed = unmatched(directives, symbols)
+        if not missed:
+            return None
+        lines = [
+            f"{len(missed)} of your {len(directives)} summary directive(s) match no symbol in this "
+            "build, so they had no effect:"
+        ]
+        for pattern in missed:
+            lines.append(f"  {pattern}")
+            for suggestion in nearest(pattern, symbols):
+                lines.append(f"      this build does define: {suggestion}")
+        lines.append(
+            "A symbol absent from the build is usually one the compiler inlined away, and no "
+            "spelling of it will match. Summarize a symbol that is there — the callee one level "
+            "out is the usual answer."
+        )
+        return "\n".join(lines)
+
+    def _report(self, outcome: CvlrOutcome, deps: VerifyDeps) -> Command | str:
+        stamper = deps.stamper
         expected = self.state["expected_failures"]
         match outcome:
             case BuildRejected(build=build):
@@ -250,15 +295,18 @@ class VerifyRules(
                     self.tool_call_id,
                     f"The chain build failed, so nothing was submitted:\n{said}",
                 )
-            case SubmissionFailed(reason=reason):
-                return tool_return(
-                    self.tool_call_id, f"The prover run did not produce results: {reason}"
-                )
-            case Checked(report=report):
+            case SubmissionFailed(build=build, reason=reason):
+                said = [f"The prover run did not produce results: {reason}"]
+                if (inert := self._inert_summaries(build, deps.submission)) is not None:
+                    said.append(inert)
+                return tool_return(self.tool_call_id, "\n\n".join(said))
+            case Checked(build=build, report=report):
                 status = report.rule_status
                 unaccounted = _unaccounted(status, expected)
                 surprising = _wrongly_expected(status, expected)
                 lines = [report.result_str]
+                if (inert := self._inert_summaries(build, deps.submission)) is not None:
+                    lines.append(inert)
                 if surprising:
                     lines.append(
                         "These rules are marked as expected failures but VERIFIED: "
