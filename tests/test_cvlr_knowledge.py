@@ -295,6 +295,30 @@ def test_the_author_is_told_to_call_the_handler_not_anchors_dispatch():
     assert "crate::entry" in prompt
 
 
+def test_the_worked_example_unwraps_the_handler_rather_than_branching_on_it():
+    """The example in this prompt taught ``if handler(..).is_ok() { assert }``, and every authoring
+    run copied it — which is how a whole phase came to be reported as blocked on Anchor.
+
+    ``.unwrap()`` makes the failure path a panic, which the prover prunes because ``assert_on_panic``
+    defaults to false, so the error value is never built. ``.is_ok()`` keeps that path live and merges
+    it back, forcing the analysis through the ``#[error_code]`` enum's generated ``Display`` and its
+    ``String`` allocation, which comes back as ``[3308]`` and no verdict at all.
+
+    Measured as two rules in one job, same program and same property, differing in nothing else: the
+    ``.unwrap()`` rule VERIFIED with its vacuity check passing, the ``.is_ok()`` rule ERRORed
+    (``docs/upstream-defects.md`` P4, the correction). The two forms check the assertion over the same
+    states, so this costs the rule nothing.
+
+    Pinned as an example-shape test rather than a prose test because the prose was never the problem.
+    """
+    prompt = _author_system_prompt()
+    assert ".unwrap();" in prompt
+    assert "if crate::vault_program::deposit(ctx, amount).is_ok()" not in _flat(prompt)
+    assert _flat("Consume the handler's `Result` with `.unwrap()`, not by branching on it") in _flat(
+        prompt
+    )
+
+
 def test_the_author_is_warned_that_re_reading_an_account_yields_pre_state():
     """The idiom that silently produces a *wrong answer* rather than an error, so it is the one worth
     guarding. An Anchor ``Account<T>`` is a deserialized copy written back only in ``exit``, which
