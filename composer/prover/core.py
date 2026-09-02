@@ -32,6 +32,7 @@ from abc import ABC, abstractmethod
 import json
 import logging
 import os
+import uuid
 
 
 from langchain_core.messages import AnyMessage, HumanMessage
@@ -448,6 +449,95 @@ async def run_prover_inner(
         run_result = cast(ProverResult, json.load(output_file))
         return run_result, stdout
 
+
+class SpecCompilationError(Exception):
+    """The spec did not compile.
+
+    Carries the compiler's own output, which names the offending lines. An authoring
+    agent can repair a spec from that, so callers driving one should surface
+    ``output`` rather than treat this as a run-ending fault."""
+
+    def __init__(self, output: str) -> None:
+        super().__init__(output or "no output captured")
+        self.output = output
+
+
+async def _run_captured(*argv: str, cwd: Path) -> tuple[int, str]:
+    """Run ``argv``, returning its exit code and combined output.
+
+    ``communicate`` rather than ``wait``: the pipes have to be drained, or a child
+    that outfills the buffer blocks forever waiting for someone to read it."""
+    proc = await asyncio.subprocess.create_subprocess_exec(
+        *argv,
+        cwd=str(cwd),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    output = b"".join(part for part in (stdout, stderr) if part).decode(
+        "utf-8", errors="replace"
+    )
+    return proc.returncode or 0, output
+
+
+async def declared_rules_list(
+    folder: Path,
+    args: list[str]
+) -> list[str]:
+    """
+    This is a temporary hack to work around `certoraRun` not providing a "native"
+    way to list rules. Instead we use certoraRun to build the project, hijack `msg` to find
+    the generated build dir, and then manually invoke the typechecker with `-listRules`
+    ourselves against that build dir.
+
+    Not great, obviously, but lets us work on this AP feature while waiting for support for this to
+    land upstream in certora-cli and the pip distribution channels.
+    """
+    if any(m == "--msg" for m in args):
+        raise ValueError("This unholy black magic only works if you don't pass msg")
+    tc_key = uuid.uuid4().hex
+    rc, output = await _run_captured(
+        "certoraRun", *args, "--msg", tc_key, "--compilation_steps_only",
+        cwd=folder,
+    )
+    if rc != 0:
+        raise SpecCompilationError(output)
+    from importlib.resources import files
+
+    tc_jar = files("certora_jars") / "Typechecker.jar"
+    if not tc_jar.is_file():
+        raise ValueError("Typechecker not installed")
+    d = folder / ".certora_internal"
+    found : Path | None = None
+    for p in d.iterdir():
+        if not p.is_dir():
+            continue
+        is_build_mirror = p / "run.conf"
+        if not is_build_mirror.is_file():
+            continue
+        try:
+            payload = json.loads(
+                is_build_mirror.read_text()
+            )
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict) or "msg" not in payload or not isinstance(payload["msg"], str):
+            continue
+        if payload["msg"] == tc_key:
+            found = p
+            break
+    if found is None:
+        raise ValueError("Couldn't find build dir")
+    with tempfile.NamedTemporaryFile("r") as f:
+        tc_rc, tc_output = await _run_captured(
+            "java", "-jar", str(tc_jar), "-buildDirectory", str(found),
+            "-typeCheck", "true", "-listRules", f.name,
+            cwd=folder,
+        )
+        if tc_rc != 0:
+            raise SpecCompilationError(tc_output)
+        all_rules = f.read()
+    return [s for r in all_rules.split() if (s := r.strip()) and s != "envfreeFuncsStaticCheck"]
 
 async def run_prover(
     folder: Path,

@@ -23,7 +23,7 @@ authors = [
 ]
 
 dependencies = [
-    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@88387d24cfa1a49687a27af7f2e52e1ab866f9e9",
+    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@54a6852eac72896d17d3bc4f3068a775f9200d1f",
     "aiohttp>=3.13",
     "attrs>=26.1",
     "Jinja2>=3.1",
@@ -73,7 +73,7 @@ s3 = ["s3fs>=2023.1.0"]
 # exactly one extra must be selected at install time (enforced via the
 # [tool.uv] conflicts block below). Each extra is named after the package it
 # pulls.
-certora-cli = ["certora-cli>=8.18.0"]
+certora-cli = ["certora-cli>=8.19.1"]
 certora-cli-beta = ["certora-cli-beta>=8.18.0"]
 certora-cli-beta-mirror = ["certora-cli-beta-mirror>=8.18.0"]
 # Back-compat alias: `prover` == stable channel.
@@ -173,7 +173,8 @@ explicit = true
 [tool.pytest.ini_options]
 markers = [
     "expensive: hits the real prover / network — deselect with -m 'not expensive'",
-    "fuzz: fuzz tests"
+    "fuzz: fuzz tests",
+    "wire: Rust/Python wire-protocol round trips — build a cargo binary at test time"
 ]
 # optional but recommended once you're registering marks:
 addopts = "--strict-markers"   # a typo'd mark becomes an error, not a silent no-match

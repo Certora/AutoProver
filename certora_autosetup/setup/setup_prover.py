@@ -659,6 +659,7 @@ class SetupProver:
             solc_default_version=self.solc_default_version,
             verbose=self.verbose,
             build_config_dir=self.build_config_dir,
+            declared_via_ir=bool(getattr(self.build_system_config, "via_ir", False)),
         )
 
         result = workaround_manager.run_compilation_with_workarounds(

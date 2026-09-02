@@ -15,7 +15,7 @@ import time
 from contextlib import contextmanager, asynccontextmanager, ExitStack, nullcontext
 from pathlib import Path
 from typing import (
-    Annotated, AsyncIterator, Callable, Container, Iterator, Mapping, override,
+    Annotated, AsyncIterator, Callable, Container, Iterable, Iterator, Mapping, override,
     AsyncContextManager, Sequence, Literal
 )
 from typing_extensions import TypedDict, NotRequired
@@ -35,7 +35,8 @@ from composer.prover.ptypes import RuleResult, RulePath
 from graphcore.graph import LLM
 
 from composer.prover.core import (
-    ProverOptions, run_prover, DefaultCexHandler
+    ProverOptions, SpecCompilationError, declared_rules_list, run_prover,
+    DefaultCexHandler
 )
 from composer.prover.callbacks import ProverEventCallbacks
 from composer.prover.ptypes import StatusCodes
@@ -44,7 +45,7 @@ from composer.diagnostics.stream import (
     ProverOutputEvent, CloudPollingEvent, RuleAnalysisResult,
     CEXAnalysisStart, ProverRun, ProverLink, ProverResult
 )
-from composer.authoring.state import make_validation_stamper
+from composer.authoring.state import make_validation_stamper, spec_digest
 from composer.spec.cvl_generation import CVLGenerationState
 from composer.diagnostics.timing import RunSummary, get_run_summary
 from graphcore.graph import tool_state_update
@@ -100,18 +101,35 @@ def _merge_rule_skips(left: dict[str, str], right: dict[str, str]) -> dict[str, 
         to_ret[k] = v
     return to_ret
 
+class RuleSelection(TypedDict):
+    sort: Literal["exclude", "include"]
+    selector: list[str]
+
 class ProverRunLog(TypedDict):
     tool_call_id: str
     prover_results: list[tuple[RulePath, StatusCodes]]
     spec_digest: str
-    rules: list[str] | None
+    rules: RuleSelection | None
     sort: Literal["run"]
+    declared_rules: list[str]
+    state_digest: str
 
 class NagMarker(TypedDict):
     nagged_rules: list[RulePath]
     sort: Literal["nag"]
 
 type ProverHistoryItem = Annotated[ProverRunLog | NagMarker, Discriminator("sort")]
+
+def _executed_rules(
+    r: ProverRunLog
+) -> list[str]:
+    if r["rules"] is None:
+        return r["declared_rules"]
+    elif r["rules"]["sort"] == "include":
+        return r["rules"]["selector"]
+    else:
+        to_filt = set(r["rules"]["selector"])
+        return [ r_id for r_id in r["declared_rules"] if r_id not in to_filt ]
 
 #: How many consecutive runs must end in the identical failure before the author is nagged
 #: about a rule. Counts the run being processed, so 3 means "this run plus the two before it".
@@ -159,10 +177,10 @@ def stuck_rule_warnings(
         assert it["sort"] == "run"
         if it["tool_call_id"] not in known_tool_call_ids:
             seen_post_compaction_history = True
-        target_rules = set(it["rules"]) if it["rules"] else None
+        target_rules = _executed_rules(it)
         # Snapshot the keys: the body deletes from ``stuck_count`` as streaks end.
         for k in list(stuck_count.keys()):
-            if target_rules is not None and k.rule not in target_rules:
+            if k.rule not in target_rules:
                 continue
             if not any(
                 rp == k and stuck_rules[k] == stat for (rp, stat) in it["prover_results"]
@@ -185,6 +203,48 @@ def last_prover_run(
             continue
         return it
     return None
+
+def _iterate_history(
+    l: list[ProverHistoryItem],
+    curr_digest: str,
+    curr_status: list[tuple[RulePath, StatusCodes]],
+) -> Iterable[list[tuple[RulePath, StatusCodes]]]:
+    """Newest-first walk of the prover results produced against the current authoring
+    state: the current run's results, then each prior run whose ``state_digest`` matches,
+    stopping at the first run recorded against a different state (nag markers are
+    transparent)."""
+    yield curr_status
+    for elem in reversed(l):
+        if elem["sort"] != "run":
+            continue
+        if elem["state_digest"] != curr_digest:
+            return
+        yield elem["prover_results"]
+
+def _is_completion_history(
+    l: list[ProverHistoryItem],
+    curr_digest: str,
+    expected_to_fail: set[str],
+    curr_status: list[tuple[RulePath, StatusCodes]],
+    all_rules: list[str]
+) -> bool:
+    """Whether the runs against the current authoring state collectively verify every
+    declared rule (rules expected to fail are forgiven their failures but still count
+    as covered)."""
+    remaining_rules = set(all_rules)
+    for history in _iterate_history(
+        l, curr_digest, curr_status
+    ):
+        for (k, stat) in history:
+            if stat != "VERIFIED" and k.rule not in expected_to_fail:
+                return False
+            # discard, not remove: results can name rules outside the declared list
+            # (envfreeFuncsStaticCheck, parametric instantiations sharing one rule),
+            # and overlapping run selections re-verify already-covered rules.
+            remaining_rules.discard(k.rule)
+        if not remaining_rules:
+            return True
+    return False
 
 def _merge_prover_history(left: list[ProverHistoryItem], right: list[ProverHistoryItem]) -> list[ProverHistoryItem]:
     to_ret = left.copy()
@@ -326,8 +386,14 @@ class VerifySpecSchema(BaseModel):
 
     rules: list[str] | None = Field(
         default=None,
-        description="Specific rules to verify. If None, verifies all rules."
+        description="Specific rules to verify. If None, verifies all rules. Mutually exclusive with the `exclude_rules` argument"
     )
+
+    exclude_rules: list[str] | None = Field(
+        default=None,
+        description="Specific rules to SKIP verifying. If none validates all rules. Mutually exclusive with `rules` argument"
+    )
+
     state: Annotated[StateWithSkips, InjectedState]
 
 
@@ -403,6 +469,7 @@ def setup_prover_config_in(
     spec_stem: str | None = None,
     main_contract: str,
     rule: list[str] | None,
+    exclude_rule: list[str] | None,
     conf_dir: Path = CERTORA_DIR,
     **config_extra
 ):
@@ -417,6 +484,8 @@ def setup_prover_config_in(
         config.update(config_extra)
         if rule is not None:
             config["rule"] = rule
+        if exclude_rule is not None:
+            config["exclude_rule"] = exclude_rule
         with temp_certora_file(
             root=working_dir,
             content=json.dumps(config, indent=2),
@@ -450,18 +519,22 @@ def get_prover_tool(
     async def verify_spec(
         tool_call_id: Annotated[str, InjectedToolCallId],
         state: Annotated[StateWithSkips, InjectedState],
-        rules: list[str] | None = None
+        rules: list[str] | None = None,
+        exclude_rules: list[str] | None = None
     ) -> str | Command:
         last_msg = state["messages"][-1]
         if isinstance(last_msg, AIMessage) and any(
             i["id"] != tool_call_id for i in last_msg.tool_calls
         ):
             return "Cannot call the verify_spec tool in parallel with other tool calls. verify_spec must be the only tool you call in a turn"
-        
+
+        if rules is not None and exclude_rules is not None:
+            return "Cannot invoke the prover with both `rules` and `exclude_rules` set to non-none"
+
         spec = state["curr_spec"]
         if spec is None:
             return "Specification not yet put on VFS"
-        
+
         spec_hash = string_hash(
             spec
         )
@@ -475,8 +548,13 @@ def get_prover_tool(
         # With a seeded stem, name the spec/conf after it (so on-disk names match the
         # dump) under a lock; else fall back to unique uid names (no lock needed).
         spec_stem = state.get("spec_stem")
+        summary = get_run_summary()
+        component = (spec_stem or main_contract).removeprefix("autospec_")
+        iteration = len(state["prover_history"]) + 1
+
         conf_dir = (CERTORA_DIR / "confs") if spec_stem is not None else CERTORA_DIR
         lock = spec_locks.setdefault(spec_stem, asyncio.Lock()) if spec_stem is not None else nullcontext()
+        prover_msg = f"{component} iteration number {iteration}"
 
         summary = get_run_summary()
 
@@ -493,7 +571,26 @@ def get_prover_tool(
                 spec_contents=spec,
                 conf_dir=conf_dir,
                 config=conf,
+                rule=None,
+                exclude_rule=None,
+                msg=""
+            ) as (config_path, _ignored):
+                try:
+                    all_rules = await declared_rules_list(
+                        folder=Path(run_root),
+                        args=[config_path]
+                    )
+                except SpecCompilationError as exc:
+                    return f"The spec failed to compile:\n{exc.output}"
+            with setup_prover_config_in(
+                working_dir=run_root,
+                main_contract=main_contract,
+                spec_stem=spec_stem,
+                spec_contents=spec,
+                conf_dir=conf_dir,
+                config=conf,
                 rule=rules,
+                exclude_rule=exclude_rules,
                 msg=prover_msg
             ) as (config_path, config):
                 async with sem:
@@ -510,14 +607,6 @@ def get_prover_tool(
             if isinstance(result, str):
                 return result
 
-            all_verified = True
-            for (r, stat) in result.rule_status.items():
-                if r in state["rule_skips"]:
-                    continue
-                if not stat:
-                    all_verified = False
-                    break
-
             stuck_rules = {
                 k: v for (k,v) in result.raw_rule_status.items() if v in ("TIMEOUT", "ERROR", "SANITY_FAILED") and k.rule not in state["rule_skips"]
             }
@@ -531,18 +620,35 @@ def get_prover_tool(
             to_warn, seen_post_compaction_history = stuck_rule_warnings(
                 stuck_rules, state["prover_history"], known_tc_ids
             )
-            
+
+            curr_state_digest = spec_digest(
+                spec, state["skipped"], state["version_history"]
+            )
+
+            prover_results : list[tuple[RulePath, StatusCodes]] = [(k, v) for (k,v) in result.raw_rule_status.items()]
+
+            all_verified = _is_completion_history(
+                l=state["prover_history"],
+                curr_digest=curr_state_digest,
+                expected_to_fail=set(state["rule_skips"].keys()),
+                curr_status=prover_results,
+                all_rules=all_rules
+            )
+
             prover_update : list[ProverHistoryItem] = [
                 ProverRunLog(
                     tool_call_id=tool_call_id,
                     prover_results=[(k, v) for (k,v) in result.raw_rule_status.items()],
-                    rules=rules,
+                    rules={"sort": "exclude", "selector": exclude_rules } if exclude_rules is not None else \
+                        {"sort": "include", "selector": rules} if rules is not None else None,
                     spec_digest=spec_hash,
-                    sort="run"
+                    sort="run",
+                    declared_rules=all_rules,
+                    state_digest=curr_state_digest
                 )
             ]
             nag_channel = {
-                
+
             }
             if len(to_warn) > 0:
                 prover_update.append(NagMarker(
@@ -559,12 +665,18 @@ def get_prover_tool(
                     nag_channel["reminders_channel"].append(
                         "(NB: Some of these prover calls happened before your most recent task history summarization)"
                     )
-            
-            if rules is None and all_verified:
+            if all_verified:
+                nag_channel.setdefault("reminders_channel", []).append(
+                    "You have successfully verified over your prior prover run(s) that all rules verify. This task is completed."
+                )
+                # Completing the coverage stamps, however the completing run was scoped:
+                # every declared rule was verified against exactly this authoring state
+                # (the state_digest match), so a piecemeal completion is as good as a
+                # full-run one.
                 return tool_state_update(
                     tool_call_id=tool_call_id, content=result.result_str,
                     prover_link=result.link, validations=stamper(state, state["version_history"]),
-                    prover_history=prover_update
+                    prover_history=prover_update, **nag_channel
                 )
             return tool_state_update(
                 tool_call_id=tool_call_id, content=result.result_str, prover_link=result.link,
