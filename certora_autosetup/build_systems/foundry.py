@@ -403,6 +403,23 @@ class FoundryManager(BuildSystemManager):
             child.is_dir() and child.name.endswith(".sol") for child in artifacts_dir.iterdir()
         )
 
+    @staticmethod
+    def recorded_source(artifact: dict) -> Optional[str]:
+        """Foundry records it under `metadata.settings.compilationTarget`, as the single key
+        of a one-entry `{source: ContractName}` map, relative to the project. More than one
+        entry means the artifact covers several sources and names none of them, so it says
+        nothing about which project wrote it."""
+        metadata = artifact.get("metadata")
+        if not isinstance(metadata, dict):
+            return None
+        settings = metadata.get("settings")
+        if not isinstance(settings, dict):
+            return None
+        target = settings.get("compilationTarget")
+        if not isinstance(target, dict) or len(target) != 1:
+            return None
+        return str(next(iter(target)))
+
     def filter_artifacts(self, artifacts_dir: Path) -> List[Path]:
         """
         Filter Foundry artifacts - all .json files except those in build-info/ directories.
