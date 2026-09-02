@@ -79,6 +79,23 @@ Read the outcome:
   nothing. Weaken them.
 * **A timeout** → the rule is too hard as stated. Bound a loop, split the rule, or summarize a call
   the property does not depend on. Re-running an unchanged timing-out rule will time out again.
+* **A rule the prover could not analyze** → an *error* rather than a verdict, so it comes back as
+  neither VERIFIED nor VIOLATED. On this backend it is usually the pointer analysis refusing
+  something on a path your rule reaches: `[3308]` illegal dereference of an absolute address (a
+  program's own `#[error_code]` enum formatting its `#[msg]` string), `[3006]` illegal store of a
+  stack pointer. In order:
+  - **summarize the offending call**, so the prover replaces it with an unconstrained stand-in
+    instead of analyzing it — sound for a property that does not depend on what it returns;
+  - **weaken the rule to a sub-property the prover can reach** — assume away the failing path if the
+    program genuinely excludes it, or assert something strictly weaker, and say so;
+  - **skip the property** with the error code and what you tried.
+
+  **Do not respond by moving the rule onto code the prover finds easier.** Calling a private helper
+  instead of the handler, or writing your own copy of the handler's body, makes the run green and
+  the report wrong: the verdict is then about your code, and nobody downstream can see the
+  difference. A blocked property that is honestly skipped is worth more than a green rule about a
+  function you wrote. If you have exhausted the three remedies and still reimplement, you must
+  declare it at publish time — see Step 5 — and expect the judge to hold you to it.
 
 A later `put_harness` invalidates the prover stamp, so finish with a clean `verify_rules()` after
 your *last* edit.
@@ -95,13 +112,17 @@ disagree with.
 
 ## Step 5 — publish
 
-Call `result(commentary, property_rules)`. The gate requires:
+Call `result(commentary, property_rules, rule_subjects)`. The gate requires:
 
 * `verify_rules` stamped the current buffer;
 * the feedback judge accepted the current buffer;
 * every non-skipped property is claimed by at least one rule, every claimed rule is one your draft
   actually declares, and every rule you declared is claimed by some property. Skipped properties
   must not appear.
+* every rule you declared has an entry in `rule_subjects` naming what it drives — the program
+  function it calls, or, if it drives a stand-in you wrote, which program function that stands in
+  for and why the real one could not be called. That declaration is carried into the report, so a
+  reader can tell which verdicts are about the program.
 
 Note the last part: a rule you wrote and never tied to a property will be rejected. Either map it or
 remove it — an unattributed rule costs prover time nobody chose to spend.
@@ -115,7 +136,12 @@ If you genuinely cannot express a property as a rule after serious effort, use
 
 Attempt every property before considering any skip. Legitimate reasons look like: the property needs
 an account model no published crate provides; it is about off-chain behaviour or transaction
-ordering the prover does not see; it needs a loop the prover cannot bound.
+ordering the prover does not see; it needs a loop the prover cannot bound; **the prover cannot
+analyze the handler the property is about, and summarizing and weakening both failed** — name the
+error code and what you tried.
+
+That last one is a real and expected outcome on this backend, not an admission of defeat. A skipped
+property tells the reader the truth about what was and was not checked, which is the deliverable.
 
 **Do not skip a property because it is universally quantified.** `nondet()` is the universal
 quantifier and the prover reasons over every value — that shape is what this tool exists for.

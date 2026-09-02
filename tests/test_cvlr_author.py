@@ -30,7 +30,13 @@ from composer.spec.cvlr.harness import (
     HarnessModule,
     module_name,
 )
-from composer.spec.cvlr.state import PropertyRuleMapping, validate_property_rules
+from composer.spec.cvlr.state import (
+    DrivesHarnessMirror,
+    DrivesProgramFunction,
+    PropertyRuleMapping,
+    validate_property_rules,
+    validate_rule_subjects,
+)
 from composer.spec.cvlr.verify import _unaccounted, _wrongly_expected
 
 DRAFT = """
@@ -103,6 +109,63 @@ def test_a_property_that_is_neither_skipped_nor_mapped_is_rejected():
         DRAFT,
     )
     assert err is not None and "forgotten_one" in err
+
+
+# ---------------------------------------------------------------------------------------------
+# What each rule drives
+#
+# The authoring loop's first real run published two units whose every rule drove a hand-written
+# mirror of the handler — a `fn deposit_balance_update`, a `fn withdraw_logic` — because [3308] made
+# the real handlers unanalyzable. The prover verified them, the judge accepted them, and the only
+# record of the substitution was a doc comment nothing downstream read. The prompts are what stop
+# that happening (`tests/test_cvlr_knowledge.py`); this is what stops it happening *silently*.
+
+
+def test_every_declared_rule_must_say_what_it_drives():
+    err = validate_rule_subjects(
+        [DrivesProgramFunction(rule="rule_solvency", function="crate::vault_program::deposit")],
+        DRAFT,
+    )
+    assert err is not None
+    assert "no_underflow_deposit" in err and "no_underflow_withdraw" in err
+
+
+def test_a_subject_cannot_name_a_rule_the_draft_does_not_declare():
+    err = validate_rule_subjects(
+        [DrivesProgramFunction(rule="rule_solvency_v2", function="crate::f")], DRAFT
+    )
+    assert err is not None and "rule_solvency_v2" in err
+
+
+def test_a_mirror_is_accepted_but_must_say_what_it_stands_in_for():
+    """The point is not to forbid the stand-in — today [3308] leaves no alternative for some
+    handlers — but to make it a declaration rather than a doc comment."""
+    subjects = [
+        DrivesProgramFunction(rule="rule_solvency", function="crate::vault_program::deposit"),
+        DrivesHarnessMirror(
+            rule="no_underflow_withdraw",
+            mirrors="crate::vault_program::withdraw",
+            reason="[3308] on the #[error_code] path; summarizing and weakening both failed",
+        ),
+        DrivesHarnessMirror(
+            rule="no_underflow_deposit",
+            mirrors="crate::vault_program::deposit",
+            reason="[3308] on the #[error_code] path; summarizing and weakening both failed",
+        ),
+    ]
+    assert validate_rule_subjects(subjects, DRAFT) is None
+
+
+def test_a_mirror_declaration_reaches_the_published_artifact():
+    """`expected_failures` set the precedent: a caveat the report needs is carried, not smoothed
+    over. A verdict earned against a stand-in is worth something different from one earned against
+    the program, and the deliverable is the only place a reader can learn which they have."""
+    mirror = DrivesHarnessMirror(
+        rule="rule_solvency", mirrors="crate::vault_program::deposit", reason="[3308]"
+    )
+    published = GeneratedHarness(commentary="c", harness=DRAFT, rule_subjects=[mirror])
+    assert published.rule_subjects == [mirror]
+    assert published.model_dump()["rule_subjects"][0]["subject"] == "harness_mirror"
 
 
 def test_a_skipped_property_may_be_absent_but_not_mapped():
@@ -231,6 +294,7 @@ def _verify_state(draft: str) -> dict:
         "expected_failures": {},
         "skipped": [],
         "property_rules": [],
+        "rule_subjects": [],
         "required_validations": [],
         "validations": {},
         "failed": None,
