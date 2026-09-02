@@ -27,7 +27,7 @@ the write-up gives the line number rather than the name.
 | [P1](#p1) | `Box::new` of a stack-built struct rejected as an illegal stack-pointer store | worked around upstream |
 | [P2](#p2) | Un-inlining a call with no summary kills the job in 3.6s with no diagnostic | major |
 | [P3](#p3) | `solanaOptimisticJoinWithStackPtr` is documented as a conf key and is not one | minor |
-| [P4](#p4) | `-solanaAggressiveGlobalDetection` does not fix the [3308] it is recommended for | **blocking** |
+| [P4](#p4) | `-solanaAggressiveGlobalDetection` does not fix the [3308] it is recommended for | **blocking**, worked around |
 | [U1](#u1) | `extract_job_id_from_url` cannot parse a Solana Prover job link | **major**, worked around |
 | [T1](#t1) | Tuning files are spelled for pre-2.2 `solana-program` paths | major |
 | [T2](#t2) | A canonical tuning file names one specific on-chain program | hygiene |
@@ -254,6 +254,11 @@ So: **blocking**, for any handler that can return a program-defined error — wh
 The misleading remedy is the smaller half of the report. The larger half is that the only workaround
 is a summary for `<Error as Display>::fmt`, which means every Anchor project needs a hand-written
 tuning entry that nothing tells it to write (compare T7).
+
+Worked around here, not fixed: `composer/spec/cvlr/tuning.py` lets the authoring loop add that
+summary itself, so a run is no longer stopped by it. That trades a blocker for an unsoundness the
+run has to declare and the judge has to weigh, which is a worse deal than the prover shipping the
+summary in its core env file.
 
 ## U1
 

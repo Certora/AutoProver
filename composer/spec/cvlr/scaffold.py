@@ -192,6 +192,11 @@ class ScaffoldPlan:
     #: already there" look identical in a diff and mean opposite things.
     satisfied: tuple[str, ...]
     blocked: tuple[Blocked, ...]
+    #: How platform paths must be spelled for this target's generation. Carried rather than
+    #: recomputed: the authoring loop rewrites a tuning file when it adds a summary
+    #: (:mod:`composer.spec.cvlr.tuning`), and it has to compose that file the same way this plan
+    #: did — a second derivation is a second chance to disagree.
+    dialect: PathDialect = PathDialect()
 
     def describe(self) -> str:
         lines = [f"CVLR scaffold for {self.package}:"]
@@ -714,13 +719,14 @@ def plan_scaffold(
     """
     relative = _project_relative(package.root, workspace.root)
     inherit = "workspace" in _read_toml(workspace.root / "Cargo.toml")
+    dialect = dialect_for(workspace, reference)
 
     changes: list[Change] = []
     satisfied: list[str] = []
     for planned, notes in (
         _plan_workspace_manifest(workspace, reference),
         _plan_harness(package, relative),
-        _plan_envs(package, relative, dialect_for(workspace, reference)),
+        _plan_envs(package, relative, dialect),
         _plan_gitignore(workspace),
     ):
         changes += planned
@@ -746,6 +752,7 @@ def plan_scaffold(
         changes=tuple(changes + manifest_changes),
         satisfied=tuple(satisfied + manifest_notes),
         blocked=tuple(blocked),
+        dialect=dialect,
     )
 
 

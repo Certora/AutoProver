@@ -49,7 +49,11 @@ from composer.authoring.judge import (
     RebuttalBase,
     build_feedback_judge,
 )
-from composer.authoring.state import SkippedProperty, make_validation_stamper
+from composer.authoring.state import (
+    SkippedProperty,
+    ValidationStamper,
+    make_validation_stamper,
+)
 from composer.authoring.tools import give_up_tool, skip_tools
 from composer.diagnostics.budget import (
     BudgetExceeded,
@@ -70,6 +74,7 @@ from composer.spec.cvlr.state import (
     PropertyRuleMapping,
     RuleSubject,
     check_cvlr_completion,
+    tuning_history,
     validate_property_rules,
     validate_rule_subjects,
 )
@@ -194,7 +199,7 @@ class Rebuttal(RebuttalBase):
 @dataclasses.dataclass
 class FeedbackDependencies:
     thunk: FeedbackThunk[Rebuttal]
-    stamper: object
+    stamper: ValidationStamper
 
 
 @tool_display("Getting feedback", "Feedback")
@@ -234,7 +239,7 @@ class FeedbackTool(
             message = f"Good? {verdict.good}\nFeedback {verdict.feedback}"
             if not verdict.good:
                 return message
-            stamp = make_validation_stamper(FEEDBACK)(self.state)
+            stamp = deps.stamper(self.state, tuning_history(self.state))
         return tool_state_update(self.tool_call_id, message, validations=stamp)
 
 
@@ -596,6 +601,7 @@ async def batch_cvlr_generation(
         skipped=[],
         property_rules=[],
         rule_subjects=[],
+        summaries=[],
         validations={},
         expected_failures={},
         failed=None,
@@ -631,6 +637,7 @@ async def batch_cvlr_generation(
         skipped=res_state["skipped"],
         property_rules=res_state["property_rules"],
         rule_subjects=res_state["rule_subjects"],
+        summaries=res_state["summaries"],
         expected_failures=res_state["expected_failures"],
         declared_rules=list(rule_names(draft)),
         final_link=res_state.get("prover_link"),

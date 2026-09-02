@@ -17,27 +17,34 @@ what makes it testable in the routine env — and the machinery is where the int
 from pathlib import Path
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
 
-from composer.authoring.state import SkippedProperty
+from composer.authoring.state import SkippedProperty, make_validation_stamper, spec_digest
 from composer.spec.cvlr.conf import RunOverlay, SelectRules, solana_conf
 from composer.spec.cvlr.prover import Submission as CvlrSubmission
 from composer.spec.cvlr.harness import (
+    DELIVERABLE_DIR,
     CvlrArtifactStore,
     GeneratedHarness,
     HarnessModule,
     module_name,
 )
 from composer.spec.cvlr.state import (
+    PROVER_VALIDATION_KEY,
     DrivesHarnessMirror,
     DrivesProgramFunction,
     PropertyRuleMapping,
     validate_property_rules,
     validate_rule_subjects,
 )
+from composer.spec.cvlr.tuning import SummaryDirective
+from composer.spec.cvlr import verify as verify_mod
 from composer.spec.cvlr.verify import _unaccounted, _wrongly_expected
+
+_DRAFT_NO_RULES = "//! Every property blocked; see the skips.\n"
 
 DRAFT = """
 use cvlr::prelude::*;
@@ -156,6 +163,34 @@ def test_a_mirror_is_accepted_but_must_say_what_it_stands_in_for():
     assert validate_rule_subjects(subjects, DRAFT) is None
 
 
+def test_an_all_skipped_unit_can_satisfy_the_prover_gate():
+    """The wall the honest exit ran into. A unit whose every property is blocked declares no rules,
+    so `verify_rules` refused it, so no stamp, so `result` refused it, so `give_up` was the only way
+    out — and a considered "nothing here is formalizable, and here is why" got reported as a
+    failure. Measured: two of three units in an end-to-end run ended exactly this way."""
+    state = _verify_state(_DRAFT_NO_RULES)
+    state["skipped"] = [SkippedProperty(property_title="p", reason="[3308] on the handler")]
+    deps = SimpleNamespace(stamper=make_validation_stamper(PROVER_VALIDATION_KEY))
+    token = verify_mod.VerifyRules._dep_ctx.set(deps)
+    try:
+        tool = verify_mod.VerifyRules(state=state, tool_call_id="tc")
+        stamped = tool._nothing_to_submit()
+    finally:
+        verify_mod.VerifyRules._dep_ctx.reset(token)
+    assert not isinstance(stamped, str), stamped
+    assert stamped.update["validations"][PROVER_VALIDATION_KEY] == spec_digest(
+        _DRAFT_NO_RULES, state["skipped"], ()
+    )
+
+
+def test_a_draft_with_no_rules_and_no_skips_is_still_unfinished():
+    """The other half, and the reason stamping the first case is safe rather than a hole: an empty
+    draft with nothing declared and nothing skipped has said nothing at all."""
+    tool = verify_mod.VerifyRules(state=_verify_state(_DRAFT_NO_RULES), tool_call_id="tc")
+    answer = tool._nothing_to_submit()
+    assert isinstance(answer, str) and "nothing to check" in answer
+
+
 def test_a_mirror_declaration_reaches_the_published_artifact():
     """`expected_failures` set the precedent: a caveat the report needs is carried, not smoothed
     over. A verdict earned against a stand-in is worth something different from one earned against
@@ -166,6 +201,28 @@ def test_a_mirror_declaration_reaches_the_published_artifact():
     published = GeneratedHarness(commentary="c", harness=DRAFT, rule_subjects=[mirror])
     assert published.rule_subjects == [mirror]
     assert published.model_dump()["rule_subjects"][0]["subject"] == "harness_mirror"
+
+
+def test_the_declarations_are_written_to_disk_and_not_just_to_the_checkpoint(tmp_path):
+    """They reached the checkpoint and died there: an end-to-end run published seven rules with
+    their subjects correctly declared, and nothing in `certora/cvlr/` said so. The base store writes
+    the module, the commentary and the property map — neither of this backend's two claims is any of
+    those."""
+    store = CvlrArtifactStore(tmp_path, Path("programs/vault"))
+    published = GeneratedHarness(
+        commentary="c",
+        harness=DRAFT,
+        rule_subjects=[
+            DrivesProgramFunction(rule="rule_solvency", function="crate::vault_program::deposit")
+        ],
+        summaries=[SummaryDirective(pattern="^<vault::E as Display>::fmt$", why="[3308]")],
+    )
+    store.write_artifact(HarnessModule(slug="deposits"), published)
+    written = json.loads(
+        (tmp_path / DELIVERABLE_DIR / "properties" / "cvlr_deposits.assumptions.json").read_text()
+    )
+    assert written["rule_subjects"][0]["function"] == "crate::vault_program::deposit"
+    assert written["summaries"][0]["why"] == "[3308]"
 
 
 def test_a_skipped_property_may_be_absent_but_not_mapped():
@@ -295,6 +352,7 @@ def _verify_state(draft: str) -> dict:
         "skipped": [],
         "property_rules": [],
         "rule_subjects": [],
+        "summaries": [],
         "required_validations": [],
         "validations": {},
         "failed": None,
