@@ -505,5 +505,23 @@ def test_the_author_is_told_a_directive_can_match_nothing():
     """Otherwise the only feedback is a repeat of the same error, and the response to that is to
     guess another spelling — which is what happened five times in one unit."""
     prompt = _flat(_author_task_prompt())
-    assert "matched **no symbol in the build**" in prompt
-    assert "inlined away and no respelling will find it" in prompt
+    assert "matched **no symbol at all**" in prompt
+    assert "the library function one level out" in prompt
+
+
+def test_no_specific_symbol_is_offered_as_a_worked_example():
+    """The example this replaces named `<vault::VaultError as core::fmt::Display>::fmt`, which is in
+    no build of that program — the compiler inlines it. Two separate runs wrote it because the
+    prompt did, kept it after being told it matched nothing, and paid a submission each time. A
+    prompt cannot know a build's symbols; the report can, so it is the report's job."""
+    prompt = _flat(_author_task_prompt())
+    assert "VaultError" not in prompt
+
+
+def test_the_author_is_told_when_to_stop_summarizing():
+    """Nothing bounded the remedy, so it did not stop: eleven directives over nine submissions,
+    seven matching real symbols, walking a formatting chain frame by frame while the error stayed
+    identical. The code was inlined into the handler, where no summary reaches."""
+    prompt = _flat(_author_task_prompt())
+    assert "Give up on this remedy after about three directives down one path" in prompt
+    assert "inlined *into the handler itself*" in prompt
