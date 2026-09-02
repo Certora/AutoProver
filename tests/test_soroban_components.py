@@ -164,11 +164,11 @@ def test_unit_resolves_functions_and_durability_tagged_storage():
 
 
 def test_well_formed_application_validates():
-    assert _soroban_validate(_app(), VAULT_ID) is None
+    assert _soroban_validate(_app(), VAULT_ID, None) is None
 
 
 def test_expected_main_is_required():
-    problem = _soroban_validate(_app(), RustIdentifier("not_the_vault"))
+    problem = _soroban_validate(_app(), RustIdentifier("not_the_vault"), None)
     assert problem is not None and "not_the_vault" in problem
 
 
@@ -176,7 +176,7 @@ def test_duplicate_component_names_rejected():
     def dup(raw):
         _components(raw)[1]["name"] = "Deposits"
 
-    problem = _soroban_validate(_app(dup), VAULT_ID)
+    problem = _soroban_validate(_app(dup), VAULT_ID, None)
     assert problem is not None and "Duplicate component names in Vault: Deposits" in problem
 
 
@@ -184,7 +184,7 @@ def test_component_slug_collision_rejected():
     def collide(raw):
         _components(raw)[1]["name"] = "Deposits!"
 
-    problem = _soroban_validate(_app(collide), VAULT_ID)
+    problem = _soroban_validate(_app(collide), VAULT_ID, None)
     assert problem is not None and "filename slug" in problem
 
 
@@ -192,7 +192,7 @@ def test_unknown_function_reference_rejected():
     def typo(raw):
         _components(raw)[0]["functions"] = ["initialize", "depsoit"]
 
-    problem = _soroban_validate(_app(typo), VAULT_ID)
+    problem = _soroban_validate(_app(typo), VAULT_ID, None)
     assert problem is not None
     assert "lists a function 'depsoit' that Vault does not declare" in problem
 
@@ -201,7 +201,7 @@ def test_function_belonging_to_no_component_rejected():
     def orphan(raw):
         _components(raw)[0]["functions"] = ["initialize"]  # drops `deposit`
 
-    problem = _soroban_validate(_app(orphan), VAULT_ID)
+    problem = _soroban_validate(_app(orphan), VAULT_ID, None)
     assert problem is not None and "'deposit'" in problem and "belong to no component" in problem
 
 
@@ -209,7 +209,7 @@ def test_a_function_may_serve_two_components():
     def overlap(raw):
         _components(raw)[1]["functions"] = ["withdraw", "initialize"]
 
-    assert _soroban_validate(_app(overlap), VAULT_ID) is None
+    assert _soroban_validate(_app(overlap), VAULT_ID, None) is None
 
 
 def test_a_contract_with_no_functions_needs_no_components():
@@ -217,7 +217,7 @@ def test_a_contract_with_no_functions_needs_no_components():
         _contract(raw)["functions"] = []
         _contract(raw)["components"] = []
 
-    assert _soroban_validate(_app(empty), VAULT_ID) is None
+    assert _soroban_validate(_app(empty), VAULT_ID, None) is None
 
 
 @pytest.mark.parametrize(
@@ -239,7 +239,7 @@ def test_unresolvable_interactions_rejected(interaction, expected):
     def point_nowhere(raw):
         _components(raw)[0]["interactions"] = [interaction]
 
-    problem = _soroban_validate(_app(point_nowhere), VAULT_ID)
+    problem = _soroban_validate(_app(point_nowhere), VAULT_ID, None)
     assert problem is not None and expected in problem
 
 
@@ -262,7 +262,7 @@ def test_unknown_storage_key_reference_rejected():
     def typo(raw):
         _components(raw)[1]["storage_keys"] = ["Blance(Address)"]
 
-    problem = _soroban_validate(_app(typo), VAULT_ID)
+    problem = _soroban_validate(_app(typo), VAULT_ID, None)
     assert problem is not None
     assert "lists a storage key 'Blance(Address)'" in problem
 
@@ -278,7 +278,7 @@ def test_a_key_declared_under_two_durabilities_rejected():
             }
         )
 
-    problem = _soroban_validate(_app(shadow), VAULT_ID)
+    problem = _soroban_validate(_app(shadow), VAULT_ID, None)
     assert problem is not None
     assert "declared twice in Vault" in problem and "separate key spaces" in problem
 
@@ -287,7 +287,7 @@ def test_a_component_need_not_claim_every_storage_key():
     def drop(raw):
         _components(raw)[0]["storage_keys"] = []
 
-    assert _soroban_validate(_app(drop), VAULT_ID) is None
+    assert _soroban_validate(_app(drop), VAULT_ID, None) is None
 
 
 def test_soroban_is_registered_and_locates_its_main():

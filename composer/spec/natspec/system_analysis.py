@@ -40,6 +40,7 @@ async def run_component_analysis[A: NatspecApplication](
         env=tools,
         extra_input=[],
         input=input,
+        project_root=mental_model.source_root,
         system_template=ecosystem.analysis_prompts.system,
         initial_template=ecosystem.analysis_prompts.initial,
         validate=validate_solidity_connectivity,

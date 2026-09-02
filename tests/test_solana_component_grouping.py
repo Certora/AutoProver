@@ -209,6 +209,7 @@ async def test_component_grouping_on_a_real_program(pg_container: "PostgresConta
                 env=env,
                 extra_input=list(SOLANA.analysis_extra_input(source)),
                 expected_main_id=source.contract_name,
+                project_root=Path(source.project_root),
                 system_template=SOLANA.analysis_prompts.system,
                 initial_template=SOLANA.analysis_prompts.initial,
                 validate=SOLANA.validate_analysis,
@@ -223,4 +224,4 @@ async def test_component_grouping_on_a_real_program(pg_container: "PostgresConta
     # analysis loop already enforced via retry — re-asserted here so a regression is loud).
     main = next(p for p in analyzed.programs if p.program_identifier == main_id)
     assert main.components, "the main program came back with no components"
-    assert SOLANA.validate_analysis(analyzed, source.contract_name) is None
+    assert SOLANA.validate_analysis(analyzed, source.contract_name, None) is None

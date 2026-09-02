@@ -20,3 +20,19 @@ system/design document
 {{ impl_noun }}
 {%- endif -%}
 {%- endmacro %}
+
+{#- The path convention every path field in the analysis result is written in. The system model's
+    ``path`` descriptions state the same frame; this macro is where the agent is told how to
+    *obtain* a conforming path, which the field description has no room for.
+
+    IMPORT WITH CONTEXT: {% raw %}{% from "shared/analysis_macros.j2" import path_convention with context %}{% endraw %}
+    for the same reason ``input_phrase`` is imported that way — the macro's callers are all inside
+    ``sort != "greenfield"`` branches, and a context-free import leaves the render params Undefined
+    for anything added here later. -#}
+{% macro path_convention() -%}
+Paths are relative to the **project root** — exactly the paths `list_files` prints and `get_file`
+accepts. Copy the path out of your own tool output rather than assembling one from an import
+statement, a remappings entry, or a build tool's configured source directory. The project root is
+not necessarily the directory the build is configured in: a repository may hold the build project
+one or more directories down, and every path you report still carries that leading directory.
+{%- endmacro %}

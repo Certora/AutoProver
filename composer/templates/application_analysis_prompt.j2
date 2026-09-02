@@ -1,4 +1,4 @@
-{% from "shared/analysis_macros.j2" import input_phrase with context %}
+{% from "shared/analysis_macros.j2" import input_phrase, path_convention with context %}
 
 # Background
 
@@ -57,7 +57,8 @@ its role within the larger application.
 
 {% if sort != "greenfield" %}
 If application/possible, provide the relative path to the Solidity file which contains the definition of the interface
-describing this external actor.
+describing this external actor. {{ path_convention() }}
+If you cannot locate that file, omit the path rather than guessing at one.
 {% endif %}
 
 Finally, for each such external actor, extract the assumptions/requirements about the external actors behavior.
@@ -108,7 +109,7 @@ of `registerNewMarket(address marketProxy)`) then the classification should be `
 
 {% if sort != "greenfield" %}
 As part of your extraction, provide the relative path to the Solidity file which contains the definition of the
-contract you are describing.
+contract you are describing. {{ path_convention() }}
 {% endif %}
 
 In addition, each explicit contract should have an associated list of "Contract Components" that comprise it.
