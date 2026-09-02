@@ -40,7 +40,7 @@ from composer.authoring.state import (
 )
 from composer.spec.context import CacheKey, CvlrGeneration, CvlrJudge
 from composer.spec.cvlr.rules import rule_names
-from composer.spec.cvlr.tuning import SummaryDirective, summary_history
+from composer.spec.cvlr.tuning import SummaryDirective, merge_summaries, summary_history
 from composer.spec.types import CheckName, PropertyTitle, RuleName
 
 #: Stamped by the prover gate when a run comes back with every rule accounted for. There is
@@ -134,9 +134,9 @@ class CvlrGenerationExtra(AuthoringExtra):
     property_rules: list[PropertyRuleMapping]
     #: One entry per declared rule, naming what it drives. See :data:`RuleSubject`.
     rule_subjects: list[RuleSubject]
-    #: Points-to summaries the author added, in the order added. Replaced wholesale rather than
-    #: merged: the tool hands back the full list so the state and the file on disk cannot drift.
-    summaries: list[SummaryDirective]
+    #: Points-to summaries the author added, in the order added, deduplicated by pattern. Reduced
+    #: rather than replaced: several ``summarize_for_prover`` calls can land in one graph step.
+    summaries: Annotated[list[SummaryDirective], merge_summaries]
     expected_failures: Annotated[dict[CheckName, str], merge_expected_failures]
     #: The job link from the most recent prover run that produced results, whether or not it was
     #: all green — a link to a failing run is still the most useful thing a report can offer.
