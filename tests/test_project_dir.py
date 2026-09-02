@@ -5,8 +5,12 @@ The interesting layout is a monorepo run from the repo root: the Foundry project
 has to be found by walking up from the contract rather than by looking where the run began.
 """
 
+import json
 from pathlib import Path
 
+from certora_autosetup.build_systems.foundry import FoundryManager
+from certora_autosetup.build_systems.hardhat import HardhatManager
+from certora_autosetup.build_systems.truffle import TruffleManager
 from certora_autosetup.utils.project_dir import (
     describe_build_config_dir,
     find_build_config_dir,
@@ -149,6 +153,101 @@ def test_artifacts_without_recorded_sources_keep_the_nearest_built_config(tmp_pa
     (pkg / "out" / "Widget.sol" / "Widget.json").write_text('{"abi": []}')
 
     assert find_build_config_dir(contract, tmp_path) == pkg.resolve()
+
+
+def _truffle_artifact(build_dir: Path, name: str, source: Path) -> None:
+    """Write a Truffle artifact. Its `sourcePath` is the absolute path the source had on the
+    machine that compiled it, which is what separates it from the other two build systems."""
+    build_dir.mkdir(parents=True, exist_ok=True)
+    (build_dir / f"{name}.json").write_text(
+        json.dumps({"contractName": name, "sourcePath": str(source), "bytecode": "0x60"})
+    )
+
+
+def test_truffle_shared_build_dir_resolves_to_the_project_that_wrote_it(tmp_path: Path) -> None:
+    # The Truffle spelling of the shared-artifact-directory problem. Both configs answer for the
+    # same default build/contracts/, only the root ran, and its artifacts name sources under the
+    # root — so pkg/ is holding somebody else's output.
+    (tmp_path / "truffle-config.js").write_text("module.exports = {};")
+    pkg = tmp_path / "pkg"
+    (pkg / "contracts").mkdir(parents=True)
+    (pkg / "truffle-config.js").write_text("module.exports = {};")
+    contract = pkg / "contracts" / "Widget.sol"
+    contract.write_text("contract Widget {}")
+    root_source = tmp_path / "contracts" / "Widget.sol"
+    root_source.parent.mkdir(parents=True)
+    root_source.write_text("contract Widget {}")
+    _truffle_artifact(pkg / "build" / "contracts", "Widget", root_source)
+
+    assert find_build_config_dir(contract, tmp_path) == tmp_path.resolve()
+
+
+def test_truffle_project_that_wrote_its_own_artifacts_still_wins(tmp_path: Path) -> None:
+    # The counterpart, so the absolute-path test is containment and not a blanket rejection.
+    (tmp_path / "package.json").write_text("{}")
+    pkg = tmp_path / "pkg"
+    (pkg / "contracts").mkdir(parents=True)
+    (pkg / "truffle-config.js").write_text("module.exports = {};")
+    contract = pkg / "contracts" / "Widget.sol"
+    contract.write_text("contract Widget {}")
+    _truffle_artifact(pkg / "build" / "contracts", "Widget", contract)
+
+    assert find_build_config_dir(contract, tmp_path) == pkg.resolve()
+
+
+def test_an_absolute_source_outside_the_candidate_is_not_ownership(tmp_path: Path) -> None:
+    # An absolute recorded path has to be tested for containment. Joining it onto the candidate
+    # would discard the candidate entirely under pathlib, so a source that exists somewhere else
+    # on disk would read as proof that this directory built it.
+    root = tmp_path / "repo"
+    (root / "contracts").mkdir(parents=True)
+    (root / "truffle-config.js").write_text("module.exports = {};")
+    contract = root / "contracts" / "Widget.sol"
+    contract.write_text("contract Widget {}")
+    elsewhere = tmp_path / "elsewhere" / "Widget.sol"
+    elsewhere.parent.mkdir(parents=True)
+    elsewhere.write_text("contract Widget {}")
+    _truffle_artifact(root / "build" / "contracts", "Widget", elsewhere)
+
+    assert TruffleManager.artifacts_belong_to(root, root / "build" / "contracts") is False
+
+
+def test_hardhat_sidecars_are_not_read_as_source_records(tmp_path: Path) -> None:
+    # `.dbg.json` and build-info/ sit in the same tree as the artifacts and record no source of
+    # their own; the `_format` stamp is what tells them apart.
+    artifacts = tmp_path / "artifacts"
+    (artifacts / "contracts" / "Widget.sol").mkdir(parents=True)
+    (artifacts / "contracts" / "Widget.sol" / "Widget.dbg.json").write_text(
+        '{"buildInfo": "../../build-info/1234.json"}'
+    )
+    (artifacts / "build-info").mkdir(parents=True)
+    (artifacts / "build-info" / "1234.json").write_text('{"solcVersion": "0.8.20"}')
+
+    assert HardhatManager.recorded_source(json.loads('{"buildInfo": "x"}')) is None
+    # Nothing in the tree records a source, so the directory cannot say whose it is.
+    assert HardhatManager.artifacts_belong_to(tmp_path, artifacts) is True
+
+
+def test_hardhat_artifact_names_its_source(tmp_path: Path) -> None:
+    artifacts = tmp_path / "artifacts"
+    (artifacts / "contracts" / "Widget.sol").mkdir(parents=True)
+    (artifacts / "contracts" / "Widget.sol" / "Widget.json").write_text(
+        json.dumps({"_format": "hh-sol-artifact-1", "sourceName": "contracts/Widget.sol"})
+    )
+    (tmp_path / "contracts").mkdir()
+    (tmp_path / "contracts" / "Widget.sol").write_text("contract Widget {}")
+
+    assert HardhatManager.artifacts_belong_to(tmp_path, artifacts) is True
+    assert HardhatManager.artifacts_belong_to(tmp_path / "pkg", artifacts) is False
+
+
+def test_foundry_artifact_covering_several_sources_names_none(tmp_path: Path) -> None:
+    # compilationTarget with more than one entry does not identify a single source, so it says
+    # nothing about which project wrote the artifact.
+    both = {"a/A.sol": "A", "b/B.sol": "B"}
+    assert FoundryManager.recorded_source({"metadata": {"settings": {"compilationTarget": both}}}) is None
+    assert FoundryManager.recorded_source({"abi": []}) is None
+    assert TruffleManager.recorded_source({"contractName": "Widget"}) is None
 
 
 def test_honors_a_custom_foundry_out_dir(tmp_path: Path) -> None:

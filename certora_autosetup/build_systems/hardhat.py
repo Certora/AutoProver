@@ -394,6 +394,16 @@ class HardhatManager(BuildSystemManager):
         return (any((artifacts_dir / "contracts").rglob("*.json"))
                 or any((artifacts_dir / "build-info").glob("*.json")))
 
+    @staticmethod
+    def recorded_source(artifact: dict) -> Optional[str]:
+        """Hardhat records it as a project-relative `sourceName`. The `_format` stamp is what
+        separates a real artifact from the `.dbg.json` sidecars and the solc standard-json
+        under `build-info/`, which sit in the same tree and carry no source of their own."""
+        if artifact.get("_format") != "hh-sol-artifact-1":
+            return None
+        source_name = artifact.get("sourceName")
+        return source_name if isinstance(source_name, str) else None
+
     def filter_artifacts(self, artifacts_dir: Path) -> List[Path]:
         """
         Filter Hardhat artifacts - only contracts/, exclude .dbg.json and build-info/.
