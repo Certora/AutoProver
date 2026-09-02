@@ -5,10 +5,12 @@ programs, and every entry is reproducible. Nothing here is filed anywhere yet �
 so that routing is a decision somebody makes rather than one I guess at, since the two groups below
 belong in different places and one of them cannot be public.
 
-**Group P — the Solana Prover.** Closed source, so these can only be reported. **None of them blocks
-Anchor verification on the path real specs use**, and an earlier draft of this file said P1 did. Production verifies
-Anchor programs by depending on `Certora/anchor`, a maintained fork whose `Error` is unboxed — see P1
-for how that was missed and what is left of the defect.
+**Group P — the Solana Prover.** Closed source, so these can only be reported. Two of them have been
+downgraded after the fact and one has replaced them, which is worth stating plainly because this file
+was wrong twice in the same direction. P1 does not block: production depends on `Certora/anchor`, a
+maintained fork whose `Error` is unboxed. P4 does not block either, and the cause turned out to be
+our own author prompt rather than the prover — see its correction. **P6 does block**, for any handler
+that performs a CPI and then updates its own state, which is most of them; it is the live one.
 
 **Group U — `prover_output_utility`.** The library the report stack reads verdicts through. One
 entry, and unlike the others it was corrupting our own output rather than merely obstructing us;
@@ -29,6 +31,7 @@ the write-up gives the line number rather than the name.
 | [P3](#p3) | `solanaOptimisticJoinWithStackPtr` is documented as a conf key and is not one | minor |
 | [P4](#p4) | `-solanaAggressiveGlobalDetection` does not fix the [3308] it is recommended for, and neither does any summary | minor — **not** blocking; see the correction |
 | [P5](#p5) | A [3308] in the generated vacuity check is reported as a clean `VERIFIED` when `rule_sanity` is off | **critical** |
+| [P6](#p6) | A summarized CPI havocs the caller's *deserialized* `Account<T>`, not just the account buffer | **blocking** for any handler with a CPI |
 | [U1](#u1) | `extract_job_id_from_url` cannot parse a Solana Prover job link | **major**, worked around |
 | [T1](#t1) | Tuning files are spelled for pre-2.2 `solana-program` paths | major |
 | [T2](#t2) | A canonical tuning file names one specific on-chain program | hygiene |
@@ -400,6 +403,58 @@ form verify too, measured on a locally patched fork: both rules VERIFIED, both v
 VERIFIED. That would restore failure-path reasoning, and it is a small PR to a repository Certora
 owns. `certora-v0.29.0` and `certora-v0.31.1` are byte-identical at all four sites, so one change
 applies across branches.
+
+## P6
+
+### A summarized CPI havocs the caller's deserialized `Account<T>`, not just the account buffer
+
+The blocker that replaced [3308] once the idiom in P4 was fixed. It cost **six of seven** properties
+in one component of an end-to-end run, and unlike P4 it is not ours.
+
+A cross-program invocation is replaced by an unconstrained stand-in — sound and expected, and a
+property about what the CPI *did* is legitimately out of reach. That is not the complaint. The
+complaint is what else the stand-in is allowed to change.
+
+An Anchor `Account<T>` is a **deserialized copy** of the account's bytes, living in the caller's own
+memory. A CPI receives `AccountInfo`s, so havocking the account *data buffers* they point at is
+correct. It cannot reach the caller's deserialized copy — nothing in the real execution writes to it
+across the call. The prover's pointer analysis appears to conflate the two, so after
+`invoke_signed_unchecked` the fields of the caller's `Account<VaultState>` are unconstrained.
+
+**The witness, from the run's own account of it.** A deposit handler transfers lamports by CPI and
+then updates one field:
+
+```rust
+// the CPI, then:
+vault.balance = vault.balance.checked_add(amount).ok_or(VaultError::Overflow)?;
+```
+
+The handler never writes `vault.authority` or `vault.bump`. The counterexamples show them changing
+anyway — one reported `bump` changing across a deposit of `amount = 0`, which no execution of this
+program can produce. Properties lost to it: exact balance increment, PDA canonicality, authority
+unchanged, bump unchanged, overflow reverts, and lamport/balance consistency.
+
+**Three remedies were attempted and recorded, none of which works:**
+
+1. `fun_acc_infos_with_mem_layout`, to pin the accounts at fixed memory addresses — produces *vacuous*
+   rules, because the layout constraints conflict with `Account::try_from`'s validation. Caught by
+   `rule_sanity`, which is the P5 defense doing its job.
+2. `is_u64` range constraints on the deserialized fields — no effect.
+3. A points-to summary for `solana_system_interface::instruction::transfer` — no effect, and the
+   reason is instructive: the havoc originates in `invoke_signed_unchecked`, which is *already*
+   summarized, so there is nothing further to summarize.
+
+**What would resolve it**: let the CPI stand-in havoc the account data buffers without havocking
+caller-local deserialized copies of them — or, failing a general fix, give the tuning files a way to
+say "this CPI does not write account X's data", which is exactly what a `system_program::transfer`
+guarantees.
+
+**Why this one matters commercially.** Nearly every non-trivial Solana handler does a CPI — a token
+transfer, a system-program transfer, a sysvar read — and then updates its own state. That is the shape
+this defeats. It bounds a much larger class of programs than [3308] ever did, and unlike [3308] there
+is no harness idiom that works around it: the run tried three and said so.
+
+---
 
 ## U1
 
