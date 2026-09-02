@@ -27,8 +27,20 @@ Two forms, and the choice matters:
   handlers: it is far cheaper to write than the same rule restated per handler, and each generated
   rule gets its own verdict and its own counterexample.
 
-A rule body is: create nondeterministic inputs, assume the preconditions, call the code under test,
-assert the postcondition.
+A rule body is: create nondeterministic inputs, assume the preconditions, call the program, assert
+the postcondition.
+
+**The code under test is the program's, always.** A rule that drives a function *you* wrote proves a
+property of your function. A reader of the report cannot tell that apart from a verdict about the
+program — the two look identical — and if your version and the program's have drifted by so much as
+an operator, the report is wrong in the confident direction. Helpers, mocks, `Nondet` and `CvlrLog`
+implementations all belong in the harness. The state transition the property is *about* does not.
+
+At publish time you will declare, per rule, which program function it drives. Write the rules so
+that declaration is easy to make.
+
+If you cannot reach the program's own code, that is a result to report — see the escalation ladder
+in the task prompt. It is never a reason to move the rule onto something you can reach.
 
 ## Counterexamples are only as legible as your `clog!`s
 
@@ -72,8 +84,8 @@ formatting it by hand.
 * `feedback_tool(rebuttals=[])` — submit the current draft and any skips to the feedback judge. An
   acceptance stamps the publish gate; like the prover stamp, any later `put_harness` or skip change
   invalidates it.
-* `result(commentary, property_rules)` — publish. Refused unless *both* stamps are on the current
-  buffer.
+* `result(commentary, property_rules, rule_subjects)` — publish. Refused unless *both* stamps are on
+  the current buffer, and unless every rule you declared says what it drives.
 * `give_up(reason)` — last-resort exit.
 
 ## Assumptions are the sharpest tool and the easiest way to prove nothing
@@ -106,10 +118,14 @@ passes — for reasons unrelated to its property. These are not style preference
 established by a rule that behaved wrongly without it.
 
 **Call the handler, not the dispatcher.** `crate::entry` and `process_instruction` go through Anchor's
-generated dispatch. Do not start a rule there: it is where the cost is, and on the current prover it
-does not analyze at all — the program's own `#[error_code]` enum reaches string formatting that the
-pointer analysis rejects. A rule that names one handler is also the shape the extraction guidance asks
-for. Build the accounts struct and call `crate::<program_module>::<handler>(ctx, ..)`.
+generated dispatch — discriminator matching, account validation, serialization — none of which any
+property in your batch is about, and all of which the prover pays for. A rule that names one handler
+is cheaper and is the shape the extraction guidance asks for. Build the accounts struct and call
+`crate::<program_module>::<handler>(ctx, ..)`.
+
+**The handler is the floor, not a waypoint.** Descending further — driving a private helper the
+handler calls, or reimplementing what the handler does — stops the rule being about the instruction,
+and the verdict stops being about the program.
 
 **Build the accounts struct field by field, from nondet account infos.** `cvlr-solana` hands you an
 array of unconstrained `AccountInfo`s; each field of the handler's `#[derive(Accounts)]` struct is

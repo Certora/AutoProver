@@ -68,8 +68,10 @@ from composer.spec.cvlr.state import (
     CvlrGenerationInput,
     CvlrGenerationState,
     PropertyRuleMapping,
+    RuleSubject,
     check_cvlr_completion,
     validate_property_rules,
+    validate_rule_subjects,
 )
 from composer.spec.cvlr.verify import (
     ExpectRuleFailure,
@@ -373,6 +375,11 @@ class PublishResultTool(
     property_rules: list[PropertyRuleMapping] = Field(
         description="The property→rules mapping, for every property you did not skip."
     )
+    rule_subjects: list[RuleSubject] = Field(
+        description="One entry per rule your draft declares, saying what that rule drives: the "
+        "program function it calls, or — if it drives a stand-in you wrote in the harness — which "
+        "program function that stands in for and why you could not call the real one."
+    )
 
     @override
     async def run(self) -> Command | str:
@@ -387,6 +394,8 @@ class PublishResultTool(
                 err = validate_property_rules(
                     self.property_rules, self.state["skipped"], titles, draft
                 )
+            if err is None:
+                err = validate_rule_subjects(self.rule_subjects, draft)
             if err is not None:
                 return err
         return tool_state_update(
@@ -394,6 +403,7 @@ class PublishResultTool(
             "Accepted",
             result=self.commentary,
             property_rules=self.property_rules,
+            rule_subjects=self.rule_subjects,
             failed=False,
         )
 
@@ -585,6 +595,7 @@ async def batch_cvlr_generation(
         required_validations=[PROVER_VALIDATION_KEY, FEEDBACK],
         skipped=[],
         property_rules=[],
+        rule_subjects=[],
         validations={},
         expected_failures={},
         failed=None,
@@ -619,6 +630,7 @@ async def batch_cvlr_generation(
         harness=draft,
         skipped=res_state["skipped"],
         property_rules=res_state["property_rules"],
+        rule_subjects=res_state["rule_subjects"],
         expected_failures=res_state["expected_failures"],
         declared_rules=list(rule_names(draft)),
         final_link=res_state.get("prover_link"),

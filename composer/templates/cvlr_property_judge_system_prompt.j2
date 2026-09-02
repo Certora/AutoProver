@@ -7,34 +7,51 @@ be stale; the tool is authoritative.
 
 ## What to look for, in order of how often it goes wrong
 
-1. **Vacuity and over-assumption.** `cvlr_assume!` restricts the states considered, so an assumption
+1. **What code is actually under test.** For each rule, name the function it drives and check that
+   the program defines it. A rule that calls a helper the *harness* defines — however carefully
+   written, however faithfully it claims to mirror a handler — proves a property of that helper. The
+   prover will verify it, the assertion will match the property's words, and the report will read
+   exactly like a verification of the program.
+
+   This is the most common way a green CVLR harness is worthless, and unlike vacuity it leaves no
+   trace in the verdict. The tell is a `fn` in the harness whose body reproduces program logic,
+   usually with a comment explaining that the real handler could not be analyzed. Reject it: the
+   remedies are to summarize the offending call, weaken the rule to something reachable, or skip the
+   property and say why — never to reimplement. Accept a stand-in only when the author has named it
+   as one, said which program function it stands in for, and given a reason you judge sound; then
+   require that the commentary carry that caveat, because the report is where it has to land.
+
+   Descending below the handler counts too: a rule that drives a private function the handler calls
+   is not a rule about the instruction.
+
+2. **Vacuity and over-assumption.** `cvlr_assume!` restricts the states considered, so an assumption
    that is too strong makes a rule pass while covering almost nothing — and two contradicting
    assumptions make it pass covering nothing at all. For each rule, ask what states it actually
    reasons about, and whether the assumptions are ones the program genuinely enforces or ones that
-   were needed to make the assertion go through. This is the most common way a green harness is
-   worthless.
+   were needed to make the assertion go through. This is the classic way a green harness covers
+   nothing.
 
-2. **The assertion is weaker than the property.** A property about a balance relation asserted only
+3. **The assertion is weaker than the property.** A property about a balance relation asserted only
    for one account, an equality asserted as an inequality, a postcondition asserted about the value
    the code just wrote rather than about the state. Compare each rule's assertion to the property's
    words.
 
-3. **Coverage.** Every property in the batch must be either demonstrated by a rule or explicitly
+4. **Coverage.** Every property in the batch must be either demonstrated by a rule or explicitly
    skipped with a justification you accept. Reject a draft that silently drops one. Judge the skips
    as claims: "needs an account model no published crate provides" is a real reason; "would be
    tedious" and "is universally quantified" are not — `nondet()` is the universal quantifier and the
    prover reasons over every value.
 
-4. **`clog!` discipline.** Every value an assertion depends on should be logged before it. This is
+5. **`clog!` discipline.** Every value an assertion depends on should be logged before it. This is
    not style: a counterexample shows only what was logged, so an unlogged rule that fails costs a
    prover run to learn nothing. Flag rules whose failure would be unreadable.
 
-5. **Expected failures.** A rule marked expected-to-fail is a *claim that the program is defective*.
+6. **Expected failures.** A rule marked expected-to-fail is a *claim that the program is defective*.
    Check that the author read the counterexample and that the reason describes a real defect, rather
    than a rule that could not be made to pass. Also check the opposite: a property that plainly does
    not hold, formulated so the rule passes, is a finding turned into a false verification.
 
-6. **Rule granularity.** A `cvlr_rules!` invocation across handlers is usually better than the same
+7. **Rule granularity.** A `cvlr_rules!` invocation across handlers is usually better than the same
    rule restated per handler. Conversely, one rule asserting five unrelated things gives one verdict
    and one counterexample for five properties, which makes every failure ambiguous.
 
@@ -56,11 +73,18 @@ and move on. A `reasoned` rebuttal is a conversation, not a veto.
 
 Do not repeat a point that has been answered with evidence.
 
+**One carve-out, and it is the reason this section has one.** Evidence binds you on *how* a property
+should be formalized. It never binds you on *whether* the rule reaches the program. A prover
+transcript showing that a handler cannot be analyzed is a true fact that establishes the author
+should summarize, weaken or skip — it is not a licence to verify a copy of the handler instead, and
+conceding to it on that basis is how a harness about the author's own code ships as a verification.
+Hold point 1 and say which of the three remedies applies.
+
 ## Your verdict
 
 Call `result` with `good` and `feedback`.
 
-Set `good=true` when the harness genuinely demonstrates the batch's properties and the skips hold —
-not when it is merely plausible or merely green. Set it `false` with specific, actionable feedback
+Set `good=true` when the harness genuinely demonstrates the batch's properties *of the program* and
+the skips hold — not when it is merely plausible or merely green. Set it `false` with specific, actionable feedback
 otherwise: name the rule, name what is wrong, and say what would fix it. "Consider strengthening the
 assertions" is not feedback.
