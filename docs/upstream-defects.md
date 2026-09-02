@@ -27,7 +27,7 @@ the write-up gives the line number rather than the name.
 | [P1](#p1) | `Box::new` of a stack-built struct rejected as an illegal stack-pointer store | worked around upstream |
 | [P2](#p2) | Un-inlining a call with no summary kills the job in 3.6s with no diagnostic | major |
 | [P3](#p3) | `solanaOptimisticJoinWithStackPtr` is documented as a conf key and is not one | minor |
-| [P4](#p4) | `-solanaAggressiveGlobalDetection` does not fix the [3308] it is recommended for, and neither does any summary | **blocking** |
+| [P4](#p4) | `-solanaAggressiveGlobalDetection` does not fix the [3308] it is recommended for, and neither does any summary | minor — **not** blocking; see the correction |
 | [P5](#p5) | A [3308] in the generated vacuity check is reported as a clean `VERIFIED` when `rule_sanity` is off | **critical** |
 | [U1](#u1) | `extract_job_id_from_url` cannot parse a Solana Prover job link | **major**, worked around |
 | [T1](#t1) | Tuning files are spelled for pre-2.2 `solana-program` paths | major |
@@ -37,6 +37,7 @@ the write-up gives the line number rather than the name.
 | [T5](#t5) | `certora/mod.rs` never declares `utils.rs` | minor |
 | [T6](#t6) | `[workspace.dependencies]` pins CVLR by hand | minor |
 | [T7](#t7) | Nothing points a new project at the Anchor fork it needs | **major** |
+| [T8](#t8) | A canonical summary is spelled for a `RawVec` symbol current toolchains no longer emit | major |
 
 ---
 
@@ -351,6 +352,55 @@ catch the rule a blocked author writes by assuming the conclusion. It is what ma
 it is now load-bearing for soundness rather than merely useful. Any project that turns it off is
 exposed.
 
+---
+
+**CORRECTION — this was never blocking, and the cause was ours.** Everything above is still true: the
+recommended flag does not work, summaries cannot reach the inlined code, and the engagement flag set
+makes no difference. What was wrong is the conclusion drawn from it — that Anchor handlers with error
+paths cannot be verified. They can, and the corpus has been doing it all along.
+
+**The rule's own idiom decides it.** A rule that consumes the handler's `Result` with `.unwrap()`
+verifies; the same rule, same program, same property, written `if handler(..).is_ok() { assert }`
+returns [3308]. Measured as two rules in a single job on the stock fork:
+
+| rule | idiom | result | vacuity check |
+|---|---|---|---|
+| `rule_withdraw_unwrap` | `h(..).unwrap(); assert` | **VERIFIED** | VERIFIED, `satisfy reached` |
+| `rule_withdraw_is_ok` | `if h(..).is_ok() { assert }` | ERROR [3308] | ERROR |
+
+`.unwrap()` makes the failure path a `panic`, and `assert_on_panic` defaults to false — the CLI's own
+`default_desc` is *"Rust panic functions are not treated as assertion violations"* — so the prover
+prunes that path and the error is never constructed. `.is_ok()` keeps the failure path live and merges
+it back, forcing the analysis through the `#[error_code]` enum's generated `Display` and its `String`.
+
+The two forms assert the same property over the same states, so this is not a weakening. It is simply
+the idiom every verified project already uses: across three engagement repositories the counts are
+6385 / 218 / 146 uses of `.unwrap()` against 87 / 36 / **0** of `.is_ok()`.
+
+**Why we did not see it.** The `.is_ok()` form was in *our own author prompt's worked example*, so
+every run reproduced it, and the resulting [3308] was read as a property of Anchor rather than of the
+example. §7.6.2 of the plan recorded the clue and it was not followed: the control tier there "passes,
+because it uses `.unwrap()` — a panic, assumed away". That generalises to the handler call, and the
+inference was not made. The prompt now teaches `.unwrap()` and says why, including the coupling to
+`assert_on_panic` — with that flag on, an `.unwrap()` that can fail asserts the handler never fails,
+which is a different claim.
+
+**What remains genuinely upstream**, and why this section is kept rather than deleted: the flag in the
+title still does not do what its help text promises, and a project that legitimately needs to reason
+about a failure path — a "rejects a bad input" property — still cannot, because that requires the
+error value the analysis refuses. That is a real limit, now correctly scoped to a property class
+rather than to every handler.
+
+**Candidate fix, still valid and now measured.** Independently of the idiom, the allocation can be
+removed at its source. On `Certora/anchor` both *readers* of `AnchorError`'s strings are already
+no-ops — `impl Display` returns `Ok(())`, `log` is empty — while both *writers* remain
+(`lang/attribute/error/src/lib.rs:110,112` and `lang/syn/src/codegen/error.rs:82,84`). Setting
+`error_name` and `error_msg` to `String::new()` — four lines, no API change — makes the `.is_ok()`
+form verify too, measured on a locally patched fork: both rules VERIFIED, both vacuity checks
+VERIFIED. That would restore failure-path reasoning, and it is a small PR to a repository Certora
+owns. `certora-v0.29.0` and `certora-v0.31.1` are byte-identical at all four sites, so one change
+applies across branches.
+
 ## U1
 
 ### `extract_job_id_from_url` cannot parse a Solana Prover job link
@@ -543,3 +593,37 @@ The file ships and is never compiled.
 The template pins the CVLR line in the workspace manifest, so a project has two places that decide
 what "current CVLR" means. Not a bug so much as a maintenance seam, and it dates: the pin is 0.4
 while the current line is 0.6.
+
+---
+
+## T8
+
+### A canonical summary is spelled for a `RawVec` symbol current toolchains no longer emit
+
+`cvlr_summaries_core.txt` carries the one directive in the whole set whose comment describes the
+dangling-pointer precondition that [3308] is about:
+
+```
+;;; - precondition: (*i64)(r1+0) is a Rust dangling pointer
+;;; - post-condition: (*i64)(r1+0) points to new allocated memory (malloc)
+#[type((*i64)(r1+0):ptr_heap)]
+^alloc::raw_vec::RawVec<T,A>::reserve_for_push(_[0-9][0-9]*)*$
+```
+
+`reserve_for_push` is not defined in a program built with platform-tools v1.43. Read back with
+`composer/cargo/symbols.py`, the alloc-related functions that *are* defined are
+`RawVec<T,A>::grow_one`, `raw_vec::finish_grow`, `RawVec<T,A>::reserve::do_reserve_and_handle`,
+`raw_vec::handle_error`, `raw_vec::capacity_overflow` and `alloc::handle_alloc_error`. Upstream Rust
+renamed the push-growth path: `reserve_for_push` became `grow_one`. The sibling directive for
+`do_reserve_and_handle` still matches.
+
+So on a current toolchain the directive is inert, silently — which is P2's complaint from the other
+side: a summary that matches nothing produces no diagnostic. Every project surveyed carries the same
+stale pattern and none mentions `grow_one`, so this is inherited from the template rather than
+anybody's local mistake, and it is not what separated our results from theirs.
+
+Fix: add `grow_one` (and probably `finish_grow`) alongside the existing pattern rather than replacing
+it, since older toolchains still emit the old name. More usefully, a way to *report* a directive that
+binds to no symbol would have caught this the first time it went stale — `composer/cargo/symbols.py`
+exists here for exactly that reason and could be pointed at the canonical files, not just at
+author-written ones.

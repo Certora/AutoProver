@@ -169,6 +169,27 @@ And **do not annotate that array's lifetime.** The helper is generic over it; wr
 returns `[AccountInfo<'static>; 16]` forces the *borrow* to be `'static` too, and the struct literal
 below then fails with "does not live long enough". Let inference pick it.
 
+**Consume the handler's `Result` with `.unwrap()`, not by branching on it.** This one looks like a
+style choice and is not. Write `handler(ctx, ..).unwrap();` and then assert; do **not** write
+`if handler(ctx, ..).is_ok() { assert }`.
+
+Both express the same property — the assertion is checked exactly on the runs where the handler
+succeeded — but they analyze differently. `.unwrap()` makes the failure path a panic, and the prover
+prunes panicking paths, so the error is never built. `.is_ok()` keeps the failure path live and merges
+it back into the rule, which forces the analysis through the error value the handler constructed. On
+an Anchor program that means the `#[error_code]` enum's generated `Display`, which allocates a
+`String`, and the pointer analysis refuses it: **the rule comes back with no verdict at all,
+`[3308] illegal dereference of an absolute address`.**
+
+Measured directly: two rules in one job, same program, same property, differing only in this — the
+`.unwrap()` rule verified and its vacuity check passed, the `.is_ok()` rule errored with [3308].
+
+One coupling to be aware of, because it changes what your rule means. Pruning the panic depends on
+`assert_on_panic` being off, which is the default and what this conf uses. If it is ever on, an
+`.unwrap()` that can fail becomes an assertion violation — the rule then claims the handler *never*
+fails, which is a different and usually false claim. A panic-freedom property is a separate rule
+written deliberately, not a side effect of how you consumed a `Result`.
+
 **Observe post-state through the handle the context borrowed — never by deserializing the account
 again.** This is the one that silently produces a wrong answer, so it is worth understanding rather
 than memorising.
@@ -195,9 +216,8 @@ cvlr_assume!(before.checked_add(amount).is_some());
 clog!(before, amount);
 
 let ctx = Context::new(&crate::ID, &mut ix, &[], Default::default());
-if crate::vault_program::deposit(ctx, amount).is_ok() {
-    cvlr_assert!(ix.vault.balance == before + amount);   // and after, through the same struct
-}
+crate::vault_program::deposit(ctx, amount).unwrap();
+cvlr_assert!(ix.vault.balance == before + amount);       // and after, through the same struct
 ```
 
 The names in that example are the example's — the accounts struct, the program module and the handler
