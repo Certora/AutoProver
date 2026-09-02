@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 from composer.authoring.state import SkippedProperty
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.cvlr.scaffold import SPECS_DIR
-from composer.spec.cvlr.state import PropertyRuleMapping
+from composer.spec.cvlr.state import PropertyRuleMapping, RuleSubject
 from composer.spec.types import CheckName, PropertyTitle, RuleName
 from composer.spec.util import ensure_dir
 
@@ -91,6 +91,10 @@ class GeneratedHarness(BaseModel):
     #: Rule name → why the author asserts it should fail. On this backend an expected failure is
     #: usually a finding, so it is carried into the report rather than smoothed over.
     expected_failures: dict[CheckName, str] = Field(default_factory=dict)
+    #: What each rule drives — a program function, or harness-local code standing in for one. Same
+    #: reasoning as ``expected_failures``: a verdict earned against a stand-in is worth something
+    #: different from one earned against the program, and the report is where that has to be said.
+    rule_subjects: list[RuleSubject] = Field(default_factory=list)
     #: Every rule the draft declares, as read from the draft rather than transcribed by the model.
     declared_rules: list[RuleName] = Field(default_factory=list)
     final_link: str | None = None
