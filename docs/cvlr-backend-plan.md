@@ -251,6 +251,13 @@ right rather than local. The Solana charter came out *narrower* than the EVM one
 real source munge in the corpus is almost entirely CVLR attributes, so "Solana munging can approach a
 rewrite" turned out to be true of one hunk in 1097 lines.
 
+The whole comparison — what each backend virtualizes, whether a subprocess can see it, what a
+per-unit workdir costs, and the chain of forced decisions behind both answers — is
+[munge-and-working-copies.md](munge-and-working-copies.md). **Revisit that reasoning once this
+backend verifies a real program end to end** (§7.10): every measurement in it is a *cost*, taken
+while P6 still blocked, so it weighs a working arrangement against a hypothetical one on cost
+alone.
+
 ### 5.3 Counterexamples are only as legible as the rule's `clog!`s
 
 Half of this is free: `certoraSolanaProver` produces the same treeView reports, so
@@ -1770,6 +1777,40 @@ scaffold templates, `backend_guidance`, munge charter, corpus sections. Expected
 anything in the chain-neutral core. **If Phase 8 requires changes there, that is information
 about where the real chain boundary lies — record it, and let it (not a guess made now) decide
 whether any of these pieces deserve to be bundled after all.**
+
+[munge-and-working-copies.md](munge-and-working-copies.md) §6 is a partial answer already: the
+boundary between the two munge implementations turned out to be *agent topology*, not Solidity
+versus Rust, which predicts Soroban inherits the Solana shape essentially whole.
+
+### 7.10 Revisit — the working-copy and munge reasoning, once the backend works
+
+Not a phase; a scheduled re-read. [munge-and-working-copies.md](munge-and-working-copies.md) argues
+that this backend should keep a physical per-unit workdir rather than a VFS, and should let the
+author apply munges itself rather than commission an editor sub-agent. Both arguments are sound and
+both are **built on cost measured against a backend that had not yet verified anything** — P6 was
+still blocking, no run had produced a finding, and no target outside the test scenario had been
+attempted. A cost-only comparison favours the cheaper arrangement by construction.
+
+That document's §7 states the triggers as falsifiable conditions rather than caveats, so this is a
+checklist rather than a re-argument:
+
+1. **A seventh munge kind appears** — the vocabulary is closed on one project's diff, and a kind that
+   is not an attribute puts soundness back on the delegatable side, where EVM's charter already has
+   the prose and a sub-agent starts making sense.
+2. **Skips naming a would-be munge become common** — the five-of-six-are-attributes finding was about
+   one project's style rather than about CVLR.
+3. **Unit counts grow** — the workdir arithmetic was taken on a three-unit run; at ten it is ~10 GB
+   and ten dependency builds, and the deferred shared read-only cache stops being optional.
+4. **Production confinement relaxes** — the private `CARGO_HOME` is confinement's doing, and it is
+   step (3) of that document's chain that makes a VFS expensive here.
+5. **CVLR gains a spec-side approximation that computes** — the whole argument against the EVM split
+   turns on `summarize_for_prover` havocking rather than computing.
+6. **The backend verifies a real program end to end** — which is the trigger for reading the other
+   five at all, because only then is there a benefit side to weigh.
+
+Do this before §7.9 rather than after: Soroban is where the "would the other chain need this
+different?" question gets asked for real, and re-deciding the working-copy shape after a second chain
+has been built on it is the expensive order.
 
 ---
 
