@@ -645,28 +645,25 @@ def _plan_munge(workspace: Workspace) -> tuple[list[Change], list[str], list[Blo
     A version the fork does not cover becomes a :class:`Blocked` on the manifest, so the run stops
     with a sentence about Anchor coverage instead of proceeding to a build that looks fine and then
     reports a pointer-analysis error.
+
+    **Already-patched is read two ways, because one of them used to be wrong.** This searched
+    ``Cargo.toml`` for a ``[patch.crates-io.<crate>]`` header, which is not the spelling any real
+    project uses — all of them write the inline ``crate = { git = … }`` form under one shared
+    header. So the search found nothing, the append added a second entry for a key TOML already had,
+    and cargo failed outright, on exactly the projects that were already doing the right thing. Now
+    the patch table is *parsed* rather than searched, and the resolved graph — where a redirect
+    shows up as a git source — is consulted as well, since it is what cargo itself computed.
     """
-    plan = munge.plan_munge(workspace)
+    plan = munge.plan_munge(
+        workspace,
+        already_redirected=munge.already_patched((workspace.root / "Cargo.toml").read_text()),
+    )
     blocked = [
         Blocked(path=Path("Cargo.toml"), problem=b.problem, resolution=b.resolution)
         for b in plan.blocked
     ]
     if blocked or not plan.overrides:
-        note = (
-            [f"{c} is not a dependency of this project" for c in plan.inapplicable]
-            if not blocked
-            else []
-        )
-        return [], note, blocked
-
-    existing = (workspace.root / "Cargo.toml").read_text()
-    already = [o for o in plan.overrides if f"[patch.crates-io.{o.crate}]" in existing]
-    if already:
-        return (
-            [],
-            [f"{o.crate} is already redirected in Cargo.toml" for o in already],
-            [],
-        )
+        return [], [] if blocked else plan.notes(), blocked
     return (
         [
             AppendSection(
@@ -678,7 +675,7 @@ def _plan_munge(workspace: Workspace) -> tuple[list[Change], list[str], list[Blo
                 ),
             )
         ],
-        [],
+        plan.notes(),
         [],
     )
 
