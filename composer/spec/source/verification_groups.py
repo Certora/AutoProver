@@ -85,11 +85,32 @@ class VerificationGroup:
     #: Per-group conf overlay merged onto the base config for this group's run
     #: (e.g. ``{"loop_iter": 2}``). Empty means no overlay.
     conf_overlay: Mapping[str, object] = field(default_factory=dict)
-    #: Opaque precision requirement that produced this group, used only to score
-    #: similarity when merging to the cap (see :func:`cap_groups`). Policy-defined
-    #: tokens — e.g. the functions this group's rules need kept precise. Two groups
-    #: with heavily overlapping footprints are the cheapest to merge.
-    footprint: frozenset[str] = frozenset()
+    #: The summaries this group installs: function -> the ``methods{}`` entry (opaque
+    #: text — NONDET, a monotone / injective ghost, a model, …). A function absent here
+    #: is verified PRECISE (unsummarized) in this group. Drives ``spec_contents`` and the
+    #: cap merge (:func:`cap_groups`): the cheapest merges are the pairs that agree on the
+    #: most summaries; on any disagreement a function drops to precise (:func:`merge_summaries`).
+    summaries: Mapping[str, str] = field(default_factory=dict)
+
+
+def append_summaries(base_spec: str, summaries: Mapping[str, str]) -> str:
+    """The base spec plus a ``methods{}`` block of this group's ``summaries`` (each value a
+    full methods entry), in stable sorted-by-function order. Empty summaries return the base
+    spec unchanged. CVL merges ``methods`` blocks, so appending is sound; a ghost the base
+    spec defines but no installed summary uses is harmless."""
+    if not summaries:
+        return base_spec
+    block = "methods {\n" + "\n".join(f"    {summaries[f]}" for f in sorted(summaries)) + "\n}\n"
+    return base_spec.rstrip() + "\n\n// --- verification group: summaries installed here ---\n" + block
+
+
+def merge_summaries(a: Mapping[str, str], b: Mapping[str, str]) -> dict[str, str]:
+    """The summaries two groups can BOTH keep when merged into one run: a function is kept only
+    where both groups summarize it identically; any disagreement (different text, or only one
+    group summarizes it) drops it to PRECISE. Order-free and always sound — dropping a summary
+    only adds precision — so it assumes no summary-strength ordering (summaries are not generally
+    comparable: e.g. 'monotone' and 'injective' are incomparable)."""
+    return {f: a[f] for f in a.keys() & b.keys() if a[f] == b[f]}
 
 
 def single_group(
@@ -124,17 +145,18 @@ def plan_verification_groups(
 
 
 def _default_merge_pair(a: VerificationGroup, b: VerificationGroup) -> VerificationGroup:
-    """Combine two groups when neither carries a distinct spec: union the owned
-    rules and footprints, keep the shared spec, and merge conf overlays (``b``
-    wins on key conflicts). A policy that gives groups distinct ``spec_contents``
-    must pass its own merge (it alone knows how to combine two methods blocks);
-    this default is correct for footprint-only or conf-overlay-only groups."""
+    """Combine two groups when neither carries a distinct spec: union the owned rules, keep
+    the agreed summaries (:func:`merge_summaries`), keep the shared spec, and merge conf
+    overlays (``b`` wins on key conflicts). A policy that gives groups distinct
+    ``spec_contents`` must pass its own merge (it alone knows how to rebuild the merged spec
+    from the merged summaries); this default is correct for summary-free / conf-overlay-only
+    groups."""
     merged_overlay: dict[str, object] = {**a.conf_overlay, **b.conf_overlay}
     return replace(
         a,
         name=f"{a.name}+{b.name}",
         owned_rules=a.owned_rules | b.owned_rules,
-        footprint=a.footprint | b.footprint,
+        summaries=merge_summaries(a.summaries, b.summaries),
         conf_overlay=merged_overlay,
     )
 
@@ -163,10 +185,11 @@ def cap_groups(
         return remaining
 
     def merge_cost(a: VerificationGroup, b: VerificationGroup) -> int:
-        # Size of the union the merged group must keep precise: smaller = less
-        # precision lost. Ties broken by combined rule count (prefer merging the
-        # smaller groups, so no single run grows unnecessarily large).
-        return len(a.footprint | b.footprint) * 100_000 + len(a.owned_rules) + len(b.owned_rules)
+        # Summaries this merge would drop to precise (kept only where both agree): fewer =
+        # less precision lost. Ties broken by combined rule count (prefer merging the smaller
+        # groups, so no single run grows unnecessarily large).
+        lost = len(a.summaries.keys() | b.summaries.keys()) - len(merge_summaries(a.summaries, b.summaries))
+        return lost * 100_000 + len(a.owned_rules) + len(b.owned_rules)
 
     while len(remaining) > cap:
         best: tuple[int, int, int] | None = None  # (cost, i, j)

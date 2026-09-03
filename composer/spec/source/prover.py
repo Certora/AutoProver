@@ -396,13 +396,10 @@ class ProverStateExtra(TypedDict):
 
     # The agent's declared verification-group partition (see agent_groups). When set
     # (via the group-declaration tool), verify_spec splits the rules into these groups
-    # — each with its own summaries (keep_precise) and conf overlay — and runs them in
+    # — each with its own per-function summaries and conf overlay — and runs them in
     # parallel. Absent => the single-spec/single-run default. Replaced wholesale: a
     # declaration is a full snapshot of the partition.
     verification_groups: NotRequired[list[VerificationGroupSpec]]
-    # Palette of prover-hostile summary entries (function -> CVL methods-block line) the
-    # author supplies once; each group's spec summarizes the palette minus its keep_precise.
-    summary_palette: NotRequired[dict[str, str]]
 
 type ProverEvents = CEXAnalysisStart | CloudPollingEvent | ProverOutputEvent | RuleAnalysisResult | ProverRun | ProverLink | ProverResult
 
@@ -860,7 +857,6 @@ def get_prover_tool(
             if declared:
                 groups = groups_from_specs(
                     spec, list(declared),
-                    summary_palette=state.get("summary_palette") or {},
                     cap=resolved_max_groups(),
                 )
             else:

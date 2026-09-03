@@ -19,8 +19,8 @@ from composer.spec.source.verification_groups import (
 )
 
 
-def _g(name, rules, footprint=()):
-    return VerificationGroup(name=name, owned_rules=frozenset(rules), footprint=frozenset(footprint))
+def _g(name, rules, summaries=None):
+    return VerificationGroup(name=name, owned_rules=frozenset(rules), summaries=summaries or {})
 
 
 # --- single_group / behavior-preserving default -----------------------------
@@ -72,27 +72,36 @@ def test_cap_noop_when_within_cap():
 
 
 def test_cap_to_one_collapses_everything():
-    groups = [_g("x", ["a"], ["f1"]), _g("y", ["b"], ["f2"]), _g("z", ["c"], ["f3"])]
+    groups = [_g("x", ["a"], {"f1": "S1"}), _g("y", ["b"], {"f2": "S2"}), _g("z", ["c"], {"f3": "S3"})]
     capped = cap_groups(groups, cap=1)
     assert len(capped) == 1
-    # The single surviving group owns every rule and keeps the union of all
-    # footprints precise — i.e. the monolithic run.
+    # The single surviving group owns every rule; the disjoint summaries all disagree,
+    # so every function drops to precise — i.e. the monolithic run.
     assert capped[0].owned_rules == {"a", "b", "c"}
-    assert capped[0].footprint == {"f1", "f2", "f3"}
+    assert capped[0].summaries == {}
 
 
-def test_cap_merges_most_similar_footprints_first():
-    # x and y share footprint {f1}; z is disjoint {f9}. Capping 3->2 must merge
-    # x+y (cheapest, union stays {f1}) and leave z alone.
-    x = _g("x", ["a"], ["f1"])
-    y = _g("y", ["b"], ["f1"])
-    z = _g("z", ["c"], ["f9"])
+def test_cap_merges_most_agreeing_summaries_first():
+    # x and y summarize f1 IDENTICALLY; z summarizes a disjoint f9. Capping 3->2 must merge
+    # x+y (cheapest: they agree on f1, losing nothing) and leave z alone.
+    x = _g("x", ["a"], {"f1": "S1"})
+    y = _g("y", ["b"], {"f1": "S1"})
+    z = _g("z", ["c"], {"f9": "S9"})
     capped = cap_groups([x, y, z], cap=2)
     assert len(capped) == 2
     by_rules = {frozenset(g.owned_rules): g for g in capped}
     assert frozenset({"a", "b"}) in by_rules  # x+y merged
     assert frozenset({"c"}) in by_rules  # z untouched
-    assert by_rules[frozenset({"a", "b"})].footprint == {"f1"}
+    assert by_rules[frozenset({"a", "b"})].summaries == {"f1": "S1"}
+
+
+def test_merge_drops_disagreed_summaries_to_precise():
+    # Both summarize f1 but INCOMPARABLY differently -> the merged group keeps neither
+    # (drops f1 to precise); no summary-strength ordering is assumed.
+    x = _g("x", ["a"], {"f1": "monotone"})
+    y = _g("y", ["b"], {"f1": "injective"})
+    capped = cap_groups([x, y], cap=1)
+    assert capped[0].summaries == {}
 
 
 def test_cap_below_one_rejected():
@@ -101,7 +110,7 @@ def test_cap_below_one_rejected():
 
 
 def test_cap_partition_disjoint_after_merges():
-    groups = [_g(str(i), [f"r{i}"], [f"f{i % 2}"]) for i in range(6)]
+    groups = [_g(str(i), [f"r{i}"], {f"f{i % 2}": f"S{i % 2}"}) for i in range(6)]
     capped = cap_groups(groups, cap=2)
     assert len(capped) == 2
     owned = [r for g in capped for r in g.owned_rules]

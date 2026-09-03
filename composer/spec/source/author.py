@@ -190,12 +190,13 @@ class DeclareVerificationGroups(
     A valid declaration:
     - Every non-skipped property appears in exactly ONE group (via that group's `property_rules`).
       Coverage is checked exactly as at publish time.
-    - `keep_precise` lists the hostile functions THIS group's rules genuinely need exact; every
-      other function in `summary_palette` is summarized in this group's spec.
-    - `summary_palette` (provide once) maps each hostile function name to the CVL methods-block
-      entry that summarizes it. The base spec you put on the VFS must define any ghosts/CVL
-      functions those entries use, and must itself leave the palette functions UNsummarized (the
-      group machinery adds the summaries each group can afford).
+    - Each group's `summaries` maps each function IT summarizes to the CVL methods-block entry to
+      summarize it with, HERE. A function a group omits is verified precise in that group. The same
+      function may be summarized differently in different groups (a rule may allow `foo` monotone
+      while another needs it injective) — choose, per group, the weakest summary sound for that
+      group's rules.
+    - The base spec you put on the VFS must define any ghosts/CVL functions those entries use, and
+      must itself leave the summarized functions UNsummarized (each group's spec adds its own).
     - `conf_overlay` is optional per-group prover config for non-summarization needs
       (e.g. {"loop_iter": 2, "global_timeout": 4000}).
 
@@ -206,11 +207,6 @@ class DeclareVerificationGroups(
     groups: list[VerificationGroupSpec] = Field(
         description="The verification groups to split into. Empty list reverts to one combined run."
     )
-    summary_palette: dict[str, str] = Field(
-        default_factory=dict,
-        description="Hostile function name -> the CVL methods-block entry that summarizes it. "
-        "Shared across all groups; each group summarizes the palette minus its keep_precise.",
-    )
 
     @override
     async def run(self) -> Command | str:
@@ -219,7 +215,7 @@ class DeclareVerificationGroups(
             return tool_state_update(
                 self.tool_call_id,
                 "Reverted to a single combined verification run.",
-                verification_groups=[], summary_palette={},
+                verification_groups=[],
             )
         names = [s.name for s in specs]
         if len(set(names)) != len(names):
@@ -238,19 +234,11 @@ class DeclareVerificationGroups(
                 (dup if m.property_title in seen else seen).add(m.property_title)
         if dup:
             return f"Each property must belong to exactly one group; these appear in more than one: {sorted(dup)}"
-        # Every kept-precise / to-be-summarized function must be in the palette.
-        missing = {f for s in specs for f in s.keep_precise if f not in self.summary_palette}
-        if missing:
-            return (
-                f"keep_precise names functions absent from summary_palette: {sorted(missing)}. "
-                "Add each to summary_palette (with its CVL summary entry) or remove it."
-            )
         return tool_state_update(
             self.tool_call_id,
             f"Declared {len(specs)} verification group(s): {', '.join(names)}. "
             "Subsequent verify_spec runs split the rules across them and run in parallel.",
             verification_groups=specs,
-            summary_palette=self.summary_palette,
         )
 
 
@@ -707,10 +695,7 @@ class EditorAwareFeedbackTool(
             # the hostile summaries — each verification group installs its own at prover
             # time (append_summaries). Surface that plan so the judge does not false-flag
             # those functions as un-summarized / HAVOCing.
-            plan = render_group_plan_for_judge(
-                self.state.get("verification_groups") or [],
-                self.state.get("summary_palette") or {},
-            )
+            plan = render_group_plan_for_judge(self.state.get("verification_groups") or [])
             judged_spec = spec if plan is None else f"{spec.rstrip()}\n\n{plan}\n"
             return await judge(snap, judged_spec, skipped, self.rebuttals, self.tool_call_id)
 

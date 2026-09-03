@@ -198,15 +198,17 @@ summarized in another. How:
 
 1. In your base spec (the VFS), write the rule/invariant bodies and any ghosts / CVL functions your
    summaries need — but do NOT summarize the hostile functions inline in the base spec.
-2. Provide a `summary_palette`: for each hostile function, the single `methods{}` entry that soundly
-   summarizes it (e.g. `function MathUtils.uncheckedExp(uint256 a, uint256 b) internal returns (uint256) => expGhost(a, b);`).
-3. Call `declare_verification_groups` with one group per cluster of properties that share a precision
+2. Call `declare_verification_groups` with one group per cluster of properties that share a precision
    need. Each group names its `property_rules` (the properties it verifies + the rule names that verify
-   them), the `keep_precise` functions its rules genuinely need exact, and an optional `conf_overlay`
-   (e.g. `{"loop_iter": 2}`). Every non-skipped property must appear in exactly one group.
+   them), its `summaries` (for each function THIS group summarizes, the `methods{}` entry to use here,
+   e.g. `function MathUtils.uncheckedExp(uint256 a, uint256 b) internal returns (uint256) => expGhost(a, b);`),
+   and an optional `conf_overlay` (e.g. `{"loop_iter": 2}`). A function a group omits is verified precise
+   there. Every non-skipped property must appear in exactly one group.
 
-Then `verify_spec` runs the groups in parallel and only (re-)runs rules not yet verified. Keep precise
-in each group ONLY what that group's properties actually depend on — summarize everything else. Start
+Then `verify_spec` runs the groups in parallel and only (re-)runs rules not yet verified. In each group,
+summarize everything its properties do NOT depend on and keep precise only what they do. The SAME
+function may need different summaries in different groups — one property may allow `foo` monotone while
+another needs it injective — so pick, per group, the weakest summary sound for that group's rules. Start
 with a small number of groups aligned to the distinct precision needs you see in the hostile list
 above; you can refine the partition as results come in.
 {% endif %}

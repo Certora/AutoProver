@@ -7,10 +7,8 @@ from composer.spec.source.agent_groups import (
 )
 
 BASE = "// rules\ninvariant a() true;\nghost g(uint) returns uint;\n"
-PALETTE = {
-    "sortByKey": "function KVL.sortByKey(uint256[] l) internal returns (uint256[]) => g(0);",
-    "uncheckedExp": "function MathUtils.uncheckedExp(uint256 a, uint256 b) internal returns (uint256) => g(a);",
-}
+SORT_SUMMARY = "function KVL.sortByKey(uint256[] l) internal returns (uint256[]) => g(0);"
+EXP_SUMMARY = "function MathUtils.uncheckedExp(uint256 a, uint256 b) internal returns (uint256) => g(a);"
 # property title -> rule names
 PROP_RULES = {
     "P-bitmap": ["r_borrow", "r_collat"],
@@ -19,10 +17,10 @@ PROP_RULES = {
 }
 
 
-def _decl(name, props, keep=(), conf=None):
+def _decl(name, props, summaries=None, conf=None):
     return GroupDeclaration(
         name=name, properties=frozenset(props),
-        keep_precise=frozenset(keep), conf_overlay=conf or {},
+        summaries=summaries or {}, conf_overlay=conf or {},
     )
 
 
@@ -70,15 +68,12 @@ def test_coverage_unknown_property():
 
 def test_build_expands_properties_to_rules_and_summaries():
     decls = [
-        _decl("bitmap", ["P-bitmap"], keep=["sortByKey"]),
-        _decl("rest", ["P-accounting", "P-misc"], keep=["uncheckedExp"]),
+        _decl("bitmap", ["P-bitmap"], summaries={"uncheckedExp": EXP_SUMMARY}),
+        _decl("rest", ["P-accounting", "P-misc"], summaries={"sortByKey": SORT_SUMMARY}),
     ]
-    groups = build_declared_groups(
-        BASE, declarations=decls, property_rules=PROP_RULES, summary_palette=PALETTE, cap=4
-    )
+    groups = build_declared_groups(BASE, declarations=decls, property_rules=PROP_RULES, cap=4)
     by = {g.name: g for g in groups}
-    # bitmap group owns the bitmap property's rules, keeps sortByKey precise (not summarized),
-    # summarizes uncheckedExp.
+    # bitmap group installs the uncheckedExp summary and keeps sortByKey precise (not installed).
     assert by["bitmap"].owned_rules == {"r_borrow", "r_collat"}
     assert "KVL.sortByKey" not in by["bitmap"].spec_contents
     assert "MathUtils.uncheckedExp" in by["bitmap"].spec_contents
@@ -93,9 +88,7 @@ def test_build_conf_overlay_passes_through():
         _decl("slow", ["P-bitmap"], conf={"global_timeout": 4000, "loop_iter": 2}),
         _decl("fast", ["P-accounting", "P-misc"]),
     ]
-    groups = build_declared_groups(
-        BASE, declarations=decls, property_rules=PROP_RULES, summary_palette=PALETTE, cap=4
-    )
+    groups = build_declared_groups(BASE, declarations=decls, property_rules=PROP_RULES, cap=4)
     slow = next(g for g in groups if g.name == "slow")
     assert slow.conf_overlay == {"global_timeout": 4000, "loop_iter": 2}
 
@@ -104,9 +97,7 @@ def test_build_rule_partition_first_declaration_wins():
     # A rule shared by two properties placed in different groups is owned by the first.
     shared = {"P-x": ["r1", "r2"], "P-y": ["r2", "r3"]}  # r2 shared
     decls = [_decl("gx", ["P-x"]), _decl("gy", ["P-y"])]
-    groups = build_declared_groups(
-        BASE, declarations=decls, property_rules=shared, summary_palette={}, cap=4
-    )
+    groups = build_declared_groups(BASE, declarations=decls, property_rules=shared, cap=4)
     by = {g.name: g for g in groups}
     assert by["gx"].owned_rules == {"r1", "r2"}
     assert by["gy"].owned_rules == {"r3"}  # r2 already claimed by gx
@@ -116,12 +107,12 @@ def test_build_rule_partition_first_declaration_wins():
 
 
 def test_build_caps_and_merges_keeping_partition():
-    decls = [_decl(f"g{i}", [p], keep=[k]) for i, (p, k) in enumerate(
-        [("P-bitmap", "sortByKey"), ("P-accounting", "uncheckedExp"), ("P-misc", "sortByKey")]
-    )]
-    groups = build_declared_groups(
-        BASE, declarations=decls, property_rules=PROP_RULES, summary_palette=PALETTE, cap=2
-    )
+    decls = [_decl(f"g{i}", [p], summaries=s) for i, (p, s) in enumerate([
+        ("P-bitmap", {"uncheckedExp": EXP_SUMMARY}),
+        ("P-accounting", {"sortByKey": SORT_SUMMARY}),
+        ("P-misc", {"uncheckedExp": EXP_SUMMARY}),
+    ])]
+    groups = build_declared_groups(BASE, declarations=decls, property_rules=PROP_RULES, cap=2)
     assert len(groups) == 2
     owned = [r for g in groups for r in g.owned_rules]
     assert sorted(owned) == sorted(r for rs in PROP_RULES.values() for r in rs)
@@ -136,40 +127,40 @@ from composer.spec.source.agent_groups import (
 from composer.spec.cvl_generation import PropertyRuleMapping
 
 
-def _spec(name, prop_rules, keep=(), conf=None):
+def _spec(name, prop_rules, summaries=None, conf=None):
     return VerificationGroupSpec(
         name=name,
         property_rules=[
             PropertyRuleMapping(property_title=p, rules=rs) for p, rs in prop_rules
         ],
-        keep_precise=list(keep),
+        summaries=summaries or {},
         conf_overlay=conf or {},
     )
 
 
 def test_render_plan_none_when_no_groups():
-    assert render_group_plan_for_judge([], PALETTE) is None
+    assert render_group_plan_for_judge([]) is None
 
 
-def test_render_plan_shows_palette_and_per_group_installs():
+def test_render_plan_shows_per_group_installed_summaries():
     specs = [
-        _spec("bitmap", [("P-bitmap", ["r_borrow", "r_collat"])], keep=["sortByKey"]),
-        _spec("acct", [("P-accounting", ["r_supply"])], conf={"loop_iter": 2}),
+        _spec("bitmap", [("P-bitmap", ["r_borrow", "r_collat"])], summaries={"uncheckedExp": EXP_SUMMARY}),
+        _spec(
+            "acct", [("P-accounting", ["r_supply"])],
+            summaries={"sortByKey": SORT_SUMMARY, "uncheckedExp": EXP_SUMMARY},
+            conf={"loop_iter": 2},
+        ),
     ]
-    out = render_group_plan_for_judge(specs, PALETTE)
+    out = render_group_plan_for_judge(specs)
     assert out is not None
-    # The palette is shown so the judge sees the sound summaries that exist.
-    assert "Summary palette" in out
-    assert "sortByKey" in out and "uncheckedExp" in out
-    # The group keeping sortByKey precise installs only the OTHER palette entry.
+    # The bitmap group lists exactly the one summary it installs; sortByKey is precise there.
     bitmap = out.split('Group "bitmap"')[1].split('Group "acct"')[0]
-    assert "keeps precise: sortByKey" in bitmap
-    assert "installs summaries for: uncheckedExp" in bitmap
-    assert "sortByKey" not in bitmap.split("installs summaries for:")[1]
-    # The group keeping nothing precise installs the whole palette + shows conf overrides.
+    assert "installs summaries:" in bitmap
+    assert "uncheckedExp:" in bitmap
+    assert "sortByKey" not in bitmap
+    # The acct group installs both, and shows its conf override.
     acct = out.split('Group "acct"')[1]
-    assert "keeps precise: (none)" in acct
-    assert "installs summaries for: sortByKey, uncheckedExp" in acct
+    assert "uncheckedExp:" in acct and "sortByKey:" in acct
     assert "loop_iter" in acct
     # It is clearly marked informational so the judge does not treat it as spec text.
     assert "informational" in out.lower()
