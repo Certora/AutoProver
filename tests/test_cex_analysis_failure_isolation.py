@@ -17,11 +17,15 @@ import pytest
 
 from composer.prover import core
 from composer.prover.core import TrivialFanoutCexHandler
-from composer.prover.ptypes import RulePath, RuleResult
+from composer.prover.ptypes import Counterexample, RulePath, RuleResult
 
 
 def _violated(rule: str) -> RuleResult:
-    return RuleResult(path=RulePath(rule=rule), cex_dump=f"<cex {rule}/>", status="VIOLATED")
+    return RuleResult(
+        path=RulePath(rule=rule),
+        counterexample=Counterexample(trace=f"<cex {rule}/>"),
+        status="VIOLATED",
+    )
 
 
 class _RecordingCallbacks:

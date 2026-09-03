@@ -628,7 +628,7 @@ async def run_prover(
     # subprocess wall-clock).
     try:
         async with results_cm as (emv_path, runtime_ms):
-            parsed = read_and_format_run_result(emv_path)
+            parsed = read_and_format_run_result(emv_path, prover_opts.app)
 
             if isinstance(parsed, str):
                 return f"Failed to parse prover results: {parsed}"

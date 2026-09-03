@@ -29,6 +29,7 @@ Marked ``expensive``: real LLM spend, containers, and cloud prover jobs. Run wit
 """
 
 import asyncio
+import json
 import os
 import shutil
 from pathlib import Path
@@ -55,6 +56,7 @@ from composer.spec.cvlr.pipeline import CvlrBackend
 from composer.pipeline.ptypes import Curtailed, Delivered
 from composer.spec.cvlr.rules import rule_names
 from composer.spec.service_host import ModelProvider, PureServiceHost
+from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.source_env import build_basic_source_tools, build_source_tools
 from composer.spec.types import RustIdentifier
 from composer.ui.tool_display import async_tool_context
@@ -259,6 +261,10 @@ async def test_the_backend_authors_cvlr_rules_for_the_vault(langgraph_db, projec
             artifact_store=CvlrArtifactStore(str(project), Path("programs") / _PACKAGE),
             prover_opts=make_prover_options(cloud=True, app="solana"),
             sandbox=SandboxConfig.from_env(),
+            # Namespaced by thread so a rule name cannot be read across runs. This is what makes
+            # the report's findings possible at all: without it the backend opts out of findings
+            # synthesis, which is what `findings: []` meant in every run before §7.7.
+            cex_analysis=CexAnalysisStore(store=conns.store, namespace=("cvlr_cex", "cvlr_gate")),
             package=_PACKAGE,
         )
         run = PipelineRun(
@@ -296,6 +302,20 @@ async def test_the_backend_authors_cvlr_rules_for_the_vault(langgraph_db, projec
         f"it entered the budget wrap-up window and units were curtailed rather than finishing. The "
         f"ceiling is a reporting instrument, not a cap: raise it."
     )
+    # Findings are the deliverable this phase added, so they get read back off the report rather
+    # than inferred from verdicts. Deliberately *not* asserted on: whether this program has a bug
+    # the author's rules can catch is a fact about the program and the model, and a gate that
+    # demanded one would fail on a correct program. The machinery is unit-tested instead
+    # (`tests/test_cvlr_findings.py`); this is here so a reader of a run sees what came out.
+    report_path = summary_path.parent / "report.json"
+    if report_path.exists():
+        findings = json.loads(report_path.read_text()).get("findings", [])
+        emit(f"\n{len(findings)} finding(s) synthesized")
+        for finding in findings:
+            emit(f"  [{finding.get('severity', '?')}] {finding.get('title', '(untitled)')}")
+    else:
+        emit(f"\nno report written at {report_path}")
+
     for outcome in result.outcomes:
         emit(f"\n== {outcome.feat.display_name} ==")
         harness = _harness(outcome.result)

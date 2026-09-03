@@ -893,8 +893,12 @@ def _capture(events: list | None = None):
 
 
 def _violated(rule: str, method: str | None = None, cex: str = "<cex/>"):
-    from composer.prover.ptypes import RulePath, RuleResult
-    return RuleResult(path=RulePath(rule=rule, method=method), cex_dump=cex, status="VIOLATED")
+    from composer.prover.ptypes import Counterexample, RulePath, RuleResult
+    return RuleResult(
+        path=RulePath(rule=rule, method=method),
+        counterexample=Counterexample(trace=cex),
+        status="VIOLATED",
+    )
 
 
 @pytest.mark.asyncio
@@ -906,8 +910,9 @@ async def test_spec_callbacks_captures_cex_analysis():
     await cb.on_analysis_complete(_violated("no_reentrancy", "withdraw"), "root cause: CEI")
 
     recs = await store.for_rule("no_reentrancy")
+    # The stored counterexample is the rendered element, which is what an analysis prompt reads.
     assert [(r.label, r.analysis, r.counterexample) for r in recs] == [
-        ("withdraw", "root cause: CEI", "<cex/>")]
+        ("withdraw", "root cause: CEI", "<counterexample><cex/></counterexample>")]
     assert await store.for_rule("no_reentrancy for withdraw") == []   # not the pretty-printed form
     assert any(e.get("type") == "rule_analysis" for e in events)
 

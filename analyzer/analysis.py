@@ -47,11 +47,24 @@ T = TypeVar("T")
 class SimpleState(MessagesState, Generic[T]):
     result: NotRequired[T]
 
-def find_tree_view_node(stat: R.TreeViewStatus, context: pathlib.Path, target: R.RulePath) -> R.RuleResult | None:
+def trace_shape(ecosystem: Ecosystem) -> R.TraceShape:
+    """How to render this ecosystem's counterexample traces.
+
+    This CLI's ecosystem axis carries one member the prover's app axis does not — ``move`` — and no
+    Move counterexample has been measured, so it gets the shape that claims nothing chain-specific.
+    """
+    return R.GENERIC_TRACE if ecosystem == "move" else R.trace_shape(ecosystem)
+
+
+def find_tree_view_node(
+    stat: R.TreeViewStatus, context: pathlib.Path, target: R.RulePath, shape: R.TraceShape
+) -> R.RuleResult | None:
     for r in stat.rules:
         if r.name != target.rule:
             continue
-        for d in R.flatten_tree_view(context=context, path=R.RulePath(rule=r.name), r=r):
+        for d in R.flatten_tree_view(
+            context=context, path=R.RulePath(rule=r.name), r=r, shape=shape
+        ):
             if d.path == target:
                 return d
     return None
@@ -340,7 +353,7 @@ async def _analyze_from_report(
 
     target_path = R.RulePath(rule=rule_target, contract=contract, method=method)
 
-    m = find_tree_view_node(stat, treeView, target_path)
+    m = find_tree_view_node(stat, treeView, target_path, trace_shape(args.ecosystem))
 
     if m is None:
         print(f"Couldn't find {target_path.pprint()}")
