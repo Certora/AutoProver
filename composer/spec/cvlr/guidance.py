@@ -6,16 +6,21 @@ property is written. Its job is not to teach CVLR — it is to keep the extracto
 list whose good entries cannot be checked and whose checkable entries are not worth checking.
 
 The EVM text (``CERTORA_BACKEND_GUIDANCE``) is almost entirely a list of exclusions, and copying its
-shape here would be wrong twice over. Two of its exclusions **invert** on Solana: checked arithmetic
-makes "no overflow" uninteresting on EVM, while a Solana release build does not check by default and
-the Prover has a flag dedicated to treating a panic as an assertion violation; and an EVM property
-that spans many functions is expensive, while ``cvlr_rules!`` fans one property across a whole grid
-of handlers for the price of one more line. So the text below spends most of its words on *shape* —
+shape here would be wrong twice over. One of its exclusions **inverts** on Solana: an EVM property that spans
+many functions is expensive, while ``cvlr_rules!`` fans one property across a whole grid of handlers
+for the price of one more line.
+
+Arithmetic is a subtler case and an earlier version of this text got it wrong. A Solana release build
+may not check arithmetic, so a *wrapping* result is a real state bug that a rule catches — but
+"cannot be made to panic" is not checkable at all, because a panic reverts and so cannot violate an
+invariant, and because the flag that would report panics as violations is per-conf where a conf covers
+a whole component. The exclusion list below says so; runs were extracting panic-freedom properties
+that could only ever be skipped. So the text below spends most of its words on *shape* —
 what a property has to look like for a rule to exist — and reserves exclusion for the handful of
 things that genuinely have no rule.
 
 Everything asserted here is traceable: the Methodology chapter of the published Solana manual
-(items 4, 6, 7, 8, 10, 15) and the conf attribute ``assert_on_panic`` in ``certora_cli``. Where the
+(items 4, 6, 7, 8, 10, 15). Where the
 manual and the surveyed projects disagree, the manual wins — see ``docs/cvlr-capture-plan.md`` §4.5
 for why recurrence alone is the wrong axis.
 
@@ -56,14 +61,23 @@ Property classes that are especially well served, and worth looking for specific
   reinitialization. These are the highest-value properties on this chain and they express directly.
 - **Arithmetic invariants** — solvency, monotonicity, conservation, no share dilution. These are
   first-class, and are checked over exact integers rather than wrapping ones.
-- **Panic freedom and overflow.** Unlike Solidity, a Solana release build does not check arithmetic
-  by default, and the Prover can treat any Rust panic as an assertion violation. "This handler
-  cannot be made to panic on any input" is a real, checkable, frequently-violated property here.
+- **Exact-integer arithmetic.** Rules reason over unbounded integers rather than wrapping ones, so
+  "the fee is exactly one percent", "supply is conserved" and "no share dilution" are stated
+  directly. Where an unchecked operation would *wrap* rather than abort, the wrong value is a real
+  state-integrity bug and a rule catches it.
 - **Reachability** — "a legitimate user can actually complete this flow" — which catches the case
   where a guard is so strict the handler is dead.
 
 What has no rule, and should not be extracted as a property:
 
+- **Panic freedom.** "This handler cannot be made to panic" has no rule here, for a reason worth
+  stating: a panic aborts the instruction and the runtime rolls back every account mutation, exactly
+  as a returned error does. So a panicking path cannot leave the program in a state that violates an
+  invariant, and the analysis prunes those paths to agree with the runtime. A reachable panic is an
+  availability concern, not a state-integrity one. (Treating panics as assertion violations is a
+  per-run conf option, and one conf covers a whole component's rules, so it cannot be enabled for one
+  property without corrupting the verdicts of its neighbours.) Arithmetic that *wraps* is a different
+  matter and belongs above.
 - Anything about off-chain events: key compromise, phishing, front-running by an off-chain actor,
   governance process.
 - Anything that depends on cryptography behaving as intended — signature validity, hash collisions,
