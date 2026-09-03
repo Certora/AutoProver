@@ -61,7 +61,7 @@ source ─analyze─▶ App model ─extract─▶ properties ─formalize─▶
 | CVLR corpus · CVLR KB articles | **Three manifests under one tag** (§7.3.1): published docs, generated crate reference, project-derived idioms — all produced in and shipped from the private repo | [rag/import_format.py](../composer/rag/import_format.py), [rag/html_manual.py](../composer/rag/html_manual.py) |
 | Preflight scaffold | **Done** (§7.4): deterministic, idempotent, refuses two decisions rather than guessing | [cvlr/scaffold.py](../composer/spec/cvlr/scaffold.py), [cvlr/preflight.py](../composer/spec/cvlr/preflight.py) |
 | Authoring loop | **Built** (§7.5), not yet exercised end to end | [cvlr/author.py](../composer/spec/cvlr/author.py), [cvlr/pipeline.py](../composer/spec/cvlr/pipeline.py) |
-| Solana CEX analysis | **Nothing** — the author reads raw counterexample dumps until §7.7 | — |
+| Solana CEX analysis | **Done** (§7.7): traces rendered per chain, analyses captured as findings evidence, and a violation that stopped on the prover's own assertion kept out of both | [prover/results.py](../composer/prover/results.py), [cvlr/verify.py](../composer/spec/cvlr/verify.py) |
 
 **Phase 0 (hands-on experience) is done.** Several team members have completed real Solana
 verification projects. What that changes: the first phase is not discovery, it is **capture** —
@@ -874,8 +874,9 @@ that is worth knowing before trusting a green fuzz run.
   gate degrades cleanly without it by design.
 * **No counterexample analysis.** The author reads whatever `UnanalyzedCexHandler` renders — the raw
   dump. §5.3 says half of CEX handling is free because the reports are the same shape; the other half
-  is §7.7, and until then the `clog!` discipline in the prompt is doing all of the work. This is the
-  biggest known limiter on loop quality right now.
+  is §7.7, and until then the `clog!` discipline in the prompt is doing all of the work. This was the
+  biggest known limiter on loop quality, and §7.7 has since closed it — including the part of the
+  "free" half that turned out not to be.
 * **No entry point.** Nothing constructs a `CvlrBackend` yet; `console-solana` / `tui-solana` are §7.8.
 
 #### 7.5.5 What the first live run found
@@ -1513,8 +1514,113 @@ non-defect, and the graded probe in §7.6.2 is a better instrument than the loop
 
 ### 7.7 Phase 6 — Counterexamples and report
 
-A CVLR counterexample analyzer (chain-neutral) and the report path; the shared report assembly
-is already domain-neutral.
+The counterexample analyzer and the report path. The shared report assembly was already
+domain-neutral and needed nothing; every change below is either in the chain-neutral prover core —
+where measuring a real Solana trace showed the seam was in the wrong place — or in the two hooks the
+CVLR backend had left unset.
+
+#### 7.7.1 The trace parser, and why the "free" half was not free
+
+§5.3 said half of counterexample handling comes for nothing because `certoraSolanaProver` produces
+the same treeView reports as `certoraRun`. That is true of the *parse*: real Solana output runs
+through `read_and_format_run_result` with no chain-specific code and yields a violated rule with a
+call trace of the same nesting as an EVM one. It is not true of the *rendering*, and the gap was
+large in both directions.
+
+**A trace is 95 % scaffolding.** On a measured counterexample, 128 of 135 frames were allocator
+calls and nondet size choices under `cvlr_solana::layout::cvlr_deserialize_nondet_accounts` —
+materializing the accounts before the rule does anything. The seven that remained were the rule, the
+deserializer, three Anchor frames and the handler call.
+
+**And EVM's frame filter deleted the failure.** `calltrace_to_xml` skipped four frame names by
+name, subtree and all, to keep an EVM trace legible. One of them is `unknown loop source code`, and
+on Solana that is the frame a loop-unwinding violation nests both its per-iteration structure and
+its `Assert 'loop has terminated' failed` under. Rendered with EVM's filter, such a trace ends at
+the handler call and states no failure anywhere in it.
+
+So the parser now takes a `TraceShape` per chain, and the two operations are distinguished because
+the distinction is what went wrong: `dropped` removes a frame and its subtree — only ever safe when
+nothing interesting can be nested inside it, which is a per-chain fact — while `elided` keeps the
+frame and replaces its subtree with a count, so a reader can tell setup happened and how much was
+hidden. Solana drops allocator bookkeeping and elides account materialization; it deliberately does
+*not* inherit EVM's two extra drops. Frames are matched by name with any value they carry stripped
+off (the prover formats a value frame as `name: '{0}'`), so one entry covers every allocation rather
+than one per address.
+
+`assertMessage` and `jumpToDefinition` were also in every output and reaching nothing. They are now
+folded into the `<counterexample>` element rather than added as `RuleResult` fields, because the
+per-rule analysis prompt, the agentic analyzer and the report's evidence capture all already read
+that one string — and because on the loop-unwinding violation the assert message is the *only*
+statement of what failed.
+
+Measured on the two fixtures: the genuine violation went from 9,473 characters and 144 frames to
+1,253 and 15, keeping every logged value; the loop violation went from 8,846 characters with the
+failure missing to 1,431 with it present.
+
+**One thing that looked like a gap and is not.** An EVM counterexample carries a `variables` table;
+on every Solana output measured it is empty. That does not matter, because CVLR puts a rule's state
+in the trace as named frames — `vault_lamports_before: '100'`, `amount: '100'`,
+`vault_lamports_before - vault_lamports_after: '99'` — so the trace is both the structure and the
+values, and rendering it well is the whole job.
+
+The fixtures are unedited output from two real runs, checked in under `tests/data/solana_cex`. That
+makes `tests/test_solana_cex_trace.py` the first non-expensive test this parser has ever had: the
+only other one submits a cloud job per assertion.
+
+#### 7.7.2 `findings: 0` was two unset hooks
+
+Every run of the gate reported `findings: []` with violated rules in it, and none of the reasons
+were interesting. `CvlrFormalizer` built its `VerifyDeps` without a CEX handler, so `submit` fell
+back to `UnanalyzedCexHandler` and nothing explained a counterexample; and it did not override
+`findings_evidence`, whose base returns `None` — the documented way a backend opts out of findings
+synthesis altogether. The report was right; nothing had asked it for any.
+
+Both now follow the CVL side's shape, which was already the template: a run-scoped
+`CexAnalysisStore` written from the prover callbacks and read back through an `EvidenceFetcher`. The
+store is a **required** constructor argument on `CvlrBackend` rather than an optional one, because a
+run that produces no findings should be somebody's decision rather than a forgotten argument.
+
+Two smaller choices worth stating. The handler is built per *call*, not per run, because it reads
+the author's live conversation as context — that is what makes its account of a counterexample worth
+more than the trace. And it is the heavy tier: reading a counterexample back to a property is the
+reasoning this backend most needs done well, since a bad account of one sends the author to rewrite
+a rule that was right.
+
+#### 7.7.3 A violated rule is not always a finding
+
+The loop-unwinding fixture is VIOLATED, has a counterexample, and is not a bug: it is the prover
+saying it ran out of loop bound. Handed to the findings synthesizer it becomes a written-up defect
+in the program under verification. This is P5's shape once more — the prover failing to complete a
+check, reported through the same channel as a result.
+
+So a violation is classified before it becomes evidence: `PropertyViolation` (the rule's own
+assertion failed) or `IncompleteCheck` (the prover reported an assertion it generated for itself).
+The signal is the assertion text, because there is no structural one — a generated `VIOLATED_ASSERT`
+node and a real one are identical in the treeView, `ruleId: null` on both. That makes the list of
+generated assertions a string match, which is why it is **built to fail safe**: an assertion it does
+not recognize is treated as the rule's own, so drift costs a spuriously reported finding — the state
+of things before any of this existed — and can never suppress a real one.
+
+**The filter is on the evidence path only, and the split is the design.** An unwound loop bound is
+worth explaining to the author, who can raise `loop_iter` or constrain the loop, so nothing is
+filtered out of the handler's account. What it must not do is become a claim about the program.
+
+That split opened one way for the deliverable to contradict itself, which is now closed. An author
+whose gate is stuck on an unwinding violation could reach for `expect_rule_failure` — the tool's own
+suggestion for a failing rule — and publish a rule declared to expose a defect that contributes
+evidence for none. So the marking no longer excuses an incomplete check from the gate, and the gate
+names those rules separately, says nothing about the program follows from them, lists the three real
+remedies, and says not to mark them. The three remedies were already in the author's prompt (§7.6.2);
+what was missing was the gate agreeing with it.
+
+#### 7.7.4 What the gate test does and does not assert
+
+It reads `report.json` back and emits the findings, and deliberately asserts nothing about the
+count. Whether this program has a bug the author's rules can catch is a fact about the program and
+the model, and a gate demanding one would fail on a correct program. The machinery is unit-tested
+instead, against the same two real counterexamples: a property violation is kept with its values
+intact, a loop bound is not kept, the author is told about it anyway, a fresh run supersedes an
+earlier iteration's capture, and the marking cannot excuse a check that never finished.
 
 ### 7.8 Phase 7 — Productionization
 

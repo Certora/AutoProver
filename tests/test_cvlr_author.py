@@ -390,7 +390,7 @@ async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeyp
         target=SimpleNamespace(session=None, stage=lambda draft, summaries=(): None),
         submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), base_conf={}),
         prover_opts=None,
-        cex=None,
+        analysis=None,
         stamper=None,
     )
     token = verify_mod.VerifyRules._dep_ctx.set(deps)
