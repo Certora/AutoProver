@@ -1301,9 +1301,10 @@ nothing.
 
 Planned as parallel with Phase 4 and reordered by §7.5.6: on an Anchor target the munge is not a
 refinement, it is what makes any rule analyzable at all. What is built is the *wiring* — pointing a
-target at `Certora/anchor`, the verification fork production already uses. The agent half (a munge
-charter, an LLM deciding what to change, the give-up boundary) is not started, and the first real case
-needed neither an agent nor a patch of our own: §7.6.4.
+target at the verification forks production already uses. The charter and the give-up boundary are
+now settled and read off a real munge (§7.6.3, §7.6.4); what remains is the ability to apply one
+(§7.6.6), which is a decision rather than a task. The phase's first success needed neither an agent
+nor a patch of our own: §7.6.7.
 
 #### 7.6.1 What is built
 
@@ -1311,10 +1312,13 @@ needed neither an agent nor a patch of our own: §7.6.4.
 target needs replaced and `manifest_additions(plan)` emits the `[patch.crates-io]` that does it. That
 is the whole module — no source copying, no patch table.
 
-`ANCHOR_FORK` is the one declared override: `anchor-lang` → `Certora/anchor` at the branch matching the
-resolved version. **This is what clears [3006]** (§7.6.2), and it is what production has always done.
+Two declared overrides, both read off real projects (§7.6.5): `ANCHOR_FORK` sends `anchor-lang` *and*
+`anchor-spl` to `Certora/anchor` at the branch matching the resolved version — **this is what clears
+[3006]** (§7.6.2) — and `FIXED_FORK` sends `fixed` to `Certora/fixed`. A fork is modelled as a
+repository with several crates in it rather than one crate, because that is what it is: the two Anchor
+crates ship off one branch and a target using both needs both.
 
-Three decisions:
+Four decisions:
 
 * **Versions are listed, not derived.** The branch names do follow `certora-v{version}`, but the case
   that matters is a version with *no* branch: the fork covers 0.30.1 and not 0.30.0. Deriving would
@@ -1324,9 +1328,13 @@ Three decisions:
   build that cannot analyze a handler.
 * **A branch, not a pinned commit.** What the reference project does: the lockfile records the commit,
   so the build is reproducible without this manifest needing an edit whenever the fork picks up a fix.
-* **A project that already sources Anchor itself is left alone.** A path or git dependency means
-  somebody decided where Anchor comes from — quite possibly this same fork. Overriding that would
-  replace a deliberate choice with a guess.
+* **A project that already sources a crate itself is left alone.** A member, a path dependency or a
+  git dependency means somebody decided where it comes from — quite possibly this same fork.
+  Overriding that would replace a deliberate choice with a guess. A source that is *not* the fork is
+  still left alone, and said so in the scaffold's notes, because it is also the first place to look
+  when a handler will not analyze.
+* **Already-patched is read from the resolved graph and from the parsed patch table, not searched
+  for as text.** §7.6.5 has what that cost before it was.
 
 The emitted manifest section leads with the fact that these are *not* the deployed program's
 dependencies, because that section is where somebody will be standing when the question occurs to
@@ -1468,14 +1476,109 @@ consistent. The prover names its own remedies this time (`-solanaAggressiveGloba
 summary), which makes it the next thing to try rather than the next thing to investigate.
 
 
-#### 7.6.3 Not started
+#### 7.6.3 The charter, read off a real munge
 
-The agent half. A munge charter, a give-up boundary (open question 4), and an LLM deciding what to
-patch. The first real case was a declared patch derived by hand from a prover error message, and it is
-worth noticing that no agent was involved in the phase's first success — the give-up boundary is a
-question about cases nobody has met yet.
+§9's mitigation for unbounded munging says the charter should be "derived from real diffs, not
+imagination", so before writing one: the corpus has exactly one project carrying a source-level
+munge, `klend-audit`, and it carries the whole apparatus — `munge.sh`, `unmunge.sh`,
+`record_diffs.sh`, a recorded `certora-munges.patch` and a `certora-Cargo.lock`. 22 files, 1097
+lines. Every source hunk in it is one of **six kinds**, and five of the six are a CVLR attribute or
+a feature-gated `use` rather than a rewrite:
 
-#### 7.6.4 The detour, and what it cost
+| kind | occurrences | what it is |
+|---|---|---|
+| `#[cfg_attr(feature = "certora", cvlr::early_panic)]` | 15 | rewrites every `?` in the function to `.unwrap()` |
+| `#[cfg_attr(feature = "certora", cvlr::mock_fn(with = …, when = …))]` | 6 | replaces the function with a named stand-in |
+| `#[cfg(feature = "certora")] use crate::certora::mocks::prelude::*;` | 6 | brings the stand-ins' traits into scope |
+| `msg!` redirected to a `certora::log` module | 3 | under paired `cfg`/`cfg(not(…))` |
+| literal array sizes replaced by `NUM_DEPOSITS` / `NUM_BORROWS` | 2 | shrinks bounded collections so loops over them fit the unroll bound |
+| `inline(never)`, always paired with `early_panic` | 3 | keeps the function a frame the prover can see |
+
+Both attributes are in the pinned reference set (`cvlr` 0.6.1 re-exports `early_panic` and
+`mock_fn`), so this is a small declarative vocabulary, not free-form source editing. Four things in
+it are worth stating plainly.
+
+**`early_panic` is the same mechanism this backend already teaches, one level down.** It replaces
+`?` with `.unwrap()` — literally, that is the whole macro — which is exactly the `.unwrap()`
+versus `.is_ok()` choice §7.6.2 measured, applied where a *rule* cannot reach it: a `?` inside the
+program's own call chain, below the handler. It is the most common munge in the corpus by a wide
+margin. What it does **not** do is make an acceptance property statable: it removes the failure path
+rather than exposing it, so "the handler accepts a zero amount" is no more provable after it.
+
+**`mock_fn` differs from `summarize_for_prover` in the direction that matters.** A summary havocs
+the return; a mock *computes* it. So a property downstream of a mocked function still means
+something, where downstream of a summary it usually does not. `when` defaults to the `certora`
+feature, and klend uses named variants (`certora-health`,
+`certora-calculate-liquidation-simplified`) so one tree carries several mock configurations chosen
+at build time.
+
+**Shrinking a bounded collection is sound in the wrong direction, and silently.** Proving a property
+for 2 deposits is not proving it for 8. The prompt's version of this remedy — `cvlr_assume!` a bound
+on the length — puts the bound in the rule, where the report can see it and state it. A shrunk array
+type puts it nowhere.
+
+**The one hunk that is not one of the six kinds is a hand-unrolled loop**, and it carries a comment
+its author wrote to justify it. That is the right home for that class of change, and it is the
+evidence for the boundary below.
+
+#### 7.6.4 The give-up boundary — open question 4, answered
+
+Not in edits and not in wall-clock. Both are proxies for nothing: klend's munge is 1097 lines and
+entirely routine, while a single hand-unrolled loop is the change that needs a person.
+
+**The boundary is the vocabulary.** A munge is in charter if it is one of the declared kinds. A
+change that would need a *new* kind is a give-up, and the give-up is a skip that names the kind it
+would have needed — which is actionable for a human in a way "the prover refused this" is not.
+
+That has two properties an edit budget does not. It is checkable, because the kinds are attributes
+with names. And it fails in the safe direction: the vocabulary grows by somebody adding a kind with
+the diff that justified it, which is the same discipline `ANCHOR_FORK`'s branch list follows and for
+the same reason.
+
+#### 7.6.5 What the corpus survey corrected in what was already built
+
+The survey behind §7.6.3 was over nine projects with a `[patch.crates-io]` table, and it found three
+things wrong with the module §7.6.1 describes. All three were silent.
+
+**`anchor-spl` was missing.** Both corpus projects verifying an Anchor program patch `anchor-spl`
+alongside `anchor-lang`, to the same repo and branch, and the fork's own history says why: two
+commits add `pub fn new_unchecked` to `TokenAccount` and to `Mint`, marked "CERTORA: used to create
+a new instance for verification purposes". Upstream those are newtypes over a private field, so
+without the fork a harness cannot build a token account at all. Patching only `anchor-lang` does
+clear [3006] — the boxing is in `anchor_lang::error` — which is what made this look complete.
+
+**`Certora/fixed` was not known about.** A second maintained fork, `certora-v1.23.1`, carrying
+conversions verification code needs (`From<u64> for FixedU64`) that upstream does not provide. Two
+projects resolve it, at the same commit, and it is a dependency of the program rather than of its
+tests.
+
+**The already-patched check could not see a real project's patch table.** It searched `Cargo.toml`
+for a `[patch.crates-io.<crate>]` header. All nine projects write the other spelling — one shared
+`[patch.crates-io]` header with an inline table per crate — and none writes the sub-table form this
+module emits. They are the same TOML and share no text. So the search found nothing, the scaffold
+appended a second entry for a key TOML already had, and cargo refused the manifest outright: the
+projects it broke were exactly the ones already doing the right thing. Now the table is parsed
+rather than searched, and the resolved graph is consulted as well, where a redirect shows up as a
+git source. A crate sourced from somewhere *other* than the fork is left alone and said so, because
+that is somebody's decision and also the first place to look when a handler will not analyze.
+
+The pattern is §7.6.7's again, one turn later: every one of these was invisible from inside a
+scaffold this backend wrote, and visible in one pass over projects it did not.
+
+#### 7.6.6 Not started
+
+Applying a source munge. The vocabulary is settled and the boundary is drawn, but this backend
+cannot write either attribute into a target today — the author has no source-editing tool, which
+§7.5.4 lists as deliberate, and giving it one is a decision rather than a detail: a property proved
+against munged source is a property of the munged program, and saying so is the same disclosure
+obligation `rule_subjects` and `summaries` already carry.
+
+If it is built, it should not be a munge-specific path. The shared report layer already has
+`Formalizer.source_edits()`, `SourceEditRecord` and `AppliedEditRecord`, which the EVM backend fills
+and this one returns `[]` for; a munge is a source edit, and reporting it through a second channel
+would be the §7.6.7 mistake in a new place — a second answer to a solved question, drifting.
+
+#### 7.6.7 The detour, and what it cost
 
 Worth recording because the mistake is repeatable and the correction came from a question, not from a
 measurement.
@@ -1683,7 +1786,12 @@ whether any of these pieces deserve to be bundled after all.**
    cache is now load-bearing rather than an optimization, and needs a confinement policy that grants
    a read-only mount of a common cache. One constraint still holds: a workdir may not switch
    confinement posture mid-run without losing its incremental cache (§5.1).
-4. **Where the munge give-up boundary sits**, in edits or in wall-clock.
+4. ~~**Where the munge give-up boundary sits**, in edits or in wall-clock.~~ **Answered: in
+   neither — the boundary is the vocabulary** (§7.6.4). Both proxies measure the wrong thing: the
+   one real source munge in the corpus is 1097 lines and entirely routine, while its single
+   hand-unrolled loop is the change that needed a person. A munge is in charter if it is one of the
+   six kinds read off that diff; a change needing a new kind is a give-up, and the give-up is a skip
+   naming the kind it would have needed.
 5. **Rule granularity per property** — one `#[rule]` per property, or parametric rules /
    `cvlr_rules!` batching. *Partially answered* (§7.5.3): both forms are offered, the prompt says to
    prefer parametric when one property spans handlers, and the *generated* names are what the mapping
@@ -1699,7 +1807,7 @@ whether any of these pieces deserve to be bundled after all.**
 | **Loop latency** | A build-gated loop may be 10–50× slower per iteration than CVL's typecheck gate; it compounds with retries | Measured in Phase 1b before any agent work; two-tier gate; warm workdir; shared RO cache in reserve |
 | **Cold-start hallucination** | Thin CVLR training data means invented macros and helpers | Two independent defenses: the crate source is readable and authoritative (§5.5), which prevents the guess; and the compile gate catches whatever slips through — but only if the gate is in the loop, which loops back to the latency risk. That coupling is the central tension of the project, and source access is the cheaper half of the answer |
 | **Reading the wrong CVLR** | Source that disagrees with the version the build resolves is confidently wrong — worse than no source | The host resolves the version from `cargo metadata` and mounts exactly that tree; the agent never picks a version, and the version is stated in the prompt |
-| **Unbounded munging** | Solana munging can approach a rewrite | Explicit give-up boundary; charter derived from real diffs, not imagination |
+| **Unbounded munging** | Solana munging can approach a rewrite | **Both halves done and from evidence** (§7.6.3–4): the charter is six kinds read off the one real source munge in the corpus, five of them a CVLR attribute rather than a rewrite; the boundary is that vocabulary rather than an edit or time budget, because the real diff is 1097 routine lines and one hand-unrolled loop |
 | **Illegible counterexamples** | Verdicts the agent cannot act on stall the loop | `clog!` discipline enforced at authoring time, not diagnosed at analysis time |
 | **Premature Soroban abstraction** | An interface designed against a guess costs more than a later refactor, and is harder to undo | No per-chain bundle (§4.1); Soroban's pieces deferred to Phase 8; "would Soroban need this different?" asked at review time against the existing Soroban model |
 | **The dev opt-out leaking into production** | An unconfined build runs untrusted `build.rs` and proc-macros with the developer's full environment; if it becomes the silent default, the whole confinement story is decorative | Explicit env-var opt-out only, never an automatic degrade; production/CI assert the launcher; unconfined runs marked in output and report |
