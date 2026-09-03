@@ -545,3 +545,40 @@ def test_a_mirror_must_also_name_program_code_as_what_it_stands_in_for():
     err = validate_rule_subjects(subjects, draft)
     assert err is not None
     assert "not in the program under verification" in err
+
+
+def _harness_with(subjects: list) -> GeneratedHarness:
+    return GeneratedHarness(
+        commentary="",
+        harness="",
+        property_rules=[],
+        rule_subjects=subjects,
+        skipped=[],
+        summaries=[],
+    )
+
+
+def test_a_harness_with_no_rules_is_not_a_harness_that_verifies_itself():
+    """The gate's reach predicate asked "does any rule drive the program", which answers *no* both
+    for a harness of pure mirrors and for one that skipped every property with a reason. Those are
+    opposite outcomes, and a run produced the second — seven skips naming the CPI havoc (P6), the
+    summaries attempted, and the absent accounting core — and the gate failed the run for it.
+
+    Pinned here rather than in ``test_cvlr_gate``, whose module-level marker makes every test in it
+    an expensive live-prover run.
+    """
+    from tests.test_cvlr_gate import _verifies_only_its_own_code
+
+    assert not _verifies_only_its_own_code(_harness_with([]))
+
+    mirror_only = [
+        DrivesHarnessMirror(
+            rule="rule_mirror", mirrors="crate::vault_program::deposit", reason="[3308]"
+        )
+    ]
+    assert _verifies_only_its_own_code(_harness_with(mirror_only))
+
+    mixed = [*mirror_only, DrivesProgramFunction(
+        rule="rule_real", function="crate::vault_program::withdraw"
+    )]
+    assert not _verifies_only_its_own_code(_harness_with(mixed))
