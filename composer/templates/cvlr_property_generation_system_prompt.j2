@@ -244,11 +244,8 @@ program the prover currently refuses to analyze it (the error construction — s
 limitation with a real cause, and a reviewer can act on it; a satisfy rule in its place is a green
 verdict about nothing.
 
-One further coupling, because it changes what your rule means. Pruning the panic depends on
-`assert_on_panic` being off, which is the default and what this conf uses. If it is ever on, an
-`.unwrap()` that can fail becomes an assertion violation — the rule then claims the handler *never*
-fails, which is a different and usually false claim. A panic-freedom property is a separate rule
-written deliberately, not a side effect of how you consumed a `Result`.
+This is also why **panic-freedom is not a property you can state here** — see the arithmetic
+section below. Pruning is what makes `.unwrap()` work, and it is not switchable per rule.
 
 **Observe post-state through the handle the context borrowed — never by deserializing the account
 again.** This is the one that silently produces a wrong answer, so it is worth understanding rather
@@ -296,12 +293,34 @@ unconstrained stand-in, so a property about what the CPI *did* — lamports actu
 balance actually changed — is an assumption your rule makes rather than something it checks. Assert
 over the program's own recorded state, which is the part it is responsible for.
 
-## Overflow is a real property class here
+## Arithmetic, and why panic-freedom is not on the menu
 
-Unlike EVM, a Solana release build does *not* check arithmetic by default, and the prover has
-`assert_on_panic` for exactly this. Panic-freedom and absence of overflow are properties worth
-stating, not non-properties. Use `NativeInt` (`cvlr::mathint`) when you need to reason about a value
-without the bit-width getting in the way, and convert back once you have bounded it.
+Arithmetic correctness is a real property class here, and a stronger one than on EVM: rules reason
+over exact integers, so "the fee is exactly one percent" or "supply is conserved" is stated directly.
+Use `NativeInt` (`cvlr::mathint`) when you need a value without the bit-width in the way, and convert
+back once you have bounded it.
+
+**"This handler cannot be made to panic" is not something you can check, and you should not try.**
+Two independent reasons, and the first is the one that matters:
+
+* **A panic reverts.** On Solana a panic — like a returned `Err` — aborts the instruction and the
+  runtime rolls back every account mutation. So a panicking path cannot violate an invariant: there
+  is no surviving state for the invariant to be false about. Pruning those paths is not a gap in the
+  analysis, it is the analysis agreeing with the runtime. A reachable panic is an *availability*
+  concern, not a state-integrity one, and it is not a finding you can produce from a rule.
+* **The switch is per-run, not per-rule.** Treating panics as assertion violations is a conf option,
+  and this backend writes one conf per unit. Turning it on to state one panic-freedom property would
+  make every *other* rule in the unit report its pruned panicking paths as violations. There is no
+  configuration in which one rule sees panics and its neighbours do not.
+
+So do not write a rule asserting a handler never panics, and do not report a panicking path as an
+attack. If a property in your batch asks for panic-freedom, skip it and say that a panic reverts, so
+the property is not about state the program can be left in.
+
+One thing this makes *more* important rather than less: if an unchecked operation can **wrap** rather
+than panic, that is a genuine state-integrity bug and it is checkable — assert the post-state equals
+the mathematically correct value and the rule fails on the wrapping input. Whether a build wraps or
+panics is a profile setting (`overflow-checks`), so read it rather than assuming.
 
 ## When a rule should fail
 

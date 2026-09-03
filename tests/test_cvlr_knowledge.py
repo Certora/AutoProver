@@ -240,12 +240,36 @@ def test_the_guidance_reaches_the_property_extractors_system_prompt():
     assert "cannot be made to panic" in _property_system_prompt()
 
 
-def test_the_guidance_does_not_repeat_the_evm_exclusions_that_invert_here():
-    """Two of ``CERTORA_BACKEND_GUIDANCE``'s exclusions are wrong on this chain, and getting them
-    wrong is expensive in opposite directions — one would drop the most frequently violated property
-    class there is, the other would suppress exactly the properties that are cheapest to check."""
-    assert "does not check arithmetic" in SOLANA_CVLR_GUIDANCE
+def test_the_guidance_does_not_repeat_the_evm_exclusion_that_inverts_here():
+    """``CERTORA_BACKEND_GUIDANCE`` suppresses properties spanning many functions because they are
+    expensive on EVM. Here ``cvlr_rules!`` fans one property across a grid of handlers for a line, so
+    repeating that exclusion would drop exactly the properties that are cheapest to check."""
     assert "cheaper, not dearer" in SOLANA_CVLR_GUIDANCE
+
+
+def test_panic_freedom_is_excluded_rather_than_advertised():
+    """An earlier version called "cannot be made to panic" real, checkable and frequently violated.
+    It is none of the three here.
+
+    A panic aborts the instruction and the runtime rolls back every account mutation, exactly as a
+    returned error does — so a panicking path cannot leave state that violates an invariant, and the
+    analysis prunes those paths to agree with the runtime. A reachable panic is an availability
+    concern. And the flag that would report panics as violations is per-conf while one conf covers a
+    whole component, so it cannot be turned on for one property without corrupting its neighbours'
+    verdicts.
+
+    Measured cost of getting this wrong: a gate run extracted two panic-freedom properties, wrote
+    them up as real attacks the prover was hiding, and skipped both — two of that unit's eight skips
+    spent on a property class that has no rule.
+
+    Arithmetic that *wraps* is a different matter and stays in the checkable list: the wrong value
+    survives the call, so a rule catches it.
+    """
+    assert "Panic freedom" in SOLANA_CVLR_GUIDANCE
+    excluded = _flat(SOLANA_CVLR_GUIDANCE.split("should not be extracted as a property")[1])
+    assert "Panic freedom" in excluded
+    assert "rolls back every account mutation" in excluded
+    assert "is a different matter and belongs above" in excluded
 
 
 def test_the_guidance_scopes_verification_below_the_dispatcher():
