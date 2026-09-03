@@ -166,8 +166,15 @@ exactly two kinds, because these are what practitioners actually reach for:
   path rather than exposing one.
 * **`mock_fn`** replaces the function with a stand-in. Unlike `summarize_for_prover`, which havocs the
   return, a mock *computes* one — so a property downstream of a mocked function still means
-  something, where downstream of a summary it usually does not. You have to have written the stand-in
-  somewhere the munged file can reach, with the same signature.
+  something, where downstream of a summary it usually does not. The stand-in has to already exist,
+  with the same signature, at a path the program's own file can spell: either a simpler function the
+  program already defines, or a `pub fn` you write in this module, named as
+  `crate::certora::specs::{{ module }}::<fn>`.
+
+  Take the second only when the property is not about what the stand-in computes. A stand-in you
+  wrote that reproduces the arithmetic a rule asserts over is the mirror problem with an attribute
+  in front of it: the rule names the program's function and verifies yours. Mocking a hash, a
+  clock, or a CPI the property does not speak about is the case this is for.
 
 A third exists and you should prefer the honest version of it. Shrinking a bounded collection — the
 array in the state struct going from 8 entries to 2 under the `certora` feature — makes loops over it

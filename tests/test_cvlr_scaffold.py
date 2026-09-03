@@ -25,7 +25,9 @@ import pytest
 
 from composer.cargo.metadata import CratePackage, LibTarget, Workspace, parse_metadata
 from composer.spec.cvlr import preflight, scaffold
+from composer.spec.cvlr.harness import CvlrArtifactStore, HarnessModule
 from composer.spec.cvlr.scaffold import (
+    HARNESS_DIR,
     INLINING,
     AppendSection,
     InsertInTable,
@@ -187,6 +189,27 @@ def test_the_manifest_a_fresh_project_ends_up_with_still_parses(tmp_path):
     metadata = parsed["package"]["metadata"]["certora"]
     assert metadata["sources"] == ["Cargo.toml", "src/**/*.rs"]
     assert metadata["solana_inlining"] == ["src/certora/envs/cvlr_inlining.txt"]
+
+
+def test_the_path_a_mock_names_resolves_from_the_programs_own_file(tmp_path):
+    """`cvlr::mock_fn(with = crate::certora::specs::<unit>::<fn>)` expands where the *munged*
+    function is — the program's own source, which is outside `certora`. So every segment between
+    there and the stand-in has to be `pub`, and the segments are written by two different modules:
+    `certora/mod.rs` by the scaffold, `specs/mod.rs` by `declare_modules`.
+
+    Both shipped as bare `mod`, which compiles and is invisible until a munge names a path through
+    them: E0603, from a generated file that neither the author nor the judge ever reads, on the one
+    tool whose whole purpose is to get past a rejected function. Verified against rustc that `pub`
+    inside a private `mod certora;` is what makes the path resolve without widening the crate.
+    """
+    plan, workspace = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
+    apply(plan, workspace.root)
+    root = (tmp_path / HARNESS_DIR / "mod.rs").read_text()
+    assert "pub mod specs;" in root and "pub mod mocks;" in root
+
+    store = CvlrArtifactStore(tmp_path, Path("."))
+    declared = store.declare_modules([HarnessModule("withdraw")]).read_text()
+    assert "pub mod withdraw;" in declared
 
 
 def test_a_feature_table_that_exists_is_edited_rather_than_reopened(tmp_path):

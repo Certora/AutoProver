@@ -329,12 +329,12 @@ check these rather than to re-read the argument.
 
 Carried here so §7's revisit has them in one place. Ranked by what a wrong answer costs.
 
-1. **The judge cannot see what the author changed.** The judge's system prompt instructs it to
-   *"check the summaries the same way"* and the judge is never given them; with munges added, it now
-   reviews a harness without being told the program underneath was modified. EVM's reviewer receives
-   the diff by construction and its approval is void the moment anything changes. The mechanism to
-   fix it exists and was built for this case: `ContextualFeedbackThunk`, whose documentation names
-   *"the editing pipeline's snapshot of the author's working copy"* as its motivating example.
+1. ~~**The judge cannot see what the author changed.**~~ **Closed** — the CVLR judge is contextual,
+   and `HarnessAssumptions` (the summaries and the munges, each with the author's justification)
+   rides into its input on every review. See plan §7.7.5. Note what remains uncovered: EVM's
+   reviewer receives a *diff* and its approval is void the moment anything changes, whereas this
+   judge receives a description and its stamp is invalidated by `tuning_history` rather than by the
+   judge itself. Same effect, different mechanism, and only the digest enforces it.
 2. **Nothing checks that a munge reached the build.** Plan §5.2 predicted this analogue of
    `EditsNotCompiled` and it is not built. The Rust failure is quiet: an attribute inserted into a
    file the `certora` feature gates out changes nothing and reports nothing, and the report still
