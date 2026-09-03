@@ -57,14 +57,25 @@ from composer.spec.cvlr.scaffold import ENVS_DIR, SPECS_DIR
 from composer.spec.cvlr.tuning import TuningFiles
 from composer.spec.cvlr.source_tools import cvlr_source_tools, mount
 from composer.spec.cvlr.state import PROVER_VALIDATION_KEY
-from composer.spec.cvlr.verify import HarnessTarget, VerifyDeps, prover_stamper
+from composer.spec.cvlr.verify import (
+    CexAnalysis,
+    HarnessTarget,
+    VerifyDeps,
+    prover_stamper,
+)
 from composer.spec.solana.model import (
     SolanaApplication,
     SolanaComponentInstance,
     SolanaProgramInstance,
 )
 from composer.io.multi_job import TaskInfo
-from composer.spec.source.report.collect import Formalized, Verdict
+from composer.spec.source.cex_capture import CexAnalysisStore
+from composer.spec.source.report.collect import (
+    EvidenceFetcher,
+    Formalized,
+    RuleEvidence,
+    Verdict,
+)
 from composer.spec.source.report_prover import make_prover_fetcher
 from composer.spec.source.report.schema import RuleName
 from composer.spec.types import PropertyFormulation
@@ -125,6 +136,8 @@ class CvlrDeps:
     #: tell which release the advice in it was about.
     versions: str
     crate_tools: tuple[BaseTool, ...]
+    #: Where each violated rule's analysis lands, for the report to reshape into findings.
+    cex_analysis: CexAnalysisStore
 
 
 @dataclasses.dataclass
@@ -179,6 +192,10 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
             ),
             prover_opts=self.deps.prover_opts,
             stamper=prover_stamper(),
+            # The heavy tier: reading a counterexample back to a property is the reasoning this
+            # backend most needs done well, and a bad account of one sends the author to rewrite a
+            # rule that was right.
+            analysis=CexAnalysis(llm=run.env.llm_heavy(), store=self.deps.cex_analysis),
         )
         return await batch_cvlr_generation(
             ctx.abstract(CvlrGeneration),
@@ -208,6 +225,26 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
         a prover job behind it; this one is built per call because a formalizer is cheap to make and
         holding an API client on it would outlive the run."""
         return await make_prover_fetcher()(formalized)
+
+    @override
+    def findings_evidence(self) -> EvidenceFetcher | None:
+        """This backend produces findings, because its prover runs analyze what they violated.
+
+        Not unconditional in spirit: what reaches the store is filtered by
+        :class:`composer.spec.cvlr.verify._CaptureCallbacks`, so a unit whose only violations were
+        the prover running into its own limits contributes evidence for none of them and the report
+        says so through the verdicts instead.
+        """
+        return self._fetch_evidence
+
+    async def _fetch_evidence(self, rule_name: str) -> list[RuleEvidence]:
+        # Every instantiation the run analyzed. CVLR's parametric form (``cvlr_rules!`` over several
+        # bases) declares one rule per base under distinct names, so this is a list of one today —
+        # but the shape is the shared one and narrowing it here would only have to be undone.
+        return [
+            RuleEvidence(label=r.label, analysis=r.analysis, counterexample=r.counterexample)
+            for r in await self.deps.cex_analysis.for_rule(rule_name)
+        ]
 
 
 @dataclasses.dataclass
@@ -248,6 +285,10 @@ class CvlrBackend:
     artifact_store: CvlrArtifactStore
     prover_opts: ProverOptions
     sandbox: SandboxConfig
+    #: Run-scoped, because rule names repeat across runs and a shared namespace would let one run's
+    #: counterexamples be read as another's. Required rather than defaulted to ``None``: a run that
+    #: produces no findings should be somebody's decision, not a forgotten argument.
+    cex_analysis: CexAnalysisStore
     #: The package to verify. ``None`` lets preflight pick it when there is only one candidate; a
     #: workspace with several is refused rather than guessed at.
     package: str | None = None
@@ -316,6 +357,7 @@ class CvlrBackend:
             package_dir=preflight.package_dir,
             versions=versions,
             crate_tools=crate_tools,
+            cex_analysis=self.cex_analysis,
         )
         return CvlrPrepared(SOLANA.locate_main(analyzed, run.source), deps)
 

@@ -22,12 +22,12 @@ import asyncio
 import dataclasses
 import logging
 from pathlib import Path
-from typing import Sequence, override
+from typing import Container, Mapping, Sequence, override
 
 from langchain_core.tools import BaseTool
 from pydantic import Field
 
-from graphcore.graph import tool_return, tool_state_update
+from graphcore.graph import LLM, tool_return, tool_state_update
 from graphcore.tools.schemas import (
     Command,
     WithAsyncDependencies,
@@ -40,7 +40,19 @@ from composer.authoring.state import ValidationStamper, make_validation_stamper
 from composer.cargo.sbf import Built, PlatformToolsMissing, SbfRun
 from composer.cargo.session import CargoSession, CompileFailed, Compiled
 from composer.cargo.symbols import defined_functions, nearest, unmatched
-from composer.prover.core import CexHandler, ProverCallbacks, ProverOptions
+from composer.prover.core import (
+    CexHandler,
+    ProverCallbacks,
+    ProverOptions,
+    TrivialFanoutCexHandler,
+    UnanalyzedCexHandler,
+)
+from composer.prover.ptypes import (
+    IncompleteCheck,
+    PropertyViolation,
+    RuleResult,
+    classify_violation,
+)
 from composer.spec.cvlr.conf import SelectRules, tools_version
 from composer.spec.cvlr.prover import (
     BuildRejected,
@@ -57,6 +69,7 @@ from composer.spec.cvlr.state import (
     tuning_history,
 )
 from composer.spec.cvlr.tuning import SummaryDirective, TuningFiles
+from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.types import CheckName
 from composer.ui.tool_display import tool_display
 
@@ -93,6 +106,94 @@ class HarnessTarget:
             self.tuning.write(tuple(summaries))
 
 
+class _CaptureCallbacks(ProverCallbacks):
+    """Keeps each violated rule's analysis where the report phase can find it.
+
+    Two responsibilities, and the split between them is the point:
+
+    * The *handler* explains every violated rule to the author. An unwound loop bound is worth
+      explaining — the author can raise ``loop_iter`` or constrain the loop — so nothing is filtered
+      out of that path.
+    * This callback decides what becomes **evidence**. An :class:`IncompleteCheck` is not evidence
+      about the program, so recording one would hand the findings synthesizer a counterexample and
+      let it write up the prover's own limits as a bug in the code under verification.
+    """
+
+    def __init__(self, store: CexAnalysisStore) -> None:
+        super().__init__()
+        self._store = store
+        self._incomplete: dict[str, str] = {}
+
+    @property
+    def incomplete(self) -> Mapping[str, str]:
+        """The last run's rules that stopped on an assertion the prover generated, and which one.
+
+        Read by the gate, which has to say something different about these than about a rule whose
+        own assertion failed. Derived here rather than in ``_report`` because the counterexample it
+        is derived from does not survive into :class:`~composer.prover.core.ProverReport`, which
+        carries statuses only.
+        """
+        return self._incomplete
+
+    @override
+    async def on_prover_result(self, results: dict[str, RuleResult]) -> None:
+        # This run supersedes what was captured for the rules it covers. Dropping their old records
+        # before the handler writes fresh ones is what stops a rule that failed in an earlier
+        # iteration and passes now from surviving into the report as a current failure. Fires before
+        # the handler by contract, so what is recorded below is always this run's.
+        self._incomplete = {}
+        for result in results.values():
+            if result.status != "VIOLATED":
+                continue
+            match classify_violation(result.counterexample):
+                case IncompleteCheck(assertion=assertion):
+                    self._incomplete[result.path.rule] = assertion
+                case PropertyViolation():
+                    pass
+        for rule_name in {r.path.rule for r in results.values()}:
+            try:
+                await self._store.forget_rule(rule_name)
+            except Exception:
+                _log.exception("cvlr: failed to clear stale cex analyses for %s", rule_name)
+
+    @override
+    async def on_analysis_complete(self, rule: RuleResult, explanation: str) -> None:
+        match classify_violation(rule.counterexample):
+            case IncompleteCheck(assertion=assertion):
+                _log.info(
+                    "cvlr: %s came back violated on an assertion the prover generated (%s), so it "
+                    "is not recorded as evidence about the program",
+                    rule.name,
+                    assertion.split(".")[0],
+                )
+            case PropertyViolation():
+                # Never let a capture failure disturb the run: the verdict is already in hand and
+                # the report can render without the explanation.
+                try:
+                    await self._store.record(rule.path, explanation, rule.cex_dump)
+                except Exception:
+                    _log.exception("cvlr: failed to capture cex analysis for %s", rule.name)
+
+
+@dataclasses.dataclass(frozen=True)
+class CexAnalysis:
+    """What turns a violated rule into a finding: something to explain it, somewhere to keep it.
+
+    Built per run rather than per submission, but the handler itself has to be built per *call* —
+    it reads the author's live conversation as context for the explanation, which is exactly what
+    makes its account of a counterexample worth more than the trace alone.
+    """
+
+    llm: LLM
+    store: CexAnalysisStore
+
+    def handler(self, state: CvlrGenerationState) -> CexHandler:
+        return TrivialFanoutCexHandler(self.llm, state)
+
+    def callbacks(self) -> "_CaptureCallbacks":
+        return _CaptureCallbacks(self.store)
+
+
 @dataclasses.dataclass(frozen=True)
 class VerifyDeps:
     """What the prover gate needs beyond the draft."""
@@ -101,16 +202,34 @@ class VerifyDeps:
     submission: Submission
     prover_opts: ProverOptions
     stamper: ValidationStamper
-    cex: CexHandler | None = None
+    #: ``None`` runs the prover with no analysis at all — the plumbing tests and any caller with no
+    #: LLM. A run that means to produce findings has to supply this.
+    analysis: CexAnalysis | None = None
     #: One submission at a time per unit. A second concurrent run would build into the same workdir
     #: and race the staged module; the tool refuses rather than serializing silently, because a
     #: caller that made two calls wanted two answers.
     lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
 
 
-def _unaccounted(status: dict[str, bool], expected_failures: dict[CheckName, str]) -> list[str]:
-    """Rules that failed and were not declared as expected failures."""
-    return sorted(name for name, ok in status.items() if not ok and name not in expected_failures)
+def _unaccounted(
+    status: dict[str, bool],
+    expected_failures: dict[CheckName, str],
+    incomplete: Container[str] = (),
+) -> list[str]:
+    """Rules that failed and were not declared as expected failures.
+
+    An incomplete check cannot be declared away, which is why the marking does not excuse one:
+    ``expect_rule_failure`` claims the failure exposes a real defect, and a rule that stopped on the
+    prover's own generated assertion never reached its property, so it has shown no defect at all.
+    Letting the marking through would publish a finding-shaped claim with nothing behind it — and
+    nothing behind it in a literal sense, since such a rule contributes no evidence either
+    (:class:`_CaptureCallbacks`).
+    """
+    return sorted(
+        name
+        for name, ok in status.items()
+        if not ok and (name not in expected_failures or name in incomplete)
+    )
 
 
 def _wrongly_expected(status: dict[str, bool], expected_failures: dict[CheckName, str]) -> list[str]:
@@ -190,6 +309,8 @@ class VerifyRules(
                 )
             async with deps.lock:
                 deps.target.stage(draft, self.state["summaries"])
+                analysis = deps.analysis
+                capture = analysis.callbacks() if analysis else None
                 outcome = await submit(
                     deps.target.session,
                     # Name exactly the rules this draft declares. Not a refinement: a conf with no
@@ -200,11 +321,15 @@ class VerifyRules(
                     # its siblings' drafts.
                     dataclasses.replace(deps.submission, rules=SelectRules(tuple(declared))),
                     prover_opts=deps.prover_opts,
-                    callbacks=ProverCallbacks(),
-                    cex=deps.cex,
+                    callbacks=capture if capture is not None else ProverCallbacks(),
+                    cex=(
+                        analysis.handler(self.state) if analysis else UnanalyzedCexHandler()
+                    ),
                     tool_call_id=self.tool_call_id,
                 )
-            return self._report(outcome, deps)
+            return self._report(
+                outcome, deps, capture.incomplete if capture is not None else {}
+            )
 
     def _nothing_to_submit(self) -> Command | str:
         """A draft with no rules: either unfinished, or a unit whose every property is blocked.
@@ -276,7 +401,9 @@ class VerifyRules(
         )
         return "\n".join(lines)
 
-    def _report(self, outcome: CvlrOutcome, deps: VerifyDeps) -> Command | str:
+    def _report(
+        self, outcome: CvlrOutcome, deps: VerifyDeps, incomplete: Mapping[str, str]
+    ) -> Command | str:
         stamper = deps.stamper
         expected = self.state["expected_failures"]
         match outcome:
@@ -302,7 +429,7 @@ class VerifyRules(
                 return tool_return(self.tool_call_id, "\n\n".join(said))
             case Checked(build=build, report=report):
                 status = report.rule_status
-                unaccounted = _unaccounted(status, expected)
+                unaccounted = _unaccounted(status, expected, incomplete)
                 surprising = _wrongly_expected(status, expected)
                 lines = [report.result_str]
                 if (inert := self._inert_summaries(build, deps.submission)) is not None:
@@ -312,6 +439,19 @@ class VerifyRules(
                         "These rules are marked as expected failures but VERIFIED: "
                         f"{', '.join(surprising)}. Either the defect is not there, or the rule does "
                         "not test for it — resolve that before publishing."
+                    )
+                if incomplete:
+                    named = "\n".join(
+                        f"  {name}: {assertion}" for name, assertion in sorted(incomplete.items())
+                    )
+                    lines.append(
+                        "These rules stopped on an assertion the prover generated rather than one "
+                        f"of yours, so they never reached their property:\n{named}\n"
+                        "Nothing here is a statement about the program. Constrain what determines "
+                        "the trip count, summarize the loop if it is not what your property is "
+                        "about, or skip the property and say what bound it needed. Do not mark one "
+                        "of these with expect_rule_failure: that claims a real defect, and none "
+                        "has been shown."
                     )
                 if unaccounted:
                     lines.append(
