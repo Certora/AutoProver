@@ -242,6 +242,15 @@ What also changes: the **munge charter** ([templates/munge_charter.j2](../compos
 needs a CVLR version, and an explicit give-up boundary. EVM munging is bounded fixup; Solana
 munging can approach a rewrite, and the loop needs a stopping rule.
 
+**Both since done, and the CVLR charter is not a second template** (§7.6.3, §7.6.4). EVM's charter is
+a `.j2` because a separate munge agent reads it; on this backend the author holds `munge_function`
+itself, so the charter belongs in the author's own system prompt and a template would be the same
+rules stated twice. The structures converged anyway — EVM's three kinds and "Lines You Do Not Cross"
+against CVLR's two kinds and a boundary that is the vocabulary — which is some evidence the shape is
+right rather than local. The Solana charter came out *narrower* than the EVM one, not wider: the one
+real source munge in the corpus is almost entirely CVLR attributes, so "Solana munging can approach a
+rewrite" turned out to be true of one hunk in 1097 lines.
+
 ### 5.3 Counterexamples are only as legible as the rule's `clog!`s
 
 Half of this is free: `certoraSolanaProver` produces the same treeView reports, so
@@ -1300,11 +1309,14 @@ nothing.
 ### 7.6 Phase 5 — Munge
 
 Planned as parallel with Phase 4 and reordered by §7.5.6: on an Anchor target the munge is not a
-refinement, it is what makes any rule analyzable at all. What is built is the *wiring* — pointing a
-target at the verification forks production already uses. The charter and the give-up boundary are
-now settled and read off a real munge (§7.6.3, §7.6.4); what remains is the ability to apply one
-(§7.6.6), which is a decision rather than a task. The phase's first success needed neither an agent
-nor a patch of our own: §7.6.7.
+refinement, it is what makes any rule analyzable at all. Two halves, and both are built. The
+*dependency* munge points a target at the verification forks production already uses (§7.6.1), and
+the corpus survey behind §7.6.3 corrected three silent things in it (§7.6.5). The *source* munge is
+a closed vocabulary of two CVLR attributes read off the one real source munge anybody has written
+(§7.6.3), applied by `munge_function` on the shared source-edit path (§7.6.6), with the give-up
+boundary being that vocabulary rather than a budget (§7.6.4). The phase's first success needed
+neither an agent nor a patch of our own, which is §7.6.7 and the reason none of the above is
+invented.
 
 #### 7.6.1 What is built
 
@@ -1565,18 +1577,40 @@ that is somebody's decision and also the first place to look when a handler will
 The pattern is §7.6.7's again, one turn later: every one of these was invisible from inside a
 scaffold this backend wrote, and visible in one pass over projects it did not.
 
-#### 7.6.6 Not started
+#### 7.6.6 Applying one — `munge_function`, on the shared source-edit path
 
-Applying a source munge. The vocabulary is settled and the boundary is drawn, but this backend
-cannot write either attribute into a target today — the author has no source-editing tool, which
-§7.5.4 lists as deliberate, and giving it one is a decision rather than a detail: a property proved
-against munged source is a property of the munged program, and saying so is the same disclosure
-obligation `rule_subjects` and `summaries` already carry.
+The author can now apply a munge, and only the two kinds §7.6.3 read off the real diff.
+`munge_function(path, function, munge, why)` inserts the attribute one line above the function's
+signature in **this unit's own copy** of the workspace — every unit already works in a private copy
+under `.cvlr_work/` and nothing writes back, so the user's tree is never touched. The path is
+resolved and refused if it leaves the workdir.
 
-If it is built, it should not be a munge-specific path. The shared report layer already has
-`Formalizer.source_edits()`, `SourceEditRecord` and `AppliedEditRecord`, which the EVM backend fills
-and this one returns `[]` for; a munge is a source edit, and reporting it through a second channel
-would be the §7.6.7 mistake in a new place — a second answer to a solved question, drifting.
+**Reported through `Formalizer.source_edits()`, not a munge-specific channel.** That hook,
+`SourceEditRecord` and `AppliedEditRecord` already exist; the EVM backend fills them and this one
+returned `[]`. And `SourceEditRecord`'s own docstring is precisely the disclosure a munge owes —
+"its presence means the component's outcomes are claims about the modified code, not the code as
+shipped". A second channel saying the same thing would be §7.6.7's mistake in a new place. The
+cumulative diff is taken against the project tree, which is the pristine copy by construction, and
+covers the munged files only: the harness module is a new file and this unit's deliverable, not a
+modification of the program.
+
+Four things it refuses or records, and none of them is the case a compile gate catches:
+
+* **A name the file does not define** — with the close matches it does, because a compile gate would
+  say so two minutes and one build later and say nothing about the name that was meant.
+* **Two functions of one name** — a trait impl and an inherent one, say. Refused rather than guessed
+  at: munging the wrong one *compiles*, leaves the rule failing, and gives no indication which was
+  changed.
+* **An attribute already present** — so re-application is a no-op. `stage` re-applies every recorded
+  munge on each build from whatever is on disk, which is only safe because of this.
+* **The stamp** — a munge feeds `version_history` exactly as a summary does, keyed on the file, the
+  function and the attribute rather than on `why`, so correcting a justification does not cost a
+  submission but changing the program does.
+
+The author prompt ranks it last among the ways out — a different rule, then a summary if the code in
+the way is not what the property depends on, then a munge — and says that a third kind is a
+`record_skip` naming the change it would have needed, which is §7.6.4's boundary stated where the
+author will meet it.
 
 #### 7.6.7 The detour, and what it cost
 

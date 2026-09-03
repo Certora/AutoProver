@@ -89,6 +89,11 @@ formatting it by hand.
   with an unconstrained stand-in rather than analyze it. The remedy for a rule that comes back with
   no verdict because the pointer analysis refused something on one of its paths. Unsound by
   construction, so it is for code your properties do not depend on; it invalidates the prover stamp.
+* `munge_function(path, function, munge, why)` — put a verification-only attribute on one of the
+  *program's* own functions, under the `certora` feature. Two kinds only: `early_panic` (every `?`
+  in the function becomes `.unwrap()`) and `mock_fn` (the function is replaced by a stand-in you
+  wrote). This changes the program under verification, so every munge is carried into the report
+  with its `why`, and applying one invalidates the prover stamp.
 * `record_skip(property_title, reason)` / `unskip_property(property_title)` — declare a property
   unformalizable, with justification.
 * `expect_rule_failure(rule_name, reason)` / `expect_rule_passage(rule_name)` — mark a rule as
@@ -150,23 +155,19 @@ than your own, the rule never reached its property.
 
 Some blocks are not in your rule and not in the conf — they are in the program's own source, and the
 remedy is to change it. That is a **munge**: a verification-only modification, applied under the
-`certora` feature so the deployed build is untouched. You cannot apply one; you have no tool that
-edits the program. What you can do is name the one that was needed, in the skip, which turns "the
-prover refused this" into something a person can act on in an afternoon.
+`certora` feature so the deployed build is untouched. `munge_function` applies one, and there are
+exactly two kinds, because these are what practitioners actually reach for:
 
-Two are worth knowing, because they are what practitioners actually reach for:
-
-* **`#[cfg_attr(feature = "certora", cvlr::early_panic)]`** on a function rewrites every `?` in it to
-  `.unwrap()`. That is the same choice as the `.unwrap()`-versus-`.is_ok()` one above, applied where a
-  rule cannot reach: a `?` *inside* the program, below the handler you call, whose error construction
-  the pointer analysis then refuses. If a rule comes back with no verdict and the trace stops inside
-  the program's own call chain on an error path, this is the remedy — say so, and name the function.
-  It does **not** help an acceptance property: it removes the failure path rather than exposing one.
-* **`#[cfg_attr(feature = "certora", cvlr::mock_fn(with = <path>))]`** replaces a function with a
-  hand-written stand-in. Unlike `summarize_for_prover`, which havocs the return, a mock *computes*
-  one — so a property downstream of a mocked function still means something, where downstream of a
-  summary it usually does not. Reach for this in a skip when the function in the way has a simple
-  specification you could state but the prover cannot analyze the implementation.
+* **`early_panic`** rewrites every `?` in the function to `.unwrap()`. That is the same choice as the
+  `.unwrap()`-versus-`.is_ok()` one above, applied where a rule cannot reach: a `?` *inside* the
+  program, below the handler you call, whose error construction the pointer analysis then refuses. If
+  a rule comes back with no verdict and the trace stops inside the program's own call chain on an
+  error path, this is the remedy. It does **not** help an acceptance property: it removes the failure
+  path rather than exposing one.
+* **`mock_fn`** replaces the function with a stand-in. Unlike `summarize_for_prover`, which havocs the
+  return, a mock *computes* one — so a property downstream of a mocked function still means
+  something, where downstream of a summary it usually does not. You have to have written the stand-in
+  somewhere the munged file can reach, with the same signature.
 
 A third exists and you should prefer the honest version of it. Shrinking a bounded collection — the
 array in the state struct going from 8 entries to 2 under the `certora` feature — makes loops over it
@@ -175,9 +176,14 @@ entries is not proved for 8. `cvlr_assume!` on the length does the same work and
 the rule, where the report states it. Use the assume; mention the shrink only if the assume will not
 do.
 
-If what a property needs is none of these three, that is worth saying explicitly. It means the munge
-would be a change of a kind nobody has written down yet, which is a decision for a person rather than
-a gap in your draft.
+**A munge is the most consequential thing you can do, so treat it that way.** It changes the program
+the verdicts are about. Prefer, in order: a different rule; a summary, if the code in the way is not
+what the property depends on; then a munge. Every one you apply appears in the report as a source
+edit, with your `why` as the entire argument that the property still means something.
+
+And if what a property needs is none of the two kinds — a hand-unrolled loop, a restructured state
+machine — do not improvise a third. `record_skip` and say which kind of change it would have needed.
+That is a decision for a person, and naming it is what makes the skip actionable.
 
 ## Reaching a handler on an Anchor program
 

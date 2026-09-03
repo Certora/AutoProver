@@ -134,6 +134,7 @@ def test_a_summary_invalidates_a_stamp_earned_before_it():
         "curr_spec": draft,
         "skipped": [],
         "summaries": [],
+        "munges": [],
         "validations": {},
         "required_validations": [PROVER_VALIDATION_KEY],
     }
@@ -149,18 +150,18 @@ def test_rewording_a_justification_does_not_cost_a_submission():
     six-minute run for it would teach the author to leave justifications alone."""
     one = (SummaryDirective(pattern=_DISPLAY, why="first wording"),)
     two = (dataclasses.replace(one[0], why="a clearer second wording"),)
-    assert tuning_history({"summaries": list(one)}) == tuning_history({"summaries": list(two)})  # type: ignore[arg-type]
+    assert tuning_history({"summaries": list(one), "munges": []}) == tuning_history({"summaries": list(two), "munges": []})  # type: ignore[arg-type]
 
 
 def test_changing_the_return_shape_does_cost_one():
     one = (SummaryDirective(pattern="^f$", why="w"),)
     two = (SummaryDirective(pattern="^f$", why="w", returns="(*i32)(r1+0):num"),)
-    assert tuning_history({"summaries": list(one)}) != tuning_history({"summaries": list(two)})  # type: ignore[arg-type]
+    assert tuning_history({"summaries": list(one), "munges": []}) != tuning_history({"summaries": list(two), "munges": []})  # type: ignore[arg-type]
 
 
 def test_the_history_is_empty_when_nothing_was_summarized():
     """So a run that never touches a tuning file hashes exactly as it did before this existed."""
-    assert tuning_history({"summaries": []}) == ()  # type: ignore[arg-type]
+    assert tuning_history({"summaries": [], "munges": []}) == ()  # type: ignore[arg-type]
 
 
 def test_a_skip_still_moves_the_digest():
