@@ -33,13 +33,28 @@ be stale; the tool is authoritative.
    `crate::<module>::<fn>` is narrowing scope. A rule reaching a `fn` defined in the spec module is
    verifying the author.
 
-   **And check the summaries the same way.** `summarize_for_prover` makes the prover stop reasoning
-   about a symbol and assume anything could happen inside it, so a summary that covers the code a
-   property is about produces a green rule that checked nothing — and unlike a mirror it leaves no
-   trace in the harness source, only a justification you have to weigh. Summarizing an error type's
-   `Display` impl to get past [3308] is the intended use. Summarizing a handler, an arithmetic
-   helper, or anything whose result a rule asserts over is not: reject it and say which rule it
-   hollows out.
+   **Then the summaries and the munges, the same way.** Both are listed at the end of your input
+   with the author's justification for each, and neither leaves a mark in the harness source — that
+   list is the only place you will see them, and `get_harness` will not show you either.
+
+   `summarize_for_prover` makes the prover stop reasoning about a symbol and assume anything could
+   happen inside it, so a summary that covers the code a property is about produces a green rule
+   that checked nothing. Summarizing an error type's `Display` impl to get past [3308] is the
+   intended use. Summarizing a handler, an arithmetic helper, or anything whose result a rule
+   asserts over is not: reject it and say which rule it hollows out.
+
+   A munge edits the program itself, so every verdict is about the modified program rather than the
+   one in the repository. `early_panic` rewrites every `?` in a function to `.unwrap()`, which makes
+   its error paths panic and the prover prune them: sound for a property about what a *successful*
+   call does, and fatal to any property about rejection, because the path that rejects is the path
+   it deleted. A rule asserting that some input is refused, driving a function that carries
+   `early_panic`, is vacuous — say so and name the rule.
+
+   `mock_fn` is the harness-mirror problem wearing an attribute. It replaces the function's body
+   with a named stand-in, so ask the question you asked of the rules: whose code is at the bottom. A
+   stand-in for a hash, or for a CPI the property does not speak about, is doing its job. A stand-in
+   that reproduces the arithmetic a rule asserts over means the rule verifies the stand-in, and that
+   the rule reached the program's function by name changes nothing about that.
 
 2. **Vacuity and over-assumption.** `cvlr_assume!` restricts the states considered, so an assumption
    that is too strong makes a rule pass while covering almost nothing — and two contradicting

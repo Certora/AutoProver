@@ -60,7 +60,7 @@ source ─analyze─▶ App model ─extract─▶ properties ─formalize─▶
 | RAG corpus registry (`KNOWLEDGE_BASES`, `rag_env`) | **`cvlr_kb` registered** — the first corpus in either map | [rag/db.py](../composer/rag/db.py), [tools/rag_env.py](../composer/tools/rag_env.py) |
 | CVLR corpus · CVLR KB articles | **Three manifests under one tag** (§7.3.1): published docs, generated crate reference, project-derived idioms — all produced in and shipped from the private repo | [rag/import_format.py](../composer/rag/import_format.py), [rag/html_manual.py](../composer/rag/html_manual.py) |
 | Preflight scaffold | **Done** (§7.4): deterministic, idempotent, refuses two decisions rather than guessing | [cvlr/scaffold.py](../composer/spec/cvlr/scaffold.py), [cvlr/preflight.py](../composer/spec/cvlr/preflight.py) |
-| Authoring loop | **Built** (§7.5), not yet exercised end to end | [cvlr/author.py](../composer/spec/cvlr/author.py), [cvlr/pipeline.py](../composer/spec/cvlr/pipeline.py) |
+| Authoring loop | **Built** (§7.5), not yet exercised end to end. The feedback judge is contextual (§7.7.5): the author's summaries and munges ride into its input, since neither shows in the draft it reviews | [cvlr/author.py](../composer/spec/cvlr/author.py), [cvlr/pipeline.py](../composer/spec/cvlr/pipeline.py) |
 | Solana CEX analysis | **Done** (§7.7): traces rendered per chain, analyses captured as findings evidence, and a violation that stopped on the prover's own assertion kept out of both | [prover/results.py](../composer/prover/results.py), [cvlr/verify.py](../composer/spec/cvlr/verify.py) |
 
 **Phase 0 (hands-on experience) is done.** Several team members have completed real Solana
@@ -1788,6 +1788,58 @@ the model, and a gate demanding one would fail on a correct program. The machine
 instead, against the same two real counterexamples: a property violation is kept with its values
 intact, a loop bound is not kept, the author is told about it anyway, a fresh run supersedes an
 earlier iteration's capture, and the marking cannot excuse a check that never finished.
+
+#### 7.7.5 The reviewer was being asked about things it had never been shown
+
+The judge's system prompt has instructed it, since §7.6, to *"check the summaries the same way"* it
+checks for harness mirrors — and `input_parts` builds the judge's input from the draft, the declared
+rules, the skips and the rebuttals. A summary appears in none of those. Munges made it worse in kind
+rather than in degree: the judge was reviewing a harness while the program underneath it had been
+edited, and nothing said so.
+
+An instruction addressed to absent evidence is not inert. The judge has the project's FS tools, so
+"weigh the summaries" sends it to the tuning files — which hold the scaffold's canonical directives
+and every sibling unit's, none of them this author's. The empty case is therefore carried
+explicitly: `HarnessAssumptions.briefing()` says *no summaries and no munges* rather than
+contributing nothing.
+
+**Where it goes.** The pair is per-invocation state, and the judge thunk is built once per unit, so
+neither `input_parts` (which sees only the draft, the skips and the rebuttals) nor a closure over
+some stable object can reach it. `ContextualFeedbackThunk` exists for exactly this and its own
+documentation names the case; the CVLR judge now uses `build_feedback_judge_generic` with
+`with_assumptions` as its `input_lift`, appending the briefing to what `input_parts` built. Appended,
+not prepended: the review should open on the artifact and then read the caveats attached to it.
+
+The alternative was widening `input_parts` to take the context, which is arguably the more honest
+factoring — it is the callback whose stated job is "whatever is better said as plain input text".
+It was not taken because it changes a signature shared with the CVL side for one backend's need, and
+because `input_lift`'s documented contract is already *"lifted into the judge's input"*.
+
+**What the judge is now told to do with them** is the part that took the thinking. Two paragraphs
+were added beside the summaries one, and both say something the verdict cannot:
+
+* `early_panic` deletes the error path. That is sound for a property about what a *successful* call
+  does and fatal to any property about rejection — a rule asserting that bad input is refused, over
+  a function carrying `early_panic`, is vacuous and green.
+* `mock_fn` is the harness-mirror problem wearing an attribute. The rule names the program's
+  function and the body is the author's, so §1's question — *whose code is at the bottom* — is
+  exactly the right one, one level down.
+
+**And building it found that `mock_fn` could not have worked.** The tool told the author to write a
+stand-in "somewhere the munged file can reach" and named
+`crate::certora::mocks::fee_math::simplified_fee`. But `put_harness` writes the author's harness
+module and nothing else, so the only stand-in an author can produce is a function in that module —
+and the scaffold's `certora/mod.rs` declared `mod specs;`, `declare_modules` wrote `mod <unit>;`, and
+`cvlr::mock_fn(with = …)` expands at the *munged* function's site, which is the program's own file,
+outside `certora`. E0603, twice over, from two generated files that neither the author nor the judge
+ever reads.
+
+Fixed by two `pub`s, verified against rustc rather than reasoned about: `pub mod` inside a private
+`mod certora;` makes the path resolve from `lib.rs` while adding nothing to the crate's public
+surface, and the module only exists under the feature gate anyway. The author prompt and the tool's
+field description now name the path that resolves. Worth stating plainly: this had been shipped
+since §7.6.3 and every test passed, because nothing had asked a program file to name a harness
+symbol. The gate that would have caught it is a live run, which is the argument for running one.
 
 ### 7.8 Phase 7 — Productionization
 

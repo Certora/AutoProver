@@ -8,8 +8,10 @@ artifact store writes into the package's ``src/certora/specs/`` that the preflig
 
 Two consequences that are not obvious from the CVL side:
 
-* **The module has to be declared.** ``specs/mod.rs`` needs a ``mod <name>;`` line per unit, and
-  every declared module must exist as a file or *no* unit compiles. Declaring them all up front is
+* **The module has to be declared.** ``specs/mod.rs`` needs a ``pub mod <name>;`` line per unit, and
+  every declared module must exist as a file or *no* unit compiles. ``pub`` because a
+  ``cvlr::mock_fn`` stand-in is named by path from the program's own file, which is outside
+  ``certora`` — see :data:`composer.spec.cvlr.scaffold._HARNESS_FILES`. Declaring them all up front is
   what :class:`composer.pipeline.core.StagedFormalizer` is for, and §5.6 predicted this exact shape:
   one shared harness module, many rules.
 * **The module name is an identifier, not a slug.** A component slug may carry characters Rust will
@@ -202,7 +204,9 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
                 path.write_text(
                     f"//! Harness for {module.slug}. Written by the CVLR author.\n"
                 )
-        declarations = "".join(f"mod {m.module};\n" for m in sorted(modules, key=lambda m: m.module))
+        declarations = "".join(
+            f"pub mod {m.module};\n" for m in sorted(modules, key=lambda m: m.module)
+        )
         mod_rs = target / "mod.rs"
         mod_rs.write_text(
             "//! The rules. One module per unit, declared here by the CVLR backend.\n"
