@@ -254,7 +254,7 @@ def test_the_inline_spelling_every_real_project_uses_is_recognized():
 [patch.crates-io]
 anchor-lang = { git = "https://github.com/Certora/anchor.git", branch = "certora-v0.29.0" }
 anchor-spl = { git = "https://github.com/Certora/anchor.git", branch = "certora-v0.29.0" }
-spl-token-2022 = { git = "https://github.com/Kamino-Finance/solana-program-library.git" }
+spl-token-2022 = { git = "https://github.com/example/solana-program-library.git" }
 """
     assert already_patched(inline) == frozenset(
         {"anchor-lang", "anchor-spl", "spl-token-2022"}
