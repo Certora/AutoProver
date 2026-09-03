@@ -439,7 +439,7 @@ class MockFn:
     """
 
     #: Path to the replacement, as the munged file must be able to spell it — e.g.
-    #: ``crate::certora::mocks::lending_operations::refresh_obligation_deposits``.
+    #: ``crate::certora::mocks::fee_math::simplified_fee``.
     stand_in: str
 
     def attribute(self) -> str:
