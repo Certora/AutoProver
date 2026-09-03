@@ -33,49 +33,10 @@ from composer.spec.soroban.null_backend import (
 )
 from composer.spec.types import ProgramName, PropertyFormulation, RustIdentifier
 
+from .test_soroban_components import _app
 
 def _program_instance() -> SorobanContractInstance:
-     deposit = SorobanFunction(
-            name=RustIdentifier("deposit"), 
-            args=[], 
-            auth=[],
-            storage=[],
-            calls=[],
-            events=[],
-            errors=[],
-            requirements=[],
-            return_type=None,
-            description="Deposit tokens into the vault.")
-     withdraw = SorobanFunction(
-            name=RustIdentifier("withdraw"), 
-            args=[], 
-            auth=[],
-            storage=[],
-            calls=[],
-            events=[],
-            errors=[],
-            requirements=[],
-            return_type=None,
-            description="Withdraw tokens from the vault.")
-     return SorobanContractInstance(0, 
-        SorobanApplication(component_name=ProgramName("Vault"),
-            application_type="program",
-            description="A single-program token vault.",
-            components=[SorobanContract(
-                name=ProgramName("Vault"),
-                contract_identifier=RustIdentifier("vault"),
-                program_identifier=RustIdentifier("vault"),
-                description="Holds deposits and releases them to the authority.",
-                components=[ContractComponent(
-                    name=RustIdentifier("Vault"),
-                    description="Operations on the vault.",
-                    functions=[deposit.name, withdraw.name],
-                    storage_keys=["balance", "authority"],
-                    interactions=[],
-                    requirements=[]
-                )],
-                storage_entries=[],
-                functions=[deposit, withdraw])]))
+    return SorobanContractInstance(0, _app())
 
 
 def _unit() -> SorobanComponentInstance:
