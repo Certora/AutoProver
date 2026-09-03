@@ -590,3 +590,30 @@ def test_the_author_is_told_when_to_stop_summarizing():
     prompt = _flat(_author_task_prompt())
     assert "Give up on this remedy after about three directives down one path" in prompt
     assert "inlined *into the handler itself*" in prompt
+
+
+def test_the_munge_vocabulary_is_taught_as_diagnosis_rather_than_as_a_tool():
+    """The charter's payload reaches the author as something to *name*, not to apply.
+
+    `cvlr::early_panic` is the most common munge in the corpus by a wide margin, and it is the
+    source-level form of the `.unwrap()` choice this prompt already teaches — applied to a `?`
+    below the handler, where a rule cannot reach it. An author who does not know the word writes
+    "the prover refused this" and a reviewer has nowhere to go; one who does writes a skip somebody
+    can act on. See `docs/cvlr-backend-plan.md` §7.6.3.
+    """
+    prompt = _flat(_author_system_prompt())
+    assert "cvlr::early_panic" in prompt
+    assert "cvlr::mock_fn" in prompt
+    # Named as a munge the author cannot apply, so it lands in the skip rather than in a draft.
+    assert "You cannot apply one" in prompt
+    # And early_panic must not be sold as the answer to the one thing it cannot do.
+    assert "does **not** help an acceptance property" in prompt
+
+
+def test_shrinking_a_bounded_collection_is_offered_only_behind_the_sound_version():
+    """It is a real munge and it is unsound in a direction nothing reports: a property proved for
+    two entries is not proved for eight. `cvlr_assume!` on the length does the same work and puts
+    the bound in the rule, where the report states it."""
+    prompt = _flat(_author_system_prompt())
+    assert "unsound in a direction nothing reports" in prompt
+    assert "Use the assume" in prompt

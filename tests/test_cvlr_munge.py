@@ -23,6 +23,7 @@ from composer.spec.cvlr.munge import (
     ANCHOR_FORK,
     SOLANA_OVERRIDES,
     MungeBlocked,
+    already_patched,
     manifest_additions,
     plan_munge,
 )
@@ -107,12 +108,49 @@ def test_an_uncovered_version_blocks_rather_than_leaving_the_boxing_in(tmp_path)
 
 
 def test_a_project_that_already_sources_anchor_itself_is_left_alone(tmp_path):
-    """A path or git dependency means somebody already decided where Anchor comes from — quite
-    possibly the fork. Overriding that would replace a deliberate choice with a guess."""
+    """A path dependency means somebody already decided where Anchor comes from. Overriding that
+    would replace a deliberate choice with a guess."""
     plan = plan_munge(_workspace(tmp_path, _package("anchor-lang", "0.31.1", source=None)))
     assert plan.overrides == ()
     assert plan.blocked == ()
-    assert plan.inapplicable == ("anchor-lang",)
+    assert [a.crate for a in plan.already] == ["anchor-lang"]
+    assert not plan.already[0].points_at_fork
+
+
+def test_a_project_already_patched_to_the_fork_is_recognized_as_such(tmp_path):
+    """The bug this replaced. Detection used to search Cargo.toml for a
+    ``[patch.crates-io.anchor-lang]`` header, and no real project writes that spelling — every one
+    of them uses the inline ``anchor-lang = {{ git = … }}`` form under a shared header. So the search
+    found nothing, the scaffold appended a second entry for a key TOML already had, and cargo failed
+    outright: the projects already doing the right thing were the ones it broke.
+
+    Seen from the resolved graph instead, which is what cargo itself computed after applying the
+    patch table."""
+    patched = _package(
+        "anchor-lang",
+        "0.31.1",
+        source="git+https://github.com/Certora/anchor.git?branch=certora-v0.31.1#3ebe7595",
+    )
+    plan = plan_munge(_workspace(tmp_path, patched))
+    assert plan.overrides == ()
+    assert plan.blocked == ()
+    (already,) = plan.already
+    assert already.points_at_fork
+    assert "nothing to do" in already.describe()
+
+
+def test_a_project_sourcing_anchor_from_some_other_fork_is_left_alone_and_said_so(tmp_path):
+    """The two cases read identically from the outside and only one of them is fine. This module
+    will not override somebody's choice, but a reader of a [3006] failure needs to know it was
+    made."""
+    other = _package(
+        "anchor-lang", "0.31.1", source="git+https://github.com/someone/anchor.git?branch=main"
+    )
+    plan = plan_munge(_workspace(tmp_path, other))
+    (already,) = plan.already
+    assert not already.points_at_fork
+    assert "someone/anchor" in already.describe()
+    assert "will not analyze" in already.describe()
 
 
 def test_a_target_that_is_not_an_anchor_program_needs_nothing(tmp_path):
@@ -121,7 +159,7 @@ def test_a_target_that_is_not_an_anchor_program_needs_nothing(tmp_path):
     assert manifest_additions(plan) == ""
     # Reported rather than dropped: "Anchor was not replaced" is what a reader of a [3006] failure
     # needs to know, and silence looks the same as success.
-    assert plan.inapplicable == ("anchor-lang",)
+    assert set(plan.inapplicable) == {"anchor-lang", "anchor-spl", "fixed"}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -142,10 +180,106 @@ def test_the_branch_list_matches_what_the_fork_publishes():
     assert "0.30.1" in versions
 
 
-def test_every_override_states_a_reason_naming_the_error_it_avoids():
-    for override in SOLANA_OVERRIDES:
-        assert "[3006]" in override.why, (
-            f"{override.crate}'s reason should name the error it avoids — this string ends up in "
-            f"somebody's Cargo.toml, and it is the only explanation they will get"
+def test_every_override_says_why_it_exists_and_covers_at_least_one_version():
+    for fork in SOLANA_OVERRIDES:
+        assert fork.crates and fork.branches
+        assert len(fork.why) > 80, (
+            f"{fork.crates}'s reason ends up verbatim in somebody's Cargo.toml, and it is the only "
+            f"explanation they will get"
         )
-        assert override.branches
+
+
+def test_the_anchor_fork_covers_both_crates_it_publishes(tmp_path):
+    """Patching only anchor-lang clears [3006], because the boxing is in ``anchor_lang::error``, and
+    then leaves anchor-spl as the upstream crate — whose ``TokenAccount`` and ``Mint`` are newtypes
+    with a private field. The fork adds ``new_unchecked`` for exactly those, so a harness over a
+    token program cannot build an account without it. Both corpus projects that verify an Anchor
+    program patch both crates, to the same branch."""
+    assert set(ANCHOR_FORK.crates) == {"anchor-lang", "anchor-spl"}
+    plan = plan_munge(
+        _workspace(
+            tmp_path, _package("anchor-lang", "0.31.1"), _package("anchor-spl", "0.31.1")
+        )
+    )
+    assert {o.crate: o.branch for o in plan.overrides} == {
+        "anchor-lang": "certora-v0.31.1",
+        "anchor-spl": "certora-v0.31.1",
+    }
+
+
+def test_one_forks_two_crates_share_one_reason_in_the_manifest(tmp_path):
+    """Repeating a paragraph verbatim under each crate reads like two unrelated changes that happen
+    to say the same thing."""
+    addition = manifest_additions(
+        plan_munge(
+            _workspace(
+                tmp_path, _package("anchor-lang", "0.31.1"), _package("anchor-spl", "0.31.1")
+            )
+        )
+    )
+    assert addition.count("Upstream anchor_lang::error::Error boxes its payload") == 1
+    assert "anchor-lang 0.31.1 -> certora-v0.31.1" in addition
+    assert "anchor-spl 0.31.1 -> certora-v0.31.1" in addition
+
+
+def test_the_fixed_fork_is_planned_from_the_version_the_corpus_pins(tmp_path):
+    """Both corpus projects that use it resolve ``fixed`` 1.23.1 to ``certora-v1.23.1``, at the same
+    commit. One branch is listed because one is what there is evidence for."""
+    plan = plan_munge(_workspace(tmp_path, _package("fixed", "1.23.1")))
+    (override,) = plan.overrides
+    assert override.repo == "https://github.com/Certora/fixed.git"
+    assert override.branch == "certora-v1.23.1"
+
+
+# ---------------------------------------------------------------------------------------------
+# reading a patch table somebody else wrote
+
+
+def test_the_inline_spelling_every_real_project_uses_is_recognized():
+    """The spelling that mattered. Nine corpus projects carry a patch table; all nine write one
+    shared ``[patch.crates-io]`` header with an inline table per crate, and none writes the
+    per-crate sub-table form this module emits. They are the same TOML and share no text, so a
+    search for either misses the other."""
+    inline = """
+[patch.crates-io]
+anchor-lang = { git = "https://github.com/Certora/anchor.git", branch = "certora-v0.29.0" }
+anchor-spl = { git = "https://github.com/Certora/anchor.git", branch = "certora-v0.29.0" }
+spl-token-2022 = { git = "https://github.com/Kamino-Finance/solana-program-library.git" }
+"""
+    assert already_patched(inline) == frozenset(
+        {"anchor-lang", "anchor-spl", "spl-token-2022"}
+    )
+
+
+def test_the_subtable_spelling_this_module_writes_is_recognized_too():
+    subtables = """
+[patch.crates-io.anchor-lang]
+git = "https://github.com/Certora/anchor.git"
+branch = "certora-v0.31.1"
+"""
+    assert already_patched(subtables) == frozenset({"anchor-lang"})
+
+
+def test_a_manifest_with_no_patch_table_redirects_nothing():
+    assert already_patched('[workspace]\nmembers = ["."]\n') == frozenset()
+    assert already_patched("[patch]\n") == frozenset()
+
+
+def test_an_unparseable_manifest_is_not_a_reason_to_refuse_to_scaffold():
+    """cargo parsed this manifest to produce the graph, so failing here means this reader disagrees
+    with cargo's — which is worth a log line and not worth stopping over. The graph still catches
+    the redirect on the next run."""
+    assert already_patched("[patch.crates-io\nthis is not toml") == frozenset()
+
+
+def test_a_crate_the_table_already_names_is_left_alone(tmp_path):
+    """Belt to the graph's braces. The graph is the better source — it is what cargo computed — but
+    it is a snapshot, and a snapshot taken before the patch table was applied still shows the
+    registry. Appending a second entry for a key TOML already has is a manifest cargo refuses."""
+    plan = plan_munge(
+        _workspace(tmp_path, _package("anchor-lang", "0.31.1")),
+        already_redirected=frozenset({"anchor-lang"}),
+    )
+    assert plan.overrides == ()
+    (already,) = plan.already
+    assert "already redirected" in already.describe()
