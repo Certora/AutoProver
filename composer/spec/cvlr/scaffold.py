@@ -275,6 +275,13 @@ def compose_env(
 #: The harness module tree. ``specs/`` is where authored rules land (§7.5), which is why it exists
 #: empty rather than being created on first use — a module that has to be created is a module an
 #: authoring step can forget to declare.
+#:
+#: ``specs`` and ``mocks`` are ``pub`` and the other two are not, because only those two are reached
+#: *by path* and only from outside ``certora``: ``cvlr::mock_fn(with = crate::certora::…)`` expands
+#: at the munged function's site, which is the program's own file. ``log`` and ``nondet`` hold trait
+#: impls, which coherence makes visible without a path. ``certora`` itself stays private, so this
+#: adds nothing to the crate's public surface — and under the feature gate it exists at all only in
+#: a verification build.
 _HARNESS_FILES: dict[str, str] = {
     "mod.rs": (
         "//! Certora verification harness.\n"
@@ -282,9 +289,9 @@ _HARNESS_FILES: dict[str, str] = {
         "//! Compiled only under the `certora` feature, which `lib.rs` gates this module on.\n"
         "\n"
         "mod log;\n"
-        "mod mocks;\n"
+        "pub mod mocks;\n"
         "mod nondet;\n"
-        "mod specs;\n"
+        "pub mod specs;\n"
     ),
     "nondet.rs": (
         "//! Implementations of `cvlr::nondet::Nondet` for this program's own types.\n"

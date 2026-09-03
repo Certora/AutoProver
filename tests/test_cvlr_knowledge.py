@@ -557,8 +557,37 @@ def test_the_author_is_warned_that_a_summary_is_unsound():
 def test_the_judge_weighs_summaries_the_same_way_it_weighs_mirrors():
     prompt = _flat(_judge_system_prompt())
     item_one = prompt.split("2. **Vacuity")[0]
-    assert "check the summaries the same way" in item_one
+    assert "the summaries and the munges, the same way" in item_one
     assert "hollows out" in item_one
+
+
+def test_the_judge_is_told_the_instruments_are_in_its_input_and_nowhere_else():
+    """The gap this closed. The prompt instructed a review of the summaries and ``input_parts``
+    handed the judge only the draft, the rules, the skips and the rebuttals — so the instruction
+    was addressed to something the judge had never seen. A judge told to weigh what it was not
+    given goes looking, and the tuning files it would find hold the scaffold's canonical directives
+    and every sibling unit's, none of which this author added."""
+    item_one = _flat(_judge_system_prompt()).split("2. **Vacuity")[0]
+    assert "listed at the end of your input" in item_one
+    assert "`get_harness` will not show you either" in item_one
+
+
+def test_the_judge_is_told_early_panic_makes_a_rejection_property_vacuous():
+    """The unsoundness specific to this munge, and one the verdict cannot show: `early_panic`
+    deletes the error path, so a rule asserting that bad input is refused goes green over a program
+    that no longer has a way to refuse it."""
+    item_one = _flat(_judge_system_prompt()).split("2. **Vacuity")[0]
+    assert "fatal to any property about rejection" in item_one
+    assert "is vacuous" in item_one
+
+
+def test_the_judge_is_told_a_mock_is_the_mirror_problem_one_level_down():
+    """`mock_fn` is the one munge kind that can put the author's own code under a rule while the
+    rule still names a program function. So it has to face the question item 1 already asks, rather
+    than being waved through because the attribute sits on real source."""
+    item_one = _flat(_judge_system_prompt()).split("2. **Vacuity")[0]
+    assert "harness-mirror problem wearing an attribute" in item_one
+    assert "whose code is at the bottom" in item_one
 
 
 def test_an_unanalyzable_handler_skip_names_the_tool_it_tried():
@@ -606,6 +635,20 @@ def test_the_munge_vocabulary_is_exactly_the_two_kinds_and_no_more():
     assert "do not improvise a third" in prompt
     # early_panic must not be sold as the answer to the one thing it cannot do.
     assert "does **not** help an acceptance property" in prompt
+
+
+def test_the_author_is_told_where_a_mock_stand_in_can_actually_live():
+    """The tool's own example named ``crate::certora::mocks::…`` and the author has no way to put a
+    file there: ``put_harness`` writes its harness module and nothing else. So the only stand-in an
+    author can produce is a ``pub fn`` in that module — and until the scaffold's ``mod specs;``
+    became ``pub``, even that path did not resolve from the program's file (E0603). A prompt naming
+    an unreachable location costs a turn and a compile to discover.
+    """
+    prompt = _flat(_author_system_prompt())
+    assert "crate::certora::specs::" in prompt
+    assert "a `pub fn` you write in this module" in prompt
+    # The kind whose sound use is narrow, said as a condition rather than a caution.
+    assert "only when the property is not about what the stand-in computes" in prompt
 
 
 def test_a_munge_is_ranked_last_among_the_ways_out():

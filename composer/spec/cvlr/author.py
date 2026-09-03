@@ -43,11 +43,13 @@ from graphcore.tools.schemas import (
 
 from composer.authoring.buffer import apply_spec_update, get_spec_tool
 from composer.authoring.judge import (
-    FeedbackThunk,
+    ContextualFeedbackThunk,
     JudgeBuilder,
+    JudgeInput,
     JudgeState,
     RebuttalBase,
-    build_feedback_judge,
+    build_feedback_judge_generic,
+    judge_host_of,
 )
 from composer.authoring.state import (
     SkippedProperty,
@@ -71,9 +73,11 @@ from composer.spec.cvlr.state import (
     PROVER_VALIDATION_KEY,
     CvlrGenerationInput,
     CvlrGenerationState,
+    HarnessAssumptions,
     PropertyRuleMapping,
     RuleSubject,
     check_cvlr_completion,
+    harness_assumptions,
     tuning_history,
     validate_property_rules,
     validate_rule_subjects,
@@ -198,7 +202,7 @@ class Rebuttal(RebuttalBase):
 
 @dataclasses.dataclass
 class FeedbackDependencies:
-    thunk: FeedbackThunk[Rebuttal]
+    thunk: ContextualFeedbackThunk[Rebuttal, HarnessAssumptions]
     stamper: ValidationStamper
 
 
@@ -235,7 +239,13 @@ class FeedbackTool(
             )
         skipped = self.state["skipped"]
         with self.tool_deps() as deps:
-            verdict = await deps.thunk(draft, skipped, self.rebuttals, self.tool_call_id)
+            verdict = await deps.thunk(
+                harness_assumptions(self.state),
+                draft,
+                skipped,
+                self.rebuttals,
+                self.tool_call_id,
+            )
             message = f"Good? {verdict.good}\nFeedback {verdict.feedback}"
             if not verdict.good:
                 return message
@@ -279,6 +289,15 @@ _PropertyGenSysTemplate = TypedTemplate[CvlrAuthorSystemParams](
 )
 
 
+def with_assumptions(base: JudgeInput, assumptions: HarnessAssumptions) -> JudgeInput:
+    """The judge's ``input_lift``: append what the draft cannot show to what ``input_parts`` built.
+
+    Appended rather than prepended because the order is a claim about what the review opens on —
+    the artifact first, then the caveats attached to it.
+    """
+    return {**base, "input": [*base["input"], *assumptions.briefing()]}
+
+
 def _build_feedback_thunk(
     judge_ctx: WorkflowContext[CvlrJudge],
     env: ServiceHost,
@@ -287,13 +306,17 @@ def _build_feedback_thunk(
     program: str,
     cvlr_versions: str,
     extra_tools: Sequence[BaseTool],
-) -> FeedbackThunk[Rebuttal]:
+) -> ContextualFeedbackThunk[Rebuttal, HarnessAssumptions]:
     """The CVLR feedback judge.
 
     ``extra_tools`` is where the CVLR crate source reaches the judge. It matters more here than for
     the author: the judge's most useful and most dangerous move is "use helper X instead", and a
     judge that cannot check whether X exists in the resolved version sends the author after a name
     the compiler will reject.
+
+    Contextual rather than plain because the draft is not the whole artifact under review: the
+    summaries and munges the author has accumulated ride in per invocation, since they change what
+    a green rule means and the judge cannot see either in the source it reads.
     """
 
     def apply_prompt(
@@ -314,6 +337,9 @@ def _build_feedback_thunk(
     def input_parts(
         draft: str, skipped: Sequence[SkippedProperty], rebuttals: Sequence[Rebuttal]
     ) -> list[str | dict]:
+        """Everything the review needs that the draft yields. What it does not — the author's
+        summaries and munges — arrives through :func:`with_assumptions`, which is the only
+        callback that sees the invocation's context."""
         parts: list[str | dict] = ["The proposed CVLR harness module is", draft]
         declared = rule_names(draft)
         parts.append(
@@ -337,9 +363,11 @@ def _build_feedback_thunk(
                 )
         return parts
 
-    return build_feedback_judge(
+    return build_feedback_judge_generic(
+        st=JudgeState,
+        inp=JudgeInput,
         ctx=judge_ctx,
-        env=env,
+        host=judge_host_of(env),
         apply_system=lambda b: _JudgeSystemTemplate.bind(
             {"cvlr_versions": cvlr_versions}
         ).render_to(b.with_sys_prompt_template),
@@ -348,6 +376,7 @@ def _build_feedback_thunk(
         readback=get_harness_tool(JudgeState),
         description="CVLR harness feedback judge",
         thread_prefix="cvlr-feedback",
+        input_lift=with_assumptions,
         extra_tools=extra_tools,
     )
 

@@ -19,6 +19,9 @@ the validation stamps and the digest gate. What is CVLR's own:
   and carried into the report through the shared ``source_edits`` hook: a property proved against
   munged source is a property of the munged program.
 
+Those last two are also what the feedback judge is shown beyond the draft
+(:class:`HarnessAssumptions`), since neither leaves a mark in the harness source it reads.
+
 **The ground truth is the buffer, not the run.** ``validate_check_mapping``'s docstring notes that
 forge names every test it ran and a backend whose checker does not is passed ``None``; the prover
 does name every rule, but only after a submission, which costs minutes and money. So the CVLR
@@ -27,6 +30,7 @@ declaration forms name their rules deterministically — and gets the both-direc
 including in the budget wrap-up window where no run is available at all.
 """
 
+import dataclasses
 from typing import Annotated, Literal, NotRequired
 
 from langgraph.graph import MessagesState
@@ -206,6 +210,63 @@ def tuning_history(state: CvlrGenerationExtra) -> tuple[str, ...]:
     than silently keeping its verdicts.
     """
     return summary_history(tuple(state["summaries"])) + munge_history(tuple(state["munges"]))
+
+
+@dataclasses.dataclass(frozen=True)
+class HarnessAssumptions:
+    """The author's two unsound instruments, as a reviewer has to be shown them.
+
+    Both change what a green rule means and neither leaves a mark in the harness source, so a judge
+    handed only the draft is reviewing the wrong artifact. The empty case is carried too: the
+    judge's system prompt instructs it to weigh the summaries, and silence answers that instruction
+    with "go and look", which points it at tuning files holding the scaffold's directives and every
+    sibling unit's.
+    """
+
+    summaries: tuple[SummaryDirective, ...]
+    munges: tuple[FunctionMunge, ...]
+
+    def briefing(self) -> list[str]:
+        """Input parts stating what a verdict on this harness would be conditional on."""
+        if not self.summaries and not self.munges:
+            return [
+                "The author has added no points-to summaries and has not munged any of the "
+                "program's functions. The verdicts this harness earns are conditional on nothing "
+                "beyond the harness itself, so there is nothing to weigh on that axis."
+            ]
+        parts: list[str] = []
+        if self.summaries:
+            parts.append(
+                "The author has told the prover to stop analyzing these symbols. Inside a "
+                "summarized symbol the prover assumes anything could happen, so a rule whose "
+                "assertion depends on one is green having checked nothing. None of this appears "
+                "in the harness source you are reading:"
+            )
+            parts += [
+                f"  {d.pattern}\n"
+                f"    Returns: {d.returns if d.returns is not None else 'unconstrained'}\n"
+                f"    Author's justification: {d.why}"
+                for d in self.summaries
+            ]
+        if self.munges:
+            parts.append(
+                "The author has also edited the program's own source. What the prover analyzed is "
+                "the modified program, not the one in the repository, and these edits are "
+                "likewise absent from the harness:"
+            )
+            parts += [
+                f"  {m.function} ({m.path}): {m.kind.describe()}\n"
+                f"    Author's justification: {m.why}"
+                for m in self.munges
+            ]
+        return parts
+
+
+def harness_assumptions(state: CvlrGenerationExtra) -> HarnessAssumptions:
+    """The judge-facing read of the pair :func:`tuning_history` reads for the digest."""
+    return HarnessAssumptions(
+        summaries=tuple(state["summaries"]), munges=tuple(state["munges"])
+    )
 
 
 def check_cvlr_completion(state: CvlrGenerationExtra) -> str | None:

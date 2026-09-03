@@ -279,7 +279,7 @@ def test_every_unit_gets_a_module_and_a_file_before_any_unit_authors(tmp_path):
     mod_rs = store.declare_modules(modules)
 
     text = mod_rs.read_text()
-    assert "mod deposit;" in text and "mod withdraw;" in text
+    assert "pub mod deposit;" in text and "pub mod withdraw;" in text
     for module in modules:
         placeholder = mod_rs.parent / module.artifact_file
         assert placeholder.is_file(), f"{module.artifact_file} was declared but not created"
