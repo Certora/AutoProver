@@ -213,11 +213,11 @@ When that happens, the move is to descend to **the program's own state-transitio
 accounting core the handler wraps — and drive it with `nondet()` domain structs rather than accounts:
 
 ```rust
-let mut order: BorrowOrder = nondet();
-let reserve: &mut Reserve = nondet();
-let before = order.clone();
-crate::borrow_order_operations::fill_borrow_order(&mut order, reserve, amount);
-cvlr_assert!(/* the property, over `before` and `order` */);
+let mut vault: VaultState = nondet();
+let ledger: &mut FeeLedger = nondet();
+let before = vault.clone();
+crate::vault_accounting::apply_withdrawal(&mut vault, ledger, amount);
+cvlr_assert!(/* the property, over `before` and `vault` */);
 ```
 
 No `Context`, no accounts struct, no CPI in the way. This is what shipped verification projects do for

@@ -1491,10 +1491,9 @@ summary), which makes it the next thing to try rather than the next thing to inv
 #### 7.6.3 The charter, read off a real munge
 
 §9's mitigation for unbounded munging says the charter should be "derived from real diffs, not
-imagination", so before writing one: the corpus has exactly one project carrying a source-level
-munge, `klend-audit`, and it carries the whole apparatus — `munge.sh`, `unmunge.sh`,
-`record_diffs.sh`, a recorded `certora-munges.patch` and a `certora-Cargo.lock`. 22 files, 1097
-lines. Every source hunk in it is one of **six kinds**, and five of the six are a CVLR attribute or
+imagination", so before writing one: exactly one project in the corpus carries a
+source-level munge, and it carries the whole apparatus with it — apply and revert scripts, a
+recorded patch, a diff-recording script and a pinned lockfile. 22 files, 1097 lines. Every source hunk in it is one of **six kinds**, and five of the six are a CVLR attribute or
 a feature-gated `use` rather than a rewrite:
 
 | kind | occurrences | what it is |
@@ -1503,7 +1502,7 @@ a feature-gated `use` rather than a rewrite:
 | `#[cfg_attr(feature = "certora", cvlr::mock_fn(with = …, when = …))]` | 6 | replaces the function with a named stand-in |
 | `#[cfg(feature = "certora")] use crate::certora::mocks::prelude::*;` | 6 | brings the stand-ins' traits into scope |
 | `msg!` redirected to a `certora::log` module | 3 | under paired `cfg`/`cfg(not(…))` |
-| literal array sizes replaced by `NUM_DEPOSITS` / `NUM_BORROWS` | 2 | shrinks bounded collections so loops over them fit the unroll bound |
+| literal array sizes replaced by named constants | 2 | the constants shrink under the feature, so loops over the collection fit the unroll bound |
 | `inline(never)`, always paired with `early_panic` | 3 | keeps the function a frame the prover can see |
 
 Both attributes are in the pinned reference set (`cvlr` 0.6.1 re-exports `early_panic` and
@@ -1520,9 +1519,8 @@ rather than exposing it, so "the handler accepts a zero amount" is no more prova
 **`mock_fn` differs from `summarize_for_prover` in the direction that matters.** A summary havocs
 the return; a mock *computes* it. So a property downstream of a mocked function still means
 something, where downstream of a summary it usually does not. `when` defaults to the `certora`
-feature, and klend uses named variants (`certora-health`,
-`certora-calculate-liquidation-simplified`) so one tree carries several mock configurations chosen
-at build time.
+feature, and that project uses named variants — one per alternative
+mock configuration — so a single tree carries several of them, chosen at build time.
 
 **Shrinking a bounded collection is sound in the wrong direction, and silently.** Proving a property
 for 2 deposits is not proving it for 8. The prompt's version of this remedy — `cvlr_assume!` a bound
@@ -1535,7 +1533,7 @@ evidence for the boundary below.
 
 #### 7.6.4 The give-up boundary — open question 4, answered
 
-Not in edits and not in wall-clock. Both are proxies for nothing: klend's munge is 1097 lines and
+Not in edits and not in wall-clock. Both are proxies for nothing: that munge is 1097 lines and
 entirely routine, while a single hand-unrolled loop is the change that needs a person.
 
 **The boundary is the vocabulary.** A munge is in charter if it is one of the declared kinds. A

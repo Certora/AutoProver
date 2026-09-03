@@ -284,8 +284,8 @@ above is that run's own account, carried into its report.
 
 **And the flag set real engagements run does not fix it either — measured, matched pair.** The three
 Anchor projects verified against this prover carry a much larger `prover_args` than this backend's
-default: `klend-audit` has it in **39 of 39** confs and `smart-account-program-audit` in its
-`base.conf`. The full set adds the five `-solanaOptimistic*` memory-model flags,
+default: one of them sets it in **39 of 39** confs, and another in the shared `base.conf` every one
+of its confs inherits. The full set adds the five `-solanaOptimistic*` memory-model flags,
 `-solanaAggressiveGlobalDetection true`, `-solanaRemoveCFGDiamonds true`, `-solanaSlicerIter 6`,
 `-solanaEnablePTAPseudoCanonicalize false` and `-solanaPrintDevMsg true`. Two jobs were submitted
 from one tree, one harness and one fork commit, differing in nothing but those ten flags:
@@ -456,9 +456,9 @@ this defeats, and it bounds a much larger class of programs than [3308] ever did
 **There is a workaround, and it is a scope reduction rather than a fix.** No harness idiom survives a
 CPI — the run tried three. What shipped verification projects do instead is not to cross it: their
 rules drive the program's own *accounting core* with `nondet()` domain structs, not the handler with
-deserialized accounts. A representative rule builds `BorrowOrder` and `&mut Reserve` by `nondet()` and
-calls `borrow_order_operations::fill_borrow_order` directly — no `Context`, no accounts struct, no
-CPI in the way. The function is the program's own; only the entry point differs.
+deserialized accounts. A representative rule builds the domain structs that core operates on by
+`nondet()` and calls the core function directly — no `Context`, no accounts struct, no CPI in the
+way. The function is the program's own; only the entry point differs.
 
 What it costs is real and has to reach the report: account validation, the CPI's effects and Anchor's
 dispatch are all outside such a rule, so a bug in the handler's own glue is out of scope. And it is

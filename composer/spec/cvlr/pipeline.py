@@ -25,7 +25,6 @@ considered and rejected are in §7.5.2.
 
 import asyncio
 import dataclasses
-import difflib
 import enum
 import logging
 import shutil
@@ -79,6 +78,7 @@ from composer.spec.source.report.collect import (
     RuleEvidence,
     Verdict,
 )
+from composer.spec.source.munge.vfs_diff import compute_diff, fs_resolver
 from composer.spec.source.report.schema import AppliedEditRecord, SourceEditRecord
 from composer.spec.source.report_prover import make_prover_fetcher
 from composer.spec.source.report.schema import RuleName
@@ -116,21 +116,24 @@ class CvlrPhase(enum.Enum):
 def _munge_diff(project: Path, workdir: Path, munges: tuple[FunctionMunge, ...]) -> str:
     """A unified diff from the project's own source to the munged copy, munged files only.
 
-    Best-effort by design. A file that cannot be read on either side is reported as a line rather
-    than raising: the report is the last thing in the run, and losing it to a missing workdir would
-    cost every other record in it."""
-    chunks: list[str] = []
+    The diff itself is :mod:`composer.spec.source.munge.vfs_diff`, which is chain-neutral despite
+    where it lives — it wants an "old" resolver and a "new" overlay, and this backend's "new" is
+    files on disk in the unit's workdir rather than a VFS. Reusing it rather than reaching for
+    ``difflib`` directly keeps one answer to "what does an edit look like in a report": the two
+    were written independently first and produced byte-identical output, which is the argument.
+
+    Reading the munged side is best-effort. A workdir that has been cleaned up loses the diff and
+    says so, rather than raising — the report is the last thing in the run, and losing all of it to
+    one missing file would cost every other record in it.
+    """
+    overlay: dict[str, str] = {}
+    notes: list[str] = []
     for path in dict.fromkeys(m.path for m in munges):
         try:
-            before = (project / path).read_text().splitlines(keepends=True)
-            after = (workdir / path).read_text().splitlines(keepends=True)
+            overlay[path] = (workdir / path).read_text()
         except OSError as exc:
-            chunks.append(f"# {path}: could not be diffed ({exc})\n")
-            continue
-        chunks.extend(
-            difflib.unified_diff(before, after, fromfile=f"a/{path}", tofile=f"b/{path}")
-        )
-    return "".join(chunks)
+            notes.append(f"# {path}: could not be diffed ({exc})\n")
+    return compute_diff(fs_resolver(project), overlay) + "".join(notes)
 
 
 def _copy_workspace(source: Path, dest: Path) -> None:
