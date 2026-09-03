@@ -632,9 +632,10 @@ class MungeMockFn(BaseModel):
 
     kind: Literal["mock_fn"] = "mock_fn"
     stand_in: str = Field(
-        description="Path to the replacement, spelled as the munged file can reach it — e.g. "
-        "`crate::certora::mocks::fee_math::simplified_fee`. It must have the same signature as the "
-        "function it replaces."
+        description="Path to the replacement, spelled as the munged file can reach it — a function "
+        "the program already defines, or a `pub fn` in your own harness module named as "
+        "`crate::certora::specs::<this module>::<fn>`. It must already exist and must have the same "
+        "signature as the function it replaces."
     )
 
 

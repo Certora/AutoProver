@@ -439,8 +439,10 @@ class MockFn:
     still means something, where downstream of a summary it usually does not.
     """
 
-    #: Path to the replacement, as the munged file must be able to spell it — e.g.
-    #: ``crate::certora::mocks::fee_math::simplified_fee``.
+    #: Path to the replacement, as the munged file must be able to spell it. The munged file is the
+    #: program's own, so the path has to resolve from *outside* ``certora`` — which is why
+    #: ``specs``/``mocks`` and each authored unit's module are declared ``pub``
+    #: (:data:`composer.spec.cvlr.scaffold._HARNESS_FILES`).
     stand_in: str
 
     def attribute(self) -> str:
