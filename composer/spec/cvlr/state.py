@@ -14,6 +14,10 @@ the validation stamps and the digest gate. What is CVLR's own:
 * ``summaries`` — the points-to summaries the author added (:mod:`composer.spec.cvlr.tuning`). These
   feed the digest through ``version_history``, because a summary changes what the prover checked:
   a stamp earned before one was added is about a different build.
+* ``munges`` — verification-only attributes the author put on the *program's* own functions
+  (:mod:`composer.spec.cvlr.munge`). Same digest channel as ``summaries`` and for the same reason,
+  and carried into the report through the shared ``source_edits`` hook: a property proved against
+  munged source is a property of the munged program.
 
 **The ground truth is the buffer, not the run.** ``validate_check_mapping``'s docstring notes that
 forge names every test it ran and a backend whose checker does not is passed ``None``; the prover
@@ -39,6 +43,7 @@ from composer.authoring.state import (
     validate_check_mapping,
 )
 from composer.spec.context import CacheKey, CvlrGeneration, CvlrJudge
+from composer.spec.cvlr.munge import FunctionMunge, merge_munges, munge_history
 from composer.spec.cvlr.rules import rule_names
 from composer.spec.cvlr.tuning import SummaryDirective, merge_summaries, summary_history
 from composer.spec.types import CheckName, PropertyTitle, RuleName
@@ -169,6 +174,9 @@ class CvlrGenerationExtra(AuthoringExtra):
     #: Points-to summaries the author added, in the order added, deduplicated by pattern. Reduced
     #: rather than replaced: several ``summarize_for_prover`` calls can land in one graph step.
     summaries: Annotated[list[SummaryDirective], merge_summaries]
+    #: Verification-only attributes the author put on the program's own functions, in the order
+    #: applied. Reduced for the same reason ``summaries`` is.
+    munges: Annotated[list[FunctionMunge], merge_munges]
     expected_failures: Annotated[dict[CheckName, str], merge_expected_failures]
     #: The job link from the most recent prover run that produced results, whether or not it was
     #: all green — a link to a failing run is still the most useful thing a report can offer.
@@ -192,11 +200,12 @@ def tuning_history(state: CvlrGenerationExtra) -> tuple[str, ...]:
     """The publish surface's non-harness half, as ``version_history`` tokens.
 
     The generic digest already takes a history so that "a stamp earned before a source edit goes
-    stale with it"; a summary is such an edit, and the sharpest kind — it changes what the prover
-    analyzed without changing a character of the draft. Every stamp site passes this, so adding a
-    summary after a green run costs the run rather than silently keeping its verdicts.
+    stale with it". A summary is such an edit, and the sharpest kind — it changes what the prover
+    analyzed without changing a character of the draft. A munge is the literal kind: it changes the
+    program. Every stamp site passes this, so adding either after a green run costs the run rather
+    than silently keeping its verdicts.
     """
-    return summary_history(tuple(state["summaries"]))
+    return summary_history(tuple(state["summaries"])) + munge_history(tuple(state["munges"]))
 
 
 def check_cvlr_completion(state: CvlrGenerationExtra) -> str | None:

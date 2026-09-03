@@ -22,9 +22,19 @@ from composer.cargo.metadata import CratePackage, Workspace
 from composer.spec.cvlr.munge import (
     ANCHOR_FORK,
     SOLANA_OVERRIDES,
+    AlreadyMunged,
+    EarlyPanic,
+    FunctionAmbiguous,
+    FunctionMunge,
+    FunctionNotFound,
+    MockFn,
     MungeBlocked,
+    Munged,
     already_patched,
+    apply_munge,
     manifest_additions,
+    merge_munges,
+    munge_history,
     plan_munge,
 )
 
@@ -283,3 +293,231 @@ def test_a_crate_the_table_already_names_is_left_alone(tmp_path):
     assert plan.overrides == ()
     (already,) = plan.already
     assert "already redirected" in already.describe()
+
+
+# ---------------------------------------------------------------------------------------------
+# the source half
+#
+# The charter (plan §7.6.3) is six kinds read off the one real source munge in the corpus, and two of
+# them are CVLR attributes an author can apply mechanically. What makes that safe rather than an
+# agent editing a program is that the vocabulary is closed, the insert is one line, and a compile
+# gate sits behind it. What a compile gate cannot catch is naming the wrong function, which is what
+# these refusals are for.
+
+SOURCE = """\
+use anchor_lang::prelude::*;
+
+/// Redeem the protocol's accumulated fees.
+pub fn redeem_fees(reserve: &mut Reserve, slot: Slot) -> Result<u64> {
+    let amount = reserve.calculate_fees()?;
+    Ok(amount)
+}
+
+fn redeem_fees_inner(x: u64) -> u64 {
+    x
+}
+
+impl Reserve {
+    pub fn calculate_fees(&self) -> Result<u64> {
+        Ok(0)
+    }
+}
+"""
+
+FEATURE = "certora"
+
+
+def _munge(function: str, kind=None, path: str = "programs/p/src/reserve.rs") -> FunctionMunge:
+    return FunctionMunge(
+        path=path, function=function, kind=kind or EarlyPanic(), why="[3308] on the `?` path"
+    )
+
+
+def test_the_attribute_lands_above_the_signature_and_below_the_doc_comment():
+    """Below the doc comment keeps the insert a one-line edit whose diff reads as one change; the
+    attribute works from either position."""
+    result = apply_munge(SOURCE, _munge("redeem_fees"), FEATURE)
+    assert isinstance(result, Munged)
+    lines = result.source.splitlines()
+    assert lines[result.line - 2] == '#[cfg_attr(feature = "certora", cvlr::early_panic)]'
+    assert lines[result.line - 1].startswith("pub fn redeem_fees(")
+    assert lines[result.line - 3].startswith("/// Redeem")
+
+
+def test_a_longer_name_sharing_a_prefix_is_not_the_same_function():
+    """`fn redeem_fees` must not match `fn redeem_fees_inner`. The trailing `(` or `<` is what
+    settles it, and getting this wrong munges a function nobody asked about."""
+    result = apply_munge(SOURCE, _munge("redeem_fees_inner"), FEATURE)
+    assert isinstance(result, Munged)
+    assert result.source.splitlines()[result.line - 1].startswith("fn redeem_fees_inner(")
+
+
+def test_a_mock_names_its_stand_in_in_the_attribute():
+    result = apply_munge(
+        SOURCE, _munge("calculate_fees", MockFn(stand_in="crate::certora::mocks::fees")), FEATURE
+    )
+    assert isinstance(result, Munged)
+    assert (
+        '#[cfg_attr(feature = "certora", cvlr::mock_fn(with = crate::certora::mocks::fees))]'
+        in result.source
+    )
+
+
+def test_the_indentation_of_the_function_is_matched():
+    """`calculate_fees` is inside an impl block. An attribute at column zero above an indented `fn`
+    compiles and reads as though nobody looked."""
+    result = apply_munge(SOURCE, _munge("calculate_fees"), FEATURE)
+    assert isinstance(result, Munged)
+    assert '    #[cfg_attr(feature = "certora", cvlr::early_panic)]' in result.source
+
+
+def test_a_function_the_file_does_not_define_is_refused_with_what_it_does():
+    """A compile gate would catch this two minutes and one build later, and say nothing about the
+    name that was meant."""
+    result = apply_munge(SOURCE, _munge("redeem_fee"), FEATURE)
+    assert isinstance(result, FunctionNotFound)
+    assert "redeem_fees" in result.nearby
+
+
+def test_two_functions_of_one_name_are_refused_rather_than_guessed_at():
+    """The failure a compile *accepts*: munging the wrong one of two same-named functions builds
+    fine, leaves the rule failing, and gives no indication which was changed."""
+    twice = SOURCE + """
+impl Collateral {
+    pub fn calculate_fees(&self) -> Result<u64> {
+        Ok(1)
+    }
+}
+"""
+    result = apply_munge(twice, _munge("calculate_fees"), FEATURE)
+    assert isinstance(result, FunctionAmbiguous)
+    assert len(result.lines) == 2
+
+
+def test_re_applying_a_munge_is_recognized_rather_than_doubled():
+    """`stage` re-applies every recorded munge on each build, from whatever is on disk. That is only
+    safe because the second application reports the attribute already there."""
+    once = apply_munge(SOURCE, _munge("redeem_fees"), FEATURE)
+    assert isinstance(once, Munged)
+    twice = apply_munge(once.source, _munge("redeem_fees"), FEATURE)
+    assert isinstance(twice, AlreadyMunged)
+
+
+def test_a_munge_invalidates_a_stamp_earned_before_it():
+    """The same channel a summary uses, for the stronger version of the reason: a munge changes the
+    program the previous run's verdicts were about."""
+    assert munge_history(()) == ()
+    early = munge_history((_munge("redeem_fees"),))
+    mocked = munge_history((_munge("redeem_fees", MockFn(stand_in="crate::m")),))
+    assert early != mocked
+
+
+def test_rewording_a_justification_does_not_cost_a_submission():
+    """Keyed on what the prover sees differently — the file, the function, the attribute — and not
+    on `why`, exactly as `summary_history` is."""
+    one = _munge("redeem_fees")
+    two = FunctionMunge(path=one.path, function=one.function, kind=one.kind, why="clearer wording")
+    assert munge_history((one,)) == munge_history((two,))
+
+
+def test_the_same_munge_recorded_twice_lands_once():
+    """A reducer for the reason `merge_summaries` is one: several tool calls can land in one graph
+    step, and LangGraph refuses two writes to an unreduced key."""
+    one = _munge("redeem_fees")
+    assert len(merge_munges([one], [one])) == 1
+    assert len(merge_munges([one], [_munge("calculate_fees")])) == 2
+    # Same function, different file: two munges, not one.
+    other_file = _munge("redeem_fees", path="programs/p/src/other.rs")
+    assert len(merge_munges([one], [other_file])) == 2
+
+
+# ---------------------------------------------------------------------------------------------
+# what the deliverable says about it
+#
+# A munge changes the program the verdicts are about, so the report owes a reader that fact. It is
+# said through the shared `source_edits` hook rather than a CVLR-specific one, because
+# `SourceEditRecord`'s own docstring is already exactly this disclosure: its presence means "the
+# component's outcomes are claims about the modified code, not the code as shipped".
+
+
+def test_a_path_leaving_the_workdir_is_refused(tmp_path):
+    """The workdir is this unit's private copy of the project, so writing in it never touches the
+    user's tree — but only while every write stays inside it."""
+    from types import SimpleNamespace
+
+    from composer.spec.cvlr.verify import HarnessTarget
+
+    workdir = tmp_path / "work"
+    (workdir / "src").mkdir(parents=True)
+    # Only the session's workdir is read; the rest of the target is not this method's business.
+    target = HarnessTarget(
+        session=SimpleNamespace(workdir=workdir),  # type: ignore[arg-type]
+        module_path=workdir / "src" / "spec.rs",
+        package="p",
+        tuning=SimpleNamespace(),  # type: ignore[arg-type]
+    )
+    assert target.source_path("src/lib.rs") == (workdir / "src" / "lib.rs").resolve()
+    assert target.source_path("../outside.rs") is None
+    assert target.source_path("/etc/passwd") is None
+
+
+@pytest.mark.asyncio
+async def test_a_delivered_units_munges_reach_the_report_as_source_edits(tmp_path):
+    from types import SimpleNamespace
+
+    from composer.pipeline.ptypes import Delivered
+    from composer.spec.cvlr.harness import GeneratedHarness
+    from composer.spec.cvlr.pipeline import WORK_DIR, CvlrFormalizer
+
+    relative = "programs/p/src/reserve.rs"
+    (tmp_path / "programs" / "p" / "src").mkdir(parents=True)
+    (tmp_path / relative).write_text(SOURCE)
+
+    workdir = tmp_path / WORK_DIR / "vault"
+    (workdir / "programs" / "p" / "src").mkdir(parents=True)
+    munge = _munge("redeem_fees", path=relative)
+    applied = apply_munge(SOURCE, munge, FEATURE)
+    assert isinstance(applied, Munged)
+    (workdir / relative).write_text(applied.source)
+
+    harness = GeneratedHarness(commentary="", harness="", munges=[munge])
+    outcome = SimpleNamespace(
+        feat=SimpleNamespace(slug="vault", display_name="Vault"),
+        result=Delivered(result=harness, deliverable=Path("x.rs")),
+    )
+    run = SimpleNamespace(source=SimpleNamespace(project_root=str(tmp_path)))
+
+    formalizer = CvlrFormalizer(GeneratedHarness, "prover", SimpleNamespace())
+    (record,) = await formalizer.source_edits([outcome], run)  # type: ignore[arg-type]
+
+    assert record.component == "Vault"
+    (edit,) = record.applied_edits
+    assert edit.why_sound == "[3308] on the `?` path"
+    assert "redeem_fees" in edit.executive_summary
+    assert "`?` rewritten to `.unwrap()`" in edit.executive_summary
+    # The diff is against the project tree, which is the pristine copy: a unit only ever writes in
+    # its own workdir.
+    assert '+#[cfg_attr(feature = "certora", cvlr::early_panic)]' in record.cumulative_diff
+    assert f"a/{relative}" in record.cumulative_diff
+
+
+@pytest.mark.asyncio
+async def test_a_unit_that_munged_nothing_contributes_no_record(tmp_path):
+    """The record's presence is the claim. An empty one would say the outcomes are about modified
+    code when they are not."""
+    from types import SimpleNamespace
+
+    from composer.pipeline.ptypes import Delivered, GaveUp
+    from composer.spec.cvlr.harness import GeneratedHarness
+    from composer.spec.cvlr.pipeline import CvlrFormalizer
+
+    run = SimpleNamespace(source=SimpleNamespace(project_root=str(tmp_path)))
+    clean = SimpleNamespace(
+        feat=SimpleNamespace(slug="a", display_name="A"),
+        result=Delivered(result=GeneratedHarness(commentary="", harness=""), deliverable=Path("a")),
+    )
+    gave_up = SimpleNamespace(
+        feat=SimpleNamespace(slug="b", display_name="B"), result=GaveUp(reason="no")
+    )
+    formalizer = CvlrFormalizer(GeneratedHarness, "prover", SimpleNamespace())
+    assert await formalizer.source_edits([clean, gave_up], run) == []  # type: ignore[arg-type]
