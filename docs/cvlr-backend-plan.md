@@ -1617,6 +1617,31 @@ the way is not what the property depends on, then a munge — and says that a th
 `record_skip` naming the change it would have needed, which is §7.6.4's boundary stated where the
 author will meet it.
 
+**The test scenario could not have exercised any of it, and now can.** Asked how likely the gate run
+was to reach `munge_function`, the answer measured out as *never*: the vault was three handlers and
+**no functions below them**, so `early_panic`'s trigger — a `?` inside the program, below the handler
+a rule calls — did not occur anywhere in the fixture, and nothing in ~15 lines per handler is worth a
+`mock_fn`. The proxy agrees: `summarize_for_prover`, the closest analogue and ranked *above*
+`munge_function`, was used in two of five historical runs and zero times in the last one, once the
+[3308] blocker it was being reached for had been fixed in the prompt.
+
+So the fixture gained an accounting core — `vault_accounting::{apply_deposit, apply_withdrawal}`,
+which the handlers now call. Three `?` below the handler, and a state transition free of `Context`
+and `AccountInfo`. That makes `early_panic` reachable, makes the §7.5.5 descent ladder demonstrable
+rather than only described, and makes the descent example in the author prompt real code compiled
+against the fixture rather than an illustration.
+
+**And the answer surfaced a trigger from the revisit list already firing.** Of the eight skips the
+last passing run recorded, *zero* would be addressed by either munge kind — but two of them, both
+deposit-balance properties blocked by P6, say in the author's own words that "the handler has no
+separate state-transition function to descend to". What those wanted was the accounting core
+*extracted*: a Refactor/Exposure-shaped change, which is EVM charter vocabulary and deliberately not
+in ours. That is
+[munge-and-working-copies.md](munge-and-working-copies.md) §7 trigger 1, met by the current target
+rather than a hypothetical future one. The fixture change makes those two properties reachable
+without a munge; whether a *target we cannot edit* would need the seventh kind is the open question,
+and §7.10 is where it gets asked.
+
 #### 7.6.7 The detour, and what it cost
 
 Worth recording because the mistake is repeatable and the correction came from a question, not from a
