@@ -103,6 +103,13 @@ class TruffleManager(BuildSystemManager):
         """Truffle writes one flat `<ContractName>.json` per contract into its build dir."""
         return artifacts_dir.is_dir() and any(artifacts_dir.glob("*.json"))
 
+    @staticmethod
+    def recorded_source(artifact: dict) -> Optional[str]:
+        """Truffle records `sourcePath`, and unlike the others it is the absolute path the
+        source had on the machine that compiled it."""
+        source_path = artifact.get("sourcePath")
+        return source_path if isinstance(source_path, str) else None
+
     def filter_artifacts(self, artifacts_dir: Path) -> List[Path]:
         """Return Truffle's artifact JSONs — one flat `<ContractName>.json` per contract."""
         return self._walk_and_filter_artifacts(
