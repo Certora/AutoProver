@@ -526,7 +526,7 @@ def test_a_rule_declared_against_the_program_s_own_code_is_accepted_at_any_depth
     subjects = [
         DrivesProgramFunction(
             rule="rule_core",
-            function="crate::borrow_order_operations::fill_borrow_order",
+            function="crate::vault_accounting::apply_withdrawal",
         )
     ]
     assert validate_rule_subjects(subjects, draft) is None

@@ -613,8 +613,8 @@ class MungeMockFn(BaseModel):
     kind: Literal["mock_fn"] = "mock_fn"
     stand_in: str = Field(
         description="Path to the replacement, spelled as the munged file can reach it — e.g. "
-        "`crate::certora::mocks::lending_operations::refresh_obligation_deposits`. It must have the "
-        "same signature as the function it replaces."
+        "`crate::certora::mocks::fee_math::simplified_fee`. It must have the same signature as the "
+        "function it replaces."
     )
 
 
