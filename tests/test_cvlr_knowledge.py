@@ -622,3 +622,40 @@ def test_shrinking_a_bounded_collection_is_offered_only_behind_the_sound_version
     prompt = _flat(_author_system_prompt())
     assert "unsound in a direction nothing reports" in prompt
     assert "Use the assume" in prompt
+
+
+def test_the_descent_example_is_real_code_against_the_test_scenario():
+    """The workaround for P6 is the one the author is most likely to need and least able to check,
+    so its example is not illustrative — it compiles.
+
+    **Verified 2026-09-03** against ``test_scenarios/solana_vault_idl``, whose `vault_accounting`
+    module is the accounting core this example descends to. To re-verify: add `cvlr` and
+    `cvlr-solana` as optional deps behind a `certora` feature on the `vault` package, paste the
+    block into a `#[cfg(feature = "certora")] pub mod` with `use super::*; use cvlr::prelude::*;`
+    inside a `#[rule] pub fn`, and `cargo check -p vault --features certora`.
+
+    The two details a first draft got wrong are pinned below: `nondet()` is implemented for scalars
+    and not for `Pubkey`, and the transition returns a `Split` rather than mutating an out-param.
+    """
+    prompt = _author_system_prompt()
+    assert "crate::vault_accounting::apply_withdrawal(&mut vault, amount, true).unwrap()" in prompt
+    assert "authority: Pubkey::default()" in prompt
+    assert "cvlr_assert!(before - vault.balance == amount);" in prompt
+
+
+def test_the_test_scenario_still_has_the_core_the_example_descends_to():
+    """The example above names a real function. If the fixture loses it the example becomes a lie
+    that only an expensive run would catch."""
+    from pathlib import Path
+
+    vault = (
+        Path(__file__).parent.parent
+        / "test_scenarios/solana_vault_idl/programs/vault/src/lib.rs"
+    ).read_text()
+    assert "pub mod vault_accounting {" in vault
+    assert "pub fn apply_withdrawal(" in vault
+    assert "pub fn apply_deposit(" in vault
+    # The `?` below the handler is what makes `early_panic` reachable at all — without it the
+    # munge tool has no trigger anywhere in this fixture (plan §7.6.6).
+    assert vault.count("?;") >= 1
+    assert "vault_accounting::apply_withdrawal(" in vault, "the handler must call it"

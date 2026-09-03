@@ -39,6 +39,7 @@ import difflib
 import logging
 import re
 import tomllib
+from pathlib import PurePosixPath
 
 from composer.cargo.metadata import Workspace
 
@@ -474,6 +475,51 @@ class FunctionMunge:
 
     def attribute_line(self, indent: str, feature: str) -> str:
         return f'{indent}#[cfg_attr(feature = "{feature}", {self.kind.attribute()})]'
+
+
+#: Top-level directories inside a unit's workdir that are **not** the project's source.
+#:
+#: Two uses, and they are the same fact: these are what a workspace copy leaves behind
+#: (:data:`composer.spec.cvlr.pipeline._NOT_COPIED`) and what a munge may not touch. A munge is a
+#: modification of *the program under verification*, and containment in the workdir does not
+#: establish that — the private ``CARGO_HOME`` confinement gives each unit lives at
+#: ``<workdir>/.sandbox_cargo``, so every dependency's unpacked source is inside the workdir too.
+#: Without this, ``munge_function`` would happily rewrite Anchor.
+#:
+#: That is the same failure ``validate_rule_subjects`` exists to prevent one axis over: a rule that
+#: drives a dependency proves a property of the dependency, and a munge of one modifies a
+#: dependency's behaviour for every crate that uses it, including the ones the property is about.
+NOT_PROJECT_SOURCE = (
+    "target",
+    ".git",
+    ".certora_internal",
+    "certora_out",
+    ".cvlr_work",
+    ".sandbox_cargo",
+)
+
+
+def is_project_source(relative: PurePosixPath | str) -> bool:
+    """Whether a workdir-relative path names a file the project shipped rather than one a build made.
+
+    Judged on the first path component, which is where every entry in :data:`NOT_PROJECT_SOURCE`
+    sits — a nested ``target/`` belonging to a vendored crate is already excluded by its parent.
+    """
+    parts = PurePosixPath(relative).parts
+    return bool(parts) and parts[0] not in NOT_PROJECT_SOURCE
+
+
+@dataclasses.dataclass(frozen=True)
+class NotProjectSource:
+    """The path is inside the workdir but is not the project's source.
+
+    Almost always a dependency: confinement puts each unit's ``CARGO_HOME`` at
+    ``<workdir>/.sandbox_cargo``, so every crate the build resolves has its unpacked source in the
+    workdir, one directory away from the program.
+    """
+
+    path: str
+    directory: str
 
 
 @dataclasses.dataclass(frozen=True)

@@ -52,7 +52,7 @@ from composer.spec.cvlr.author import batch_cvlr_generation
 from composer.spec.cvlr.conf import DEFAULT_FEATURE, load_base
 from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness, HarnessModule
-from composer.spec.cvlr.munge import FunctionMunge
+from composer.spec.cvlr.munge import NOT_PROJECT_SOURCE, FunctionMunge
 from composer.spec.cvlr.preflight import CvlrPreflight, gate_workspace, prepare_workspace
 from composer.spec.cvlr.prover import Submission
 from composer.spec.cvlr.scaffold import ENVS_DIR, SPECS_DIR
@@ -100,9 +100,12 @@ WORK_DIR = Path(".cvlr_work")
 #: Never copied into a unit's workdir. ``target`` is regenerable and enormous; ``.git`` is neither
 #: needed nor ours to duplicate; :data:`WORK_DIR` is where the copies themselves go, so copying it
 #: would nest one unit's workspace inside another's.
-_NOT_COPIED = shutil.ignore_patterns(
-    "target", ".git", ".certora_internal", "certora_out", WORK_DIR.name
-)
+#:
+#: The list is :data:`~composer.spec.cvlr.munge.NOT_PROJECT_SOURCE`, because it is the same fact
+#: read twice: what a copy of the project leaves out is what a munge of the project may not touch.
+#: Sharing it also keeps the two from drifting, which matters in one direction — a directory added
+#: here and not there would become munge-able.
+_NOT_COPIED = shutil.ignore_patterns(*NOT_PROJECT_SOURCE)
 
 
 class CvlrPhase(enum.Enum):
