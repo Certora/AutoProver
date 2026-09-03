@@ -299,6 +299,13 @@ check these rather than to re-read the argument.
    becomes property-independent again, EVM's charter already has the prose for it, and a sub-agent
    starts making sense. The give-up boundary already surfaces this: it is exactly the case that
    produces a `record_skip` naming a kind nobody has written down.
+
+   **Already observed once.** Two of the eight skips in the last passing gate run were
+   deposit-balance properties blocked by P6, both saying the handler had no state-transition
+   function to descend to. What they wanted was that function *extracted* — Refactor/Exposure, not
+   an attribute. The test scenario was editable and gained one (plan §7.6.6); a real target would
+   not have been, and the question of whether that justifies a seventh kind is exactly what this
+   trigger is for.
 2. **Evidence that the closed vocabulary is costing rules.** If skips naming a would-be munge become
    a common outcome, the corpus's five-of-six-are-attributes finding was about one project's style
    rather than about CVLR.

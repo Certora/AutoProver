@@ -22,6 +22,7 @@ import asyncio
 import dataclasses
 import logging
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Annotated, Container, Literal, Mapping, Sequence, override
 
 from langchain_core.tools import BaseTool
@@ -63,8 +64,10 @@ from composer.spec.cvlr.munge import (
     MockFn,
     MungeKind,
     Munged,
+    NotProjectSource,
     apply_munge,
     function_names,
+    is_project_source,
 )
 from composer.spec.cvlr.prover import (
     BuildRejected,
@@ -89,6 +92,13 @@ _log = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass(frozen=True)
+class NotInWorkdir:
+    """The path resolves outside this unit's copy of the project."""
+
+    path: str
+
+
+@dataclasses.dataclass(frozen=True)
 class HarnessTarget:
     """Where a draft is staged so the crate compiles with it in.
 
@@ -104,15 +114,24 @@ class HarnessTarget:
     #: The package's tuning files, which ``summarize_for_prover`` rewrites.
     tuning: TuningFiles
 
-    def source_path(self, relative: str) -> Path | None:
-        """A workspace-relative path resolved inside this unit's workdir, or ``None`` if it escapes.
+    def source_path(self, relative: str) -> Path | NotInWorkdir | NotProjectSource:
+        """Resolve a workdir-relative path a munge may write to, or say why it may not.
 
-        The workdir is this unit's private copy of the project, so writing in it never touches the
-        user's tree — but only while every write stays inside it, which is what this checks.
+        Two things have to hold and they are not the same one. The path must stay **inside** this
+        unit's workdir, which is what keeps a munge from reaching the user's tree. And it must name
+        the **project's own source**, which containment does not establish: confinement puts this
+        unit's ``CARGO_HOME`` at ``<workdir>/.sandbox_cargo``, so every dependency's unpacked source
+        is inside the workdir too, and a check that stopped at containment would let a munge rewrite
+        Anchor for every crate in the graph.
         """
         root = self.session.workdir.resolve()
         candidate = (root / relative).resolve()
-        return candidate if candidate.is_relative_to(root) else None
+        if not candidate.is_relative_to(root):
+            return NotInWorkdir(relative)
+        inside = candidate.relative_to(root)
+        if not is_project_source(PurePosixPath(inside)):
+            return NotProjectSource(path=relative, directory=inside.parts[0])
+        return candidate
 
     def stage(
         self,
@@ -137,9 +156,10 @@ class HarnessTarget:
             self.tuning.write(tuple(summaries))
         for munge in munges:
             path = self.source_path(munge.path)
-            if path is None or not path.is_file():
-                # Recorded against a file that is no longer there. Not this method's failure to
-                # report — the build is about to say so with a span in it.
+            if not isinstance(path, Path) or not path.is_file():
+                # Recorded against a path that is no longer writable or no longer there. Not this
+                # method's failure to report — the tool refused anything unwritable when it was
+                # recorded, and a missing file the build is about to name with a span in it.
                 _log.warning("cvlr: cannot apply munge to %s", munge.path)
                 continue
             match apply_munge(path.read_text(), munge, DEFAULT_FEATURE):
@@ -688,12 +708,23 @@ class MungeFunction(
                 "account for."
             )
         with self.tool_deps() as target:
-            resolved = target.source_path(self.path)
-            if resolved is None:
-                return (
-                    f"{self.path} resolves outside this project. Munge the program's own source, "
-                    f"with a path relative to the workspace root."
-                )
+            match target.source_path(self.path):
+                case NotInWorkdir():
+                    return (
+                        f"{self.path} resolves outside this project. Munge the program's own "
+                        f"source, with a path relative to the workspace root."
+                    )
+                case NotProjectSource(directory=directory):
+                    return (
+                        f"{self.path} is under `{directory}`, which is not this project's source. "
+                        f"A munge changes the program under verification; `{directory}` holds "
+                        f"build output or the dependency sources cargo resolved, and modifying a "
+                        f"dependency changes its behaviour for every crate in the graph — "
+                        f"including the ones your property is about. If the code in the way is a "
+                        f"dependency's, that is a `summarize_for_prover` or a `record_skip`."
+                    )
+                case Path() as resolved:
+                    pass
             if not resolved.is_file():
                 return f"{self.path} is not a file in this project."
             record = FunctionMunge(

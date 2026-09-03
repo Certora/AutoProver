@@ -440,25 +440,70 @@ def test_the_same_munge_recorded_twice_lands_once():
 # component's outcomes are claims about the modified code, not the code as shipped".
 
 
-def test_a_path_leaving_the_workdir_is_refused(tmp_path):
-    """The workdir is this unit's private copy of the project, so writing in it never touches the
-    user's tree — but only while every write stays inside it."""
+def _target(workdir: Path):
+    """A `HarnessTarget` for path questions only — the rest of it is not `source_path`'s business."""
     from types import SimpleNamespace
 
     from composer.spec.cvlr.verify import HarnessTarget
 
-    workdir = tmp_path / "work"
-    (workdir / "src").mkdir(parents=True)
-    # Only the session's workdir is read; the rest of the target is not this method's business.
-    target = HarnessTarget(
+    return HarnessTarget(
         session=SimpleNamespace(workdir=workdir),  # type: ignore[arg-type]
         module_path=workdir / "src" / "spec.rs",
         package="p",
         tuning=SimpleNamespace(),  # type: ignore[arg-type]
     )
+
+
+def test_a_path_leaving_the_workdir_is_refused(tmp_path):
+    """The workdir is this unit's private copy of the project, so writing in it never touches the
+    user's tree — but only while every write stays inside it."""
+    from composer.spec.cvlr.verify import NotInWorkdir
+
+    workdir = tmp_path / "work"
+    (workdir / "src").mkdir(parents=True)
+    target = _target(workdir)
     assert target.source_path("src/lib.rs") == (workdir / "src" / "lib.rs").resolve()
-    assert target.source_path("../outside.rs") is None
-    assert target.source_path("/etc/passwd") is None
+    assert isinstance(target.source_path("../outside.rs"), NotInWorkdir)
+    assert isinstance(target.source_path("/etc/passwd"), NotInWorkdir)
+
+
+def test_a_dependency_inside_the_workdir_is_refused_too(tmp_path):
+    """Containment is not the question, and this is the case that shows why.
+
+    Confinement gives each unit a private ``CARGO_HOME`` at ``<workdir>/.sandbox_cargo``, so every
+    dependency's unpacked source sits inside the workdir, one directory away from the program. A
+    check that stopped at "is it in the workdir" would let a munge rewrite Anchor — for every crate
+    in the graph, including the ones the property is about. Same failure
+    ``validate_rule_subjects`` prevents one axis over.
+    """
+    from composer.spec.cvlr.munge import NotProjectSource
+
+    workdir = tmp_path / "work"
+    (workdir / "src").mkdir(parents=True)
+    target = _target(workdir)
+
+    anchor = ".sandbox_cargo/registry/src/index.crates.io-6f17d22/anchor-lang-0.31.1/src/error.rs"
+    refusal = target.source_path(anchor)
+    assert isinstance(refusal, NotProjectSource)
+    assert refusal.directory == ".sandbox_cargo"
+
+    for built in ("target/debug/build/x/out/gen.rs", ".certora_internal/x.rs", "certora_out/y.rs"):
+        assert isinstance(target.source_path(built), NotProjectSource), built
+
+
+def test_the_copy_and_the_munge_rule_are_one_list():
+    """What a copy of the project leaves out is what a munge of the project may not touch. Drift in
+    one direction is the dangerous one: a directory added to the copy's ignore list and not to this
+    one would become munge-able."""
+    from composer.spec.cvlr.munge import NOT_PROJECT_SOURCE, is_project_source
+    from composer.spec.cvlr.pipeline import WORK_DIR
+
+    assert WORK_DIR.name in NOT_PROJECT_SOURCE
+    assert ".sandbox_cargo" in NOT_PROJECT_SOURCE
+    assert is_project_source("programs/vault/src/lib.rs")
+    assert not is_project_source("target/debug/deps/x.rs")
+    # An empty path names no file and is not source.
+    assert not is_project_source("")
 
 
 @pytest.mark.asyncio
