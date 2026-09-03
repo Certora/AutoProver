@@ -38,6 +38,7 @@ from typing import Any, cast
 import pytest
 
 from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, platform_tools_installed
+from composer.diagnostics.budget import BUDGET_PRESSURE_THRESHOLD, token_cost_budget
 from composer.input.types import DEFAULT_RECURSION_LIMIT
 from composer.llm.registry import get_provider_for
 from composer.pipeline.core import run_pipeline
@@ -123,6 +124,21 @@ def _harness(result: object) -> GeneratedHarness | None:
     if isinstance(result, Curtailed):
         result = result.value
     return result.result if isinstance(result, Delivered) else None
+
+
+#: A reporting-only ceiling on this run's LLM spend.
+#:
+#: ``CostAccumulator`` is already attached by every LLM provider, but it accrues into whichever
+#: budget is installed — so a run with none spends unmeasured, which is what every run of this gate
+#: did until now. Installing one makes the total readable (``token_cost_budget`` keeps its counter
+#: live past the block for exactly this reason).
+#:
+#: Deliberately far above any observed run. At
+#: :data:`~composer.diagnostics.budget.BUDGET_PRESSURE_THRESHOLD` of this the authoring loop enters
+#: its wrap-up window and starts curtailing units, which would change the very behaviour this test
+#: exists to measure. The assertion below fails if a run ever comes close, so a future edit cannot
+#: quietly turn a reporting instrument into a real cap.
+_SPEND_CEILING_USD = 500.0
 
 
 def _verifies_only_its_own_code(harness: GeneratedHarness) -> bool:
@@ -253,9 +269,11 @@ async def test_the_backend_authors_cvlr_rules_for_the_vault(langgraph_db, projec
             _cpu_semaphore=asyncio.Semaphore(2),
             env=env,
         )
-        result = await run_pipeline(
-            backend, run, ecosystem=SOLANA, interactive=False, threat_model=None, max_bug_rounds=1
-        )
+        with token_cost_budget(_SPEND_CEILING_USD) as spend:
+            result = await run_pipeline(
+                backend, run, ecosystem=SOLANA, interactive=False, threat_model=None,
+                max_bug_rounds=1,
+            )
 
     # Written to a file as well as printed. ``capsys.disabled()`` restores the stream pytest saved at
     # session start, which is not the one a redirected or piped run is reading — a full gate run's
@@ -271,7 +289,12 @@ async def test_the_backend_authors_cvlr_rules_for_the_vault(langgraph_db, projec
 
     emit(
         f"\nCVLR gate: {result.n_components} component(s), {result.n_properties} propert(ies), "
-        f"{result.n_delivered} delivered"
+        f"{result.n_delivered} delivered, ${spend.curr_cost:.2f} of LLM spend"
+    )
+    assert spend.curr_cost < _SPEND_CEILING_USD * BUDGET_PRESSURE_THRESHOLD, (
+        f"this run spent ${spend.curr_cost:.2f} against a ceiling of ${_SPEND_CEILING_USD:.2f}, so "
+        f"it entered the budget wrap-up window and units were curtailed rather than finishing. The "
+        f"ceiling is a reporting instrument, not a cap: raise it."
     )
     for outcome in result.outcomes:
         emit(f"\n== {outcome.feat.display_name} ==")
