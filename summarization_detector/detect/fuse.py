@@ -77,8 +77,8 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
             c.score += score
             c.evidence += " | " + evidence
 
-    # signal 1 (nonlinear) + 3 (external): the difficulty hotspots. The prover's procIds carry a visibility
-    # marker; three kinds are handled distinctly:
+    # signal 1 (nonlinear) + 3 (external): the difficulty hotspots (see the signal table in this package's
+    # __init__). The prover's procIds carry a visibility marker; three kinds are handled distinctly:
     #  - unmarked `<CUT>.m`     -> the CUT's OWN external method = a rule subject, never summarized -> DROP
     #  - unmarked `<other>.m`   -> a cross-contract callee (e.g. HubInstanceHarness.previewRemoveByShares)
     #                              -> keep + flag as a resolved external (signal 3)

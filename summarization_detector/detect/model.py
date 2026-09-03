@@ -1,26 +1,56 @@
-"""Runtime dataclasses, scoring constants/helpers, and procId string helpers — the detector's vocabulary.
+"""Runtime dataclasses, scoring constants/helpers, and tool-wide low-level helpers (path normalization,
+AST-span primitives, procId strings) — the detector's vocabulary.
 
 Leaf module: every other detect submodule imports from here; it imports nothing from them.
 """
 import re
 from collections.abc import Callable
 from dataclasses import MISSING, asdict, dataclass, field, fields
+from pathlib import Path
+
+from certora_autosetup.solidity_ast import parse_src
 
 from ..difficulty import _path_count_value
 
 
-# ---------------------------------------------------------------- shared AST-span primitives
+# ---------------------------------------------------------------- shared path + AST-span primitives
+def _project_relative(p: str, sources_root: str | Path | None) -> str:
+    """Normalize a solc source-unit path to project-relative so every candidate's `file` is uniform (solc
+    records a MIX of relative and absolute keys depending on how each was imported/remapped). Certora fetches
+    every source under `.certora_sources/`, so the segment after it IS the project path — key on that first:
+    it is robust to the temp-dir symlink (macOS `tempfile` yields `/var/...` while solc resolves the same
+    file to `/private/var/...`) that makes a plain `relative_to(sources_root)` throw and leak the absolute
+    path. Falls back to `relative_to` (with a resolved retry), else returns `p` unchanged (already relative /
+    outside the root)."""
+    marker = ".certora_sources/"
+    i = p.rfind(marker)
+    if i != -1:
+        return p[i + len(marker):]
+    if sources_root is None:
+        return p
+    try:
+        return str(Path(p).relative_to(Path(sources_root)))
+    except ValueError:
+        try:                                            # resolve both to defeat the /var -> /private/var symlink
+            return str(Path(p).resolve().relative_to(Path(sources_root).resolve()))
+        except ValueError:
+            return p                                    # already relative / not under the root — leave as-is
+
+
+
 def _span3(node: dict) -> tuple[int, int, int] | None:
     """`src` = "offset:length:fileId" -> (start, end, fileId). fileId distinguishes the source files that
-    share one compilation unit's node-id space."""
+    share one compilation unit's node-id space. Reuses `certora_autosetup`'s canonical `src` parser (which
+    yields `(offset, length, file_index)`); we carry `end = offset + length` and tolerate a missing/malformed
+    `src` as None."""
     src = node.get("src")
     if not isinstance(src, str):
         return None
     try:
-        off, length, fid = src.split(":")
-        return int(off), int(off) + int(length), int(fid)
+        loc = parse_src(src)
     except ValueError:
         return None
+    return loc.offset, loc.offset + loc.length, loc.file_index
 
 
 def _span(node: dict) -> tuple[int, int] | None:
@@ -181,7 +211,7 @@ class Candidate:
     mutating: bool | None = None  # True if state-changing (not view/pure); None if unresolved from the AST
     reaching_count: int = 0       # how many entry methods' postOptimize TAC keeps this primitive (breadth)
     summarizable: bool = True     # the prover's own `summarizable` flag (surviving graph)
-    candidate_summary: str = ""   # suggested summary (curated EXACT or generic over-approx)
+    candidate_summary: str = ""   # suggested over-/under-approximation (curated overlay), "" for a generic match
     # Alternative places to summarize instead of the leaf. A candidate uses ONE direction, never both:
     # `caller_boundaries` = containers to walk UP to (hashing/primitive/branching); `callee_boundaries` =
     # shared inlined primitives to descend DOWN to (nonlinear). The field name carries the direction.

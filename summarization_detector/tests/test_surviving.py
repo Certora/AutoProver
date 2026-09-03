@@ -27,9 +27,13 @@ def test_generic_match_suggests_no_summary():
 
 
 def test_curated_overlay_attaches_a_concrete_summary():
+    # Math.mulDiv is an EXACT-summary lib -> NOT curated here (autosetup applies the exact summary); still
+    # flagged generically as nonlinear-mulDiv, with no over-approx suggested.
     oz = classify_hostile("Math.mulDiv(uint256,uint256,uint256)")
-    assert oz is not None and oz.category == "nonlinear-mulDiv"
-    assert oz.curated is True and oz.candidate_summary != ""
+    assert oz is not None and oz.category == "nonlinear-mulDiv" and oz.curated is False and oz.candidate_summary == ""
+    # the curated overlay carries only OVER-approximations -> Solady LibBit bit-scan gets a concrete summary
+    lb = classify_hostile("LibBit.popCount(uint256)")
+    assert lb is not None and lb.category == "bitwise-scan" and lb.curated is True and lb.candidate_summary != ""
 
 
 def test_generic_camelcase_exp_is_caught_without_hardcoding():
@@ -69,13 +73,13 @@ def test_detect_from_fuses_surviving_into_enriched_candidate():
     # the surviving name carries a signature; the candidate key is sig-stripped so it merges cleanly.
     # A generic match carries no summary; a curated one carries the concrete text.
     surv = surviving_hostile([_graph("borrow(uint256)", ["BitLib.fls(uint256)",
-                                                         "WadRayMath.rayMul(uint256,uint256)"])])
+                                                         "LibBit.popCount(uint256)"])])
     rep = detect_from([], DifficultyReport(), cut="Vault", surviving=surv)
     fls = next(c for c in rep.candidates if c.function == "BitLib.fls")
     assert "bitwise-scan" in fls.signals          # the hard-op class IS the signal (no separate category)
     assert fls.reaching_count == 1 and fls.candidate_summary == ""
-    ray = next(c for c in rep.candidates if c.function == "WadRayMath.rayMul")
-    assert "nonlinear-mulDiv" in ray.signals and ray.candidate_summary != ""
+    pc = next(c for c in rep.candidates if c.function == "LibBit.popCount")   # curated over-approx overlay
+    assert "bitwise-scan" in pc.signals and pc.candidate_summary != ""
 
 
 def test_entry_of_rule():

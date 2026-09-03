@@ -167,6 +167,12 @@ def _param_infos(node: dict, key: str) -> list[tuple[str, object]]:
     return [(((p.get("typeDescriptions") or {}).get("typeString") or ""), p.get("typeName")) for p in ps]
 
 
+# The recursive nested-blob detection below is this check's value-add. `certora_autosetup.parsers.
+# type_analyzer` (TypeCategory / TypeInfo.cvl_name / TypeRegistry.is_primitive_type) is the canonical LEAF
+# Solidity->CVL type mapping but does NOT recurse (it stops at the outer array/struct), and the ULTIMATE
+# arbiter of CVL-expressibility is the CVL typechecker (Typechecker.jar, shelled out via
+# `certora_autosetup.typechecker_loop` / certoraRun) — not Python-callable per type. So this stays a
+# deliberately CONSERVATIVE recursive subset: better to skip a boundary than suggest an unexpressible summary.
 def _expressible_typename(tn: object, merged: dict, seen: frozenset = frozenset()) -> bool:
     """Whether a solc `typeName` is modelable as a typed CVL summary value — walked RECURSIVELY, so a blob
     nested inside an array or struct is caught (unlike a flat typeString check). Expressible: value types,
@@ -197,6 +203,10 @@ def _expressible_typename(tn: object, merged: dict, seen: frozenset = frozenset(
     return False                                          # unknown node -> conservative
 
 
+# Sibling authority: `certora_autosetup.setup.setup_summaries.SetupSummaries._returns_reference_type` encodes
+# the SAME rule (a reference return — string/bytes/array/struct/mapping — is NOT `=> NONDET`-able), used for
+# the same gate. It is not reused here because it reads the build-JSON data-location (`returnLocations` in
+# memory/calldata/storage) per return, not a solc `TypeName` node, so it is input-incompatible with this walk.
 def _is_reference_typename(tn: object, merged: dict) -> bool:
     """Whether a solc return `typeName` is a REFERENCE type — one the prover REFUSES `=> NONDET` on
     ("using a NONDET summary for reference types causes unsoundness"): dynamic/fixed arrays, dynamic

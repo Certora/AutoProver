@@ -2,17 +2,30 @@
 
 From a prover run it ranks the functions worth summarizing (a `Candidate` list with WHY each is
 prover-hostile, WHERE it can be summarized, and — for a curated public-library match — a suggested summary).
-The public surface is re-exported here so `summarization_detector.detect` stays a stable import path:
+
+THE SIGNALS (the `signal N` referenced throughout the comments). Each is WHY a function is flagged:
+
+  1  nonlinear           degree x nonlinear-op hotspots           from the difficulty report   (fuse)
+  2  hashing             dynamic-input keccak / abi.encode        from the solc AST            (ast_scan)
+  3  external            resolved cross-contract callee (a TAG)   from the difficulty report   (fuse)
+  4  surviving           prover-hostile primitives still in TAC   from the surviving graphs    (catalog)
+  5  branching           loop / path-count explosion              from the difficulty report   (fuse)
+
+Signals 2 and 4 are separately-computed inputs (each its own analysis + module); 1, 3, 5 are all derived
+from the one difficulty report and are consumed inline in `detect_from`, so they have no module of their own.
+
+THE MODULES. The public surface is re-exported here so `summarization_detector.detect` stays a stable import
+path:
 
   model      runtime dataclasses + scoring constants/helpers + procId string helpers (leaf)
   ast_scan   signal 2 — the AST hashing/encoding scan + source-location resolution
   catalog    signal 4 — the prover-hostile-op catalog (+ curated overlay) + surviving aggregation
   callgraph  the AST call graph: reachability gate, cone weights, fn-facts, expressibility, boundaries
-  fuse       `detect_from` — folds the signals into the ranked candidate list (scoring + caps)
+  fuse       `detect_from` — folds signals 1/3/5 (and 2/4, passed in) into the ranked candidate list
   core       `ensure_ast` + `detect` — AST acquisition and orchestration
 """
 from ..difficulty import DifficultyReport, Hotspot, fetch_difficulty   # re-exported for back-compat
-from .ast_scan import _function_locations, _project_relative, scan_ast
+from .ast_scan import _function_locations, scan_ast
 from .callgraph import (
     FnFacts,
     _by_qual_or_bare,
@@ -49,4 +62,5 @@ from .model import (
     NONLINEAR_MIN_PCT,
     SURVIVING_SCORE,
     _UNSERIALIZED_FIELDS,
+    _project_relative,
 )

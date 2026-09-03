@@ -6,7 +6,7 @@ from pathlib import Path
 
 from certora_autosetup.solidity_ast import stream_raw_units
 
-from .model import HashSignal, _min_span, _span
+from .model import HashSignal, _min_span, _project_relative, _span
 
 
 # ---------------------------------------------------------------- signal 2: AST hashing/encoding calls
@@ -175,29 +175,6 @@ def scan_ast(ast_path: str | Path) -> list[HashSignal]:
     for key, rec in out.items():
         rec.dynamic_input = _dynamic_input(sites.get(key, []), param_ids.get(key, set()))
     return sorted(out.values(), key=lambda h: h.function)
-
-
-def _project_relative(p: str, sources_root: str | Path | None) -> str:
-    """Normalize a solc source-unit path to project-relative so every candidate's `file` is uniform (solc
-    records a MIX of relative and absolute keys depending on how each was imported/remapped). Certora fetches
-    every source under `.certora_sources/`, so the segment after it IS the project path — key on that first:
-    it is robust to the temp-dir symlink (macOS `tempfile` yields `/var/...` while solc resolves the same
-    file to `/private/var/...`) that makes a plain `relative_to(sources_root)` throw and leak the absolute
-    path. Falls back to `relative_to` (with a resolved retry), else returns `p` unchanged (already relative /
-    outside the root)."""
-    marker = ".certora_sources/"
-    i = p.rfind(marker)
-    if i != -1:
-        return p[i + len(marker):]
-    if sources_root is None:
-        return p
-    try:
-        return str(Path(p).relative_to(Path(sources_root)))
-    except ValueError:
-        try:                                            # resolve both to defeat the /var -> /private/var symlink
-            return str(Path(p).resolve().relative_to(Path(sources_root).resolve()))
-        except ValueError:
-            return p                                    # already relative / not under the root — leave as-is
 
 
 def _function_locations(ast_path: str | Path,

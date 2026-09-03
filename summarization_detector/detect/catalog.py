@@ -9,9 +9,12 @@ from .model import _is_cvl_ghost
 # ---------------------------------------------------------------- signal 4: surviving hostile primitives
 # From a sanity run's postOptimize SurvivingCallGraph dumps (one per entry method): the functions still in
 # the optimized TAC. A RAW (non-ghost) prover-hostile primitive that survives is a summarization candidate;
-# an already-applied summary appears as a `CVL/Ghost Function` stand-in (excluded — it IS the summary).
+# an already-applied summary appears as a `CVL/Ghost Function` stand-in and is excluded HERE. It is NOT
+# ignored, though: a ghost still contributing nonlinear ops / path count is flagged by the `already-summarised`
+# signal (in `fuse`, off the difficulty hotspots) as a coarsening target — signal 4 only covers RAW code.
 # GENERIC_RULES recognize the hostile OPERATION by conventional primitive-name tokens (protocol-agnostic);
-# a CURATED overlay maps specific PUBLIC libraries to their known EXACT summaries.
+# a CURATED overlay maps specific PUBLIC libraries to a suggested OVER-/UNDER-approximation (never an exact
+# summary — that is autosetup's job; see CURATED_SUMMARIES).
 @dataclass(frozen=True)
 class HostileCategory:
     key: str
@@ -65,29 +68,18 @@ _PRIMITIVE_CATEGORIES = frozenset(c.key for c in GENERIC_RULES)
 class CuratedEntry:
     match: "re.Pattern[str]"     # a specific "Contract.func(sig)" pattern for a known PUBLIC library
     category: str                # one of the GENERIC_RULES keys
-    summary: str                 # the concrete summary text, INCLUDING any soundness caveat — a curated
-                                 # entry may be exact, or a documented over-/under-approximation
+    summary: str                 # the concrete summary text (an OVER-/UNDER-approximation, INCLUDING its
+                                 # soundness caveat) — never an exact summary; those are autosetup's job
 
 
-# CURATED overlay — specific PUBLIC libraries → a known-good, concrete summary. Only public, widely-used
-# third-party libraries belong here; a protocol's own private math is caught by the GENERIC rules above and
-# carries no suggested summary.
+# CURATED overlay — specific PUBLIC libraries → a suggested OVER-/UNDER-approximation the consumer can adopt
+# (and decide fits its rules). Deliberately NOT exact / meaning-preserving summaries: those are autosetup's
+# job and are applied there (an exactly-summarized call never reaches the detector as hostile). So a public
+# library whose only sound-and-useful summary is exact (e.g. WadRayMath / OZ Math / FixedPointMathLib mulDiv)
+# is NOT listed here — it is still flagged as toxic by the GENERIC `nonlinear-mulDiv` rule and by the
+# nonlinearity hotspots (signal 1), just with no over-approx suggestion. Only entries offering a genuine
+# over-/under-approximation belong here; a protocol's own private math is caught by the GENERIC rules.
 CURATED_SUMMARIES: tuple[CuratedEntry, ...] = (
-    CuratedEntry(
-        match=re.compile(r"\b(WadRayMath|PercentageMath)\.(ray|wad|percent)", re.I),
-        category="nonlinear-mulDiv",
-        summary="=> WAD/RAY fixed-point mulDiv summary (EXACT floor/ceil of x·y/scale).",
-    ),
-    CuratedEntry(
-        match=re.compile(r"\b(Math|MathUpgradeable)\.mulDiv\b"),
-        category="nonlinear-mulDiv",
-        summary="=> OZ_Math.mulDiv curated summary (EXACT).",
-    ),
-    CuratedEntry(
-        match=re.compile(r"\bFixedPointMathLib\.|\bFullMath\.mulDiv\b|\bPRBMath"),
-        category="nonlinear-mulDiv",
-        summary="=> FixedPointMathLib / FullMath / PRB curated summary (EXACT).",
-    ),
     CuratedEntry(
         match=re.compile(r"\bLibBit\.(popCount|fls|flz|clz|ctz|ffs|findLastSet|findFirstSet)\b"),
         category="bitwise-scan",

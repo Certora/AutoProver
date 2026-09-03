@@ -721,10 +721,11 @@ def test_classify_hostile_curated_overlay():
     # a generic name match reports category + reason but NO curated summary
     m = classify_hostile("MathUtils.uncheckedExp(uint256,uint256)")
     assert m is not None and m.category == "symbolic-exp" and not m.curated and m.candidate_summary == ""
-    # curated public libraries carry a concrete summary
+    # a known-EXACT public math lib (FixedPointMathLib mulDiv) is NOT curated here — autosetup applies the
+    # exact summary; the detector still flags it via the GENERIC nonlinear-mulDiv rule, with no summary
     ozm = classify_hostile("FixedPointMathLib.mulDivDown(uint256,uint256,uint256)")
-    assert ozm is not None and ozm.curated and ozm.candidate_summary
-    # Solady LibBit is a common public library -> now curated (was a bare generic bitwise-scan match)
+    assert ozm is not None and ozm.category == "nonlinear-mulDiv" and not ozm.curated and ozm.candidate_summary == ""
+    # the curated overlay carries only OVER-approximations: Solady LibBit bit-scan -> a bounded-NONDET summary
     lb = classify_hostile("LibBit.popCount(uint256)")
     assert lb is not None and lb.category == "bitwise-scan" and lb.curated and "LibBit" in lb.candidate_summary
 
