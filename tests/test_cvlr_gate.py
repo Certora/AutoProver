@@ -125,24 +125,37 @@ def _harness(result: object) -> GeneratedHarness | None:
     return result.result if isinstance(result, Delivered) else None
 
 
-def _reaches_program(harness: GeneratedHarness) -> bool:
-    """Whether any rule declares that it drives the program's own code.
+def _verifies_only_its_own_code(harness: GeneratedHarness) -> bool:
+    """Whether this harness has rules and *none* of them drives the program.
 
     ``rule_subjects`` is the author's per-rule statement of what a rule drives: a program function,
-    or harness-local code standing in for one. A harness where every rule is a stand-in is by
-    construction not evidence about the program.
+    or harness-local code standing in for one. A harness whose every rule is a stand-in is by
+    construction not evidence about the program, and that is what this catches.
 
-    This replaced a text scan for ``crate::entry`` / ``crate::<package>``, which was measured wrong
-    in both directions. It false-*passed* a harness that says ``crate::VaultState`` while driving a
-    reimplementation, and — the reason it is gone — it false-*failed* a harness that does
-    ``use crate::{..., vault_program};`` and then calls ``vault_program::initialize(ctx)``, because
-    the call site carries no ``crate::`` prefix. Reach is a question about name resolution, and the
-    declaration answers it without this test doing the compiler's job.
+    **A harness with no rules at all is not that**, and an earlier version of this predicate failed
+    it. It asked "does any rule drive the program", which answers *no* both for a harness of pure
+    mirrors and for one that concluded nothing was provable and skipped every property with a
+    reason. Those are opposite outcomes: the first is worthless, the second is the best available
+    answer to P6 (``docs/upstream-defects.md``) and is what the loop was pushed toward for three
+    runs. A run then produced it — seven skips, each naming the CPI havoc, the summaries it tried and
+    the absent accounting core — and this test failed the run for it. Hence the inversion: the
+    question is whether any rule *fails* to reach the program, not whether one succeeds.
+
+    An empty harness only reaches here having accounted for every property: the publish gate refuses
+    a result unless each is mapped to a rule or explicitly skipped.
+
+    This also replaced a text scan for ``crate::entry`` / ``crate::<package>``, which was measured
+    wrong in both directions. It false-*passed* a harness that says ``crate::VaultState`` while
+    driving a reimplementation, and false-*failed* one that does ``use crate::{..., vault_program};``
+    then calls ``vault_program::initialize(ctx)``, because the call site carries no ``crate::``
+    prefix. Reach is a question about name resolution, and the declaration answers it without this
+    test doing the compiler's job.
 
     Not simply trusted: :func:`_undeclared_functions` fails a declaration the shipped source
-    contradicts.
+    contradicts, and the publish gate refuses a subject rooted outside the program's own crate.
     """
-    return any(s.subject == "program_function" for s in harness.rule_subjects)
+    subjects = harness.rule_subjects
+    return bool(subjects) and not any(s.subject == "program_function" for s in subjects)
 
 
 def _mirrored_rules(harness: GeneratedHarness) -> list[str]:
@@ -305,12 +318,14 @@ async def test_the_backend_authors_cvlr_rules_for_the_vault(langgraph_db, projec
         if mirrors := _mirrored_rules(harness):
             emit(f"  {outcome.feat.display_name}: declared stand-ins — {', '.join(mirrors)}")
 
-    unreached = [
+    self_verifying = [
         o.feat.display_name
         for o in result.outcomes
-        if (h := _harness(o.result)) is not None and not _reaches_program(h)
+        if (h := _harness(o.result)) is not None and _verifies_only_its_own_code(h)
     ]
-    assert not unreached, (
-        f"delivered harnesses in which no rule drives the program: {unreached}. Their rules verify "
-        f"whatever the harness itself defines, so they are not evidence about {_PACKAGE}."
+    assert not self_verifying, (
+        f"delivered harnesses whose every rule drives harness-local code: {self_verifying}. Those "
+        f"rules verify whatever the harness itself defines, so they are not evidence about "
+        f"{_PACKAGE}. A harness with no rules at all is a different outcome and passes: see "
+        f"{_verifies_only_its_own_code.__name__}."
     )
