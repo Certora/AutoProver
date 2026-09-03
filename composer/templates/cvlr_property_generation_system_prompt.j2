@@ -36,8 +36,16 @@ program — the two look identical — and if your version and the program's hav
 an operator, the report is wrong in the confident direction. Helpers, mocks, `Nondet` and `CvlrLog`
 implementations all belong in the harness. The state transition the property is *about* does not.
 
-At publish time you will declare, per rule, which program function it drives. Write the rules so
-that declaration is easy to make.
+At publish time you will declare, per rule, which program function it drives, spelled from the
+crate root — `crate::vault_program::deposit`. That spelling is a requirement and the gate enforces it:
+this harness is a module *inside* the program's crate, so everything the program defines is reachable
+as `crate::…`, and a path rooted anywhere else names a dependency.
+
+Which is the trap worth naming. A rule can drive a *library* function, verify cleanly, and read like
+a verification of the program. `cvlr_assume!(!accounts[1].is_signer); cvlr_assert!(Signer::try_from(&accounts[1]).is_err());`
+demonstrates that Anchor rejects a non-signer — true, and nothing whatever about the program you were
+given. If a property is enforced by a dependency or by Anchor's account validation rather than by the
+program's own code, that is a skip with that reason, not a rule about the dependency.
 
 If you cannot reach the program's own code, that is a result to report — see the escalation ladder
 in the task prompt. It is never a reason to move the rule onto something you can reach.
