@@ -488,3 +488,60 @@ def test_the_accepted_character_set_stays_a_subset_of_the_cli_s():
     cli_extra = {"(", " ", ",", "/", "[", "'", "-", '"', "_", "]", ".", ")", ":", "\\", "=", "*", "$"}
     cli = set(string.ascii_letters) | set(string.digits) | cli_extra
     assert _MSG_SAFE <= cli, f"not accepted by the CLI: {_MSG_SAFE - cli}"
+
+
+def test_a_rule_declared_against_a_dependency_is_refused():
+    """A rule can drive a *library* function, verify cleanly, and map onto a program property.
+
+    Measured: an end-to-end run shipped
+    ``cvlr_assume!(!accounts[1].is_signer); cvlr_assert!(Signer::try_from(..).is_err())`` against a
+    property named "depositor must sign". It was GOOD, it was the only assertion in its unit, and it
+    establishes a fact about ``anchor_lang`` rather than about the program. Neither the mapping gate
+    nor the verdict can see that; the declaration can, because the author named the dependency
+    honestly.
+
+    The harness is a module inside the program's crate, so the program's own items are always
+    reachable as ``crate::…``. That makes this a spelling rule rather than a guess about which crates
+    count as "the program".
+    """
+    draft = "#[rule]\nfn rule_signer_rejects_non_signer() { }\n"
+    subjects = [
+        DrivesProgramFunction(
+            rule="rule_signer_rejects_non_signer",
+            function="anchor_lang::accounts::signer::Signer::try_from",
+        )
+    ]
+    err = validate_rule_subjects(subjects, draft)
+    assert err is not None
+    assert "not in the program under verification" in err
+    assert "anchor_lang" in err
+
+
+def test_a_rule_declared_against_the_program_s_own_code_is_accepted_at_any_depth():
+    """The check is about authorship, not depth: descending to the accounting core a handler wraps is
+    the sanctioned move when a CPI blocks a handler-level property (``docs/upstream-defects.md`` P6),
+    so it must pass."""
+    draft = "#[rule]\nfn rule_core() { }\n"
+    subjects = [
+        DrivesProgramFunction(
+            rule="rule_core",
+            function="crate::borrow_order_operations::fill_borrow_order",
+        )
+    ]
+    assert validate_rule_subjects(subjects, draft) is None
+
+
+def test_a_mirror_must_also_name_program_code_as_what_it_stands_in_for():
+    """A stand-in's whole claim is "this reproduces *that*". Pointing it at a dependency makes the
+    claim unfalsifiable and the caveat meaningless."""
+    draft = "#[rule]\nfn rule_mirror() { }\n"
+    subjects = [
+        DrivesHarnessMirror(
+            rule="rule_mirror",
+            mirrors="anchor_lang::accounts::account::Account::try_from",
+            reason="the real one could not be analyzed",
+        )
+    ]
+    err = validate_rule_subjects(subjects, draft)
+    assert err is not None
+    assert "not in the program under verification" in err

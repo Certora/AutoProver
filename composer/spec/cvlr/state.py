@@ -109,8 +109,28 @@ type RuleSubject = Annotated[
 ]
 
 
+#: The prefix a path into the program under verification must carry. The harness is a module *inside*
+#: that crate (``src/certora/specs/<unit>.rs``), so every one of the program's own items is reachable
+#: as ``crate::…`` — which makes this a spelling requirement rather than a guess about which crates
+#: are "the program". A path rooted anywhere else names a dependency.
+_PROGRAM_ROOT = "crate::"
+
+
+def _outside_the_program(path: str) -> bool:
+    return not path.startswith(_PROGRAM_ROOT)
+
+
 def validate_rule_subjects(subjects: list[RuleSubject], draft: str) -> str | None:
-    """None if every declared rule has exactly one subject and no subject names an absent rule."""
+    """None if every declared rule has exactly one subject naming code inside the program.
+
+    The second half is what a green harness can otherwise hide. A rule may drive a *dependency* —
+    asserting that ``anchor_lang``'s ``Signer::try_from`` rejects a non-signer, say — verify cleanly,
+    and map onto a property of the program, while establishing nothing about the program at all. That
+    happened: an end-to-end run shipped exactly that rule against a property named
+    "depositor must sign", and it was the most convincing-looking rule in its unit. The declaration is
+    honest in that case — the author named the dependency — so the check costs the author nothing and
+    catches what neither the mapping gate nor the verdict can see.
+    """
     declared = set(rule_names(draft))
     seen: set[RuleName] = set()
     errors: list[str] = []
@@ -122,6 +142,18 @@ def validate_rule_subjects(subjects: list[RuleSubject], draft: str) -> str | Non
         elif subject.rule in seen:
             errors.append(f"Rule {subject.rule!r} appears more than once in `rule_subjects`.")
         seen.add(subject.rule)
+        named = (
+            subject.function if subject.subject == "program_function" else subject.mirrors
+        )
+        if _outside_the_program(named):
+            errors.append(
+                f"Rule {subject.rule!r} names {named!r}, which is not in the program under "
+                f"verification: the harness is a module inside that crate, so its own items are "
+                f"reachable as `{_PROGRAM_ROOT}…` and anything else is a dependency. A rule that "
+                f"drives a dependency proves a property of that dependency, however well it maps to "
+                f"the property's words. Drive the program's own code, or skip the property and say "
+                f"this is why."
+            )
     for name in sorted(declared - seen):
         errors.append(
             f"Rule {name!r} has no entry in `rule_subjects`: say which program function it drives, "
