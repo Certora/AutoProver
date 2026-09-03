@@ -38,6 +38,14 @@ _MAX_HOTSPOTS = 8          # a ranked pointer, not a dump
 _HOTSPOTS_NODE_LABEL = "nonlinearity hotspots"
 _HOTSPOT_FN_RE = re.compile(r"function:\s*(?P<fn>.+)", re.S)       # $procId (may contain spaces/quotes)
 _HOTSPOT_PCT_RE = re.compile(r"nonlinear ops:\s*(?P<pct>\d+)\s*%")
+# The rule-level ABSOLUTE max polynomial degree ("nonlinear ops: 3\nmax polyn. degree: 3"), the scale of the
+# rule's nonlinearity — the per-function % alone is only a within-rule share and isn't comparable across
+# rules. The negative lookahead excludes the per-function CONTRIBUTION form ("contrib. to max polyn. degree:
+# 33 %"), which is a percentage, not the absolute degree.
+_DEGREE_RE = re.compile(r"max polyn\. degree:\s*(?P<deg>\d+)(?!\s*%|\d)")
+# The rule-level ABSOLUTE nonlinear-op count ("nonlinear ops: 3\n..."). Same lookahead trick excludes the
+# per-function CONTRIBUTION form ("contrib. to nonlinear ops: 66 %"), which is a percentage.
+_NL_OPS_RE = re.compile(r"(?<!contrib\. to )nonlinear ops:\s*(?P<ops>\d+)(?!\s*%|\d)")
 # The SIBLING "path count hotspots" node (SingleDifficultyStats.kt, same shape as nonlinearity): functions
 # ranked by % contribution to BRANCHING (path/loop count), each with a source file:line. This is the signal
 # for path-explosion-bound rules (combinatorial loops over dynamic arrays) where the nonlinearity node is
@@ -76,8 +84,11 @@ def _path_count_value(s: str) -> float:
 @dataclass
 class Hotspot:
     function: str            # e.g. "SomeLib.someNonlinearFn" (procId)
-    pct: int                 # % contribution to the rule's nonlinear ops
+    pct: int                 # % contribution to the rule's nonlinear ops (branching: to the rule's branching)
     location: str            # "file:line" or ""
+    path_count: str = ""     # branching only: the path count of the rule this hotspot came from (e.g. "approx. 2^39")
+    degree: int = 0          # nonlinearity only: the max polynomial degree of the rule this hotspot came from
+    nl_ops: int = 0          # nonlinearity only: the absolute nonlinear-op count of the rule this hotspot came from
 
 
 @dataclass
@@ -168,6 +179,28 @@ def _scan_max_path_count(node, best: list) -> None:
             _scan_max_path_count(c, best)
 
 
+def _scan_rule_nl(node, best: list) -> None:
+    """Walk the tree; keep the rule's absolute nonlinearity stats — best = [max nonlinear ops, max polyn
+    degree]. Both come from the rule-level `nonlinearity` node ("nonlinear ops: N\\nmax polyn. degree: D");
+    the per-function `contrib. to ...: N %` shares are skipped (a trailing % / extra digit fails the
+    lookahead in `_NL_OPS_RE` / `_DEGREE_RE`)."""
+    if isinstance(node, dict):
+        v = node.get("value")
+        for s in (v if isinstance(v, list) else [v]):
+            if isinstance(s, str):
+                mo = _NL_OPS_RE.search(s)
+                if mo:
+                    best[0] = max(best[0], int(mo.group("ops")))
+                md = _DEGREE_RE.search(s)
+                if md:
+                    best[1] = max(best[1], int(md.group("deg")))
+        for c in node.get("children", []) or []:
+            _scan_rule_nl(c, best)
+    elif isinstance(node, list):
+        for c in node:
+            _scan_rule_nl(c, best)
+
+
 _LIVE_STATS_RE = re.compile(r"rule_live_statistics_(\d+)\.json")
 _PROBE_MAX = 64            # fallback if the status doesn't reference the live-stats files by name
 
@@ -209,12 +242,33 @@ def fetch_difficulty(job_url: str, limit: int | None = _MAX_HOTSPOTS) -> Difficu
             tree = api.fetch_treeview_output_by_filename(job_url, f"rule_live_statistics_{n}.json")
         except Exception:
             continue      # index not present (expected when probing) / transient fetch error
-        _parse_hotspots(tree, hs, _HOTSPOTS_NODE_LABEL, _HOTSPOT_PCT_RE)
-        _parse_hotspots(tree, br, _BRANCHING_NODE_LABEL, _BRANCHING_PCT_RE)
-        _scan_max_path_count(tree, max_pc)
+        # Each rule_live_statistics file is ONE rule, so its nonlinear-op count and max polynomial degree are
+        # THIS rule's. Attach both to the rule's nonlinearity hotspots (the absolute severities; the % is only
+        # a within-rule share), and dedupe a function across split rules by keeping its worst (degree, pct).
+        file_nl: list = [0, 0]      # [nonlinear ops, max polyn degree]
+        _scan_rule_nl(tree, file_nl)
+        this_hs: dict[str, Hotspot] = {}
+        _parse_hotspots(tree, this_hs, _HOTSPOTS_NODE_LABEL, _HOTSPOT_PCT_RE)
+        for fn, h in this_hs.items():
+            h.nl_ops, h.degree = file_nl[0], file_nl[1]
+            prev = hs.get(fn)
+            if prev is None or (file_nl[1], h.pct) > (prev.degree, prev.pct):
+                hs[fn] = h
+        # Same per-rule attach for branching: its path count is THIS rule's.
+        file_pc: list = [0.0, ""]
+        _scan_max_path_count(tree, file_pc)
+        this_br: dict[str, Hotspot] = {}
+        _parse_hotspots(tree, this_br, _BRANCHING_NODE_LABEL, _BRANCHING_PCT_RE)
+        for fn, h in this_br.items():
+            h.path_count = file_pc[1]
+            prev = br.get(fn)
+            if prev is None or (file_pc[0], h.pct) > (_path_count_value(prev.path_count), prev.pct):
+                br[fn] = h
+        if file_pc[0] > max_pc[0]:
+            max_pc[0], max_pc[1] = file_pc[0], file_pc[1]
     report.max_path_count = max_pc[1]
-    nl_ranked = sorted(hs.values(), key=lambda h: h.pct, reverse=True)
-    br_ranked = sorted(br.values(), key=lambda h: h.pct, reverse=True)
+    nl_ranked = sorted(hs.values(), key=lambda h: (h.degree, h.pct), reverse=True)
+    br_ranked = sorted(br.values(), key=lambda h: (_path_count_value(h.path_count), h.pct), reverse=True)
     report.hotspots = nl_ranked if limit is None else nl_ranked[:limit]
     report.branching = br_ranked if limit is None else br_ranked[:limit]
     return report

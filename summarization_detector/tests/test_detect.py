@@ -180,18 +180,20 @@ def test_detect_from_surfaces_hot_cvl_ghost_but_drops_cheap_one():
     # longer a problem); one STILL contributing nonlinear ops means its summary is itself nonlinear (e.g. an
     # exact mulDiv summary) and is surfaced as an `already-summarised` coarsening target.
     from summarization_detector.detect import ALREADY_SUMMARISED_MIN_PCT
+    # degree/nl_ops set high enough that the ABSOLUTE magnitude floor is not the binding constraint here —
+    # this test exercises the ghost % floor (ALREADY_SUMMARISED_MIN_PCT), not the magnitude floor.
     diff = DifficultyReport(hotspots=[
-        Hotspot("CVL/Ghost Function 'mulDivDownSummary(x,y,denominator)'", 86, ""),           # still hot
-        Hotspot("CVL/Ghost Function 'edgeGhost(a)'", ALREADY_SUMMARISED_MIN_PCT, ""),          # at floor -> kept
-        Hotspot("CVL/Ghost Function 'cheapGhost(a,b)'", ALREADY_SUMMARISED_MIN_PCT - 1, ""),   # below -> dropped
-        Hotspot("AmountConverter.getExpectedOut", 20, "contracts/AmountConverter.sol:134"),    # external callee
+        Hotspot("CVL/Ghost Function 'mulDivDownSummary(x,y,denominator)'", 86, "", degree=6, nl_ops=50),  # still hot
+        Hotspot("CVL/Ghost Function 'edgeGhost(a)'", ALREADY_SUMMARISED_MIN_PCT, "", degree=6, nl_ops=50), # at floor -> kept
+        Hotspot("CVL/Ghost Function 'cheapGhost(a,b)'", ALREADY_SUMMARISED_MIN_PCT - 1, "", degree=6, nl_ops=50),  # below -> dropped
+        Hotspot("AmountConverter.getExpectedOut", 20, "contracts/AmountConverter.sol:134", degree=6, nl_ops=50),   # external callee
     ])
     rep = detect_from([], diff, cut="Stonks")
     by = {c.function: c for c in rep.candidates}
     assert "AmountConverter.getExpectedOut" in by                                    # real raw math still kept
     # the hot ghost is surfaced under its summary name, flagged already-summarised, with coarsen guidance
     hot = by["mulDivDownSummary(x,y,denominator)"]
-    assert hot.signals == ("already-summarised",)
+    assert hot.signals == ("nonlinear", "already-summarised")   # nonlinearity is the problem; the ghost qualifies it
     assert "coarsen" in hot.evidence.lower()
     assert hot.file == "" and hot.line is None                                        # a ghost has no source loc
     assert "edgeGhost(a)" in by                                                       # exactly at the floor -> kept
@@ -330,7 +332,7 @@ def test_boundary_format_flags_mutating_vs_pure():
     # only expressible, internal boundaries reach the report; mutating is the last remaining caveat
     rep = DetectionReport(candidates=[Candidate(
         "leaf", ("hashing",), 10.0, "ev",
-        boundaries=[
+        caller_boundaries=[
             Boundary("A.pureView", 1, "pureView(address) -> b32", mutating=False),
             Boundary("A.mutClose", 2, "mutClose(address) -> b32", mutating=True),
         ])])
@@ -355,12 +357,12 @@ def test_descend_to_prims_finds_shared_nonlinear_primitive():
     assert _descend_to_prims(edges, "V.previewDeposit", reachable={"V.previewDeposit"}) == {}
 
 
-def test_boundary_down_direction_renders_shared_count():
+def test_boundary_callee_renders_shared_count():
     from summarization_detector.detect import DetectionReport, Candidate, Boundary
     rep = DetectionReport(candidates=[Candidate(
         "V.previewDeposit", ("nonlinear",), 100.0, "ev",
-        boundaries=[Boundary("MathLib.mulDivDown", 2, "mulDivDown(uint256, uint256, uint256) -> uint256",
-                             mutating=False, direction="down", shared=8)])])
+        callee_boundaries=[Boundary("MathLib.mulDivDown", 2, "mulDivDown(uint256, uint256, uint256) -> uint256",
+                                    mutating=False, shared=8)])])
     line = next(ln for ln in rep.format().splitlines() if "mulDivDown" in ln)
     assert "↓" in line and "shared ×8" in line and "summarizable here" in line
 
@@ -443,19 +445,18 @@ def test_function_locations_file_and_line():
     assert no_src["Lib.foo"] == ("src/A.sol", None)          # file only, line unresolved without sources
 
 
-def test_detect_from_caps_each_category_and_reports_dropped():
+def test_detect_from_caps_each_category():
     from summarization_detector.detect import detect_from, HashSignal, MAX_PER_CATEGORY
     from summarization_detector.difficulty import DifficultyReport
     cap = MAX_PER_CATEGORY["hashing"]
-    # more hashers than the hashing cap -> that category is bounded to its cap and `dropped` records the rest
+    # more hashers than the hashing cap -> that category is bounded to its cap (the rest are simply not kept)
     hs = [HashSignal(function=f"C.h{i}", contract="C", name=f"h{i}", mutability="view",
                      visibility="internal", patterns=("keccak256",), file="src/C.sol",
                      is_dependency=False, dynamic_input=True)
           for i in range(cap + 5)]
     rep = detect_from(hs, DifficultyReport(), cut="C")
     hashing = [c for c in rep.candidates if "hashing" in c.signals]
-    assert len(hashing) == cap        # hashing category capped
-    assert rep.dropped == 5           # the 5 over the cap are dropped
+    assert len(hashing) == cap                 # hashing category capped
 
 
 def test_surviving_score_is_flat_regardless_of_reach():
@@ -541,7 +542,7 @@ def test_detect_from_collects_toxic_entrypoints_top5_by_pct():
         Hotspot("C.getUserAccountData", 40, "C.sol:6"),   # 6th -> dropped by top-5
     ])
     rep = detect_from([], diff, cut="C")
-    assert [f for f, _ in rep.toxic_entrypoints] == [
+    assert [f for f, _, _ in rep.toxic_entrypoints] == [
         "C.liquidationCall", "C.setUsingAsCollateral", "C.updateUserRiskPremium", "C.borrow", "C.withdraw",
     ]
     assert rep.candidates == []  # the external subjects themselves are never candidates
@@ -616,15 +617,21 @@ def test_difficulty_parses_path_count_hotspots_separately_from_nonlinearity():
 
 def test_detect_from_emits_branching_candidates():
     diff = DifficultyReport(branching=[
-        Hotspot("(internal) Router._insertLeg", 39, "Router.sol:433"),
-        Hotspot("CombinatorialModule._storeLegsFromMemory", 20, "M.sol:1092"),
-        Hotspot("Router.inject", 30, "Router.sol:1"),                  # CUT's own external = subject -> skip
-        Hotspot("(internal) Router._tiny", BRANCHING_MIN_PCT - 1, ""),  # below the floor -> dropped
+        Hotspot("(internal) Router._insertLeg", 39, "Router.sol:433", path_count="approx. 2^39"),
+        Hotspot("CombinatorialModule._storeLegsFromMemory", 20, "M.sol:1092", path_count="approx. 2^20"),
+        Hotspot("Router.inject", 30, "Router.sol:1", path_count="approx. 2^30"),   # CUT external subject -> skip
+        Hotspot("(internal) Router._tiny", BRANCHING_MIN_PCT - 1, "", path_count="approx. 2^50"),  # below floor -> drop
     ])
     by = {c.function: c for c in detect_from([], diff, cut="Router").candidates}
     ins = by["Router._insertLeg"]
-    assert "branching" in ins.signals and "branching" in ins.evidence.lower()
-    assert "CombinatorialModule._storeLegsFromMemory" in by
+    assert "branching" in ins.signals
+    assert "paths" in ins.evidence and "%" not in ins.evidence         # per-function path count, no % or rule ref
+    assert "@" not in ins.evidence                                     # no duplicated file:line (it's in .file/.line)
+    # score is the ABSOLUTE branching severity = log2(paths contributed) = log2(2^39) x 39% ~= 15.2 (NOT
+    # population-normalized to 100, and NOT the within-rule % of 39)
+    assert 15 <= ins.score < 16
+    # a higher-path-count rule outranks a lower one regardless of %: _insertLeg (2^39) > _storeLegs (2^20)
+    assert ins.score > by["CombinatorialModule._storeLegsFromMemory"].score
     assert "Router.inject" not in by                                   # the CUT external subject is skipped
     assert not any("_tiny" in f for f in by)                          # below the floor is dropped
 
@@ -675,10 +682,113 @@ def test_scan_max_path_count_keeps_worst_incl_list_values():
     assert best[1] == "approx. 2^51"
 
 
-def test_detect_from_branching_evidence_carries_absolute_path_count():
-    diff = DifficultyReport(branching=[Hotspot("(internal) C._loop", 40, "")], max_path_count="approx. 2^51")
+def test_detect_from_branching_drops_tiny_path_space():
+    # A big within-rule share of a rule that barely branches is NOT a path explosion: below the absolute
+    # path-count floor the branching signal is not attributed at all (no `~2 paths` noise on a getter).
+    diff = DifficultyReport(branching=[
+        Hotspot("(internal) C.getter", 90, "C.sol:1", path_count="6"),               # 90% of 6 paths -> dropped
+        Hotspot("(internal) C.loop",   40, "C.sol:2", path_count="approx. 2^30"),     # real explosion -> kept
+    ])
     by = {c.function: c for c in detect_from([], diff, cut="C").candidates}
-    assert "2^51" in by["C._loop"].evidence and "branching" in by["C._loop"].evidence.lower()
+    assert "C.getter" not in by                                       # tiny path space -> no branching candidate
+    assert "branching" in by["C.loop"].signals
+
+
+def test_detect_from_branching_evidence_lists_paths_contributed():
+    # The evidence lists the paths ATTRIBUTABLE TO THIS FUNCTION (2^(pct% of the rule's branching bits)),
+    # not the rule total and not a %: 40% of a 2^51 rule -> ~2^20 paths.
+    diff = DifficultyReport(branching=[Hotspot("(internal) C._loop", 40, "", path_count="approx. 2^51")])
+    by = {c.function: c for c in detect_from([], diff, cut="C").candidates}
+    ev = by["C._loop"].evidence
+    assert "2^20" in ev and "paths" in ev and "%" not in ev
+    assert 20 <= by["C._loop"].score < 21                            # absolute severity = log2(2^51 x 40%) ~= 20.4
+
+
+def test_detect_from_drops_trivially_nonlinear():
+    # A big within-rule share of a barely-nonlinear rule (low degree AND few ops) is below the absolute
+    # magnitude floor (degree x contributed_ops) -> not surfaced, even though it clears the % floor.
+    diff = DifficultyReport(hotspots=[
+        Hotspot("(internal) C.trivial", 90, "C.sol:1", degree=3, nl_ops=2),    # mag 3 x (2 x 0.9) = 5.4 -> dropped
+        Hotspot("(internal) C.real",    50, "C.sol:2", degree=6, nl_ops=40),   # mag 6 x 20 = 120 -> kept
+    ])
+    by = {c.function: c for c in detect_from([], diff, cut="C").candidates}
+    assert "C.trivial" not in by
+    assert "C.real" in by
+
+
+def test_classify_hostile_curated_overlay():
+    from summarization_detector.detect import classify_hostile
+    # a generic name match reports category + reason but NO curated summary
+    m = classify_hostile("MathUtils.uncheckedExp(uint256,uint256)")
+    assert m is not None and m.category == "symbolic-exp" and not m.curated and m.candidate_summary == ""
+    # curated public libraries carry a concrete summary
+    ozm = classify_hostile("FixedPointMathLib.mulDivDown(uint256,uint256,uint256)")
+    assert ozm is not None and ozm.curated and ozm.candidate_summary
+    # Solady LibBit is a common public library -> now curated (was a bare generic bitwise-scan match)
+    lb = classify_hostile("LibBit.popCount(uint256)")
+    assert lb is not None and lb.category == "bitwise-scan" and lb.curated and "LibBit" in lb.candidate_summary
+
+
+def test_project_relative_strips_certora_sources_marker():
+    from summarization_detector.detect import _project_relative
+    # absolute temp path under .certora_sources -> project-relative, even when sources_root is the /var form
+    # while the AST path is the resolved /private/var form (macOS temp-dir symlink) — the marker sidesteps it.
+    p = "/private/var/folders/x/T/detect-abc/sources/inputs/.certora_sources/src/libraries/math/MathUtils.sol"
+    root = "/var/folders/x/T/detect-abc/sources/inputs/.certora_sources"
+    assert _project_relative(p, root) == "src/libraries/math/MathUtils.sol"
+    assert _project_relative("src/Foo.sol", "/whatever/root") == "src/Foo.sol"       # already relative -> as-is
+    assert _project_relative("/root/src/Foo.sol", "/root") == "src/Foo.sol"          # no marker -> relative_to
+
+
+def test_branching_score_is_absolute_so_nonlinear_dominates_small_paths():
+    from summarization_detector.detect import detect_from
+    from summarization_detector.difficulty import DifficultyReport, Hotspot
+    # a branching candidate with a SMALL path count scores low (absolute severity, NOT population-normalized
+    # to 100), so it does not out-rank a genuine nonlinear candidate — path explosion matters only at scale.
+    diff = DifficultyReport(
+        hotspots=[Hotspot("(internal) C.mathHeavy", 80, "C.sol:1", degree=6, nl_ops=40)],
+        branching=[Hotspot("(internal) C.smallLoop", 90, "C.sol:2", path_count="approx. 2^6")],
+    )
+    by = {c.function: c for c in detect_from([], diff, cut="C").candidates}
+    assert by["C.smallLoop"].score < 10                          # ~2^5 contributed paths -> low absolute score
+    assert by["C.mathHeavy"].score > by["C.smallLoop"].score     # nonlinear dominates small branching
+
+
+def test_detect_from_branching_only_trivial_contribution_dropped_entirely():
+    from summarization_detector.detect import detect_from
+    from summarization_detector.difficulty import DifficultyReport, Hotspot
+    # a candidate whose ONLY signal is branching, contributing just a few paths, is not surfaced at all — even
+    # though its RULE has plenty of paths (a rule-total floor would let it through; the CONTRIBUTED floor does
+    # not): 20% of 2^10 -> ~2^2 = 4 contributed paths.
+    diff = DifficultyReport(branching=[Hotspot("(internal) C.setter", 20, "C.sol:1", path_count="approx. 2^10")])
+    assert detect_from([], diff, cut="C").candidates == []
+
+
+def test_scan_rule_nl_absolute_not_contrib_pct():
+    # The rule-level `nonlinear ops: N` / `max polyn. degree: D` are the absolute scales; the per-function
+    # `contrib. to ...: N %` shares must be skipped (else a 99% share would masquerade as a degree-99 rule).
+    from summarization_detector.difficulty import _scan_rule_nl
+    tree = {"children": [
+        {"label": "nonlinearity", "value": "nonlinear ops: 3\nmax polyn. degree: 6"},   # absolute -> ops 3, deg 6
+        {"label": "hotspot", "value": "contrib. to nonlinear ops: 88 %\ncontrib. to max polyn. degree: 99 %"},
+    ]}
+    best = [0, 0]
+    _scan_rule_nl(tree, best)
+    assert best == [3, 6]
+
+
+def test_detect_from_nonlinear_score_normalized_by_degree_across_population():
+    # Two nonlinear candidates from rules of different max polynomial degree. Score = degree x within-rule %,
+    # NORMALIZED across the run's nonlinear candidates -> the higher-degree one is 100 even at a LOWER %.
+    diff = DifficultyReport(hotspots=[
+        Hotspot("(internal) C.lowDegHot",   90, "C.sol:1", degree=2, nl_ops=100),   # deg 2, 90% -> mag 180
+        Hotspot("(internal) C.highDegLess", 50, "C.sol:2", degree=6, nl_ops=100),   # deg 6, 50% -> mag 300 (worst)
+    ])
+    by = {c.function: c for c in detect_from([], diff, cut="C").candidates}
+    assert by["C.highDegLess"].score == 100.0                         # worst magnitude -> normalized to 100
+    assert by["C.lowDegHot"].score < by["C.highDegLess"].score        # higher degree wins despite lower %
+    ev = by["C.highDegLess"].evidence
+    assert "50 nonlinear ops" in ev and "polynomial degree 6" in ev and "%" not in ev   # 50% of 100 ops
 
 
 def test_caller_boundaries_nondet_ranks_view_pure_before_mutating():
@@ -701,11 +811,12 @@ def test_candidate_schema_parity_locks_typeddicts_to_dataclasses():
     # them so they cannot silently drift (the "keep them in step" hazard). Also checks that to_dict's
     # default-pruning (NotRequired keys) matches the fields that actually carry a default.
     from dataclasses import MISSING, fields
-    from summarization_detector.detect import Candidate, Boundary
+    from summarization_detector.detect import Candidate, Boundary, _UNSERIALIZED_FIELDS
     from summarization_detector.schema import HostileCandidate, HostileBoundary
-    assert set(HostileCandidate.__annotations__) == {f.name for f in fields(Candidate)}
+    serialized = {f.name for f in fields(Candidate)} - _UNSERIALIZED_FIELDS   # `score` is internal, not emitted
+    assert set(HostileCandidate.__annotations__) == serialized
     assert set(HostileBoundary.__annotations__) == {f.name for f in fields(Boundary)}
     opt = {f.name for f in fields(Candidate)
-           if f.default is not MISSING or f.default_factory is not MISSING}
-    assert set(HostileCandidate.__optional_keys__) == opt          # NotRequired == fields with a default
-    assert set(HostileBoundary.__optional_keys__) == set()         # Boundary has no defaults -> all required
+           if (f.default is not MISSING or f.default_factory is not MISSING) and f.name not in _UNSERIALIZED_FIELDS}
+    assert set(HostileCandidate.__optional_keys__) == opt          # NotRequired == serialized fields with a default
+    assert set(HostileBoundary.__optional_keys__) == set()         # boundaries serialize whole -> all required

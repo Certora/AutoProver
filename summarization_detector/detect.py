@@ -49,7 +49,7 @@ from pathlib import Path
 
 from certora_autosetup.solidity_ast import stream_raw_units
 
-from .difficulty import DifficultyReport, Hotspot, fetch_difficulty
+from .difficulty import DifficultyReport, Hotspot, _path_count_value, fetch_difficulty
 
 # ---------------------------------------------------------------- signal 2: AST hashing/encoding calls
 # The TRIGGER is an actual hash builtin — a global `Identifier` callee. Yul (assembly) calls are
@@ -79,16 +79,79 @@ class HashSignal:
                                   # only fixed-size fields (the typical EIP-712 digest) is bounded/cheap.
 
 
-# Output caps — keep the report (and the prompt it renders into) bounded. The score is only comparable
-# WITHIN a signal category (nonlinear = % of the rule's nonlinear ops; surviving = flat; hashing = fixed),
-# so each category is capped on its own rather than by a single cross-category top-N (which would let the
-# nonlinear %s crowd out the surviving/hashing targets).
+# Output caps — keep the report (and the prompt it renders into) bounded. The magnitude signals (nonlinear
+# degree, branching path count) are normalized to 0..100 across the run's candidates and SUMMED across a
+# candidate's signals (so a multi-signal candidate can exceed 100); surviving/hashing add flat amounts. Even
+# so the mix is not fully cross-category comparable, so each category is capped on its own rather than by a
+# single cross-category top-N (which would let one category crowd out the surviving/hashing targets).
 MAX_PER_CATEGORY = {"primitive": 10, "nonlinear": 10, "hashing": 10, "already-summarised": 10, "branching": 10}
 NONLINEAR_MIN_PCT = 15       # drop difficulty hotspots below this % of the rule's nonlinear ops (long tail)
 BRANCHING_MIN_PCT = 15       # drop path-count hotspots below this % of the rule's branching (long tail)
+# The % floor is only a within-rule share. The branching signal is for path EXPLOSION, so also require the
+# paths this function CONTRIBUTES (2^(share% of the rule's branching bits), the number shown in the evidence)
+# to clear an absolute floor — a function contributing a handful of paths is not a meaningful source of the
+# explosion, even if the rule as a whole is large. Contributed <= rule total, so this subsumes a rule floor.
+BRANCHING_MIN_PATHS = 16
+# The same for nonlinearity: the % floors above are within-rule shares, so a big share of a barely-nonlinear
+# rule (e.g. an already-applied summary that adds ~2 ops in a degree-3 rule) still clears them. Also require
+# an absolute severity — the magnitude `degree x contributed_ops` — to clear a floor. Using the product (not
+# ops or degree alone) keeps a high-degree-but-few-ops rule while dropping a low-degree, few-op one.
+NONLINEAR_MIN_MAGNITUDE = 12
+
+
+def _nl_magnitude(degree: int, nl_ops: int, pct: int) -> float:
+    """A nonlinear candidate's RAW severity (normalized later across the run's nonlinear candidates): the
+    rule's absolute max polynomial degree — the SCALE of the nonlinearity — times the ABSOLUTE nonlinear ops
+    this function contributes (``nl_ops * pct/100`` — the same count shown in the evidence). Using the
+    absolute count, not the within-rule share %, keeps the score consistent with the displayed ops and
+    comparable across rules of different size (a big share of a tiny rule must not out-rank a smaller share
+    of a huge one). Falls back to the share (``pct``) when the absolute op count is unavailable (older
+    data); ``max(degree, 1)`` likewise degrades to ranking by ops when the degree is unavailable."""
+    return max(degree, 1) * (nl_ops * pct / 100.0 if nl_ops else pct)
+
+
+def _br_magnitude(path_count: str, pct: int) -> float:
+    """A branching candidate's RAW severity (normalized later across the run's branching candidates): the
+    ``log2`` of the rule's absolute path count — the SCALE of the explosion — times the within-rule
+    contribution %. Falls back to the % alone (severity 1) when no path count is attached."""
+    from math import log2
+    v = _path_count_value(path_count)
+    severity = log2(v) if v > 1 else 1.0
+    return severity * pct
+
+
+def _nl_ops_contributed(nl_ops: int, pct: int) -> int:
+    """The nonlinear ops attributable to this function for the evidence line: its within-rule % of the
+    rule's absolute count. Nonlinear ops ADD, so the share is a direct fraction."""
+    return round(nl_ops * pct / 100.0)
+
+
+def _paths_contributed_value(path_count: str, pct: int) -> float:
+    """The number of paths attributable to this function: ``2 ** (pct% of the rule's branching bits)`` —
+    paths MULTIPLY, so the function's share is of the log, not of the count. This (not the rule's total) is
+    what measures whether the function is a meaningful source of the path explosion."""
+    from math import log2
+    v = _path_count_value(path_count)
+    if v <= 1:
+        return 1.0
+    return 2.0 ** (log2(v) * pct / 100.0)
+
+
+def _paths_contributed(path_count: str, pct: int) -> str:
+    """`_paths_contributed_value` for the evidence line — an int for small counts, ``approx. 2^k`` for large."""
+    from math import log2
+    n = _paths_contributed_value(path_count, pct)
+    return str(round(n)) if n < 2 ** 20 else f"approx. 2^{round(log2(n))}"
+
+
+def _normalize(raw: dict[str, float], cap: float) -> dict[str, float]:
+    """Scale raw per-candidate severities to 0..100 by the sample max (`cap`). `cap` is passed explicitly
+    so a category whose candidates are scored in more than one place — nonlinearity, where toxic-entrypoint
+    boundaries are added later — can share ONE scale. Empty / all-zero cap -> `{}` (no scores added)."""
+    return {k: round(v / cap * 100.0, 1) for k, v in raw.items()} if cap > 0 else {}
 # An ALREADY-SUMMARISED (CVL/Ghost) hotspot still contributing nonlinear ops means its summary is itself
-# still nonlinear (an EXACT mulDiv / ray-math summary, say) — a per-group coarsening target that the raw
-# signal cannot see, because the moment a function has any summary it stops appearing as raw hostile code.
+# still nonlinear (an EXACT mulDiv / ray-math summary, say) — a coarsening target that the raw signal cannot
+# see, because the moment a function has any summary it stops appearing as raw hostile code.
 # Gated LOWER than NONLINEAR_MIN_PCT: the prover also attributes a summary's cost to its callers, so a ghost
 # under-reports as a standalone proc, and recoarsening an existing summary is a safe, cheap win — so a hot
 # ghost clears a lower bar than a raw candidate would.
@@ -108,14 +171,14 @@ class Boundary:
     public/external entry point (the rule's subject, never a summarization site) — so the signature alone
     conveys feasibility. `mutating` (writes state, NOT view/pure — summarizing it as a value would erase
     side effects the properties may observe) is the one remaining caveat. `hops` = call-graph distance from
-    the candidate. `direction` = "up" (a CALLER to summarize at — the hashing-leaf case) or "down" (a shared
-    nonlinear PRIMITIVE the candidate inlines — the real arg-based target). `shared` = for a "down" target,
-    how many sibling candidates also inline it (fan-in). Best: non-mutating, nearest."""
+    the candidate. Direction is carried by which candidate field holds it — `caller_boundaries` (walk UP to a
+    container to summarize) vs `callee_boundaries` (descend DOWN to a shared inlined primitive) — never both,
+    so it is not repeated per entry. `shared` = for a callee, how many sibling candidates also inline it
+    (fan-in). Best: non-mutating, nearest."""
     function: str
     hops: int
     signature: str
     mutating: bool
-    direction: str = "up"
     shared: int = 1
 
 
@@ -138,7 +201,11 @@ class Candidate:
     reaching_count: int = 0       # how many entry methods' postOptimize TAC keeps this primitive (breadth)
     summarizable: bool = True     # the prover's own `summarizable` flag (surviving graph)
     candidate_summary: str = ""   # suggested summary (curated EXACT or generic over-approx)
-    boundaries: list[Boundary] = field(default_factory=list)   # caller boundaries to summarize at instead
+    # Alternative places to summarize instead of the leaf. A candidate uses ONE direction, never both:
+    # `caller_boundaries` = containers to walk UP to (hashing/primitive/branching); `callee_boundaries` =
+    # shared inlined primitives to descend DOWN to (nonlinear). The field name carries the direction.
+    caller_boundaries: list[Boundary] = field(default_factory=list)
+    callee_boundaries: list[Boundary] = field(default_factory=list)
 
 
 #: Per-field default of every OPTIONAL `Candidate` field (one with a default / default_factory), derived
@@ -151,32 +218,39 @@ _CANDIDATE_DEFAULTS = {
     if f.default is not MISSING or f.default_factory is not MISSING
 }
 
+#: Candidate fields kept for INTERNAL use (ranking) but NOT serialized. `score` orders the candidates — the
+#: output is emitted in that order, so the sequence conveys the ranking — but the number itself is not
+#: cross-comparable (nonlinear is population-relative, branching absolute) and so would mislead if shown.
+_UNSERIALIZED_FIELDS = frozenset({"score"})
+
 
 @dataclass
 class DetectionReport:
     candidates: list[Candidate] = field(default_factory=list)
-    dropped: int = 0   # candidates cut by the per-category caps (0 = the whole ranked list is present)
-    # The CUT's own prover-hostile EXTERNAL methods (the rules' subjects): (qualified name, % nonlinear ops),
-    # highest-% first. They are never summarized themselves, but detect_url descends each to its shallowest
-    # sound inner boundary and adds THAT as a `toxic-entrypoint` candidate. Not serialized (consumed in-process).
-    toxic_entrypoints: list[tuple[str, float]] = field(default_factory=list)
+    # The CUT's own prover-hostile EXTERNAL methods (the rules' subjects): (qualified name, rule max polyn.
+    # degree, raw nonlinear magnitude), worst-magnitude first. They are never summarized themselves, but
+    # detect_url descends each to its shallowest sound inner boundary and adds THAT as a `toxic-entrypoint`
+    # candidate, scored on the entrypoint's magnitude against `nl_max`. Not serialized (consumed in-process).
+    toxic_entrypoints: list[tuple[str, int, float]] = field(default_factory=list)
+    nl_max: float = 0.0   # the run's peak nonlinear magnitude (shared scale for toxic-entrypoint boundaries)
 
     def is_empty(self) -> bool:
         return not self.candidates
 
     def to_dict(self) -> dict:
         """Machine-readable form for a consuming pipeline: each candidate (the problematic function, why,
-        and rank) with its caller-boundary shortlist. Fields left at their default (unresolved location,
-        no reach, no summary, no boundaries, summarizable) are OMITTED — the consumer assumes the default,
-        and the prompt this renders into stays lean. The emitted shape is the `schema.py` TypedDicts
+        and rank) with its caller-boundary shortlist, emitted in RANK ORDER (the sequence conveys priority;
+        the numeric `score` is `_UNSERIALIZED_FIELDS`, not emitted). Fields left at their default (unresolved
+        location, no reach, no summary, no boundaries, summarizable) are OMITTED — the consumer assumes the
+        default, and the prompt this renders into stays lean. The emitted shape is the `schema.py` TypedDicts
         (`HostileCandidate` / `HostileBoundary`); `test_candidate_schema_parity` locks those to the
         `Candidate`/`Boundary` fields so they cannot silently drift from this."""
         candidates = []
         for c in self.candidates:
             d = {k: v for k, v in asdict(c).items()
-                 if k not in _CANDIDATE_DEFAULTS or _CANDIDATE_DEFAULTS[k] != v}
+                 if k not in _UNSERIALIZED_FIELDS and (k not in _CANDIDATE_DEFAULTS or _CANDIDATE_DEFAULTS[k] != v)}
             candidates.append(d)
-        return {"candidates": candidates, "dropped": self.dropped}
+        return {"candidates": candidates}
 
     def format(self) -> str:
         if self.is_empty():
@@ -189,15 +263,14 @@ class DetectionReport:
             out.append(f"                          {c.evidence}")
             if c.candidate_summary:
                 out.append(f"                          candidate: {c.candidate_summary}")
-            for b in c.boundaries:
+            for b in c.caller_boundaries:                       # containers to walk UP to
                 # only expressible, internal boundaries survive the filter, so mutating is the last caveat
                 feas = "state-changing — prefer a pure boundary" if b.mutating else "summarizable here"
-                if b.direction == "down":                       # a shared nonlinear primitive (descend)
-                    arrow = "↓"
-                    tag = f"shared ×{b.shared}, {feas}" if b.shared > 1 else feas
-                else:                                           # a caller boundary (walk up)
-                    arrow, tag = "↑", feas
-                out.append(f"                          {arrow} +{b.hops} {b.signature}  [{tag}]")
+                out.append(f"                          ↑ +{b.hops} {b.signature}  [{feas}]")
+            for b in c.callee_boundaries:                       # shared nonlinear primitives to descend DOWN to
+                feas = "state-changing — prefer a pure boundary" if b.mutating else "summarizable here"
+                tag = f"shared ×{b.shared}, {feas}" if b.shared > 1 else feas
+                out.append(f"                          ↓ +{b.hops} {b.signature}  [{tag}]")
         return "\n".join(out)
 
 
@@ -376,6 +449,29 @@ def scan_ast(ast_path: str | Path) -> list[HashSignal]:
     return sorted(out.values(), key=lambda h: h.function)
 
 
+def _project_relative(p: str, sources_root: str | Path | None) -> str:
+    """Normalize a solc source-unit path to project-relative so every candidate's `file` is uniform (solc
+    records a MIX of relative and absolute keys depending on how each was imported/remapped). Certora fetches
+    every source under `.certora_sources/`, so the segment after it IS the project path — key on that first:
+    it is robust to the temp-dir symlink (macOS `tempfile` yields `/var/...` while solc resolves the same
+    file to `/private/var/...`) that makes a plain `relative_to(sources_root)` throw and leak the absolute
+    path. Falls back to `relative_to` (with a resolved retry), else returns `p` unchanged (already relative /
+    outside the root)."""
+    marker = ".certora_sources/"
+    i = p.rfind(marker)
+    if i != -1:
+        return p[i + len(marker):]
+    if sources_root is None:
+        return p
+    try:
+        return str(Path(p).relative_to(Path(sources_root)))
+    except ValueError:
+        try:                                            # resolve both to defeat the /var -> /private/var symlink
+            return str(Path(p).resolve().relative_to(Path(sources_root).resolve()))
+        except ValueError:
+            return p                                    # already relative / not under the root — leave as-is
+
+
 def _function_locations(ast_path: str | Path,
                         sources_root: str | Path | None = None) -> dict[str, tuple[str, int | None]]:
     """`Contract.fn` -> (source_file, 1-based start line | None). The FILE is the AST node group's path.
@@ -385,16 +481,6 @@ def _function_locations(ast_path: str | Path,
     import bisect
     out: dict[str, tuple[str, int | None]] = {}
     newlines: dict[str, list[int] | None] = {}          # file -> newline byte offsets (None = unreadable)
-
-    def _relativize(p: str) -> str:
-        # solc records source-unit keys as a MIX of project-relative and absolute paths (depending on how
-        # each was imported/remapped); normalize to project-relative so every entry's `file` is uniform.
-        if sources_root is None:
-            return p
-        try:
-            return str(Path(p).relative_to(Path(sources_root)))
-        except ValueError:
-            return p                                    # already relative / not under the root — leave as-is
 
     def _line_of(file: str, offset: int) -> int | None:
         if sources_root is None:
@@ -433,7 +519,7 @@ def _function_locations(ast_path: str | Path,
                 c = _tightest(fsp[0], contracts)
                 cname = c[1] if c else ""
                 qual = f"{cname}.{fname}" if cname else fname
-                out[qual] = (_relativize(absp), _line_of(absp, fsp[0]))   # read line from absp, store relative
+                out[qual] = (_project_relative(absp, sources_root), _line_of(absp, fsp[0]))   # store relative
     return out
 
 
@@ -518,6 +604,13 @@ CURATED_SUMMARIES: tuple[CuratedEntry, ...] = (
         match=re.compile(r"\bFixedPointMathLib\.|\bFullMath\.mulDiv\b|\bPRBMath"),
         category="nonlinear-mulDiv",
         summary="=> FixedPointMathLib / FullMath / PRB curated summary (EXACT).",
+    ),
+    CuratedEntry(
+        match=re.compile(r"\bLibBit\.(popCount|fls|flz|clz|ctz|ffs|findLastSet|findFirstSet)\b"),
+        category="bitwise-scan",
+        summary="=> Solady LibBit bit-scan: replace the word-wide bit loop with a NONDET result bounded to "
+                "the op's range (popCount 0..256; fls/clz/ctz/ffs a bit index 0..255) — a sound "
+                "over-approximation.",
     ),
 )
 
@@ -744,6 +837,11 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
     to coarsen (its summary is itself still nonlinear) — handled in-loop, not pre-filtered."""
     hotspots = difficulty.hotspots
     cand: dict[str, Candidate] = {}
+    # Raw per-candidate severities for the two MAGNITUDE signals (nonlinear degree, branching path count).
+    # Accumulated here, then normalized 0..100 across the run's candidates and folded into `score` — the raw
+    # magnitudes are not comparable across categories, only within one, so each is scaled by its own sample.
+    raw_nl: dict[str, float] = {}
+    raw_br: dict[str, float] = {}
 
     def _bump(key: str, sig: str, score: float, evidence: str):
         c = cand.get(key)
@@ -766,35 +864,50 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
     #                              keeping the highest-contribution instance (hotspots are pct-sorted).
     surviving_bare = {raw.split("(", 1)[0].rpartition(".")[2] for raw in (surviving or {})}
     seen_internal: set[str] = set()
-    toxic_entrypoints: list[tuple[str, float]] = []
+    toxic_entrypoints: list[tuple[str, int, float]] = []
     for h in hotspots:
         if _is_cvl_ghost(h.function):                        # an already-applied summary still in the problem
             if h.pct < ALREADY_SUMMARISED_MIN_PCT:           # cheap ghost -> genuinely handled, drop
                 continue
+            mag = _nl_magnitude(h.degree, h.nl_ops, h.pct)
+            if mag < NONLINEAR_MIN_MAGNITUDE:                # trivially nonlinear (low degree AND few ops) -> drop
+                continue
             name = _ghost_summary_name(h.function)
-            _bump(name, "already-summarised", float(h.pct),
-                  f"already-applied summary still {h.pct}% of nonlinear ops — its summary is itself "
-                  f"nonlinear; coarsen it to an uninterpreted/NONDET summary where the property does not "
-                  f"read its result (a sound over-approximation), especially per verification-group")
+            _bump(name, "already-summarised", 0.0,          # score folded in at normalization (raw_nl below)
+                  f"already-applied summary still adds ~{_nl_ops_contributed(h.nl_ops, h.pct)} nonlinear ops "
+                  f"(polynomial degree {h.degree}) — its summary is itself nonlinear; coarsen it to an "
+                  f"uninterpreted/NONDET summary where the property does not read its result (a sound "
+                  f"over-approximation)")
+            raw_nl[name] = raw_nl.get(name, 0.0) + mag
+            c = cand[name]
+            if "nonlinear" not in c.signals:                 # nonlinearity is the problem; already-summarised qualifies
+                c.signals = ("nonlinear", *c.signals)
             continue
         if h.pct < NONLINEAR_MIN_PCT:                        # drop the long, low-contribution tail
             continue
         internal, fn, contract, bare = _decode_hotspot(h)
-        if contract == cut and not internal:                # the CUT's own external method (rule subject)
-            toxic_entrypoints.append((fn, float(h.pct)))     # not summarizable itself; descend to a boundary later
+        mag = _nl_magnitude(h.degree, h.nl_ops, h.pct)
+        if mag < NONLINEAR_MIN_MAGNITUDE:                    # trivially nonlinear (low degree AND few ops) -> drop
             continue
+        if contract == cut and not internal:                # the CUT's own external method (rule subject)
+            toxic_entrypoints.append((fn, h.degree, mag))
+            continue                                         # not summarizable itself; descend to a boundary later
         if bare in surviving_bare:                          # already a correctly-named surviving candidate
             continue
         if internal:
             if bare in seen_internal:                       # caller-attribution dup -> keep the top one
                 continue
             seen_internal.add(bare)
-        _bump(fn, "nonlinear", float(h.pct),
-              f"{h.pct}% of nonlinear ops" + (f" @{h.location}" if h.location else ""))
+        _bump(fn, "nonlinear", 0.0,                          # score folded in at normalization (raw_nl below)
+              f"~{_nl_ops_contributed(h.nl_ops, h.pct)} nonlinear ops, polynomial degree {h.degree}")
+        raw_nl[fn] = raw_nl.get(fn, 0.0) + mag
         if h.location:                                      # the difficulty report carries the location
             cand[fn].file, cand[fn].line = _parse_location(h.location)
         if contract and contract != cut and not internal:   # a genuine cross-contract external call
-            _bump(fn, "external", 10.0, f"resolved external in {contract} (not the CUT)")
+            # `external` is a context TAG, not a difficulty amount — it must not add score, or a modifier
+            # would out-rank a genuinely harder (higher-magnitude) nonlinear candidate. The nonlinear
+            # magnitude already scored above is what ranks it.
+            _bump(fn, "external", 0.0, f"resolved external in {contract} (not the CUT)")
 
     # signal 5 (branching / path count): the SIBLING difficulty node. When a rule times out on loop/path
     # explosion rather than math, the nonlinearity node can be empty (the math is already summarized) while
@@ -803,9 +916,10 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
     # The value/void-return soundness gate (a reference-returning branch fn can't be `=> NONDET`ed) is
     # applied in `detect()`, where the AST return types are available.
     seen_branch: set[str] = set()
-    pc_ctx = f", in a rule with up to {difficulty.max_path_count} paths" if difficulty.max_path_count else ""
     for h in difficulty.branching:
         if h.pct < BRANCHING_MIN_PCT:                        # drop the long, low-contribution tail
+            continue
+        if _paths_contributed_value(h.path_count, h.pct) < BRANCHING_MIN_PATHS:   # not a real explosion source
             continue
         internal, fn, contract, bare = _decode_hotspot(h)
         if contract == cut and not internal:                # CUT's own external method = rule subject -> skip
@@ -813,8 +927,9 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
         if bare in seen_branch:                             # caller-attribution dup -> keep the top one
             continue
         seen_branch.add(bare)
-        _bump(fn, "branching", float(h.pct),
-              f"{h.pct}% of branching (loop/path count){pc_ctx}" + (f" @{h.location}" if h.location else ""))
+        _bump(fn, "branching", 0.0,                          # score folded in at normalization (raw_br below)
+              f"~{_paths_contributed(h.path_count, h.pct)} paths (loop/path count)")
+        raw_br[fn] = raw_br.get(fn, 0.0) + _br_magnitude(h.path_count, h.pct)
         if h.location and cand[fn].file == "":              # keep the nonlinear location if already set
             cand[fn].file, cand[fn].line = _parse_location(h.location)
 
@@ -843,6 +958,21 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
         c.summarizable = rec["summarizable"]
         c.candidate_summary = rec["candidate_summary"]
 
+    # NONLINEAR score: population-normalized to 0..100 across the run's nonlinear candidates (degree x ops has
+    # no natural absolute scale, so relative severity is what's readable). The scale spans the toxic
+    # entrypoints too (their boundaries are scored later in `detect`, against this same `nl_max`), so one
+    # candidate can't out-scale another purely by which code path surfaced it.
+    nl_max = max([*raw_nl.values(), *(m for _, _, m in toxic_entrypoints)], default=0.0)
+    for fn, s in _normalize(raw_nl, nl_max).items():
+        cand[fn].score += s
+    # BRANCHING score: ABSOLUTE, NOT population-normalized. Path explosion only matters in absolute terms —
+    # 2^40 paths is a real problem, 4 paths is nothing — so a weak branching population must not inflate to
+    # 100 the way divide-by-max would. The score is log2(paths this function contributes) (= raw_br / 100,
+    # since raw_br = log2(rule paths) x within-rule %): ~2 for 4 paths, ~40 for 2^40. Nonlinear thus dominates
+    # branching unless the path count is astronomical.
+    for fn, mag in raw_br.items():
+        cand[fn].score += round(mag / 100.0, 1)
+
     # cone-of-influence re-weighting for the hashing signal: build-phase cost has no per-function measure,
     # so scale a hashing candidate by how much reachable code consumes its result (normalized within the
     # candidate set, factor in [1, 2], so it stays comparable to the measured nonlinear pct). A hash whose
@@ -864,8 +994,9 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
             per_cat[cat] = per_cat.get(cat, 0) + 1
             kept.append(c)
     return DetectionReport(
-        candidates=kept, dropped=len(ranked) - len(kept),
-        toxic_entrypoints=sorted(toxic_entrypoints, key=lambda t: -t[1])[:5],  # top 5 by nonlinear-ops %
+        candidates=kept,
+        toxic_entrypoints=sorted(toxic_entrypoints, key=lambda t: -t[2])[:5],  # top 5 by nonlinear magnitude
+        nl_max=nl_max,
     )
 
 
@@ -946,17 +1077,18 @@ def detect(job_url: str | None = None, *, ast_path: str | Path | None = None,
                 fanin[p] = fanin.get(p, 0) + 1
         for c in report.candidates:
             if "hashing" in c.signals or any(s in _PRIMITIVE_CATEGORIES for s in c.signals):  # walk UP to a caller
-                c.boundaries = _caller_boundaries(edges, facts, c.function, bounds_reach)
+                # Only SOUND containers: a boundary is a place to `=> NONDET` INSTEAD of the leaf, so it must be
+                # value/void-return (`nondet_ok`). Reference-returning / would-not-help callers are not offered
+                # — a directly-summarizable primitive (e.g. an in-memory sort) then simply lists no boundaries.
+                c.caller_boundaries = _caller_boundaries(edges, facts, c.function, bounds_reach, nondet=True)
             elif "nonlinear" in c.signals:                 # descend DOWN to the shared nonlinear primitive
                 targets = sorted(prim_reach.get(c.function, {}).items(),
                                  key=lambda kv: (-fanin.get(kv[0], 0), kv[1], kv[0]))[:4]
-                c.boundaries = []
                 for p, d in targets:
                     f = facts.get(p) or FnFacts(p)
                     if not f.expressible:    # a shared primitive we can't express as a value is no target
                         continue
-                    c.boundaries.append(Boundary(p, d, f.signature, f.mutating, direction="down",
-                                                 shared=fanin.get(p, 1)))
+                    c.callee_boundaries.append(Boundary(p, d, f.signature, f.mutating, shared=fanin.get(p, 1)))
             elif "branching" in c.signals:                 # path-count: NONDET the loop, gated on return + writes
                 f = _by_qual_or_bare(facts, c.function)
                 ok = f.nondet_ok if f else False           # value/void return => NONDET-able
@@ -966,33 +1098,39 @@ def detect(job_url: str | None = None, *, ast_path: str | Path | None = None,
                 # signals do — a reference-returning OR state-mutating hotspot can often be replaced by a
                 # cleanly-sound (view/pure, value/void) boundary. Only view/pure value/void is
                 # unconditionally sound to `=> NONDET`.
-                c.boundaries = _caller_boundaries(edges, facts, c.function, bounds_reach, nondet=True)
+                c.caller_boundaries = _caller_boundaries(edges, facts, c.function, bounds_reach, nondet=True)
+                has_bnd = bool(c.caller_boundaries)
                 if ok and not mutating:                    # value/void return AND view/pure -> unconditionally sound
                     c.candidate_summary = ("=> NONDET (view/pure, value/void return): sound over-approximation, "
                                            "deletes the loop/path subproblem")
                 elif ok:                                   # value/void return but STATE-MUTATING: NONDET drops writes
-                    c.candidate_summary = ("state-MUTATING: `=> NONDET` drops its writes, so it is sound ONLY if "
-                                           "the property does not read the state it mutates; prefer a view/pure "
-                                           "value/void boundary below if one is offered, else verify")
-                else:                                      # reference return -> the prover rejects NONDET here
+                    c.candidate_summary = ("state-MUTATING: `=> NONDET` drops its writes, so it is sound ONLY if the "
+                                           "property does not read the state it mutates" + (
+                                               "; else prefer a view/pure value/void boundary below"
+                                               if has_bnd else "; else verify"))
+                elif has_bnd:                              # reference return, but a value/void container exists
                     c.candidate_summary = ("returns a reference type (the prover rejects `=> NONDET` on it): "
                                            "NONDET a value/void caller/container that wraps its loop instead "
                                            "(see boundaries)")
+                else:                                      # reference return, no in-scene value/void boundary found
+                    c.candidate_summary = ("returns a reference type (the prover rejects `=> NONDET` on it) and no "
+                                           "value/void caller/container that wraps its loop was found in scene; verify")
         # Prover-toxic CUT entrypoints (the rules' own external subjects) can't be summarized themselves, but
         # their shallowest sound inner boundary can. Surface that boundary as a candidate — this is what a
         # human summarizes when the method under test times out (e.g. liquidationCall ->
         # _calculateLiquidationAmounts), which no leaf-primitive signal catches.
         present = {c.function for c in report.candidates}
-        for ep, pct in report.toxic_entrypoints:
+        for ep, degree, mag in report.toxic_entrypoints:
             boundary = _shallowest_view_boundary(edges, facts, ep)
             if boundary is None or boundary in present:
                 continue
             present.add(boundary)
+            score = round(mag / report.nl_max * 100.0, 1) if report.nl_max else mag
             report.candidates.append(Candidate(
-                function=boundary, signals=("toxic-entrypoint",), score=float(pct),
-                evidence=f"shallowest summarizable boundary of prover-toxic {ep} ({pct:.0f}% of nonlinear "
-                         f"ops) — the method under test can't be summarized, but this internal view can, "
-                         f"cutting its whole subtree",
+                function=boundary, signals=("nonlinear", "toxic-entrypoint"), score=score,
+                evidence=f"shallowest summarizable boundary of prover-toxic {ep} (whose rule's nonlinearity "
+                         f"reaches polynomial degree {degree}) — the method under test can't be summarized, "
+                         f"but this internal view can, cutting its whole subtree",
             ))
         report.candidates.sort(key=lambda c: (-c.score, c.function))     # re-rank with the new candidates
     # attach each candidate's source location (file always; line when the source is readable)
@@ -1337,9 +1475,10 @@ def _caller_boundaries(edges: dict, facts: dict, leaf: str, reachable: set[str] 
                        max_hops: int = 4, limit: int = 4, nondet: bool = False) -> list[Boundary]:
     """Walk UP the call graph from `leaf` and return caller boundaries — places to summarize instead of
     the leaf — ranked view/pure-first then nearest. Restricted to `reachable` (host-less free functions
-    matched by bare name, as in the gate) when given, so suggestions are real. When `nondet` (the branching
-    case), keep internal callers that are `=> NONDET`-summarizable (value/void return) — the value/void
-    CONTAINER that wraps the leaf's loop — instead of the default `expressible` filter."""
+    matched by bare name, as in the gate) when given, so suggestions are real. When `nondet` (every current
+    boundary offer — branching, primitive, hashing), keep only callers that are `=> NONDET`-summarizable
+    (value/void return) — the CONTAINER that wraps the leaf — since a boundary is a place to NONDET instead
+    of the leaf. `nondet=False` is a looser `expressible`-only fallback."""
     bare = {n.rpartition(".")[2] for n in reachable} if reachable is not None else set()
     out: list[Boundary] = []
     for q, h in _bfs_depths(_invert(edges), leaf, max_hops).items():
@@ -1349,9 +1488,9 @@ def _caller_boundaries(edges: dict, facts: dict, leaf: str, reachable: set[str] 
         if f.external:                       # an entry point is the rule's subject, never a boundary
             continue
         if nondet:
-            if not f.nondet_ok:              # branching: keep value/void-return (NONDET-able) containers
+            if not f.nondet_ok:              # keep only value/void-return (NONDET-able) containers
                 continue
-        elif not f.expressible:              # nonlinear/hashing: keep value-expressible boundaries
+        elif not f.expressible:              # looser fallback: any value-expressible boundary
             continue
         out.append(Boundary(q, h, f.signature, f.mutating))
     # view/pure over state-changing, then nearest — the cleanest, safest boundary first
