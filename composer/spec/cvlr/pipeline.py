@@ -25,6 +25,7 @@ considered and rejected are in §7.5.2.
 
 import asyncio
 import dataclasses
+import difflib
 import enum
 import logging
 import shutil
@@ -35,6 +36,7 @@ from langchain_core.tools import BaseTool
 
 from composer.cargo.session import CargoSession, WarmFailed
 from composer.pipeline.core import (
+    ComponentOutcome,
     CorePhases,
     Formalizer,
     PipelineRun,
@@ -43,7 +45,7 @@ from composer.pipeline.core import (
     SystemAnalysisSpec,
     ToolBinder,
 )
-from composer.pipeline.ptypes import BackendJob, Curtailed, GaveUp
+from composer.pipeline.ptypes import BackendJob, Curtailed, Delivered, GaveUp
 from composer.prover.core import ProverOptions
 from composer.sandbox.config import SandboxConfig
 from composer.spec.context import CvlrGeneration, WorkflowContext
@@ -51,6 +53,7 @@ from composer.spec.cvlr.author import batch_cvlr_generation
 from composer.spec.cvlr.conf import DEFAULT_FEATURE, load_base
 from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness, HarnessModule
+from composer.spec.cvlr.munge import FunctionMunge
 from composer.spec.cvlr.preflight import CvlrPreflight, gate_workspace, prepare_workspace
 from composer.spec.cvlr.prover import Submission
 from composer.spec.cvlr.scaffold import ENVS_DIR, SPECS_DIR
@@ -76,6 +79,7 @@ from composer.spec.source.report.collect import (
     RuleEvidence,
     Verdict,
 )
+from composer.spec.source.report.schema import AppliedEditRecord, SourceEditRecord
 from composer.spec.source.report_prover import make_prover_fetcher
 from composer.spec.source.report.schema import RuleName
 from composer.spec.types import PropertyFormulation
@@ -107,6 +111,26 @@ class CvlrPhase(enum.Enum):
     PREFLIGHT = "preflight"
     FORMALIZATION = "formalization"
     REPORT = "report"
+
+
+def _munge_diff(project: Path, workdir: Path, munges: tuple[FunctionMunge, ...]) -> str:
+    """A unified diff from the project's own source to the munged copy, munged files only.
+
+    Best-effort by design. A file that cannot be read on either side is reported as a line rather
+    than raising: the report is the last thing in the run, and losing it to a missing workdir would
+    cost every other record in it."""
+    chunks: list[str] = []
+    for path in dict.fromkeys(m.path for m in munges):
+        try:
+            before = (project / path).read_text().splitlines(keepends=True)
+            after = (workdir / path).read_text().splitlines(keepends=True)
+        except OSError as exc:
+            chunks.append(f"# {path}: could not be diffed ({exc})\n")
+            continue
+        chunks.extend(
+            difflib.unified_diff(before, after, fromfile=f"a/{path}", tofile=f"b/{path}")
+        )
+    return "".join(chunks)
 
 
 def _copy_workspace(source: Path, dest: Path) -> None:
@@ -225,6 +249,56 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
         a prover job behind it; this one is built per call because a formalizer is cheap to make and
         holding an API client on it would outlive the run."""
         return await make_prover_fetcher()(formalized)
+
+    @override
+    async def source_edits(
+        self,
+        outcomes: list[ComponentOutcome[GeneratedHarness, SolanaComponentInstance]],
+        run: PipelineRun,
+    ) -> list[SourceEditRecord]:
+        """The munges each delivered unit's verdicts were earned against.
+
+        Reported through the shared hook rather than a CVLR-specific one, because a munge *is* a
+        source edit and the report already has a vocabulary for that — ``SourceEditRecord``'s own
+        docstring says its presence means "the component's outcomes are claims about the modified
+        code, not the code as shipped", which is exactly the disclosure a munge owes. A second
+        channel saying the same thing would be §7.6.7's mistake in a new place.
+
+        The diff is taken against the project tree, which is the pristine copy: every unit works in
+        its own copy under :data:`WORK_DIR` and nothing ever writes back. Only the munged files are
+        diffed — the harness module is a new file and this unit's own deliverable, not a
+        modification of the program.
+        """
+        records: list[SourceEditRecord] = []
+        project = Path(run.source.project_root)
+        for outcome in outcomes:
+            # Delivered only. A curtailed partial's munges are on disk, but its verdicts are
+            # unreliable by construction, and a SourceEditRecord means "these outcomes are claims
+            # about the modified code" — which says nothing useful about outcomes that are not
+            # claims at all.
+            if not isinstance(outcome.result, Delivered):
+                continue
+            harness = outcome.result.result
+            if not harness.munges:
+                continue
+            workdir = project / WORK_DIR / HarnessModule(outcome.feat.slug).module
+            records.append(
+                SourceEditRecord(
+                    component=outcome.feat.display_name,
+                    applied_edits=[
+                        AppliedEditRecord(
+                            edit_id=m.edit_id,
+                            executive_summary=f"{m.function} in {m.path}: {m.kind.describe()}",
+                            why_sound=m.why,
+                        )
+                        for m in harness.munges
+                    ],
+                    cumulative_diff=await asyncio.to_thread(
+                        _munge_diff, project, workdir, tuple(harness.munges)
+                    ),
+                )
+            )
+        return records
 
     @override
     def findings_evidence(self) -> EvidenceFetcher | None:

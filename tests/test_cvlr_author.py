@@ -353,6 +353,7 @@ def _verify_state(draft: str) -> dict:
         "property_rules": [],
         "rule_subjects": [],
         "summaries": [],
+        "munges": [],
         "required_validations": [],
         "validations": {},
         "failed": None,
@@ -387,7 +388,7 @@ async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeyp
 
     deps = SimpleNamespace(
         lock=asyncio.Lock(),
-        target=SimpleNamespace(session=None, stage=lambda draft, summaries=(): None),
+        target=SimpleNamespace(session=None, stage=lambda draft, summaries=(), munges=(): None),
         submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), base_conf={}),
         prover_opts=None,
         analysis=None,

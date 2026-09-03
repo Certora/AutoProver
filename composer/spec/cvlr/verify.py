@@ -22,10 +22,10 @@ import asyncio
 import dataclasses
 import logging
 from pathlib import Path
-from typing import Container, Mapping, Sequence, override
+from typing import Annotated, Container, Literal, Mapping, Sequence, override
 
 from langchain_core.tools import BaseTool
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from graphcore.graph import LLM, tool_return, tool_state_update
 from graphcore.tools.schemas import (
@@ -53,7 +53,19 @@ from composer.prover.ptypes import (
     RuleResult,
     classify_violation,
 )
-from composer.spec.cvlr.conf import SelectRules, tools_version
+from composer.spec.cvlr.conf import DEFAULT_FEATURE, SelectRules, tools_version
+from composer.spec.cvlr.munge import (
+    AlreadyMunged,
+    EarlyPanic,
+    FunctionAmbiguous,
+    FunctionMunge,
+    FunctionNotFound,
+    MockFn,
+    MungeKind,
+    Munged,
+    apply_munge,
+    function_names,
+)
 from composer.spec.cvlr.prover import (
     BuildRejected,
     Checked,
@@ -92,18 +104,49 @@ class HarnessTarget:
     #: The package's tuning files, which ``summarize_for_prover`` rewrites.
     tuning: TuningFiles
 
-    def stage(self, draft: str, summaries: Sequence[SummaryDirective] = ()) -> None:
-        """Put the draft and the tuning directives on disk, ready to build.
+    def source_path(self, relative: str) -> Path | None:
+        """A workspace-relative path resolved inside this unit's workdir, or ``None`` if it escapes.
 
-        Both, from one place, because both are inputs to the build and the prover reads the tuning
-        file through the conf. The summaries come from already-merged state rather than from the tool
-        that recorded one, so two concurrent ``summarize_for_prover`` calls cannot each write their
-        own view of the list and lose the other's.
+        The workdir is this unit's private copy of the project, so writing in it never touches the
+        user's tree — but only while every write stays inside it, which is what this checks.
+        """
+        root = self.session.workdir.resolve()
+        candidate = (root / relative).resolve()
+        return candidate if candidate.is_relative_to(root) else None
+
+    def stage(
+        self,
+        draft: str,
+        summaries: Sequence[SummaryDirective] = (),
+        munges: Sequence[FunctionMunge] = (),
+    ) -> None:
+        """Put the draft, the tuning directives and the source munges on disk, ready to build.
+
+        All three from one place, because all three are inputs to the build: the prover reads the
+        tuning file through the conf, and a munge changes the program it compiles. Each comes from
+        already-merged state rather than from the tool that recorded one, so two concurrent calls
+        cannot each write their own view of the list and lose the other's.
+
+        Munges are re-applied from whatever is on disk rather than from a pristine copy, which is
+        safe because :func:`~composer.spec.cvlr.munge.apply_munge` reports an attribute already
+        present instead of adding a second one.
         """
         self.module_path.parent.mkdir(parents=True, exist_ok=True)
         self.module_path.write_text(draft)
         if summaries:
             self.tuning.write(tuple(summaries))
+        for munge in munges:
+            path = self.source_path(munge.path)
+            if path is None or not path.is_file():
+                # Recorded against a file that is no longer there. Not this method's failure to
+                # report — the build is about to say so with a span in it.
+                _log.warning("cvlr: cannot apply munge to %s", munge.path)
+                continue
+            match apply_munge(path.read_text(), munge, DEFAULT_FEATURE):
+                case Munged(source=source):
+                    path.write_text(source)
+                case other:
+                    _log.info("cvlr: munge of %s not re-applied: %s", munge.edit_id, other)
 
 
 class _CaptureCallbacks(ProverCallbacks):
@@ -261,7 +304,7 @@ class CargoCheck(
         if draft is None:
             return "No harness written yet — put a draft first."
         with self.tool_deps() as target:
-            target.stage(draft, self.state["summaries"])
+            target.stage(draft, self.state["summaries"], self.state["munges"])
             run = await target.session.check(package=target.package, features=("certora",))
         match run.verdict:
             case Compiled():
@@ -308,7 +351,7 @@ class VerifyRules(
                     "starting a second one."
                 )
             async with deps.lock:
-                deps.target.stage(draft, self.state["summaries"])
+                deps.target.stage(draft, self.state["summaries"], self.state["munges"])
                 analysis = deps.analysis
                 capture = analysis.callbacks() if analysis else None
                 outcome = await submit(
@@ -476,6 +519,7 @@ def gate_tools(target: HarnessTarget, deps: VerifyDeps) -> list[BaseTool]:
         CargoCheck.bind(target).as_tool("cargo_check"),
         VerifyRules.bind(deps).as_tool("verify_rules"),
         SummarizeForProver.bind(target.tuning).as_tool("summarize_for_prover"),
+        MungeFunction.bind(target).as_tool("munge_function"),
     ]
 
 
@@ -554,6 +598,143 @@ class SummarizeForProver(
             f"Recorded a summary for {directive.pattern}. It takes effect on the next build, and it "
             "invalidated the prover stamp — re-run verify_rules.",
             summaries=[directive],
+        )
+
+
+class MungeEarlyPanic(BaseModel):
+    """Rewrite every `?` in the function to `.unwrap()`."""
+
+    kind: Literal["early_panic"] = "early_panic"
+
+
+class MungeMockFn(BaseModel):
+    """Replace the function with a stand-in you have written."""
+
+    kind: Literal["mock_fn"] = "mock_fn"
+    stand_in: str = Field(
+        description="Path to the replacement, spelled as the munged file can reach it — e.g. "
+        "`crate::certora::mocks::lending_operations::refresh_obligation_deposits`. It must have the "
+        "same signature as the function it replaces."
+    )
+
+
+#: The munge kinds, as the author selects between them. Discriminated because they carry different
+#: fields, which is the same reason ``RuleSubject`` is
+#: (:mod:`composer.spec.cvlr.state`) — `mock_fn` needs a target and `early_panic` takes nothing.
+type MungeChoice = Annotated[MungeEarlyPanic | MungeMockFn, Field(discriminator="kind")]
+
+
+def _kind_of(choice: MungeChoice) -> MungeKind:
+    match choice:
+        case MungeEarlyPanic():
+            return EarlyPanic()
+        case MungeMockFn(stand_in=stand_in):
+            return MockFn(stand_in=stand_in)
+
+
+@tool_display(lambda p: f"Munging `{p['function']}`", "Munge")
+class MungeFunction(
+    WithInjectedState[CvlrGenerationState],
+    WithInjectedId,
+    WithAsyncDependencies[Command | str, HarnessTarget],
+):
+    """Put a verification-only attribute on one of the *program's own* functions.
+
+    A **munge** is a modification of the code under verification, applied under the ``certora``
+    feature so the deployed build is untouched. Reach for one when the block is in the program
+    rather than in your rule or the conf — and only for the two kinds below, which are what
+    practitioners actually use.
+
+    ``early_panic`` rewrites every ``?`` in the function to ``.unwrap()``. That is the same choice as
+    ``.unwrap()``-versus-``.is_ok()`` in a rule, reached one level down: a ``?`` *inside* the program,
+    below the handler you call, whose error construction the pointer analysis refuses ([3308]). It
+    does **not** make an acceptance property statable — it removes the failure path rather than
+    exposing one.
+
+    ``mock_fn`` replaces the function with a stand-in. Unlike ``summarize_for_prover``, which havocs
+    the return, a mock computes one — so a property downstream of a mocked function still means
+    something. You must have written the stand-in somewhere the munged file can reach.
+
+    **This changes the program, and the report says so.** Every munge is carried into the
+    deliverable with its ``why``, because a property proved against munged source is a property of
+    the munged program. Applying one invalidates the prover stamp: re-run ``verify_rules``.
+
+    If what you need is neither of these, do not improvise a third. Skip the property and say which
+    kind of change it would have needed — that is a decision for a person.
+    """
+
+    path: str = Field(
+        description="The file to munge, relative to the workspace root — e.g. "
+        "`programs/vault/src/state/reserve.rs`."
+    )
+    function: str = Field(
+        description="The name of the function, as its `fn` line spells it. Not a path: the file "
+        "plus the name is what identifies it, and two functions of one name in a file is refused "
+        "rather than guessed at."
+    )
+    munge: MungeChoice = Field(description="Which of the two attributes to apply")
+    why: str = Field(
+        description="Why the prover cannot analyze this function as written — quote the error — and "
+        "why this attribute is sound for the properties in this batch. It goes into the report; it "
+        "is the only account a reader gets of what the program was changed to."
+    )
+
+    @override
+    async def run(self) -> Command | str:
+        if not self.why.strip():
+            return (
+                "A non-empty `why` is required. A munge changes the program under verification, so "
+                "an unexplained one leaves the report claiming a property of code nobody can "
+                "account for."
+            )
+        with self.tool_deps() as target:
+            resolved = target.source_path(self.path)
+            if resolved is None:
+                return (
+                    f"{self.path} resolves outside this project. Munge the program's own source, "
+                    f"with a path relative to the workspace root."
+                )
+            if not resolved.is_file():
+                return f"{self.path} is not a file in this project."
+            record = FunctionMunge(
+                path=self.path,
+                function=self.function,
+                kind=_kind_of(self.munge),
+                why=self.why,
+            )
+            if any(m.edit_id == record.edit_id for m in self.state["munges"]):
+                return f"{self.function} in {self.path} already carries that attribute."
+            # A dry run against what is on disk, so a name that matches nothing is a tool error the
+            # author can act on rather than a build failure two minutes later.
+            match apply_munge(resolved.read_text(), record, DEFAULT_FEATURE):
+                case FunctionNotFound(nearby=nearby):
+                    suggestion = (
+                        f" This file does define: {', '.join(nearby)}." if nearby else ""
+                    )
+                    return (
+                        f"{self.path} defines no function named {self.function}.{suggestion}"
+                    )
+                case FunctionAmbiguous(lines=lines):
+                    return (
+                        f"{self.path} defines {self.function} {len(lines)} times (lines "
+                        f"{', '.join(str(n) for n in lines)}). Munging the wrong one compiles and "
+                        f"changes nothing you can see, so this is refused: move the function, or "
+                        f"munge a caller that is unambiguous."
+                    )
+                case AlreadyMunged(line=line):
+                    return (
+                        f"{self.path}:{line} already carries that attribute, so nothing changed."
+                    )
+                case Munged(line=line):
+                    pass
+        # Only this record: the reducer merges, and `stage` is what writes it, so the tool never
+        # races a sibling call over the same file.
+        return tool_state_update(
+            self.tool_call_id,
+            f"Recorded a {record.kind.attribute()} munge on {self.path}:{line} ({self.function}). "
+            f"It takes effect on the next build, and it invalidated the prover stamp — run "
+            f"cargo_check and then verify_rules.",
+            munges=[record],
         )
 
 
