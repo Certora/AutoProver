@@ -35,7 +35,9 @@ somebody checks it against a project the scaffold did not create.
 """
 
 import dataclasses
+import difflib
 import logging
+import re
 import tomllib
 
 from composer.cargo.metadata import Workspace
@@ -397,3 +399,204 @@ def _wrapped(text: str, width: int = 88) -> list[str]:
     if current:
         lines.append(current)
     return lines
+
+
+# ---------------------------------------------------------------------------------------------
+# the source half: verification-only attributes on the program's own functions
+#
+# ``docs/cvlr-backend-plan.md`` §7.6.3 has the charter these two kinds were read off, and §7.6.4 the
+# boundary. Both are CVLR attributes rather than rewrites, which is what makes applying one a
+# mechanical edit with a compile gate behind it instead of an agent editing a program.
+
+
+@dataclasses.dataclass(frozen=True)
+class EarlyPanic:
+    """Every ``?`` in the function becomes ``.unwrap()``.
+
+    Literally that — ``cvlr_early_panic`` walks the body and rewrites ``Expr::Try``. So it is the
+    ``.unwrap()``-versus-``.is_ok()`` choice the author prompt teaches, reached one level down: a
+    ``?`` inside the program, below the handler a rule calls, whose error construction the pointer
+    analysis then refuses ([3308]). The most common munge in the corpus by a wide margin.
+
+    What it cannot do is make an *acceptance* property statable. It removes the failure path rather
+    than exposing one, so "this handler accepts a zero amount" is no more provable after it.
+    """
+
+    def attribute(self) -> str:
+        return "cvlr::early_panic"
+
+    def describe(self) -> str:
+        return "`?` rewritten to `.unwrap()` throughout, so error paths panic and are pruned"
+
+
+@dataclasses.dataclass(frozen=True)
+class MockFn:
+    """The function is replaced by a named stand-in.
+
+    Differs from a summary (:mod:`composer.spec.cvlr.tuning`) in the direction that matters: a
+    summary havocs the return, a mock *computes* one. So a property downstream of a mocked function
+    still means something, where downstream of a summary it usually does not.
+    """
+
+    #: Path to the replacement, as the munged file must be able to spell it — e.g.
+    #: ``crate::certora::mocks::lending_operations::refresh_obligation_deposits``.
+    stand_in: str
+
+    def attribute(self) -> str:
+        return f"cvlr::mock_fn(with = {self.stand_in})"
+
+    def describe(self) -> str:
+        return f"replaced by {self.stand_in}"
+
+
+#: The declared munge kinds — the charter, as types. A change that would need a *new* one is the
+#: give-up boundary (§7.6.4): not an edit budget, because the one real source munge in the corpus is
+#: 1097 routine lines and one hand-unrolled loop, and only the loop needed a person.
+type MungeKind = EarlyPanic | MockFn
+
+
+@dataclasses.dataclass(frozen=True)
+class FunctionMunge:
+    """One verification-only attribute on one of the program's functions."""
+
+    #: The file, relative to the workspace root, so the record means the same thing in the report as
+    #: on disk.
+    path: str
+    function: str
+    kind: MungeKind
+    #: Why the prover could not analyze the function as written, and why this attribute is sound for
+    #: the properties in this batch. The only account anybody gets, exactly as with a summary.
+    why: str
+
+    @property
+    def edit_id(self) -> str:
+        return f"{self.kind.attribute()}@{self.path}::{self.function}"
+
+    def attribute_line(self, indent: str, feature: str) -> str:
+        return f'{indent}#[cfg_attr(feature = "{feature}", {self.kind.attribute()})]'
+
+
+@dataclasses.dataclass(frozen=True)
+class Munged:
+    """The attribute was inserted.
+
+    ``line`` is where the function's signature sits **in the returned source**, 1-indexed — so it
+    is what a message about the munge should quote, and the attribute is the line above it.
+    """
+
+    source: str
+    line: int
+
+
+@dataclasses.dataclass(frozen=True)
+class FunctionNotFound:
+    """No function of that name in the file. ``nearby`` is what the file does define."""
+
+    function: str
+    nearby: tuple[str, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class FunctionAmbiguous:
+    """Several functions of that name — a trait impl and an inherent one, or two impl blocks.
+
+    Refused rather than guessed at: munging the wrong one of two same-named functions produces a
+    build that compiles, a rule that still fails, and no indication which of them was changed.
+    """
+
+    function: str
+    lines: tuple[int, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class AlreadyMunged:
+    """The function already carries this attribute, so the file is unchanged."""
+
+    function: str
+    line: int
+
+
+type MungeAttempt = Munged | FunctionNotFound | FunctionAmbiguous | AlreadyMunged
+
+
+def _signature_pattern(function: str) -> re.Pattern[str]:
+    """Where a named function's signature starts.
+
+    Deliberately anchored at the line and permissive about what precedes ``fn``: visibility, and the
+    ``const`` / ``async`` / ``unsafe`` / ``extern "C"`` qualifiers, in the order Rust requires them.
+    The trailing ``[(<]`` is what keeps ``fn deposit`` from matching ``fn deposit_fee``.
+    """
+    return re.compile(
+        r"^(?P<indent>[ \t]*)"
+        r"(?:pub(?:\([^)]*\))?[ \t]+)?"
+        r"(?:default[ \t]+)?"
+        r"(?:const[ \t]+)?"
+        r"(?:async[ \t]+)?"
+        r"(?:unsafe[ \t]+)?"
+        r"(?:extern[ \t]+\"[^\"]*\"[ \t]+)?"
+        rf"fn[ \t]+{re.escape(function)}[ \t]*[(<]",
+        re.MULTILINE,
+    )
+
+
+_ANY_FN = re.compile(r"\bfn[ \t]+([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def function_names(source: str) -> tuple[str, ...]:
+    """Every function name the file mentions a definition of, in order, deduplicated."""
+    return tuple(dict.fromkeys(_ANY_FN.findall(source)))
+
+
+def apply_munge(source: str, munge: FunctionMunge, feature: str) -> MungeAttempt:
+    """Insert ``munge``'s attribute above its function, or say why not.
+
+    The attribute goes immediately above the signature, which puts it *below* any doc comment and
+    any attribute already there — legal, and it keeps the insertion a single-line edit whose diff
+    reads as one. The compile gate is what catches a signature this misjudged; these three refusals
+    are the cases a compile would accept and a reader would not.
+    """
+    matches = list(_signature_pattern(munge.function).finditer(source))
+    if not matches:
+        return FunctionNotFound(
+            function=munge.function,
+            nearby=tuple(
+                difflib.get_close_matches(munge.function, function_names(source), n=3, cutoff=0.5)
+            ),
+        )
+    lines = source.splitlines(keepends=True)
+    starts = [source.count("\n", 0, m.start()) for m in matches]
+    if len(matches) > 1:
+        return FunctionAmbiguous(munge.function, tuple(n + 1 for n in starts))
+    (index,) = starts
+    attribute = munge.attribute_line(matches[0].group("indent"), feature)
+    if index > 0 and lines[index - 1].strip() == attribute.strip():
+        return AlreadyMunged(munge.function, index + 1)
+    lines.insert(index, attribute + "\n")
+    # The signature moved down by the line just inserted above it.
+    return Munged("".join(lines), index + 2)
+
+
+def munge_history(munges: tuple[FunctionMunge, ...]) -> tuple[str, ...]:
+    """The munges as ``version_history`` tokens, so a stamp predating one goes stale with it.
+
+    Keyed on what the prover sees differently — the file, the function and the attribute — and not
+    on ``why``, so correcting the wording of a justification does not cost a submission. Same trade
+    as :func:`composer.spec.cvlr.tuning.summary_history`, for the same reason.
+    """
+    return tuple(f"munge:{m.edit_id}" for m in munges)
+
+
+def merge_munges(left: list[FunctionMunge], right: list[FunctionMunge]) -> list[FunctionMunge]:
+    """State reducer for the munge list: append, in order, deduplicating by :attr:`edit_id`.
+
+    A reducer for the reason ``merge_summaries`` is one — several tool calls can land in one graph
+    step, and LangGraph refuses two writes to an unreduced key.
+    """
+    merged = list(left)
+    seen = {m.edit_id for m in merged}
+    for munge in right:
+        if munge.edit_id in seen:
+            continue
+        merged.append(munge)
+        seen.add(munge.edit_id)
+    return merged

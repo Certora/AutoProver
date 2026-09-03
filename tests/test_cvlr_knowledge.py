@@ -592,22 +592,27 @@ def test_the_author_is_told_when_to_stop_summarizing():
     assert "inlined *into the handler itself*" in prompt
 
 
-def test_the_munge_vocabulary_is_taught_as_diagnosis_rather_than_as_a_tool():
-    """The charter's payload reaches the author as something to *name*, not to apply.
+def test_the_munge_vocabulary_is_exactly_the_two_kinds_and_no_more():
+    """The charter as the author sees it (`docs/cvlr-backend-plan.md` §7.6.3).
 
-    `cvlr::early_panic` is the most common munge in the corpus by a wide margin, and it is the
+    `early_panic` is the most common munge in the corpus by a wide margin, and it is the
     source-level form of the `.unwrap()` choice this prompt already teaches — applied to a `?`
-    below the handler, where a rule cannot reach it. An author who does not know the word writes
-    "the prover refused this" and a reviewer has nowhere to go; one who does writes a skip somebody
-    can act on. See `docs/cvlr-backend-plan.md` §7.6.3.
+    below the handler, where a rule cannot reach it. The closed list is the point: the give-up
+    boundary is the vocabulary, so a third kind has to be a skip rather than an improvisation.
     """
     prompt = _flat(_author_system_prompt())
-    assert "cvlr::early_panic" in prompt
-    assert "cvlr::mock_fn" in prompt
-    # Named as a munge the author cannot apply, so it lands in the skip rather than in a draft.
-    assert "You cannot apply one" in prompt
-    # And early_panic must not be sold as the answer to the one thing it cannot do.
+    assert "munge_function(path, function, munge, why)" in prompt
+    assert "there are exactly two kinds" in prompt
+    assert "do not improvise a third" in prompt
+    # early_panic must not be sold as the answer to the one thing it cannot do.
     assert "does **not** help an acceptance property" in prompt
+
+
+def test_a_munge_is_ranked_last_among_the_ways_out():
+    """It changes the program the verdicts are about, which nothing else on the tool list does."""
+    prompt = _flat(_author_system_prompt())
+    assert "most consequential thing you can do" in prompt
+    assert _flat("a different rule; a summary, if the code in the way is not") in prompt
 
 
 def test_shrinking_a_bounded_collection_is_offered_only_behind_the_sound_version():
