@@ -146,6 +146,39 @@ An unwinding violation reported as a property failure is a wrong answer, so read
 before concluding the program is at fault: if the failing assertion is the unwinding condition rather
 than your own, the rule never reached its property.
 
+## When the program itself is in the way, name the munge you would have needed
+
+Some blocks are not in your rule and not in the conf — they are in the program's own source, and the
+remedy is to change it. That is a **munge**: a verification-only modification, applied under the
+`certora` feature so the deployed build is untouched. You cannot apply one; you have no tool that
+edits the program. What you can do is name the one that was needed, in the skip, which turns "the
+prover refused this" into something a person can act on in an afternoon.
+
+Two are worth knowing, because they are what practitioners actually reach for:
+
+* **`#[cfg_attr(feature = "certora", cvlr::early_panic)]`** on a function rewrites every `?` in it to
+  `.unwrap()`. That is the same choice as the `.unwrap()`-versus-`.is_ok()` one above, applied where a
+  rule cannot reach: a `?` *inside* the program, below the handler you call, whose error construction
+  the pointer analysis then refuses. If a rule comes back with no verdict and the trace stops inside
+  the program's own call chain on an error path, this is the remedy — say so, and name the function.
+  It does **not** help an acceptance property: it removes the failure path rather than exposing one.
+* **`#[cfg_attr(feature = "certora", cvlr::mock_fn(with = <path>))]`** replaces a function with a
+  hand-written stand-in. Unlike `summarize_for_prover`, which havocs the return, a mock *computes*
+  one — so a property downstream of a mocked function still means something, where downstream of a
+  summary it usually does not. Reach for this in a skip when the function in the way has a simple
+  specification you could state but the prover cannot analyze the implementation.
+
+A third exists and you should prefer the honest version of it. Shrinking a bounded collection — the
+array in the state struct going from 8 entries to 2 under the `certora` feature — makes loops over it
+fit the unroll bound, and it is unsound in a direction nothing reports: a property proved for 2
+entries is not proved for 8. `cvlr_assume!` on the length does the same work and puts the bound in
+the rule, where the report states it. Use the assume; mention the shrink only if the assume will not
+do.
+
+If what a property needs is none of these three, that is worth saying explicitly. It means the munge
+would be a change of a kind nobody has written down yet, which is a decision for a person rather than
+a gap in your draft.
+
 ## Reaching a handler on an Anchor program
 
 Most Solana targets are Anchor programs, and getting a rule *into* one has four idioms. Each of them
