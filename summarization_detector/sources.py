@@ -13,7 +13,8 @@ import os
 import tempfile
 import time
 from pathlib import Path
-from typing import Callable, TypeVar
+from collections.abc import Callable
+from typing import TypeVar
 
 from .detect import DetectionReport, detect, ensure_ast
 
@@ -41,9 +42,13 @@ def _retry_transient(fn: Callable[[], _T], tries: int = 4) -> _T:
 
 
 def _aiss_env_for(url: str) -> None:
-    """vaas-dev jobs require AISS_ENV=dev for POU auth; set it from the URL host if unset."""
+    """Set AISS_ENV from the URL host (if unset) so POU authenticates against the run's environment. POU
+    defaults an unset AISS_ENV to `prod`, so a vaas-stg / vaas-dev job would otherwise auth against prod;
+    set stg/dev explicitly. A prod job (prover.certora.com) needs nothing — it IS the default."""
     if "vaas-dev" in url:
         os.environ.setdefault("AISS_ENV", "dev")
+    elif "vaas-stg" in url:
+        os.environ.setdefault("AISS_ENV", "stg")
 
 
 def fetch_sources(url: str, dest: str | Path) -> Path:
@@ -57,30 +62,32 @@ def fetch_sources(url: str, dest: str | Path) -> Path:
 
 
 def find_run_conf(sources_dir: str | Path) -> Path:
-    """Locate the job's run conf in a fetched sources tree — the canonical
-    `inputs/.certora_sources/run.conf`, else the shallowest `run.conf`/`*.conf` outside lib/ and the
-    `.certora_internal` machinery."""
+    """The job's run conf in a fetched sources tree: the canonical `inputs/.certora_sources/run.conf`.
+    Raises if it is absent — it does NOT guess among other `*.conf` files (a mock, a sub-run's conf, or a
+    leftover would be picked silently and drive the whole run off the wrong scene). The caller passes one
+    explicitly instead (`detect_url(conf=...)` / `--conf`); the error lists the candidates it could choose
+    from."""
     root = Path(sources_dir)
     canonical = root / "inputs" / ".certora_sources" / "run.conf"
     if canonical.exists():
         return canonical
-    for pattern in ("run.conf", "*.conf"):
-        cands = [p for p in root.rglob(pattern)
-                 if "/lib/" not in str(p) and "/.certora_internal/" not in str(p)]
-        if cands:
-            return min(cands, key=lambda p: len(p.parts))
-    raise FileNotFoundError(f"no run.conf found under {root}")
+    others = sorted(str(p.relative_to(root)) for p in root.rglob("*.conf")
+                    if "/lib/" not in str(p) and "/.certora_internal/" not in str(p))
+    hint = f"; pass one explicitly (candidates: {', '.join(others)})" if others else ""
+    raise FileNotFoundError(
+        f"canonical run conf inputs/.certora_sources/run.conf not found under {root}{hint}")
 
 
 def cut_from_conf(conf_path: str | Path) -> str:
-    """The main (verified) contract — the part before ':' in the conf's `verify` field
-    (`"Router:certora/specs/x.spec"` -> `"Router"`), falling back to the first `parametric_contracts`."""
+    """The main (verified) contract — the part before ':' in the conf's mandatory `verify` field
+    (`"Router:certora/specs/x.spec"` -> `"Router"`). Delegates to `certora_autosetup`'s
+    `ConfigManager.extract_main_contract_from_config`, the single source of truth for conf parsing, so we
+    read only `verify` and never guess the CUT from an unrelated field (`parametric_contracts` names ALL
+    parametric targets, not the CUT). Returns "" if `verify` is absent/malformed — the caller then requires
+    an explicit `cut`."""
+    from certora_autosetup.utils.enhanced_config_manager import ConfigManager
     conf = json.loads(Path(conf_path).read_text())
-    verify = conf.get("verify") or ""
-    if isinstance(verify, str) and ":" in verify:
-        return verify.split(":", 1)[0]
-    parametric = conf.get("parametric_contracts") or []
-    return parametric[0] if parametric else ""
+    return ConfigManager.extract_main_contract_from_config(conf) or ""
 
 
 def find_external_call_graph(sources_dir: str | Path) -> Path | None:
@@ -149,13 +156,21 @@ def fetch_surviving_graphs(url: str) -> list[dict]:
 
 def detect_url(url: str, *, work_dir: str | Path | None = None, solc_dir: str | Path | None = None,
                cut: str | None = None, external_call_graph: str | Path | None = None,
-               include_dependencies: bool = False) -> DetectionReport:
+               include_dependencies: bool = False, conf: str | Path | None = None) -> DetectionReport:
     """The one-input entry: from a prover-run URL, fetch + derive everything and run the detector. `cut`
-    and `external_call_graph` override what would otherwise be derived/fetched. `work_dir` (default: a
-    temp dir) holds the fetched sources + generated AST."""
+    and `external_call_graph` override what would otherwise be derived/fetched. `conf` overrides the
+    canonical run-conf lookup for a non-standard tree — a path relative to the fetched sources tree (or
+    absolute); required when the canonical `inputs/.certora_sources/run.conf` is absent. `work_dir`
+    (default: a temp dir) holds the fetched sources + generated AST."""
     work = Path(work_dir) if work_dir else Path(tempfile.mkdtemp(prefix="detect-"))
     src = fetch_sources(url, work / "sources")
-    conf = find_run_conf(src)
+    if conf is not None:
+        conf = Path(conf)
+        conf = conf if conf.is_absolute() else src / conf
+        if not conf.exists():
+            raise FileNotFoundError(f"conf {conf} not found in the fetched sources tree")
+    else:
+        conf = find_run_conf(src)
     cut = cut or cut_from_conf(conf)
     if not cut:
         raise ValueError(f"could not derive the main contract from {conf} — pass cut=")

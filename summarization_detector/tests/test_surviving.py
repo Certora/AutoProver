@@ -20,7 +20,7 @@ def test_classify_generic_categories():
 
 
 def test_generic_match_suggests_no_summary():
-    # a generic (non-curated) match reports the category but leaves the summary to the agent
+    # a generic (non-curated) match reports the category but leaves the summary to the consumer
     for name in ("ListLib.sortByKey(ListLib.List)", "BitLib.fls(uint256)"):
         m = classify_hostile(name)
         assert m is not None and m.curated is False and m.candidate_summary == ""

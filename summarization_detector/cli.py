@@ -14,8 +14,8 @@ from .sources import detect_url
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="detect-summaries",
-        description="Rank the functions worth summarizing in a scene (and how: over-approx vs symbolic "
-                    "model). Give just --url; everything else is derived.")
+        description="Rank the functions worth summarizing in a scene, with why each is prover-hostile and "
+                    "where it can be summarized. Give just --url; everything else is derived.")
     p.add_argument("--url", default=None,
                    help="prover-run URL — the only input needed: fetches sources + conf, derives the main "
                         "contract, generates the AST, and pulls the difficulty report.")
@@ -34,7 +34,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="emit the report as JSON (for pipeline/tool consumption) instead of text.")
     # offline / override path (when you already have the artifacts instead of a URL):
     p.add_argument("--ast", default=None, help="path to a solc AST dump (.asts.json).")
-    p.add_argument("--conf", default=None, help="a .conf to generate the AST from (offline, needs --cut).")
+    p.add_argument("--conf", default=None,
+                   help="a .conf to generate the AST from: offline path (needs --cut), or with --url a path "
+                        "relative to the fetched sources tree when the canonical run.conf is absent.")
     p.add_argument("--job-url", default=None,
                    help="difficulty-report URL for the offline path (with --ast/--conf).")
     a = p.parse_args(argv)
@@ -42,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.url:
         report = detect_url(a.url, work_dir=a.work_dir, solc_dir=a.solc_dir, cut=a.cut,
                             external_call_graph=a.external_call_graph,
-                            include_dependencies=a.include_dependencies)
+                            include_dependencies=a.include_dependencies, conf=a.conf)
     else:
         if not (a.ast or a.conf):
             p.error("give --url, or the offline path: --ast/--conf (+ --cut).")

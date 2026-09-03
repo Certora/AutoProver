@@ -4,7 +4,7 @@ From a prover run it ranks the functions worth summarizing: a candidate list wit
 prover-hostile (the hard-op signal / category), WHERE it can be summarized (caller boundaries), and, for a
 curated public-library match, a suggested summary. It suggests WHAT to summarize — not the summarization
 strategy (per-function summary, whole-contract symbolic model, …) and not how the summary is written; the
-CVL-generation / invariant agent (or smtool) does that. It fetches the prover's output via
+consumer decides that. It fetches the prover's output via
 `prover_output_utility` and parses the solc AST dump (from `certoraRun --dump_asts`) with
 `certora_autosetup.solidity_ast`. Invoke via `detect()` or the CLI
 (`python -m summarization_detector` / `detect-summaries`).
@@ -26,14 +26,6 @@ from .detect import (
     cone_weights,
 )
 from .sources import detect_url, cut_from_conf, find_run_conf, fetch_surviving_graphs
-from .difficulty_profile import (
-    ProfileReport,
-    SlowRule,
-    Hotspot,
-    profile_job,
-    profile_jobs,
-    aggregate_by_class,
-)
 
 __all__ = [
     "Boundary",
@@ -48,12 +40,6 @@ __all__ = [
     "cone_weights",
     "cut_from_conf",
     "find_run_conf",
-    "ProfileReport",
-    "SlowRule",
-    "Hotspot",
-    "profile_job",
-    "profile_jobs",
-    "aggregate_by_class",
     "HostileCategory",
     "CuratedEntry",
     "HostileMatch",
