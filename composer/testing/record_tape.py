@@ -65,13 +65,15 @@ import json
 import sys
 from pathlib import Path
 from typing import Any, cast
+from uuid import UUID
 
 from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 
 from composer.diagnostics.timing import get_current_task_id
 from composer.llm.types import CacheLevel
+from composer.testing.harness_tape import TapeKey, dump_keys, opening_key, prefix_key
 
 # task_id used for LLM calls that fire outside any run_task scope. HarnessFakeLLM
 # raises on such calls, so anything landing here needs manual attention before
@@ -96,8 +98,11 @@ class TapeRecorder:
         self.out_path = out_path
         # task_id -> ordered list of recorded AIMessages.
         self.lanes: dict[str, list[AIMessage]] = {}
+        # task_id -> prefix keys aligned with `lanes` by index; the sidecar that
+        # makes the tape resume-safe (see harness_tape.attach_sidecar_keys).
+        self.keys: dict[str, list[TapeKey]] = {}
 
-    def record(self, message: AIMessage) -> None:
+    def record(self, message: AIMessage, prompt: list[BaseMessage] | None = None) -> None:
         if not message.text and not (message.tool_calls or []):
             # Content-less turn (no text, no tool_calls): a transient no-tool-call
             # turn the agent loop rejects and retries — never kept in thread state.
@@ -105,7 +110,16 @@ class TapeRecorder:
             # tool call" retry and exhaust the lane, so drop it.
             return
         task_id = get_current_task_id() or NO_TASK_LANE
-        self.lanes.setdefault(task_id, []).append(message)
+        lane = self.lanes.setdefault(task_id, [])
+        lane.append(message)
+        if prompt is not None:
+            self.keys.setdefault(task_id, []).append(
+                TapeKey(index=len(lane) - 1, prefix=prefix_key(prompt), opening=opening_key(prompt))
+            )
+
+    @property
+    def sidecar_path(self) -> Path:
+        return self.out_path.with_name(self.out_path.stem + ".keys.json")
 
     def dump(self) -> None:
         total = sum(len(v) for v in self.lanes.values())
@@ -127,6 +141,16 @@ class TapeRecorder:
             f"[record_tape]   lanes: {counts}",
             file=sys.stderr,
         )
+        keyed = sum(len(v) for v in self.keys.values())
+        if keyed:
+            dump_keys(self.sidecar_path, self.keys)
+            print(f"[record_tape] wrote {keyed} prefix key(s) to {self.sidecar_path}", file=sys.stderr)
+        if keyed != total:
+            print(
+                f"[record_tape] WARNING: {total - keyed} response(s) have no prompt key "
+                f"(on_chat_model_start did not fire for them); those lanes fall back to positional replay.",
+                file=sys.stderr,
+            )
         if NO_TASK_LANE in self.lanes:
             print(
                 f"[record_tape] WARNING: {len(self.lanes[NO_TASK_LANE])} call(s) "
@@ -155,7 +179,23 @@ class RecordingCallback(BaseCallbackHandler):
 
     run_inline = True
 
-    def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
+    def on_chat_model_start(
+        self,
+        serialized: dict[str, Any],
+        messages: list[list[BaseMessage]],
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        # Remember the prompt so the response can be keyed by its AI prefix.
+        if messages:
+            _PROMPTS[run_id] = list(messages[0])
+
+    def on_llm_end(self, response: LLMResult, *, run_id: UUID | None = None, **kwargs: Any) -> None:
+        prompt = _PROMPTS.pop(run_id, None) if run_id is not None else None
         rec = _RECORDER
         if rec is None:
             return
@@ -166,7 +206,11 @@ class RecordingCallback(BaseCallbackHandler):
         # on_llm_end for a chat model always carries a ChatGeneration whose
         # `.message` is the AIMessage (same access UsageCallback makes).
         if isinstance(generation, ChatGeneration):
-            rec.record(cast(AIMessage, generation.message))
+            rec.record(cast(AIMessage, generation.message), prompt)
+
+
+# run_id -> the prompt messages of an in-flight call, paired up in on_llm_end.
+_PROMPTS: dict[UUID, list[BaseMessage]] = {}
 
 
 def default_out_path(name: str) -> Path:

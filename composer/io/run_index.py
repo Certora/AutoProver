@@ -18,9 +18,14 @@ from langgraph.store.base import BaseStore
 from composer.core.user import user_data_ns
 from composer.io.thread_logging import (
     DEFAULT_META_NS,
+    ExecutionMeta,
+    Run,
     RunMeta,
     ThreadMeta,
+    as_run,
     data_ns as _data_subns,
+    executions_ns as _executions_subns,
+    is_v2,
     runs_ns as _runs_subns,
     threads_ns as _threads_subns,
 )
@@ -48,9 +53,27 @@ def data_ns(run_id: str, uid: str | None = None) -> tuple[str, ...]:
     return _data_subns(logging_ns(uid), run_id)
 
 
+def executions_ns(run_id: str, uid: str | None = None) -> tuple[str, ...]:
+    return _executions_subns(logging_ns(uid), run_id)
+
+
 # ---------------------------------------------------------------------------
 # Store readers
 # ---------------------------------------------------------------------------
+
+async def list_executions(
+    store: BaseStore, run_id: str, *, uid: str | None = None
+) -> list[ExecutionMeta]:
+    """The run's execution records, as stored. Empty for a run written before
+    executions existed; :func:`as_run` synthesizes that run's one execution."""
+    items = await store.asearch(executions_ns(run_id, uid), limit=1000)
+    return [cast(ExecutionMeta, it.value) for it in items]
+
+
+async def _load_run(store: BaseStore, run_id: str, meta: RunMeta, uid: str | None) -> Run:
+    executions = await list_executions(store, run_id, uid=uid) if is_v2(meta) else []
+    return as_run(run_id, meta, executions)
+
 
 async def list_runs(
     store: BaseStore,
@@ -58,23 +81,33 @@ async def list_runs(
     uid: str | None = None,
     limit: int = 50,
     since: str | None = None,
-) -> list[tuple[str, RunMeta]]:
-    """Return ``[(run_id, meta), ...]`` most-recent-first.
+) -> list[Run]:
+    """Runs most-recent-first, normalized whatever shape they were stored in.
 
-    ``since`` is an ISO-8601 string compared lexically against ``start_time``
-    (which is also ISO-8601, so lex compare == chronological compare).
+    ``since`` is an ISO-8601 string compared lexically against the run's start
+    (also ISO-8601, so lex compare == chronological compare).
     """
     items = await store.asearch(runs_ns(uid), limit=limit)
-    pairs: list[tuple[str, RunMeta]] = [(it.key, cast(RunMeta, it.value)) for it in items]
+    runs = [await _load_run(store, it.key, cast(RunMeta, it.value), uid) for it in items]
     if since is not None:
-        pairs = [(rid, m) for rid, m in pairs if m["start_time"] >= since]
-    pairs.sort(key=lambda kv: kv[1]["start_time"], reverse=True)
-    return pairs
+        runs = [r for r in runs if r.start_time >= since]
+    runs.sort(key=lambda r: r.start_time, reverse=True)
+    return runs
 
 
 async def get_run(
     store: BaseStore, run_id: str, *, uid: str | None = None
+) -> Run | None:
+    item = await store.aget(runs_ns(uid), run_id)
+    if item is None:
+        return None
+    return await _load_run(store, run_id, cast(RunMeta, item.value), uid)
+
+
+async def get_run_record(
+    store: BaseStore, run_id: str, *, uid: str | None = None
 ) -> RunMeta | None:
+    """The run record as stored, for the export; readers want :func:`get_run`."""
     item = await store.aget(runs_ns(uid), run_id)
     if item is None:
         return None
@@ -119,7 +152,9 @@ async def get_run_data(
 # Wire format
 # ---------------------------------------------------------------------------
 
-WIRE_VERSION = 1
+#: 2 adds ``executions``; a version-1 file has none and reads as a run that was
+#: its own single execution, exactly like a v1 store record.
+WIRE_VERSION = 2
 
 
 # Inner discrimination on BaseMessage's `type` Literal field. AIMessage.type ==
@@ -160,6 +195,10 @@ class ExportedRun(BaseModel):
     run_id: str
     run: RunMeta
     threads: list[ExportedThread]
+    executions: list[ExecutionMeta] = Field(default_factory=list)
+
+    def view(self) -> Run:
+        return as_run(self.run_id, self.run, self.executions)
 
 
 def _encode_timeline_item(item: TimelineItem, checkpoint_id: str | None) -> ExportedTimelineItem:
@@ -192,9 +231,10 @@ async def build_export(
     For each thread segment, walks the checkpoint chain bounded by the
     ThreadMeta's ``start_checkpoint_id`` / ``end_checkpoint_id``.
     """
-    run = await get_run(store, run_id, uid=uid)
+    run = await get_run_record(store, run_id, uid=uid)
     if run is None:
         raise KeyError(f"No such run: {run_id}")
+    executions = await list_executions(store, run_id, uid=uid) if is_v2(run) else []
 
     threads = await list_threads_for_run(store, run_id, uid=uid)
     exported_threads: list[ExportedThread] = []
@@ -218,6 +258,7 @@ async def build_export(
         run_id=run_id,
         run=run,
         threads=exported_threads,
+        executions=executions,
     )
 
 

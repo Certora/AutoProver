@@ -21,7 +21,9 @@ Subclasses fill in:
 import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Callable, Self
+from typing import Any, AsyncIterator, Callable, Self, override
+
+from composer.io.protocol import HumanInteractionBridge
 
 from langchain_core.messages import AIMessage, ToolCall as LC_ToolCall, ToolMessage
 
@@ -74,8 +76,9 @@ class AgentDisplayState:
 # ---------------- handler ----------------
 
 
-class LiveDisplayHandler[H]:
-    """IOHandler[H] base that drives an inline rich.live.Live region."""
+class LiveDisplayHandler[H](HumanInteractionBridge[H]):
+    """IOHandler base that drives an inline rich.live.Live region; ``H`` is what
+    its ``handle_human_interaction`` hook knows how to ask."""
 
     def __init__(
         self,
@@ -132,7 +135,7 @@ class LiveDisplayHandler[H]:
                 live.start()
                 live.update(self._render())
 
-    # ---------- IOHandler[H] surface ----------
+    # ---------- IOHandler surface ----------
 
     async def log_checkpoint_id(self, *, path: list[str], checkpoint_id: str) -> None:
         pass
@@ -195,21 +198,14 @@ class LiveDisplayHandler[H]:
                 self._scrollback(rendered)
             self._refresh()
 
-    async def human_interaction(
-        self,
-        ty: H,
-        debug_thunk: Callable[[], None],
-    ) -> str:
+    @override
+    async def human_interaction(self, ty: H) -> str:
         async with self._paused_live():
-            return await self.handle_human_interaction(ty, debug_thunk)
+            return await self.handle_human_interaction(ty)
 
     # ---------- pluggable hooks ----------
 
-    async def handle_human_interaction(
-        self,
-        ty: H,
-        debug_thunk: Callable[[], None],
-    ) -> str:
+    async def handle_human_interaction(self, ty: H) -> str:
         raise NotImplementedError
 
     def derive_status(self, agent: AgentDisplayState) -> str:

@@ -1,6 +1,5 @@
 from typing_extensions import NotRequired, Annotated
 from typing import Literal, Any, cast
-import uuid
 
 from pydantic import BaseModel, Field
 
@@ -22,7 +21,7 @@ from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 from composer.core.state import AIComposerState
 from composer.core.validation import ReqsValidation
 from composer.core.context import AIComposerContext, stamp
-from composer.io.context import run_to_completion
+from composer.io.context import DurableThread, run_to_completion
 from composer.ui.tool_display import tool_display
 
 class JudgeInput(FlowInput, RoughDraftState):
@@ -152,7 +151,7 @@ def get_judge_tool(
         judge_state = await run_to_completion(
             compiled_graph,
             JudgeInput(input=[req_list], vfs=state["vfs"], orig_reqs=reqs, memory=None, did_read=False),
-            thread_id=uuid.uuid1().hex,
+            thread_id=DurableThread("requirements-judge"),
             context=None,
             # Preserves the langgraph default this run has always ridden on.
             recursion_limit=250,

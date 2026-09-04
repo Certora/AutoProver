@@ -39,7 +39,7 @@ from composer.ui.tool_display import ToolDisplayConfig
 
 
 class AutoProveLiveHandler(LiveDisplayHandler[None], NullEventHandler):
-    """``IOHandler[None]`` + ``EventHandler`` + ``HandlerFactory`` for
+    """``IOHandler`` + ``EventHandler`` + ``HandlerFactory`` for
     the auto-prove pipeline, rendered as a single rich.live region.
 
     Use as::
@@ -68,9 +68,7 @@ class AutoProveLiveHandler(LiveDisplayHandler[None], NullEventHandler):
     # ── IOHandler hook: HITL — autoprove has none ────────────────────
 
     @override
-    async def handle_human_interaction(
-        self, ty: None, debug_thunk: Callable[[], None]
-    ) -> str:
+    async def handle_human_interaction(self, ty: None) -> str:
         raise RuntimeError(
             "Unexpected HITL interrupt in auto-prove live handler"
         )
@@ -165,7 +163,7 @@ class AutoProveLiveHandler(LiveDisplayHandler[None], NullEventHandler):
 
     async def make_handler(
         self, info: TaskInfo[AutoProvePhase]
-    ) -> TaskHandle[None]:
+    ) -> TaskHandle:
         # ``run_task`` fires ``on_start`` / ``on_done`` per-task, not
         # per-phase — a single phase like CVL_GEN spawns one
         # "Invariant CVL" task plus one per-component batch, all
@@ -198,6 +196,7 @@ class AutoProveLiveHandler(LiveDisplayHandler[None], NullEventHandler):
 
         return TaskHandle(
             handler=self,
+            interrupt_handler=self,
             event_handler=self,
             on_start=_on_start,
             on_error=_on_error,

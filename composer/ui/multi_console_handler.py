@@ -18,6 +18,7 @@ The path label is built lazily from the ``description`` values received in
 path is all descriptions joined with `` / ``.
 """
 
+from collections.abc import Sequence
 from typing import Callable, Any, AsyncIterator
 from abc import ABC, abstractmethod
 import sys
@@ -25,6 +26,7 @@ import asyncio
 from contextlib import asynccontextmanager
 
 from composer.io.multi_job import TaskHandle, TaskInfo, HasName
+from composer.io.protocol import InterruptHandler, RefuseInterrupts, StateObserver, observed
 from composer.io.conversation import (
     ConversationClient
 )
@@ -33,17 +35,29 @@ from rich.console import RenderableType
 
 
 class MultiJobConsoleHandler[P: HasName](ABC):
-    """``IOHandler[Never]`` + ``HandlerFactory``
+    """``IOHandler`` + ``HandlerFactory``
 
     One instance spans the whole pipeline run.  ``make_handler`` is passed as
     the ``handler_factory`` argument; it returns ``handler=self`` each time so
     path descriptions accumulated by one phase are visible to all later phases.
+
+    Output is this object; input is ``interrupts``, refusing by default since
+    the pipelines this drives ask nothing at the console. A headless run passes
+    its mailbox as ``interrupts`` and again in ``observers`` so it sees the
+    output events it acks on.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        interrupts: InterruptHandler | None = None,
+        observers: Sequence[StateObserver] = (),
+    ) -> None:
         self._descriptions: dict[str, str] = {}
         self._conversation_lock = asyncio.Semaphore()
         self._suppress_output = False
+        self._interrupts: InterruptHandler = interrupts if interrupts is not None else RefuseInterrupts()
+        self._observers = tuple(observers)
 
     def _output(self, to_print: Any):
         if self._suppress_output:
@@ -91,13 +105,6 @@ class MultiJobConsoleHandler[P: HasName](ABC):
             else:
                 self._output(f"[{label}] at node: {node_name}")
 
-    async def human_interaction(
-        self, ty: None, debug_thunk: Callable[[], None]
-    ) -> str:
-        raise RuntimeError(
-            "Unexpected HITL interrupt in auto-prove console handler"
-        )
-
     @asynccontextmanager
     async def _start_conversation(self, initial: RenderableType) -> AsyncIterator[ConversationClient]:
         async with self._conversation_lock:
@@ -123,7 +130,7 @@ class MultiJobConsoleHandler[P: HasName](ABC):
     # ------------------------------------------------------------------
 
 
-    async def make_handler(self, info: TaskInfo[P]) -> TaskHandle[None]:
+    async def make_handler(self, info: TaskInfo[P]) -> TaskHandle:
         """Return a ``TaskHandle`` that routes all events back to *self*.
 
         Pass this bound method as ``handler_factory`` to
@@ -137,7 +144,8 @@ class MultiJobConsoleHandler[P: HasName](ABC):
             print(tb, file=sys.stderr)
 
         return TaskHandle(
-            handler=self,
+            handler=observed(self, *self._observers),
+            interrupt_handler=self._interrupts,
             event_handler=self,
             on_start=lambda: print(
                 f"\n{'─' * 60}\nPhase: {info.label}\n{'─' * 60}"

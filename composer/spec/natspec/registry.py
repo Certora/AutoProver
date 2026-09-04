@@ -36,7 +36,7 @@ from composer.spec.natspec.models import (
     InterfaceResult,
     StubDeclarationModel,
 )
-from composer.spec.util import uniq_thread_id
+from composer.io.context import DurableThread
 from composer.ui.tool_display import tool_display
 from composer.spec.natspec.task_description import Assembler
 
@@ -223,7 +223,7 @@ async def run_registry_agent(
     res = await run_to_completion(
         workflow,
         FlowInput(input=input_parts),
-        thread_id=uniq_thread_id("stub-registrar"),
+        thread_id=DurableThread("stub-registrar"),
         recursion_limit=recursion_limit,
         description="Stub update",
         within_tool=within_tool,

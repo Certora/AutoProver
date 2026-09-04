@@ -358,6 +358,7 @@ async def _run_codegen(
         print("Analyzing requirements...")
         extraction = await get_requirements(
             handler,
+            handler,
             workflow_options,
             llm.builder_for(),
             system_doc_doc,
@@ -474,7 +475,7 @@ async def _run_codegen(
     )
 
     try:
-        async with with_handler(handler, CodeGenEventHandler(handler)):
+        async with with_handler(handler, CodeGenEventHandler(handler), handler):
             with set_current_task_id(CODEGEN_TASK_ID):
                 final_state = await run_to_completion(
                     workflow_exec,

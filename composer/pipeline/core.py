@@ -39,6 +39,7 @@ from abc import ABC, abstractmethod
 from contextlib import nullcontext
 
 
+from composer.io.context import GraphSuspended
 from composer.io.multi_job import TaskInfo
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import (
@@ -72,7 +73,7 @@ from composer.diagnostics.budget import total_budget, named_budget_or_nop, time_
 
 from .ptypes import (
     DEFAULT_MAX_CPU_TASKS,
-    BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult,
+    AwaitingInput, BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult,
     Curtailed,  Delivered, RunBudget,
     FinalProperties, GaveUp, PersistedPluginArtifact, PipelineRun, PluginArtifact,
     RegisteredArtifacts, SystemAnalysisSpec
@@ -261,7 +262,7 @@ class PreparedSystem[FormT: BackendResult, U: FeatureUnit, Main](ABC):
         ...
 
 
-class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](Protocol):
+class PipelineBackend[P: enum.Enum, FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](Protocol):
     @property
     def backend_guidance(self) -> str: ...
 
@@ -275,7 +276,7 @@ class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifi
     def artifact_store(self) -> ArtifactStore[A, FormT]: ...
 
 
-    async def preflight(self, run: PipelineRun[P, H]) -> Pre:
+    async def preflight(self, run: PipelineRun[P]) -> Pre:
         """Whatever the backend can do before it knows anything about the program — run
         *concurrently with system analysis*, and awaited before :meth:`prepare_system`.
 
@@ -292,7 +293,7 @@ class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifi
 
     async def prepare_system(
         self, analyzed: App,
-        run: PipelineRun[P, H],
+        run: PipelineRun[P],
         preflight: Pre,
     ) -> PreparedSystem[FormT, U, Main]: ...
 
@@ -418,9 +419,9 @@ def _time_context(time_budget_s: float | None) -> ContextManager[None]:
     else:
         return nullcontext()
 
-async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
-    backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
-    run: PipelineRun[P, H],
+async def run_pipeline[P: enum.Enum, FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
+    backend: PipelineBackend[P, FormT, A, U, Main, App, Pre],
+    run: PipelineRun[P],
     *,
     interactive: bool = False,
     threat_model: Document | None = None,
@@ -440,9 +441,9 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
             extra_context=extra_context, ecosystem=ecosystem
         )
 
-async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
-    backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
-    run: PipelineRun[P, H],
+async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
+    backend: PipelineBackend[P, FormT, A, U, Main, App, Pre],
+    run: PipelineRun[P],
     *,
     interactive: bool,
     threat_model: Document | None,
@@ -459,9 +460,9 @@ async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: Artifact
         )
 
 # ---- the driver --------------------------------------------------------------
-async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
-    backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
-    run: PipelineRun[P, H],
+async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
+    backend: PipelineBackend[P, FormT, A, U, Main, App, Pre],
+    run: PipelineRun[P],
     plugin_manager: PluginManager[P, U],
     *,
     interactive: bool = False,
@@ -667,7 +668,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
 
     settled = await asyncio.gather(*[_run(b) for b in batches], return_exceptions=True)
     outcomes = [o if isinstance(o, ComponentOutcome)
-                else ComponentOutcome(b.feat, b.props, o)
+                else ComponentOutcome(b.feat, b.props, AwaitingInput(o) if isinstance(o, GraphSuspended) else o)
                 for b, o in zip(batches, settled)]
 
     await formalizer.finalize(outcomes, run)
@@ -720,9 +721,9 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
 
     return _tally(outcomes)
 
-async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
+async def _extract_all[P: enum.Enum, Main, U: FeatureUnit](
     prop_key: str,
-    main: Main, backend_guidance: str, run: PipelineRun[P, H],
+    main: Main, backend_guidance: str, run: PipelineRun[P],
     phase: P, interactive: bool, threat_model: Document | None,
     extra_context: Sequence[Document], max_rounds: int,
     # ``App`` stays ``Any`` here: this helper never touches the analyzed-model axis, only
@@ -819,6 +820,7 @@ def _tally[FormT: BackendResult, U: FeatureUnit](
     outcomes: list[ComponentOutcome[FormT, U]]
 ) -> CorePipelineResult[FormT]:
     failures: list[str] = []
+    awaiting: list[str] = []
     for o in outcomes:
         if isinstance(o.result, BaseException):
             failures.append(f"{o.feat.display_name}: {o.result}")
@@ -832,8 +834,12 @@ def _tally[FormT: BackendResult, U: FeatureUnit](
             failures.append(
                 f"{o.feat.display_name}: BUDGET: formalization cut short ({what})"
             )
+        elif isinstance(o.result, AwaitingInput):
+            awaiting.append(
+                f"{o.feat.display_name}: awaiting input on {o.result.n_questions} question(s)"
+            )
     # The rollup is unit-agnostic; widen the concrete-unit outcomes to the protocol for storage.
     return CorePipelineResult(
         len(outcomes), sum(len(o.props) for o in outcomes),
-        cast(list[ComponentOutcome[FormT, FeatureUnit]], outcomes), failures,
+        cast(list[ComponentOutcome[FormT, FeatureUnit]], outcomes), failures, awaiting,
     )

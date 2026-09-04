@@ -48,6 +48,7 @@ from composer.io.context import (
     with_handler,
 )
 from composer.io.event_handler import NullEventHandler
+from composer.io.protocol import RefuseInterrupts
 
 pytestmark = pytest.mark.asyncio
 
@@ -92,7 +93,7 @@ class FlakyLLM:
 
 class _RecordingIOHandler:
     """IOHandler that records log_start descriptions (the retry loops label
-    attempts through them) and refuses HITL (none expected here)."""
+    attempts through them). Interrupts are refused separately (none expected)."""
 
     def __init__(self) -> None:
         self.descriptions: list[str] = []
@@ -108,9 +109,6 @@ class _RecordingIOHandler:
 
     async def log_end(self, path: list[str]) -> None:
         pass
-
-    async def human_interaction(self, ty: Any, debug_thunk: Any) -> str:
-        raise AssertionError("no HITL interaction expected in retry tests")
 
 
 def _recording_backoff(record: list[int]) -> Backoff:
@@ -155,7 +153,7 @@ async def _run(
     thread_id: str,
     retry: "RetryPolicy | FreshRetryPolicy[Any, Any] | None" = None,
 ) -> RetryState:
-    async with with_handler(handler, NullEventHandler()):
+    async with with_handler(handler, NullEventHandler(), RefuseInterrupts()):
         return await run_to_completion(
             graph,
             {"log": ["<input>"]},
@@ -326,7 +324,7 @@ async def test_nested_subgraph_failures_retry_under_the_ambient_floor():
     with _ambient_policy(DefaultRetryPolicy(
         _retry_on(FakeOverloadedError), backoff=_recording_backoff(backoffs), max_retries=3,
     )):
-        async with with_handler(handler, NullEventHandler()):
+        async with with_handler(handler, NullEventHandler(), RefuseInterrupts()):
             result = await run_to_completion(
                 parent_graph,
                 {"log": ["<input>"]},
@@ -417,7 +415,7 @@ async def test_exhausted_subagent_escalates_to_parent_and_respawns_fresh():
     with _ambient_policy(DefaultRetryPolicy(
         _retry_on(FakeOverloadedError), backoff=_recording_backoff(backoffs), max_retries=2,
     )):
-        async with with_handler(handler, NullEventHandler()):
+        async with with_handler(handler, NullEventHandler(), RefuseInterrupts()):
             result = await run_to_completion(
                 parent_graph,
                 {"log": ["<input>"]},

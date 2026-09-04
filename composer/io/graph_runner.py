@@ -12,14 +12,16 @@ and connects it to the ``EventQueue`` / drainer infrastructure.
 """
 
 import time
+from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, Callable, Awaitable, cast
 
 from composer.io.events import GraphEvents, NextCheckpoint, CustomUpdate, Start, End, StateUpdate
+from composer.io.protocol import InterruptId
 from composer.io.thread_logging import log_thread
 
 from langgraph._internal._typing import StateLike
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.types import Command
+from langgraph.types import Command, Interrupt
 
 from langchain_core.runnables import RunnableConfig
 
@@ -74,17 +76,23 @@ class SinkProtocol(Protocol):
     def __call__(self, event: GraphEvents) -> None:
         ...
 
-type HumanHandler[T, S] = Callable[[T, S], Awaitable[str]]
+type InterruptHandler[S] = Callable[[Sequence[Interrupt], S], Awaitable[Mapping[InterruptId, str]]]
+"""Given every interrupt pending on the thread and its current state, return a
+person's text reply for each, keyed by ``Interrupt.id``. Interrupts left out stay
+pending: the graph raises them again and the handler is asked again. A handler
+that cannot answer in this process raises; what it raises is its business, not
+the runner's.
+"""
 
 
-async def run_graph[H, S: StateLike, I: StateLike, C: StateLike | None](
+async def run_graph[S: StateLike, I: StateLike, C: StateLike | None](
     event_sink: SinkProtocol,
     graph: CompiledStateGraph[S, C, I, Any],
     ctxt: C,
-    input: I,
+    input: I | None,
     run_conf: RunnableConfig,
     description: str,
-    human_handler: HumanHandler[H, S] | None = None,
+    interrupt_handler: InterruptHandler[S] | None = None,
     within_tool: str | None = None,
 ) -> S:
     """Stream a graph to completion, emitting events to *event_sink*.
@@ -93,9 +101,15 @@ async def run_graph[H, S: StateLike, I: StateLike, C: StateLike | None](
     ``StateUpdate`` / ``NextCheckpoint`` / ``CustomUpdate`` as the
     graph produces output.
 
-    When the graph raises an ``__interrupt__``, calls
-    *human_handler* with the interrupt value and current state, then
-    resumes with the returned string.
+    ``input=None`` resumes the thread at its latest checkpoint: LangGraph
+    replays the persisted writes of the tasks that had finished and runs only
+    the rest. A ``checkpoint_id`` in the config is different: it forks the
+    thread at that checkpoint and re-executes the whole step, finished tasks
+    included. Pass an id only to deliberately go back.
+
+    When the graph pauses on interrupts, hands all of them (one per
+    interrupting task) to *interrupt_handler* together with the thread's
+    state, and resumes with the map it returns.
     """
     config = run_conf.get("configurable", None)
     if config is None or "thread_id" not in config:
@@ -129,8 +143,10 @@ async def run_graph[H, S: StateLike, I: StateLike, C: StateLike | None](
             while True:
                 curr_input = graph_input
                 graph_input = None
-                interrupted = False
-                interrupt_data: H | None = None
+                # Every interrupt pending after this stream, by id: one per
+                # interrupting task, so a turn with two human-facing tool
+                # calls yields two, each resumable on its own.
+                pending: dict[InterruptId, Interrupt] = {}
                 async for (ty, payload) in graph.astream(
                     curr_input, config=curr_config, context=ctxt, stream_mode=["checkpoints", "updates", "custom"]
                 ):
@@ -148,30 +164,30 @@ async def run_graph[H, S: StateLike, I: StateLike, C: StateLike | None](
                     else:
                         assert ty == "updates"
                         if "__interrupt__" in payload:
-                            assert human_handler is not None
+                            if interrupt_handler is None:
+                                raise RuntimeError(f"graph {tid} interrupted but no interrupt handler is installed")
                             if "configurable" in curr_config and "checkpoint_id" in curr_config["configurable"]:
                                 del curr_config["configurable"]["checkpoint_id"]
-                            # Record the interrupt but keep draining the stream:
+                            # Record the interrupts but keep draining the stream:
                             # the interrupt checkpoint may not be committed when
                             # this update is yielded, and the resume below targets
                             # the thread's latest checkpoint. Breaking out here
                             # races that write — a resume against the stale
                             # checkpoint replays the previous node (duplicated LLM
                             # turns / re-fired interrupts / dropped state updates).
-                            if not interrupted:
-                                interrupt_data = cast(H, payload["__interrupt__"][0].value)
-                                interrupted = True
+                            for intr in payload["__interrupt__"]:
+                                pending[InterruptId(intr.id)] = intr
                             continue
                         event_sink(
                             StateUpdate(
                                 _normalize_updates_payload(payload), thread_id=tid
                             )
                         )
-                if interrupted:
-                    assert human_handler is not None
+                if pending:
+                    assert interrupt_handler is not None
                     curr_state = cast(S, (await graph.aget_state({"configurable": {"thread_id": tid}})).values)
-                    human_response = await human_handler(cast(H, interrupt_data), curr_state)
-                    graph_input = Command(resume=human_response)
+                    resume = await interrupt_handler(list(pending.values()), curr_state)
+                    graph_input = Command(resume=dict(resume))
                     continue
 
                 result_state = (await graph.aget_state({"configurable": {"thread_id": tid}})).values

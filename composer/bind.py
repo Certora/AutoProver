@@ -22,6 +22,16 @@ if (_tape := os.environ.get("COMPOSER_TEST_TAPE")):
     import importlib
     _mod = importlib.import_module(f"composer.testing.ui_harness_{_tape}")
     _mod.install_harness_tape()
+    # Resume-safe replay: with the tape's sidecar of prefix keys attached, entries
+    # are served by the prompt's AI-message prefix instead of by cursor, so a
+    # process resuming from a checkpoint lands on the right continuation.
+    # COMPOSER_TAPE_LEARN_KEYS=1 instead serves positionally and writes that
+    # sidecar at exit — run it once, on a fresh (non-resumed) replay.
+    from composer.testing.harness_tape import attach_sidecar_keys, enable_key_learning
+    if os.environ.get("COMPOSER_TAPE_LEARN_KEYS"):
+        enable_key_learning(_tape)
+    else:
+        attach_sidecar_keys(_tape)
 elif (_record := os.environ.get("COMPOSER_RECORD_TAPE")):
     # Record a real run into a replayable tape (inverse of COMPOSER_TEST_TAPE).
     # Optional COMPOSER_RECORD_OUT overrides the default

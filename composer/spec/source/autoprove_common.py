@@ -4,7 +4,6 @@ import argparse
 import hashlib
 import logging
 import pathlib
-import uuid
 from contextlib import asynccontextmanager
 from typing import cast, AsyncIterator, Protocol, Callable, Awaitable
 
@@ -66,7 +65,7 @@ class AutoProveArgs(ExtendedModelOptions, RAGDBOptions, Protocol):
 # Main
 # ---------------------------------------------------------------------------
 
-type Executor = Callable[[HandlerFactory[AutoProvePhase, None]], Awaitable[CorePipelineResult[GeneratedCVL]]]
+type Executor = Callable[[HandlerFactory[AutoProvePhase]], Awaitable[CorePipelineResult[GeneratedCVL]]]
 
 @asynccontextmanager
 async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
@@ -104,7 +103,10 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
     construct ``AutoProveArgs`` directly.
     """
 
-    thread_id = f"autoprove_{uuid.uuid4().hex[:12]}"
+    # The root of every thread id in the run, and so of every checkpoint, cache
+    # and memory namespace under it. Named after the run rather than the
+    # process so a later execution of the same run finds the same threads.
+    thread_id = f"autoprove_{summary.run_id}"
 
     async def exit_logger(
         run: SourceFields,
@@ -128,7 +130,7 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
     design_phase : AutoProvePhase = cast(AutoProvePhase, AutoProvePhase.DISCOVER_DESIGN_DOC)
 
     async def callback(
-        handler: HandlerFactory[AutoProvePhase, None]
+        handler: HandlerFactory[AutoProvePhase]
     ) -> CorePipelineResult[GeneratedCVL]:
         async with (
             cli_pipeline(

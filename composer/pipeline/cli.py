@@ -221,11 +221,11 @@ class StagedPipeline:
     logger: RunDataLogger
     root_key: str
 
-class Continuation[P: enum.Enum, H](Protocol):
+class Continuation[P: enum.Enum](Protocol):
     async def __call__[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
         self,
         env: ServiceHost,
-        backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
+        backend: PipelineBackend[P, FormT, A, U, Main, App, Pre],
         ecosystem: Ecosystem[App, Main, U]
     ) -> CorePipelineResult[FormT]:
         ...
@@ -239,15 +239,15 @@ class AtExit(Protocol):
         ...
 
 @asynccontextmanager
-async def cli_pipeline[P: enum.Enum, H](
+async def cli_pipeline[P: enum.Enum](
     args: PipelineArgs,
     thread_id: str,
     summary: RunSummary,
-    task_handler: HandlerFactory[P, H],
+    task_handler: HandlerFactory[P],
     design_doc_phase: P,
     at_exit: AtExit | None = None,
     **metadata
-) -> AsyncIterator[tuple[StagedPipeline, Continuation[P, H]]]:
+) -> AsyncIterator[tuple[StagedPipeline, Continuation[P]]]:
     project_root = pathlib.Path(args.project_root).resolve()
     main_contract_path, contract_name = args.main_contract.split(":", 1)
 
@@ -298,7 +298,8 @@ async def cli_pipeline[P: enum.Enum, H](
             "discovery_cache_root": list(disc_cache_ns) if disc_cache_ns is not None else None,
             "memory_ns": args.memory_ns if args.memory_ns is not None else thread_id,
             **metadata
-        }, default_logging_ns(uid=None), run_id=summary.run_id) as data_logger
+        }, default_logging_ns(uid=None), run_id=summary.run_id, execution_id=summary.execution_id,
+           resumed_from=summary.resumed_from) as data_logger
     ):
         try:
             memory_ns = args.memory_ns
@@ -385,7 +386,7 @@ async def cli_pipeline[P: enum.Enum, H](
 
             async def cont[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
                 env: ServiceHost,
-                backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
+                backend: PipelineBackend[P, FormT, A, U, Main, App, Pre],
                 ecosystem: Ecosystem[App, Main, U]
             ) -> CorePipelineResult[FormT]:
                 await data_logger(CACHE_ROOT_RECORD, AutoProveCacheTags(
@@ -413,7 +414,7 @@ async def cli_pipeline[P: enum.Enum, H](
                     _cpu_semaphore=cpu_semaphore,
                     _handler_factory=task_handler
                 )
-                return await run_pipeline(
+                result = await run_pipeline(
                     backend=backend,
                     run=run,
                     interactive=args.interactive,
@@ -424,6 +425,11 @@ async def cli_pipeline[P: enum.Enum, H](
                     time_budget_s=args.time_budget,
                     ecosystem=ecosystem,
                 )
+                if result.unfinished:
+                    # The process exits cleanly, but the run is parked on questions:
+                    # say so in the execution record rather than "completed".
+                    data_logger.outcome("awaiting_input")
+                return result
 
             yield (StagedPipeline(
                 conns=conns, llm_models=models, logger=data_logger,

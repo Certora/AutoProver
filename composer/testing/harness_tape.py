@@ -1,6 +1,12 @@
-from typing import Any, Callable, Iterator, Sequence, override, cast
+from typing import Any, Callable, Iterator, Mapping, Sequence, override, cast
+import atexit
+import hashlib
+import json
 import random
 import asyncio
+import sys
+from dataclasses import dataclass
+from pathlib import Path
 
 from pydantic import Field
 from langchain_core.language_models.fake_chat_models import (
@@ -8,7 +14,7 @@ from langchain_core.language_models.fake_chat_models import (
 )
 from langchain_core.prompt_values import PromptValue
 from langchain_core.tools import BaseTool
-from langchain_core.messages import BaseMessage, AIMessage
+from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 from composer.diagnostics.timing import get_current_task_id
@@ -31,6 +37,66 @@ def _prompt_preview(model_input: Any) -> str:
         return f"{type(last).__name__}: {str(content)[:160]}"
     except Exception:
         return "<unpreviewable prompt>"
+
+
+def prompt_messages(model_input: Any) -> list[BaseMessage]:
+    """The message list behind an ``ainvoke`` input, or ``[]`` for anything else."""
+    if isinstance(model_input, PromptValue):
+        return list(model_input.to_messages())
+    if isinstance(model_input, (list, tuple)):
+        return [m for m in model_input if isinstance(m, BaseMessage)]
+    return []
+
+
+def _digest(payload: Any) -> str:
+    return hashlib.sha1(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+def ai_digest(message: AIMessage) -> str:
+    """Identity of one taped turn: its text and tool calls. Ids, usage and
+    thinking blocks are excluded — they are assigned or stripped along the way."""
+    return _digest(
+        {
+            "text": message.text,
+            "tool_calls": [{"name": tc["name"], "args": tc["args"]} for tc in (message.tool_calls or [])],
+        }
+    )
+
+
+def prefix_key(messages: Sequence[BaseMessage]) -> tuple[str, ...]:
+    """The AI-message prefix of a prompt. Every AI message in a taped run came
+    from the tape, so this is deterministic where tool results are not."""
+    return tuple(ai_digest(m) for m in messages if isinstance(m, AIMessage))
+
+
+def opening_key(messages: Sequence[BaseMessage]) -> str | None:
+    """Digest of a conversation's opening: its system prompt(s) plus the first
+    human message. The tie-break between conversations that share an AI prefix
+    (most often the empty one, at their first turn): two sub-agents asked the
+    same first question still differ by system prompt."""
+    system = [m.content for m in messages if isinstance(m, SystemMessage)]
+    first_human = next((m.content for m in messages if isinstance(m, HumanMessage)), None)
+    if not system and first_human is None:
+        return None
+    return _digest({"system": system, "human": first_human})
+
+
+@dataclass(frozen=True)
+class TapeKey:
+    """Where one lane entry belongs in conversation space: the entry's ``index``
+    in the lane, the AI prefix of the prompt it answered, and that prompt's
+    opening (system prompt plus first human message)."""
+
+    index: int
+    prefix: tuple[str, ...]
+    opening: str | None
+
+    def to_json(self) -> dict[str, Any]:
+        return {"index": self.index, "prefix": list(self.prefix), "opening": self.opening}
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> "TapeKey":
+        return cls(index=int(data["index"]), prefix=tuple(data["prefix"]), opening=data.get("opening"))
 
 
 class HarnessFakeLLM(FakeMessagesListChatModel):
@@ -66,6 +132,18 @@ class HarnessFakeLLM(FakeMessagesListChatModel):
     lanes: dict[str, list[BaseMessage]] = Field(default_factory=dict)
     # task_id -> next index. Mutated in place; each instance owns its own dict.
     lane_cursors: dict[str, int] = Field(default_factory=dict, exclude=True)
+    # task_id -> keys for that lane's entries. A lane that has keys is served by
+    # the prompt's AI-message prefix instead of by cursor: stateless, so a resumed
+    # process (or a re-issued in-flight call) gets the same continuation the
+    # original run did. Lanes without keys stay positional.
+    keys: dict[str, list[TapeKey]] = Field(default_factory=dict, exclude=True)
+    # Keys observed while serving positionally, when ``learning`` is on; written to
+    # the sidecar at exit so the next run can be keyed.
+    learned: dict[str, list[TapeKey]] = Field(default_factory=dict, exclude=True)
+    learning: bool = Field(default=False, exclude=True)
+    # Last-resort tie-break among entries that share both prefix and opening
+    # (system prompt + first human message): recorded order, per process.
+    keyed_cursors: dict[str, int] = Field(default_factory=dict, exclude=True)
 
     with_human_delay: bool = Field(default=True)
 
@@ -106,6 +184,9 @@ class HarnessFakeLLM(FakeMessagesListChatModel):
                 f"Known lanes: {sorted(self.lanes)}. "
                 f"Prompt -> {_prompt_preview(input)}"
             )
+        messages = prompt_messages(input)
+        if self.keys.get(task_id):
+            return cast(AIMessage, lane[self._keyed_index(task_id, messages, input)])
         i = self.lane_cursors.get(task_id, 0)
         if i >= len(lane):
             raise RuntimeError(
@@ -114,7 +195,43 @@ class HarnessFakeLLM(FakeMessagesListChatModel):
                 f"this phase. Prompt -> {_prompt_preview(input)}"
             )
         self.lane_cursors[task_id] = i + 1
+        if self.learning:
+            self.learned.setdefault(task_id, []).append(
+                TapeKey(index=i, prefix=prefix_key(messages), opening=opening_key(messages))
+            )
         return cast(AIMessage, lane[i])
+
+    def _keyed_index(self, task_id: str, messages: Sequence[BaseMessage], model_input: Any) -> int:
+        """Pick the lane entry for this prompt by AI prefix, then opening
+        (system prompt + first human message), then recorded order."""
+        prefix = prefix_key(messages)
+        candidates = [k for k in self.keys[task_id] if k.prefix == prefix]
+        if not candidates:
+            longest = max(
+                (len(k.prefix) for k in self.keys[task_id] if prefix[: len(k.prefix)] == k.prefix),
+                default=0,
+            )
+            raise RuntimeError(
+                f"HarnessFakeLLM: no tape entry in lane {task_id!r} for an AI prefix of "
+                f"length {len(prefix)} (longest recorded prefix that is a stem of it: {longest}). "
+                f"The conversation diverged from the recording. Prompt -> {_prompt_preview(model_input)}"
+            )
+        opening = opening_key(messages)
+        if len(candidates) > 1:
+            narrowed = [k for k in candidates if k.opening == opening]
+            if narrowed:
+                candidates = narrowed
+        if len(candidates) == 1:
+            return candidates[0].index
+        cursor_key = f"{task_id}|{'.'.join(prefix)}|{opening}"
+        j = self.keyed_cursors.get(cursor_key, 0)
+        if j >= len(candidates):
+            raise RuntimeError(
+                f"HarnessFakeLLM: the {len(candidates)} tape entries in lane {task_id!r} that share "
+                f"this prompt's prefix and opening are exhausted. Prompt -> {_prompt_preview(model_input)}"
+            )
+        self.keyed_cursors[cursor_key] = j + 1
+        return candidates[j].index
 
 
 class _DummyUploader:
@@ -244,6 +361,62 @@ def install_fake_llm(fake: Any) -> None:
     _llm_seams_patched = True
 
 
+# --- sidecar keys: resume-safe routing for an existing tape ------------------------
+#
+# A tape module holds each lane's responses in call order. The sidecar
+# ``ui_harness_<name>.keys.json`` next to it records, per entry, the AI prefix and
+# opening (system prompt + first human message) of the prompt that entry answered.
+# With the sidecar attached
+# the fake routes by prefix and needs no cursor, so a process that resumes from a
+# checkpoint (whose prompt already carries the earlier turns) lands on the right
+# entry. The recorder writes the sidecar for new tapes; ``enable_key_learning``
+# writes it for an existing positional tape from one ordinary, non-resumed replay.
+
+
+def sidecar_path(tape_name: str) -> Path:
+    return Path(__file__).resolve().parent / f"ui_harness_{tape_name}.keys.json"
+
+
+def load_keys(path: Path) -> dict[str, list[TapeKey]]:
+    data = json.loads(path.read_text())
+    return {lane: [TapeKey.from_json(k) for k in entries] for lane, entries in data.items()}
+
+
+def dump_keys(path: Path, keys: Mapping[str, Sequence[TapeKey]]) -> None:
+    path.write_text(
+        json.dumps({lane: [k.to_json() for k in entries] for lane, entries in keys.items()}, indent=1) + "\n"
+    )
+
+
+def attach_sidecar_keys(tape_name: str) -> bool:
+    """Route the installed fake by prefix using the tape's sidecar, if it has one."""
+    path = sidecar_path(tape_name)
+    if not path.exists():
+        return False
+    _current_fake().keys = load_keys(path)
+    return True
+
+
+def enable_key_learning(tape_name: str) -> Path:
+    """Serve the installed fake positionally and write the sidecar at exit
+    (``COMPOSER_TAPE_LEARN_KEYS=1``). Run this on a fresh, non-resumed replay."""
+    fake = _current_fake()
+    fake.learning = True
+    path = sidecar_path(tape_name)
+
+    def _dump() -> None:
+        if not fake.learned:
+            print("[harness_tape] no tape entries were served — no keys written.", file=sys.stderr)
+            return
+        dump_keys(path, fake.learned)
+        total = sum(len(v) for v in fake.learned.values())
+        print(f"[harness_tape] wrote {total} prefix key(s) across {len(fake.learned)} lane(s) to {path}", file=sys.stderr)
+
+    atexit.register(_dump)
+    print(f"[harness_tape] learning prefix keys for tape {tape_name!r}; sidecar -> {path}", file=sys.stderr)
+    return path
+
+
 def install_fake_responses(responses: list[str]) -> None:
     """Replay scripted human replies for console HITL interrupts.
 
@@ -266,7 +439,6 @@ def install_fake_responses(responses: list[str]) -> None:
 
     def _fake_prompt_input(
         prompt_str: str,
-        debug_thunk: Callable[[], None],
         filter: Callable[[str], str | None] | None = None,
     ) -> str:
         assert _active_responses is not None, "no response tape installed"

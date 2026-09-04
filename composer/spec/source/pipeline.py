@@ -326,8 +326,8 @@ class ProverPrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance, Con
 
 @dataclass
 class ProverBackend:
-    """``PipelineBackend[AutoProvePhase, GeneratedCVL, None, SpecIdentity, ContractComponentInstance,
-    ContractInstance, SourceApplication, None]`` (P, FormT, H, A, Unit, Main, App, Pre) — structural."""
+    """``PipelineBackend[AutoProvePhase, GeneratedCVL, SpecIdentity, ContractComponentInstance,
+    ContractInstance, SourceApplication, None]`` (P, FormT, A, Unit, Main, App, Pre) — structural."""
     backend_guidance = CERTORA_BACKEND_GUIDANCE
     core_phases = CorePhases({
         "analysis": AutoProvePhase.COMPONENT_ANALYSIS,
@@ -342,14 +342,14 @@ class ProverBackend:
     editing: SourceEditing
     analysis_store: CexAnalysisStore
 
-    async def preflight(self, run: PipelineRun[AutoProvePhase, None]) -> None:
+    async def preflight(self, run: PipelineRun[AutoProvePhase]) -> None:
         """Nothing to do ahead of analysis. The prover's expensive pre-work (AutoSetup, summaries,
         structural invariants) needs the *harnessed* model, so it stays in ``prepare_formalization``,
         where it already overlaps property extraction."""
         return None
 
     async def prepare_system(
-        self, analyzed: SourceApplication, run: PipelineRun[AutoProvePhase, None],
+        self, analyzed: SourceApplication, run: PipelineRun[AutoProvePhase],
         preflight: None,
     ) -> PreparedSystem[GeneratedCVL, ContractComponentInstance, ContractInstance]:
         sys_desc = await run.runner(

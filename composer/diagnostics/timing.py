@@ -81,9 +81,26 @@ class PhaseRecord:
     token_usage_by_model: dict[str, TokenTotals] = field(default_factory=dict)
 
 def run_id_generator() -> str:
+    """The run's identity: stable across every process that works on it.
+
+    ``AUTOPROVER_RUN_ID`` when the control plane distinguishes the run from
+    its executions; ``AUTOPROVER_JOB_ID`` where it does not, which makes the
+    run its own single execution (every deployment so far); a uuid locally."""
+    if (res := os.getenv("AUTOPROVER_RUN_ID")):
+        return res
     if (res := os.getenv("AUTOPROVER_JOB_ID")):
         return res
     return uuid.uuid4().hex
+
+
+def execution_id_generator(run_id: str) -> str:
+    """This process's identity within the run: ``AUTOPROVER_JOB_ID`` when set,
+    else the run id (a run that is its own single execution)."""
+    return os.getenv("AUTOPROVER_JOB_ID") or run_id
+
+
+def resumed_from_env() -> str | None:
+    return os.getenv("AUTOPROVER_RESUMED_FROM") or None
 
 @dataclass
 class RunSummary:
@@ -94,10 +111,16 @@ class RunSummary:
     _active_prover_by_task: dict[str, tuple[float, int]] = field(default_factory=dict, repr=False)
     prover_reported_ms_total: int = 0  # Run-wide prover-REPORTED runtime, summed over every prover run. Distinct from prover_total_s, which is composer's client-side wall-clock (and so includes cloud queue / polling / result download).
     _active_prover_reported_by_task: dict[str, int] = field(default_factory=dict, repr=False)  # Maps task_id -> prover-reported ms accumulated while the task is in flight.
-    run_id: str = field(default_factory=run_id_generator)  # Maps task_id -> (prover_s_accum, prover_calls) recorded while task is in flight.
+    run_id: str = field(default_factory=run_id_generator)  # The run's identity, stable across the processes that work on it.
+    execution_id: str = ""  # This process's identity within the run; equals run_id when the run is its own single execution.
+    resumed_from: str | None = field(default_factory=resumed_from_env)  # The execution this one resumed, if any.
     _latest_link_by_task: dict[str, str] = field(default_factory=dict, repr=False)  # Maps task_id -> link for the most recent prover run.
     token_usage_by_model: dict[str, TokenTotals] = field(default_factory=dict)  # Maps model_name -> accumulated raw token counts across the whole run.
     _active_tokens_by_task: dict[str, dict[str, TokenTotals]] = field(default_factory=dict, repr=False)  # Maps task_id -> {model_name -> token counts} accumulated while the task is in flight.
+
+    def __post_init__(self) -> None:
+        if not self.execution_id:
+            self.execution_id = execution_id_generator(self.run_id)
 
     def record_phase(
         self,

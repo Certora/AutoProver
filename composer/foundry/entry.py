@@ -88,7 +88,7 @@ class FoundryArgs(ExtendedModelOptions, FoundryRAGDBOptions, Protocol):
 
 
 type FoundryRunner = Callable[
-    [HandlerFactory[FoundryPhase, None]], Awaitable[FoundryPipelineResult],
+    [HandlerFactory[FoundryPhase]], Awaitable[FoundryPipelineResult],
 ]
 
 
@@ -152,7 +152,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
     thread_id = f"foundry_{uuid.uuid4().hex[:12]}"
 
 
-    async def runner(fact: HandlerFactory[FoundryPhase, None]) -> FoundryPipelineResult:
+    async def runner(fact: HandlerFactory[FoundryPhase]) -> FoundryPipelineResult:
         async with (
             cli_pipeline(
                   args=args,

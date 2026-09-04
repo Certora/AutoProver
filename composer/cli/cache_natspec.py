@@ -482,7 +482,7 @@ async def _async_main(args: argparse.Namespace) -> int:
             return 1
 
         try:
-            tags = NatspecRunTags.model_validate(meta.get("tags") or {})
+            tags = NatspecRunTags.model_validate(meta.tags or {})
         except Exception as exc:
             print(
                 f"Error: run {args.run_id} does not look like a natspec run "

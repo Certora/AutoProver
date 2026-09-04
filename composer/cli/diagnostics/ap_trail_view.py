@@ -40,7 +40,7 @@ from composer.io.run_index import (
     list_threads_for_run,
     read_export,
 )
-from composer.io.thread_logging import RunMeta, ThreadMeta
+from composer.io.thread_logging import Run, ThreadMeta
 from composer.io.thread_timeline import TimelineItem, load_timeline
 from composer.ui.thread_renderer import DescendableToolCall, ThreadRenderer
 from composer.workflow.services import checkpointer_context, store_context
@@ -58,7 +58,7 @@ class RunSource(Protocol):
     def run_id(self) -> str: ...
 
     @property
-    def run(self) -> RunMeta: ...
+    def run(self) -> Run: ...
 
     @property
     def threads(self) -> list[tuple[str, ThreadMeta]]:
@@ -75,7 +75,7 @@ class RunSource(Protocol):
 @dataclass
 class LiveRunSource:
     _run_id: str
-    _run: RunMeta
+    _run: Run
     _threads: list[tuple[str, ThreadMeta]]
     _checkpointer: BaseCheckpointSaver
 
@@ -84,7 +84,7 @@ class LiveRunSource:
         return self._run_id
 
     @property
-    def run(self) -> RunMeta:
+    def run(self) -> Run:
         return self._run
 
     @property
@@ -120,8 +120,8 @@ class ReplayRunSource:
         return self._exported.run_id
 
     @property
-    def run(self) -> RunMeta:
-        return self._exported.run
+    def run(self) -> Run:
+        return self._exported.view()
 
     @property
     def threads(self) -> list[tuple[str, ThreadMeta]]:
@@ -217,9 +217,8 @@ class RunExplorerApp(App):
 
     def _fmt_run_subtitle(self) -> str:
         n_threads = len(self._source.threads)
-        end = self._source.run.get("end_time")
-        status = "in-progress" if end is None else "completed"
-        return f"{status}  |  {n_threads} thread(s)"
+        run = self._source.run
+        return f"{run.status}  |  {len(run.executions)} execution(s)  |  {n_threads} thread(s)"
 
     def _fmt_thread_label(self, meta: ThreadMeta) -> str:
         desc = meta.get("description") or "(no description)"

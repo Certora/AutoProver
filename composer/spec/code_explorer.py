@@ -18,7 +18,7 @@ from graphcore.tools.schemas import WithAsyncImplementation, WithInjectedId
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.tool_env import BaseSourceTools, BasicAgentTools
-from composer.spec.util import uniq_thread_id
+from composer.io.context import DurableThread
 from composer.spec.agent_index import AgentIndex, IndexedTool
 from composer.ui.tool_display import tool_display_of, CommonTools
 
@@ -130,7 +130,7 @@ def code_explorer_tool(
                     input=[self.question]
                 ),
                 recursion_limit=recursion_limit,
-                thread_id=uniq_thread_id("code_explorer"),
+                thread_id=DurableThread("code_explorer"),
                 within_tool=self.tool_call_id,
             )
             assert "result" in st
@@ -166,7 +166,7 @@ def indexed_code_explorer_tool(
                 graph=builder_graph,
                 context=None,
                 description=f"Code Explorer: {self.question}",
-                thread_id=uniq_thread_id("code_explorer"),
+                thread_id=DurableThread("code_explorer"),
                 recursion_limit=recursion_limit,
                 input=FlowInput(input=[
                     self.question,

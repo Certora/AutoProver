@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import override
 
 import difflib
 
@@ -8,7 +8,7 @@ from composer.diagnostics.handlers import summarize_update, print_prover_updates
 from composer.diagnostics.stream import ProgressUpdate
 from composer.human.types import HumanInteractionType, ProposalType, QuestionType, RequirementRelaxationType, ExtractionQuestionType
 from composer.ui.prompt import prompt_input
-from composer.io.protocol import WorkflowPurpose
+from composer.io.protocol import HumanInteractionBridge, WorkflowPurpose
 from composer.core.state import ResultStateSchema, AIComposerState
 
 
@@ -36,7 +36,9 @@ class BaseConsoleHandler[H, P]:
         print("=" * 80)
 
 
-class ConsoleHandler(BaseConsoleHandler[HumanInteractionType, ProgressUpdate]):
+class ConsoleHandler(
+    HumanInteractionBridge[HumanInteractionType], BaseConsoleHandler[HumanInteractionType, ProgressUpdate]
+):
     def __init__(self, capture_prover_output: bool = False):
         self._capture_prover_output = capture_prover_output
 
@@ -57,7 +59,7 @@ class ConsoleHandler(BaseConsoleHandler[HumanInteractionType, ProgressUpdate]):
             return
         print_prover_updates(upd)
 
-    def handle_proposal_interrupt(self, interrupt_ty: ProposalType, debug_thunk: Callable[[], None]) -> str:
+    def handle_proposal_interrupt(self, interrupt_ty: ProposalType) -> str:
         self._print_header("SPEC CHANGE PROPOSAL")
         orig = interrupt_ty["current_spec"].splitlines(keepends=True)
         proposed = interrupt_ty["proposed_spec"].splitlines(keepends=True)
@@ -96,17 +98,17 @@ class ConsoleHandler(BaseConsoleHandler[HumanInteractionType, ProgressUpdate]):
                 return "Response must begin with ACCEPTED/REJECTED/REFINE"
             return None
 
-        return prompt_input("Response to proposal, must start with ACCEPTED/REJECTED/REFINE", debug_thunk, filt)
+        return prompt_input("Response to proposal, must start with ACCEPTED/REJECTED/REFINE", filt)
 
-    def handle_question_interrupt(self, interrupt_data: QuestionType, debug_thunk: Callable[[], None]) -> str:
+    def handle_question_interrupt(self, interrupt_data: QuestionType) -> str:
         self._print_header("HUMAN ASSISTANCE REQUESTED")
         print(f"Question: {interrupt_data['question']}")
         print(f"Context: {interrupt_data['context']}")
         if interrupt_data["code"]:
             print(f"Code:\n{interrupt_data['code']}")
-        return prompt_input("Enter your answer (begin response with FOLLOWUP to request clarification)", debug_thunk)
+        return prompt_input("Enter your answer (begin response with FOLLOWUP to request clarification)")
 
-    def handle_req_relaxation_interrupt(self, interrupt: RequirementRelaxationType, debug_thunk: Callable[[], None]) -> str:
+    def handle_req_relaxation_interrupt(self, interrupt: RequirementRelaxationType) -> str:
         self._print_header("REQUIREMENTS SKIP REQUEST")
         print("The agent would like to skip satisfying one of the requirements")
         print(f"Context:\n{interrupt['context']}")
@@ -117,28 +119,25 @@ class ConsoleHandler(BaseConsoleHandler[HumanInteractionType, ProgressUpdate]):
             if not r.startswith("ACCEPTED") and not r.startswith("REJECTED"):
                 return "Response must begin with ACCEPTED/REJECTED"
             return None
-        return prompt_input("Response to request, must start with ACCEPTED/REJECTED", debug_thunk, filt)
+        return prompt_input("Response to request, must start with ACCEPTED/REJECTED", filt)
 
-    def handle_extraction_question(self, interrupt: ExtractionQuestionType, debug_thunk: Callable[[], None]) -> str:
+    def handle_extraction_question(self, interrupt: ExtractionQuestionType) -> str:
         self._print_header("HUMAN ASSISTANCE REQUESTED")
         print(f"Context:\n{interrupt['context']}")
         print(f"Question: {interrupt['question']}")
-        return prompt_input("Enter your response", debug_thunk)
+        return prompt_input("Enter your response")
 
-    async def human_interaction(
-        self,
-        ty: HumanInteractionType,
-        debug_thunk: Callable[[], None]
-    ) -> str:
+    @override
+    async def human_interaction(self, ty: HumanInteractionType) -> str:
         match ty["type"]:
             case "proposal":
-                return self.handle_proposal_interrupt(ty, debug_thunk)
+                return self.handle_proposal_interrupt(ty)
             case "question":
-                return self.handle_question_interrupt(ty, debug_thunk)
+                return self.handle_question_interrupt(ty)
             case "req_relaxation":
-                return self.handle_req_relaxation_interrupt(ty, debug_thunk)
+                return self.handle_req_relaxation_interrupt(ty)
             case "extraction_question":
-                return self.handle_extraction_question(ty, debug_thunk)
+                return self.handle_extraction_question(ty)
 
     async def output(
         self,

@@ -44,7 +44,8 @@ from composer.core.state import AIComposerState
 from composer.input.files import Document
 from composer.kb.kb_context import with_cvl_context
 from composer.spec.graph_builder import bind_standard, run_to_completion
-from composer.spec.util import uniq_thread_id, string_hash
+from composer.spec.util import string_hash
+from composer.io.context import DurableThread
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 from composer.ui.tool_display import tool_display
 from composer.prover.report_store import ReportStore
@@ -203,7 +204,7 @@ def summary_critic_tool(
             inp = _CritiqueInput(input=input_parts, did_read=False, memory=None, vfs=self.state["vfs"])
             st = await run_to_completion(
                 graph, inp,
-                thread_id=uniq_thread_id("summary-critic"),
+                thread_id=DurableThread("summary-critic"),
                 recursion_limit=recursion_limit,
                 description="Summary critic",
                 within_tool=self.tool_call_id,
@@ -422,7 +423,7 @@ class CEXRemediator(
             )
             st = await run_to_completion(
                 graph, inp,
-                thread_id=uniq_thread_id("cex-remediation"),
+                thread_id=DurableThread("cex-remediation"),
                 description="CEX Remediation Agent",
                 within_tool=self.tool_call_id,
                 recursion_limit=deps.recursion_limit,

@@ -2,7 +2,7 @@ import asyncio
 import traceback
 from abc import abstractmethod
 from collections.abc import Coroutine
-from typing import Callable
+from typing import Callable, override
 
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
@@ -12,12 +12,13 @@ from textual.validation import Validator
 
 from rich.text import Text
 
+from composer.io.protocol import HumanInteractionBridge
 from composer.ui.log_screen import LogViewerMixin
 from composer.ui.tool_display import ToolDisplayConfig
 from composer.ui.message_renderer import MessageRenderer, TokenStats, dot, KNOWN_NODES
 
 
-class BaseRichConsoleApp[H, P](LogViewerMixin, App):
+class BaseRichConsoleApp[H, P](HumanInteractionBridge[H], LogViewerMixin, App):
     """Base Textual TUI for workflow IO, parameterized by human interaction (H) and progress (P) types."""
 
     CSS = """
@@ -168,11 +169,8 @@ class BaseRichConsoleApp[H, P](LogViewerMixin, App):
         target = self._get_mount_target(path)
         await self.render_progress(target, path, upd)
 
-    async def human_interaction(
-        self,
-        ty: H,
-        debug_thunk: Callable[[], None]
-    ) -> str:
+    @override
+    async def human_interaction(self, ty: H) -> str:
         await self._mounted.wait()
         target = self.query_one("#event-log", VerticalScroll)
 

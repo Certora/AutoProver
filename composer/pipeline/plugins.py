@@ -68,7 +68,7 @@ class DisplayStrings(tuple[str, str]):
 @dataclass
 class PluginPhaseRunner[P: enum.Enum, U: FeatureUnit]:
     plugin: PipelinePlugin[U]
-    _run: PipelineRun[P, Any]
+    _run: PipelineRun[P]
     _phase: P
     _sub_phase: DisplayStrings
     plugin_id: str
@@ -145,7 +145,7 @@ class PluginManager[P: enum.Enum, U: FeatureUnit]:
     """The plugins that apply to this run, already narrowed to ones whose hooks accept ``U``."""
 
     _plugins: dict[str, PipelinePlugin[U]]
-    _run: PipelineRun[P, Any]
+    _run: PipelineRun[P]
 
     @cached_property
     def plugin_digest(self) -> None | str:
@@ -193,7 +193,7 @@ class PluginPhaseManager[P: enum.Enum, U: FeatureUnit](PluginManager[P, U]):
 
 @asynccontextmanager
 async def load_plugins[P: enum.Enum, U: FeatureUnit](
-    run: PipelineRun[P, Never], unit_type: type[U]
+    run: PipelineRun[P], unit_type: type[U]
 ) -> AsyncIterator[PluginManager[P, U]]:
     """Initialize the installed plugins that apply to a run over ``unit_type``.
 

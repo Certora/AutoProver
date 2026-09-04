@@ -31,7 +31,7 @@ from composer.spec.context import WorkflowContext, CVLGeneration, CacheKey, Edit
 from composer.spec.system_model import SolidityIdentifier
 from composer.spec.service_host import ServiceHost
 from composer.spec.graph_builder import run_to_completion, bind_standard
-from composer.spec.util import uniq_thread_id
+from composer.io.context import DurableThread
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 
 class MungerStateExtra(VFSState):
@@ -267,7 +267,7 @@ def munge_feedback_judge(
         res = await run_to_completion(
             workflow,
             MungeFeedbackInput(input=review, vfs=vfs, memory=None, did_read=False),
-            thread_id=uniq_thread_id("munge-feedback"),
+            thread_id=DurableThread("munge-feedback"),
             recursion_limit=ctx.recursion_limit,
             description="Editor feedback judge",
             within_tool=within_tool,
@@ -488,7 +488,7 @@ def editor_tool(
             input=inp,
             recursion_limit=ctx.recursion_limit,
             within_tool=tid,
-            thread_id=uniq_thread_id("code-editor")
+            thread_id=DurableThread("code-editor")
         )
     
     return EditMungeTool.bind(MungeToolDeps(

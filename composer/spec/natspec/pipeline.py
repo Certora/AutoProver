@@ -166,7 +166,7 @@ class ContractResult:
 @dataclass
 class PipelineServices:
     sem: asyncio.Semaphore
-    factory: HandlerFactory[Phase, None]
+    factory: HandlerFactory[Phase]
     env: ServiceHost
     mental_model: MentalModel
     file_registry: FileRegistry
@@ -412,7 +412,7 @@ async def run_natspec_pipeline[A: NatspecApplication, I: InterfaceDeclModel, S: 
     start_env: PureServiceHost,
     ctx: WorkflowContext[None],
     store: BaseStore,
-    handler_factory: HandlerFactory[Phase, None],
+    handler_factory: HandlerFactory[Phase],
     mental_model: MentalModel[A, I, S],
     source_factory: ToolGenerator,
     *,

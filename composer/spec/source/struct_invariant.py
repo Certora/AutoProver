@@ -26,7 +26,7 @@ from composer.spec.context import WorkflowContext, SourceFields, SourceCode, Cac
 from composer.spec.service_host import ServiceHost
 from composer.spec.system_model import HarnessedApplication
 from composer.spec.gen_types import TypedTemplate
-from composer.spec.util import uniq_thread_id
+from composer.io.context import DurableThread
 from composer.ui.tool_display import tool_display
 
 
@@ -178,7 +178,7 @@ async def get_invariant_formulation(
                         memory=None,
                         did_read=False,
                     ),
-                    thread_id=uniq_thread_id("invariant-judge"),
+                    thread_id=DurableThread("invariant-judge"),
                     recursion_limit=judge_ctx.recursion_limit,
                     description=f"Invariant feedback: {self.inv.name}",
                     within_tool=self.tool_call_id,

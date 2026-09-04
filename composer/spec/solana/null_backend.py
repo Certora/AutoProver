@@ -150,8 +150,8 @@ class NullSolanaPrepared(PreparedSystem[NullResult, SolanaComponentInstance, Sol
 
 @dataclass
 class NullSolanaBackend:
-    """``PipelineBackend[SolanaPhase, NullResult, None, NullArtifact, SolanaComponentInstance,
-    SolanaProgramInstance, SolanaApplication, None]`` (P, FormT, H, A, Unit, Main, App, Pre) — structural."""
+    """``PipelineBackend[SolanaPhase, NullResult, NullArtifact, SolanaComponentInstance,
+    SolanaProgramInstance, SolanaApplication, None]`` (P, FormT, A, Unit, Main, App, Pre) — structural."""
 
     artifact_store: NullSolanaArtifactStore
     backend_guidance = SOLANA_NULL_GUIDANCE
@@ -165,12 +165,12 @@ class NullSolanaBackend:
         }
     )
 
-    async def preflight(self, run: PipelineRun[SolanaPhase, None]) -> None:
+    async def preflight(self, run: PipelineRun[SolanaPhase]) -> None:
         """Nothing to prepare — this backend builds nothing and only records properties."""
         return None
 
     async def prepare_system(
-        self, analyzed: SolanaApplication, run: PipelineRun[SolanaPhase, None], preflight: None
+        self, analyzed: SolanaApplication, run: PipelineRun[SolanaPhase], preflight: None
     ) -> PreparedSystem[NullResult, SolanaComponentInstance, SolanaProgramInstance]:
         # Use the Solana ecosystem's locate_main so the backend and ecosystem agree on the
         # target program (imported lazily to avoid an import cycle with pipeline.ecosystem).

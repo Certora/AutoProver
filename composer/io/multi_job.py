@@ -8,7 +8,7 @@ import inspect
 
 
 from dataclasses import dataclass
-from composer.io.protocol import IOHandler
+from composer.io.protocol import IOHandler, InterruptHandler
 from composer.io.context import with_handler
 from composer.io.event_handler import EventHandler
 from composer.io.conversation import ConversationContextProvider
@@ -33,29 +33,33 @@ class TaskInfo[P: HasName]:
 
 
 @dataclass(frozen=True)
-class TaskHandle[H]:
-    """Bundles an IOHandler with lifecycle callbacks."""
-    handler: IOHandler[H]
+class TaskHandle:
+    """Bundles a task's output handler, input handler, and lifecycle callbacks.
+    A UI that is both output and input is passed as both; a headless run pairs
+    its console output with a mailbox, wrapped by ``observed`` so the mailbox
+    sees the output events it acks on."""
+    handler: IOHandler
+    interrupt_handler: InterruptHandler
     event_handler: EventHandler
     conversation_provider: ConversationContextProvider
     on_error: Callable[[Exception, str], Awaitable[None]]
     on_start: Callable[[], None] = lambda: None
     on_done: Callable[[], None] = lambda: None
 
-class HandlerFactory[P: HasName, H](Protocol):
+class HandlerFactory[P: HasName](Protocol):
     def __call__(
         self,
         /,
         info: TaskInfo[P]
-    ) -> Awaitable[TaskHandle[H]]:
+    ) -> Awaitable[TaskHandle]:
         ...
 
 
 @dataclass(frozen=True)
-class TaskRunner[P: HasName, H]:
+class TaskRunner[P: HasName]:
     """A curried version of ``run_task`` with the handler
      factory and concurrency gate."""
-    factory: HandlerFactory[P, H]
+    factory: HandlerFactory[P]
     semaphore: asyncio.Semaphore | None = None
 
     async def run[T](
@@ -81,8 +85,8 @@ async def maybe_semaphore(
 
 type TaskCallable[T] = Callable[[], Awaitable[T]] | Callable[[ConversationContextProvider], Awaitable[T]]
 
-async def run_task[P: HasName, T, H](
-    factory: HandlerFactory[P, H],
+async def run_task[P: HasName, T](
+    factory: HandlerFactory[P],
     info: TaskInfo[P],
     fn: TaskCallable[T],
     semaphore: asyncio.Semaphore | None = None,
@@ -91,7 +95,6 @@ async def run_task[P: HasName, T, H](
 
     P - Type of phase markers
     T - return type of the task
-    H - Type of human interaction request (routed through the handler from factory)
 
     Manages lifecycle callbacks (on_start/on_done/on_error).  If
     *semaphore* is provided, the task waits for acquisition before
@@ -117,7 +120,7 @@ async def run_task[P: HasName, T, H](
                     f"task running: phase={phase_name} task_id={info.task_id} "
                     f"queue_wait={t_running - t_request:.2f}s"
                 )
-                async with with_handler(handle.handler, handle.event_handler):
+                async with with_handler(handle.handler, handle.event_handler, handle.interrupt_handler):
                     result = await inv()
         except Exception as exc:
             await handle.on_error(exc, traceback.format_exc())

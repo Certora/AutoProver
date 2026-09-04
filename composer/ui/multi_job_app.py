@@ -16,7 +16,7 @@ import asyncio
 import enum
 from collections.abc import Callable, Coroutine
 from contextlib import asynccontextmanager, AbstractAsyncContextManager
-from typing import Any, Protocol, AsyncIterator
+from typing import Any, Protocol, AsyncIterator, override
 import asyncio
 
 from textual.app import App, ComposeResult
@@ -46,6 +46,7 @@ from composer.io.conversation import (
 )
 from composer.io.stream import AsyncDataQueue, ManagedQueue, managed_streamer, EndConversation, Checkpoint
 from composer.io.multi_job import HasName, TaskHandle, TaskInfo
+from composer.io.protocol import HumanInteractionBridge
 
 
 # ---------------------------------------------------------------------------
@@ -333,8 +334,8 @@ class TaskHost(Protocol):
 # MultiJobTaskHandler — per-task IOHandler
 # ---------------------------------------------------------------------------
 
-class MultiJobTaskHandler[H]:
-    """Per-task ``IOHandler[H]`` that renders LLM messages, handles
+class MultiJobTaskHandler[H](HumanInteractionBridge[H]):
+    """Per-task ``IOHandler`` that renders LLM messages, handles
     HITL input, and manages task status.
 
     ``H`` is the human-interaction schema type.
@@ -481,11 +482,8 @@ class MultiJobTaskHandler[H]:
                 await self._renderer.render_messages(target, v["messages"])
             await self.on_node_state(path, node_name, v)
 
-    async def human_interaction(
-        self,
-        ty: H,
-        debug_thunk: Callable[[], None],
-    ) -> str:
+    @override
+    async def human_interaction(self, ty: H) -> str:
         self._set_status(TaskStatus.WAITING_HITL)
 
         prompt_parts = self.format_hitl_prompt(ty)
@@ -689,7 +687,7 @@ class MultiJobApp[P: HasName, T: MultiJobTaskHandler](LogViewerMixin, FileConten
 
     # ── HandlerFactory implementation ─────────────────────────
 
-    async def make_handler(self, info: TaskInfo[P]) -> TaskHandle[Any]:
+    async def make_handler(self, info: TaskInfo[P]) -> TaskHandle:
         """Create per-task panel, handler, summary row, and return a ``TaskHandle``."""
         task_id = info.task_id
         label = info.label
@@ -719,6 +717,7 @@ class MultiJobApp[P: HasName, T: MultiJobTaskHandler](LogViewerMixin, FileConten
 
         return TaskHandle(
             handler=handler,
+            interrupt_handler=handler,
             event_handler=event_handler,
             on_start=handler.mark_running,
             on_done=handler.mark_done,

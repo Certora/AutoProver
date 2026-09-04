@@ -28,7 +28,7 @@ from composer.io.conversation import (
     ConversationClient, AIYapping, ToolComplete, ToolBatch, ThinkingStart,
     StateUpdate
 )
-from composer.io.protocol import IOHandler
+from composer.io.protocol import IOHandler, RefuseInterrupts
 from composer.io.event_handler import NullEventHandler
 from composer.io.context import with_handler
 
@@ -152,7 +152,7 @@ async def refinement_loop[T](
 
     tid = uniq_thread_id("refinement_conversation")
 
-    class NullHandler(IOHandler[Never]):
+    class NullHandler(IOHandler):
         async def log_checkpoint_id(self, *, path: list[str], checkpoint_id: str):
             pass
 
@@ -162,15 +162,12 @@ async def refinement_loop[T](
         async def log_state_update(self, path: list[str], st: dict):
             pass
 
-        async def human_interaction(self, ty: Never, debug_thunk: Callable[[], None]) -> str:
-            raise RuntimeError("This should never be called")
-        
         async def log_start(self, *, path: list[str], description: str, tool_id: str | None):
             pass
     curr_state = init_data
     graph_input : ConversationState[T] | Command | None = init_state
     async with with_handler(
-        NullHandler(), NullEventHandler()
+        NullHandler(), NullEventHandler(), RefuseInterrupts()
     ):
         while graph_input:
             human_question : str | None | Literal[False] = False

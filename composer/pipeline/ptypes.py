@@ -7,6 +7,7 @@ from typing import Protocol, Callable, Awaitable, TypedDict
 
 from pydantic import BaseModel
 
+from composer.io.context import GraphSuspended
 from composer.io.multi_job import HandlerFactory, TaskInfo, run_task, ConversationContextProvider
 from composer.spec.context import (
     WorkflowContext, SourceCode, SourceFields
@@ -37,10 +38,10 @@ DEFAULT_MAX_CPU_TASKS = 2
 
 
 @dataclass
-class TaskRunnerHost[P: enum.Enum, H, S: SourceFields, C]:
+class TaskRunnerHost[P: enum.Enum, S: SourceFields, C]:
     ctx: WorkflowContext[C]
     source: S
-    _handler_factory: HandlerFactory[P, H]
+    _handler_factory: HandlerFactory[P]
     _agent_semaphore: asyncio.Semaphore
     _cpu_semaphore: asyncio.Semaphore
 
@@ -79,7 +80,7 @@ class TaskRunnerHost[P: enum.Enum, H, S: SourceFields, C]:
 
 # ---- run-scoped shared infra, handed to every hook ---------------------------
 @dataclass
-class PipelineRun[P: enum.Enum, H](TaskRunnerHost[P, H, SourceCode, None]):
+class PipelineRun[P: enum.Enum](TaskRunnerHost[P, SourceCode, None]):
     env: ServiceHost
 
 
@@ -165,9 +166,20 @@ class Delivered[FormT: BackendResult]:
     def run_link(self) -> str | None:
         return self.result.output_link
 
+@dataclass(frozen=True)
+class AwaitingInput:
+    """The component's formalization is parked on questions this process could not
+    answer. Not a failure: a later execution of the run resumes it where it stopped."""
+    suspended: GraphSuspended
+
+    @property
+    def n_questions(self) -> int:
+        return len(self.suspended.interrupts)
+
+
 @dataclass
 class ComponentOutcome[FormT: BackendResult, U: FeatureUnit](BackendJob[U]):
-    result: Delivered[FormT] | GaveUp | BaseException | Curtailed[Delivered[FormT]]
+    result: Delivered[FormT] | GaveUp | BaseException | Curtailed[Delivered[FormT]] | AwaitingInput
     #: Verification artifacts the batch's plugin tools registered, already
     #: persisted by the artifact store. Independent of ``result``: a component
     #: that gave up may still have produced artifacts worth reporting.
@@ -181,6 +193,9 @@ class CorePipelineResult[FormT: BackendResult]:
     n_properties: int
     outcomes: list[ComponentOutcome[FormT, FeatureUnit]]
     failures: list[str]
+    #: Components parked on questions for a person, one line each. They are neither
+    #: delivered nor failed: the run is unfinished and a later execution picks them up.
+    awaiting_input: list[str] = field(default_factory=list)
 
     @property
     def n_delivered(self) -> int:
@@ -190,12 +205,18 @@ class CorePipelineResult[FormT: BackendResult]:
         return sum(1 for o in self.outcomes if isinstance(o.result, Delivered))
 
     @property
+    def unfinished(self) -> bool:
+        """At least one component is awaiting input: the run must be resumed, not judged."""
+        return bool(self.awaiting_input)
+
+    @property
     def all_failed(self) -> bool:
         """Every attempted component ended without a reliable deliverable (gave up, crashed, or
-        was budget-curtailed) — the run is a total failure. Guarded on a non-empty outcome set so
+        was budget-curtailed) — the run is a total failure. A component awaiting input has not
+        ended, so a run with one is never a total failure. Guarded on a non-empty outcome set so
         "all of nothing" is never reported as failure (the driver raises before returning in the
         no-outcomes case anyway)."""
-        return bool(self.outcomes) and self.n_delivered == 0
+        return bool(self.outcomes) and self.n_delivered == 0 and not self.unfinished
 
 class PhaseBudget(TypedDict):
     """Per-phase spending *caps* (USD). Ceilings, not allotments: they bound

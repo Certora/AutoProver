@@ -24,7 +24,7 @@ from composer.workflow.services import checkpointer_context
 from composer.tools.search import cvl_manual_tools
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 from composer.templates.loader import load_jinja_template
-from composer.io.protocol import IOHandler
+from composer.io.protocol import IOHandler, InterruptHandler
 from composer.io.context import with_handler, run_to_completion
 from composer.io.event_handler import NullEventHandler
 from composer.ui.tool_display import tool_display
@@ -116,6 +116,7 @@ initial_prompt = load_jinja_template("req_extraction_prompt.j2")
 
 async def get_requirements(
     io: IOHandler,
+    interrupts: InterruptHandler,
     options: RAGDBOptions,
     llm: BaseChatModel,
     sys_doc: Document,
@@ -173,7 +174,7 @@ async def get_requirements(
 
         graph_input = ExtractionInput(input=input_text, memory=None, did_read=False)
 
-        async with with_handler(io, NullEventHandler()):  # type: ignore[arg-type]
+        async with with_handler(io, NullEventHandler(), interrupts):
             with set_current_task_id(REQUIREMENTS_TASK_ID):
                 final_state = await run_to_completion(
                     built,

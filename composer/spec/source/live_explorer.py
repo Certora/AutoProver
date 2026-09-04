@@ -24,8 +24,8 @@ from composer.spec.code_explorer import (
 )
 
 from composer.spec.context import SourceCode, user_data_ns
-from composer.spec.util import uniq_thread_id
 from composer.spec.graph_builder import run_to_completion
+from composer.io.context import DurableThread
 
 
 
@@ -192,7 +192,7 @@ def setup_live_edits(
             context=None,
             description="Code Explorer",
             recursion_limit=recursion_limit,
-            thread_id=uniq_thread_id("code-explorer"),
+            thread_id=DurableThread("code-explorer"),
             within_tool=tool_call_id
         )
         assert "result" in res

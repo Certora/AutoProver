@@ -295,6 +295,8 @@ async def rust_entry_point(
             },
             default_logging_ns(uid=None),
             run_id=summary.run_id,
+            execution_id=summary.execution_id,
+            resumed_from=summary.resumed_from,
         ),
     ):
         model_provider = ModelProvider(

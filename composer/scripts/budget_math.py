@@ -264,7 +264,7 @@ def build_matrix(
     lines: list[str] = [
         f"# Budget test matrix — calibrated from run `{run.run_id}`",
         "",
-        f"Source window: {run.run['start_time']} .. {run.run['end_time']}  ",
+        f"Source window: {run.view().start_time} .. {run.view().end_time}  ",
         f"Models: {', '.join(map(str, models))}  ",
         f"Observed live LLM spend (1h cache-write bound): **${run_total:.2f}**  ",
         f"Warn threshold θ = {theta} (warn at θ·cap; hard stop is cooperative, at cost > cap)",
@@ -370,8 +370,9 @@ def build_matrix(
 # ---------------------------------------------------------------------------
 
 def _print_analysis(run: ExportedRun, roots: list[Root]) -> None:
-    print(f"run {run.run_id}  ({run.run['start_time']} .. {run.run['end_time']})")
-    print(f"tags: {run.run['tags']}\n")
+    view = run.view()
+    print(f"run {run.run_id}  ({view.start_time} .. {view.end_time}; {len(view.executions)} execution(s))")
+    print(f"tags: {view.tags}\n")
 
     hdr = (f"{'root (sub-agents folded)':52} {'phase':26} {'calls':>5} "
            f"{'$5m':>8} {'$1h':>8}")

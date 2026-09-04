@@ -26,7 +26,7 @@ from composer.diagnostics.budget import BudgetPressureAbort, pressure_abort_moni
 from composer.spec.context import WorkflowContext
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.service_host import ServiceHost, Sort
-from composer.spec.util import uniq_thread_id
+from composer.io.context import DurableThread
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 
 
@@ -238,7 +238,7 @@ def build_feedback_judge_generic[R: RebuttalBase, S: JudgeState, I: JudgeInput, 
                     JudgeInput(input=parts, curr_spec=spec, memory=None, did_read=False),
                     exec_ctx,
                 ),
-                thread_id=uniq_thread_id(thread_prefix),
+                thread_id=DurableThread(thread_prefix),
                 recursion_limit=ctx.recursion_limit,
                 description=description,
                 within_tool=within_tool,

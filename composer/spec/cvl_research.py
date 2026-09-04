@@ -18,6 +18,7 @@ from composer.tools.thinking import get_rough_draft_tools, RoughDraftState
 from composer.kb.kb_context import with_cvl_context
 from composer.spec.tool_env import BaseRAGTools
 from composer.spec.util import uniq_thread_id
+from composer.io.context import DurableThread
 from composer.spec.agent_index import AgentIndex, IndexedTool
 from composer.spec.gen_types import TypedTemplate
 from composer.ui.tool_display import tool_display_of, CommonTools
@@ -157,9 +158,17 @@ def cvl_research_tool(
         inp: _CVLResearchInput,
         within_tool: str | None,
     ) -> _CVLResearchST:
+        if within_tool is None:
+            # A top-level invocation has no tool call to anchor a durable thread on.
+            return await run_to_completion(
+                graph, inp,
+                thread_id=uniq_thread_id("cvl-research"),
+                description="CVL research",
+                recursion_limit=recursion_limit,
+            )
         return await run_to_completion(
             graph, inp,
-            thread_id=uniq_thread_id("cvl-research"),
+            thread_id=DurableThread("cvl-research"),
             description="CVL research",
             recursion_limit=recursion_limit,
             within_tool=within_tool,
@@ -190,7 +199,7 @@ def indexed_cvl_research_tool(
                 graph = graph,
                 context=None,
                 description="CVL Researcher",
-                thread_id=uniq_thread_id("cvl-research"),
+                thread_id=DurableThread("cvl-research"),
                 recursion_limit=recursion_limit,
                 input=_CVLResearchInput(input=[
                     self.question,
