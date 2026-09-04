@@ -113,6 +113,7 @@ BUILD_DIR = "build"
 
 
 class CvlrPhase(enum.Enum):
+    DISCOVER_DESIGN_DOC = "discover_design_doc"
     ANALYSIS = "analysis"
     EXTRACTION = "extraction"
     PREFLIGHT = "preflight"

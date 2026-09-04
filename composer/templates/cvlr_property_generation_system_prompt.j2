@@ -58,8 +58,11 @@ that fails with nothing logged tells you that something is wrong and nothing abo
 then spend a prover run — minutes — learning what one `clog!` would have told you. This is the single
 highest-return habit on this backend.
 
-If a type you assert over has no `CvlrLog` implementation, add one in `certora/log.rs` rather than
-formatting it by hand.
+If a type you assert over has no `CvlrLog` implementation, write one **in your own harness module**
+rather than formatting it by hand. `put_harness` replaces that module and nothing else: the sibling
+files the scaffold created (`log.rs`, `nondet.rs`, `mocks/`) exist for a human continuing this work
+by hand, and you have no tool that writes them — do not try. A trait impl may live anywhere in the
+crate as long as the *type* is this crate's own, which is true of everything you assert over here.
 
 ## Tools
 
@@ -127,6 +130,26 @@ the universal quantifier.
 
 For account inputs, `cvlr-solana` provides the nondet account machinery; read its source for the
 current spelling rather than guessing, since it has changed across releases.
+
+**An enum input needs an impl, not a literal.** `nondet()` covers the scalars, and a struct you can
+build field by field — but there is no way to write "some variant of this enum" inline. Implement
+the trait in your harness module and dispatch on a nondet discriminant:
+
+```rust
+impl cvlr::nondet::Nondet for FeeType {
+    fn nondet() -> Self {
+        match nondet::<u64>() {
+            0 => Self::SolReferral(nondet()),
+            1 => Self::Epoch(nondet()),
+            _ => Self::SolWithdrawal(nondet()),
+        }
+    }
+}
+```
+
+The catch-all arm is the part that matters. A `match` whose every arm names a discriminant leaves
+the remaining values unmapped, and the rule then quantifies over only the variants you listed —
+which reads as a proof about the enum and is a proof about a subset of it.
 
 ## Loops are bounded, and the bound is not assumed away
 

@@ -15,6 +15,9 @@ from pathlib import Path
 
 import pytest
 
+from composer.layout import INTERNAL_DIR
+from composer.sandbox.recipes import SANDBOX_CARGO_DIR
+
 from composer.spec.cvlr.harness import CvlrArtifactStore, HarnessModule
 from composer.spec.cvlr.munge import EarlyPanic, FunctionMunge, MockFn
 from composer.spec.cvlr.scaffold import declare_unit_features
@@ -232,13 +235,13 @@ def test_a_munge_of_something_that_is_not_project_source_is_refused(tmp_path: Pa
     checkpoint. Confinement puts `CARGO_HOME` inside the tree, so containment alone would let a
     replay rewrite a dependency for every crate in the graph."""
     tree = _tree(tmp_path)
-    dependency = ".sandbox_cargo/registry/src/idx/anchor-lang-0.31.1/src/error.rs"
+    dependency = str(SANDBOX_CARGO_DIR / "registry/src/idx/anchor-lang-0.31.1/src/error.rs")
     munge = FunctionMunge(
         path=dependency, function="f", kind=EarlyPanic(), why="w", feature="unit_a"
     )
     result = tree.reconcile("a", _edits(tree, "a", "//\n", munge))
     assert not result
-    assert ".sandbox_cargo" in result.drifted[0].describe()
+    assert INTERNAL_DIR.name in result.drifted[0].describe()
 
 
 # ---------------------------------------------------------------------------------------------
