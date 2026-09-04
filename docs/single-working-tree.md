@@ -11,6 +11,14 @@
 > **Built.** §6 is done and §8's three cheap checks pass; what each turned out to be is recorded
 > where it happened. The two that need the SBF toolchain and a real run are still open, and §8 says
 > which.
+>
+> **The tree is now a graphcore VFS, and this document's *implementation* half is superseded**
+> ([the-tree-is-a-vfs.md](the-tree-is-a-vfs.md)). What that changed is how the one tree is
+> materialized and read — §6 items 1 and 2 and the first finding under it — and nothing about the
+> claim: it is still one tree for the run, still one cargo feature per unit gating the spec modules,
+> still one build permit. That document's §5 lists those three as properties that "carry over
+> unchanged from the current design and must not be lost", so this is where the argument for them
+> still lives. §2, §3, §4, §7, §8 and §9 stand as written.
 
 ---
 
@@ -309,6 +317,14 @@ insistence that the manifest and `specs/mod.rs` are written once, up front, by a
 
 Every item landed. Where the shape differed from what was planned, the row says so.
 
+> **Items 1 and 2 have since been replaced rather than revised.** Both describe `SharedTree`
+> reimplementing what a VFS materializer does — a bulk copy, content-compared writes, a manifest of
+> what it derived — and that half is now graphcore's
+> ([the-tree-is-a-vfs.md](the-tree-is-a-vfs.md) §7 step 3). What survives from item 1 is the
+> *property* it was after, reconcile-always-from-pristine, which the materializer's restore-from-base
+> rule provides; and from item 2, drift being put in front of the author rather than logged. Items
+> 3–8 are untouched.
+
 | # | Change | Where |
 |---|---|---|
 | 1 | Reconcile always from pristine. `_copy_workspace`'s `if dest.exists(): return` is gone; `SharedTree.reconcile` rebuilds each derived file from the pristine copy and replays, so a munge dropped from state disappears from disk | [tree.py](../composer/spec/cvlr/tree.py), [verify.py](../composer/spec/cvlr/verify.py) |
@@ -330,10 +346,17 @@ stays unowned by the run — nothing in the loop writes an inlining directive, s
 
 **A file whose last munge is dropped has nothing in state naming it.** Rebuilding "every munged
 file" from the current munge set restores nothing when that set has just become empty — which is
-exactly when restoring matters. The tree therefore records the files it has derived, in a
-`.cvlr-derived.json` at its root, so a later session can restore a file the session that munged it
-never got to unmunge. It is a hint and never a source of truth: a corrupt or absent note costs one
-redundant restore-and-replay that the content comparison then declines to write.
+exactly when restoring matters. The tree therefore recorded the files it had derived, in a
+`.cvlr-derived.json` at its root, so a later session could restore a file the session that munged it
+never got to unmunge — a hint and never a source of truth, so a corrupt or absent note cost one
+redundant restore-and-replay that the content comparison then declined to write.
+
+**Since removed, and the finding is why it can be.** The tree is now a graphcore VFS base plus one
+overlay ([the-tree-is-a-vfs.md](the-tree-is-a-vfs.md)), and the materializer's own manifest together
+with its restore-from-base rule answer exactly this question without the tree remembering anything.
+The *problem* stated above is the reason the base/overlay split is load-bearing rather than a flat
+stack: a path an overlay stops serving has two possible answers here — a dropped munge must restore
+the developer's file, a departed unit's draft must disappear — and only the base can tell them apart.
 
 **Replay order had to stop depending on scheduling.** Two munges of one function each insert a line
 above its signature, so the order decides the file's bytes — and bytes that depended on which unit

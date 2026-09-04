@@ -21,6 +21,13 @@
 > been settled the other way and built — program source has one owner, a munge editor agent with a
 > reviewer of its own ([who-edits-the-program.md](who-edits-the-program.md) §9) — and §4's charter
 > stands except for its count of the vocabulary; see the note there.
+>
+> **And the title's premise is retired: the two working copies have converged.** CVLR's tree is now a
+> graphcore VFS — the same instrument EVM uses, base plus overlay, materialized incrementally into a
+> persistent directory ([the-tree-is-a-vfs.md](the-tree-is-a-vfs.md)). So §1–§3's finding that these
+> are "two answers with almost nothing in common" describes a state that no longer exists, and §1.3's
+> table has flipped on the CVLR side row by row. What remains genuinely different is *agent
+> topology*, which is §6 — and that was already the answer §6 reached by a different route.
 
 **This document is a snapshot of reasoning, not a conclusion.** Every measurement in it was taken
 while the CVLR backend still had a blocking prover defect ([upstream-defects.md](upstream-defects.md)
@@ -93,9 +100,13 @@ tree is otherwise deleted before anyone can look at it.
 
 ### 1.2 CVLR — a physical copy per unit, edited in place
 
-> **Superseded.** One copy per *run* now, at `<project>/.cvlr_work/build/`, and edits are no longer
-> "in place": every file the run derives is rewritten from checkpointed state on every stage, which
-> is what makes the tree disposable. See [single-working-tree.md](single-working-tree.md) §4.
+> **Superseded twice.** One copy per *run* now, at `<project>/.cvlr_work/build/`, and edits are no
+> longer "in place": every file the run derives is rewritten from checkpointed state on every stage,
+> which is what makes the tree disposable ([single-working-tree.md](single-working-tree.md) §4). And
+> that tree is no longer a bespoke copy at all — it is a graphcore VFS base plus one overlay, with
+> the author's read tools and the build's materializer coming out of one `fs_tools_layered` call so
+> they cannot disagree about what the composite view holds
+> ([the-tree-is-a-vfs.md](the-tree-is-a-vfs.md) §4–§5).
 
 `CvlrFormalizer.formalize` gives each unit `<project>/.cvlr_work/<module>/`, produced by
 `shutil.copytree` with `target`, `.git`, `.certora_internal`, `certora_out` and `.cvlr_work` itself
@@ -112,18 +123,24 @@ real file, and `cargo` sees it because it is simply there.
 Stated side by side, the two are less different than they look. Both end with a physical tree that a
 subprocess builds. They differ in *when* it is made and what is cheap in between.
 
-| | EVM | CVLR |
-|---|---|---|
-| copy made | per materialization — every compile check, every review | once per unit, at formalization |
-| copy lives in | a `TemporaryDirectory`, deleted on context exit | `.cvlr_work/<unit>/`, kept for inspection |
-| between copies, an edit is | a dict update in graph state | a write to a file |
-| reverting an edit | pick an older snapshot from the edit store | not possible |
-| cost of an edit | negligible | negligible |
-| cost of letting a build see edits | a full filtered tree copy | zero |
+| | EVM | CVLR (as described here) | CVLR (now) |
+|---|---|---|---|
+| copy made | per materialization — every compile check, every review | once per unit, at formalization | once per run, incrementally reconciled |
+| copy lives in | a `TemporaryDirectory`, deleted on context exit | `.cvlr_work/<unit>/`, kept for inspection | `.cvlr_work/build/`, kept for inspection |
+| between copies, an edit is | a dict update in graph state | a write to a file | **a dict update in graph state** |
+| reverting an edit | pick an older snapshot from the edit store | not possible | **drop it from state; the tree is rederived** |
+| cost of an edit | negligible | negligible | negligible |
+| cost of letting a build see edits | a full filtered tree copy | zero | **a content-compared incremental dump** |
 
 EVM's VFS buys **cheap, revertible, reviewable edits** and pays a tree copy whenever a subprocess
-needs to see them. CVLR inverted it: the copy is paid once, edits are real writes, and there is no
+needs to see them. CVLR inverted it: the copy was paid once, edits were real writes, and there was no
 revert.
+
+**That inversion is what has since been undone**, and the fourth column is why the comparison this
+document is built on no longer holds. The premise that made the inversion look necessary — that
+materializing means a fresh directory per compile — is a property of `TempDirectoryProvider` rather
+than of `Materializer`, so a persistent materializer buys the revertibility back without paying the
+copy ([the-tree-is-a-vfs.md](the-tree-is-a-vfs.md) §2).
 
 ---
 
