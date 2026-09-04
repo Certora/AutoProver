@@ -192,12 +192,19 @@ class DeclareVerificationGroups(
     - Every non-skipped property appears in exactly ONE group (via that group's `property_rules`).
       Coverage is checked exactly as at publish time.
     - Each group's `summaries` maps each function IT summarizes to the CVL methods-block entry to
-      summarize it with, HERE. A function a group omits is verified precise in that group. The same
+      summarize it with, HERE. A function a group omits is verified as the base spec has it — precise only
+      if the base spec (incl. its imports) does not already summarize it. The same
       function may be summarized differently in different groups (a rule may allow `foo` monotone
       while another needs it injective) — choose, per group, the weakest summary sound for that
       group's rules.
     - The base spec you put on the VFS must define any ghosts/CVL functions those entries use, and
       must itself leave the summarized functions UNsummarized (each group's spec adds its own).
+    - Your `summaries` are APPENDED to the base spec's methods block (autosetup's imported summaries
+      included). To change how an ALREADY-base-summarized function behaves in a group, your entry must
+      be MORE SPECIFIC than the base's — an exact `Contract.f(...)` overrides a wildcard `_.f(...)`. If
+      the base already summarizes it EXACTLY for that contract you cannot override or remove it (a second
+      exact entry is a duplicate → typecheck error), and there is no way to make it precise in one group;
+      the workaround is to summarize a CALLER of that function instead (usually not base-summarized).
 
     Note: a rule reachable from two properties in DIFFERENT groups is verified ONCE — in the FIRST
     group that declares it — under THAT group's summaries (the run partitions rules disjointly). So

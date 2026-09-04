@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 
 from composer.spec.cvl_generation import PropertyRuleMapping
 from composer.spec.source.verification_groups import (
-    VerificationGroup, append_summaries, cap_groups, merge_summaries,
+    VerificationGroup, append_summaries, cap_groups,
 )
 
 
@@ -78,8 +78,9 @@ class VerificationGroupSpec(BaseModel):
         default_factory=dict,
         description="The summaries THIS group installs: each key a hostile function, each value the full "
         "CVL methods{} entry to summarize it here (e.g. \"function C.f(uint) external => NONDET;\", a ghost "
-        "mirror, a model). A function absent from this map is verified PRECISE (unsummarized) in this "
-        "group. The same function may be summarized differently in different groups — choose, per group, "
+        "mirror, a model). A function absent from this map is verified as the base spec has it in this "
+        "group — precise only if the base spec (incl. its imports) does not already summarize it. The same "
+        "function may be summarized differently in different groups — choose, per group, "
         "the weakest summary sound for that group's rules, and reuse the same entry across groups where "
         "it is sound (consistency).",
     )
@@ -106,23 +107,22 @@ def over_cap_message(specs: list[VerificationGroupSpec], cap: int) -> str | None
 
     Each group is a separate prover run, so the count is bounded. Rather than silently auto-merge the
     declaration (which would undo the split the agent deliberately chose), the declaring tool rejects an
-    over-cap declaration and asks the agent to refactor — and shows the merge the run would OTHERWISE force
-    (the same greedy, most-agreeing-summaries merge :func:`cap_groups` would apply), so the agent can make
-    that choice itself or find a better one."""
+    over-cap declaration and asks the agent to refactor — and SUGGESTS a concrete valid merge (the greedy,
+    most-agreeing-summaries merge :func:`cap_groups` computes), which the agent can adopt or improve."""
     if len(specs) <= cap:
         return None
-    # A lightweight sim of the run's own partition + cap merge, to name the merge it would force.
+    # A lightweight sim of the partition, run through cap_groups to name one valid merge to suggest.
     sim = [
         VerificationGroup(name=s.name, owned_rules=owned, summaries=dict(s.summaries))
         for s, owned in zip(specs, owned_rules_per_group(specs))
     ]
-    forced = "; ".join(g.name for g in cap_groups(sim, cap))
+    suggested = "; ".join(g.name for g in cap_groups(sim, cap))
     return (
         f"You declared {len(specs)} verification groups but at most {cap} are allowed — each group is a "
         f"separate prover run (raise the limit via AUTOPROVER_MAX_VERIFICATION_GROUPS). Merge groups until "
         f"there are at most {cap}: combine the ones whose rules can share the same summaries — a merged "
-        f"group keeps a summary only where both groups agree, else that function drops to precise. Left as "
-        f"is, the run would force this merge: {forced}."
+        f"group keeps a summary only where both groups agree, else that function drops to precise. One valid "
+        f"merge to adopt or improve: {suggested}."
     )
 
 
@@ -137,10 +137,13 @@ def groups_from_specs(
 
     Owned rules are partitioned first-declaration-wins (:func:`owned_rules_per_group`). Each
     group's spec installs the summaries it declared (:func:`append_summaries`); a function it
-    does not summarize is verified precise. The result is bounded to ``cap`` via the greedy
-    merge, which keeps only the summaries both merged groups agree on (:func:`merge_summaries`)
-    and regenerates the merged spec."""
-    groups: list[VerificationGroup] = [
+    does not summarize is verified precise. The declaration must already be within ``cap`` — the
+    declaring tool rejects an over-cap declaration (:func:`over_cap_message`) rather than merging
+    — so this asserts the bound instead of capping."""
+    assert len(specs) <= cap, (
+        f"{len(specs)} groups exceeds cap {cap}; over-cap declarations are rejected at declare time"
+    )
+    return [
         VerificationGroup(
             name=s.name,
             owned_rules=owned,
@@ -150,18 +153,6 @@ def groups_from_specs(
         )
         for s, owned in zip(specs, owned_rules_per_group(specs))
     ]
-
-    def merge_pair(a: VerificationGroup, b: VerificationGroup) -> VerificationGroup:
-        merged = merge_summaries(a.summaries, b.summaries)
-        return VerificationGroup(
-            name=f"{a.name}+{b.name}"[:60],
-            owned_rules=a.owned_rules | b.owned_rules,
-            spec_contents=append_summaries(base_spec, merged),
-            summaries=merged,
-            conf_overlay={**a.conf_overlay, **b.conf_overlay},
-        )
-
-    return cap_groups(groups, cap, merge_pair=merge_pair)
 
 
 def render_group_plan_for_judge(specs: list["VerificationGroupSpec"]) -> str | None:
@@ -175,7 +166,8 @@ def render_group_plan_for_judge(specs: list["VerificationGroupSpec"]) -> str | N
     unsound/HAVOCing. The note makes each group's install concrete: its properties,
     rules, and exactly which functions it summarizes (with the summary text) — so the
     judge evaluates the spec as it is actually verified, not as a monolith. A function
-    a group does NOT list is verified precise there."""
+    a group does NOT list is verified as the base spec has it there — precise unless the
+    base spec itself summarizes it."""
     if not specs:
         return None
     lines: list[str] = [
@@ -187,7 +179,10 @@ def render_group_plan_for_judge(specs: list["VerificationGroupSpec"]) -> str | N
         "// summaries listed below. A hostile function that appears un-summarized in the base",
         "// spec above IS summarized in every group that lists it here — treat those as",
         "// installed (not HAVOCing) when judging soundness and coverage; a function a group",
-        "// does not list is verified precise there.",
+        "// does not list is verified as the base spec above has it (precise unless the base",
+        "// spec above already summarizes it). A summary a group DOES list for a function the base",
+        "// spec above already summarizes is a more-specific override (exact beats wildcard), so that",
+        "// group verifies under the group's entry, not the base's.",
         "//",
     ]
     for s in specs:

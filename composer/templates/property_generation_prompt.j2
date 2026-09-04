@@ -184,8 +184,17 @@ summarized in another. How:
    need. Each group names its `property_rules` (the properties it verifies + the rule names that verify
    them) and its `summaries` (for each function THIS group summarizes, the `methods{}` entry to use here,
    e.g. `function MathUtils.uncheckedExp(uint256 a, uint256 b) internal returns (uint256) => expGhost(a, b);`).
-   A function a group omits is verified precise there. Every non-skipped property must appear in exactly
+   A function a group omits is verified as the base spec has it there — precise unless the base spec
+   (including its imports) already summarizes it. Every non-skipped property must appear in exactly
    one group.
+3. Your group `summaries` are APPENDED to the base spec's `methods{}` block (which includes autosetup's
+   imported summaries). To CHANGE how an already-base-summarized function behaves in a group, your entry
+   must be MORE SPECIFIC than the base's: an exact `Contract.f(...)` overrides a wildcard `_.f(...)`
+   (most-specific wins). If the base already summarizes it EXACTLY for that contract, you CANNOT override
+   or remove it — a second exact entry is a duplicate and fails the typecheck — and there is currently no
+   way to make that function precise in one group. When you hit that wall, summarize a CALLER of the
+   function instead: the caller is usually not base-summarized, so your summary applies cleanly at its
+   boundary.
 
 Then `verify_spec` runs the groups in parallel and only (re-)runs rules not yet verified. In each group,
 summarize everything its properties do NOT depend on and keep precise only what they do. The SAME

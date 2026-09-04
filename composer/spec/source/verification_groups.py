@@ -68,10 +68,6 @@ class VerificationGroup:
 
     Groups partition the rule set: every rule is *owned* by exactly one group,
     and that group's run is authoritative for its verdict (:func:`merge_group_results`).
-    The group is submitted with the prover's ``rule`` selector limited to its rules, but the
-    prover's status map still reports some it does not own — built-in checks it always runs
-    (e.g. ``envfreeFuncsStaticCheck``) and the per-method instantiations of a parametric rule —
-    so only the owned rules' verdicts are kept.
     """
 
     #: Stable identifier, used in conf/spec names and logs.
@@ -86,11 +82,15 @@ class VerificationGroup:
     #: Per-group conf overlay merged onto the base config for this group's run
     #: (e.g. ``{"loop_iter": 2}``). Empty means no overlay.
     conf_overlay: Mapping[str, object] = field(default_factory=dict)
-    #: The summaries this group installs: function -> the ``methods{}`` entry (opaque
-    #: text — NONDET, a monotone / injective ghost, a model, …). A function absent here
-    #: is verified PRECISE (unsummarized) in this group. Drives ``spec_contents`` and the
-    #: cap merge (:func:`cap_groups`): the cheapest merges are the pairs that agree on the
-    #: most summaries; on any disagreement a function drops to precise (:func:`merge_summaries`).
+    #: The summaries this group installs, APPENDED to the base spec's ``methods{}`` block
+    #: (:func:`append_summaries`): function -> the ``methods{}`` entry (opaque text — NONDET,
+    #: a monotone / injective ghost, a model, …). A function absent here is left as the base
+    #: spec has it — PRECISE only if the base spec itself leaves it unsummarized; a base-global
+    #: summary (e.g. a curated/oracle model) still applies. Groups add on top of the shared base,
+    #: they do not remove its summaries. Drives ``spec_contents`` and the cap merge
+    #: (:func:`cap_groups`): the cheapest merges are the pairs that agree on the most summaries;
+    #: on disagreement a function drops out of the merged group summaries (:func:`merge_summaries`),
+    #: back to the base spec's treatment.
     summaries: Mapping[str, str] = field(default_factory=dict)
 
 
@@ -125,24 +125,6 @@ def single_group(
     This is the behavior-preserving default — routing a run through
     ``single_group`` reproduces the current one-spec/one-run model exactly."""
     return [VerificationGroup(name=name, owned_rules=frozenset(all_rules), spec_contents=spec_contents)]
-
-
-def plan_verification_groups(
-    all_rules: Sequence[str],
-    *,
-    spec_contents: str | None = None,
-) -> list[VerificationGroup]:
-    """Partition this run's rules into verification groups.
-
-    The seam a splitting policy plugs into. The default — and, until a policy is
-    wired, the only — partition is the trivial one: a single group owning every
-    rule under the shared spec, i.e. the current one-spec/one-run behavior. A
-    populating policy (e.g. summarization-footprint clustering) replaces this to
-    return multiple groups with distinct specs/confs, then bounds them with
-    :func:`cap_groups`; the run loop and :func:`merge_group_results` treat the
-    result as N-way, so turning a policy on needs no change to callers here.
-    """
-    return single_group(all_rules, spec_contents=spec_contents)
 
 
 def _default_merge_pair(a: VerificationGroup, b: VerificationGroup) -> VerificationGroup:

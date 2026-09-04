@@ -13,7 +13,6 @@ from composer.spec.source.verification_groups import (
     VerificationGroup,
     cap_groups,
     merge_group_results,
-    plan_verification_groups,
     prune_phantom_owned_rules,
     resolved_max_groups,
     single_group,
@@ -33,15 +32,6 @@ def test_single_group_owns_all_rules():
     assert groups[0].owned_rules == {"a", "b", "c"}
     assert groups[0].spec_contents is None
     assert groups[0].conf_overlay == {}
-
-
-def test_default_planner_is_single_group():
-    # Until a splitting policy is wired, the planner reproduces the current
-    # one-spec/one-run model: one group owning every rule.
-    groups = plan_verification_groups(["a", "b", "c"])
-    assert len(groups) == 1
-    assert groups[0].owned_rules == {"a", "b", "c"}
-    assert groups[0].spec_contents is None
 
 
 # --- resolved_max_groups ----------------------------------------------------

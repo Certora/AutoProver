@@ -1,5 +1,7 @@
 """Unit tests for the agent-declared, property-level group planner (transparent policy)."""
 
+import pytest
+
 from composer.spec.cvl_generation import PropertyRuleMapping
 from composer.spec.source.agent_groups import (
     VerificationGroupSpec,
@@ -116,16 +118,12 @@ def test_build_rule_partition_first_declaration_wins():
     assert sorted(owned) == ["r1", "r2", "r3"]
 
 
-def test_build_caps_and_merges_keeping_partition():
-    decls = [_grp(f"g{i}", [p], summaries=s) for i, (p, s) in enumerate([
-        ("P-bitmap", {"uncheckedExp": EXP_SUMMARY}),
-        ("P-accounting", {"sortByKey": SORT_SUMMARY}),
-        ("P-misc", {"uncheckedExp": EXP_SUMMARY}),
-    ])]
-    groups = groups_from_specs(BASE, decls, cap=2)
-    assert len(groups) == 2
-    owned = [r for g in groups for r in g.owned_rules]
-    assert sorted(owned) == sorted(r for rs in PROP_RULES.values() for r in rs)
+def test_build_asserts_declaration_within_cap():
+    # groups_from_specs does NOT merge — the tool rejects an over-cap declaration at declare time
+    # (over_cap_message), so a >cap declaration reaching the builder is a programming error.
+    decls = [_grp(f"g{i}", [p]) for i, p in enumerate(["P-bitmap", "P-accounting", "P-misc"])]
+    with pytest.raises(AssertionError):
+        groups_from_specs(BASE, decls, cap=2)
 
 
 # --- judge-facing group plan rendering --------------------------------------
@@ -137,9 +135,9 @@ def test_over_cap_message_none_within_cap():
     assert over_cap_message(specs, cap=2) is None
 
 
-def test_over_cap_message_rejects_and_shows_the_forced_merge():
+def test_over_cap_message_rejects_and_suggests_a_merge():
     # 3 groups, cap 2 -> reject. g1 and g2 agree on `foo` (cheapest merge, loses nothing); g3 is disjoint,
-    # so the merge the run would force is g1+g2, which the message names so the agent can adopt or improve it.
+    # so the suggested merge is g1+g2, which the message names so the agent can adopt or improve it.
     specs = [
         _spec("g1", [("P1", ["r1"])], summaries={"foo": "S"}),
         _spec("g2", [("P2", ["r2"])], summaries={"foo": "S"}),
