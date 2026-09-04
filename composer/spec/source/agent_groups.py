@@ -88,6 +88,24 @@ class VerificationGroupSpec(BaseModel):
     )
 
 
+def owned_rules_per_group(specs: list[VerificationGroupSpec]) -> list[frozenset[str]]:
+    """Each spec's owned rules under first-declaration-wins, aligned to ``specs`` by index.
+
+    A group's owned rules are the union of its properties' rules; a rule declared by more than
+    one group is owned by the FIRST that declares it, so the partition stays disjoint (the
+    ``merge_group_results`` / per-group-completion invariant that every rule has exactly one
+    owner). Both the runnable build (:func:`groups_from_specs`) and the over-cap preview
+    (:func:`over_cap_message`) partition rules this way; they differ only in what they build
+    around it."""
+    claimed: set[str] = set()
+    owned_per: list[frozenset[str]] = []
+    for s in specs:
+        owned = {str(r) for m in s.property_rules for r in m.rules} - claimed
+        claimed |= owned
+        owned_per.append(frozenset(owned))
+    return owned_per
+
+
 def over_cap_message(specs: list[VerificationGroupSpec], cap: int) -> str | None:
     """A rejection message when the agent declared MORE groups than the cap, else ``None``.
 
@@ -98,12 +116,11 @@ def over_cap_message(specs: list[VerificationGroupSpec], cap: int) -> str | None
     that choice itself or find a better one."""
     if len(specs) <= cap:
         return None
-    claimed: set[str] = set()
-    sim: list[VerificationGroup] = []
-    for s in specs:  # mirror groups_from_specs' first-declaration-wins owned-rule partition
-        owned = {str(r) for m in s.property_rules for r in m.rules} - claimed
-        claimed |= owned
-        sim.append(VerificationGroup(name=s.name, owned_rules=frozenset(owned), summaries=dict(s.summaries)))
+    # A lightweight sim of the run's own partition + cap merge, to name the merge it would force.
+    sim = [
+        VerificationGroup(name=s.name, owned_rules=owned, summaries=dict(s.summaries))
+        for s, owned in zip(specs, owned_rules_per_group(specs))
+    ]
     forced = "; ".join(g.name for g in cap_groups(sim, cap))
     return (
         f"You declared {len(specs)} verification groups but at most {cap} are allowed — each group is a "
@@ -123,29 +140,21 @@ def groups_from_specs(
     """Expand the agent's declared group specs into runnable :class:`VerificationGroup`s
     (coverage assumed already validated with :func:`validate_declared_coverage`).
 
-    Each group's owned rules are the union of its properties' rules, made a disjoint
-    partition by first-declaration-wins (a rule shared across properties in different
-    groups is owned — and thus authoritatively verified — by the first, keeping the
-    ``merge_group_results`` / per-group-completion invariant that every rule has exactly
-    one owner). Each group's spec installs the summaries it declared (:func:`append_summaries`);
-    a function it does not summarize is verified precise. The result is bounded to ``cap`` via
-    the greedy merge, which keeps only the summaries both merged groups agree on
-    (:func:`merge_summaries`) and regenerates the merged spec."""
-    claimed: set[str] = set()
-    groups: list[VerificationGroup] = []
-    for s in specs:
-        owned = {str(r) for m in s.property_rules for r in m.rules}
-        owned -= claimed  # first-declaration-wins: keep the rule partition disjoint
-        claimed |= owned
-        groups.append(
-            VerificationGroup(
-                name=s.name,
-                owned_rules=frozenset(owned),
-                spec_contents=append_summaries(base_spec, s.summaries),
-                summaries=dict(s.summaries),
-                conf_overlay=s.conf_overlay,
-            )
+    Owned rules are partitioned first-declaration-wins (:func:`owned_rules_per_group`). Each
+    group's spec installs the summaries it declared (:func:`append_summaries`); a function it
+    does not summarize is verified precise. The result is bounded to ``cap`` via the greedy
+    merge, which keeps only the summaries both merged groups agree on (:func:`merge_summaries`)
+    and regenerates the merged spec."""
+    groups: list[VerificationGroup] = [
+        VerificationGroup(
+            name=s.name,
+            owned_rules=owned,
+            spec_contents=append_summaries(base_spec, s.summaries),
+            summaries=dict(s.summaries),
+            conf_overlay=s.conf_overlay,
         )
+        for s, owned in zip(specs, owned_rules_per_group(specs))
+    ]
 
     def merge_pair(a: VerificationGroup, b: VerificationGroup) -> VerificationGroup:
         merged = merge_summaries(a.summaries, b.summaries)
