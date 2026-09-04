@@ -109,6 +109,49 @@ def _pick_package(workspace: Workspace, requested: str | None) -> CratePackage:
     )
 
 
+@dataclasses.dataclass(frozen=True)
+class SelectedPackage:
+    """Which package a run will verify, resolved before the run starts.
+
+    :func:`prepare_workspace` reaches the same answer, but only once the run is under way — and two
+    things a caller has to build first need it: the artifact store, which writes the harness into
+    *that* crate's directory, and the ``--package`` a scaffolded workspace is then gated on. So the
+    selection is available on its own, and a workspace that needs one named fails while it is still
+    a usage error rather than a run that has spent an analysis agent.
+    """
+
+    workspace_root: Path
+    name: str
+    #: The package's directory relative to the workspace root — the same relation
+    #: :attr:`CvlrPreflight.package_dir` carries, since they are computed from one workspace read.
+    package_dir: Path
+
+
+async def select_package(
+    project_root: Path, package: str | None = None, *, main_source: Path | None = None
+) -> SelectedPackage:
+    """Resolve ``package`` against the workspace at ``project_root``.
+
+    An explicit name wins. Failing that, the crate that *owns* the main program's source file is
+    the answer — cargo's own view of which member a path belongs to, so a multi-program workspace
+    (which :func:`_pick_package` refuses on its own) needs no second flag to say what the main
+    program already said. Only when neither is available does this fall back to the single-library
+    rule, and its refusal message.
+    """
+    workspace = await _workspace_at(project_root)
+    owner = workspace.owning(main_source) if main_source is not None else None
+    member = (
+        owner
+        if package is None and owner is not None and owner.lib is not None
+        else _pick_package(workspace, package)
+    )
+    return SelectedPackage(
+        workspace_root=workspace.root,
+        name=member.name,
+        package_dir=member.root.resolve().relative_to(workspace.root.resolve()),
+    )
+
+
 async def _workspace_at(root: Path, *, features: tuple[str, ...] = ()) -> Workspace:
     try:
         workspace = await read_workspace(root, features=features)

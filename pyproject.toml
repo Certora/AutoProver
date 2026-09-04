@@ -187,6 +187,8 @@ console-autoprove = "composer.cli.console_autoprove:main"
 tui-autoprove = "composer.cli.tui_autoprove:main"
 console-foundry = "composer.cli.console_foundry:main"
 tui-foundry = "composer.cli.tui_foundry:main"
+console-solana = "composer.cli.console_solana:main"
+tui-solana = "composer.cli.tui_solana:main"
 # console-crucible / tui-crucible land in PR3, together with the `composer.crucible_launch`
 # module they name — an entry point pointing at a module that doesn't exist installs happily
 # and only fails, as an ImportError, when someone runs it.

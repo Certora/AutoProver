@@ -59,12 +59,25 @@ def test_the_solana_choice_records_the_platform_it_implies():
     assert "2.x" in ref.SOLANA.platform.label
 
 
-def test_the_unpublished_spl_token_crate_is_recorded_under_both_names():
-    # It was renamed, so a reader searching either name must find the note; silence would read as
-    # "no such thing" rather than "deliberately out of scope".
-    (spl,) = ref.SOLANA.unpublished
-    assert set(spl.names) == {"cvlr-spl-token", "cvlr-solana-token"}
-    assert "SPL Token" in spl.missing
+def test_the_spl_token_model_is_part_of_the_reference_set():
+    # It was recorded as an *unpublished* capability — "published under neither name, so entries
+    # needing it must model the token account themselves" — on the strength of a real project
+    # reaching it through a git redirect. That project's own comment says the redirect was a
+    # stopgap until release, and the release happened: it is on crates.io at the same version as
+    # the chain crate it was factored out of. A reference set that still called it unavailable
+    # would have the scaffold withhold it and the corpus teach hand-rolling what exists.
+    assert ref.CrateRelease("cvlr-spl-token", "0.5.0") in ref.SOLANA.specializations
+    assert ref.SOLANA.unpublished == ()
+
+
+def test_a_fresh_project_is_pinned_the_whole_reference_set():
+    # Specializations used to be declared and never scaffolded. Nothing downstream can add one: the
+    # author has no manifest tool and the munge editor edits program source, so a specialization the
+    # scaffold omits is a capability the run cannot reach at all.
+    assert ref.SOLANA.scaffold_crates() == ref.SOLANA.crates()
+    assert {c.name for c in ref.SOLANA.scaffold_crates()} == {
+        "cvlr", "cvlr-solana", "cvlr-solana-stake", "cvlr-spl-token",
+    }
 
 
 def test_an_unknown_chain_raises_and_names_the_ones_that_exist():

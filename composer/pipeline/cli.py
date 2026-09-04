@@ -52,6 +52,7 @@ if TYPE_CHECKING:
 
 from certora_autosetup.harnesser.swap import swap_library_main_contract_paths
 from composer.spec.util import fs_forbidden_read
+from graphcore.tools.vfs import GlobalExcludeArg
 import hashlib
 
 
@@ -279,15 +280,29 @@ async def cli_pipeline[P: enum.Enum, H](
     design_doc_phase: P,
     at_exit: AtExit | None = None,
     run_mode: RunMode = RunMode.COMPREHENSIVE,
+    forbidden_read: GlobalExcludeArg = fs_forbidden_read,
+    max_properties: int | None = None,
     **metadata
 ) -> AsyncIterator[tuple[StagedPipeline, Continuation[P, H]]]:
+    """``forbidden_read`` is what the run's source tools withhold, and defaults to the Solidity
+    rule this was written against. A non-EVM caller passes its ecosystem's
+    ``language.default_forbidden_read`` — on a Cargo project the Solidity default withholds nothing
+    it should and admits ``target/``, whose build artifacts are larger than the source tree.
+
+    ``max_properties`` bounds how many extracted properties the run attempts to formalize (see
+    :func:`composer.pipeline.core._capped`). Independent of ``budget``, which bounds what a run
+    spends rather than what it takes on."""
     project_root = pathlib.Path(args.project_root).resolve()
     main_contract_path, contract_name = args.main_contract.split(":", 1)
 
     # Resolve the budget up front so a malformed one fails before any services spin up.
     budget = resolve_budget(args.budget, args.budget_total)
 
-    full_contract_path = pathlib.Path(main_contract_path).resolve()
+    # A relative path is resolved against the *project root*, not the process's working directory.
+    # Both readings agree whenever the old one worked — running from inside the project makes them
+    # the same directory — and they diverge only where it used to fail outright, which is running
+    # the CLI from anywhere else. That is the normal case for a checkout you are not sitting in.
+    full_contract_path = (project_root / main_contract_path).resolve()
     if not full_contract_path.is_relative_to(project_root):
         raise ValueError(f"Invalid path: {full_contract_path} doesn't appear in project root {project_root}")
 
@@ -328,7 +343,7 @@ async def cli_pipeline[P: enum.Enum, H](
     init_source = SourceFields(
         relative_path=relative_path,
         contract_name=SourceIdentifier(contract_name),
-        forbidden_read=fs_forbidden_read,
+        forbidden_read=forbidden_read,
         project_root=str(project_root)
     )
 
@@ -467,6 +482,7 @@ async def cli_pipeline[P: enum.Enum, H](
                     budget=budget,
                     time_budget_s=args.time_budget,
                     ecosystem=ecosystem,
+                    max_properties=max_properties,
                 )
 
             yield (StagedPipeline(

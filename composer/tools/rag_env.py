@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
+    from sentence_transformers import SentenceTransformer
 
     from composer.rag.db import ComposerRAGDB
 
@@ -77,17 +78,26 @@ def validate_rag_db(rag_db: str | None) -> None:
         )
 
 
-def build_rag_tools(rag_db: str) -> "tuple[BaseTool, ...]":
+def build_rag_tools(
+    rag_db: str, model: "SentenceTransformer | None" = None
+) -> "tuple[BaseTool, ...]":
     """Search tools for the declared corpus, or ``()`` if it can't be opened (best-effort — the
     author still has the static cheat-sheet). An unregistered tag raises; see the module docstring
-    for why the two are treated differently."""
+    for why the two are treated differently.
+
+    ``model`` is the embedding model to query with. It is worth passing whenever the caller already
+    has one: :func:`composer.rag.models.get_model` is not memoized, so omitting it loads a second
+    copy of a multi-hundred-megabyte transformer that does the same job as the one the run staged.
+    """
     validate_rag_db(rag_db)
     try:
         from composer.rag.db import KNOWLEDGE_BASES, PostgreSQLRAGDatabase
         from composer.rag.models import get_model
 
         # Lazy pool — opens on first search; the DB must already be populated.
-        db = PostgreSQLRAGDatabase(KNOWLEDGE_BASES[rag_db], get_model())
+        db = PostgreSQLRAGDatabase(
+            KNOWLEDGE_BASES[rag_db], model if model is not None else get_model()
+        )
         return tuple(_FACTORIES[rag_db](db))
     except Exception as e:  # noqa: BLE001 — RAG is optional; the cheat-sheet suffices
         _log.warning("RAG %r unavailable (%s); using the static cheat-sheet only", rag_db, e)

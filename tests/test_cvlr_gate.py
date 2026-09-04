@@ -124,7 +124,7 @@ def _harness(result: object) -> GeneratedHarness | None:
     "no deliverable" three times while the deliverables sat on disk.
     """
     if isinstance(result, Curtailed):
-        result = result.value
+        result = result.partial
     return result.result if isinstance(result, Delivered) else None
 
 

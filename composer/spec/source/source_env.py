@@ -1,4 +1,4 @@
-from typing import Unpack
+from typing import Sequence, Unpack
 from dataclasses import dataclass
 
 from langchain_core.tools import BaseTool
@@ -6,7 +6,7 @@ from langgraph.store.base import BaseStore
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from graphcore.graph import Builder
-from graphcore.tools.vfs import GlobalExcludeArg, fs_tools
+from graphcore.tools.vfs import FSBackend, GlobalExcludeArg, fs_tools, fs_tools_layered
 
 from composer.pipeline.ecosystem import Ecosystem
 from composer.spec.tool_env import BaseSourceTools
@@ -41,6 +41,26 @@ def build_basic_source_tools(
     return _BaseSourceTools(
         tuple(fs_tools(fs_layer=root, forbidden_read=forbidden_read, cache_listing=False))
     )
+
+
+def build_layered_source_tools(
+    backends: Sequence[FSBackend],
+    forbidden_read: GlobalExcludeArg,
+) -> BaseSourceTools:
+    """The same surface as :func:`build_basic_source_tools`, over a stack rather than one directory.
+
+    ``backends`` are consulted in priority order, first hit wins. What that buys a backend which
+    *derives* a working copy of the project is that the agent and the compiler can be made to read
+    the same text: put the derived tree above the pristine checkout and a file the run has edited
+    reads as edited, while everything else reads as the developer wrote it.
+
+    The materializer ``fs_tools_layered`` also returns is dropped here on purpose — a caller that
+    only wants to *read* a stack has nothing to materialize. A caller that wants both should call
+    ``fs_tools_layered`` itself, so that the tools and the materializer come from one stack and
+    cannot disagree about what the view contains.
+    """
+    tools, _ = fs_tools_layered(backends, forbidden_read=forbidden_read)
+    return _BaseSourceTools(tuple(tools))
 
 
 def build_source_tools(

@@ -290,9 +290,9 @@ class SharedTree:
         Two things have to hold and they are not the same one. The path must stay **inside** the
         working tree, which is what keeps a munge from reaching the user's checkout. And it must
         name the **project's own source**, which containment does not establish: confinement puts
-        ``CARGO_HOME`` at ``<tree>/.sandbox_cargo``, so every dependency's unpacked source is inside
-        the tree too, and a check that stopped at containment would let a munge rewrite Anchor for
-        every crate in the graph.
+        ``CARGO_HOME`` under ``<tree>/.certora_internal/sandbox/cargo``, so every dependency's
+        unpacked source is inside the tree too, and a check that stopped at containment would let a
+        munge rewrite Anchor for every crate in the graph.
         """
         root = self.root.resolve()
         candidate = (root / relative).resolve()

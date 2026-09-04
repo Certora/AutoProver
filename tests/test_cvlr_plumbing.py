@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from langgraph.store.memory import InMemoryStore
+
 from composer.cargo.metadata import parse_metadata
 from composer.cargo.sbf import (
     MalformedBuildManifest,
@@ -27,12 +29,19 @@ from composer.cargo.sbf import (
 from composer.cargo.session import CargoSession, CompileFailed
 from composer.cargo.toolchain import SolanaToolchain, ToolchainRequestUnsupported
 from composer.certora_env import CertoraEnvironmentError, prover_app
+from composer.diagnostics.timing import (
+    RunSummary,
+    install_run_summary,
+    set_current_task_id,
+)
 from composer.prover.core import ProverOptions, make_prover_options
 from composer.sandbox.config import SandboxConfig
 from composer.spec.context import SourceFields
 from composer.spec.cvlr import conf as cvlr_conf
 from composer.spec.cvlr.crates import resolve
 from composer.spec.cvlr.prover import Submission
+from composer.spec.cvlr.verify import _CaptureCallbacks, _RunAccounting
+from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.cvlr_reference import SOLANA
 from composer.spec.system_model import SolidityIdentifier
 
@@ -501,3 +510,50 @@ def test_a_failed_compile_carries_the_compilers_own_words():
     failed = CompileFailed(diagnostics="error[E0599]: no method named `cvlr_assert`", exit_code=101)
     assert not isinstance(failed, Built)
     assert "E0599" in failed.diagnostics
+
+
+# --------------------------------------------------------------------------------------------
+# what a prover run costs
+# --------------------------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_prover_run_is_accounted_for():
+    """``ProverCallbacks``' defaults are no-ops, so a backend that overrides only the events it
+    cares about opts out of the run's prover accounting without saying so — which is what CVLR did
+    until this class existed. The consequence was not cosmetic: a run whose wall clock is mostly
+    cloud time reported none of it, in ``summary.format()`` and in ``job_info.json`` alike."""
+    summary = RunSummary()
+    install_run_summary(summary)
+    callbacks = _RunAccounting()
+
+    # A task has to be active for the per-task attribution to land anywhere: the link and the
+    # runtime are folded into that task's phase record when the phase closes.
+    with set_current_task_id("verify-deposits"):
+        await callbacks.on_prover_run(["certoraSolanaProver", "run.conf"])
+        await callbacks.on_prover_link("https://prover.certora.com/output/1/2")
+        await callbacks.on_prover_runtime(4200)
+        await callbacks.on_prover_result({})
+    summary.record_phase(
+        task_id="verify-deposits", label="deposits", phase="formalization",
+        wall_s=90.0, queue_wait_s=0.0,
+    )
+
+    assert summary.prover_usage_summary()["total_ms"] == 4200
+    assert summary.prover_total_calls == 1
+    assert summary.phases[0].final_link == "https://prover.certora.com/output/1/2"
+    assert summary.phases[0].prover_reported_ms == 4200
+
+
+@pytest.mark.asyncio
+async def test_capturing_evidence_does_not_replace_the_accounting():
+    """The capture callbacks override ``on_prover_result`` for their own reasons; the wall-clock
+    tally lives in the same event, so the override has to chain."""
+    summary = RunSummary()
+    install_run_summary(summary)
+    callbacks = _CaptureCallbacks(CexAnalysisStore(store=InMemoryStore(), namespace=("t",)))
+
+    await callbacks.on_prover_run([])
+    await callbacks.on_prover_result({})
+
+    assert summary.prover_total_calls == 1

@@ -27,6 +27,7 @@ from typing import override
 from pydantic import BaseModel, Field
 
 from composer.authoring.state import SkippedProperty
+from composer.diagnostics.timing import RunSummary
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.cvlr.munge import FunctionMunge
 from composer.spec.cvlr.scaffold import SPECS_DIR
@@ -184,6 +185,16 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
                 indent=2,
             )
         )
+
+    @override
+    def _job_info_payload(self, summary: RunSummary, *, user_id: str) -> dict[str, object]:
+        """Extends the shared manifest with the prover-reported runtime, as the autoprove store
+        does. A CVLR run spends most of its wall clock in the cloud, so a manifest carrying only
+        LLM cost describes the smaller half of what the run cost."""
+        return {
+            **super()._job_info_payload(summary, user_id=user_id),
+            "prover_usage": summary.prover_usage_summary(),
+        }
 
     def declare_modules(self, modules: list[HarnessModule]) -> tuple[Path, ...]:
         """Write ``specs/mod.rs`` declaring every unit's module behind its own cargo feature.
