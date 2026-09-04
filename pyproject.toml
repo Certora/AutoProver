@@ -206,6 +206,9 @@ certora-fixconf = "certora_autosetup.fixconf:main"
 autosetup = "certora_autosetup.autosetup.cli:main"
 fixconf = "certora_autosetup.fixconf:main"
 
+# summarization_detector entry points
+detect-summaries = "summarization_detector.cli:main"
+
 # Command-sandbox providers, resolved by composer.sandbox.config.SandboxConfig.resolve_provider.
 # Adding a provider = adding a line here (and re-running the editable install so the
 # dist-info picks it up); the seam never imports a concrete mechanism itself.
@@ -214,7 +217,7 @@ none = "composer.sandbox.policy:NoneProvider"
 launcher = "composer.sandbox.launcher:LauncherProvider"
 
 [tool.setuptools.packages.find]
-include = ["composer*", "sanity_analyzer*", "analyzer*", "certora_autosetup*"]
+include = ["composer*", "sanity_analyzer*", "analyzer*", "certora_autosetup*", "summarization_detector*"]
 
 [tool.setuptools.package-dir]
 "" = "."
