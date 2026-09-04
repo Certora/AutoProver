@@ -32,6 +32,7 @@ import enum
 import functools
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import (
     Protocol, Any, ClassVar, Concatenate, cast, Awaitable, Sequence, Callable, ContextManager, overload
 )
@@ -495,6 +496,8 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                     input=source, env=run.env,
                     extra_input=[*ecosystem.analysis_extra_input(source), *spec.extra_input],
                     expected_main_id=source.contract_name,
+                    project_root=Path(source.project_root),
+                    forbidden_read=source.forbidden_read,
                     system_template=ecosystem.analysis_prompts.system,
                     initial_template=ecosystem.analysis_prompts.initial,
                     validate=ecosystem.validate_analysis,

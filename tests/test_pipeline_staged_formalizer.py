@@ -138,6 +138,8 @@ class _FeatCtx:
 class _Source:
     contract_name = "Vault"
     relative_path = "programs/vault/src/lib.rs"
+    project_root = "/nonexistent/project"
+    forbidden_read = None
 
 
 class _Run:
