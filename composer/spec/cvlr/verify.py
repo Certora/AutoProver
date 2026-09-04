@@ -160,7 +160,7 @@ class HarnessTarget:
         """
         return self.tree.resolve(relative)
 
-    def stage(
+    async def stage(
         self,
         draft: str,
         summaries: Sequence[SummaryDirective] = (),
@@ -184,7 +184,7 @@ class HarnessTarget:
         what keeps two units out of it at once.
         """
         self.tuning.write(tuple(summaries))
-        return self.tree.reconcile(
+        return await self.tree.reconcile(
             self.unit.module,
             UnitEdits(
                 module_path=self.module_path, draft=draft, munges=tuple(munges)
@@ -408,7 +408,7 @@ class CargoCheck(
             return "No harness written yet — put a draft first."
         with self.tool_deps() as target:
             async with target.build_slot():
-                reconciled = target.stage(
+                reconciled = await target.stage(
                     draft, self.state["summaries"], self.state["munges"]
                 )
                 run = await target.session.check(
@@ -467,7 +467,7 @@ class VerifyRules(
                 # it, because it waits on a cloud job and a sibling's edits meanwhile are inert for
                 # this build (docs/single-working-tree.md §2.4).
                 async with deps.target.build_slot():
-                    reconciled = deps.target.stage(
+                    reconciled = await deps.target.stage(
                         draft, self.state["summaries"], self.state["munges"]
                     )
                     prepared = await prepare_submission(

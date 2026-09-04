@@ -11,7 +11,7 @@ No cargo, no network, no prover.
 """
 
 import asyncio
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -44,10 +44,10 @@ def _project(tmp_path: Path) -> Path:
     return project
 
 
-def _tree(tmp_path: Path) -> SharedTree:
+async def _tree(tmp_path: Path) -> SharedTree:
     project = _project(tmp_path)
     tree = SharedTree(pristine=project, root=tmp_path / "work" / "build")
-    tree.materialize()
+    await tree.materialize()
     return tree
 
 
@@ -73,82 +73,88 @@ def _edits(tree: SharedTree, unit: str, draft: str, *munges: FunctionMunge) -> U
 # derived, not state
 
 
-def test_deleting_the_tree_and_reconciling_reproduces_it(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_deleting_the_tree_and_reconciling_reproduces_it(tmp_path: Path):
     """§8's disposability invariant, in miniature. The tree is a build cache: losing it costs a
     rebuild and never correctness, which is what makes a cache replay — where there is no tree at
     all — a resume rather than a fresh start."""
-    tree = _tree(tmp_path)
+    tree = await _tree(tmp_path)
     edits = _edits(tree, "vault", "// draft\n", _munge("redeem_fees", "unit_vault"))
-    tree.reconcile("vault", edits)
+    await tree.reconcile("vault", edits)
     before = (tree.root / _RESERVE).read_text()
 
     import shutil
 
     shutil.rmtree(tree.root)
     fresh = SharedTree(pristine=tree.pristine, root=tree.root)
-    fresh.materialize()
-    fresh.reconcile("vault", edits)
+    await fresh.materialize()
+    await fresh.reconcile("vault", edits)
     assert (fresh.root / _RESERVE).read_text() == before
 
 
-def test_a_munge_dropped_from_state_leaves_the_file(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_a_munge_dropped_from_state_leaves_the_file(tmp_path: Path):
     """The bug the old arrangement could not have: `stage` edited in place and never removed, so a
     rewound checkpoint silently kept an attribute nothing in state knew about. Rebuilding each
     munged file from the pristine copy is what makes rewinding mean something."""
-    tree = _tree(tmp_path)
-    tree.reconcile("vault", _edits(tree, "vault", "//\n", _munge("redeem_fees", "unit_vault")))
+    tree = await _tree(tmp_path)
+    await tree.reconcile("vault", _edits(tree, "vault", "//\n", _munge("redeem_fees", "unit_vault")))
     assert "early_panic" in (tree.root / _RESERVE).read_text()
 
-    tree.reconcile("vault", _edits(tree, "vault", "//\n"))
+    await tree.reconcile("vault", _edits(tree, "vault", "//\n"))
     assert (tree.root / _RESERVE).read_text() == _SOURCE
 
 
-def test_a_later_session_restores_a_file_whose_munge_is_gone(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_a_later_session_restores_a_file_whose_munge_is_gone(tmp_path: Path):
     """The same removal, across a resume. The tree is reused, so the attribute is still on disk, and
     a session that starts with an empty munge set has nothing in state naming the file — which is
     exactly when it most needs restoring. The tree's own note of what it derived is what closes it.
     """
-    tree = _tree(tmp_path)
-    tree.reconcile("vault", _edits(tree, "vault", "//\n", _munge("redeem_fees", "unit_vault")))
+    tree = await _tree(tmp_path)
+    await tree.reconcile("vault", _edits(tree, "vault", "//\n", _munge("redeem_fees", "unit_vault")))
     assert "early_panic" in (tree.root / _RESERVE).read_text()
 
     resumed = SharedTree(pristine=tree.pristine, root=tree.root)
-    resumed.materialize()
-    resumed.reconcile("vault", _edits(resumed, "vault", "//\n"))
+    await resumed.materialize()
+    await resumed.reconcile("vault", _edits(resumed, "vault", "//\n"))
     assert (tree.root / _RESERVE).read_text() == _SOURCE
 
 
-def test_the_derived_note_is_not_a_source_of_truth(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_the_derived_note_is_not_a_source_of_truth(tmp_path: Path):
     """Its worst case has to be a redundant restore, never a wrong one: a corrupt or absent note
     must not stop a reconcile."""
-    from composer.spec.cvlr.tree import DERIVED_MANIFEST
+    from graphcore.tools.vfs import MATERIALIZED_MANIFEST as DERIVED_MANIFEST
 
-    tree = _tree(tmp_path)
-    tree.reconcile("vault", _edits(tree, "vault", "//\n", _munge("redeem_fees", "unit_vault")))
+    tree = await _tree(tmp_path)
+    await tree.reconcile("vault", _edits(tree, "vault", "//\n", _munge("redeem_fees", "unit_vault")))
     (tree.root / DERIVED_MANIFEST).write_text("{ not json")
 
     resumed = SharedTree(pristine=tree.pristine, root=tree.root)
-    resumed.materialize()
-    result = resumed.reconcile("vault", _edits(resumed, "vault", "//\n", _munge("redeem_fees", "unit_vault")))
+    await resumed.materialize()
+    result = await resumed.reconcile("vault", _edits(resumed, "vault", "//\n", _munge("redeem_fees", "unit_vault")))
     assert result
     assert "early_panic" in (tree.root / _RESERVE).read_text()
 
 
-def test_re_reconciling_the_same_state_writes_nothing(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_re_reconciling_the_same_state_writes_nothing(tmp_path: Path):
     """Cargo fingerprints on mtime, so rewriting identical bytes is indistinguishable from an edit
     and costs a full rebuild. This is what makes "resume and change nothing" an incremental build."""
-    tree = _tree(tmp_path)
+    tree = await _tree(tmp_path)
     edits = _edits(tree, "vault", "// draft\n", _munge("redeem_fees", "unit_vault"))
-    assert tree.reconcile("vault", edits).written
-    assert tree.reconcile("vault", edits).written == ()
+    assert (await tree.reconcile("vault", edits)).written
+    assert (await tree.reconcile("vault", edits)).written == ()
 
 
-def test_no_scratch_file_is_left_behind(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_no_scratch_file_is_left_behind(tmp_path: Path):
     """Derived files are replaced atomically, because the build permit does not cover the prover's
     own rerun of the build script — so another unit's build can be reading the file. A leftover
     temp file would also be collected as a source and uploaded."""
-    tree = _tree(tmp_path)
-    tree.reconcile("vault", _edits(tree, "vault", "//\n", _munge("redeem_fees", "unit_vault")))
+    tree = await _tree(tmp_path)
+    await tree.reconcile("vault", _edits(tree, "vault", "//\n", _munge("redeem_fees", "unit_vault")))
     assert [p.name for p in (tree.root / "programs" / "p" / "src").iterdir()] == ["reserve.rs"]
 
 
@@ -156,24 +162,26 @@ def test_no_scratch_file_is_left_behind(tmp_path: Path):
 # two units in one tree
 
 
-def test_the_union_of_both_units_munges_is_replayed(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_the_union_of_both_units_munges_is_replayed(tmp_path: Path):
     """Replaying only the staging unit's would delete its sibling's line, and the sibling would add
     it back on its next gate — churning the file and rebuilding the crate for nothing."""
-    tree = _tree(tmp_path)
-    tree.reconcile("a", _edits(tree, "a", "//a\n", _munge("redeem_fees", "unit_a")))
-    tree.reconcile("b", _edits(tree, "b", "//b\n", _munge("calculate_fees", "unit_b")))
+    tree = await _tree(tmp_path)
+    await tree.reconcile("a", _edits(tree, "a", "//a\n", _munge("redeem_fees", "unit_a")))
+    await tree.reconcile("b", _edits(tree, "b", "//b\n", _munge("calculate_fees", "unit_b")))
 
     text = (tree.root / _RESERVE).read_text()
     assert '#[cfg_attr(feature = "unit_a", cvlr::early_panic)]' in text
     assert '#[cfg_attr(feature = "unit_b", cvlr::early_panic)]' in text
 
 
-def test_two_units_munging_one_function_are_two_dormant_lines(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_two_units_munging_one_function_are_two_dormant_lines(tmp_path: Path):
     """The reason the tree can be shared at all. Each attribute is gated on the recording unit's own
     feature, so neither is in effect in the other's build — and neither is a conflict."""
-    tree = _tree(tmp_path)
-    tree.reconcile("a", _edits(tree, "a", "//a\n", _munge("redeem_fees", "unit_a")))
-    tree.reconcile(
+    tree = await _tree(tmp_path)
+    await tree.reconcile("a", _edits(tree, "a", "//a\n", _munge("redeem_fees", "unit_a")))
+    await tree.reconcile(
         "b",
         _edits(
             tree,
@@ -187,29 +195,31 @@ def test_two_units_munging_one_function_are_two_dormant_lines(tmp_path: Path):
     assert 'feature = "unit_b", cvlr::mock_fn(with = crate::certora::mocks::f)' in text
 
 
-def test_the_replay_order_does_not_depend_on_who_staged_first(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_the_replay_order_does_not_depend_on_who_staged_first(tmp_path: Path):
     """Bytes that depended on scheduling would make the crate's fingerprint depend on it too, and
     two runs of the same state would rebuild for no reason anybody could see."""
     a = _munge("redeem_fees", "unit_a")
     b = _munge("redeem_fees", "unit_b")
 
-    one = _tree(tmp_path / "one")
-    one.reconcile("a", _edits(one, "a", "//\n", a))
-    one.reconcile("b", _edits(one, "b", "//\n", b))
+    one = await _tree(tmp_path / "one")
+    await one.reconcile("a", _edits(one, "a", "//\n", a))
+    await one.reconcile("b", _edits(one, "b", "//\n", b))
 
-    two = _tree(tmp_path / "two")
-    two.reconcile("b", _edits(two, "b", "//\n", b))
-    two.reconcile("a", _edits(two, "a", "//\n", a))
+    two = await _tree(tmp_path / "two")
+    await two.reconcile("b", _edits(two, "b", "//\n", b))
+    await two.reconcile("a", _edits(two, "a", "//\n", a))
 
     assert (one.root / _RESERVE).read_text() == (two.root / _RESERVE).read_text()
 
 
-def test_a_siblings_module_is_left_alone(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_a_siblings_module_is_left_alone(tmp_path: Path):
     """It is `cfg`'d out of this build, so its contents cannot affect it — and rewriting it would
     dirty a file the sibling is the author of."""
-    tree = _tree(tmp_path)
-    tree.reconcile("a", _edits(tree, "a", "// a's draft\n"))
-    tree.reconcile("b", _edits(tree, "b", "// b's draft\n"))
+    tree = await _tree(tmp_path)
+    await tree.reconcile("a", _edits(tree, "a", "// a's draft\n"))
+    await tree.reconcile("b", _edits(tree, "b", "// b's draft\n"))
     assert (tree.root / "src/certora/specs/a.rs").read_text() == "// a's draft\n"
 
 
@@ -217,29 +227,31 @@ def test_a_siblings_module_is_left_alone(tmp_path: Path):
 # drift
 
 
-def test_a_munge_onto_moved_source_is_reported_rather_than_lost(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_a_munge_onto_moved_source_is_reported_rather_than_lost(tmp_path: Path):
     """Replay happens against the pristine project, which can move between the run that recorded a
     munge and the run that replays it. The failure is otherwise mute: the build succeeds, the report
     still carries a source-edit record, and the property was checked against code the record does
     not describe."""
-    tree = _tree(tmp_path)
-    result = tree.reconcile("a", _edits(tree, "a", "//\n", _munge("gone_away", "unit_a")))
+    tree = await _tree(tmp_path)
+    result = await tree.reconcile("a", _edits(tree, "a", "//\n", _munge("gone_away", "unit_a")))
     assert not result
     (drift,) = result.drifted
     assert drift.munge.function == "gone_away"
     assert "gone_away" in drift.describe()
 
 
-def test_a_munge_of_something_that_is_not_project_source_is_refused(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_a_munge_of_something_that_is_not_project_source_is_refused(tmp_path: Path):
     """The tool checked this when it recorded the munge, but the record now arrives from a
     checkpoint. Confinement puts `CARGO_HOME` inside the tree, so containment alone would let a
     replay rewrite a dependency for every crate in the graph."""
-    tree = _tree(tmp_path)
+    tree = await _tree(tmp_path)
     dependency = str(SANDBOX_CARGO_DIR / "registry/src/idx/anchor-lang-0.31.1/src/error.rs")
     munge = FunctionMunge(
         path=dependency, function="f", kind=EarlyPanic(), why="w", feature="unit_a"
     )
-    result = tree.reconcile("a", _edits(tree, "a", "//\n", munge))
+    result = await tree.reconcile("a", _edits(tree, "a", "//\n", munge))
     assert not result
     assert INTERNAL_DIR.name in result.drifted[0].describe()
 
@@ -312,7 +324,8 @@ def test_a_manifest_with_no_features_table_gets_one(tmp_path: Path):
     assert "[features]\nunit_a = []" in manifest.read_text()
 
 
-def test_a_reused_tree_picks_up_a_changed_unit_set(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_a_reused_tree_picks_up_a_changed_unit_set(tmp_path: Path):
     """`mod.rs` and the manifest are written into the *project* before the tree is copied, because
     they are deliverables and a function of the job list rather than of any unit's state. A resumed
     run whose components changed would otherwise build against the previous run's copy of both — a
@@ -323,18 +336,23 @@ def test_a_reused_tree_picks_up_a_changed_unit_set(tmp_path: Path):
     (project / mod_rs).write_text('#[cfg(feature = "unit_a")]\npub mod a;\n')
 
     tree = SharedTree(pristine=project, root=tmp_path / "work" / "build")
-    tree.materialize()
+    await tree.materialize()
     assert "unit_b" not in (tree.root / mod_rs).read_text()
 
     (project / mod_rs).write_text(
         '#[cfg(feature = "unit_a")]\npub mod a;\n#[cfg(feature = "unit_b")]\npub mod b;\n'
     )
     resumed = SharedTree(pristine=project, root=tree.root)
-    resumed.materialize()
-    assert resumed.adopt(mod_rs) == (str(mod_rs),)
+    assert resumed.adopt(mod_rs) == (str(PurePosixPath(mod_rs.as_posix())),)
+    await resumed.materialize()
     assert "unit_b" in (tree.root / mod_rs).read_text()
-    # And re-adopting an unchanged file does not dirty the crate.
-    assert resumed.adopt(mod_rs) == ()
+
+    # And re-adopting an unchanged file does not dirty the crate. `adopt` seeds rather than writes,
+    # so what makes that true is the content compare in the materializer, not the return value.
+    before = (tree.root / mod_rs).stat().st_mtime_ns
+    resumed.adopt(mod_rs)
+    await resumed.materialize()
+    assert (tree.root / mod_rs).stat().st_mtime_ns == before
 
 
 def test_the_gate_and_the_submission_ask_for_the_same_two_features(tmp_path: Path):
