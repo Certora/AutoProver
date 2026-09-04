@@ -85,6 +85,36 @@ async def _drain(
         sink(buf)
 
 
+#: How long to give the AutoSetup child to exit before we stop waiting on it. The wait below sits
+#: in a ``finally`` that a cancellation also travels through, so it has to be bounded: an
+#: unbounded wait there parks the whole run behind one subprocess, with no timeout above it that
+#: can help and nothing left running to say why.
+_REAP_TIMEOUT_S = 30.0
+
+
+async def _reap(proc: asyncio.subprocess.Process) -> int | None:
+    """Wait for ``proc`` to exit, escalating to a kill, and stop waiting rather than block forever.
+
+    Returns the exit status, or ``None`` if the child could not be reaped at all — a child that
+    will not die tells us nothing about whether AutoSetup succeeded, so the caller treats that as
+    a failure.
+    """
+    for escalate in (False, True):
+        if escalate and proc.returncode is None:
+            _logger.warning(
+                "AutoSetup child still alive after %.0fs, killing it", _REAP_TIMEOUT_S
+            )
+            proc.kill()
+        try:
+            async with asyncio.timeout(_REAP_TIMEOUT_S):
+                # Shielded: the timeout must cancel our wait, not the child's exit plumbing.
+                return await asyncio.shield(proc.wait())
+        except TimeoutError:
+            continue
+    _logger.error("AutoSetup child outlived a kill, giving up on it and continuing")
+    return proc.returncode
+
+
 async def run_autosetup(
     project_root: Path,
     relative_path: str,
@@ -176,7 +206,12 @@ async def run_autosetup(
             raise
         finally:
             _logger.debug("AutoSetup process complete, waiting for exit")
-            returncode = await proc.wait()
+            returncode = await _reap(proc)
+        if returncode is None:
+            return SetupFailure(
+                error="AutoSetup did not exit",
+                stderr="\n".join(stderr_lines),
+            )
         cb.log_complete(returncode)
         if returncode != 0:
             return SetupFailure(
