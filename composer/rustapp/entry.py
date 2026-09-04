@@ -44,7 +44,7 @@ from composer.input.types import (
 )
 from composer.io.multi_job import HandlerFactory, TaskInfo, run_task
 from composer.io.thread_logging import default_logging_ns, thread_logger
-from composer.pipeline.cli import root_cache_key
+from composer.pipeline.cli import autoprover_version, root_cache_key
 from composer.pipeline.core import CorePipelineResult, DEFAULT_MAX_CPU_TASKS
 from composer.pipeline.ecosystem import Ecosystem
 from composer.rag.models import DefaultEmbedder, get_model
@@ -143,6 +143,7 @@ def _root_cache_key(
         system_doc_path=system_doc_path,
         relative_path=relative_path,
         contract_name=contract_name,
+        tool_version=autoprover_version(),
     )
 
 

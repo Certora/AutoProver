@@ -115,7 +115,7 @@ class ConfigurationBuilder:
         return self._replace(files=list(files))
 
     def with_verify(self, *, main_contract: SolidityIdentifier, spec_file: str) -> Self:
-        return self._replace(verify=f"{main_contract}:certora/{spec_file}")
+        return self._replace(verify=f"{main_contract}:{spec_file}")
 
     def with_solc(self, version: str) -> Self:
         return self._replace(
@@ -158,8 +158,10 @@ class ConfigurationBuilder:
             root=str(path),
             ext="conf",
             prefix="run",
-        ) as basename:
-            yield path / "certora" / basename
+        ) as rel_conf:
+            # temp_certora_file yields a project-root-relative path that already
+            # carries the `certora/` segment, so join it to the root verbatim.
+            yield path / rel_conf
 
 
 class Assembler(ABC):

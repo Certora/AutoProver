@@ -173,9 +173,9 @@
     "description": "Aave PercentageMath operations"
   },
   "aave_MathUtils": {
-    "names": ["mulDivDown", "mulDivUp", "divUp"],
+    "names": ["mulDivDown", "mulDivUp", "divUp", "uncheckedExp"],
     "library_names": ["MathUtils"],
     "summary_file": "specs/summaries/Aave/Aave_Math.spec",
-    "description": "Aave MathUtils generic 256-bit mulDiv / divUp"
+    "description": "Aave MathUtils generic 256-bit mulDiv / divUp and uncheckedExp (10**decimals)"
   }
 }
