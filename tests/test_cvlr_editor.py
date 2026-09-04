@@ -26,6 +26,7 @@ from composer.spec.cvlr.editor import (
     ApplyMockFn,
     DropMunge,
     EditsProposed,
+    ExtractFunction,
     MungeFunction,
     RequestReview,
     SubmitEdits,
@@ -379,3 +380,162 @@ def test_a_crate_name_with_a_hyphen_finds_its_dep_info(tmp_path: Path):
     (root / "src" / "lib.rs").write_text("")
     (deps / "my_program-abc.d").write_text(f"{deps}/my_program-abc.d: src/lib.rs\n")
     assert compiled_sources(root, "my-program", marker=root / "src/lib.rs") is not None
+
+
+# ---------------------------------------------------------------------------------------------
+# extraction
+#
+# The kind that restructures rather than annotates, so it is the only one where the tool has real
+# work to do before recording: everything below is a refusal that a compile would either accept or
+# report far too late to act on.
+
+
+_EXTRACT_FIELDS = {
+    "path": _RESERVE,
+    "function": "redeem_fees",
+    "extracted_name": "redeem_fees_transition",
+    "replacement": (
+        "pub fn redeem_fees(reserve: &mut Reserve) -> Result<u64> {\n"
+        "    redeem_fees_transition(reserve)\n"
+        "}"
+    ),
+    "extracted": (
+        "pub fn redeem_fees_transition(reserve: &mut Reserve) -> Result<u64> {\n"
+        "    let amount = reserve.calculate_fees()?;\n"
+        "    Ok(amount)\n"
+        "}"
+    ),
+    "why": "the property is about the accounting step, which has no boundary of its own",
+}
+
+
+async def _extract(target, state=None, **over):
+    return await _run(
+        ExtractFunction, target, state or _editor_state(), **{**_EXTRACT_FIELDS, **over}
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_extraction_records_the_pristine_text_and_the_asking_unit_s_feature(
+    tmp_path: Path,
+):
+    """The two halves the model does not get to write. The original is captured, so the deployed
+    build compiles what the project shipped rather than what a model retyped; the feature comes
+    from the unit that asked, so the pair is dormant everywhere else."""
+    result = await _extract(_target(tmp_path))
+    (record,) = result.update["proposed"]
+    assert record.feature == "unit_vault"
+    assert record.original == (
+        "pub fn redeem_fees(reserve: &mut Reserve) -> Result<u64> {\n"
+        "    let amount = reserve.calculate_fees()?;\n"
+        "    Ok(amount)\n"
+        "}"
+    )
+    assert f'#[cfg(not(feature = "unit_vault"))]\n{record.original}' in record.render()
+
+
+@pytest.mark.asyncio
+async def test_a_replacement_that_changes_the_signature_is_refused(tmp_path: Path):
+    """Every caller in the program compiles against whichever half its features select, so the two
+    have to be interchangeable. The compile gate would catch it — after a build, with a diagnostic
+    about the callers rather than about the split."""
+    answer = await _extract(
+        _target(tmp_path),
+        replacement=(
+            "pub fn redeem_fees(reserve: &mut Reserve, extra: u64) -> Result<u64> {\n"
+            "    redeem_fees_transition(reserve)\n"
+            "}"
+        ),
+    )
+    assert isinstance(answer, str) and "changes the signature" in answer
+
+
+@pytest.mark.asyncio
+async def test_an_extracted_function_the_harness_cannot_call_is_refused(tmp_path: Path):
+    """The whole point of the split is that the author's rule can drive the new function, and it
+    lives in the program's module rather than theirs."""
+    answer = await _extract(_target(tmp_path), extracted=_EXTRACT_FIELDS["extracted"].removeprefix("pub "))
+    assert isinstance(answer, str) and "must be `pub`" in answer
+
+
+@pytest.mark.asyncio
+async def test_a_replacement_that_never_calls_what_was_extracted_is_refused(tmp_path: Path):
+    """Then the two halves of the pair do different things, which is a rewrite wearing an
+    extraction — and one the feature-off build would never reveal."""
+    answer = await _extract(
+        _target(tmp_path),
+        replacement="pub fn redeem_fees(reserve: &mut Reserve) -> Result<u64> {\n    Ok(0)\n}",
+    )
+    assert isinstance(answer, str) and "never calls" in answer
+
+
+@pytest.mark.asyncio
+async def test_extracting_under_a_name_the_file_already_uses_is_refused(tmp_path: Path):
+    answer = await _extract(
+        _target(tmp_path),
+        extracted_name="calculate_fees",
+        replacement=(
+            "pub fn redeem_fees(reserve: &mut Reserve) -> Result<u64> {\n"
+            "    calculate_fees(reserve)\n"
+            "}"
+        ),
+        extracted=(
+            "pub fn calculate_fees(reserve: &mut Reserve) -> Result<u64> {\n    Ok(0)\n}"
+        ),
+    )
+    assert isinstance(answer, str) and "already mentions" in answer
+
+
+@pytest.mark.asyncio
+async def test_an_unexplained_extraction_is_refused(tmp_path: Path):
+    answer = await _extract(_target(tmp_path), why=" ")
+    assert isinstance(answer, str) and "non-empty `why`" in answer
+
+
+@pytest.mark.asyncio
+async def test_an_extraction_voids_a_standing_approval(tmp_path: Path):
+    """Same rule as `munge_function`, and it matters more here: the reviewer approved a diff, and
+    an extraction changes far more of it than an attribute does."""
+    result = await _extract(_target(tmp_path), _editor_state(reviewed_digest="stale"))
+    assert result.update["reviewed_digest"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_second_split_of_one_function_for_one_unit_is_refused(tmp_path: Path):
+    """Two splits under the same feature are two definitions of one function, which does not build.
+    Refused here rather than at the compile gate, where the diagnostic is about duplicate symbols
+    and says nothing about which of the two edits to take back."""
+    target = _target(tmp_path)
+    (record,) = (await _extract(target)).update["proposed"]
+    answer = await _extract(
+        target,
+        _editor_state(proposed=[record]),
+        extracted_name="redeem_fees_core",
+        replacement=_EXTRACT_FIELDS["replacement"].replace(
+            "redeem_fees_transition", "redeem_fees_core"
+        ),
+        extracted=_EXTRACT_FIELDS["extracted"].replace(
+            "redeem_fees_transition", "redeem_fees_core"
+        ),
+    )
+    assert isinstance(answer, str) and "already splitting" in answer
+
+
+@pytest.mark.asyncio
+async def test_an_attribute_on_a_function_this_unit_is_splitting_is_refused(tmp_path: Path):
+    """The quiet one. `replay` puts attributes on before splits, so the `cfg_attr` ends up above the
+    `#[cfg(not(..))]` — right for a sibling unit, and for the unit that asked it means the attribute
+    sits on the copy its own build discards. It compiles, it reports nothing, and it does nothing."""
+    target = _target(tmp_path)
+    (split,) = (await _extract(target)).update["proposed"]
+    answer = await _run(
+        MungeFunction,
+        target,
+        _editor_state(proposed=[split]),
+        path=_RESERVE,
+        function="redeem_fees",
+        munge=ApplyEarlyPanic(),
+        why="[3308] on the `?`",
+    )
+    assert isinstance(answer, str) and "does not compile" not in answer
+    assert "the copy this unit does *not* compile" in answer

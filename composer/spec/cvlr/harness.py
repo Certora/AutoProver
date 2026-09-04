@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field
 from composer.authoring.state import SkippedProperty
 from composer.diagnostics.timing import RunSummary
 from composer.spec.artifacts import ArtifactStore
-from composer.spec.cvlr.munge import FunctionMunge
+from composer.spec.cvlr.munge import Munge
 from composer.spec.cvlr.scaffold import SPECS_DIR
 from composer.spec.cvlr.state import PropertyRuleMapping, RuleSubject
 from composer.spec.cvlr.tuning import SummaryDirective
@@ -119,10 +119,10 @@ class GeneratedHarness(BaseModel):
     #: replaced a function with an unconstrained stand-in: the verdicts are conditional on them
     #: being sound for these properties, and the ``why`` is the only argument that they were.
     summaries: list[SummaryDirective] = Field(default_factory=list)
-    #: Verification-only attributes the author put on the program's own functions. Reported for a
-    #: stronger version of the same reason: the verdicts are about the munged program, and the
-    #: report's ``source_edits`` is where that is said in the shared vocabulary every backend uses.
-    munges: list[FunctionMunge] = Field(default_factory=list)
+    #: Verification-only edits to the program's own source. Reported for a stronger version of the
+    #: same reason: the verdicts are about the munged program, and the report's ``source_edits`` is
+    #: where that is said in the shared vocabulary every backend uses.
+    munges: list[Munge] = Field(default_factory=list)
     #: Every rule the draft declares, as read from the draft rather than transcribed by the model.
     declared_rules: list[RuleName] = Field(default_factory=list)
     final_link: str | None = None

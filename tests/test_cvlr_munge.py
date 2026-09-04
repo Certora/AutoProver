@@ -14,6 +14,7 @@ No cargo and no network — ``Workspace`` objects are built directly. The fork a
 covered by ``tests/test_cvlr_anchor_reach.py``, which is expensive.
 """
 
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -27,13 +28,18 @@ from composer.spec.cvlr.munge import (
     AlreadyMunged,
     EarlyPanic,
     FunctionAmbiguous,
+    FunctionExtraction,
+    FunctionItem,
     FunctionMunge,
     FunctionNotFound,
     MockFn,
     MungeBlocked,
     Munged,
+    NoFunctionBody,
+    SourceDrifted,
     already_patched,
     apply_munge,
+    function_item,
     manifest_additions,
     merge_munges,
     munge_history,
@@ -457,8 +463,8 @@ def test_the_same_munge_recorded_twice_lands_once():
 # component's outcomes are claims about the modified code, not the code as shipped".
 
 
-def _target(workdir: Path):
-    """A `HarnessTarget` for path questions only — the rest of it is not `source_path`'s business."""
+def _target(workdir: Path, pristine: Path | None = None):
+    """A `HarnessTarget` for path questions only — the rest is not `pristine_source`'s business."""
     import asyncio
     from types import SimpleNamespace
 
@@ -472,22 +478,27 @@ def _target(workdir: Path):
         package="p",
         tuning=SimpleNamespace(),  # type: ignore[arg-type]
         unit=HarnessModule("vault"),
-        tree=SharedTree(pristine=workdir, root=workdir),
+        tree=SharedTree(pristine=pristine or workdir, root=workdir),
         build_sem=asyncio.Semaphore(1),
     )
 
 
 def test_a_path_leaving_the_workdir_is_refused(tmp_path):
     """The working tree is the run's copy of the project, so writing in it never touches the
-    user's tree — but only while every write stays inside it."""
+    user's tree — but only while every write stays inside it.
+
+    The path is validated against the tree and then *answered* against the pristine copy, because
+    those are the bytes `reconcile` replays onto: a tool that captured a region from a tree already
+    carrying a sibling's munges would record an edit no replay could apply.
+    """
     from composer.spec.cvlr.verify import NotInWorkdir
 
-    workdir = tmp_path / "work"
+    workdir, project = tmp_path / "work", tmp_path / "project"
     (workdir / "src").mkdir(parents=True)
-    target = _target(workdir)
-    assert target.source_path("src/lib.rs") == (workdir / "src" / "lib.rs").resolve()
-    assert isinstance(target.source_path("../outside.rs"), NotInWorkdir)
-    assert isinstance(target.source_path("/etc/passwd"), NotInWorkdir)
+    target = _target(workdir, pristine=project)
+    assert target.pristine_source("src/lib.rs") == project / "src" / "lib.rs"
+    assert isinstance(target.pristine_source("../outside.rs"), NotInWorkdir)
+    assert isinstance(target.pristine_source("/etc/passwd"), NotInWorkdir)
 
 
 def test_a_dependency_inside_the_workdir_is_refused_too(tmp_path):
@@ -508,14 +519,14 @@ def test_a_dependency_inside_the_workdir_is_refused_too(tmp_path):
     anchor = str(
         SANDBOX_CARGO_DIR / "registry/src/index.crates.io-6f17d22/anchor-lang-0.31.1/src/error.rs"
     )
-    refusal = target.source_path(anchor)
+    refusal = target.pristine_source(anchor)
     assert isinstance(refusal, NotProjectSource)
     # Judged on the first component: the cargo home lives under the internal directory, which is
     # what the rule names — it needs no entry of its own.
     assert refusal.directory == INTERNAL_DIR.name
 
     for built in ("target/debug/build/x/out/gen.rs", ".certora_internal/x.rs", "certora_out/y.rs"):
-        assert isinstance(target.source_path(built), NotProjectSource), built
+        assert isinstance(target.pristine_source(built), NotProjectSource), built
 
 
 def test_the_copy_and_the_munge_rule_are_one_list():
@@ -595,3 +606,161 @@ async def test_a_unit_that_munged_nothing_contributes_no_record(tmp_path):
         GeneratedHarness, "prover", SimpleNamespace(), SimpleNamespace()  # type: ignore[arg-type]
     )
     assert await formalizer.source_edits([clean, gave_up], run) == []  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------------------------
+# extraction — the one kind that is not an attribute
+#
+# ``docs/who-edits-the-program.md`` §8.4. Everything above inserts a line above a signature, which
+# needs only the signature to still be there. This replaces a region, so it needs two things the
+# attribute kinds get for free and neither is optional: the region has to be *the same region* it
+# was recorded against, and the deployed build has to be untouched by construction rather than by
+# whoever wrote the replacement remembering to gate it.
+
+_EXTRACTABLE = '''\
+//! a program
+/// Settle the position.
+#[inline]
+pub fn settle(state: &mut State, amount: u64) -> Result<u64> {
+    let hint = "a } brace in a string";
+    let sep = '}';
+    // } in a comment
+    /* nested /* } */ still a comment */
+    if amount > state.cap {
+        return err!(Bad);
+    }
+    state.total += amount;
+    Ok(state.total)
+}
+
+pub fn other() -> u64 {
+    1
+}
+'''
+
+_REPLACEMENT = '''\
+pub fn settle(state: &mut State, amount: u64) -> Result<u64> {
+    if amount > state.cap {
+        return err!(Bad);
+    }
+    settle_transition(state, amount)
+}'''
+
+_EXTRACTED = '''\
+pub fn settle_transition(state: &mut State, amount: u64) -> Result<u64> {
+    state.total += amount;
+    Ok(state.total)
+}'''
+
+
+def _extraction(source: str = _EXTRACTABLE, feature: str = FEATURE, **over) -> FunctionExtraction:
+    item = function_item(source, "settle")
+    assert isinstance(item, FunctionItem)
+    fields = {
+        "path": "programs/p/src/reserve.rs",
+        "function": "settle",
+        "extracted_name": "settle_transition",
+        "original": item.text,
+        "replacement": _REPLACEMENT,
+        "extracted": _EXTRACTED,
+        "why": "the rule has to drive the accounting step",
+        "feature": feature,
+    }
+    return FunctionExtraction(**{**fields, **over})
+
+
+def test_the_item_ends_at_its_own_closing_brace_and_not_a_brace_in_a_literal():
+    """A brace in a string, a character literal or a comment is not a brace. An attribute needed
+    only the signature line, so this scanner is the whole cost of the kind that is a rewrite —
+    stopping one brace early captures a fragment and the replay silently rewrites the wrong region.
+    """
+    item = function_item(_EXTRACTABLE, "settle")
+    assert isinstance(item, FunctionItem)
+    assert item.text.startswith("pub fn settle(")
+    assert item.text.rstrip().endswith("Ok(state.total)\n}")
+    assert "pub fn other" not in item.text
+    assert item.signature == "pub fn settle(state: &mut State, amount: u64) -> Result<u64>"
+
+
+def test_a_declaration_with_no_body_has_nothing_to_extract():
+    trait = "pub trait Settles {\n    fn settle(&mut self, amount: u64) -> Result<u64>;\n}\n"
+    assert isinstance(function_item(trait, "settle"), NoFunctionBody)
+
+
+def test_the_pair_preserves_the_deployed_build_verbatim():
+    """The property that makes a restructuring acceptable at all. The original is captured text
+    rather than something a model retyped, and both `cfg` lines come from the record — so there is
+    no spelling of an extraction in which a build without the feature sees anything new."""
+    applied = apply_munge(_EXTRACTABLE, _extraction())
+    assert isinstance(applied, Munged)
+    item = function_item(_EXTRACTABLE, "settle")
+    assert isinstance(item, FunctionItem)
+    assert f'#[cfg(not(feature = "{FEATURE}"))]\n{item.text}' in applied.source
+    assert applied.source.count(f'#[cfg(feature = "{FEATURE}")]') == 2
+    assert _EXTRACTED in applied.source
+    # The doc comment and the pre-existing attribute stay where they were, above the pair.
+    assert "/// Settle the position.\n#[inline]\n#[cfg(not" in applied.source
+
+
+def test_the_pair_is_indented_to_sit_where_the_original_sat():
+    """An impl block is where most munge-able functions live, and Rust does not care — but a reader
+    reviewing the diff does, and this diff is the artifact the reviewer rules on."""
+    body = _EXTRACTABLE[_EXTRACTABLE.index("pub fn settle") : _EXTRACTABLE.index("pub fn other")]
+    nested = f"impl State {{\n{textwrap.indent(body.rstrip(), '    ')}\n}}\n"
+    applied = apply_munge(nested, _extraction(nested))
+    assert isinstance(applied, Munged)
+    assert f'    #[cfg(not(feature = "{FEATURE}"))]' in applied.source
+    assert "    pub fn settle_transition(" in applied.source
+
+
+def test_source_that_has_moved_since_the_extraction_was_recorded_is_reported():
+    """The drift detector, and the reason the record stores the text rather than a line range. A
+    replay that could not find its region would otherwise rewrite whatever is there now."""
+    edit = _extraction()
+    moved = _EXTRACTABLE.replace("state.total += amount;", "state.total = state.total + amount;")
+    assert isinstance(apply_munge(moved, edit), SourceDrifted)
+
+
+def test_replaying_an_extraction_twice_is_recognized_rather_than_nested():
+    """The rendered pair *contains* the original verbatim, so a second replay would find it inside
+    the `#[cfg(not(..))]` half and nest one pair inside another. Asking "already applied" first is
+    what stops that."""
+    once = apply_munge(_EXTRACTABLE, _extraction())
+    assert isinstance(once, Munged)
+    assert isinstance(apply_munge(once.source, _extraction()), AlreadyMunged)
+
+
+def test_changing_the_rewrite_changes_the_edit_id_and_rewording_the_reason_does_not():
+    """An attribute's whole content is its name, so `edit_id` can spell it out. Here the compiler
+    sees two blocks of written Rust, and an id blind to them would let a re-recorded extraction
+    inherit the previous one's review and the previous one's prover stamp."""
+    base = _extraction()
+    assert base.edit_id == _extraction(why="a clearer sentence").edit_id
+    changed = _extraction(extracted=_EXTRACTED.replace("+=", "= state.total +"))
+    assert changed.edit_id != base.edit_id
+    assert munge_history((changed,)) != munge_history((base,))
+
+
+def test_a_sibling_unit_s_attribute_lands_above_the_pair():
+    """The interesting half of `replay`'s order. Applied after the split, a `cfg_attr` would find
+    two definitions of one name and refuse; applied before, it sits above the `#[cfg(not(..))]` —
+    which is where it belongs, because the unit that recorded it builds with the extraction feature
+    off and compiles the original."""
+    from composer.spec.cvlr.tree import replay
+
+    updated, drifted = replay(
+        _EXTRACTABLE, (_extraction(), _munge("settle", path="programs/p/src/reserve.rs", feature="unit_other"))
+    )
+    assert not drifted
+    assert (
+        '#[cfg_attr(feature = "unit_other", cvlr::early_panic)]\n'
+        f'#[cfg(not(feature = "{FEATURE}"))]\npub fn settle('
+    ) in updated
+
+
+def test_an_extraction_reaches_the_report_through_the_same_channel_as_an_attribute():
+    """`describe()` is what `SourceEditRecord` and the judge briefing both read, so a kind the
+    report cannot describe is a kind the report silently omits."""
+    edit = _extraction()
+    assert "settle_transition" in edit.describe()
+    assert edit.edit_id in munge_history((edit,))[0]

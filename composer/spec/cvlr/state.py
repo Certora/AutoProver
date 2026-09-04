@@ -48,7 +48,7 @@ from composer.authoring.state import (
     validate_check_mapping,
 )
 from composer.spec.context import CacheKey, CvlrGeneration, CvlrJudge
-from composer.spec.cvlr.munge import FunctionMunge, merge_munges, munge_history
+from composer.spec.cvlr.munge import Munge, merge_munges, munge_history
 from composer.spec.cvlr.rules import rule_names
 from composer.spec.cvlr.tree import munge_diff
 from composer.spec.cvlr.tuning import SummaryDirective, merge_summaries, summary_history
@@ -180,9 +180,9 @@ class CvlrGenerationExtra(AuthoringExtra):
     #: Points-to summaries the author added, in the order added, deduplicated by pattern. Reduced
     #: rather than replaced: several ``summarize_for_prover`` calls can land in one graph step.
     summaries: Annotated[list[SummaryDirective], merge_summaries]
-    #: Verification-only attributes the author put on the program's own functions, in the order
-    #: applied. Reduced for the same reason ``summaries`` is.
-    munges: Annotated[list[FunctionMunge], merge_munges]
+    #: Verification-only edits the editor made to the program's own source on this unit's behalf,
+    #: in the order applied. Reduced for the same reason ``summaries`` is.
+    munges: Annotated[list[Munge], merge_munges]
     expected_failures: Annotated[dict[CheckName, str], merge_expected_failures]
     #: The job link from the most recent prover run that produced results, whether or not it was
     #: all green — a link to a failing run is still the most useful thing a report can offer.
@@ -226,7 +226,7 @@ class HarnessAssumptions:
     """
 
     summaries: tuple[SummaryDirective, ...]
-    munges: tuple[FunctionMunge, ...]
+    munges: tuple[Munge, ...]
     #: A unified diff from the project's own source to what the munges make of it. Empty when there
     #: are none. The judge gets the change itself rather than a description of it, which is what
     #: EVM's munge reviewer has always had and this one did not — a description is the editor's
@@ -262,7 +262,7 @@ class HarnessAssumptions:
                 "likewise absent from the harness:"
             )
             parts += [
-                f"  {m.function} ({m.path}): {m.kind.describe()}\n"
+                f"  {m.function} ({m.path}): {m.describe()}\n"
                 f"    Justification: {m.why}"
                 for m in self.munges
             ]
