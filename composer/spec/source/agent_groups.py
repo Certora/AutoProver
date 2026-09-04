@@ -18,8 +18,6 @@ shared base spec plus a `methods{}` block of the summaries that group declared
 group does not summarize is verified precise there.
 """
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -30,34 +28,8 @@ from composer.spec.source.verification_groups import (
 )
 
 
-@dataclass(frozen=True)
-class GroupDeclaration:
-    """One agent-declared verification group, expressed over properties.
-
-    Carries its property->rules mapping directly — the same shape the authoring layer passes to
-    ``validate_check_mapping`` (``(title, rules)`` bundled together) — so the core needs no
-    separately-threaded rule dict."""
-    #: Agent-chosen, human-readable identifier (used in conf/spec names and results).
-    name: str
-    #: This group's property->rules mapping: each property title it verifies -> the rule/invariant
-    #: names that verify it. Every non-skipped property must appear in exactly one declaration; the
-    #: union of these rules is the group's owned rules.
-    property_rules: Mapping[str, Sequence[str]]
-    #: The summaries this group installs: function -> its ``methods{}`` entry. A function
-    #: absent here is verified PRECISE (unsummarized) in this group.
-    summaries: Mapping[str, str] = field(default_factory=dict)
-    #: Per-group conf overlay (e.g. {"loop_iter": 2, "global_timeout": 4000}). The
-    #: non-summarization split axis — isolation, timeouts, loop bounds, links.
-    conf_overlay: Mapping[str, object] = field(default_factory=dict)
-
-    @property
-    def properties(self) -> frozenset[str]:
-        """The property titles this group covers (the keys of ``property_rules``)."""
-        return frozenset(self.property_rules)
-
-
 def validate_declared_coverage(
-    declarations: list[GroupDeclaration],
+    specs: list["VerificationGroupSpec"],
     *,
     all_properties: set[str],
     skipped: set[str],
@@ -68,7 +40,7 @@ def validate_declared_coverage(
     assigned to exactly one group; no unknown or skipped property may be assigned.
     Returns None when valid, else one message enumerating every problem — the shape
     an agent tool hands back so the author can fix its declaration."""
-    assigned: list[str] = [p for d in declarations for p in d.properties]
+    assigned: list[str] = [str(m.property_title) for s in specs for m in s.property_rules]
     seen: set[str] = set()
     duplicated: set[str] = set()
     for p in assigned:
@@ -84,54 +56,6 @@ def validate_declared_coverage(
     if skipped_assigned := seen & skipped:
         problems.append(f"skipped properties should not be assigned to a group: {sorted(skipped_assigned)}")
     return "; ".join(problems) if problems else None
-
-
-def build_declared_groups(
-    base_spec: str,
-    *,
-    declarations: list[GroupDeclaration],
-    cap: int,
-) -> list[VerificationGroup]:
-    """Expand agent-declared property groups into runnable :class:`VerificationGroup`s.
-
-    Each declaration's owned rules are the union of its properties' rules, made a
-    disjoint partition by first-declaration-wins (a rule shared across properties in
-    different groups is owned — and thus authoritatively verified — by the first,
-    keeping the ``merge_group_results`` / per-group-completion invariant that every
-    rule has exactly one owner). Each group's spec installs the summaries it declared
-    (:func:`append_summaries`); a function it does not summarize is verified precise. The
-    result is bounded to ``cap`` via the greedy merge, which keeps only the summaries both
-    merged groups agree on (:func:`merge_summaries`) and regenerates the merged spec.
-
-    Coverage should be checked first with :func:`validate_declared_coverage`; this
-    function assumes a valid declaration and only enforces the rule partition."""
-    claimed: set[str] = set()
-    groups: list[VerificationGroup] = []
-    for d in declarations:
-        owned = {r for rs in d.property_rules.values() for r in rs}
-        owned -= claimed  # first-declaration-wins: keep the rule partition disjoint
-        claimed |= owned
-        groups.append(
-            VerificationGroup(
-                name=d.name,
-                owned_rules=frozenset(owned),
-                spec_contents=append_summaries(base_spec, d.summaries),
-                summaries=dict(d.summaries),
-                conf_overlay=d.conf_overlay,
-            )
-        )
-
-    def merge_pair(a: VerificationGroup, b: VerificationGroup) -> VerificationGroup:
-        merged = merge_summaries(a.summaries, b.summaries)
-        return VerificationGroup(
-            name=f"{a.name}+{b.name}"[:60],
-            owned_rules=a.owned_rules | b.owned_rules,
-            spec_contents=append_summaries(base_spec, merged),
-            summaries=merged,
-            conf_overlay={**a.conf_overlay, **b.conf_overlay},
-        )
-
-    return cap_groups(groups, cap, merge_pair=merge_pair)
 
 
 # --- Agent-facing declaration (the tool input / state shape) ----------------
@@ -164,27 +88,6 @@ class VerificationGroupSpec(BaseModel):
     )
 
 
-def _declaration_of(spec: VerificationGroupSpec) -> GroupDeclaration:
-    """The internal :class:`GroupDeclaration` for one agent-declared spec — its property->rules
-    mapping (rules bundled per property), summaries, and conf overlay."""
-    return GroupDeclaration(
-        name=spec.name,
-        property_rules={str(m.property_title): [str(r) for r in m.rules] for m in spec.property_rules},
-        summaries=dict(spec.summaries),
-        conf_overlay=spec.conf_overlay,
-    )
-
-
-def coverage_error(
-    specs: list[VerificationGroupSpec], *, all_properties: set[str], skipped: set[str]
-) -> str | None:
-    """Validate declared-group coverage over the property space (see
-    :func:`validate_declared_coverage`), reading properties from each group's mapping."""
-    return validate_declared_coverage(
-        [_declaration_of(s) for s in specs], all_properties=all_properties, skipped=skipped
-    )
-
-
 def over_cap_message(specs: list[VerificationGroupSpec], cap: int) -> str | None:
     """A rejection message when the agent declared MORE groups than the cap, else ``None``.
 
@@ -197,7 +100,7 @@ def over_cap_message(specs: list[VerificationGroupSpec], cap: int) -> str | None
         return None
     claimed: set[str] = set()
     sim: list[VerificationGroup] = []
-    for s in specs:  # mirror build_declared_groups' first-declaration-wins owned-rule partition
+    for s in specs:  # mirror groups_from_specs' first-declaration-wins owned-rule partition
         owned = {str(r) for m in s.property_rules for r in m.rules} - claimed
         claimed |= owned
         sim.append(VerificationGroup(name=s.name, owned_rules=frozenset(owned), summaries=dict(s.summaries)))
@@ -217,12 +120,44 @@ def groups_from_specs(
     *,
     cap: int,
 ) -> list[VerificationGroup]:
-    """Expand the agent's declared group specs into runnable groups (coverage assumed
-    already validated). Convenience over :func:`build_declared_groups`, converting each
-    spec to its :class:`GroupDeclaration`."""
-    return build_declared_groups(
-        base_spec, declarations=[_declaration_of(s) for s in specs], cap=cap
-    )
+    """Expand the agent's declared group specs into runnable :class:`VerificationGroup`s
+    (coverage assumed already validated with :func:`validate_declared_coverage`).
+
+    Each group's owned rules are the union of its properties' rules, made a disjoint
+    partition by first-declaration-wins (a rule shared across properties in different
+    groups is owned — and thus authoritatively verified — by the first, keeping the
+    ``merge_group_results`` / per-group-completion invariant that every rule has exactly
+    one owner). Each group's spec installs the summaries it declared (:func:`append_summaries`);
+    a function it does not summarize is verified precise. The result is bounded to ``cap`` via
+    the greedy merge, which keeps only the summaries both merged groups agree on
+    (:func:`merge_summaries`) and regenerates the merged spec."""
+    claimed: set[str] = set()
+    groups: list[VerificationGroup] = []
+    for s in specs:
+        owned = {str(r) for m in s.property_rules for r in m.rules}
+        owned -= claimed  # first-declaration-wins: keep the rule partition disjoint
+        claimed |= owned
+        groups.append(
+            VerificationGroup(
+                name=s.name,
+                owned_rules=frozenset(owned),
+                spec_contents=append_summaries(base_spec, s.summaries),
+                summaries=dict(s.summaries),
+                conf_overlay=s.conf_overlay,
+            )
+        )
+
+    def merge_pair(a: VerificationGroup, b: VerificationGroup) -> VerificationGroup:
+        merged = merge_summaries(a.summaries, b.summaries)
+        return VerificationGroup(
+            name=f"{a.name}+{b.name}"[:60],
+            owned_rules=a.owned_rules | b.owned_rules,
+            spec_contents=append_summaries(base_spec, merged),
+            summaries=merged,
+            conf_overlay={**a.conf_overlay, **b.conf_overlay},
+        )
+
+    return cap_groups(groups, cap, merge_pair=merge_pair)
 
 
 def render_group_plan_for_judge(specs: list["VerificationGroupSpec"]) -> str | None:

@@ -1,8 +1,11 @@
 """Unit tests for the agent-declared, property-level group planner (transparent policy)."""
 
+from composer.spec.cvl_generation import PropertyRuleMapping
 from composer.spec.source.agent_groups import (
-    GroupDeclaration,
-    build_declared_groups,
+    VerificationGroupSpec,
+    groups_from_specs,
+    over_cap_message,
+    render_group_plan_for_judge,
     validate_declared_coverage,
 )
 
@@ -17,49 +20,59 @@ PROP_RULES = {
 }
 
 
-def _decl(name, props, summaries=None, conf=None, rules=None):
-    rules = rules if rules is not None else PROP_RULES  # property -> rules; unknown props map to no rules
-    return GroupDeclaration(
-        name=name, property_rules={p: list(rules.get(p, [])) for p in props},
-        summaries=summaries or {}, conf_overlay=conf or {},
+def _spec(name, prop_rules, summaries=None, conf=None):
+    return VerificationGroupSpec(
+        name=name,
+        property_rules=[
+            PropertyRuleMapping(property_title=p, rules=rs) for p, rs in prop_rules
+        ],
+        summaries=summaries or {},
+        conf_overlay=conf or {},
     )
+
+
+def _grp(name, props, summaries=None, conf=None, rules=None):
+    # A group over property titles, sourcing each property's rules from `rules` (PROP_RULES
+    # by default); an unknown property maps to no rules.
+    rules = rules if rules is not None else PROP_RULES
+    return _spec(name, [(p, list(rules.get(p, []))) for p in props], summaries, conf)
 
 
 # --- coverage validation ----------------------------------------------------
 
 
 def test_coverage_ok():
-    decls = [_decl("g1", ["P-bitmap"]), _decl("g2", ["P-accounting", "P-misc"])]
+    decls = [_grp("g1", ["P-bitmap"]), _grp("g2", ["P-accounting", "P-misc"])]
     assert validate_declared_coverage(
         decls, all_properties=set(PROP_RULES), skipped=set()
     ) is None
 
 
 def test_coverage_missing_property():
-    decls = [_decl("g1", ["P-bitmap"])]
+    decls = [_grp("g1", ["P-bitmap"])]
     err = validate_declared_coverage(decls, all_properties=set(PROP_RULES), skipped=set())
     assert err is not None and "no group" in err
 
 
 def test_coverage_duplicate_property():
-    decls = [_decl("g1", ["P-bitmap"]), _decl("g2", ["P-bitmap", "P-accounting", "P-misc"])]
+    decls = [_grp("g1", ["P-bitmap"]), _grp("g2", ["P-bitmap", "P-accounting", "P-misc"])]
     err = validate_declared_coverage(decls, all_properties=set(PROP_RULES), skipped=set())
     assert err is not None and "more than one group" in err
 
 
 def test_coverage_skipped_property_not_required_nor_assignable():
     # P-misc is skipped -> need not be covered, but must not be assigned either.
-    ok = [_decl("g1", ["P-bitmap"]), _decl("g2", ["P-accounting"])]
+    ok = [_grp("g1", ["P-bitmap"]), _grp("g2", ["P-accounting"])]
     assert validate_declared_coverage(
         ok, all_properties=set(PROP_RULES), skipped={"P-misc"}
     ) is None
-    bad = [_decl("g1", ["P-bitmap"]), _decl("g2", ["P-accounting", "P-misc"])]
+    bad = [_grp("g1", ["P-bitmap"]), _grp("g2", ["P-accounting", "P-misc"])]
     err = validate_declared_coverage(bad, all_properties=set(PROP_RULES), skipped={"P-misc"})
     assert err is not None and "skipped" in err
 
 
 def test_coverage_unknown_property():
-    decls = [_decl("g1", ["P-bitmap"]), _decl("g2", ["P-accounting", "P-misc", "P-ghost"])]
+    decls = [_grp("g1", ["P-bitmap"]), _grp("g2", ["P-accounting", "P-misc", "P-ghost"])]
     err = validate_declared_coverage(decls, all_properties=set(PROP_RULES), skipped=set())
     assert err is not None and "unknown" in err
 
@@ -69,10 +82,10 @@ def test_coverage_unknown_property():
 
 def test_build_expands_properties_to_rules_and_summaries():
     decls = [
-        _decl("bitmap", ["P-bitmap"], summaries={"uncheckedExp": EXP_SUMMARY}),
-        _decl("rest", ["P-accounting", "P-misc"], summaries={"sortByKey": SORT_SUMMARY}),
+        _grp("bitmap", ["P-bitmap"], summaries={"uncheckedExp": EXP_SUMMARY}),
+        _grp("rest", ["P-accounting", "P-misc"], summaries={"sortByKey": SORT_SUMMARY}),
     ]
-    groups = build_declared_groups(BASE, declarations=decls, cap=4)
+    groups = groups_from_specs(BASE, decls, cap=4)
     by = {g.name: g for g in groups}
     # bitmap group installs the uncheckedExp summary and keeps sortByKey precise (not installed).
     assert by["bitmap"].owned_rules == {"r_borrow", "r_collat"}
@@ -86,10 +99,10 @@ def test_build_expands_properties_to_rules_and_summaries():
 
 def test_build_conf_overlay_passes_through():
     decls = [
-        _decl("slow", ["P-bitmap"], conf={"global_timeout": 4000, "loop_iter": 2}),
-        _decl("fast", ["P-accounting", "P-misc"]),
+        _grp("slow", ["P-bitmap"], conf={"global_timeout": 4000, "loop_iter": 2}),
+        _grp("fast", ["P-accounting", "P-misc"]),
     ]
-    groups = build_declared_groups(BASE, declarations=decls, cap=4)
+    groups = groups_from_specs(BASE, decls, cap=4)
     slow = next(g for g in groups if g.name == "slow")
     assert slow.conf_overlay == {"global_timeout": 4000, "loop_iter": 2}
 
@@ -97,8 +110,8 @@ def test_build_conf_overlay_passes_through():
 def test_build_rule_partition_first_declaration_wins():
     # A rule shared by two properties placed in different groups is owned by the first.
     shared = {"P-x": ["r1", "r2"], "P-y": ["r2", "r3"]}  # r2 shared
-    decls = [_decl("gx", ["P-x"], rules=shared), _decl("gy", ["P-y"], rules=shared)]
-    groups = build_declared_groups(BASE, declarations=decls, cap=4)
+    decls = [_grp("gx", ["P-x"], rules=shared), _grp("gy", ["P-y"], rules=shared)]
+    groups = groups_from_specs(BASE, decls, cap=4)
     by = {g.name: g for g in groups}
     assert by["gx"].owned_rules == {"r1", "r2"}
     assert by["gy"].owned_rules == {"r3"}  # r2 already claimed by gx
@@ -108,36 +121,18 @@ def test_build_rule_partition_first_declaration_wins():
 
 
 def test_build_caps_and_merges_keeping_partition():
-    decls = [_decl(f"g{i}", [p], summaries=s) for i, (p, s) in enumerate([
+    decls = [_grp(f"g{i}", [p], summaries=s) for i, (p, s) in enumerate([
         ("P-bitmap", {"uncheckedExp": EXP_SUMMARY}),
         ("P-accounting", {"sortByKey": SORT_SUMMARY}),
         ("P-misc", {"uncheckedExp": EXP_SUMMARY}),
     ])]
-    groups = build_declared_groups(BASE, declarations=decls, cap=2)
+    groups = groups_from_specs(BASE, decls, cap=2)
     assert len(groups) == 2
     owned = [r for g in groups for r in g.owned_rules]
     assert sorted(owned) == sorted(r for rs in PROP_RULES.values() for r in rs)
 
 
 # --- judge-facing group plan rendering --------------------------------------
-
-from composer.spec.source.agent_groups import (
-    VerificationGroupSpec,
-    over_cap_message,
-    render_group_plan_for_judge,
-)
-from composer.spec.cvl_generation import PropertyRuleMapping
-
-
-def _spec(name, prop_rules, summaries=None, conf=None):
-    return VerificationGroupSpec(
-        name=name,
-        property_rules=[
-            PropertyRuleMapping(property_title=p, rules=rs) for p, rs in prop_rules
-        ],
-        summaries=summaries or {},
-        conf_overlay=conf or {},
-    )
 
 
 def test_over_cap_message_none_within_cap():
