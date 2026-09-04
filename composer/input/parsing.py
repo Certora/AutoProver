@@ -1,4 +1,5 @@
 import argparse
+import pathlib
 from typing import TypeVar, Protocol, cast, Annotated, get_type_hints, get_origin, Any, get_args, Union
 from composer.input.types import CommandLineArgs, ResumeArgs, Arg, OptionalArg, RAGDBOptions, ModelOptions, LanggraphOptions, UploadPaths, InputData, SpecInput
 from composer.input.files import DOCUMENT_SUFFIXES, FileUploader
@@ -142,7 +143,11 @@ def _common_options(parser: argparse.ArgumentParser) -> None:
 def fresh_workflow_argument_parser() -> TypedArgumentParser[CommandLineArgs]:
     """Configure command line argument parser."""
     parser = argparse.ArgumentParser(description="Certora AI Composer for Smart Contract Generation")
-    parser.add_argument("spec_file", help="Specification file for the smart contract")
+    parser.add_argument(
+        "spec_file", nargs="+",
+        help="One or more specification files for the smart contract. All of them "
+             "gate the generated code: it must satisfy every rule in every spec.",
+    )
     parser.add_argument("interface_file", help="The interface file for the smart contract")
     parser.add_argument("system_doc", help="A text document describing the system")
     _common_options(parser)
@@ -153,23 +158,50 @@ def fresh_workflow_argument_parser() -> TypedArgumentParser[CommandLineArgs]:
 async def upload_input(uploader: FileUploader, args: UploadPaths) -> InputData:
     """Turn the CLI's spec / interface / system-doc paths into an ``InputData``.
 
-    Spec and interface are unconditionally uploaded to the Files API as text
+    Specs and interface are unconditionally uploaded to the Files API as text
     (``upload_text_file_if_needed`` → ``UploadedTextFile``, a ``TextDocument``);
     the system doc goes through ``get_document`` so a PDF is uploaded while a
     text design doc stays inline.
+
+    Each spec is materialized in the VFS under its own file name, since
+    ``vfs_path`` keys the specs downstream (audit's resume artifact indexes them
+    by it). A single spec keeps the conventional ``rules.spec`` name so existing
+    single-spec runs and their recorded artifacts are unaffected.
     """
-    spec = await uploader.upload_text_file_if_needed(args.spec_file)
+    specs = [
+        SpecInput(file=await uploader.upload_text_file_if_needed(path), vfs_path=vfs_path)
+        for path, vfs_path in zip(args.spec_file, _spec_vfs_paths(args.spec_file))
+    ]
     intf = await uploader.upload_text_file_if_needed(args.interface_file)
     system_doc = await uploader.get_document(args.system_doc)
     if system_doc is None:
         raise FileNotFoundError(f"System document not found or not a file: {args.system_doc}")
-    # The legacy CLI triad is single-spec; map it to a one-element specs list at
-    # the conventional codegen path. The pipeline is plumbed for N specs.
     return InputData(
-        specs=[SpecInput(file=spec, vfs_path="rules.spec")],
+        specs=specs,
         system_doc=system_doc,
         intf=intf,
     )
+
+
+def _spec_vfs_paths(spec_files: list[str]) -> list[str]:
+    """VFS names for the CLI's spec paths: the file names, deduplicated by path.
+
+    Distinct directories can hold same-named specs (``core/vault.spec`` and
+    ``periphery/vault.spec``), and a collision would silently drop one of them
+    from anything keyed by ``vfs_path``, so reject it with the offending name
+    rather than inventing a suffix the user never asked for.
+    """
+    if len(spec_files) == 1:
+        return ["rules.spec"]
+    names = [pathlib.PurePath(p).name for p in spec_files]
+    duplicates = {n for n in names if names.count(n) > 1}
+    if duplicates:
+        raise ValueError(
+            f"Spec file names must be unique; got {len(names)} specs with repeated "
+            f"name(s): {', '.join(sorted(duplicates))}. Rename or copy them so each "
+            f"spec has a distinct file name."
+        )
+    return names
 
 
 def _common_resume_args(parser: argparse.ArgumentParser) -> None:
