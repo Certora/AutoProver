@@ -33,6 +33,9 @@ _WHY = "[3308] on the #[error_code] Display impl; no property asserts over an er
 _DISPLAY = "^<vault::VaultError as core::fmt::Display>::fmt$"
 
 
+_UNIT = "deposits"
+
+
 @pytest.fixture
 def tuning(tmp_path: Path) -> TuningFiles:
     """A scaffolded envs directory: every family's composite present, package layers headed."""
@@ -41,7 +44,7 @@ def tuning(tmp_path: Path) -> TuningFiles:
     for family in ENV_FAMILIES:
         (envs / family.package).write_text(f"; {family.package}, yours to edit\n")
         (envs / family.composite).write_text("; composed\n")
-    return TuningFiles(envs_dir=envs, dialect=PathDialect())
+    return TuningFiles(envs_dir=envs, dialect=PathDialect(), unit=_UNIT)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -49,37 +52,62 @@ def tuning(tmp_path: Path) -> TuningFiles:
 
 
 def test_the_directive_reaches_the_file_the_conf_names(tuning: TuningFiles):
-    """Both files, not just the package layer. The conf names the *composite*, so a directive
-    written only to the layer the author owns would change nothing about the next submission — the
-    tool would report success and the author would get an identical [3308]."""
+    """Both files, not just the layer. The conf names the *composite*, so a directive written only
+    to the layer would change nothing about the next submission — the tool would report success and
+    the author would get an identical [3308]."""
     tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY),))
-    for name in (SUMMARIES.package, SUMMARIES.composite):
-        assert _DISPLAY in (tuning.envs_dir / name).read_text(), name
+    for path in (tuning.unit_layer_path(SUMMARIES), tuning.composite_path()):
+        assert _DISPLAY in path.read_text(), path
+
+
+def test_the_file_the_conf_names_is_this_units_own(tuning: TuningFiles):
+    """The leak a cargo feature cannot close. Every unit shares one working tree, and a summary is a
+    regex the prover applies to the whole build — so one shared file would apply one unit's
+    summaries to every other unit's submission, silently narrowing what their green rules checked."""
+    assert tuning.composite_path().name == SUMMARIES.unit_composite(_UNIT)
+    assert tuning.composite_path().name != SUMMARIES.composite
+
+
+def test_the_projects_own_layer_is_not_written_to(tuning: TuningFiles):
+    """`_package.txt` is the project's file. A run that appended to it would leave one unit's
+    directives applying to every later submission, including ones this run never made."""
+    before = (tuning.envs_dir / SUMMARIES.package).read_text()
+    tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY),))
+    assert (tuning.envs_dir / SUMMARIES.package).read_text() == before
+
+
+def test_the_projects_own_layer_still_reaches_the_composite(tuning: TuningFiles):
+    """Not touching it is not the same as ignoring it: the unit composite is composed from the
+    canonical layers *and* the project's, so nothing a project declared is dropped by the override
+    the conf carries."""
+    tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY),))
+    assert "yours to edit" in tuning.composite_path().read_text()
 
 
 def test_the_justification_is_written_beside_the_pattern(tuning: TuningFiles):
     """A summary is unsound, so the file has to say why this one was acceptable. Somebody reading
     this project's tuning file six months from now is the audience."""
     tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY),))
-    layer = (tuning.envs_dir / SUMMARIES.package).read_text()
-    assert f"; {_WHY}" in layer
+    assert f"; {_WHY}" in tuning.unit_layer_path(SUMMARIES).read_text()
 
 
-def test_the_scaffolds_header_survives_a_rewrite(tuning: TuningFiles):
+def test_the_unit_layer_says_who_owns_it(tuning: TuningFiles):
+    """It is rewritten from state on every build, so a reader who edits it loses the edit."""
     tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY),))
-    assert "yours to edit" in (tuning.envs_dir / SUMMARIES.package).read_text()
+    layer = tuning.unit_layer_path(SUMMARIES).read_text()
+    assert _UNIT in layer and "DO NOT EDIT" in layer
 
 
 def test_a_return_shape_is_wrapped_as_a_type_annotation(tuning: TuningFiles):
     tuning.write((SummaryDirective(pattern="^foo$", why="w", returns="(*i32)(r1+0):num"),))
-    assert "#[type((*i32)(r1+0):num)]" in (tuning.envs_dir / SUMMARIES.package).read_text()
+    assert "#[type((*i32)(r1+0):num)]" in tuning.unit_layer_path(SUMMARIES).read_text()
 
 
 def test_no_annotation_is_emitted_for_an_unconstrained_return(tuning: TuningFiles):
     """The common case — a formatting function nobody asserts over — and an empty `#[type()]` is
     not the same directive as no `#[type]` at all."""
     tuning.write((SummaryDirective(pattern="^foo$", why="w"),))
-    assert "#[type" not in (tuning.envs_dir / SUMMARIES.package).read_text()
+    assert "#[type" not in tuning.unit_layer_path(SUMMARIES).read_text()
 
 
 def test_the_layer_is_rewritten_rather_than_appended_to(tuning: TuningFiles):
@@ -87,7 +115,7 @@ def test_the_layer_is_rewritten_rather_than_appended_to(tuning: TuningFiles):
     drift, and a re-run replaying its recorded directives would double them."""
     tuning.write((SummaryDirective(pattern="^a$", why="w"),))
     tuning.write((SummaryDirective(pattern="^b$", why="w"),))
-    layer = (tuning.envs_dir / SUMMARIES.package).read_text()
+    layer = tuning.unit_layer_path(SUMMARIES).read_text()
     assert "^b$" in layer and "^a$" not in layer
 
 
@@ -96,12 +124,30 @@ def test_the_inlining_family_is_left_alone(tuning: TuningFiles):
     before = (tuning.envs_dir / INLINING.package).read_text()
     tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY),))
     assert (tuning.envs_dir / INLINING.package).read_text() == before
+    assert not (tuning.envs_dir / INLINING.unit_composite(_UNIT)).exists()
 
 
-def test_dropping_every_directive_restores_the_scaffolded_layer(tuning: TuningFiles):
+def test_dropping_every_directive_removes_it_from_the_file(tuning: TuningFiles):
+    """What makes the tuning file *derived* in the sense a resumed run needs: state is the only
+    source of truth, so rewinding past a directive takes it off disk too."""
     tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY),))
     tuning.write(())
-    assert _DISPLAY not in (tuning.envs_dir / SUMMARIES.package).read_text()
+    assert _DISPLAY not in tuning.composite_path().read_text()
+
+
+def test_two_units_do_not_see_each_others_directives(tmp_path: Path):
+    """The whole point of the split, stated directly."""
+    envs = tmp_path / "envs"
+    envs.mkdir()
+    for family in ENV_FAMILIES:
+        (envs / family.package).write_text("; yours to edit\n")
+        (envs / family.composite).write_text("; composed\n")
+    a = TuningFiles(envs_dir=envs, dialect=PathDialect(), unit="a")
+    b = TuningFiles(envs_dir=envs, dialect=PathDialect(), unit="b")
+    a.write((SummaryDirective(pattern="^only_a$", why="w"),))
+    b.write((SummaryDirective(pattern="^only_b$", why="w"),))
+    assert "^only_b$" not in a.composite_path().read_text()
+    assert "^only_a$" not in b.composite_path().read_text()
 
 
 # ---------------------------------------------------------------------------------------------
@@ -112,11 +158,17 @@ def test_an_unscaffolded_project_is_reported_rather_than_written_to(tmp_path: Pa
     """The failure that is otherwise mute. With no composite there is no tuning file in the conf, so
     a summary has no effect — and the author would read a successful tool result, re-run, and get
     the same error with no way to tell that the remedy never applied."""
-    empty = TuningFiles(envs_dir=tmp_path, dialect=PathDialect())
-    assert set(empty.missing()) == {f.composite for f in ENV_FAMILIES}
+    empty = TuningFiles(envs_dir=tmp_path, dialect=PathDialect(), unit=_UNIT)
+    assert set(empty.missing()) == {
+        *(f.composite for f in ENV_FAMILIES),
+        SUMMARIES.unit_composite(_UNIT),
+    }
 
 
 def test_a_scaffolded_project_reports_nothing_missing(tuning: TuningFiles):
+    """Once the unit's composite exists. Before the first stage it does not, and the conf would name
+    a path the prover refuses to read — which is why the formalizer composes an empty one up front."""
+    tuning.write(())
     assert tuning.missing() == ()
 
 

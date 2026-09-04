@@ -8,6 +8,18 @@
 > would be one mechanism; they are not, and the reason is worth writing down because it is not the
 > reason anybody expected.
 
+> **§5's conclusion is wrong for CVLR, for a reason it names and then discards** — see
+> [who-edits-the-program.md](who-edits-the-program.md) §2.1. The sub-agent does not have to argue that
+> a property-relative munge was acceptable; CVLR's judge holds the properties and already rules on
+> both kinds, where EVM's munge reviewer is deliberately built not to.
+>
+> **The CVLR half of §1–§3 no longer describes the code.** The per-unit workdir has been replaced
+> by one tree for the run, with each unit's module behind its own cargo feature —
+> [single-working-tree.md](single-working-tree.md) is the argument and what was built. §7's trigger 3
+> is what fired, one step earlier than expected: the per-unit arithmetic did not survive being
+> checked against what cargo actually caches. §4's charter and §5's argument about *who* applies a
+> munge are untouched, though §4's count of the vocabulary is wrong — see the note there.
+
 **This document is a snapshot of reasoning, not a conclusion.** Every measurement in it was taken
 while the CVLR backend still had a blocking prover defect ([upstream-defects.md](upstream-defects.md)
 P6) and had never
@@ -79,6 +91,10 @@ tree is otherwise deleted before anyone can look at it.
 
 ### 1.2 CVLR — a physical copy per unit, edited in place
 
+> **Superseded.** One copy per *run* now, at `<project>/.cvlr_work/build/`, and edits are no longer
+> "in place": every file the run derives is rewritten from checkpointed state on every stage, which
+> is what makes the tree disposable. See [single-working-tree.md](single-working-tree.md) §4.
+
 `CvlrFormalizer.formalize` gives each unit `<project>/.cvlr_work/<module>/`, produced by
 `shutil.copytree` with `target`, `.git`, `.certora_internal`, `certora_out` and `.cvlr_work` itself
 excluded, and `symlinks=True`. **It is not a git worktree** — there is no object-store sharing and no
@@ -141,6 +157,14 @@ results.
 
 ## 3. The reasoning chain
 
+> **Steps (1)–(4) no longer hold.** (1) is false as stated: the compile gate is whole-crate only
+> while every unit's module is compiled, and each is now behind its own cargo feature, so a module
+> that is `cfg`'d out is neither compiled nor in rustc's dep-info. (2), (3) and (4) were forced by
+> (1) and fall with it. **(5) and (6) survive, and for the reason given** — cargo's input is source
+> plus `CARGO_HOME` plus `target/`, so a VFS would still be the wrong instrument, and edits are still
+> real writes. What changed is that the writes are now *derived* from state rather than being the
+> state. [single-working-tree.md](single-working-tree.md) §4 is the difference.
+
 Each step below was forced by the one above it. None of them is a preference, and only the last one
 is about munging at all.
 
@@ -192,6 +216,28 @@ The charter's soundness criterion is **behavioural equivalence** — *"Represent
 logical behavior may not."*
 
 ### 4.2 CVLR: two library attributes, property-relative
+
+> **The count is wrong, and by a lot.** "The one project in the corpus that carries a source-level
+> munge" is nine of eleven: counting `cfg_attr`-with-`certora` outside `certora/` trees gives
+> restaking 73, spl 50, klend-audit 43, stake-pool 21, kamino 13, smart-account 12, manifest 10,
+> vault-tutorial 5, token 3; only fluid and SolanaExamples are clean. And the vocabulary across those
+> is six *kinds*: beyond `early_panic` (152 sites) and `mock_fn` (~47) there are `certora_make_pub`
+> (6 — pure visibility widening, universally sound by construction, but a **project-local proc
+> macro** with no counterpart in `cvlr`, and Rust cannot make visibility conditional on a feature
+> without duplicating the item), `cvlr_hook_on_entry` / `on_exit` (9 — a call to a spec-side function
+> at a function's entry or exit, universally sound when observation-only), `inline(never)` (5) and
+> `derive(Copy)` (2). Three of the six are now offered
+> ([who-edits-the-program.md](who-edits-the-program.md) §9.3).
+> The hooks matter most: they are in the pinned reference set (`cvlr-hook-0.6.1`, re-exported from
+> `cvlr` as `hook_on_entry` / `hook_on_exit`), this backend has never heard of them, and they are the
+> spec-side observation instrument §7 trigger 5 asks about. Rewriting this section against that
+> evidence has not been done.
+>
+> One thing the corpus also settles: `cvlr::mock_fn` takes a `when` parameter naming a cargo feature,
+> and the conf's `cargo_features` selects which mocks are live per run — kamino metavault declares
+> eleven such features under the comment *"Per-conf prover mocks; enabled via `cargo_features`. Inert
+> without `certora`."*. That is what makes a source munge scopable at all, and
+> [single-working-tree.md](single-working-tree.md) §2.3 is what this backend does with it.
 
 Read off the one project in the corpus that carries a source-level munge — 22 files, 1097 lines —
 whose every source hunk is one of six kinds:
@@ -309,9 +355,10 @@ check these rather than to re-read the argument.
 2. **Evidence that the closed vocabulary is costing rules.** If skips naming a would-be munge become
    a common outcome, the corpus's five-of-six-are-attributes finding was about one project's style
    rather than about CVLR.
-3. **Units multiplying.** The per-unit workdir was measured on a three-unit run. At ten units the
-   arithmetic is ~10 GB and ten dependency builds, and the deferred shared read-only cache stops
-   being an optimization.
+3. ~~**Units multiplying.**~~ **Fired, and earlier than the trigger anticipated.** It did not take
+   ten units: the per-unit arithmetic was wrong about what cargo caches, and one tree with a cargo
+   feature per unit removes the duplication at three units as well as at ten
+   ([single-working-tree.md](single-working-tree.md) §3).
 4. **Confinement changing.** `CargoSession.cargo_home` returns `None` when the sandbox is disabled,
    so unconfined dev runs share `~/.cargo` and pay none of the 119 MB. If production confinement
    relaxes, step (3) of the chain in §3 weakens and with it the case against a VFS.
@@ -338,14 +385,25 @@ Carried here so §7's revisit has them in one place. Ranked by what a wrong answ
 2. **Nothing checks that a munge reached the build.** Plan §5.2 predicted this analogue of
    `EditsNotCompiled` and it is not built. The Rust failure is quiet: an attribute inserted into a
    file the `certora` feature gates out changes nothing and reports nothing, and the report still
-   carries a source-edit record claiming a change that had no effect.
-3. **Munges accumulate and cannot be undone.** No `revert_to_edit`, no history log. Mitigated today
-   by a munge being one line with a seconds-long compile gate behind it.
+   carries a source-edit record claiming a change that had no effect. **Half closed**: a munge whose
+   *function* cannot be found on replay is now a typed refusal put in front of the author rather than
+   a log line ([single-working-tree.md](single-working-tree.md) §4.3). A munge that lands in a file
+   the feature gates out is still silent.
+3. **Munges accumulate and cannot be undone — half closed, and the half that is left is the tool.**
+   The *representation* now supports removal: each munged file is rebuilt from the pristine copy and
+   replayed from state on every build, so a `FunctionMunge` that is not in state is not on disk,
+   including across a resume. That is what makes a rewound checkpoint mean something, and it is a
+   property a text overlay could not have had. But no tool removes one — `merge_munges` appends and
+   deduplicates, and `munge_function` is its only writer — so *within* a run an author still cannot
+   undo a munge it regrets. A `revert_munge` is now a small thing to add and was not added; the
+   history log EVM's edit store keeps is still absent.
 4. **No findings-staleness oracle.** Not yet applicable — CVLR findings are synthesized per run, so
    there is no cross-version store for an oracle to answer about. It becomes a real gap the moment
    findings persist across runs.
 
-Two deferred optimizations, in the order they have to land:
+Two deferred optimizations, in the order they have to land — **both now moot**, because the shared
+tree fetches and compiles the dependency graph once for the whole run and is therefore both of them
+at once ([single-working-tree.md](single-working-tree.md) §3):
 
 1. **Shared read-only registry.** `shared_cargo_ro_paths` already carries the hook and a comment
    saying a future shared cache "can add specific cache subtrees here without re-opening the

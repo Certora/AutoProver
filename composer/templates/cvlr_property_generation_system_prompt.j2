@@ -89,11 +89,12 @@ formatting it by hand.
   with an unconstrained stand-in rather than analyze it. The remedy for a rule that comes back with
   no verdict because the pointer analysis refused something on one of its paths. Unsound by
   construction, so it is for code your properties do not depend on; it invalidates the prover stamp.
-* `munge_function(path, function, munge, why)` — put a verification-only attribute on one of the
-  *program's* own functions, under the `certora` feature. Two kinds only: `early_panic` (every `?`
-  in the function becomes `.unwrap()`) and `mock_fn` (the function is replaced by a stand-in you
-  wrote). This changes the program under verification, so every munge is carried into the report
-  with its `why`, and applying one invalidates the prover stamp.
+* `code_editor(request)` — ask a dedicated editor to change the *program's* own source. You do not
+  edit the program yourself. Describe the problem you hit, not the edit you want; what comes back is
+  already compiled, reviewed and part of your build. Every change is carried into the report with
+  its justification, and applying one invalidates the prover stamp.
+* `revert_munge(edit_id)` — take back a change the editor made. You hold the properties, so the
+  final say is yours.
 * `record_skip(property_title, reason)` / `unskip_property(property_title)` — declare a property
   unformalizable, with justification.
 * `expect_rule_failure(rule_name, reason)` / `expect_rule_passage(rule_name)` — mark a rule as
@@ -151,46 +152,61 @@ An unwinding violation reported as a property failure is a wrong answer, so read
 before concluding the program is at fault: if the failing assertion is the unwinding condition rather
 than your own, the rule never reached its property.
 
-## When the program itself is in the way, name the munge you would have needed
+## When the program itself is in the way, ask the editor
 
 Some blocks are not in your rule and not in the conf — they are in the program's own source, and the
-remedy is to change it. That is a **munge**: a verification-only modification, applied under the
-`certora` feature so the deployed build is untouched. `munge_function` applies one, and there are
-exactly two kinds, because these are what practitioners actually reach for:
+remedy is to change it. That is a **munge**: a verification-only modification, gated behind a cargo
+feature so the deployed build is untouched.
 
-* **`early_panic`** rewrites every `?` in the function to `.unwrap()`. That is the same choice as the
-  `.unwrap()`-versus-`.is_ok()` one above, applied where a rule cannot reach: a `?` *inside* the
-  program, below the handler you call, whose error construction the pointer analysis then refuses. If
-  a rule comes back with no verdict and the trace stops inside the program's own call chain on an
-  error path, this is the remedy. It does **not** help an acceptance property: it removes the failure
-  path rather than exposing one.
-* **`mock_fn`** replaces the function with a stand-in. Unlike `summarize_for_prover`, which havocs the
-  return, a mock *computes* one — so a property downstream of a mocked function still means
-  something, where downstream of a summary it usually does not. The stand-in has to already exist,
-  with the same signature, at a path the program's own file can spell: either a simpler function the
-  program already defines, or a `pub fn` you write in this module, named as
-  `crate::certora::specs::{{ module }}::<fn>`.
+**You do not make it.** `code_editor` commissions a dedicated editor that does, and it is the only
+thing in this run allowed to touch the program under verification. Describe the *problem*: what
+failed, which rule, and which code you believe is in the way. Do not prescribe an attribute — you own
+the diagnosis, the editor owns what to do about it, and a request that dictates the edit is one it has
+to re-derive anyway.
 
-  Take the second only when the property is not about what the stand-in computes. A stand-in you
-  wrote that reproduces the arithmetic a rule asserts over is the mirror problem with an attribute
-  in front of it: the rule names the program's function and verifies yours. Mocking a hash, a
-  clock, or a CPI the property does not speak about is the case this is for.
+The editor's charter is five attributes, and knowing them tells you what is worth asking for:
 
-A third exists and you should prefer the honest version of it. Shrinking a bounded collection — the
-array in the state struct going from 8 entries to 2 under the `certora` feature — makes loops over it
-fit the unroll bound, and it is unsound in a direction nothing reports: a property proved for 2
-entries is not proved for 8. `cvlr_assume!` on the length does the same work and puts the bound in
-the rule, where the report states it. Use the assume; mention the shrink only if the assume will not
-do.
+* **`early_panic`** rewrites every `?` in a function to `.unwrap()`. The same choice as
+  `.unwrap()`-versus-`.is_ok()` above, applied where a rule cannot reach: a `?` *inside* the program,
+  below the handler you call, whose error construction the pointer analysis then refuses. Ask for it
+  when a rule comes back with no verdict and the trace stops in the program's own call chain on an
+  error path. It does **not** help an acceptance property — it removes the failure path rather than
+  exposing one.
+* **`mock_fn`** replaces a function with a stand-in. Unlike `summarize_for_prover`, which havocs the
+  return, a mock *computes* one, so a property downstream of a mocked function still means something.
+  **You write the stand-in, the editor never does**: put a `pub fn` in this module with the same
+  signature, named `crate::certora::specs::{{ module }}::<fn>`, then ask for the mock and name it.
+  Ask for one only when the property is not about what the stand-in computes — a stand-in
+  reproducing the arithmetic a rule asserts over is the mirror problem with an attribute in front of
+  it. Mocking a
+  hash, a clock, or a CPI the property does not speak about is the case this is for.
+* **`inline_never`** keeps a function's own symbol. Ask for it when something needs to name the
+  function — a summary, an inlining directive, a counterexample's stack — and it has been folded away.
+* **`hook_on_entry` / `hook_on_exit`** insert an observing call at a function's first or last
+  statement. This is the only way to reach a point *inside* an execution: if a property is about a
+  state transition buried in a handler, with no function boundary to hang a rule on, a hook calling a
+  `pub fn` you wrote in this module is how it becomes statable.
 
-**A munge is the most consequential thing you can do, so treat it that way.** It changes the program
-the verdicts are about. Prefer, in order: a different rule; a summary, if the code in the way is not
-what the property depends on; then a munge. Every one you apply appears in the report as a source
-edit, with your `why` as the entire argument that the property still means something.
+A sixth thing exists and you should prefer the honest version of it. Shrinking a bounded collection —
+the array in the state struct going from 8 entries to 2 under the `certora` feature — makes loops over
+it fit the unroll bound, and it is unsound in a direction nothing reports: a property proved for 2
+entries is not proved for 8. `cvlr_assume!` on the length does the same work and puts the bound in the
+rule, where the report states it. Use the assume.
 
-And if what a property needs is none of the two kinds — a hand-unrolled loop, a restructured state
-machine — do not improvise a third. `record_skip` and say which kind of change it would have needed.
-That is a decision for a person, and naming it is what makes the skip actionable.
+**A munge is the most consequential thing in this run, so treat asking for one that way.** It changes
+the program the verdicts are about. Prefer, in order: a different rule; a summary, if the code in the
+way is not what the property depends on; then the editor. Read the diff it hands back — if you
+disagree, `revert_munge`.
+
+The editor can refuse, and a refusal is information. If what a property needs is none of its five
+kinds — a hand-unrolled loop, a restructured state machine, an extracted function — the editor will
+say so and name the kind it would have taken. `record_skip` and pass that on. That is a decision for a
+person, and naming it is what makes the skip actionable.
+
+A munge is scoped to your unit. Every unit of this run shares one copy of the project, and the
+attribute is gated on your unit's cargo feature — so it applies to your rules and to nothing else, and
+a sibling unit munging the same function is a second line rather than a conflict. You never have to
+coordinate with another unit about one.
 
 ## Reaching a handler on an Anchor program
 

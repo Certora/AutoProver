@@ -324,22 +324,31 @@ impl Reserve {
 }
 """
 
-FEATURE = "certora"
+FEATURE = "unit_vault"
 
 
-def _munge(function: str, kind=None, path: str = "programs/p/src/reserve.rs") -> FunctionMunge:
+def _munge(
+    function: str,
+    kind=None,
+    path: str = "programs/p/src/reserve.rs",
+    feature: str = FEATURE,
+) -> FunctionMunge:
     return FunctionMunge(
-        path=path, function=function, kind=kind or EarlyPanic(), why="[3308] on the `?` path"
+        path=path,
+        function=function,
+        kind=kind or EarlyPanic(),
+        why="[3308] on the `?` path",
+        feature=feature,
     )
 
 
 def test_the_attribute_lands_above_the_signature_and_below_the_doc_comment():
     """Below the doc comment keeps the insert a one-line edit whose diff reads as one change; the
     attribute works from either position."""
-    result = apply_munge(SOURCE, _munge("redeem_fees"), FEATURE)
+    result = apply_munge(SOURCE, _munge("redeem_fees"))
     assert isinstance(result, Munged)
     lines = result.source.splitlines()
-    assert lines[result.line - 2] == '#[cfg_attr(feature = "certora", cvlr::early_panic)]'
+    assert lines[result.line - 2] == '#[cfg_attr(feature = "unit_vault", cvlr::early_panic)]'
     assert lines[result.line - 1].startswith("pub fn redeem_fees(")
     assert lines[result.line - 3].startswith("/// Redeem")
 
@@ -347,18 +356,18 @@ def test_the_attribute_lands_above_the_signature_and_below_the_doc_comment():
 def test_a_longer_name_sharing_a_prefix_is_not_the_same_function():
     """`fn redeem_fees` must not match `fn redeem_fees_inner`. The trailing `(` or `<` is what
     settles it, and getting this wrong munges a function nobody asked about."""
-    result = apply_munge(SOURCE, _munge("redeem_fees_inner"), FEATURE)
+    result = apply_munge(SOURCE, _munge("redeem_fees_inner"))
     assert isinstance(result, Munged)
     assert result.source.splitlines()[result.line - 1].startswith("fn redeem_fees_inner(")
 
 
 def test_a_mock_names_its_stand_in_in_the_attribute():
     result = apply_munge(
-        SOURCE, _munge("calculate_fees", MockFn(stand_in="crate::certora::mocks::fees")), FEATURE
+        SOURCE, _munge("calculate_fees", MockFn(stand_in="crate::certora::mocks::fees"))
     )
     assert isinstance(result, Munged)
     assert (
-        '#[cfg_attr(feature = "certora", cvlr::mock_fn(with = crate::certora::mocks::fees))]'
+        '#[cfg_attr(feature = "unit_vault", cvlr::mock_fn(with = crate::certora::mocks::fees))]'
         in result.source
     )
 
@@ -366,15 +375,15 @@ def test_a_mock_names_its_stand_in_in_the_attribute():
 def test_the_indentation_of_the_function_is_matched():
     """`calculate_fees` is inside an impl block. An attribute at column zero above an indented `fn`
     compiles and reads as though nobody looked."""
-    result = apply_munge(SOURCE, _munge("calculate_fees"), FEATURE)
+    result = apply_munge(SOURCE, _munge("calculate_fees"))
     assert isinstance(result, Munged)
-    assert '    #[cfg_attr(feature = "certora", cvlr::early_panic)]' in result.source
+    assert '    #[cfg_attr(feature = "unit_vault", cvlr::early_panic)]' in result.source
 
 
 def test_a_function_the_file_does_not_define_is_refused_with_what_it_does():
     """A compile gate would catch this two minutes and one build later, and say nothing about the
     name that was meant."""
-    result = apply_munge(SOURCE, _munge("redeem_fee"), FEATURE)
+    result = apply_munge(SOURCE, _munge("redeem_fee"))
     assert isinstance(result, FunctionNotFound)
     assert "redeem_fees" in result.nearby
 
@@ -389,7 +398,7 @@ impl Collateral {
     }
 }
 """
-    result = apply_munge(twice, _munge("calculate_fees"), FEATURE)
+    result = apply_munge(twice, _munge("calculate_fees"))
     assert isinstance(result, FunctionAmbiguous)
     assert len(result.lines) == 2
 
@@ -397,9 +406,9 @@ impl Collateral {
 def test_re_applying_a_munge_is_recognized_rather_than_doubled():
     """`stage` re-applies every recorded munge on each build, from whatever is on disk. That is only
     safe because the second application reports the attribute already there."""
-    once = apply_munge(SOURCE, _munge("redeem_fees"), FEATURE)
+    once = apply_munge(SOURCE, _munge("redeem_fees"))
     assert isinstance(once, Munged)
-    twice = apply_munge(once.source, _munge("redeem_fees"), FEATURE)
+    twice = apply_munge(once.source, _munge("redeem_fees"))
     assert isinstance(twice, AlreadyMunged)
 
 
@@ -416,7 +425,13 @@ def test_rewording_a_justification_does_not_cost_a_submission():
     """Keyed on what the prover sees differently — the file, the function, the attribute — and not
     on `why`, exactly as `summary_history` is."""
     one = _munge("redeem_fees")
-    two = FunctionMunge(path=one.path, function=one.function, kind=one.kind, why="clearer wording")
+    two = FunctionMunge(
+        path=one.path,
+        function=one.function,
+        kind=one.kind,
+        why="clearer wording",
+        feature=one.feature,
+    )
     assert munge_history((one,)) == munge_history((two,))
 
 
@@ -442,8 +457,11 @@ def test_the_same_munge_recorded_twice_lands_once():
 
 def _target(workdir: Path):
     """A `HarnessTarget` for path questions only — the rest of it is not `source_path`'s business."""
+    import asyncio
     from types import SimpleNamespace
 
+    from composer.spec.cvlr.harness import HarnessModule
+    from composer.spec.cvlr.tree import SharedTree
     from composer.spec.cvlr.verify import HarnessTarget
 
     return HarnessTarget(
@@ -451,11 +469,14 @@ def _target(workdir: Path):
         module_path=workdir / "src" / "spec.rs",
         package="p",
         tuning=SimpleNamespace(),  # type: ignore[arg-type]
+        unit=HarnessModule("vault"),
+        tree=SharedTree(pristine=workdir, root=workdir),
+        build_sem=asyncio.Semaphore(1),
     )
 
 
 def test_a_path_leaving_the_workdir_is_refused(tmp_path):
-    """The workdir is this unit's private copy of the project, so writing in it never touches the
+    """The working tree is the run's copy of the project, so writing in it never touches the
     user's tree — but only while every write stays inside it."""
     from composer.spec.cvlr.verify import NotInWorkdir
 
@@ -470,7 +491,7 @@ def test_a_path_leaving_the_workdir_is_refused(tmp_path):
 def test_a_dependency_inside_the_workdir_is_refused_too(tmp_path):
     """Containment is not the question, and this is the case that shows why.
 
-    Confinement gives each unit a private ``CARGO_HOME`` at ``<workdir>/.sandbox_cargo``, so every
+    Confinement gives the run a private ``CARGO_HOME`` at ``<workdir>/.sandbox_cargo``, so every
     dependency's unpacked source sits inside the workdir, one directory away from the program. A
     check that stopped at "is it in the workdir" would let a munge rewrite Anchor — for every crate
     in the graph, including the ones the property is about. Same failure
@@ -512,19 +533,13 @@ async def test_a_delivered_units_munges_reach_the_report_as_source_edits(tmp_pat
 
     from composer.pipeline.ptypes import Delivered
     from composer.spec.cvlr.harness import GeneratedHarness
-    from composer.spec.cvlr.pipeline import WORK_DIR, CvlrFormalizer
+    from composer.spec.cvlr.pipeline import CvlrFormalizer
 
     relative = "programs/p/src/reserve.rs"
     (tmp_path / "programs" / "p" / "src").mkdir(parents=True)
     (tmp_path / relative).write_text(SOURCE)
 
-    workdir = tmp_path / WORK_DIR / "vault"
-    (workdir / "programs" / "p" / "src").mkdir(parents=True)
     munge = _munge("redeem_fees", path=relative)
-    applied = apply_munge(SOURCE, munge, FEATURE)
-    assert isinstance(applied, Munged)
-    (workdir / relative).write_text(applied.source)
-
     harness = GeneratedHarness(commentary="", harness="", munges=[munge])
     outcome = SimpleNamespace(
         feat=SimpleNamespace(slug="vault", display_name="Vault"),
@@ -532,7 +547,9 @@ async def test_a_delivered_units_munges_reach_the_report_as_source_edits(tmp_pat
     )
     run = SimpleNamespace(source=SimpleNamespace(project_root=str(tmp_path)))
 
-    formalizer = CvlrFormalizer(GeneratedHarness, "prover", SimpleNamespace())
+    formalizer = CvlrFormalizer(
+        GeneratedHarness, "prover", SimpleNamespace(), SimpleNamespace()  # type: ignore[arg-type]
+    )
     (record,) = await formalizer.source_edits([outcome], run)  # type: ignore[arg-type]
 
     assert record.component == "Vault"
@@ -540,9 +557,10 @@ async def test_a_delivered_units_munges_reach_the_report_as_source_edits(tmp_pat
     assert edit.why_sound == "[3308] on the `?` path"
     assert "redeem_fees" in edit.executive_summary
     assert "`?` rewritten to `.unwrap()`" in edit.executive_summary
-    # The diff is against the project tree, which is the pristine copy: a unit only ever writes in
-    # its own workdir.
-    assert '+#[cfg_attr(feature = "certora", cvlr::early_panic)]' in record.cumulative_diff
+    # Derived from the munge records against the pristine project — no working tree involved, and
+    # none exists here. That is what makes a report survive the tree being deleted, and what keeps
+    # one unit's diff from showing a sibling's dormant lines.
+    assert '+#[cfg_attr(feature = "unit_vault", cvlr::early_panic)]' in record.cumulative_diff
     assert f"a/{relative}" in record.cumulative_diff
 
 
@@ -564,5 +582,7 @@ async def test_a_unit_that_munged_nothing_contributes_no_record(tmp_path):
     gave_up = SimpleNamespace(
         feat=SimpleNamespace(slug="b", display_name="B"), result=GaveUp(reason="no")
     )
-    formalizer = CvlrFormalizer(GeneratedHarness, "prover", SimpleNamespace())
+    formalizer = CvlrFormalizer(
+        GeneratedHarness, "prover", SimpleNamespace(), SimpleNamespace()  # type: ignore[arg-type]
+    )
     assert await formalizer.source_edits([clean, gave_up], run) == []  # type: ignore[arg-type]
