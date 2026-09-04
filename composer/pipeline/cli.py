@@ -47,6 +47,7 @@ from composer.spec.source.design_doc_finder import (
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
 
+from certora_autosetup.harnesser.swap import swap_library_main_contract_paths
 from composer.spec.util import fs_forbidden_read
 import hashlib
 
@@ -229,6 +230,15 @@ async def cli_pipeline[P: enum.Enum, H](
         raise ValueError(f"Invalid path: {full_contract_path} doesn't appear in project root {project_root}")
 
     relative_path = str(full_contract_path.relative_to(project_root))
+
+    # The Prover instantiates no parametric methods against a library, so verifying one
+    # directly comes back vacuous with no error. Swap in a generated harness here, ahead
+    # of SourceFields: every later phase — component analysis, CVL authoring, the conf's
+    # verify target — has to agree on one contract name, and AutoSetup keys its results
+    # by that name too.
+    relative_path, contract_name = swap_library_main_contract_paths(
+        project_root, relative_path, contract_name
+    )
 
     # Set up services
     tiered = get_provider_for(tiered=args)
