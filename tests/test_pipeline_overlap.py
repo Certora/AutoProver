@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from composer.pipeline.run_mode import RunMode
 import composer.pipeline.core as core
 from composer.pipeline.core import run_pipeline
 from composer.pipeline.ecosystem import EVM
@@ -118,6 +119,7 @@ class _Run:
     """Just enough ``PipelineRun`` for the driver: runners that await the job inline."""
 
     source = _Source()
+    run_mode = RunMode.COMPREHENSIVE
     env = None
     ctx = _Ctx()
 

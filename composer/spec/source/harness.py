@@ -163,7 +163,7 @@ def lift_harnessed(
 
     Declared beside the models because every consumer of the harnessed view
     must build it identically — the prover pipeline, and any offline walker
-    re-deriving component cache keys (``composer.meta.run``): the harnessed
+    re-deriving component cache keys (``composer.cli.cache_autoprove``): the harnessed
     app is part of the unit's ``cache_material``."""
     contract_to_harness: dict[SolidityIdentifier, list[HarnessDefinition]] = {}
     for c in sys_desc.transitive_closure:

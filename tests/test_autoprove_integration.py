@@ -106,7 +106,8 @@ def _make_args(rag_conn: str, scenario_dir: Path, system_doc: str | None) -> Aut
         thinking_tokens=2048,
         memory_tool=False,
         interleaved_thinking=False,
-        time_budget=None
+        time_budget=None,
+        run_mode=None,
     ))
 
 

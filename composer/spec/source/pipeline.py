@@ -46,7 +46,9 @@ from composer.spec.source.struct_invariant import get_invariant_formulation
 from composer.spec.source.autosetup import SetupSuccess
 from composer.spec.source.prover import get_prover_tool, materializing_project
 from composer.spec.source.plugin import CertoraProverTools
-from composer.spec.source.author import batch_cvl_generation, EditingTools, SourceEditing, ProverTool
+from composer.spec.source.author import (
+    batch_cvl_generation, EditingTools, FocusPolicy, SourceEditing, ProverTool,
+)
 from composer.spec.source.artifacts import ProverArtifactStore, ComponentSpec, InvariantSpec
 from composer.spec.source.report_prover import make_prover_fetcher
 from composer.spec.source.report.collect import (
@@ -70,6 +72,7 @@ from composer.pipeline.core import (
     Curtailed
 )
 from composer.pipeline.ecosystem import main_instance
+from composer.pipeline.run_mode import RunMode
 from composer.pipeline.keys import COMMON_SYSTEM_CACHE_KEY
 from composer.spec.source.keys import AP_PROPERTIES_KEY_NAME, INV_CVL_KEY
 
@@ -126,6 +129,13 @@ class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
             spec_stem=ComponentSpec(feat.slugified_name).stem,
             editing_tools=EditingTools(
                 editing=self._deps.editing, tool_provider=extra_tools
+            ),
+            # A prioritized run staked itself on these properties, so the author's exits
+            # tighten around them: they cannot be skipped, and an exhausted give-up is
+            # refused until the prover has actually been run.
+            focus=(
+                FocusPolicy(protected=tuple(p.title for p in props))
+                if run.run_mode is RunMode.PRIORITIZED else None
             ),
         )
 
