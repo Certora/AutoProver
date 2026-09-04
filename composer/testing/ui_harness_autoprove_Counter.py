@@ -221,8 +221,9 @@ rule incrementOther_credits_target_when_distinct {
 #
 # Shape must satisfy pydantic validation of
 # ``composer.spec.system_model.SourceApplication`` AND the
-# ``validate_solidity_connectivity`` validator: unique names + all referenced
-# components / external actors exist. One SourceExplicitContract ("Counter")
+# ``validate_solidity_connectivity`` validator: unique names, all referenced
+# components / external actors exist, and every declared ``path`` names a real
+# file under the scenario's project root. One SourceExplicitContract ("Counter")
 # with one ContractComponent ("Increment"), no interactions, no external
 # actors — minimal valid shape.
 
@@ -400,9 +401,9 @@ _SYSTEM_ANALYSIS_TAPE: list[BaseMessage] = [
     # Tools available: memory, write_rough_draft, read_rough_draft,
     #   source_tools = list_files, get_file, grep_files, code_explorer,
     #                  code_document_ref.
-    # Validator: validate_solidity_connectivity (graph wellformedness only; no
-    #   did_read requirement — we can hit `result` at any time once the
-    #   application shape is correct).
+    # Validator: validate_solidity_connectivity (graph wellformedness plus the
+    #   existence of every declared source path; no did_read requirement — we can
+    #   hit `result` at any time once the application shape is correct).
 
     # P1.1 — exercise memory + list_files + get_file. Memory paths must sit
     # under /memories; `view /memories` is the harmless exercise.
@@ -485,7 +486,7 @@ _SYSTEM_ANALYSIS_TAPE: list[BaseMessage] = [
 
     # P1.5 — emit the SourceApplication. Satisfies validate_solidity_connectivity
     # (unique names, no dangling interaction references since there are no
-    # interactions).
+    # interactions, and a declared path that exists in the scenario tree).
     _ai(
         "Application model ready.",
         _tc("result", **_APP_RESULT),

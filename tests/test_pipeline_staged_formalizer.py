@@ -147,6 +147,8 @@ class _Source:
     contract_name = "Vault"
     relative_path = "programs/vault/src/lib.rs"
     content = None
+    project_root = "/nonexistent/project"
+    forbidden_read = None
 
 
 class _Env:
