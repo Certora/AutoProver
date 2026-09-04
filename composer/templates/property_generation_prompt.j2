@@ -182,10 +182,10 @@ summarized in another. How:
    summaries need — but do NOT summarize those functions inline in the base spec.
 2. Call `declare_verification_groups` with one group per cluster of properties that share a precision
    need. Each group names its `property_rules` (the properties it verifies + the rule names that verify
-   them), its `summaries` (for each function THIS group summarizes, the `methods{}` entry to use here,
-   e.g. `function MathUtils.uncheckedExp(uint256 a, uint256 b) internal returns (uint256) => expGhost(a, b);`),
-   and an optional `conf_overlay` (e.g. `{"loop_iter": 2}`). A function a group omits is verified precise
-   there. Every non-skipped property must appear in exactly one group.
+   them) and its `summaries` (for each function THIS group summarizes, the `methods{}` entry to use here,
+   e.g. `function MathUtils.uncheckedExp(uint256 a, uint256 b) internal returns (uint256) => expGhost(a, b);`).
+   A function a group omits is verified precise there. Every non-skipped property must appear in exactly
+   one group.
 
 Then `verify_spec` runs the groups in parallel and only (re-)runs rules not yet verified. In each group,
 summarize everything its properties do NOT depend on and keep precise only what they do. The SAME

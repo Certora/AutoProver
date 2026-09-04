@@ -20,22 +20,21 @@ PROP_RULES = {
 }
 
 
-def _spec(name, prop_rules, summaries=None, conf=None):
+def _spec(name, prop_rules, summaries=None):
     return VerificationGroupSpec(
         name=name,
         property_rules=[
             PropertyRuleMapping(property_title=p, rules=rs) for p, rs in prop_rules
         ],
         summaries=summaries or {},
-        conf_overlay=conf or {},
     )
 
 
-def _grp(name, props, summaries=None, conf=None, rules=None):
+def _grp(name, props, summaries=None, rules=None):
     # A group over property titles, sourcing each property's rules from `rules` (PROP_RULES
     # by default); an unknown property maps to no rules.
     rules = rules if rules is not None else PROP_RULES
-    return _spec(name, [(p, list(rules.get(p, []))) for p in props], summaries, conf)
+    return _spec(name, [(p, list(rules.get(p, []))) for p in props], summaries)
 
 
 # --- coverage validation ----------------------------------------------------
@@ -97,14 +96,11 @@ def test_build_expands_properties_to_rules_and_summaries():
     assert "KVL.sortByKey" in by["rest"].spec_contents
 
 
-def test_build_conf_overlay_passes_through():
-    decls = [
-        _grp("slow", ["P-bitmap"], conf={"global_timeout": 4000, "loop_iter": 2}),
-        _grp("fast", ["P-accounting", "P-misc"]),
-    ]
+def test_build_leaves_conf_overlay_at_substrate_default():
+    # The agent tool does not expose conf_overlay; built groups carry the substrate default ({}).
+    decls = [_grp("g1", ["P-bitmap"]), _grp("g2", ["P-accounting", "P-misc"])]
     groups = groups_from_specs(BASE, decls, cap=4)
-    slow = next(g for g in groups if g.name == "slow")
-    assert slow.conf_overlay == {"global_timeout": 4000, "loop_iter": 2}
+    assert all(g.conf_overlay == {} for g in groups)
 
 
 def test_build_rule_partition_first_declaration_wins():
@@ -166,7 +162,6 @@ def test_render_plan_shows_per_group_installed_summaries():
         _spec(
             "acct", [("P-accounting", ["r_supply"])],
             summaries={"sortByKey": SORT_SUMMARY, "uncheckedExp": EXP_SUMMARY},
-            conf={"loop_iter": 2},
         ),
     ]
     out = render_group_plan_for_judge(specs)
@@ -176,9 +171,10 @@ def test_render_plan_shows_per_group_installed_summaries():
     assert "installs summaries:" in bitmap
     assert "uncheckedExp:" in bitmap
     assert "sortByKey" not in bitmap
-    # The acct group installs both, and shows its conf override.
+    # The acct group installs both summaries.
     acct = out.split('Group "acct"')[1]
     assert "uncheckedExp:" in acct and "sortByKey:" in acct
-    assert "loop_iter" in acct
+    # No conf is rendered — the judge is given the spec, not the .conf (and groups carry no conf).
+    assert "conf" not in out.lower()
     # It is clearly marked informational so the judge does not treat it as spec text.
     assert "informational" in out.lower()

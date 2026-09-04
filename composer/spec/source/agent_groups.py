@@ -10,15 +10,16 @@ property lands in exactly one group, every group's owned rules are verified
 (per-group completion), therefore every property is covered.
 
 Groups here are NOT opaque. The agent names them, sees their membership, and
-controls each group's summaries (`summaries`) and configuration (`conf_overlay`).
+controls each group's summaries (`summaries`). (The substrate group also carries a
+per-group conf overlay, but the agent-facing tool does not expose it yet — a
+per-group prover-config knob is new, unvalidated, and unreviewed by the judge, so it
+is deferred to a follow-up with proper guardrails.)
 The machinery only expands properties to rules, enforces a disjoint rule partition,
 validates coverage, and bounds the count to the cap. The per-group spec is the
 shared base spec plus a `methods{}` block of the summaries that group declared
 (:func:`composer.spec.source.verification_groups.append_summaries`); a function a
 group does not summarize is verified precise there.
 """
-
-from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -64,8 +65,9 @@ def validate_declared_coverage(
 class VerificationGroupSpec(BaseModel):
     """One verification group as the CVL author declares it — the transparent,
     agent-controlled unit. Carries its own property->rule mapping so the rules are
-    known during authoring (the publish-time mapping is their union), the functions
-    it keeps precise, and any conf overrides."""
+    known during authoring (the publish-time mapping is their union) and the functions
+    it keeps precise. (Per-group conf overrides are supported by the substrate but not
+    exposed here yet — see the module docstring.)"""
     name: str = Field(description="A short, unique, human-readable name for this group (used in run/spec names).")
     property_rules: list[PropertyRuleMapping] = Field(
         description="The properties this group verifies and, for each, the rule/invariant names in "
@@ -81,11 +83,6 @@ class VerificationGroupSpec(BaseModel):
         "the weakest summary sound for that group's rules, and reuse the same entry across groups where "
         "it is sound (consistency).",
     )
-    conf_overlay: dict[str, Any] = Field(
-        default_factory=dict,
-        description="Optional per-group prover-config overrides for the non-summarization split "
-        "reasons, e.g. {\"loop_iter\": 2, \"global_timeout\": 4000}.",
-    )
 
 
 def owned_rules_per_group(specs: list[VerificationGroupSpec]) -> list[frozenset[str]]:
@@ -94,9 +91,7 @@ def owned_rules_per_group(specs: list[VerificationGroupSpec]) -> list[frozenset[
     A group's owned rules are the union of its properties' rules; a rule declared by more than
     one group is owned by the FIRST that declares it, so the partition stays disjoint (the
     ``merge_group_results`` / per-group-completion invariant that every rule has exactly one
-    owner). Both the runnable build (:func:`groups_from_specs`) and the over-cap preview
-    (:func:`over_cap_message`) partition rules this way; they differ only in what they build
-    around it."""
+    owner)."""
     claimed: set[str] = set()
     owned_per: list[frozenset[str]] = []
     for s in specs:
@@ -151,7 +146,7 @@ def groups_from_specs(
             owned_rules=owned,
             spec_contents=append_summaries(base_spec, s.summaries),
             summaries=dict(s.summaries),
-            conf_overlay=s.conf_overlay,
+            # conf_overlay left at its substrate default ({}): the agent tool does not expose it yet.
         )
         for s, owned in zip(specs, owned_rules_per_group(specs))
     ]
@@ -207,7 +202,10 @@ def render_group_plan_for_judge(specs: list["VerificationGroupSpec"]) -> str | N
                 lines.append(f"//     {func}: {s.summaries[func].strip()}")
         else:
             lines.append("//   installs summaries: (none — all functions precise)")
-        if s.conf_overlay:
-            lines.append(f"//   conf overrides: {s.conf_overlay}")
+        # No per-group conf is shown: the agent-facing group carries none yet (deferred), and even
+        # the substrate's conf overlay would be moot here — the judge is handed the spec, not the
+        # .conf, so it has neither a base to compare against nor a mandate to review conf soundness.
+        # If groups gain agent-set conf AND the judge starts reviewing .conf files, list each
+        # group's conf diff here.
         lines.append("//")
     return "\n".join(lines)

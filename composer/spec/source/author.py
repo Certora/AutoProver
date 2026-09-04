@@ -198,8 +198,6 @@ class DeclareVerificationGroups(
       group's rules.
     - The base spec you put on the VFS must define any ghosts/CVL functions those entries use, and
       must itself leave the summarized functions UNsummarized (each group's spec adds its own).
-    - `conf_overlay` is optional per-group prover config for non-summarization needs
-      (e.g. {"loop_iter": 2, "global_timeout": 4000}).
 
     Note: a rule reachable from two properties in DIFFERENT groups is verified ONCE — in the FIRST
     group that declares it — under THAT group's summaries (the run partitions rules disjointly). So
