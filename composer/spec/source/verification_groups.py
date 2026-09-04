@@ -69,8 +69,10 @@ class VerificationGroup:
 
     Groups partition the rule set: every rule is *owned* by exactly one group,
     and that group's run is authoritative for its verdict (:func:`merge_group_results`).
-    A run may still instantiate more rules than it owns — e.g. a spec whose
-    invariants reference each other — but only the owned rules' verdicts are kept.
+    The group is submitted with the prover's ``rule`` selector limited to its rules, but the
+    prover's status map still reports some it does not own — built-in checks it always runs
+    (e.g. ``envfreeFuncsStaticCheck``) and the per-method instantiations of a parametric rule —
+    so only the owned rules' verdicts are kept.
     """
 
     #: Stable identifier, used in conf/spec names and logs.
@@ -231,11 +233,12 @@ def merge_group_results(
 ) -> dict[RulePath, StatusCodes]:
     """Recombine per-group prover verdicts into one verdict map.
 
-    For each group, keep only the statuses of the rules that group *owns* (a run
-    may instantiate more rules than it owns, but a non-owned rule's verdict there
-    is under the wrong precision setup and must be ignored). The union over groups
-    is the authoritative status of every rule. With one group owning all rules,
-    this returns that group's map unchanged.
+    For each group, keep only the statuses of the rules that group *owns*. A run's status map
+    carries rules the group does not own — the prover's always-run built-in checks (e.g.
+    ``envfreeFuncsStaticCheck``) and parametric instantiations, plus (where the group's rule is
+    shared with another) a verdict computed under the wrong group's precision — all of which are
+    dropped. The union over the owned sets is the authoritative status of every rule. With one
+    group owning all rules, this returns that group's map unchanged.
     """
     combined: dict[RulePath, StatusCodes] = {}
     for group, statuses in per_group:
