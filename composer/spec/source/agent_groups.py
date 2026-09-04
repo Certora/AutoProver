@@ -18,7 +18,7 @@ shared base spec plus a `methods{}` block of the summaries that group declared
 group does not summarize is verified precise there.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -32,18 +32,28 @@ from composer.spec.source.verification_groups import (
 
 @dataclass(frozen=True)
 class GroupDeclaration:
-    """One agent-declared verification group, expressed over properties."""
+    """One agent-declared verification group, expressed over properties.
+
+    Carries its property->rules mapping directly — the same shape the authoring layer passes to
+    ``validate_check_mapping`` (``(title, rules)`` bundled together) — so the core needs no
+    separately-threaded rule dict."""
     #: Agent-chosen, human-readable identifier (used in conf/spec names and results).
     name: str
-    #: Property titles this group verifies. Expanded to rules via the property->rule
-    #: mapping; every non-skipped property must appear in exactly one declaration.
-    properties: frozenset[str]
+    #: This group's property->rules mapping: each property title it verifies -> the rule/invariant
+    #: names that verify it. Every non-skipped property must appear in exactly one declaration; the
+    #: union of these rules is the group's owned rules.
+    property_rules: Mapping[str, Sequence[str]]
     #: The summaries this group installs: function -> its ``methods{}`` entry. A function
     #: absent here is verified PRECISE (unsummarized) in this group.
     summaries: Mapping[str, str] = field(default_factory=dict)
     #: Per-group conf overlay (e.g. {"loop_iter": 2, "global_timeout": 4000}). The
     #: non-summarization split axis — isolation, timeouts, loop bounds, links.
     conf_overlay: Mapping[str, object] = field(default_factory=dict)
+
+    @property
+    def properties(self) -> frozenset[str]:
+        """The property titles this group covers (the keys of ``property_rules``)."""
+        return frozenset(self.property_rules)
 
 
 def validate_declared_coverage(
@@ -80,7 +90,6 @@ def build_declared_groups(
     base_spec: str,
     *,
     declarations: list[GroupDeclaration],
-    property_rules: dict[str, list[str]],
     cap: int,
 ) -> list[VerificationGroup]:
     """Expand agent-declared property groups into runnable :class:`VerificationGroup`s.
@@ -99,7 +108,7 @@ def build_declared_groups(
     claimed: set[str] = set()
     groups: list[VerificationGroup] = []
     for d in declarations:
-        owned = {r for p in d.properties for r in property_rules.get(p, [])}
+        owned = {r for rs in d.property_rules.values() for r in rs}
         owned -= claimed  # first-declaration-wins: keep the rule partition disjoint
         claimed |= owned
         groups.append(
@@ -155,10 +164,15 @@ class VerificationGroupSpec(BaseModel):
     )
 
 
-def property_rules_of(specs: list[VerificationGroupSpec]) -> dict[str, list[str]]:
-    """The combined property->rule mapping across all declared groups — the value
-    finalized into ``property_rules`` at publish."""
-    return {str(m.property_title): [str(r) for r in m.rules] for spec in specs for m in spec.property_rules}
+def _declaration_of(spec: VerificationGroupSpec) -> GroupDeclaration:
+    """The internal :class:`GroupDeclaration` for one agent-declared spec — its property->rules
+    mapping (rules bundled per property), summaries, and conf overlay."""
+    return GroupDeclaration(
+        name=spec.name,
+        property_rules={str(m.property_title): [str(r) for r in m.rules] for m in spec.property_rules},
+        summaries=dict(spec.summaries),
+        conf_overlay=spec.conf_overlay,
+    )
 
 
 def coverage_error(
@@ -166,11 +180,9 @@ def coverage_error(
 ) -> str | None:
     """Validate declared-group coverage over the property space (see
     :func:`validate_declared_coverage`), reading properties from each group's mapping."""
-    decls = [
-        GroupDeclaration(name=s.name, properties=frozenset(m.property_title for m in s.property_rules))
-        for s in specs
-    ]
-    return validate_declared_coverage(decls, all_properties=all_properties, skipped=skipped)
+    return validate_declared_coverage(
+        [_declaration_of(s) for s in specs], all_properties=all_properties, skipped=skipped
+    )
 
 
 def over_cap_message(specs: list[VerificationGroupSpec], cap: int) -> str | None:
@@ -206,22 +218,10 @@ def groups_from_specs(
     cap: int,
 ) -> list[VerificationGroup]:
     """Expand the agent's declared group specs into runnable groups (coverage assumed
-    already validated). Convenience over :func:`build_declared_groups` that unpacks the
-    embedded property->rule mappings and per-group summaries."""
-    declarations = [
-        GroupDeclaration(
-            name=s.name,
-            properties=frozenset(m.property_title for m in s.property_rules),
-            summaries=dict(s.summaries),
-            conf_overlay=s.conf_overlay,
-        )
-        for s in specs
-    ]
+    already validated). Convenience over :func:`build_declared_groups`, converting each
+    spec to its :class:`GroupDeclaration`."""
     return build_declared_groups(
-        base_spec,
-        declarations=declarations,
-        property_rules=property_rules_of(specs),
-        cap=cap,
+        base_spec, declarations=[_declaration_of(s) for s in specs], cap=cap
     )
 
 

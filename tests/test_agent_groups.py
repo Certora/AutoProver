@@ -17,9 +17,10 @@ PROP_RULES = {
 }
 
 
-def _decl(name, props, summaries=None, conf=None):
+def _decl(name, props, summaries=None, conf=None, rules=None):
+    rules = rules if rules is not None else PROP_RULES  # property -> rules; unknown props map to no rules
     return GroupDeclaration(
-        name=name, properties=frozenset(props),
+        name=name, property_rules={p: list(rules.get(p, [])) for p in props},
         summaries=summaries or {}, conf_overlay=conf or {},
     )
 
@@ -71,7 +72,7 @@ def test_build_expands_properties_to_rules_and_summaries():
         _decl("bitmap", ["P-bitmap"], summaries={"uncheckedExp": EXP_SUMMARY}),
         _decl("rest", ["P-accounting", "P-misc"], summaries={"sortByKey": SORT_SUMMARY}),
     ]
-    groups = build_declared_groups(BASE, declarations=decls, property_rules=PROP_RULES, cap=4)
+    groups = build_declared_groups(BASE, declarations=decls, cap=4)
     by = {g.name: g for g in groups}
     # bitmap group installs the uncheckedExp summary and keeps sortByKey precise (not installed).
     assert by["bitmap"].owned_rules == {"r_borrow", "r_collat"}
@@ -88,7 +89,7 @@ def test_build_conf_overlay_passes_through():
         _decl("slow", ["P-bitmap"], conf={"global_timeout": 4000, "loop_iter": 2}),
         _decl("fast", ["P-accounting", "P-misc"]),
     ]
-    groups = build_declared_groups(BASE, declarations=decls, property_rules=PROP_RULES, cap=4)
+    groups = build_declared_groups(BASE, declarations=decls, cap=4)
     slow = next(g for g in groups if g.name == "slow")
     assert slow.conf_overlay == {"global_timeout": 4000, "loop_iter": 2}
 
@@ -96,8 +97,8 @@ def test_build_conf_overlay_passes_through():
 def test_build_rule_partition_first_declaration_wins():
     # A rule shared by two properties placed in different groups is owned by the first.
     shared = {"P-x": ["r1", "r2"], "P-y": ["r2", "r3"]}  # r2 shared
-    decls = [_decl("gx", ["P-x"]), _decl("gy", ["P-y"])]
-    groups = build_declared_groups(BASE, declarations=decls, property_rules=shared, cap=4)
+    decls = [_decl("gx", ["P-x"], rules=shared), _decl("gy", ["P-y"], rules=shared)]
+    groups = build_declared_groups(BASE, declarations=decls, cap=4)
     by = {g.name: g for g in groups}
     assert by["gx"].owned_rules == {"r1", "r2"}
     assert by["gy"].owned_rules == {"r3"}  # r2 already claimed by gx
@@ -112,7 +113,7 @@ def test_build_caps_and_merges_keeping_partition():
         ("P-accounting", {"sortByKey": SORT_SUMMARY}),
         ("P-misc", {"uncheckedExp": EXP_SUMMARY}),
     ])]
-    groups = build_declared_groups(BASE, declarations=decls, property_rules=PROP_RULES, cap=2)
+    groups = build_declared_groups(BASE, declarations=decls, cap=2)
     assert len(groups) == 2
     owned = [r for g in groups for r in g.owned_rules]
     assert sorted(owned) == sorted(r for rs in PROP_RULES.values() for r in rs)
