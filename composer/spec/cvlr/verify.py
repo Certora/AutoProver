@@ -21,9 +21,17 @@ until the bug disappeared. The marking is what makes that an explicit, recorded 
 import asyncio
 import dataclasses
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
-from pathlib import PurePosixPath
-from typing import Annotated, Container, Literal, Mapping, Sequence, override
+from typing import (
+    Annotated,
+    AsyncIterator,
+    Container,
+    Literal,
+    Mapping,
+    Sequence,
+    override,
+)
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
@@ -66,8 +74,6 @@ from composer.spec.cvlr.munge import (
     Munged,
     NotProjectSource,
     apply_munge,
-    function_names,
-    is_project_source,
 )
 from composer.spec.cvlr.prover import (
     BuildRejected,
@@ -75,27 +81,23 @@ from composer.spec.cvlr.prover import (
     CvlrOutcome,
     Submission,
     SubmissionFailed,
-    submit,
+    prepare_submission,
+    run_submission,
 )
+from composer.spec.cvlr.harness import HarnessModule
 from composer.spec.cvlr.rules import rule_names
 from composer.spec.cvlr.state import (
     PROVER_VALIDATION_KEY,
     CvlrGenerationState,
     tuning_history,
 )
+from composer.spec.cvlr.tree import NotInWorkdir, Reconciled, SharedTree, UnitEdits
 from composer.spec.cvlr.tuning import SummaryDirective, TuningFiles
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.types import CheckName
 from composer.ui.tool_display import tool_display
 
 _log = logging.getLogger(__name__)
-
-
-@dataclasses.dataclass(frozen=True)
-class NotInWorkdir:
-    """The path resolves outside this unit's copy of the project."""
-
-    path: str
 
 
 @dataclasses.dataclass(frozen=True)
@@ -106,6 +108,11 @@ class HarnessTarget:
     declared — not copying a spec next to a conf. ``module_path`` is absolute; the declaration in
     ``specs/mod.rs`` was written once for the whole run
     (:meth:`composer.spec.cvlr.harness.CvlrArtifactStore.declare_modules`).
+
+    Every unit shares ``tree`` and ``build_sem`` and has its own everything else
+    (``docs/single-working-tree.md``). The unit's cargo feature is what keeps that safe: a build
+    selects ``certora`` plus :attr:`~composer.spec.cvlr.harness.HarnessModule.feature`, so no other
+    unit's module is compiled and no other unit's draft can break this gate.
     """
 
     session: CargoSession
@@ -113,60 +120,74 @@ class HarnessTarget:
     package: str
     #: The package's tuning files, which ``summarize_for_prover`` rewrites.
     tuning: TuningFiles
+    #: This unit's identity — the module name the tree keys edits by, and the cargo feature that
+    #: selects it.
+    unit: HarnessModule
+    #: The run's one working copy, shared with every sibling unit.
+    tree: SharedTree
+    #: One permit for the whole run, held across staging and the local cargo invocation. Not held
+    #: across a prover run: that waits on a cloud job for minutes, and the derived files a sibling
+    #: might rewrite meanwhile are inert for any build but its own.
+    build_sem: asyncio.Semaphore
+
+    @property
+    def features(self) -> tuple[str, ...]:
+        """The feature set every build of this unit uses — the harness, plus this unit's module."""
+        return (DEFAULT_FEATURE, self.unit.feature)
+
+    @asynccontextmanager
+    async def build_slot(self) -> AsyncIterator[None]:
+        """Serialize staging and the cargo invocation that follows it.
+
+        Concurrent cargo runs against one ``target/`` already serialize on cargo's own build-
+        directory lock, so this is not what makes the shared tree correct — the per-unit feature is
+        (``docs/single-working-tree.md`` §2.4). What the permit buys is a queue the host can see
+        instead of a silent stall inside cargo, and not having several sandboxed builds parked
+        holding grants.
+        """
+        async with self.build_sem:
+            yield
 
     def source_path(self, relative: str) -> Path | NotInWorkdir | NotProjectSource:
-        """Resolve a workdir-relative path a munge may write to, or say why it may not.
+        """Resolve a tree-relative path a munge may write to, or say why it may not.
 
-        Two things have to hold and they are not the same one. The path must stay **inside** this
-        unit's workdir, which is what keeps a munge from reaching the user's tree. And it must name
-        the **project's own source**, which containment does not establish: confinement puts this
-        unit's ``CARGO_HOME`` at ``<workdir>/.sandbox_cargo``, so every dependency's unpacked source
-        is inside the workdir too, and a check that stopped at containment would let a munge rewrite
-        Anchor for every crate in the graph.
+        The tree's own answer (:meth:`composer.spec.cvlr.tree.SharedTree.resolve`), asked here so a
+        munge is refused when it is *recorded* rather than only when it is replayed. One
+        implementation, because a check the tool and the replay could disagree about is a check that
+        lets an edit through on one path and not the other.
         """
-        root = self.session.workdir.resolve()
-        candidate = (root / relative).resolve()
-        if not candidate.is_relative_to(root):
-            return NotInWorkdir(relative)
-        inside = candidate.relative_to(root)
-        if not is_project_source(PurePosixPath(inside)):
-            return NotProjectSource(path=relative, directory=inside.parts[0])
-        return candidate
+        return self.tree.resolve(relative)
 
     def stage(
         self,
         draft: str,
         summaries: Sequence[SummaryDirective] = (),
         munges: Sequence[FunctionMunge] = (),
-    ) -> None:
-        """Put the draft, the tuning directives and the source munges on disk, ready to build.
+    ) -> Reconciled:
+        """Make the tree agree with this unit's state, and report what could not be carried over.
 
-        All three from one place, because all three are inputs to the build: the prover reads the
-        tuning file through the conf, and a munge changes the program it compiles. Each comes from
-        already-merged state rather than from the tool that recorded one, so two concurrent calls
-        cannot each write their own view of the list and lose the other's.
+        All three inputs from one place, because all three are inputs to the build: the prover reads
+        the tuning file through the conf, and a munge changes the program it compiles. Each comes
+        from already-merged state rather than from the tool that recorded one, so two concurrent
+        calls cannot each write their own view of the list and lose the other's.
 
-        Munges are re-applied from whatever is on disk rather than from a pristine copy, which is
-        safe because :func:`~composer.spec.cvlr.munge.apply_munge` reports an attribute already
-        present instead of adding a second one.
+        Everything here is written **from state**, not edited in place. The summaries file is
+        rewritten wholesale even when there are none — the composite the conf names has to exist, and
+        a directive dropped from state has to disappear. The munges are replayed onto the pristine
+        source by :meth:`composer.spec.cvlr.tree.SharedTree.reconcile`, which is what makes the tree
+        derivable after a crash, a rewind, or a cache replay with no tree at all
+        (``docs/single-working-tree.md`` §4).
+
+        Call it while holding :meth:`build_slot`. It is the tree's only writer, and the permit is
+        what keeps two units out of it at once.
         """
-        self.module_path.parent.mkdir(parents=True, exist_ok=True)
-        self.module_path.write_text(draft)
-        if summaries:
-            self.tuning.write(tuple(summaries))
-        for munge in munges:
-            path = self.source_path(munge.path)
-            if not isinstance(path, Path) or not path.is_file():
-                # Recorded against a path that is no longer writable or no longer there. Not this
-                # method's failure to report — the tool refused anything unwritable when it was
-                # recorded, and a missing file the build is about to name with a span in it.
-                _log.warning("cvlr: cannot apply munge to %s", munge.path)
-                continue
-            match apply_munge(path.read_text(), munge, DEFAULT_FEATURE):
-                case Munged(source=source):
-                    path.write_text(source)
-                case other:
-                    _log.info("cvlr: munge of %s not re-applied: %s", munge.edit_id, other)
+        self.tuning.write(tuple(summaries))
+        return self.tree.reconcile(
+            self.unit.module,
+            UnitEdits(
+                module_path=self.module_path, draft=draft, munges=tuple(munges)
+            ),
+        )
 
 
 class _CaptureCallbacks(ProverCallbacks):
@@ -304,6 +325,26 @@ def _wrongly_expected(status: dict[str, bool], expected_failures: dict[CheckName
     return sorted(name for name in expected_failures if status.get(name) is True)
 
 
+def _drift_note(reconciled: Reconciled) -> str:
+    """What to tell the author when a munge in state did not reach the file.
+
+    Surfaced rather than logged. A munge is replayed onto the *pristine* project, which can have
+    moved since the munge was recorded — a resumed run, a cache replay, or a developer editing
+    underneath the run — and the failure is otherwise mute: the build succeeds, the report still
+    carries a source-edit record, and the property was checked against code the record does not
+    describe. ``docs/single-working-tree.md`` §4.3 is the argument for this being a return value.
+    """
+    if not reconciled.drifted:
+        return ""
+    lines = "\n".join(f"  - {d.describe()}" for d in reconciled.drifted)
+    return (
+        f"\n\nWARNING: {len(reconciled.drifted)} recorded munge(s) could not be applied to the "
+        f"program source, so this build does not contain them:\n{lines}\n"
+        "The source they name has changed since they were recorded. Re-record them against the "
+        "code as it is now, or drop the rules that depended on them."
+    )
+
+
 @tool_display("Compiling the harness", "Compile")
 class CargoCheck(
     WithInjectedState[CvlrGenerationState],
@@ -324,19 +365,26 @@ class CargoCheck(
         if draft is None:
             return "No harness written yet — put a draft first."
         with self.tool_deps() as target:
-            target.stage(draft, self.state["summaries"], self.state["munges"])
-            run = await target.session.check(package=target.package, features=("certora",))
+            async with target.build_slot():
+                reconciled = target.stage(
+                    draft, self.state["summaries"], self.state["munges"]
+                )
+                run = await target.session.check(
+                    package=target.package, features=target.features
+                )
         match run.verdict:
             case Compiled():
                 declared = rule_names(draft)
                 names = ", ".join(declared) if declared else "none"
                 return tool_return(
                     self.tool_call_id,
-                    f"Compiled in {run.duration_ms}ms. Rules declared: {names}.",
+                    f"Compiled in {run.duration_ms}ms. Rules declared: {names}."
+                    + _drift_note(reconciled),
                 )
             case CompileFailed(diagnostics=diagnostics):
                 return tool_return(
-                    self.tool_call_id, f"Does not compile:\n{diagnostics}"
+                    self.tool_call_id,
+                    f"Does not compile:\n{diagnostics}" + _drift_note(reconciled),
                 )
 
 
@@ -371,27 +419,45 @@ class VerifyRules(
                     "starting a second one."
                 )
             async with deps.lock:
-                deps.target.stage(draft, self.state["summaries"], self.state["munges"])
                 analysis = deps.analysis
                 capture = analysis.callbacks() if analysis else None
-                outcome = await submit(
-                    deps.target.session,
-                    # Name exactly the rules this draft declares. Not a refinement: a conf with no
-                    # `rule` entry makes the cloud job end in FAILED, with no report and nothing on
-                    # disk to read, so *every* submission this backend made failed until this line
-                    # named them. Not `AllRules` either — the build is whole-crate, so "everything
-                    # the artifact declares" is every unit's rules, and this unit would be graded on
-                    # its siblings' drafts.
-                    dataclasses.replace(deps.submission, rules=SelectRules(tuple(declared))),
-                    prover_opts=deps.prover_opts,
-                    callbacks=capture if capture is not None else ProverCallbacks(),
-                    cex=(
-                        analysis.handler(self.state) if analysis else UnanalyzedCexHandler()
-                    ),
-                    tool_call_id=self.tool_call_id,
-                )
+                # The permit covers staging and the local build; the prover run below is outside
+                # it, because it waits on a cloud job and a sibling's edits meanwhile are inert for
+                # this build (docs/single-working-tree.md §2.4).
+                async with deps.target.build_slot():
+                    reconciled = deps.target.stage(
+                        draft, self.state["summaries"], self.state["munges"]
+                    )
+                    prepared = await prepare_submission(
+                        deps.target.session,
+                        # Name exactly the rules this draft declares. Not a refinement: a conf with
+                        # no `rule` entry makes the cloud job end in FAILED, with no report and
+                        # nothing on disk to read, so *every* submission this backend made failed
+                        # until this line named them. Not `AllRules` either — a build compiles this
+                        # unit's module and the artifact declares every unit's rules, so this unit
+                        # would be graded on its siblings' drafts.
+                        dataclasses.replace(
+                            deps.submission, rules=SelectRules(tuple(declared))
+                        ),
+                    )
+                if isinstance(prepared, BuildRejected):
+                    outcome: CvlrOutcome = prepared
+                else:
+                    outcome = await run_submission(
+                        deps.target.session,
+                        prepared,
+                        prover_opts=deps.prover_opts,
+                        callbacks=capture if capture is not None else ProverCallbacks(),
+                        cex=(
+                            analysis.handler(self.state) if analysis else UnanalyzedCexHandler()
+                        ),
+                        tool_call_id=self.tool_call_id,
+                    )
             return self._report(
-                outcome, deps, capture.incomplete if capture is not None else {}
+                outcome,
+                deps,
+                capture.incomplete if capture is not None else {},
+                drift=_drift_note(reconciled),
             )
 
     def _nothing_to_submit(self) -> Command | str:
@@ -465,8 +531,17 @@ class VerifyRules(
         return "\n".join(lines)
 
     def _report(
-        self, outcome: CvlrOutcome, deps: VerifyDeps, incomplete: Mapping[str, str]
+        self,
+        outcome: CvlrOutcome,
+        deps: VerifyDeps,
+        incomplete: Mapping[str, str],
+        *,
+        drift: str = "",
     ) -> Command | str:
+        """What the gate says, with any replay drift appended.
+
+        ``drift`` rides on every branch rather than only the green one: a munge that did not reach
+        the build is as much a part of why a rule failed as of what a passing rule means."""
         stamper = deps.stamper
         expected = self.state["expected_failures"]
         match outcome:
@@ -483,13 +558,13 @@ class VerifyRules(
                 )
                 return tool_return(
                     self.tool_call_id,
-                    f"The chain build failed, so nothing was submitted:\n{said}",
+                    f"The chain build failed, so nothing was submitted:\n{said}" + drift,
                 )
             case SubmissionFailed(build=build, reason=reason):
                 said = [f"The prover run did not produce results: {reason}"]
                 if (inert := self._inert_summaries(build, deps.submission)) is not None:
                     said.append(inert)
-                return tool_return(self.tool_call_id, "\n\n".join(said))
+                return tool_return(self.tool_call_id, "\n\n".join(said) + drift)
             case Checked(build=build, report=report):
                 status = report.rule_status
                 unaccounted = _unaccounted(status, expected, incomplete)
@@ -522,11 +597,12 @@ class VerifyRules(
                         "with expect_rule_failure and say why the failure is real."
                     )
                     return tool_state_update(
-                        self.tool_call_id, "\n\n".join(lines), prover_link=report.link
+                        self.tool_call_id, "\n\n".join(lines) + drift, prover_link=report.link
                     )
                 return tool_state_update(
                     self.tool_call_id,
-                    "\n\n".join([*lines, "Every rule is accounted for. This draft is stamped."]),
+                    "\n\n".join([*lines, "Every rule is accounted for. This draft is stamped."])
+                    + drift,
                     prover_link=report.link,
                     validations=stamper(self.state, tuning_history(self.state)),
                 )
@@ -534,12 +610,16 @@ class VerifyRules(
 
 def gate_tools(target: HarnessTarget, deps: VerifyDeps) -> list[BaseTool]:
     """The gate tools and the one tool that changes what they check, named as the prompt refers to
-    them."""
+    them.
+
+    ``munge_function`` is deliberately absent. Editing the program under verification belongs to one
+    entity and it is not the author (:mod:`composer.spec.cvlr.editor`,
+    ``docs/who-edits-the-program.md`` §4); what the author gets instead is ``code_editor`` and
+    ``revert_munge``, bound where the rest of its tools are."""
     return [
         CargoCheck.bind(target).as_tool("cargo_check"),
         VerifyRules.bind(deps).as_tool("verify_rules"),
         SummarizeForProver.bind(target.tuning).as_tool("summarize_for_prover"),
-        MungeFunction.bind(target).as_tool("munge_function"),
     ]
 
 
@@ -618,155 +698,6 @@ class SummarizeForProver(
             f"Recorded a summary for {directive.pattern}. It takes effect on the next build, and it "
             "invalidated the prover stamp — re-run verify_rules.",
             summaries=[directive],
-        )
-
-
-class MungeEarlyPanic(BaseModel):
-    """Rewrite every `?` in the function to `.unwrap()`."""
-
-    kind: Literal["early_panic"] = "early_panic"
-
-
-class MungeMockFn(BaseModel):
-    """Replace the function with a stand-in you have written."""
-
-    kind: Literal["mock_fn"] = "mock_fn"
-    stand_in: str = Field(
-        description="Path to the replacement, spelled as the munged file can reach it — a function "
-        "the program already defines, or a `pub fn` in your own harness module named as "
-        "`crate::certora::specs::<this module>::<fn>`. It must already exist and must have the same "
-        "signature as the function it replaces."
-    )
-
-
-#: The munge kinds, as the author selects between them. Discriminated because they carry different
-#: fields, which is the same reason ``RuleSubject`` is
-#: (:mod:`composer.spec.cvlr.state`) — `mock_fn` needs a target and `early_panic` takes nothing.
-type MungeChoice = Annotated[MungeEarlyPanic | MungeMockFn, Field(discriminator="kind")]
-
-
-def _kind_of(choice: MungeChoice) -> MungeKind:
-    match choice:
-        case MungeEarlyPanic():
-            return EarlyPanic()
-        case MungeMockFn(stand_in=stand_in):
-            return MockFn(stand_in=stand_in)
-
-
-@tool_display(lambda p: f"Munging `{p['function']}`", "Munge")
-class MungeFunction(
-    WithInjectedState[CvlrGenerationState],
-    WithInjectedId,
-    WithAsyncDependencies[Command | str, HarnessTarget],
-):
-    """Put a verification-only attribute on one of the *program's own* functions.
-
-    A **munge** is a modification of the code under verification, applied under the ``certora``
-    feature so the deployed build is untouched. Reach for one when the block is in the program
-    rather than in your rule or the conf — and only for the two kinds below, which are what
-    practitioners actually use.
-
-    ``early_panic`` rewrites every ``?`` in the function to ``.unwrap()``. That is the same choice as
-    ``.unwrap()``-versus-``.is_ok()`` in a rule, reached one level down: a ``?`` *inside* the program,
-    below the handler you call, whose error construction the pointer analysis refuses ([3308]). It
-    does **not** make an acceptance property statable — it removes the failure path rather than
-    exposing one.
-
-    ``mock_fn`` replaces the function with a stand-in. Unlike ``summarize_for_prover``, which havocs
-    the return, a mock computes one — so a property downstream of a mocked function still means
-    something. You must have written the stand-in somewhere the munged file can reach.
-
-    **This changes the program, and the report says so.** Every munge is carried into the
-    deliverable with its ``why``, because a property proved against munged source is a property of
-    the munged program. Applying one invalidates the prover stamp: re-run ``verify_rules``.
-
-    If what you need is neither of these, do not improvise a third. Skip the property and say which
-    kind of change it would have needed — that is a decision for a person.
-    """
-
-    path: str = Field(
-        description="The file to munge, relative to the workspace root — e.g. "
-        "`programs/vault/src/state/reserve.rs`."
-    )
-    function: str = Field(
-        description="The name of the function, as its `fn` line spells it. Not a path: the file "
-        "plus the name is what identifies it, and two functions of one name in a file is refused "
-        "rather than guessed at."
-    )
-    munge: MungeChoice = Field(description="Which of the two attributes to apply")
-    why: str = Field(
-        description="Why the prover cannot analyze this function as written — quote the error — and "
-        "why this attribute is sound for the properties in this batch. It goes into the report; it "
-        "is the only account a reader gets of what the program was changed to."
-    )
-
-    @override
-    async def run(self) -> Command | str:
-        if not self.why.strip():
-            return (
-                "A non-empty `why` is required. A munge changes the program under verification, so "
-                "an unexplained one leaves the report claiming a property of code nobody can "
-                "account for."
-            )
-        with self.tool_deps() as target:
-            match target.source_path(self.path):
-                case NotInWorkdir():
-                    return (
-                        f"{self.path} resolves outside this project. Munge the program's own "
-                        f"source, with a path relative to the workspace root."
-                    )
-                case NotProjectSource(directory=directory):
-                    return (
-                        f"{self.path} is under `{directory}`, which is not this project's source. "
-                        f"A munge changes the program under verification; `{directory}` holds "
-                        f"build output or the dependency sources cargo resolved, and modifying a "
-                        f"dependency changes its behaviour for every crate in the graph — "
-                        f"including the ones your property is about. If the code in the way is a "
-                        f"dependency's, that is a `summarize_for_prover` or a `record_skip`."
-                    )
-                case Path() as resolved:
-                    pass
-            if not resolved.is_file():
-                return f"{self.path} is not a file in this project."
-            record = FunctionMunge(
-                path=self.path,
-                function=self.function,
-                kind=_kind_of(self.munge),
-                why=self.why,
-            )
-            if any(m.edit_id == record.edit_id for m in self.state["munges"]):
-                return f"{self.function} in {self.path} already carries that attribute."
-            # A dry run against what is on disk, so a name that matches nothing is a tool error the
-            # author can act on rather than a build failure two minutes later.
-            match apply_munge(resolved.read_text(), record, DEFAULT_FEATURE):
-                case FunctionNotFound(nearby=nearby):
-                    suggestion = (
-                        f" This file does define: {', '.join(nearby)}." if nearby else ""
-                    )
-                    return (
-                        f"{self.path} defines no function named {self.function}.{suggestion}"
-                    )
-                case FunctionAmbiguous(lines=lines):
-                    return (
-                        f"{self.path} defines {self.function} {len(lines)} times (lines "
-                        f"{', '.join(str(n) for n in lines)}). Munging the wrong one compiles and "
-                        f"changes nothing you can see, so this is refused: move the function, or "
-                        f"munge a caller that is unambiguous."
-                    )
-                case AlreadyMunged(line=line):
-                    return (
-                        f"{self.path}:{line} already carries that attribute, so nothing changed."
-                    )
-                case Munged(line=line):
-                    pass
-        # Only this record: the reducer merges, and `stage` is what writes it, so the tool never
-        # races a sibling call over the same file.
-        return tool_state_update(
-            self.tool_call_id,
-            f"Recorded a {record.kind.attribute()} munge on {self.path}:{line} ({self.function}). "
-            f"It takes effect on the next build, and it invalidated the prover stamp — run "
-            f"cargo_check and then verify_rules.",
-            munges=[record],
         )
 
 

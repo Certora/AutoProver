@@ -122,7 +122,9 @@ async def test_the_backend_opts_into_findings_and_reads_back_what_it_captured():
     rule = _violated("rule_withdraw_fee_collector_vault_aliasing", _REAL_VIOLATION)
     await _CaptureCallbacks(store).on_analysis_complete(rule, "the collector aliases the vault")
 
-    formalizer = CvlrFormalizer(object, "prover", SimpleNamespace(cex_analysis=store))
+    formalizer = CvlrFormalizer(
+        object, "prover", SimpleNamespace(cex_analysis=store), SimpleNamespace()
+    )
     fetch = formalizer.findings_evidence()
     assert fetch is not None
 

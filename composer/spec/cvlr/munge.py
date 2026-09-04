@@ -42,6 +42,7 @@ import tomllib
 from pathlib import PurePosixPath
 
 from composer.cargo.metadata import Workspace
+from composer.spec.cvlr.conf import DEFAULT_FEATURE
 
 _log = logging.getLogger(__name__)
 
@@ -452,15 +453,89 @@ class MockFn:
         return f"replaced by {self.stand_in}"
 
 
+@dataclasses.dataclass(frozen=True)
+class InlineNever:
+    """The function is kept as its own frame rather than being inlined into its callers.
+
+    Behaviour-preserving outright — ``inline`` is a hint about codegen and nothing else — which makes
+    it the cheapest thing in the vocabulary to justify. It earns its place because a summary, an
+    inlining directive and a counterexample's call stack all address a function *by symbol*, and a
+    function the optimizer folded away has no symbol to address. The corpus uses it exactly that way,
+    three of five times paired with ``early_panic``.
+    """
+
+    def attribute(self) -> str:
+        return "inline(never)"
+
+    def describe(self) -> str:
+        return "kept out of line, so it keeps a symbol the prover can name"
+
+
+@dataclasses.dataclass(frozen=True)
+class HookOnEntry:
+    """A call inserted as the function's first statement.
+
+    ``cvlr::hook_on_entry`` (``cvlr-hook``, in the pinned reference set) rewrites the body to run
+    ``call`` before anything else. Sound when the call only *observes* — records a flag, checks an
+    invariant, logs — which is every use in the corpus; a call that mutates the program's state is a
+    rewrite wearing an attribute and is outside the charter.
+
+    It is the vocabulary's only instrument for reaching a point *inside* an execution. Everything
+    else states a property at a function boundary, so a property about a state transition buried in a
+    handler has, until now, had nowhere to attach.
+    """
+
+    call: str
+
+    def attribute(self) -> str:
+        return f"cvlr::hook_on_entry({self.call})"
+
+    def describe(self) -> str:
+        return f"calls {self.call} on entry"
+
+
+@dataclasses.dataclass(frozen=True)
+class HookOnExit:
+    """A call inserted before the function returns. The exit half of :class:`HookOnEntry`."""
+
+    call: str
+
+    def attribute(self) -> str:
+        return f"cvlr::hook_on_exit({self.call})"
+
+    def describe(self) -> str:
+        return f"calls {self.call} on exit"
+
+
 #: The declared munge kinds — the charter, as types. A change that would need a *new* one is the
 #: give-up boundary (§7.6.4): not an edit budget, because the one real source munge in the corpus is
 #: 1097 routine lines and one hand-unrolled loop, and only the loop needed a person.
-type MungeKind = EarlyPanic | MockFn
+#:
+#: Five, not the two this backend shipped first. The three added here are the rest of what a corpus
+#: survey found projects actually writing, minus two that cannot be had: ``certora_make_pub`` is a
+#: *project-local* proc macro in the one project that uses it and has no counterpart in ``cvlr`` —
+#: and Rust cannot make visibility conditional on a feature without duplicating the item — while an
+#: exposure-style extraction is not an attribute at all and needs the gated-pair form
+#: ``docs/who-edits-the-program.md`` §8.4 describes.
+type MungeKind = EarlyPanic | MockFn | InlineNever | HookOnEntry | HookOnExit
 
 
 @dataclasses.dataclass(frozen=True)
 class FunctionMunge:
-    """One verification-only attribute on one of the program's functions."""
+    """One verification-only attribute on one of the program's functions, and what turns it on.
+
+    ``feature`` is the cargo feature the attribute is gated on, and it is what makes a shared
+    working tree possible (``docs/single-working-tree.md`` §2.3). A munge recorded by one unit is a
+    **dormant** line for every other: with the feature off, ``cfg_attr`` contributes no attribute and
+    the compiled function is the one the project shipped. So two units' munges of the same function
+    coexist as two lines, and the union of every unit's munges is the single well-defined content of
+    that file.
+
+    Gating the whole ``cfg_attr`` rather than using ``cvlr::mock_fn``'s own ``when`` parameter — the
+    corpus idiom — because it is one mechanism for both kinds: ``cvlr::early_panic`` has no ``when``,
+    and the corpus gates *it* by wrapping the ``cfg_attr`` condition anyway. The effect is identical
+    and there is one thing to read.
+    """
 
     #: The file, relative to the workspace root, so the record means the same thing in the report as
     #: on disk.
@@ -470,13 +545,22 @@ class FunctionMunge:
     #: Why the prover could not analyze the function as written, and why this attribute is sound for
     #: the properties in this batch. The only account anybody gets, exactly as with a summary.
     why: str
+    #: The cargo feature that activates it. Defaulted to the whole-harness feature so a record
+    #: written without one still means what it used to; every munge this backend records names the
+    #: recording unit's own feature.
+    feature: str = DEFAULT_FEATURE
 
     @property
     def edit_id(self) -> str:
-        return f"{self.kind.attribute()}@{self.path}::{self.function}"
+        """Identity for deduplication and for the report.
 
-    def attribute_line(self, indent: str, feature: str) -> str:
-        return f'{indent}#[cfg_attr(feature = "{feature}", {self.kind.attribute()})]'
+        The feature is part of it: two units munging the same function the same way are two distinct
+        lines in the file, each dormant for the other, and collapsing them would drop one.
+        """
+        return f"{self.feature}:{self.kind.attribute()}@{self.path}::{self.function}"
+
+    def attribute_line(self, indent: str) -> str:
+        return f'{indent}#[cfg_attr(feature = "{self.feature}", {self.kind.attribute()})]'
 
 
 #: Top-level directories inside a unit's workdir that are **not** the project's source.
@@ -513,15 +597,18 @@ def is_project_source(relative: PurePosixPath | str) -> bool:
 
 @dataclasses.dataclass(frozen=True)
 class NotProjectSource:
-    """The path is inside the workdir but is not the project's source.
+    """The path is inside the working tree but is not the project's source.
 
-    Almost always a dependency: confinement puts each unit's ``CARGO_HOME`` at
+    Almost always a dependency: confinement puts the run's ``CARGO_HOME`` at
     ``<workdir>/.sandbox_cargo``, so every crate the build resolves has its unpacked source in the
-    workdir, one directory away from the program.
+    tree, one directory away from the program.
     """
 
     path: str
     directory: str
+
+    def describe(self) -> str:
+        return f"{self.path} is under {self.directory}, which is not the project's source"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -595,13 +682,19 @@ def function_names(source: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(_ANY_FN.findall(source)))
 
 
-def apply_munge(source: str, munge: FunctionMunge, feature: str) -> MungeAttempt:
+def apply_munge(source: str, munge: FunctionMunge) -> MungeAttempt:
     """Insert ``munge``'s attribute above its function, or say why not.
 
     The attribute goes immediately above the signature, which puts it *below* any doc comment and
     any attribute already there — legal, and it keeps the insertion a single-line edit whose diff
     reads as one. The compile gate is what catches a signature this misjudged; these three refusals
     are the cases a compile would accept and a reader would not.
+
+    The three refusals are also the drift detector for a resumed or replayed run
+    (``docs/single-working-tree.md`` §4.3). Replay happens against the *pristine* project, which can
+    have moved since the munge was recorded; a function that is gone or has acquired a same-named
+    sibling is reported here rather than silently mis-applied, which is what a text overlay of the
+    old file would have done.
     """
     matches = list(_signature_pattern(munge.function).finditer(source))
     if not matches:
@@ -616,7 +709,7 @@ def apply_munge(source: str, munge: FunctionMunge, feature: str) -> MungeAttempt
     if len(matches) > 1:
         return FunctionAmbiguous(munge.function, tuple(n + 1 for n in starts))
     (index,) = starts
-    attribute = munge.attribute_line(matches[0].group("indent"), feature)
+    attribute = munge.attribute_line(matches[0].group("indent"))
     if index > 0 and lines[index - 1].strip() == attribute.strip():
         return AlreadyMunged(munge.function, index + 1)
     lines.insert(index, attribute + "\n")
@@ -634,12 +727,31 @@ def munge_history(munges: tuple[FunctionMunge, ...]) -> tuple[str, ...]:
     return tuple(f"munge:{m.edit_id}" for m in munges)
 
 
-def merge_munges(left: list[FunctionMunge], right: list[FunctionMunge]) -> list[FunctionMunge]:
-    """State reducer for the munge list: append, in order, deduplicating by :attr:`edit_id`.
+@dataclasses.dataclass(frozen=True)
+class DropMunges:
+    """A write that *removes* munges rather than adding them.
+
+    A distinct type rather than a flag on the write, because the two operations carry different
+    payloads and a list that sometimes meant "remove these" would be indistinguishable from one that
+    meant "add these". It is what makes a munge undoable: the working tree is rebuilt from the
+    pristine copy and replayed from this list on every build, so an ``edit_id`` that leaves the list
+    leaves the file (``docs/single-working-tree.md`` §4).
+    """
+
+    edit_ids: frozenset[str]
+
+
+type MungeWrite = list[FunctionMunge] | DropMunges
+
+
+def merge_munges(left: list[FunctionMunge], right: MungeWrite) -> list[FunctionMunge]:
+    """State reducer for the munge list: append deduplicating by :attr:`edit_id`, or remove.
 
     A reducer for the reason ``merge_summaries`` is one — several tool calls can land in one graph
     step, and LangGraph refuses two writes to an unreduced key.
     """
+    if isinstance(right, DropMunges):
+        return [m for m in left if m.edit_id not in right.edit_ids]
     merged = list(left)
     seen = {m.edit_id for m in merged}
     for munge in right:

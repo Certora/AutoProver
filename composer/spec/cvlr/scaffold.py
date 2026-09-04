@@ -38,6 +38,7 @@ import logging
 import re
 import tomllib
 from pathlib import Path
+from typing import Sequence
 
 from composer.cargo.metadata import CratePackage, Workspace
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
@@ -104,8 +105,23 @@ class EnvFamily:
 
     @property
     def composite(self) -> str:
-        """The file the conf names, generated from the three layers."""
+        """The file the *package* declares, generated from the three layers."""
         return f"{self.stem}.txt"
+
+    def unit_layer(self, unit: str) -> str:
+        """One unit's own directives, which the authoring loop rewrites wholesale.
+
+        A fourth layer rather than more lines in ``package``: that file is the *project's*, and a
+        run that appended to it would leave one unit's directives applying to every other unit's
+        submission — the one cross-unit leak a cargo feature cannot close, because a summary is a
+        prover-side symbol pattern rather than anything the compiler sees
+        (``docs/single-working-tree.md`` §6).
+        """
+        return f"{self.stem}_{unit}_run.txt"
+
+    def unit_composite(self, unit: str) -> str:
+        """The file *one unit's conf* names, generated from all four layers."""
+        return f"{self.stem}_{unit}.txt"
 
 
 INLINING = EnvFamily("cvlr_inlining")
@@ -244,14 +260,23 @@ def env_provenance() -> str:
 
 
 def compose_env(
-    family: EnvFamily, *, package_layer: str, dialect: PathDialect = PathDialect()
+    family: EnvFamily,
+    *,
+    package_layer: str,
+    unit_layer: str = "",
+    dialect: PathDialect = PathDialect(),
 ) -> str:
-    """The generated composite: header, then the three layers, the way the template's justfile does.
+    """The generated composite: header, then the layers, the way the template's justfile does.
 
     ``package_layer`` is passed in rather than read from disk so recomposing after the authoring
     loop has added a directive is the same function call, with no hidden state. It is the one layer
     the dialect does not touch: it is the project's own file, written against the project's own
     symbols, so its paths are already whatever the project resolves.
+
+    ``unit_layer`` is the fourth layer and is empty for the package-level composite, which is the
+    only kind the scaffold writes. A run composes it non-empty, per unit, so that one unit's
+    summaries are not applied to another unit's submission — see :meth:`EnvFamily.unit_layer`. It is
+    the project's symbols too, so the dialect leaves it alone for the same reason.
     """
     header = _GENERATED_HEADER.format(
         core=family.core, anchor=family.anchor, package=family.package
@@ -269,6 +294,8 @@ def compose_env(
         canonical_env(family.anchor, dialect),
         package_layer,
     ]
+    if unit_layer.strip():
+        parts.append(unit_layer)
     return "\n".join(p.rstrip("\n") for p in parts) + "\n"
 
 
@@ -800,6 +827,38 @@ def _insert_in_table(text: str, header: str, addition: str) -> str:
         )
     index = at[0] + 1
     return "".join(lines[:index]) + addition + "".join(lines[index:])
+
+
+def declare_unit_features(manifest: Path, features: Sequence[str]) -> tuple[str, ...]:
+    """Declare one empty cargo feature per unit, returning the ones this call added.
+
+    The counterpart to :meth:`composer.spec.cvlr.harness.CvlrArtifactStore.declare_modules`: that
+    writes ``#[cfg(feature = "unit_x")] pub mod x;`` and this makes ``unit_x`` a feature cargo will
+    accept. Without it ``--features certora,unit_x`` fails with *"Package does not contain this
+    feature"* — the same failure ``docs/command-sandbox.md`` §11 item 8 records the Rust wheel
+    hitting on a shared crate, and the reason both halves are written once, up front, by one writer.
+
+    **Every unit feature is empty, and that is load-bearing.** A feature that enabled a *dependency*
+    feature would change the deps' resolved feature set, give them separate fingerprints, and
+    reinstate the per-unit dependency build the shared tree exists to remove
+    (``docs/single-working-tree.md`` §2.1). Empty means the only compilation that varies with it is
+    the program crate's own — 4 of 519 artifacts by that document's §3.
+
+    Idempotent, like everything else that writes into somebody's manifest: a feature already
+    declared is left exactly as it is, whatever it says.
+    """
+    parsed = _read_toml(manifest)
+    declared = parsed.get("features", {})
+    wanted = [f for f in dict.fromkeys(features) if f not in declared]
+    if not wanted:
+        return ()
+    entries = "".join(f"{feature} = []\n" for feature in wanted)
+    text = manifest.read_text()
+    if declared:
+        manifest.write_text(_insert_in_table(text, "[features]", entries))
+    else:
+        manifest.write_text(text + _section_banner() + f"[features]\n{entries}")
+    return tuple(wanted)
 
 
 def apply(plan: ScaffoldPlan, root: Path) -> tuple[Path, ...]:

@@ -7,27 +7,37 @@ built. What this module adds is the four things that differ: a preflight that sc
 the workspace, a staged formalizer that declares the harness modules, the per-unit authoring loop,
 and verdicts read back from the prover.
 
-**Why the formalizer is staged.** ``specs/mod.rs`` needs a ``mod`` line per unit, and a module
-declared without a file is a compile error — so a unit whose sibling has not been written yet would
-fail *its own* compile gate for a reason that has nothing to do with it. The declaration therefore
-has to happen once, when every unit is known, which is exactly what
+**Why the formalizer is staged.** ``specs/mod.rs`` needs a ``mod`` line per unit and the package
+manifest needs a feature per unit, and no single unit knows what the others are — so both have to be
+written once, by one writer, when every unit is known, which is exactly what
 :class:`~composer.pipeline.core.StagedFormalizer` exists for. §5.6 predicted this shape ("one shared
-certora harness module, many rules") before there was any code to hang it on.
+certora harness module, many rules") before there was any code to hang it on. Getting the manifest
+half wrong is the failure ``docs/command-sandbox.md`` §11 item 8 records on the Rust wheel path: a
+``--features`` a shared crate does not declare fails with "Package does not contain this feature",
+and the unit it belongs to is dropped.
 
-**Why each unit gets its own workdir.** This closes open question 3, and the answer is forced rather
-than preferred. The compile gate is whole-crate: ``cargo check`` on the package compiles *every*
-unit's module, so in a shared workdir unit A's gate fails whenever unit B's draft is momentarily
-broken — a gate that fails for another unit's reason, nondeterministically. That is worse than a slow
-gate, because it is not reproducible. The cost is one dependency graph per unit, which makes the
-shared read-only cargo cache §5.1 held in reserve load-bearing rather than optional; the alternatives
-considered and rejected are in §7.5.2.
+**Why every unit shares one workdir.** ``docs/single-working-tree.md`` is the argument; this is the
+summary. §7.5.2 answered open question 3 with "per unit, and forced", on the grounds that the compile
+gate is whole-crate — unit A's gate would fail whenever unit B's draft was momentarily broken. That
+is true of a shared tree and false of this one, because each unit's module is declared behind its own
+cargo feature: a module behind a disabled ``cfg`` is never compiled, never enters rustc's dep-info,
+and so can neither break nor dirty a sibling's build. What that buys is the whole cost of the old
+arrangement — the dependency graph is fetched once and compiled once instead of once per unit, since
+an empty unit feature leaves every dependency's resolved feature set identical and only the program
+crate's own artifacts vary.
+
+Two things follow. Builds are serialized behind one permit, because every unit shares one
+``target/`` — cargo would serialize them anyway on its own build-directory lock, and an explicit
+permit is a queue the host can see. And the tree is **derived** rather than state: it is the pristine
+project plus each unit's draft plus the union of the munges plus the tuning files, all of which are
+in the checkpoint, so it can be deleted and rebuilt and a resumed or cache-replayed run still
+produces the same submission (:mod:`composer.spec.cvlr.tree`).
 """
 
 import asyncio
 import dataclasses
 import enum
 import logging
-import shutil
 from pathlib import Path
 from typing import Sequence, override
 
@@ -52,10 +62,10 @@ from composer.spec.cvlr.author import batch_cvlr_generation
 from composer.spec.cvlr.conf import DEFAULT_FEATURE, load_base
 from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness, HarnessModule
-from composer.spec.cvlr.munge import NOT_PROJECT_SOURCE, FunctionMunge
 from composer.spec.cvlr.preflight import CvlrPreflight, gate_workspace, prepare_workspace
 from composer.spec.cvlr.prover import Submission
-from composer.spec.cvlr.scaffold import ENVS_DIR, SPECS_DIR
+from composer.spec.cvlr.scaffold import ENVS_DIR, SPECS_DIR, SUMMARIES, declare_unit_features
+from composer.spec.cvlr.tree import SharedTree, munge_diff
 from composer.spec.cvlr.tuning import TuningFiles
 from composer.spec.cvlr.source_tools import cvlr_source_tools, mount
 from composer.spec.cvlr.state import PROVER_VALIDATION_KEY
@@ -78,7 +88,6 @@ from composer.spec.source.report.collect import (
     RuleEvidence,
     Verdict,
 )
-from composer.spec.source.munge.vfs_diff import compute_diff, fs_resolver
 from composer.spec.source.report.schema import AppliedEditRecord, SourceEditRecord
 from composer.spec.source.report_prover import make_prover_fetcher
 from composer.spec.source.report.schema import RuleName
@@ -86,26 +95,21 @@ from composer.spec.types import PropertyFormulation
 
 _log = logging.getLogger(__name__)
 
-#: Where per-unit workdirs go. A real directory rather than a temp dir, because a failed authoring
-#: session's workspace is the most useful thing to look at afterwards and a temp dir is gone by the
-#: time anyone asks.
+#: Where the run's working copy goes. A real directory rather than a temp dir, because a failed
+#: authoring session's workspace is the most useful thing to look at afterwards and a temp dir is
+#: gone by the time anyone asks.
 #:
 #: **Deliberately not under ``.certora_internal``**, which is where this started. The prover's source
-#: collector skips paths inside that directory, so a unit whose whole workspace lived there uploaded
+#: collector skips paths inside that directory, so a run whose whole workspace lived there uploaded
 #: its ``.so`` and tuning files and *none* of its Rust — silently, with the job still succeeding.
 #: Confirmed by moving one project between the two paths with nothing else changed: seven ``.rs``
 #: files collected from a plain path, zero from under ``.certora_internal``.
 WORK_DIR = Path(".cvlr_work")
 
-#: Never copied into a unit's workdir. ``target`` is regenerable and enormous; ``.git`` is neither
-#: needed nor ours to duplicate; :data:`WORK_DIR` is where the copies themselves go, so copying it
-#: would nest one unit's workspace inside another's.
-#:
-#: The list is :data:`~composer.spec.cvlr.munge.NOT_PROJECT_SOURCE`, because it is the same fact
-#: read twice: what a copy of the project leaves out is what a munge of the project may not touch.
-#: Sharing it also keeps the two from drifting, which matters in one direction — a directory added
-#: here and not there would become munge-able.
-_NOT_COPIED = shutil.ignore_patterns(*NOT_PROJECT_SOURCE)
+#: The one tree, under :data:`WORK_DIR`. Named rather than being :data:`WORK_DIR` itself so that the
+#: build output, the sandbox's private ``CARGO_HOME`` and anything a later version keeps beside them
+#: are visibly separate things in one place.
+BUILD_DIR = "build"
 
 
 class CvlrPhase(enum.Enum):
@@ -114,42 +118,6 @@ class CvlrPhase(enum.Enum):
     PREFLIGHT = "preflight"
     FORMALIZATION = "formalization"
     REPORT = "report"
-
-
-def _munge_diff(project: Path, workdir: Path, munges: tuple[FunctionMunge, ...]) -> str:
-    """A unified diff from the project's own source to the munged copy, munged files only.
-
-    The diff itself is :mod:`composer.spec.source.munge.vfs_diff`, which is chain-neutral despite
-    where it lives — it wants an "old" resolver and a "new" overlay, and this backend's "new" is
-    files on disk in the unit's workdir rather than a VFS. Reusing it rather than reaching for
-    ``difflib`` directly keeps one answer to "what does an edit look like in a report": the two
-    were written independently first and produced byte-identical output, which is the argument.
-
-    Reading the munged side is best-effort. A workdir that has been cleaned up loses the diff and
-    says so, rather than raising — the report is the last thing in the run, and losing all of it to
-    one missing file would cost every other record in it.
-    """
-    overlay: dict[str, str] = {}
-    notes: list[str] = []
-    for path in dict.fromkeys(m.path for m in munges):
-        try:
-            overlay[path] = (workdir / path).read_text()
-        except OSError as exc:
-            notes.append(f"# {path}: could not be diffed ({exc})\n")
-    return compute_diff(fs_resolver(project), overlay) + "".join(notes)
-
-
-def _copy_workspace(source: Path, dest: Path) -> None:
-    """A unit's own copy of the workspace.
-
-    Synchronous and called off the event loop by the caller. Re-copying an existing workdir is
-    skipped rather than merged: a resumed run should find the workspace it left, including whatever
-    the last session staged."""
-    if dest.exists():
-        _log.info("cvlr: reusing the existing workdir at %s", dest)
-        return
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source, dest, ignore=_NOT_COPIED, symlinks=True)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -170,9 +138,31 @@ class CvlrDeps:
     cex_analysis: CexAnalysisStore
 
 
+@dataclasses.dataclass(frozen=True)
+class SharedBuild:
+    """The one working tree, the one cargo session over it, and the permit that serializes them.
+
+    Made once per run in :meth:`CvlrStagedFormalizer.begin`, because every part of it is run-constant
+    and because the copy and the dependency fetch are the two costs the shared tree exists to pay
+    once instead of once per unit.
+
+    ``warm_failure`` is carried rather than raised. A failed dependency fetch means nothing any unit
+    could author would build, and the run should still produce a report saying so for each of them —
+    which is what the per-unit ``GaveUp`` did when each unit warmed its own workspace.
+    """
+
+    tree: SharedTree
+    session: CargoSession
+    #: One permit for the whole run. Held across staging and the local cargo invocation, and not
+    #: across a prover run — see :meth:`composer.spec.cvlr.verify.HarnessTarget.build_slot`.
+    build_sem: asyncio.Semaphore
+    warm_failure: str | None = None
+
+
 @dataclasses.dataclass
 class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
     deps: CvlrDeps
+    build: SharedBuild
 
     @override
     async def formalize(
@@ -185,31 +175,30 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
         extra_tools: ToolBinder[SolanaComponentInstance],
     ) -> GeneratedHarness | Curtailed[GeneratedHarness] | GaveUp:
         identity = HarnessModule(feat.slug)
-        project = Path(run.source.project_root)
-        workdir = project / WORK_DIR / identity.module
-        await asyncio.to_thread(_copy_workspace, project, workdir)
-
-        session = CargoSession(workdir=workdir, sandbox=self.deps.sandbox)
-        warmed = await session.warm()
-        if isinstance(warmed, WarmFailed):
+        if self.build.warm_failure is not None:
             # Not a give-up by the agent: nothing it could author would build. Reported as one so
-            # the run continues with the other units and the report says why this one has nothing.
-            return GaveUp(
-                reason=(
-                    f"could not fetch the dependency graph for {workdir} "
-                    f"(exit {warmed.exit_code}):\n{warmed.diagnostics}"
-                )
-            )
+            # the run continues with the other units and the report says why each has nothing.
+            return GaveUp(reason=self.build.warm_failure)
 
-        package_root = workdir / self.deps.package_dir
+        session = self.build.session
+        package_root = session.workdir / self.deps.package_dir
+        tuning = TuningFiles(
+            envs_dir=package_root / ENVS_DIR,
+            dialect=self.deps.preflight.scaffold.dialect,
+            unit=identity.module,
+        )
+        # The composite this unit's conf names has to exist before the first submission names it,
+        # and the loop may summarize nothing at all. Composing it empty now costs one file and
+        # removes a case where the prover refuses a conf for a path that was never written.
+        await asyncio.to_thread(tuning.write, ())
         target = HarnessTarget(
             session=session,
             module_path=package_root / SPECS_DIR / identity.artifact_file,
             package=self.deps.preflight.package,
-            tuning=TuningFiles(
-                envs_dir=package_root / ENVS_DIR,
-                dialect=self.deps.preflight.scaffold.dialect,
-            ),
+            tuning=tuning,
+            unit=identity,
+            tree=self.build.tree,
+            build_sem=self.build.build_sem,
         )
         verify = VerifyDeps(
             target=target,
@@ -218,7 +207,17 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
                 base_conf=load_base(None),
                 msg=f"{self.deps.preflight.package}: {label}",
                 stem=identity.stem,
-                features=(DEFAULT_FEATURE,),
+                # The harness feature and this unit's own: what compiles exactly one unit's rules
+                # out of the shared crate (docs/single-working-tree.md §2.1).
+                features=(DEFAULT_FEATURE, identity.feature),
+                # Workdir-relative, which is how certoraSolanaProver reads a conf path.
+                summaries=(
+                    str(
+                        self.deps.package_dir
+                        / ENVS_DIR
+                        / SUMMARIES.unit_composite(identity.module)
+                    ),
+                ),
             ),
             prover_opts=self.deps.prover_opts,
             stamper=prover_stamper(),
@@ -238,6 +237,7 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
             cvlr_versions=self.deps.versions,
             target=target,
             verify=verify,
+            pristine=self.build.tree.pristine,
             crate_tools=self.deps.crate_tools,
         )
 
@@ -270,10 +270,13 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
         code, not the code as shipped", which is exactly the disclosure a munge owes. A second
         channel saying the same thing would be §7.6.7's mistake in a new place.
 
-        The diff is taken against the project tree, which is the pristine copy: every unit works in
-        its own copy under :data:`WORK_DIR` and nothing ever writes back. Only the munged files are
-        diffed — the harness module is a new file and this unit's own deliverable, not a
-        modification of the program.
+        The diff is computed from the munge records rather than read off the working tree
+        (:func:`composer.spec.cvlr.tree.munge_diff`). Two reasons, and both are consequences of the
+        tree being shared: the tree holds every unit's munges, so reading it would show one unit's
+        report its siblings' dormant lines; and a diff derived from state survives the tree being
+        deleted, which ``docs/single-working-tree.md`` §4 makes a routine thing to do. Only the
+        munged files are diffed — the harness module is a new file and this unit's own deliverable,
+        not a modification of the program.
         """
         records: list[SourceEditRecord] = []
         project = Path(run.source.project_root)
@@ -287,7 +290,6 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
             harness = outcome.result.result
             if not harness.munges:
                 continue
-            workdir = project / WORK_DIR / HarnessModule(outcome.feat.slug).module
             records.append(
                 SourceEditRecord(
                     component=outcome.feat.display_name,
@@ -300,7 +302,7 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
                         for m in harness.munges
                     ],
                     cumulative_diff=await asyncio.to_thread(
-                        _munge_diff, project, workdir, tuple(harness.munges)
+                        munge_diff, project, tuple(harness.munges)
                     ),
                 )
             )
@@ -337,10 +339,56 @@ class CvlrStagedFormalizer(StagedFormalizer[GeneratedHarness, SolanaComponentIns
     async def begin(
         self, jobs: Sequence[BackendJob[SolanaComponentInstance]], run: PipelineRun
     ) -> Formalizer[GeneratedHarness, SolanaComponentInstance]:
+        """Declare every unit, then make the one tree they share.
+
+        The order is the whole of it. Both declarations — the ``cfg``-gated ``mod`` lines and the
+        cargo features they name — are written into the *project*, once, by this one writer, before
+        the tree is copied from it. A feature declared later than the tree would not be in the tree;
+        a feature not declared at all makes ``--features unit_x`` fail with "Package does not
+        contain this feature", which is the failure ``docs/command-sandbox.md`` §11 item 8 records
+        the Rust wheel hitting on a shared crate.
+        """
+        project = Path(run.source.project_root)
         modules = [HarnessModule(job.feat.slug) for job in jobs]
-        mod_rs = await asyncio.to_thread(self.deps.store.declare_modules, modules)
-        _log.info("cvlr: declared %d harness module(s) in %s", len(modules), mod_rs)
-        return CvlrFormalizer(GeneratedHarness, "prover", self.deps)
+        manifest = self.deps.package_dir / "Cargo.toml"
+        declared = await asyncio.to_thread(self.deps.store.declare_modules, modules)
+        added = await asyncio.to_thread(
+            declare_unit_features, project / manifest, [m.feature for m in modules]
+        )
+        _log.info(
+            "cvlr: declared %d harness module(s) in %s; added %d cargo feature(s)",
+            len(modules),
+            declared[0],
+            len(added),
+        )
+
+        tree = SharedTree(pristine=project, root=project / WORK_DIR / BUILD_DIR)
+        await asyncio.to_thread(tree.materialize)
+        # A reused tree predates the two declarations above, so a resumed run whose component set
+        # changed would build against a manifest missing a unit's feature and a `mod.rs` missing its
+        # module. Content-compared, so an unchanged set costs nothing.
+        adopted = await asyncio.to_thread(
+            tree.adopt, manifest, *(p.relative_to(project) for p in declared)
+        )
+        if adopted:
+            _log.info("cvlr: re-synced %s into the working tree", ", ".join(adopted))
+        session = CargoSession(workdir=tree.root, sandbox=self.deps.sandbox)
+        warmed = await session.warm()
+        failure = (
+            f"could not fetch the dependency graph for {tree.root} "
+            f"(exit {warmed.exit_code}):\n{warmed.diagnostics}"
+            if isinstance(warmed, WarmFailed)
+            else None
+        )
+        build = SharedBuild(
+            tree=tree,
+            session=session,
+            # One permit for the run. Cargo would serialize concurrent builds against this
+            # `target/` on its own lock anyway; the permit is the queue the host can see.
+            build_sem=asyncio.Semaphore(1),
+            warm_failure=failure,
+        )
+        return CvlrFormalizer(GeneratedHarness, "prover", self.deps, build)
 
 
 @dataclasses.dataclass

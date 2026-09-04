@@ -151,3 +151,42 @@ def test_the_briefing_lands_after_what_input_parts_built():
     caveats on it. Reversed, the review opens on a list of symbol patterns with no context."""
     lifted = with_assumptions(_base(), HarnessAssumptions(summaries=(_DISPLAY,), munges=()))
     assert _DISPLAY.pattern in str(lifted["input"][-1])
+
+
+def test_the_judge_is_shown_the_diff_and_not_only_a_description(tmp_path):
+    """The half of ``docs/munge-and-working-copies.md`` §8 gap 1 that stayed open: EVM's reviewer
+    receives a diff, and this judge received a sentence the editor wrote about its own work. The
+    diff is derived from the munge records, so no working tree is involved and none has to exist.
+    """
+    source = "pub fn calculate_fees(r: &Reserve) -> Result<u64> {\n    Ok(0)\n}\n"
+    (tmp_path / "programs" / "p" / "src").mkdir(parents=True)
+    (tmp_path / "programs/p/src/reserve.rs").write_text(source)
+
+    munge = FunctionMunge(
+        path="programs/p/src/reserve.rs",
+        function="calculate_fees",
+        kind=EarlyPanic(),
+        why="[3308] on the error type's Display impl",
+        feature="unit_vault",
+    )
+    briefing = _text(
+        harness_assumptions(
+            {"summaries": [], "munges": [munge]},  # type: ignore[arg-type]
+            tmp_path,
+        )
+    )
+    assert '+#[cfg_attr(feature = "unit_vault", cvlr::early_panic)]' in briefing
+    assert "the summary is the editor's account of its own work" in briefing
+
+
+def test_a_briefing_without_a_project_still_describes_the_munges(tmp_path):
+    """The diff is an addition, not a replacement: a caller with no project on hand gets the weaker
+    briefing rather than an error, and the descriptions it always had."""
+    munge = FunctionMunge(
+        path="p.rs", function="f", kind=EarlyPanic(), why="w", feature="unit_vault"
+    )
+    briefing = _text(
+        harness_assumptions({"summaries": [], "munges": [munge]})  # type: ignore[arg-type]
+    )
+    assert "f (p.rs)" in briefing
+    assert "@@" not in briefing

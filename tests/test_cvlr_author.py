@@ -276,7 +276,7 @@ def test_every_unit_gets_a_module_and_a_file_before_any_unit_authors(tmp_path):
     # fail its *own* compile gate. This is what the staged formalizer is for.
     store = CvlrArtifactStore(tmp_path, Path("programs/prog"))
     modules = [HarnessModule("deposit"), HarnessModule("withdraw")]
-    mod_rs = store.declare_modules(modules)
+    mod_rs, *_ = store.declare_modules(modules)
 
     text = mod_rs.read_text()
     assert "pub mod deposit;" in text and "pub mod withdraw;" in text
@@ -373,22 +373,29 @@ async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeyp
     conf machinery is correct, the build is correct, and the bug lives entirely in what is handed
     across.
 
-    Also pins *which* selection. ``AllRules`` would look right and be wrong — the build is
-    whole-crate, so it would grade this unit on every sibling unit's rules.
+    Also pins *which* selection. ``AllRules`` would look right and be wrong — the artifact declares
+    every unit's rules, so it would grade this unit on its siblings' drafts.
     """
+    import contextlib
+
     from composer.spec.cvlr import verify as verify_mod
+    from composer.spec.cvlr.tree import Reconciled
 
     captured: dict = {}
 
-    async def fake_submit(session, submission, **kwargs):
+    async def fake_prepare(session, submission, **kwargs):
         captured["rules"] = submission.rules
         raise _StopProbe
 
-    monkeypatch.setattr(verify_mod, "submit", fake_submit)
+    monkeypatch.setattr(verify_mod, "prepare_submission", fake_prepare)
 
     deps = SimpleNamespace(
         lock=asyncio.Lock(),
-        target=SimpleNamespace(session=None, stage=lambda draft, summaries=(), munges=(): None),
+        target=SimpleNamespace(
+            session=None,
+            stage=lambda draft, summaries=(), munges=(): Reconciled(written=(), drifted=()),
+            build_slot=contextlib.nullcontext,
+        ),
         submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), base_conf={}),
         prover_opts=None,
         analysis=None,
@@ -410,8 +417,8 @@ async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeyp
     assert conf["rule"] == ["rule_balance_conserved", "rule_only_authority_withdraws"]
 
 
-def test_the_unit_workdir_is_not_inside_a_prover_internal_directory():
-    """Where the per-unit workspace lives changes what the prover receives.
+def test_the_working_tree_is_not_inside_a_prover_internal_directory():
+    """Where the run's workspace lives changes what the prover receives.
 
     The collector skips paths under ``.certora_internal``, so a workspace placed there uploads its
     ``.so`` and tuning files and none of its Rust. Nothing reports it: the job still runs and still
@@ -421,10 +428,11 @@ def test_the_unit_workdir_is_not_inside_a_prover_internal_directory():
     under ``.certora_internal``.
 
     Also pins the two places the directory's name has to appear, because forgetting either is its
-    own quiet failure: uncopied, or a unit's workspace nests inside another's on the next run.
+    own quiet failure: uncopied, or the tree nesting inside itself on the next run.
     """
-    from composer.spec.cvlr.pipeline import WORK_DIR, _NOT_COPIED
+    from composer.spec.cvlr.pipeline import WORK_DIR
     from composer.spec.cvlr.scaffold import GITIGNORE_LINES
+    from composer.spec.cvlr.tree import _NOT_COPIED
 
     assert ".certora_internal" not in WORK_DIR.parts
     assert WORK_DIR.name in GITIGNORE_LINES
