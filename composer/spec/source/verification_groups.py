@@ -37,10 +37,9 @@ _logger = logging.getLogger("composer.prover")
 
 # A group count above this is merged down (see cap_groups). Each group is a
 # separate prover run, so the cap bounds run fan-out (cost / parallelism) and the
-# worst case of one-group-per-rule; at 1 the whole spec runs as a single group,
-# i.e. exactly today's behavior. Overridable per run via the env var, mirroring
-# the AUTOPROVER_* prover-config knobs.
-DEFAULT_MAX_VERIFICATION_GROUPS = 4
+# worst case of one-group-per-rule; at 1 the whole spec runs as a single group.
+# Overridable per run via the env var, mirroring the AUTOPROVER_* prover-config knobs.
+DEFAULT_MAX_VERIFICATION_GROUPS = 6
 MAX_VERIFICATION_GROUPS_ENV = "AUTOPROVER_MAX_VERIFICATION_GROUPS"
 
 
