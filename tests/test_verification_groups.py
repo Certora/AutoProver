@@ -14,6 +14,7 @@ from composer.spec.source.verification_groups import (
     cap_groups,
     merge_group_results,
     plan_verification_groups,
+    prune_phantom_owned_rules,
     resolved_max_groups,
     single_group,
 )
@@ -137,3 +138,20 @@ def test_merge_results_single_group_is_passthrough():
     g = _g("all", ["r1", "r2"])
     res = {RulePath(rule="r1"): "VERIFIED", RulePath(rule="r2"): "VIOLATED"}
     assert merge_group_results([(g, res)]) == res
+
+
+def test_prune_phantom_owned_rules_drops_undeclared_and_reports_them():
+    # A rule owned by a group but absent from the compiled spec (agent typo) would otherwise be pending
+    # forever (never submitted, never verified) and wedge the group in a perpetual re-run. Prune it +
+    # report it so the caller can warn.
+    g1 = VerificationGroup(name="a", owned_rules=frozenset({"r1", "ghostRule"}))
+    g2 = VerificationGroup(name="b", owned_rules=frozenset({"r2"}))
+    pruned, phantom = prune_phantom_owned_rules([g1, g2], ["r1", "r2"])
+    assert phantom == {"ghostRule"}
+    assert {g.name: set(g.owned_rules) for g in pruned} == {"a": {"r1"}, "b": {"r2"}}
+
+
+def test_prune_phantom_owned_rules_noop_when_all_real():
+    groups = [VerificationGroup(name="a", owned_rules=frozenset({"r1"}))]
+    pruned, phantom = prune_phantom_owned_rules(groups, ["r1", "r2"])
+    assert phantom == set() and pruned == groups   # unchanged (value-equal frozen dataclasses)

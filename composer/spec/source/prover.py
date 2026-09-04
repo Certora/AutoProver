@@ -57,6 +57,7 @@ from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.verification_groups import (
     VerificationGroup,
     merge_group_results,
+    prune_phantom_owned_rules,
     resolved_max_groups,
     single_group,
 )
@@ -713,6 +714,15 @@ def get_prover_tool(
                 return spec_digest(
                     g.spec_contents if g.spec_contents is not None else spec,
                     state["skipped"], state["version_history"],
+                )
+
+            # Drop phantom owned rules (declared but absent from the compiled spec) so a typo can't wedge
+            # a group in a silent perpetual re-run (never submitted, yet forever pending). Warn once.
+            groups, phantom = prune_phantom_owned_rules(groups, all_rules)
+            if phantom:
+                _logger.warning(
+                    "verification groups: declared rule(s) absent from the compiled spec, ignored: %s",
+                    sorted(phantom),
                 )
 
             plan = plan_group_execution(

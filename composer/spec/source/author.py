@@ -200,6 +200,11 @@ class DeclareVerificationGroups(
     - `conf_overlay` is optional per-group prover config for non-summarization needs
       (e.g. {"loop_iter": 2, "global_timeout": 4000}).
 
+    Note: a rule reachable from two properties in DIFFERENT groups is verified ONCE — in the FIRST
+    group that declares it — under THAT group's summaries (the run partitions rules disjointly). So
+    make the first group's summaries sound for any rule it shares with a later group, or keep that
+    rule's functions precise there.
+
     Groups run in parallel; already-verified rules are not re-run. Call again to REPLACE the whole
     partition; pass an empty `groups` list to revert to a single combined run. If you declare more
     groups than the run's cap, the most-similar are merged automatically.

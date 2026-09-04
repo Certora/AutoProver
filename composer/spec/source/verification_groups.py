@@ -208,6 +208,24 @@ def cap_groups(
     return remaining
 
 
+def prune_phantom_owned_rules(
+    groups: Sequence[VerificationGroup], all_rules: Sequence[str]
+) -> tuple[list[VerificationGroup], set[str]]:
+    """Remap each group's owned rules to those the compiled spec actually declares, and return the
+    dropped "phantom" rules — names owned by a group but absent from ``all_rules`` (an agent typo, or a
+    ``property_rules`` entry naming a non-existent rule).
+
+    Left in, a phantom owned rule is never submitted (the submit set is filtered to ``all_rules``) yet
+    forever counts as pending, so its group would never complete — a silent perpetual re-run. Returns the
+    groups unchanged and an empty set when every owned rule is real, so the caller warns only on a genuine
+    mistake."""
+    actual = frozenset(all_rules)
+    phantom = {r for g in groups for r in g.owned_rules} - actual
+    if not phantom:
+        return list(groups), set()
+    return [replace(g, owned_rules=g.owned_rules & actual) for g in groups], phantom
+
+
 def merge_group_results(
     per_group: Sequence[tuple[VerificationGroup, Mapping[RulePath, StatusCodes]]],
 ) -> dict[RulePath, StatusCodes]:
