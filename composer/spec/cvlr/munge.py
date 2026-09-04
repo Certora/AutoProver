@@ -42,6 +42,7 @@ import tomllib
 from pathlib import PurePosixPath
 
 from composer.cargo.metadata import Workspace
+from composer.layout import INTERNAL_DIR
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
 
 _log = logging.getLogger(__name__)
@@ -568,20 +569,22 @@ class FunctionMunge:
 #: Two uses, and they are the same fact: these are what a workspace copy leaves behind
 #: (:data:`composer.spec.cvlr.pipeline._NOT_COPIED`) and what a munge may not touch. A munge is a
 #: modification of *the program under verification*, and containment in the workdir does not
-#: establish that — the private ``CARGO_HOME`` confinement gives each unit lives at
-#: ``<workdir>/.sandbox_cargo``, so every dependency's unpacked source is inside the workdir too.
-#: Without this, ``munge_function`` would happily rewrite Anchor.
+#: establish that — confinement puts the run's private ``CARGO_HOME`` under
+#: :data:`~composer.sandbox.recipes.SANDBOX_CARGO_DIR`, so every dependency's unpacked source is
+#: inside the workdir too. Without this, ``munge_function`` would happily rewrite Anchor.
 #:
 #: That is the same failure ``validate_rule_subjects`` exists to prevent one axis over: a rule that
 #: drives a dependency proves a property of the dependency, and a munge of one modifies a
 #: dependency's behaviour for every crate that uses it, including the ones the property is about.
+#:
+#: The cargo home needs no entry of its own: it lives under :data:`INTERNAL_DIR`, and the match is
+#: on the first path component.
 NOT_PROJECT_SOURCE = (
     "target",
     ".git",
-    ".certora_internal",
+    INTERNAL_DIR.name,
     "certora_out",
     ".cvlr_work",
-    ".sandbox_cargo",
 )
 
 
@@ -599,9 +602,9 @@ def is_project_source(relative: PurePosixPath | str) -> bool:
 class NotProjectSource:
     """The path is inside the working tree but is not the project's source.
 
-    Almost always a dependency: confinement puts the run's ``CARGO_HOME`` at
-    ``<workdir>/.sandbox_cargo``, so every crate the build resolves has its unpacked source in the
-    tree, one directory away from the program.
+    Almost always a dependency: confinement puts the run's ``CARGO_HOME`` under
+    ``.certora_internal/sandbox/cargo``, so every crate the build resolves has its unpacked source
+    in the tree, a few directories away from the program.
     """
 
     path: str

@@ -816,7 +816,7 @@ CVLR", and there is no single coordinate that means it. What the survey and the 
 |---|---|---|---|
 | `cvlr`, `cvlr-spec` | 0.6.1 | 2026-03-28 | 0.6.1 (crates.io) |
 | `cvlr-solana`, `cvlr-solana-stake` | 0.5.0 | 2026-01-16 | 0.6.0-dev (git branch / path override) |
-| `cvlr-solana-token` / `cvlr-spl-token` | **never published** | — | 0.5.0–0.6.0-dev (path override) |
+| `cvlr-spl-token` (once also `cvlr-solana-token`) | **0.5.0** — published since this survey | — | 0.5.0–0.6.0-dev (path override) |
 | `cvlr-soroban*` | 0.4.0 | 2025-03-17 | 0.4.0 from a **personal fork** on a Soroban-SDK branch |
 
 The projects cannot settle it either: fifteen lockfiles resolve **ten distinct (version, source)
@@ -849,7 +849,7 @@ compile gate, the crate reference and the generated scaffold all read:
 
 | Chain | CVLR | Platform generation it implies |
 |---|---|---|
-| Solana | `cvlr` 0.6.1, `cvlr-solana` 0.5.0, `cvlr-solana-stake` 0.5.0 | `solana-program` 2.x (the last monolithic line) |
+| Solana | `cvlr` 0.6.1, `cvlr-solana` 0.5.0, `cvlr-solana-stake` 0.5.0, `cvlr-spl-token` 0.5.0 | `solana-program` 2.x (the last monolithic line) |
 | Soroban | `cvlr` 0.6.1, `cvlr-soroban` 0.4.0, `cvlr-soroban-derive` 0.4.0 | `soroban-sdk` 22.x |
 
 Verified by compiling a probe per chain against exactly these pins — the Solana one exercising
@@ -877,14 +877,26 @@ Two things follow, both deliberate:
 
 Accepted consequences, recorded so they are not rediscovered later as bugs:
 
-- **SPL Token support is a known hole.** The token model was factored out of `cvlr-solana` on the
-  unreleased 0.6 line and published under neither `cvlr-spl-token` nor `cvlr-solana-token`. Entries
-  needing it model the token account themselves. The gap is recorded in the reference data under
-  *both* names, so searching either finds it; if the crate is ever published the corpus is revised
-  then, rather than pre-emptively.
-- **The scaffold never emits a git-branch or `[patch.crates-io]` pin**, however current the project
-  that does. That is precisely what makes the newest engagement's build unreproducible from its own
-  repository, and it is not a practice to propagate to users.
+- ~~**SPL Token support is a known hole.**~~ **Closed — the crate was published.** The token model
+  was factored out of `cvlr-solana` and is on crates.io as `cvlr-spl-token` 0.5.0, the same version
+  as the chain crate it came from; the corpus project that reached it through a `[patch.crates-io]`
+  git redirect said as much in its own comment ("use git dependency until v0.5 … is released"). It
+  is now a `specialization` in the reference set, and the *scaffold declares every specialization*
+  rather than only core and chain — because there is no demand-time to add one later. The author
+  writes spec code and has no manifest-editing tool (deliberately: a dependency changes how the
+  project builds for everyone), and the munge editor's vocabulary is attributes on program source,
+  so a specialization the scaffold omits is a capability the run cannot reach at all. The one
+  exception is a project that already declares the chain crate: it has chosen its own CVLR line, and
+  adding a reference-version specialization on top would pair two generations of `AccountInfo`.
+- **The scaffold never emits a git-branch or `[patch.crates-io]` pin *for CVLR*,** however current
+  the project that does. That is precisely what makes the newest engagement's build unreproducible
+  from its own repository, and it is not a practice to propagate to users. It *does* emit
+  `[patch.crates-io]` redirects for the two maintained verification forks — `anchor-lang` /
+  `anchor-spl` to `Certora/anchor` and `fixed` to `Certora/fixed`, each on the branch matching the
+  resolved version — because without the Anchor one no handler can be analyzed at all
+  ([cvlr-backend-plan.md](cvlr-backend-plan.md) §7.6.1). The distinction that matters is *what* is
+  redirected: a moving pin on CVLR itself decides what the corpus was gated against, while a fork
+  redirect is the target's dependency and is recorded in the project's own lockfile.
 - **A stamp needs the platform generation, not just the CVLR version** (§4.3.6).
 
 **And the docs need the compile gate too.** Building the probe surfaced two defects in the manual's

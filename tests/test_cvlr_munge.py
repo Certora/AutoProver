@@ -19,6 +19,8 @@ from pathlib import Path
 import pytest
 
 from composer.cargo.metadata import CratePackage, Workspace
+from composer.layout import INTERNAL_DIR
+from composer.sandbox.recipes import SANDBOX_CARGO_DIR
 from composer.spec.cvlr.munge import (
     ANCHOR_FORK,
     SOLANA_OVERRIDES,
@@ -491,8 +493,8 @@ def test_a_path_leaving_the_workdir_is_refused(tmp_path):
 def test_a_dependency_inside_the_workdir_is_refused_too(tmp_path):
     """Containment is not the question, and this is the case that shows why.
 
-    Confinement gives the run a private ``CARGO_HOME`` at ``<workdir>/.sandbox_cargo``, so every
-    dependency's unpacked source sits inside the workdir, one directory away from the program. A
+    Confinement gives the run a private ``CARGO_HOME`` under ``<workdir>/.certora_internal``, so
+    every dependency's unpacked source sits inside the workdir, below the program. A
     check that stopped at "is it in the workdir" would let a munge rewrite Anchor — for every crate
     in the graph, including the ones the property is about. Same failure
     ``validate_rule_subjects`` prevents one axis over.
@@ -503,10 +505,14 @@ def test_a_dependency_inside_the_workdir_is_refused_too(tmp_path):
     (workdir / "src").mkdir(parents=True)
     target = _target(workdir)
 
-    anchor = ".sandbox_cargo/registry/src/index.crates.io-6f17d22/anchor-lang-0.31.1/src/error.rs"
+    anchor = str(
+        SANDBOX_CARGO_DIR / "registry/src/index.crates.io-6f17d22/anchor-lang-0.31.1/src/error.rs"
+    )
     refusal = target.source_path(anchor)
     assert isinstance(refusal, NotProjectSource)
-    assert refusal.directory == ".sandbox_cargo"
+    # Judged on the first component: the cargo home lives under the internal directory, which is
+    # what the rule names — it needs no entry of its own.
+    assert refusal.directory == INTERNAL_DIR.name
 
     for built in ("target/debug/build/x/out/gen.rs", ".certora_internal/x.rs", "certora_out/y.rs"):
         assert isinstance(target.source_path(built), NotProjectSource), built
@@ -520,7 +526,10 @@ def test_the_copy_and_the_munge_rule_are_one_list():
     from composer.spec.cvlr.pipeline import WORK_DIR
 
     assert WORK_DIR.name in NOT_PROJECT_SOURCE
-    assert ".sandbox_cargo" in NOT_PROJECT_SOURCE
+    # The sandbox's private CARGO_HOME is covered by the directory it lives under, not by an entry
+    # of its own — so the rule keeps holding if another scratch directory joins it there.
+    assert INTERNAL_DIR.name in NOT_PROJECT_SOURCE
+    assert not is_project_source(str(SANDBOX_CARGO_DIR / "registry/src/x/anchor/src/lib.rs"))
     assert is_project_source("programs/vault/src/lib.rs")
     assert not is_project_source("target/debug/deps/x.rs")
     # An empty path names no file and is not source.
