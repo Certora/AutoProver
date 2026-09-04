@@ -31,6 +31,7 @@ including in the budget wrap-up window where no run is available at all.
 """
 
 import dataclasses
+from pathlib import Path
 from typing import Annotated, Literal, NotRequired
 
 from langgraph.graph import MessagesState
@@ -49,6 +50,7 @@ from composer.authoring.state import (
 from composer.spec.context import CacheKey, CvlrGeneration, CvlrJudge
 from composer.spec.cvlr.munge import FunctionMunge, merge_munges, munge_history
 from composer.spec.cvlr.rules import rule_names
+from composer.spec.cvlr.tree import munge_diff
 from composer.spec.cvlr.tuning import SummaryDirective, merge_summaries, summary_history
 from composer.spec.types import CheckName, PropertyTitle, RuleName
 
@@ -225,6 +227,11 @@ class HarnessAssumptions:
 
     summaries: tuple[SummaryDirective, ...]
     munges: tuple[FunctionMunge, ...]
+    #: A unified diff from the project's own source to what the munges make of it. Empty when there
+    #: are none. The judge gets the change itself rather than a description of it, which is what
+    #: EVM's munge reviewer has always had and this one did not — a description is the editor's
+    #: account, and reviewing an account is how a change nobody described slips through.
+    diff: str = ""
 
     def briefing(self) -> list[str]:
         """Input parts stating what a verdict on this harness would be conditional on."""
@@ -256,16 +263,33 @@ class HarnessAssumptions:
             )
             parts += [
                 f"  {m.function} ({m.path}): {m.kind.describe()}\n"
-                f"    Author's justification: {m.why}"
+                f"    Justification: {m.why}"
                 for m in self.munges
             ]
+            if self.diff:
+                parts.append(
+                    "This is what those edits do to the program. Read it rather than the summary "
+                    "above: the summary is the editor's account of its own work."
+                )
+                parts.append(self.diff)
         return parts
 
 
-def harness_assumptions(state: CvlrGenerationExtra) -> HarnessAssumptions:
-    """The judge-facing read of the pair :func:`tuning_history` reads for the digest."""
+def harness_assumptions(
+    state: CvlrGenerationExtra, pristine: Path | None = None
+) -> HarnessAssumptions:
+    """The judge-facing read of the pair :func:`tuning_history` reads for the digest.
+
+    ``pristine`` is the developer's project, and giving it turns the munge briefing from a list of
+    descriptions into a diff. Optional because the diff is derived from the records — no working tree
+    is involved — so a caller with no project on hand still gets a correct, weaker briefing rather
+    than an error.
+    """
+    munges = tuple(state["munges"])
     return HarnessAssumptions(
-        summaries=tuple(state["summaries"]), munges=tuple(state["munges"])
+        summaries=tuple(state["summaries"]),
+        munges=munges,
+        diff=munge_diff(pristine, munges) if pristine is not None and munges else "",
     )
 
 
