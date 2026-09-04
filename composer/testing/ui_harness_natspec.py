@@ -405,7 +405,7 @@ _COUNTER_TAPE: list[BaseMessage] = [
     #     cvl_keyword_search, get_cvl_manual_section, get_cvl_recipe,
     #     cvl_research, cvl_document_ref)
     #   - injected_tools: request_stub_field, register_verification_file,
-    #     list_verification_files
+    #     unregister_verification_file, list_verification_files
     #   - static_tools: put_cvl, put_cvl_raw, feedback_tool, record_skip,
     #     unskip_property, get_cvl, erc20_guidance, unresolved_call_guidance
     #   - give_up, advisory_typecheck, publish, memory
