@@ -26,6 +26,8 @@ from composer.spec.cvl_generation import (
     GeneratedCVL, PropertyRuleMapping, AppliedEdit, FeedbackToolBase,
 )
 from composer.prover.core import run_prover, CexHandler, ProverCallbacks, ProverReport
+from composer.spec.source.agent_groups import VerificationGroupSpec, over_cap_message, render_group_plan_for_judge
+from composer.spec.source.verification_groups import resolved_max_groups
 from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools, WIPE_HISTORY
 from composer.spec.source.prover import setup_prover_config_in
 from composer.spec.context import WorkflowContext, CVLGeneration, CacheKey, SourceCode
@@ -167,6 +169,91 @@ class PublishResultTool(
             result=self.commentary,
             property_rules=self.property_rules,
             failed=False,
+        )
+
+
+@tool_display(lambda p: f"Declaring {len(p['groups'])} verification group(s)", None)
+class DeclareVerificationGroups(
+    WithAsyncDependencies[Command | str, list[PropertyTitle]],
+    WithInjectedState[SourceCVLGenerationState],
+    WithInjectedId,
+):
+    """
+    Split verification into independent, PARALLEL prover runs ("verification groups").
+
+    Use this when one combined run is (or would be) intractable — typically a timeout from
+    having to keep too much of the code precise at once. Each group verifies a subset of the
+    properties under its OWN summarization and configuration, so different groups can keep
+    DIFFERENT functions precise: a function summarized in one group can stay exact in another.
+    This breaks the "one global methods block forces the intersection of every rule's precision
+    needs" bottleneck.
+
+    A valid declaration:
+    - Every non-skipped property appears in exactly ONE group (via that group's `property_rules`).
+      Coverage is checked exactly as at publish time.
+    - Each group's `summaries` maps each function IT summarizes to the CVL methods-block entry to
+      summarize it with, HERE. A function a group omits is verified as the base spec has it — precise only
+      if the base spec (incl. its imports) does not already summarize it. The same
+      function may be summarized differently in different groups (a rule may allow `foo` monotone
+      while another needs it injective) — choose, per group, the weakest summary sound for that
+      group's rules.
+    - The base spec you put on the VFS must define any ghosts/CVL functions those entries use, and
+      must itself leave the summarized functions UNsummarized (each group's spec adds its own).
+    - Your `summaries` are APPENDED to the base spec's methods block (autosetup's imported summaries
+      included). To change how an ALREADY-base-summarized function behaves in a group, your entry must
+      be MORE SPECIFIC than the base's — an exact `Contract.f(...)` overrides a wildcard `_.f(...)`. If
+      the base already summarizes it EXACTLY for that contract you cannot override or remove it (a second
+      exact entry is a duplicate → typecheck error), and there is no way to make it precise in one group;
+      the workaround is to summarize a CALLER of that function instead (usually not base-summarized).
+
+    Note: a rule reachable from two properties in DIFFERENT groups is verified ONCE — in the FIRST
+    group that declares it — under THAT group's summaries (the run partitions rules disjointly). So
+    make the first group's summaries sound for any rule it shares with a later group, or keep that
+    rule's functions precise there.
+
+    Groups run in parallel; already-verified rules are not re-run. Call again to REPLACE the whole
+    partition; pass an empty `groups` list to revert to a single combined run. There is a cap on the
+    number of groups (each is a separate prover run); declaring more is REJECTED with the merge the run
+    would otherwise force, so you refactor the partition yourself rather than have it silently merged.
+    """
+    groups: list[VerificationGroupSpec] = Field(
+        description="The verification groups to split into. Empty list reverts to one combined run."
+    )
+
+    @override
+    async def run(self) -> Command | str:
+        specs = self.groups
+        if not specs:
+            return tool_state_update(
+                self.tool_call_id,
+                "Reverted to a single combined verification run.",
+                verification_groups=[],
+            )
+        names = [s.name for s in specs]
+        if len(set(names)) != len(names):
+            return "Group names must be unique."
+        # Coverage: the union of the groups' property->rule mappings must cover every
+        # non-skipped property — the same check applied at publish.
+        combined = [m for s in specs for m in s.property_rules]
+        with self.tool_deps() as titles:
+            if (err := validate_property_rules(combined, self.state["skipped"], titles)) is not None:
+                return err
+        # Partition: a property must not be claimed by more than one group.
+        seen: set[str] = set()
+        dup: set[str] = set()
+        for s in specs:
+            for m in s.property_rules:
+                (dup if m.property_title in seen else seen).add(m.property_title)
+        if dup:
+            return f"Each property must belong to exactly one group; these appear in more than one: {sorted(dup)}"
+        # Reject an over-cap declaration; over_cap_message suggests a valid merge to adopt.
+        if (over := over_cap_message(specs, resolved_max_groups())) is not None:
+            return over
+        return tool_state_update(
+            self.tool_call_id,
+            f"Declared {len(specs)} verification group(s): {', '.join(names)}. "
+            "Subsequent verify_spec runs split the rules across them and run in parallel.",
+            verification_groups=specs,
         )
 
 
@@ -619,7 +706,13 @@ class EditorAwareFeedbackTool(
                 vfs=self.state["vfs"],
                 version_history=self.state["version_history"],
             )
-            return await judge(snap, spec, skipped, self.rebuttals, self.tool_call_id)
+            # The judge reviews the base spec, whose methods{} block deliberately omits
+            # the hostile summaries — each verification group installs its own at prover
+            # time (append_summaries). Surface that plan so the judge does not false-flag
+            # those functions as un-summarized / HAVOCing.
+            plan = render_group_plan_for_judge(self.state.get("verification_groups") or [])
+            judged_spec = spec if plan is None else f"{spec.rstrip()}\n\n{plan}\n"
+            return await judge(snap, judged_spec, skipped, self.rebuttals, self.tool_call_id)
 
     @override
     def _version_history(self) -> Sequence[str]:
@@ -864,6 +957,7 @@ async def batch_cvl_generation(
         [prover_tool.lg_tool,
          ExpectRulePassage.as_tool("expect_rule_passage"),
          ExpectRuleFailure.as_tool("expect_rule_failure"),
+         DeclareVerificationGroups.bind(titles).as_tool("declare_verification_groups"),
          give_up_tool(name="give_up", description=_GIVE_UP_DESCRIPTION, label="CVL generation"),
          PublishResultTool.bind(titles).as_tool("result"),
          ctx.get_memory_tool()]

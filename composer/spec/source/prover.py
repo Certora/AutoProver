@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import time
+from dataclasses import dataclass
 from contextlib import contextmanager, asynccontextmanager, ExitStack, nullcontext
 from pathlib import Path
 from typing import (
@@ -35,7 +36,7 @@ from composer.prover.ptypes import RuleResult, RulePath
 from graphcore.graph import LLM
 
 from composer.prover.core import (
-    ProverOptions, SpecCompilationError, declared_rules_list, run_prover,
+    ProverOptions, SpecCompilationError, ProverReport, declared_rules_list, run_prover,
     DefaultCexHandler
 )
 from composer.prover.callbacks import ProverEventCallbacks
@@ -53,6 +54,14 @@ from composer.spec.util import temp_certora_file
 from composer.spec.gen_types import CERTORA_DIR, SPECS_DIR
 from composer.spec.util import string_hash
 from composer.spec.source.cex_capture import CexAnalysisStore
+from composer.spec.source.verification_groups import (
+    VerificationGroup,
+    merge_group_results,
+    prune_phantom_owned_rules,
+    resolved_max_groups,
+    single_group,
+)
+from composer.spec.source.agent_groups import VerificationGroupSpec, groups_from_specs
 
 
 _logger = logging.getLogger("composer.prover")
@@ -113,6 +122,8 @@ class ProverRunLog(TypedDict):
     sort: Literal["run"]
     declared_rules: list[str]
     state_digest: str
+    # The verification group this run belongs to; absent (None) for an ungrouped run.
+    group: NotRequired[str | None]
 
 class NagMarker(TypedDict):
     nagged_rules: list[RulePath]
@@ -134,6 +145,10 @@ def _executed_rules(
 #: How many consecutive runs must end in the identical failure before the author is nagged
 #: about a rule. Counts the run being processed, so 3 means "this run plus the two before it".
 STUCK_RULE_NAG_THRESHOLD = 3
+
+#: Statuses that make a rule "stuck" — a failure worth warning/nagging about (a genuine
+#: VIOLATED is a real verdict, not stuck).
+STUCK_STATUSES: frozenset[StatusCodes] = frozenset({"TIMEOUT", "ERROR", "SANITY_FAILED"})
 
 
 def stuck_rule_warnings(
@@ -246,6 +261,116 @@ def _is_completion_history(
             return True
     return False
 
+def _history_for_group(
+    l: list[ProverHistoryItem], group: str | None
+) -> list[ProverHistoryItem]:
+    """The history entries relevant to one verification group's completion: that
+    group's own runs, plus every nag marker (nags are group-agnostic and are
+    transparent to ``_iterate_history``). Runs belonging to a *different* group are
+    dropped, so a group's contiguous same-digest streak is not truncated by another
+    group's interleaved run at a different digest. An untagged run (``group`` absent)
+    belongs to the default group ``None`` — the single-group / backward-compatible case."""
+    return [it for it in l if it["sort"] != "run" or it.get("group") == group]
+
+
+def group_is_complete(
+    l: list[ProverHistoryItem],
+    *,
+    group: str | None,
+    curr_digest: str,
+    expected_to_fail: set[str],
+    curr_status: list[tuple[RulePath, StatusCodes]],
+    owned_rules: set[str],
+) -> bool:
+    """Whether one group's owned rules are all verified against its current spec state.
+
+    Delegates to :func:`_is_completion_history` over the group's own filtered history,
+    so a group with a distinct spec (distinct ``state_digest``) is evaluated in isolation
+    from interleaved runs of other groups. Overall verification completeness is the AND of
+    this over every group."""
+    return _is_completion_history(
+        l=_history_for_group(l, group),
+        curr_digest=curr_digest,
+        expected_to_fail=expected_to_fail,
+        curr_status=curr_status,
+        all_rules=list(owned_rules),
+    )
+
+
+def group_pending_rules(
+    l: list[ProverHistoryItem],
+    *,
+    group: str | None,
+    curr_digest: str,
+    owned_rules: set[str],
+    expected_to_fail: set[str],
+    curr_status: list[tuple[RulePath, StatusCodes]] | None = None,
+) -> set[str]:
+    """The owned rules a re-run of this group still needs to cover: those whose *latest*
+    verdict against the group's current spec state is not ``VERIFIED`` (and that are not
+    expected to fail), plus any never yet run. This is the incremental re-run engine —
+    verified rules are never re-submitted; a timed-out / spuriously-violated rule is, on
+    its own, within its group's setup. Empty means the group is fully covered and its run
+    can be skipped entirely."""
+    latest: dict[str, StatusCodes] = {}
+    for results in _iterate_history(_history_for_group(l, group), curr_digest, list(curr_status or [])):
+        for (path, status) in results:  # newest-first: first seen is the latest verdict
+            if path.rule in owned_rules and path.rule not in latest:
+                latest[path.rule] = status
+    return {
+        rule for rule in owned_rules
+        if rule not in expected_to_fail and latest.get(rule) != "VERIFIED"
+    }
+
+
+@dataclass(frozen=True)
+class GroupRun:
+    """One verification group's execution decision for a single verify pass."""
+    group: VerificationGroup
+    #: The group's current spec-state digest (keys its completion history).
+    digest: str
+    #: Owned rules to (re-)submit this pass. Empty means the group is already
+    #: fully covered at this digest, so its prover run is skipped entirely.
+    pending: frozenset[str]
+
+
+def plan_group_execution(
+    groups: Sequence[VerificationGroup],
+    *,
+    history: list[ProverHistoryItem],
+    all_rules: list[str],
+    agent_rules: list[str] | None,
+    agent_exclude: list[str] | None,
+    expected_to_fail: set[str],
+    digest_of: Callable[[VerificationGroup], str],
+) -> list[GroupRun]:
+    """Decide, per group, which owned rules this verify pass (re-)submits.
+
+    Each group's pending set is its owned rules not yet verified at its current
+    digest (:func:`group_pending_rules`) intersected with any explicit agent rule
+    selection. An empty pending set marks a group already fully covered — the
+    executor skips its run. Pure and total (never runs the prover), so the
+    parallel executor and this decision can be tested apart."""
+    if agent_rules is not None:
+        selection = set(agent_rules)
+    elif agent_exclude is not None:
+        selection = set(all_rules) - set(agent_exclude)
+    else:
+        selection = set(all_rules)
+    plan: list[GroupRun] = []
+    for group in groups:
+        digest = digest_of(group)
+        pending = group_pending_rules(
+            history,
+            group=group.name,
+            curr_digest=digest,
+            owned_rules=set(group.owned_rules),
+            expected_to_fail=expected_to_fail,
+        )
+        plan.append(GroupRun(group=group, digest=digest, pending=frozenset(pending & selection)))
+    return plan
+
+
 def _merge_prover_history(left: list[ProverHistoryItem], right: list[ProverHistoryItem]) -> list[ProverHistoryItem]:
     to_ret = left.copy()
     to_ret.extend(right)
@@ -268,6 +393,11 @@ class ProverStateExtra(TypedDict):
     # outside the editing-enabled pipeline. No merge op intentionally: the vfs is
     # only ever replaced wholesale (commit_edit / revert_to_edit).
     vfs: NotRequired[dict[str, str]]
+
+    # The agent's declared verification-group partition (see agent_groups), set via the
+    # group-declaration tool; absent => the single-spec/single-run default. Replaced wholesale
+    # on redeclaration.
+    verification_groups: NotRequired[list[VerificationGroupSpec]]
 
 type ProverEvents = CEXAnalysisStart | CloudPollingEvent | ProverOutputEvent | RuleAnalysisResult | ProverRun | ProverLink | ProverResult
 
@@ -563,6 +693,162 @@ def get_prover_tool(
         prover_msg = f"{component} iteration number {iteration}"
 
 
+        def _finalize_run(
+            *,
+            status_map: Mapping[RulePath, StatusCodes],
+            prover_update: list[ProverHistoryItem],
+            all_verified: bool,
+            content: str,
+            link: str | None,
+        ) -> Command:
+            """Post-run bookkeeping shared by the grouped and single-run paths: nag on rules stuck on
+            repeated identical failures, then build the tool_state_update. The caller supplies this
+            pass's own status map, history items, completion verdict, and result text/link."""
+            stuck_rules = {
+                k: v for (k, v) in status_map.items()
+                if v in STUCK_STATUSES and k.rule not in state["rule_skips"]
+            }
+            known_tc_ids = {
+                l["id"] for msg in state["messages"] if isinstance(msg, AIMessage)
+                for l in msg.tool_calls if l["name"] == "verify_spec"
+            }
+            to_warn, seen_post_compaction_history = stuck_rule_warnings(
+                stuck_rules, state["prover_history"], known_tc_ids
+            )
+            nag_channel: dict = {}
+            if len(to_warn) > 0:
+                prover_update.append(NagMarker(sort="nag", nagged_rules=list(to_warn)))
+                nag_channel["reminders_channel"] = [
+                    "The following rule(s) have had identical failures on the last 3 runs of the prover:",
+                    *(f"- {it.pprint()}" for it in to_warn),
+                    "You may need to significantly change your approach, or skip the property if this is a persistent issue (you may need to use rebuttals to communicate"
+                    " these failures to the feedback judge).",
+                    "If these are TIMEOUTs, re-running the same spec will not help. Consider "
+                    "`declare_verification_groups` to split the properties into parallel runs, each keeping only "
+                    "what it needs precise and summarizing the rest — a monolithic run pays the intersection of every "
+                    "rule's precision needs.",
+                ]
+                if seen_post_compaction_history:
+                    nag_channel["reminders_channel"].append(
+                        "(NB: Some of these prover calls happened before your most recent task history summarization)"
+                    )
+            if all_verified:
+                nag_channel.setdefault("reminders_channel", []).append(
+                    "You have successfully verified over your prior prover run(s) that all rules verify. This task is completed."
+                )
+                return tool_state_update(
+                    tool_call_id=tool_call_id, content=content,
+                    prover_link=link, validations=stamper(state, state["version_history"]),
+                    prover_history=prover_update, **nag_channel
+                )
+            return tool_state_update(
+                tool_call_id=tool_call_id, content=content, prover_link=link,
+                prover_history=prover_update, **nag_channel
+            )
+
+        async def run_grouped(
+            run_root: str, all_rules: list[str], groups: list[VerificationGroup]
+        ) -> str | Command:
+            """Verify a multi-group partition: each group runs its pending owned rules
+            under its own spec/conf, concurrently, and the per-group verdicts recombine.
+
+            Groups run in parallel via ``asyncio.gather`` — on cloud, ``sem`` is a no-op,
+            so the submissions are genuinely concurrent; each group writes its spec/conf
+            under a group-distinct name so the parallel same-stem writes don't race.
+            Completion is the AND of per-group completeness (a fully-covered group is
+            skipped and passes trivially); history entries are tagged with their group so
+            :func:`group_is_complete` evaluates each group over its own digest streak."""
+            expected = set(state["rule_skips"].keys())
+
+            def digest_of(g: VerificationGroup) -> str:
+                return spec_digest(
+                    g.spec_contents if g.spec_contents is not None else spec,
+                    state["skipped"], state["version_history"],
+                )
+
+            # Drop phantom owned rules — declared but absent from the compiled spec; warn once.
+            groups, phantom = prune_phantom_owned_rules(groups, all_rules)
+            if phantom:
+                _logger.warning(
+                    "verification groups: declared rule(s) absent from the compiled spec, ignored: %s",
+                    sorted(phantom),
+                )
+
+            plan = plan_group_execution(
+                groups, history=state["prover_history"], all_rules=all_rules,
+                agent_rules=rules, agent_exclude=exclude_rules,
+                expected_to_fail=expected, digest_of=digest_of,
+            )
+
+            async def run_one(gr: GroupRun) -> tuple[GroupRun, ProverReport | str | None]:
+                if not gr.pending:
+                    return (gr, None)  # already fully covered — skip its run
+                g = gr.group
+                gspec = g.spec_contents if g.spec_contents is not None else spec
+                gstem = f"{spec_stem}__{g.name}" if spec_stem is not None else None
+                with setup_prover_config_in(
+                    working_dir=run_root,
+                    main_contract=main_contract,
+                    spec_stem=gstem,
+                    spec_contents=gspec,
+                    conf_dir=conf_dir,
+                    config={**conf, **g.conf_overlay},
+                    rule=sorted(gr.pending),
+                    exclude_rule=None,
+                    msg=f"{component} [{g.name}] iteration number {iteration}",
+                ) as (config_path, cfg):
+                    async with sem:
+                        res = await run_prover(
+                            Path(run_root), [config_path], tool_call_id, prover_opts,
+                            _SpecCallbacks(get_stream_writer(), tool_call_id, summary, cfg,
+                                           analysis_store=analysis_store),
+                            DefaultCexHandler(llm, state, summarization_threshold=10),
+                        )
+                return (gr, res)
+
+            runs = await asyncio.gather(*(run_one(gr) for gr in plan))
+
+            # A hard toolchain error (str) aborts the pass; otherwise sort into the
+            # groups that actually ran vs. those skipped as already-covered.
+            outcomes: list[tuple[GroupRun, ProverReport | None]] = []
+            for (gr, res) in runs:
+                if isinstance(res, str):
+                    return res
+                outcomes.append((gr, res))
+            executed = [(gr, res) for (gr, res) in outcomes if res is not None]
+            merged = merge_group_results([(gr.group, res.raw_rule_status) for (gr, res) in executed])
+            combined_str = "\n\n".join(
+                f"=== group {gr.group.name} ===\n{res.result_str}" for (gr, res) in executed
+            ) or "All verification groups already covered by prior runs; nothing to re-run."
+            link = next((res.link for (_gr, res) in executed if res.link is not None), None)
+
+            prover_update: list[ProverHistoryItem] = [
+                ProverRunLog(
+                    tool_call_id=tool_call_id,
+                    prover_results=[(k, v) for (k, v) in res.raw_rule_status.items()],
+                    rules={"sort": "include", "selector": sorted(gr.pending)},
+                    spec_digest=string_hash(gr.group.spec_contents if gr.group.spec_contents is not None else spec),
+                    sort="run",
+                    declared_rules=all_rules,
+                    state_digest=gr.digest,
+                    group=gr.group.name,
+                )
+                for (gr, res) in executed
+            ]
+            all_verified = all(
+                group_is_complete(
+                    state["prover_history"], group=gr.group.name, curr_digest=gr.digest,
+                    expected_to_fail=expected,
+                    curr_status=[(k, v) for (k, v) in res.raw_rule_status.items()] if res is not None else [],
+                    owned_rules=set(gr.group.owned_rules),
+                )
+                for (gr, res) in outcomes
+            )
+            return _finalize_run(
+                status_map=merged, prover_update=prover_update,
+                all_verified=all_verified, content=combined_str, link=link,
+            )
+
         async def run_in(run_root: str) -> str | Command:
             with setup_prover_config_in(
                 working_dir=run_root,
@@ -582,6 +868,19 @@ def get_prover_tool(
                     )
                 except SpecCompilationError as exc:
                     return f"The spec failed to compile:\n{exc.output}"
+            # Groups from the agent's declaration, else one shared-spec group. Only a genuine
+            # split — more than one group, or a group carrying its own spec/conf — takes
+            # run_grouped; a trivial single group falls through to the single-run path below.
+            declared = state.get("verification_groups")
+            if declared:
+                groups = groups_from_specs(
+                    spec, list(declared),
+                    cap=resolved_max_groups(),
+                )
+            else:
+                groups = single_group(all_rules)
+            if len(groups) > 1 or groups[0].spec_contents is not None or groups[0].conf_overlay:
+                return await run_grouped(run_root, all_rules, groups)
             with setup_prover_config_in(
                 working_dir=run_root,
                 main_contract=main_contract,
@@ -607,26 +906,10 @@ def get_prover_tool(
             if isinstance(result, str):
                 return result
 
-            stuck_rules = {
-                k: v for (k,v) in result.raw_rule_status.items() if v in ("TIMEOUT", "ERROR", "SANITY_FAILED") and k.rule not in state["rule_skips"]
-            }
-
-            known_tc_ids = {
-                l["id"]
-                for msg in state["messages"] if isinstance(msg, AIMessage)
-                for l in msg.tool_calls if l["name"] == "verify_spec"
-            }
-
-            to_warn, seen_post_compaction_history = stuck_rule_warnings(
-                stuck_rules, state["prover_history"], known_tc_ids
-            )
-
             curr_state_digest = spec_digest(
                 spec, state["skipped"], state["version_history"]
             )
-
-            prover_results : list[tuple[RulePath, StatusCodes]] = [(k, v) for (k,v) in result.raw_rule_status.items()]
-
+            prover_results: list[tuple[RulePath, StatusCodes]] = [(k, v) for (k, v) in result.raw_rule_status.items()]
             all_verified = _is_completion_history(
                 l=state["prover_history"],
                 curr_digest=curr_state_digest,
@@ -634,11 +917,10 @@ def get_prover_tool(
                 curr_status=prover_results,
                 all_rules=all_rules
             )
-
-            prover_update : list[ProverHistoryItem] = [
+            prover_update: list[ProverHistoryItem] = [
                 ProverRunLog(
                     tool_call_id=tool_call_id,
-                    prover_results=[(k, v) for (k,v) in result.raw_rule_status.items()],
+                    prover_results=prover_results,
                     rules={"sort": "exclude", "selector": exclude_rules } if exclude_rules is not None else \
                         {"sort": "include", "selector": rules} if rules is not None else None,
                     spec_digest=spec_hash,
@@ -647,40 +929,9 @@ def get_prover_tool(
                     state_digest=curr_state_digest
                 )
             ]
-            nag_channel = {
-
-            }
-            if len(to_warn) > 0:
-                prover_update.append(NagMarker(
-                    sort="nag",
-                    nagged_rules=list(to_warn)
-                ))
-                nag_channel["reminders_channel"] = [
-                    "The following rule(s) have had identical failures on the last 3 runs of the prover:",
-                    *(f"- {it.pprint()}" for it in to_warn),
-                    "You may need to significantly change your approach, or skip the property if this is a persistent issue (you may need to use rebuttals to communicate"
-                    " these failures to the feedback judge)."
-                ]
-                if seen_post_compaction_history:
-                    nag_channel["reminders_channel"].append(
-                        "(NB: Some of these prover calls happened before your most recent task history summarization)"
-                    )
-            if all_verified:
-                nag_channel.setdefault("reminders_channel", []).append(
-                    "You have successfully verified over your prior prover run(s) that all rules verify. This task is completed."
-                )
-                # Completing the coverage stamps, however the completing run was scoped:
-                # every declared rule was verified against exactly this authoring state
-                # (the state_digest match), so a piecemeal completion is as good as a
-                # full-run one.
-                return tool_state_update(
-                    tool_call_id=tool_call_id, content=result.result_str,
-                    prover_link=result.link, validations=stamper(state, state["version_history"]),
-                    prover_history=prover_update, **nag_channel
-                )
-            return tool_state_update(
-                tool_call_id=tool_call_id, content=result.result_str, prover_link=result.link,
-                prover_history=prover_update, **nag_channel
+            return _finalize_run(
+                status_map=result.raw_rule_status, prover_update=prover_update,
+                all_verified=all_verified, content=result.result_str, link=result.link,
             )
 
         # The author's working copy decides where this run executes (in-situ for

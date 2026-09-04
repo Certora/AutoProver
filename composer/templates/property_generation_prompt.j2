@@ -165,6 +165,44 @@ You may also make use of the following CVL resources, available as CVL files.
 {% endfor %}
 {% endif %}
 
+## Verify by splitting into groups — split PREEMPTIVELY when a single run would time out
+
+A spec has ONE global `methods{}` block, so a monolithic `verify_spec` verifies every rule under the
+*intersection* of what all rules need precise: one property that needs a function exact forces EVERY rule
+to pay that cost, and re-running the same spec never escapes it. So if you anticipate a timeout, or you
+see properties with CONFLICTING precision needs — one property needs a function exact while another can
+summarize it — do NOT run the monolith and wait for it to time out. **Split into verification groups
+FIRST.**
+
+Use the `declare_verification_groups` tool: partition the properties into groups, each verified in its
+own PARALLEL prover run under its OWN summarization. A function one group must keep exact can be
+summarized in another. How:
+
+1. In your base spec (the VFS), write the rule/invariant bodies and any ghosts / CVL functions your
+   summaries need — but do NOT summarize those functions inline in the base spec.
+2. Call `declare_verification_groups` with one group per cluster of properties that share a precision
+   need. Each group names its `property_rules` (the properties it verifies + the rule names that verify
+   them) and its `summaries` (for each function THIS group summarizes, the `methods{}` entry to use here,
+   e.g. `function MathUtils.uncheckedExp(uint256 a, uint256 b) internal returns (uint256) => expGhost(a, b);`).
+   A function a group omits is verified as the base spec has it there — precise unless the base spec
+   (including its imports) already summarizes it. Every non-skipped property must appear in exactly
+   one group.
+3. Your group `summaries` are APPENDED to the base spec's `methods{}` block (which includes autosetup's
+   imported summaries). To CHANGE how an already-base-summarized function behaves in a group, your entry
+   must be MORE SPECIFIC than the base's: an exact `Contract.f(...)` overrides a wildcard `_.f(...)`
+   (most-specific wins). If the base already summarizes it EXACTLY for that contract, you CANNOT override
+   or remove it — a second exact entry is a duplicate and fails the typecheck — and there is currently no
+   way to make that function precise in one group. When you hit that wall, summarize a CALLER of the
+   function instead: the caller is usually not base-summarized, so your summary applies cleanly at its
+   boundary.
+
+Then `verify_spec` runs the groups in parallel and only (re-)runs rules not yet verified. In each group,
+summarize everything its properties do NOT depend on and keep precise only what they do. The SAME
+function may need different summaries in different groups — one property may allow `foo` monotone while
+another needs it injective — so pick, per group, the weakest summary sound for that group's rules. Start
+with a small number of groups aligned to the distinct precision needs you see, and refine as results
+come in.
+
 <state>
 Use the available memory tools to track your progress through this algorithm, any important lessons about CVL you may have learned,
 or any other significant, relevant information to this task. In particular, be sure to update your memory before calling the prover to summarize
