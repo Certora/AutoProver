@@ -32,11 +32,12 @@ lines — and available after the tree has been deleted.
 """
 
 import dataclasses
-import json
+import functools
 import logging
-import os
-import shutil
+from pathlib import PurePath
 from pathlib import Path, PurePosixPath
+
+from graphcore.tools.vfs import DictBackend, DirBackend, PersistentMaterializer
 
 from composer.spec.cvlr.munge import (
     FunctionMunge,
@@ -59,13 +60,14 @@ _log = logging.getLogger(__name__)
 #: twice: what a copy of the project leaves out is what a munge of the project may not touch.
 #: Sharing it also keeps the two from drifting, which matters in one direction — a directory added
 #: here and not there would become munge-able.
-_NOT_COPIED = shutil.ignore_patterns(*NOT_PROJECT_SOURCE)
+def _NOT_MATERIALIZED(path: PurePath) -> bool:
+    """Directories the tree is never filled from, by first path component.
 
-#: Where the tree notes which of the project's files a run has munged, so a later session can restore
-#: one whose munge has since been dropped from state. A hint, not state — see
-#: :meth:`SharedTree._read_manifest`. Not collected as a prover source: it is neither ``Cargo.toml``
-#: nor under ``src/**/*.rs``, and the CLI's own fallback patterns do not include ``.json``.
-DERIVED_MANIFEST = ".cvlr-derived.json"
+    The same list the munge boundary uses (:data:`NOT_PROJECT_SOURCE`) and for the same reason: a
+    build directory, a VCS directory and a previous run's tree are not the project. Copying one into
+    the tree would at best waste the space and at worst nest a working copy inside a working copy.
+    """
+    return bool(path.parts) and path.parts[0] in NOT_PROJECT_SOURCE
 
 
 @dataclasses.dataclass(frozen=True)
@@ -129,32 +131,6 @@ class Reconciled:
         return not self.drifted
 
 
-def _write_if_changed(path: Path, text: str) -> bool:
-    """Write ``text`` only when it differs from what is there. Returns whether it wrote.
-
-    Two properties, both load-bearing.
-
-    **Compared before written**, because cargo's fingerprint is an mtime check against the files
-    rustc reported reading: rewriting identical bytes is indistinguishable from an edit and costs a
-    full rebuild of the crate. This is what makes "resume and change nothing" a no-op build.
-
-    **Replaced atomically**, because the build permit covers the local cargo invocation but not the
-    prover's own rerun of the build script, so another unit's build can be reading this file. The
-    *content* is safe to see either way — a munge that is not this build's is a ``cfg_attr`` on a
-    feature it does not enable, which contributes no attribute — but a half-written file is not, and
-    ``os.replace`` is what makes "either the old one or the new one" the only two possibilities.
-    """
-    try:
-        if path.read_text() == text:
-            return False
-    except (OSError, UnicodeDecodeError):
-        pass
-    path.parent.mkdir(parents=True, exist_ok=True)
-    scratch = path.with_name(f".{path.name}.cvlr-tmp")
-    scratch.write_text(text)
-    os.replace(scratch, path)
-    return True
-
 
 def replay(source: str, munges: tuple[FunctionMunge, ...]) -> tuple[str, tuple[Drifted, ...]]:
     """Apply ``munges`` to pristine ``source``, reporting the ones that did not take.
@@ -215,48 +191,45 @@ class SharedTree:
     #: The tree every unit builds in.
     root: Path
     _units: dict[str, UnitEdits] = dataclasses.field(default_factory=dict)
-    #: Every file any unit has *ever* munged, this session or an earlier one. Rebuilt files are
-    #: found from this rather than from the current munge set, because a file whose last munge was
-    #: dropped from state still has to be restored — and it is exactly then that nothing in state
-    #: names it. Persisted in the tree (:data:`DERIVED_MANIFEST`) so that a resumed run restores a
-    #: file the session that munged it never got to unmunge.
-    _munged_paths: set[str] = dataclasses.field(default_factory=set)
+    #: The derived layer, as an overlay above the pristine project. Everything this tree contains
+    #: that the developer did not write is served from here, and the materializer's own note of what
+    #: it last held is what restores a file whose munges have since been dropped — including across
+    #: sessions, which is the case nothing in *state* can name (``docs/the-tree-is-a-vfs.md`` §5).
+    _derived: DictBackend = dataclasses.field(default_factory=DictBackend)
+    #: Paths :meth:`adopt` put in the overlay. Kept apart from the rest because the two have
+    #: opposite lifetimes: a reconcile rebuilds its own contribution from scratch every time, while
+    #: an adopted file stays until somebody adopts it again. Folding them together makes a dropped
+    #: munge un-droppable, since its file would look adopted the moment state stopped naming it.
+    _adopted: set[str] = dataclasses.field(default_factory=set)
 
-    def materialize(self) -> None:
-        """Copy the project into the tree if it is not already there.
+    @functools.cached_property
+    def _materializer(self) -> PersistentMaterializer:
+        """The tree's one writer.
 
-        The one thing that is *not* reconciled, because it is not derived from state: everything the
-        build generates and the sandbox's private ``CARGO_HOME`` live in this directory, and
-        re-copying would throw away the warm cache the shared tree exists to keep. What keeps a
-        stale tree honest is that every file the run derives is rewritten from state in
-        :meth:`reconcile`.
+        A base and one overlay: the project is copied in once and never re-read, and the derived
+        files are content-compared on every reconcile. Both halves matter and neither is incidental
+        — an unchanged file that gets rewritten costs a rebuild of everything downstream of it, and
+        re-comparing a checkout that does not change is the copy the shared tree exists to avoid.
+
+        What is *not* materialized is everything the build generates: ``target/``, the sandbox's
+        private ``CARGO_HOME``, the lock file cargo updates. A persistent target accumulates them
+        and the materializer touches only what it put there.
         """
-        if self.root.exists():
-            _log.info("cvlr: reusing the working tree at %s", self.root)
-            self._munged_paths |= self._read_manifest()
-            return
-        self.root.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(self.pristine, self.root, ignore=_NOT_COPIED, symlinks=True)
-
-    def _read_manifest(self) -> set[str]:
-        """Files an earlier session derived, or nothing if the note is absent or unreadable.
-
-        Deliberately forgiving. This is a *hint* about what to rebuild, never a source of truth: its
-        worst case is naming a file no munge touches any more, which costs one restore-and-replay
-        that :func:`_write_if_changed` then declines to write. A missing note costs the one thing it
-        exists to prevent, so it is written on every reconcile rather than at the end of a run.
-        """
-        try:
-            loaded = json.loads((self.root / DERIVED_MANIFEST).read_text())
-        except (OSError, ValueError):
-            return set()
-        return {p for p in loaded.get("munged", []) if isinstance(p, str)}
-
-    def _write_manifest(self) -> None:
-        _write_if_changed(
-            self.root / DERIVED_MANIFEST,
-            json.dumps({"munged": sorted(self._munged_paths)}, indent=2) + "\n",
+        return PersistentMaterializer(
+            DirBackend(self.pristine, cache_listing=False),
+            [self._derived],
+            global_exclude=_NOT_MATERIALIZED,
         )
+
+    async def materialize(self) -> None:
+        """Put the project into the tree, if this is the first time anyone has.
+
+        Idempotent by way of the materializer's manifest rather than by an existence check: a tree
+        that is already there is one the base copy skips, and one that is half-written is one it
+        completes.
+        """
+        self.root.parent.mkdir(parents=True, exist_ok=True)
+        await self._materializer.dump_to(self.root)
 
     def adopt(self, relative: Path | str, *more: Path | str) -> tuple[str, ...]:
         """Re-sync named files from the pristine project into the tree. Returns what changed.
@@ -268,17 +241,21 @@ class SharedTree:
         component set had changed would build a manifest missing a unit's feature and a ``mod.rs``
         missing its module.
 
-        Content-compared like every other derived write, so re-adopting an unchanged file does not
-        dirty the crate.
+        Seeds the derived overlay rather than writing: the base copy runs once, so a *changed*
+        project file would otherwise never reach an existing tree. Materialization is the caller's
+        next step and is what makes it so — and content-compares it, so re-adopting an unchanged
+        file does not dirty the crate.
         """
-        changed: list[str] = []
+        seeded: list[str] = []
         for path in (relative, *more):
             source = self.pristine / path
             if not source.is_file():
                 continue
-            if _write_if_changed(self.root / path, source.read_text()):
-                changed.append(str(path))
-        return tuple(changed)
+            key = str(PurePosixPath(Path(path).as_posix()))
+            self._derived.files[key] = source.read_text()
+            self._adopted.add(key)
+            seeded.append(key)
+        return tuple(seeded)
 
     def resolve(self, relative: str) -> Path | NotInWorkdir | NotProjectSource:
         """The tree path a munge names, or why it is not one.
@@ -303,34 +280,34 @@ class SharedTree:
             return NotProjectSource(path=relative, directory=inside.parts[0])
         return candidate
 
-    def reconcile(self, unit: str, edits: UnitEdits) -> Reconciled:
+    async def reconcile(self, unit: str, edits: UnitEdits) -> Reconciled:
         """Make the tree agree with state, and say what it took.
 
-        Records ``unit``'s contribution, then rewrites the derived layer: this unit's harness module,
-        and every file any unit has munged. Each is rebuilt from the pristine copy and replayed, so
-        the result depends only on state — a munge removed from state is removed from disk, which is
-        the case a file with no munges left is restored for.
+        Records ``unit``'s contribution, then rebuilds the whole derived overlay from every unit's
+        state and materializes it: each munged file is replayed onto the *pristine* source, so the
+        result depends only on state. A munge dropped from state is a path the overlay stops
+        serving, and the materializer restores it from the base — which is the case a file with no
+        munges left is restored for, and it needs nothing remembered about which files were once
+        munged, in this session or an earlier one.
 
-        Sibling units' harness modules are deliberately left alone. They are ``cfg``'d out of this
-        build, so their contents cannot affect it, and each sibling rewrites its own before its own
-        gate.
+        Every unit's draft is in the overlay, not just this one's. A sibling is ``cfg``'d out of
+        this build so its content cannot affect it, but omitting it would make the overlay stop
+        serving it and the materializer restore the placeholder over a draft its own unit is still
+        working on.
         """
         self._units[unit] = edits
-        written: list[str] = []
         drifted: list[Drifted] = []
+        derived: dict[str, str] = {}
 
-        if _write_if_changed(edits.module_path, edits.draft):
-            written.append(self._relative(edits.module_path))
+        for staged in self._units.values():
+            derived[self._relative(staged.module_path)] = staged.draft
 
         by_path: dict[str, list[FunctionMunge]] = {}
         for staged in self._units.values():
             for munge in staged.munges:
                 by_path.setdefault(munge.path, []).append(munge)
-        self._munged_paths |= by_path.keys()
-        self._write_manifest()
 
-        for path in sorted(self._munged_paths):
-            munges = by_path.get(path, [])
+        for path, munges in sorted(by_path.items()):
             resolved = self.resolve(path)
             if not isinstance(resolved, Path):
                 drifted += [Drifted(munge=m, why=resolved) for m in munges]
@@ -344,8 +321,19 @@ class SharedTree:
                 continue
             updated, file_drift = replay(source, tuple(munges))
             drifted += file_drift
-            if _write_if_changed(resolved, updated):
-                written.append(path)
+            derived[path] = updated
+
+        # What `adopt` seeded stays: those are run-derived too, and dropping them here would have
+        # the materializer restore the previous run's copy over them.
+        adopted = {
+            k: self._derived.files[k]
+            for k in self._adopted
+            if k in self._derived.files and k not in derived
+        }
+        before = dict(self._derived.files)
+        self._derived.files = {**adopted, **derived}
+        await self._materializer.dump_to(self.root)
+        written = [p for p, text in self._derived.files.items() if before.get(p) != text]
 
         for drift in drifted:
             _log.warning("cvlr: munge not replayed — %s", drift.describe())
