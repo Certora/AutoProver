@@ -173,6 +173,32 @@ def coverage_error(
     return validate_declared_coverage(decls, all_properties=all_properties, skipped=skipped)
 
 
+def over_cap_message(specs: list[VerificationGroupSpec], cap: int) -> str | None:
+    """A rejection message when the agent declared MORE groups than the cap, else ``None``.
+
+    Each group is a separate prover run, so the count is bounded. Rather than silently auto-merge the
+    declaration (which would undo the split the agent deliberately chose), the declaring tool rejects an
+    over-cap declaration and asks the agent to refactor — and shows the merge the run would OTHERWISE force
+    (the same greedy, most-agreeing-summaries merge :func:`cap_groups` would apply), so the agent can make
+    that choice itself or find a better one."""
+    if len(specs) <= cap:
+        return None
+    claimed: set[str] = set()
+    sim: list[VerificationGroup] = []
+    for s in specs:  # mirror build_declared_groups' first-declaration-wins owned-rule partition
+        owned = {str(r) for m in s.property_rules for r in m.rules} - claimed
+        claimed |= owned
+        sim.append(VerificationGroup(name=s.name, owned_rules=frozenset(owned), summaries=dict(s.summaries)))
+    forced = "; ".join(g.name for g in cap_groups(sim, cap))
+    return (
+        f"You declared {len(specs)} verification groups but at most {cap} are allowed — each group is a "
+        f"separate prover run (raise the limit via AUTOPROVER_MAX_VERIFICATION_GROUPS). Merge groups until "
+        f"there are at most {cap}: combine the ones whose rules can share the same summaries — a merged "
+        f"group keeps a summary only where both groups agree, else that function drops to precise. Left as "
+        f"is, the run would force this merge: {forced}."
+    )
+
+
 def groups_from_specs(
     base_spec: str,
     specs: list[VerificationGroupSpec],

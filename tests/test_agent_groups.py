@@ -122,6 +122,7 @@ def test_build_caps_and_merges_keeping_partition():
 
 from composer.spec.source.agent_groups import (
     VerificationGroupSpec,
+    over_cap_message,
     render_group_plan_for_judge,
 )
 from composer.spec.cvl_generation import PropertyRuleMapping
@@ -136,6 +137,27 @@ def _spec(name, prop_rules, summaries=None, conf=None):
         summaries=summaries or {},
         conf_overlay=conf or {},
     )
+
+
+def test_over_cap_message_none_within_cap():
+    specs = [_spec("a", [("P1", ["r1"])]), _spec("b", [("P2", ["r2"])])]
+    assert over_cap_message(specs, cap=4) is None
+    assert over_cap_message(specs, cap=2) is None
+
+
+def test_over_cap_message_rejects_and_shows_the_forced_merge():
+    # 3 groups, cap 2 -> reject. g1 and g2 agree on `foo` (cheapest merge, loses nothing); g3 is disjoint,
+    # so the merge the run would force is g1+g2, which the message names so the agent can adopt or improve it.
+    specs = [
+        _spec("g1", [("P1", ["r1"])], summaries={"foo": "S"}),
+        _spec("g2", [("P2", ["r2"])], summaries={"foo": "S"}),
+        _spec("g3", [("P3", ["r3"])], summaries={"bar": "T"}),
+    ]
+    msg = over_cap_message(specs, cap=2)
+    assert msg is not None
+    assert "3 verification groups" in msg and "at most 2" in msg
+    assert "AUTOPROVER_MAX_VERIFICATION_GROUPS" in msg
+    assert "g1+g2" in msg and "g3" in msg
 
 
 def test_render_plan_none_when_no_groups():

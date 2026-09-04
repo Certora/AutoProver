@@ -26,7 +26,8 @@ from composer.spec.cvl_generation import (
     GeneratedCVL, PropertyRuleMapping, AppliedEdit, FeedbackToolBase,
 )
 from composer.prover.core import run_prover, CexHandler, ProverCallbacks, ProverReport
-from composer.spec.source.agent_groups import VerificationGroupSpec, render_group_plan_for_judge
+from composer.spec.source.agent_groups import VerificationGroupSpec, over_cap_message, render_group_plan_for_judge
+from composer.spec.source.verification_groups import resolved_max_groups
 from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools, WIPE_HISTORY
 from composer.spec.source.prover import setup_prover_config_in
 from composer.spec.context import WorkflowContext, CVLGeneration, CacheKey, SourceCode
@@ -206,8 +207,9 @@ class DeclareVerificationGroups(
     rule's functions precise there.
 
     Groups run in parallel; already-verified rules are not re-run. Call again to REPLACE the whole
-    partition; pass an empty `groups` list to revert to a single combined run. If you declare more
-    groups than the run's cap, the most-similar are merged automatically.
+    partition; pass an empty `groups` list to revert to a single combined run. There is a cap on the
+    number of groups (each is a separate prover run); declaring more is REJECTED with the merge the run
+    would otherwise force, so you refactor the partition yourself rather than have it silently merged.
     """
     groups: list[VerificationGroupSpec] = Field(
         description="The verification groups to split into. Empty list reverts to one combined run."
@@ -239,6 +241,10 @@ class DeclareVerificationGroups(
                 (dup if m.property_title in seen else seen).add(m.property_title)
         if dup:
             return f"Each property must belong to exactly one group; these appear in more than one: {sorted(dup)}"
+        # Cap: too many groups is rejected here (not silently auto-merged) so the split stays the agent's
+        # to control; the message shows the merge the run would otherwise force.
+        if (over := over_cap_message(specs, resolved_max_groups())) is not None:
+            return over
         return tool_state_update(
             self.tool_call_id,
             f"Declared {len(specs)} verification group(s): {', '.join(names)}. "
