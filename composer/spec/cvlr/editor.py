@@ -28,11 +28,17 @@ Three things follow from records rather than text, and each replaces a piece of 
   for the same reason;
 * what the author receives back is a set of records to keep or drop, so ``revert`` costs nothing
   and needs no edit store.
+
+The one kind that is a genuine rewrite rather than an attribute — extraction, ``§8.4`` — is a record
+too, and for the same reason. :class:`~composer.spec.cvlr.munge.FunctionExtraction` stores the text
+it replaces and renders the ``#[cfg]`` pair itself, so the deployed build is untouched by
+construction rather than by the model remembering to gate what it wrote.
 """
 
 import dataclasses
 import hashlib
 import logging
+import re
 from pathlib import Path
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Literal, NotRequired, Sequence, override
@@ -65,16 +71,23 @@ from composer.spec.cvlr.munge import (
     DropMunges,
     EarlyPanic,
     FunctionAmbiguous,
+    FunctionExtraction,
+    FunctionItem,
     FunctionMunge,
     FunctionNotFound,
     HookOnEntry,
     HookOnExit,
     InlineNever,
     MockFn,
+    Munge,
     MungeKind,
     Munged,
+    NoFunctionBody,
     NotProjectSource,
-    apply_munge,
+    apply_attribute,
+    apply_extraction,
+    function_item,
+    function_names,
     merge_munges,
 )
 
@@ -236,8 +249,8 @@ async def gate_edits(
     *,
     draft: str,
     summaries: Sequence[SummaryDirective],
-    candidate: Sequence[FunctionMunge],
-    proposed: Sequence[FunctionMunge],
+    candidate: Sequence[Munge],
+    proposed: Sequence[Munge],
 ) -> GateOutcome:
     """Stage ``candidate`` into the run's working tree, compile it, and check ``proposed`` arrived.
 
@@ -277,12 +290,12 @@ async def gate_edits(
 # state
 
 
-def _digest(munges: Sequence[FunctionMunge]) -> str:
+def _digest(munges: Sequence[Munge]) -> str:
     """What an approval is tied to: the edits, not their prose.
 
-    Keyed on ``edit_id`` — the file, the function, the attribute and the feature — so re-wording a
-    justification does not void a review, and changing what the compiler sees does. Same trade as
-    ``munge_history``, for the same reason.
+    Keyed on ``edit_id`` — the file, the function, the feature, and the attribute or a digest of the
+    rewrite — so re-wording a justification does not void a review, and changing what the compiler
+    sees does. Same trade as ``munge_history``, for the same reason.
     """
     joined = "\n".join(sorted(m.edit_id for m in munges))
     return hashlib.sha256(joined.encode()).hexdigest()
@@ -300,8 +313,8 @@ class EditorStateExtra(MessagesState):
     #: and existing munges, and a stale copy would gate something nobody is going to submit.
     draft: str
     summaries: list[SummaryDirective]
-    committed: list[FunctionMunge]
-    proposed: Annotated[list[FunctionMunge], merge_munges]
+    committed: list[Munge]
+    proposed: Annotated[list[Munge], merge_munges]
     #: Hash of the record list the reviewer approved. ``submit`` fires only when it still matches, so
     #: any edit after approval silently voids it.
     reviewed_digest: str | None
@@ -313,8 +326,8 @@ class EditorInput(FlowInput):
     feature: str
     draft: str
     summaries: list[SummaryDirective]
-    committed: list[FunctionMunge]
-    proposed: list[FunctionMunge]
+    committed: list[Munge]
+    proposed: list[Munge]
     reviewed_digest: str | None
     memory: str | None
 
@@ -325,6 +338,27 @@ class EditorState(EditorStateExtra):
 
 # ---------------------------------------------------------------------------------------------
 # the editor's tools
+
+
+def _held(state: EditorStateExtra) -> list[Munge]:
+    """Every edit this unit has against the program — landed and proposed.
+
+    One list rather than two because the checks below are about the *file*, and the file does not
+    know which of them the author has already accepted. Only this unit's: a sibling's edits are
+    dormant in this build and cannot collide with these.
+    """
+    return [*state["committed"], *state["proposed"]]
+
+
+def _extraction_of(state: EditorStateExtra, path: str, function: str) -> FunctionExtraction | None:
+    return next(
+        (
+            m
+            for m in _held(state)
+            if isinstance(m, FunctionExtraction) and m.path == path and m.function == function
+        ),
+        None,
+    )
 
 
 @tool_display(lambda p: f"Munging `{p['function']}`", "Munge")
@@ -354,8 +388,9 @@ class MungeFunction(
       statement. The only way to reach a point *inside* an execution. Observation only: a call that
       changes the program's state is a rewrite, and outside your charter.
 
-    If what the request needs is none of these, `give_up` and say which kind it would have taken.
-    Do not improvise a sixth.
+    If the request needs a *new function boundary* rather than a line on an existing function,
+    that is `extract_function`, not one of these. If it is neither, `give_up` and say which kind it
+    would have taken; do not improvise one.
     """
 
     path: str = Field(
@@ -383,7 +418,7 @@ class MungeFunction(
                 "account for."
             )
         with self.tool_deps() as target:
-            match target.source_path(self.path):
+            match target.pristine_source(self.path):
                 case NotInWorkdir():
                     return (
                         f"{self.path} resolves outside this project. Munge the program's own "
@@ -409,11 +444,18 @@ class MungeFunction(
                 why=self.why,
                 feature=self.state["feature"],
             )
-            if any(m.edit_id == record.edit_id for m in self.state["proposed"]):
+            if any(m.edit_id == record.edit_id for m in _held(self.state)):
                 return f"{self.function} in {self.path} already carries that attribute."
-            # A dry run against what is on disk, so a name that matches nothing is a tool error you
-            # can act on rather than a build failure two minutes later.
-            match apply_munge(resolved.read_text(), record):
+            if (split := _extraction_of(self.state, self.path, self.function)) is not None:
+                return (
+                    f"You are already splitting {self.function} ({split.edit_id}), and an attribute "
+                    f"here would land on the copy this unit does *not* compile — a change that "
+                    f"builds, reports nothing and does nothing. Put the attribute on the extracted "
+                    f"function by writing it into that item's own text, or `drop_munge` the split."
+                )
+            # A dry run against the source replay will act on, so a name that matches nothing is a
+            # tool error you can act on rather than a build failure two minutes later.
+            match apply_attribute(resolved.read_text(), record):
                 case FunctionNotFound(nearby=nearby):
                     suggestion = f" This file does define: {', '.join(nearby)}." if nearby else ""
                     return f"{self.path} defines no function named {self.function}.{suggestion}"
@@ -440,6 +482,214 @@ class MungeFunction(
                         content=(
                             f"Applied {record.kind.attribute()} to {self.path}:{line} "
                             f"({self.function}), gated on `{record.feature}`."
+                        ),
+                    )
+                ],
+            }
+        )
+
+
+@tool_display(lambda p: f"Extracting `{p['extracted_name']}`", "Extract")
+class ExtractFunction(
+    WithInjectedState[EditorStateExtra],
+    WithInjectedId,
+    WithAsyncDependencies[Command | str, HarnessTarget],
+):
+    """Split one of the program's functions so a rule can drive a piece of it directly.
+
+    The one kind here that is not an attribute and the only one that restructures code. It answers a
+    property about a state transition *inside* a function, where there is no boundary to hang a rule
+    on — and only when the author needs to **call** that transition. If observing the point is
+    enough, `hook_on_entry` / `hook_on_exit` is far smaller and you should prefer it.
+
+    What lands in the file is three items, and the tool writes the `cfg` lines rather than you:
+
+    ```rust
+    #[cfg(not(feature = "<the unit that asked>"))]
+    fn settle(..) { /* the original, byte for byte */ }
+    #[cfg(feature = "<the unit that asked>")]
+    fn settle(..) { settle_transition(..) }      // your `replacement`
+    #[cfg(feature = "<the unit that asked>")]
+    pub fn settle_transition(..) { .. }          // your `extracted`
+    ```
+
+    So the deployed build and every sibling unit compile the function exactly as the project wrote
+    it. Two things follow, and both are refusals rather than judgement calls:
+
+    * **`settle` must still do what it did.** Moving code into the extracted function is the entire
+      change. Dropping a check, reordering effects or simplifying arithmetic on the way is a
+      rewrite — `give_up` instead. This kind is a refactoring, which is what makes it cheap to
+      justify; an extraction that changes behaviour is the most expensive thing you could do.
+    * **The signature stays identical.** Every caller in the program compiles against whichever half
+      its features select, so the two must be interchangeable. The tool checks this and refuses.
+
+    The extracted function must be `pub`, and the author's rule has to be able to name it — if the
+    module it lands in is not reachable from `crate::certora::specs`, say so and refuse: you cannot
+    change visibility, and a `pub fn` inside a private module is not callable from the harness.
+    """
+
+    path: str = Field(
+        description="The file holding the function to split, relative to the workspace root."
+    )
+    function: str = Field(
+        description="The name of the enclosing function, as its `fn` line spells it. It keeps this "
+        "name and this signature; only its body changes."
+    )
+    extracted_name: str = Field(
+        description="The name of the new function. It must not already exist in the file."
+    )
+    replacement: str = Field(
+        description="The complete definition of `function` as it should read under the feature — "
+        "same signature, body delegating to the extracted function. Write the whole item, `fn` line "
+        "included, and no `#[cfg]`: the tool adds that."
+    )
+    extracted: str = Field(
+        description="The complete definition of the new function, `pub`, holding the code moved out "
+        "of `function`. Write the whole item; the tool adds the `#[cfg]`."
+    )
+    why: str = Field(
+        description="What the author cannot state without this boundary, and why the split is "
+        "behaviour-preserving. It goes into the report as the account of what the program became."
+    )
+
+    @override
+    async def run(self) -> Command | str:
+        if not self.why.strip():
+            return (
+                "A non-empty `why` is required. An extraction restructures the program under "
+                "verification, so an unexplained one leaves the report claiming a property of code "
+                "nobody can account for."
+            )
+        with self.tool_deps() as target:
+            match target.pristine_source(self.path):
+                case NotInWorkdir():
+                    return (
+                        f"{self.path} resolves outside this project. Extract from the program's own "
+                        f"source, with a path relative to the workspace root."
+                    )
+                case NotProjectSource(directory=directory):
+                    return (
+                        f"{self.path} is under `{directory}`, which is not this project's source. "
+                        f"A munge changes the program under verification; `{directory}` holds build "
+                        f"output or the dependency sources cargo resolved. If the code in the way "
+                        f"is a dependency's, refuse and say so."
+                    )
+                case Path() as resolved:
+                    pass
+            if not resolved.is_file():
+                return f"{self.path} is not a file in this project."
+            source = resolved.read_text()
+            match function_item(source, self.function):
+                case FunctionNotFound(nearby=nearby):
+                    suggestion = f" This file does define: {', '.join(nearby)}." if nearby else ""
+                    return f"{self.path} defines no function named {self.function}.{suggestion}"
+                case FunctionAmbiguous(lines=lines):
+                    return (
+                        f"{self.path} defines {self.function} {len(lines)} times (lines "
+                        f"{', '.join(str(n) for n in lines)}). Splitting the wrong one of two "
+                        f"same-named functions compiles and changes nothing you can see, so this "
+                        f"is refused: name a function that is unambiguous, or give up and say why."
+                    )
+                case NoFunctionBody():
+                    return (
+                        f"{self.function} in {self.path} is a declaration with no body — a trait "
+                        f"method or an `extern` entry. There is nothing to extract from it; the "
+                        f"implementation you want is elsewhere."
+                    )
+                case FunctionItem() as original:
+                    pass
+            if self.extracted_name in function_names(source):
+                return (
+                    f"{self.path} already mentions a function named {self.extracted_name}. Pick a "
+                    f"name the file does not use, so the extracted function is unambiguous."
+                )
+            match function_item(self.replacement, self.function):
+                case FunctionItem() as rewritten:
+                    pass
+                case _:
+                    return (
+                        f"`replacement` must be exactly one complete definition of {self.function}, "
+                        f"`fn` line through closing brace, and no `#[cfg]`."
+                    )
+            if rewritten.signature != original.signature:
+                return (
+                    "The replacement changes the signature, which every caller in the program "
+                    "compiles against. Reproduce it exactly.\n"
+                    f"  the program's: {original.signature}\n"
+                    f"  yours:         {rewritten.signature}"
+                )
+            match function_item(self.extracted, self.extracted_name):
+                case FunctionItem() as lifted:
+                    pass
+                case _:
+                    return (
+                        f"`extracted` must be exactly one complete definition of "
+                        f"{self.extracted_name}, `fn` line through closing brace, and no `#[cfg]`."
+                    )
+            if not lifted.text.lstrip().startswith("pub"):
+                return (
+                    f"{self.extracted_name} must be `pub`. The whole point of the split is that the "
+                    f"author's rule can call it, and it lives in the program's module, not theirs."
+                )
+            if not re.search(rf"\b{re.escape(self.extracted_name)}\b", self.replacement):
+                return (
+                    f"The replacement never calls {self.extracted_name}, so the two halves of the "
+                    f"pair do different things. The feature-on `{self.function}` has to delegate to "
+                    f"what you extracted."
+                )
+            record = FunctionExtraction(
+                path=self.path,
+                function=self.function,
+                extracted_name=self.extracted_name,
+                original=original.text,
+                replacement=self.replacement,
+                extracted=self.extracted,
+                why=self.why,
+                feature=self.state["feature"],
+            )
+            if any(m.edit_id == record.edit_id for m in _held(self.state)):
+                return f"You have already recorded exactly that split of {self.function}."
+            if (split := _extraction_of(self.state, self.path, self.function)) is not None:
+                return (
+                    f"You are already splitting {self.function} ({split.edit_id}). Two splits of "
+                    f"one function for one unit are two definitions of it under the same feature, "
+                    f"which does not build. `drop_munge` that one and record a single split that "
+                    f"does both."
+                )
+            if any(
+                isinstance(m, FunctionMunge)
+                and m.path == self.path
+                and m.function == self.function
+                for m in _held(self.state)
+            ):
+                return (
+                    f"This unit already has an attribute on {self.function}, and it would land on "
+                    f"the copy the split leaves for everyone else — so it would stop doing "
+                    f"anything. Drop it and write it into the extracted item's own text, or do not "
+                    f"split this function."
+                )
+            match apply_extraction(source, record):
+                case Munged(line=line):
+                    pass
+                case refusal:
+                    return (
+                        f"That split cannot be applied to {self.path} as it stands ({refusal}). "
+                        f"Re-read the file."
+                    )
+        return Command(
+            update={
+                "proposed": [record],
+                "reviewed_digest": None,
+                "messages": [
+                    ToolMessage(
+                        tool_call_id=self.tool_call_id,
+                        content=(
+                            f"Split {self.path}:{line} ({self.function}), gated on "
+                            f"`{record.feature}`. `{self.extracted_name}` is now a function of its "
+                            f"own under that feature; the original is preserved verbatim for every "
+                            f"build without it. Tell the author in `how_to_apply` how a rule names "
+                            f"it — the compile gate is the only thing that will catch an "
+                            f"unreachable path."
                         ),
                     )
                 ],
@@ -662,11 +912,11 @@ class SubmitEdits(
 class GiveUpEditing(WithInjectedId, WithImplementation[Command]):
     """Refuse the request.
 
-    A first-class outcome, not a failure. Refuse when the change is outside the five kinds, when it
-    would need a rewrite rather than an attribute, when the code in the way belongs to a dependency,
-    or when no attribute would honestly solve the stated problem. Name the kind of change it would
-    have taken — the author turns that into a recorded skip, and a skip naming a missing kind is how
-    the vocabulary earns its next entry.
+    A first-class outcome, not a failure. Refuse when the change is outside the six kinds, when it
+    would change what the program *does* rather than how it is arranged, when the code in the way
+    belongs to a dependency, or when nothing in the charter would honestly solve the stated problem.
+    Name the kind of change it would have taken — the author turns that into a recorded skip, and a
+    skip naming a missing kind is how the vocabulary earns its next entry.
     """
 
     explanation: str = Field(description="Why the change cannot or should not be made.")
@@ -846,6 +1096,7 @@ def editor_tools(
             [
                 editor_ctx.get_memory_tool(),
                 MungeFunction.bind(target).as_tool("munge_function"),
+                ExtractFunction.bind(target).as_tool("extract_function"),
                 DropMunge.as_tool("drop_munge"),
                 RequestReview.bind(
                     ReviewDeps(pristine=pristine, review=reviewer)

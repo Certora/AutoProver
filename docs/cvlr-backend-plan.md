@@ -2032,8 +2032,9 @@ moved two of the triggers: trigger 1's "seventh munge kind" was already four, an
 uses. Both still belong in a revision of
 [munge-and-working-copies.md](munge-and-working-copies.md) §4, which has not been written. What is
 left is to watch the metric both notes name — **the skip rate**, and specifically skips naming a kind
-the vocabulary lacks. Extraction is the one that keeps coming back, and it is the one kind that is
-not an attribute ([who-edits-the-program.md](./who-edits-the-program.md) §9.4–§9.5).
+the vocabulary lacks. Extraction was the one that kept coming back and is now built, as the one kind
+that is not an attribute ([who-edits-the-program.md](./who-edits-the-program.md) §10); what the next
+run's skips name is the reading that matters.
 
 **Why it was scheduled at all**, since that is what the triggers below are for.
 [munge-and-working-copies.md](munge-and-working-copies.md) argued that this backend should keep a
@@ -2048,11 +2049,12 @@ That document's §7 states the triggers as falsifiable conditions rather than ca
 checklist rather than a re-argument. Where each stands now:
 
 1. ~~**A seventh munge kind appears**~~ — **fired.** The vocabulary was closed on one project's diff
-   and the wider survey found four more kinds; five are now offered and the one that is *not* an
-   attribute — extraction — is the one still outstanding (§7.6.3, [who-edits-the-program.md](./who-edits-the-program.md) §9.4).
-2. **Skips naming a would-be munge become common** — **the live metric.** Two of the last run's eight
-   skips wanted an extracted state-transition function, which the vocabulary cannot express. This is
-   what to watch.
+   and the wider survey found four more kinds; six are now offered, including the one that is *not*
+   an attribute (§7.6.3, [who-edits-the-program.md](./who-edits-the-program.md) §10).
+2. **Skips naming a would-be munge become common** — **the live metric, and its first reading has
+   been acted on.** Two of the last run's eight skips wanted an extracted state-transition function;
+   the vocabulary now expresses it. What the next run's skips name is what says whether the
+   vocabulary or the topology was the limit.
 3. **Unit counts grow** — moot as stated: one tree is one dependency graph, so the arithmetic that
    made ten units ~10 GB is gone. What replaces it is §3 of
    [single-working-tree.md](./single-working-tree.md): at some N the single build permit is the
@@ -2203,12 +2205,17 @@ list because most of it is not in the phase that will fix it.
    the source tools expose the program's own code, but a harness must also name what the target's
    *macros* generate — `Accounts` structs, `Bumps` types, discriminants. `cargo expand` output or the
    Anchor crate source would supply it; nothing does today (§7.5.5).
-8. **Extraction is the munge kind the vocabulary lacks**, and the only one that is not an attribute.
-   Two of the last gate run's eight skips wanted a state-transition function extracted. It needs a
-   `TextRewrite` alongside `FunctionMunge` and a charter that can describe a restructuring, neither
-   of which exists ([who-edits-the-program.md](./who-edits-the-program.md) §9.4). **The skip rate is
-   the metric** — skips naming a kind the vocabulary lacks is what says whether the editor topology
-   helped or hurt (§9.5 there, and §7.10 here).
+8. ~~**Extraction is the munge kind the vocabulary lacks**~~ — **built**
+   ([who-edits-the-program.md](./who-edits-the-program.md) §10). `extract_function` is the editor's
+   sixth tool and the only one that is not an attribute: a `FunctionExtraction` record captures the
+   pristine item verbatim and renders §8.4's gated pair, so the deployed half is text nobody retyped
+   and neither `cfg` line is the model's to write. What is left of the item is the part a run
+   answers: whether the reviewer's new refactoring check catches a "tidied" line, and whether the
+   judge's narrowing question — a rule that starts at a manufactured boundary has left the
+   validation before it outside the proof — is the one that actually comes up. **The skip rate
+   remains the metric** — skips naming a kind the vocabulary lacks is what says whether the editor
+   topology helped or hurt (§9.5 there, and §7.10 here), and extraction was the kind that kept
+   coming back.
 
 **Checks and residue deferred to a real run** — [single-working-tree.md](./single-working-tree.md) §8
 for the first three, [the-tree-is-a-vfs.md](./the-tree-is-a-vfs.md) §6 for the fourth.

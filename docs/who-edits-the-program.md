@@ -10,7 +10,8 @@
 >
 > **Built, as a Solana-only editor** ([editor.py](../composer/spec/cvlr/editor.py)). §4's three moves
 > all landed; §8 is the design it was built to, and §9 records where the build differed and what was
-> deliberately left out.
+> deliberately left out. §9.4's first bullet — extraction, the gated pair — has since been built
+> too; §10 is what that took.
 >
 > **Coming from the EVM backend and new to Solana?** Read the appendix first — three differences
 > account for everything below, and the first one causes the other two.
@@ -440,7 +441,7 @@ feature reaches changes nothing, reports nothing, and leaves the report claiming
 did not happen. A build whose dep-info cannot be identified reports `NotChecked` and says so, rather
 than passing.
 
-### 9.3 The vocabulary went from two kinds to five
+### 9.3 The vocabulary went from two kinds to five — and then to six (§10)
 
 Not scope creep: an editor choosing between two kinds is §2.3's objection at full strength. Added:
 
@@ -460,9 +461,9 @@ listed as though it were.
 
 ### 9.4 What was deliberately left out
 
-* **Extraction** — §8.4's gated pair. The one kind that is not an attribute, and the one two skips
-  wanted. It needs `TextRewrite` alongside `FunctionMunge` and a charter that can describe a
-  restructuring; neither exists.
+* ~~**Extraction**~~ — §8.4's gated pair. The one kind that is not an attribute, and the one two
+  skips wanted. It needed a record alongside `FunctionMunge` and a charter that can describe a
+  restructuring, and at the time neither existed. **Built; see §10.**
 * **`MockBody`** — §8.4 argued the editor might write mock bodies into `certora/mocks/`. It does not:
   §3's recommendation stands, the author writes the stand-in in its own harness module and names it
   to the editor, and the editor refuses a `mock_fn` whose target does not exist. That keeps the
@@ -477,7 +478,111 @@ The skip rate. §5 said it: an editor that refuses leaves the author holding a `
 **skips naming a kind the vocabulary lacks are the metric that says whether this helped or hurt**.
 Three of the five kinds are new, so the first run under this arrangement is also the first test of
 whether the vocabulary or the topology was the limit — and if extraction keeps coming back, §9.4's
-first bullet is the next thing to build.
+first bullet is the next thing to build. It did, and it was; §10.
+
+---
+
+## 10. Extraction, built
+
+§8.4's gated pair, and §9.4's first bullet. The vocabulary is six kinds now, five of which are one
+attribute above a signature and one of which is not.
+
+### 10.1 The shape, and the two things the tool refuses to delegate
+
+`extract_function` is the editor's sixth tool. The model supplies the enclosing function's name, a
+`replacement` for it, an `extracted` function it delegates to, and a justification. Everything else
+is the tool's, and that is the design rather than an implementation detail — an extraction has two
+properties that would be *claims* if a model wrote them and are *facts* because a record renders
+them:
+
+* **The deployed half is captured, not retyped.** `FunctionExtraction.original` is the pristine text
+  of the item, read off the developer's copy at the moment the edit is recorded. The `#[cfg(not(..))]`
+  half is that string, byte for byte. A model asked to reproduce the original alongside its
+  replacement would eventually reproduce it *nearly*, and nothing downstream would notice.
+* **Both `cfg` lines come from the record.** §8.4's requirement was that the kind "cannot be inert by
+  accident"; the stronger version available here is that it cannot be *active* by accident either.
+  The model never writes a `cfg`, so there is no spelling of an extraction in which the feature-off
+  build sees something new.
+
+Five checks refuse at record time rather than at the compile gate, and each is a failure a build
+would either accept or report far too late to act on. Three are about the pair itself: the enclosing
+signature must be unchanged (every caller compiles against whichever half its features select); the
+extracted function must be `pub` (the whole point is that the author's rule can call it); and the
+replacement must actually call what was extracted (otherwise the two halves do different things and
+only one of them is ever built).
+
+The other two are about what one unit already holds against the same function, and the second is the
+interesting one:
+
+* **A second split of one function, for one unit, does not build** — two definitions under the same
+  feature. The compile gate would say so, in a diagnostic about duplicate symbols that names neither
+  of the two edits to take back.
+* **An attribute and a split of one function, for one unit, is a silent no-op.** §10.2's ordering
+  puts attributes on first, so the `cfg_attr` lands above the `#[cfg(not(..))]` — correct for the
+  sibling unit that recorded it, and for the unit that recorded *both* it means the attribute sits
+  on the copy its own build discards. It compiles, it reports nothing, it does nothing, and the
+  dep-info check that catches the other version of that failure (§9.2) cannot see it, because the
+  file was compiled. The refusal points at the remedy: an attribute inside the extracted item's own
+  text is gated by the item.
+
+### 10.2 What it cost, and where
+
+About 200 lines, and the surprising half is not the record.
+
+**The scanner.** An attribute needs the signature *line*; a rewrite needs the whole item, which means
+knowing which `}` closes it — so `munge.py` grew a small Rust lexer that skips comments (nesting),
+strings, raw strings and character literals. It is 40 lines and it is the only place this backend
+parses Rust rather than pattern-matching it. `'\u{1F600}'` is why the character-literal pattern
+spells its escapes out: a scanner that fell through to counting that brace would mismatch every brace
+after it.
+
+**The union.** `FunctionMunge` became `Munge = FunctionMunge | FunctionExtraction`, which touched
+seven modules and changed nothing in six of them beyond a type and one call site — `m.kind.describe()`
+became `m.describe()`, so the report, the judge briefing and `SourceEditRecord` carry an extraction
+without knowing there is a second kind of thing.
+
+**Ordering, in `replay`.** The one place the two kinds genuinely interact. An attribute applied
+*after* a split finds two definitions of one name and refuses; applied before, its `cfg_attr` lands
+above the `#[cfg(not(..))]` the pair opens with — which is where it belongs, because the unit that
+recorded the attribute builds with the extraction's feature off and compiles the original. So
+attributes go on first, and the composition is checked against real rustc in both feature states.
+
+**`edit_id` had to grow a digest.** An attribute's whole content is its name, so the id could spell
+it out. An extraction's content is two blocks of model-written Rust, and an id blind to them would
+let a re-recorded extraction inherit the previous one's review approval and the previous one's prover
+stamp — the exact failure `_digest` and `munge_history` exist to prevent.
+
+### 10.3 What the tool cannot check, and who does
+
+**That the code moved is the code that was there.** The tool verifies the signature and preserves the
+original; it cannot verify that the feature-on half computes what the feature-off half computes. That
+is the reviewer's, and it is now check 4 in its prompt — with the point that the untouched copy
+sitting beside it in the diff is what makes a dropped guard easy to miss rather than easy to catch.
+
+**Whether a rule that drives the extracted piece still means the property.** That is the judge's, and
+it is the one genuinely new question this kind raises. Extraction is behaviour-preserving, so it
+cannot hollow out a rule the way `early_panic` and `mock_fn` can. What it does instead is *narrow*
+one: it manufactures a boundary partway through a handler, and everything before that boundary —
+account validation, an authority check, the bound that made the transition safe — is outside a rule
+that starts at it. Both prompts say so, and the author's says it in the vocabulary of
+`rule_subjects`, which is where the narrowing has to be declared.
+
+### 10.4 What is still not there
+
+**Visibility.** The extracted function is `pub`, but the module it lands in may not be reachable from
+`crate::certora::specs`, and Rust has no feature-conditional `pub` (§9.3, on `certora_make_pub`). The
+charter's answer is a refusal that names it, which is honest and is not a fix. If this turns out to
+be common, the remedy is a second gated pair on the module declaration rather than a new kind.
+
+**Two units extracting one function compose, and nothing depends on it.** The second extraction finds
+the first's preserved original inside its `#[cfg(not(..))]` half and nests correctly — each feature
+selects its own half and the deployed build gets the innermost original. That falls out of content
+addressing rather than being designed, so it is recorded here and not advertised in the charter, and
+it is only sound *across* units: two for one unit are refused (§10.1).
+
+**The metric is unchanged.** §9.5 still stands: the skip rate, and specifically skips naming a kind
+the vocabulary lacks. Extraction was the kind that kept coming back; what the next run says is
+whether anything replaces it.
 
 ---
 
