@@ -36,9 +36,12 @@ somebody checks it against a project the scaffold did not create.
 
 import dataclasses
 import difflib
+import hashlib
 import logging
 import re
+import textwrap
 import tomllib
+from collections.abc import Iterator
 from pathlib import PurePosixPath
 
 from composer.cargo.metadata import Workspace
@@ -513,11 +516,13 @@ class HookOnExit:
 #: 1097 routine lines and one hand-unrolled loop, and only the loop needed a person.
 #:
 #: Five, not the two this backend shipped first. The three added here are the rest of what a corpus
-#: survey found projects actually writing, minus two that cannot be had: ``certora_make_pub`` is a
-#: *project-local* proc macro in the one project that uses it and has no counterpart in ``cvlr`` —
-#: and Rust cannot make visibility conditional on a feature without duplicating the item — while an
-#: exposure-style extraction is not an attribute at all and needs the gated-pair form
-#: ``docs/who-edits-the-program.md`` §8.4 describes.
+#: survey found projects actually writing, minus one that cannot be had: ``certora_make_pub`` is a
+#: *project-local* proc macro in the one project that uses it and has no counterpart in ``cvlr``,
+#: and Rust cannot make visibility conditional on a feature without duplicating the item.
+#:
+#: The sixth kind a corpus survey found is **not** an attribute and so is not in this union at all —
+#: see :class:`FunctionExtraction`, which is a sibling of :class:`FunctionMunge` rather than one
+#: more entry here.
 type MungeKind = EarlyPanic | MockFn | InlineNever | HookOnEntry | HookOnExit
 
 
@@ -559,6 +564,9 @@ class FunctionMunge:
         lines in the file, each dormant for the other, and collapsing them would drop one.
         """
         return f"{self.feature}:{self.kind.attribute()}@{self.path}::{self.function}"
+
+    def describe(self) -> str:
+        return self.kind.describe()
 
     def attribute_line(self, indent: str) -> str:
         return f'{indent}#[cfg_attr(feature = "{self.feature}", {self.kind.attribute()})]'
@@ -648,13 +656,47 @@ class FunctionAmbiguous:
 
 @dataclasses.dataclass(frozen=True)
 class AlreadyMunged:
-    """The function already carries this attribute, so the file is unchanged."""
+    """The edit is already in the file, so it is unchanged."""
 
     function: str
     line: int
 
 
-type MungeAttempt = Munged | FunctionNotFound | FunctionAmbiguous | AlreadyMunged
+@dataclasses.dataclass(frozen=True)
+class SourceDrifted:
+    """The exact text an extraction was recorded against is no longer in the file.
+
+    Only :class:`FunctionExtraction` can report this, and it is the price of the one kind that is
+    not an attribute. An attribute is *inserted* above a signature, so replaying it needs only the
+    signature to still be there; a rewrite replaces a region and has to know the region is
+    unchanged. Content addressing is what makes a moved region loud rather than a rewrite applied to
+    code nobody read (``docs/who-edits-the-program.md`` §8.4).
+    """
+
+    function: str
+
+
+@dataclasses.dataclass(frozen=True)
+class NoFunctionBody:
+    """The signature has no body — a trait method declaration, or an ``extern`` block entry.
+
+    An attribute on one of those is legal and occasionally wanted; an extraction of one is not a
+    thing, because there is nothing to extract.
+    """
+
+    function: str
+
+
+#: What applying an attribute can come to. ``FunctionNotFound`` is here and not in
+#: :data:`ExtractionAttempt` because an attribute is located by name, where an extraction is located
+#: by the text it captured — a name that has gone takes the text with it, so the extraction reports
+#: the more specific :class:`SourceDrifted`.
+type AttributeAttempt = Munged | FunctionNotFound | FunctionAmbiguous | AlreadyMunged
+
+#: What applying an extraction can come to.
+type ExtractionAttempt = Munged | FunctionAmbiguous | AlreadyMunged | SourceDrifted
+
+type MungeAttempt = AttributeAttempt | ExtractionAttempt
 
 
 def _signature_pattern(function: str) -> re.Pattern[str]:
@@ -685,19 +727,282 @@ def function_names(source: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(_ANY_FN.findall(source)))
 
 
-def apply_munge(source: str, munge: FunctionMunge) -> MungeAttempt:
-    """Insert ``munge``'s attribute above its function, or say why not.
+# ---------------------------------------------------------------------------------------------
+# extraction: the one kind that is not an attribute
+#
+# ``docs/who-edits-the-program.md`` §8.4. Everything above attaches a line to a function that already
+# exists, which is why applying one is a mechanical insert. Extraction *splits* a function so a rule
+# can drive a piece of it directly, and there is no attribute for that — so it is a rewrite, and a
+# rewrite needs two things the attribute kinds get for free: it has to be content-addressed, so a
+# replay onto source that has moved fails loudly instead of quietly rewriting the wrong region; and
+# it cannot be *inert by accident*, which in Rust means the gated-pair form below rather than a
+# ``cfg_attr``.
+#
+# Finding where an item ends is the machinery that costs: an attribute needs only the signature line,
+# a rewrite needs the whole definition. Hence a small Rust scanner — enough to know which braces are
+# code and which are inside a string, a character literal or a comment.
 
-    The attribute goes immediately above the signature, which puts it *below* any doc comment and
-    any attribute already there — legal, and it keeps the insertion a single-line edit whose diff
-    reads as one. The compile gate is what catches a signature this misjudged; these three refusals
-    are the cases a compile would accept and a reader would not.
 
-    The three refusals are also the drift detector for a resumed or replayed run
+#: A raw string opener, ``r"``/``r#"``/``br##"`` — the closing delimiter carries the same hash count.
+_RAW_STRING = re.compile(r'b?r(?P<hashes>#*)"')
+
+#: A character or byte-character literal. The escapes are spelled out rather than left to ``\\.``
+#: because ``'\u{1F600}'`` contains a brace, and a scanner that fell through to counting it would
+#: mismatch every brace after it.
+_CHAR_LITERAL = re.compile(r"b?'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F_]{1,6}\}|.)|[^\\'\n])'")
+
+
+def _code_positions(source: str, start: int) -> Iterator[int]:
+    """Indices of the characters of ``source`` from ``start`` that are code.
+
+    Skips line and (nesting) block comments, strings, raw strings, and character literals — the four
+    places a brace can appear without opening or closing a block. A lifetime is *not* skipped and
+    does not need to be: ``'a`` fails :data:`_CHAR_LITERAL` for want of a closing quote, and the
+    characters it yields are not braces.
+    """
+    i, n = start, len(source)
+    while i < n:
+        c = source[i]
+        if source.startswith("//", i):
+            newline = source.find("\n", i)
+            if newline < 0:
+                return
+            i = newline
+            continue
+        if source.startswith("/*", i):
+            depth, i = 1, i + 2
+            while i < n and depth:
+                if source.startswith("/*", i):
+                    depth, i = depth + 1, i + 2
+                elif source.startswith("*/", i):
+                    depth, i = depth - 1, i + 2
+                else:
+                    i += 1
+            continue
+        if (raw := _RAW_STRING.match(source, i)) is not None:
+            closing = '"' + raw["hashes"]
+            end = source.find(closing, raw.end())
+            i = n if end < 0 else end + len(closing)
+            continue
+        if c == '"' or source.startswith('b"', i):
+            i += 2 if c == "b" else 1
+            while i < n:
+                if source[i] == "\\":
+                    i += 2
+                elif source[i] == '"':
+                    i += 1
+                    break
+                else:
+                    i += 1
+            continue
+        if (char := _CHAR_LITERAL.match(source, i)) is not None:
+            i = char.end()
+            continue
+        yield i
+        i += 1
+
+
+def _body_span(source: str, signature_start: int) -> tuple[int, int] | None:
+    """The body of the signature at ``signature_start``: its opening brace, and one past its close.
+
+    The body's opening brace is the first one at bracket depth zero, which is what keeps a ``{`` in
+    a parameter's type or a ``pub(crate)`` from being mistaken for it. A ``;`` at depth zero first
+    means there is no body at all.
+    """
+    depth, opened = 0, None
+    for i in _code_positions(source, signature_start):
+        match source[i]:
+            case "(" | "[":
+                depth += 1
+            case ")" | "]":
+                depth -= 1
+            case "{" if depth == 0:
+                opened = i
+                break
+            case ";" if depth == 0:
+                return None
+            case _:
+                pass
+    if opened is None:
+        return None
+    depth = 0
+    for i in _code_positions(source, opened):
+        match source[i]:
+            case "{":
+                depth += 1
+            case "}":
+                depth -= 1
+                if depth == 0:
+                    return opened, i + 1
+            case _:
+                pass
+    return None
+
+
+@dataclasses.dataclass(frozen=True)
+class FunctionItem:
+    """A whole function definition as it stands in some source.
+
+    ``signature`` is whitespace-collapsed so two spellings of one contract compare equal. That is
+    the check that makes an extraction a *refactoring*: the enclosing function keeps its name, its
+    parameters and its return type, so every caller in the program — including the ones no rule
+    mentions — is unaffected by which half of the gated pair it compiles.
+    """
+
+    text: str
+    signature: str
+    line: int
+
+
+def function_item(
+    source: str, function: str
+) -> FunctionItem | FunctionNotFound | FunctionAmbiguous | NoFunctionBody:
+    """The one definition of ``function`` in ``source``, or why it cannot be pinned down.
+
+    The refusals are :func:`apply_munge`'s, for the same reasons: a name that matches nothing is a
+    typo worth reporting by name, and two functions of one name is a choice this module will not
+    make on somebody's behalf.
+    """
+    matches = list(_signature_pattern(function).finditer(source))
+    if not matches:
+        return FunctionNotFound(
+            function=function,
+            nearby=tuple(
+                difflib.get_close_matches(function, function_names(source), n=3, cutoff=0.5)
+            ),
+        )
+    if len(matches) > 1:
+        return FunctionAmbiguous(
+            function, tuple(source.count("\n", 0, m.start()) + 1 for m in matches)
+        )
+    (match,) = matches
+    body = _body_span(source, match.start())
+    if body is None:
+        return NoFunctionBody(function)
+    opened, end = body
+    return FunctionItem(
+        text=source[match.start() : end],
+        signature=" ".join(source[match.start() : opened].split()),
+        line=source.count("\n", 0, match.start()) + 1,
+    )
+
+
+def _reindent(text: str, indent: str) -> str:
+    """Model-written Rust, re-laid-out to sit where the function it replaces sat."""
+    return textwrap.indent(textwrap.dedent(text).strip("\n"), indent)
+
+
+@dataclasses.dataclass(frozen=True)
+class FunctionExtraction:
+    """A function split into a feature-gated pair so a rule can drive a piece of it.
+
+    The kind two of the last gate run's eight skips wanted and the vocabulary could not express: a
+    property about a state transition buried inside a handler has no function boundary to attach to,
+    and no attribute creates one. :class:`HookOnEntry` reaches such a point to *observe* it; this is
+    for the case where the rule has to **call** it.
+
+    What replaces the original function is three items rather than one::
+
+        #[cfg(not(feature = "unit_x"))]
+        fn settle(..) { /* the original, untouched */ }
+        #[cfg(feature = "unit_x")]
+        fn settle(..) { settle_transition(..) }
+        #[cfg(feature = "unit_x")]
+        pub fn settle_transition(..) { /* what the rule descends to */ }
+
+    Ugly, and it keeps every property the attribute kinds have. The deployed build compiles the
+    original verbatim, because :attr:`original` is captured text rather than something a model
+    retyped. Every sibling unit compiles it too, since the pair is gated on the requesting unit's
+    own feature. And it cannot be inert by accident: :meth:`render` writes both ``cfg`` lines, so
+    there is no spelling of this record in which the feature-off build sees anything new.
+
+    :attr:`original` is also what makes replay safe. It is the drift detector the attribute kinds
+    get from ``FunctionNotFound``: a rewrite has to know the region it replaces is still the region
+    it was recorded against, so the text is stored and a replay that cannot find it reports
+    :class:`SourceDrifted` rather than rewriting whatever is there now.
+
+    One thing the pair does not carry across: attributes and doc comments already above the function
+    stay above the ``#[cfg(not(..))]`` line, so they apply to the original half and not to the
+    feature-on half. That is right for a ``#[cfg_attr]`` recorded by *another* unit — that unit
+    builds with this feature off — and it is why :func:`replay` applies attributes first.
+    """
+
+    path: str
+    function: str
+    #: The new function's name, as :attr:`extracted` spells it and as the author's rule will call it.
+    extracted_name: str
+    #: The pristine definition of :attr:`function`, captured verbatim when the extraction was
+    #: recorded. Not authored by anybody: retyping it is how the deployed half stops being the
+    #: deployed half.
+    original: str
+    #: :attr:`function` as it reads under the feature — same signature, body delegating to the
+    #: extracted item.
+    replacement: str
+    #: The extracted item itself, ``pub`` so the harness module can name it.
+    extracted: str
+    why: str
+    feature: str = DEFAULT_FEATURE
+
+    def render(self) -> str:
+        """The gated triple, indented to sit where the original sat."""
+        indent = self.original[: len(self.original) - len(self.original.lstrip(" \t"))]
+        gate_on = f'{indent}#[cfg(feature = "{self.feature}")]'
+        return "\n".join(
+            [
+                f'{indent}#[cfg(not(feature = "{self.feature}"))]',
+                self.original,
+                gate_on,
+                _reindent(self.replacement, indent),
+                gate_on,
+                _reindent(self.extracted, indent),
+            ]
+        )
+
+    @property
+    def edit_id(self) -> str:
+        """Identity for deduplication, for the report, and for what a review is approval *of*.
+
+        Carries a digest of the rewrite itself, which the attribute kinds have no need of: an
+        attribute's whole content is its name, so ``edit_id`` spells it out. Here the compiler sees
+        two blocks of model-written Rust, and an id blind to them would let a re-recorded extraction
+        inherit the previous one's review and the previous one's prover stamp.
+        """
+        digest = hashlib.sha256(self.render().encode()).hexdigest()[:8]
+        return f"{self.feature}:extract[{self.extracted_name}:{digest}]@{self.path}::{self.function}"
+
+    def describe(self) -> str:
+        return f"split so `{self.extracted_name}` is a function a rule can drive"
+
+
+#: One edit to the program under verification: an attribute on a function, or a function split in
+#: two. Both are gated on the recording unit's cargo feature and both replay onto the pristine
+#: project, which is the whole of what the rest of the backend needs to know about the difference.
+type Munge = FunctionMunge | FunctionExtraction
+
+
+def apply_munge(source: str, munge: Munge) -> MungeAttempt:
+    """Apply one recorded edit to ``source``, or say why it did not take.
+
+    The refusals are the drift detector for a resumed or replayed run
     (``docs/single-working-tree.md`` §4.3). Replay happens against the *pristine* project, which can
-    have moved since the munge was recorded; a function that is gone or has acquired a same-named
-    sibling is reported here rather than silently mis-applied, which is what a text overlay of the
-    old file would have done.
+    have moved since the edit was recorded; a function that is gone, has acquired a same-named
+    sibling, or whose body no longer reads as it did is reported here rather than silently
+    mis-applied, which is what a text overlay of the old file would have done.
+    """
+    match munge:
+        case FunctionMunge():
+            return apply_attribute(source, munge)
+        case FunctionExtraction():
+            return apply_extraction(source, munge)
+
+
+def apply_attribute(source: str, munge: FunctionMunge) -> AttributeAttempt:
+    """Insert the attribute immediately above its function's signature.
+
+    Above the signature puts it *below* any doc comment and any attribute already there — legal, and
+    it keeps the insertion a single-line edit whose diff reads as one. The compile gate is what
+    catches a signature this misjudged; these three refusals are the cases a compile would accept
+    and a reader would not.
     """
     matches = list(_signature_pattern(munge.function).finditer(source))
     if not matches:
@@ -720,12 +1025,46 @@ def apply_munge(source: str, munge: FunctionMunge) -> MungeAttempt:
     return Munged("".join(lines), index + 2)
 
 
-def munge_history(munges: tuple[FunctionMunge, ...]) -> tuple[str, ...]:
+def _occurrences(haystack: str, needle: str) -> tuple[int, ...]:
+    found: list[int] = []
+    at = haystack.find(needle)
+    while at >= 0:
+        found.append(at)
+        at = haystack.find(needle, at + 1)
+    return tuple(found)
+
+
+def apply_extraction(source: str, edit: FunctionExtraction) -> ExtractionAttempt:
+    """Replace the captured definition with the gated triple.
+
+    The rendered block *contains* the original verbatim, so "already applied" has to be asked before
+    "is the original still here" — otherwise a second replay would find the original inside the
+    ``#[cfg(not(..))]`` half and nest one triple inside another.
+    """
+    rendered = edit.render()
+    if (at := source.find(rendered)) >= 0:
+        return AlreadyMunged(edit.function, source.count("\n", 0, at) + 2)
+    match _occurrences(source, edit.original):
+        case ():
+            return SourceDrifted(edit.function)
+        case (at,):
+            pass
+        case hits:
+            return FunctionAmbiguous(
+                edit.function, tuple(source.count("\n", 0, h) + 1 for h in hits)
+            )
+    updated = source[:at] + rendered + source[at + len(edit.original) :]
+    # One line below the `#[cfg(not(..))]` the triple opens with.
+    return Munged(updated, updated.count("\n", 0, at) + 2)
+
+
+def munge_history(munges: tuple[Munge, ...]) -> tuple[str, ...]:
     """The munges as ``version_history`` tokens, so a stamp predating one goes stale with it.
 
-    Keyed on what the prover sees differently — the file, the function and the attribute — and not
-    on ``why``, so correcting the wording of a justification does not cost a submission. Same trade
-    as :func:`composer.spec.cvlr.tuning.summary_history`, for the same reason.
+    Keyed on what the prover sees differently — the file, the function, and the attribute or the
+    rewrite — and not on ``why``, so correcting the wording of a justification does not cost a
+    submission. Same trade as :func:`composer.spec.cvlr.tuning.summary_history`, for the same
+    reason.
     """
     return tuple(f"munge:{m.edit_id}" for m in munges)
 
@@ -744,10 +1083,10 @@ class DropMunges:
     edit_ids: frozenset[str]
 
 
-type MungeWrite = list[FunctionMunge] | DropMunges
+type MungeWrite = list[Munge] | DropMunges
 
 
-def merge_munges(left: list[FunctionMunge], right: MungeWrite) -> list[FunctionMunge]:
+def merge_munges(left: list[Munge], right: MungeWrite) -> list[Munge]:
     """State reducer for the munge list: append deduplicating by :attr:`edit_id`, or remove.
 
     A reducer for the reason ``merge_summaries`` is one — several tool calls can land in one graph

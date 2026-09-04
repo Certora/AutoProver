@@ -633,19 +633,22 @@ def test_the_author_knows_the_charter_without_holding_the_tool():
     prompt = _flat(_author_system_prompt())
     assert "code_editor(request)" in prompt
     assert "You do not make it" in prompt
-    assert "charter is five attributes" in prompt
+    assert "charter is six kinds" in prompt
     assert "The editor can refuse, and a refusal is information" in prompt
     # early_panic must not be sold as the answer to the one thing it cannot do.
     assert "does **not** help an acceptance property" in prompt
 
 
 def test_every_kind_the_editor_offers_is_named_to_the_author():
-    """A request is only as good as the author's sense of what is available. The two kinds added
-    with the editor are the two that answer problems the author previously had to skip: a folded-away
-    symbol nothing can name, and a property about a point inside an execution."""
+    """A request is only as good as the author's sense of what is available, and the skip rate is
+    the metric this backend watches — so a kind the author does not know about is a skip that never
+    had to happen. Extraction is the newest and the one two of a gate run's eight skips wanted."""
     prompt = _flat(_author_system_prompt())
     for kind in ("early_panic", "mock_fn", "inline_never", "hook_on_entry", "hook_on_exit"):
         assert kind in prompt, kind
+    assert "an extraction" in prompt
+    # And the narrowing it buys, since the author is the one who declares what a rule drives.
+    assert "proves nothing about the checks that stayed in the enclosing function" in prompt
 
 
 def test_the_author_is_told_where_a_mock_stand_in_can_actually_live():
