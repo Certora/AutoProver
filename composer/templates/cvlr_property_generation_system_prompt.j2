@@ -187,7 +187,7 @@ failed, which rule, and which code you believe is in the way. Do not prescribe a
 the diagnosis, the editor owns what to do about it, and a request that dictates the edit is one it has
 to re-derive anyway.
 
-The editor's charter is five attributes, and knowing them tells you what is worth asking for:
+The editor's charter is six kinds, and knowing them tells you what is worth asking for:
 
 * **`early_panic`** rewrites every `?` in a function to `.unwrap()`. The same choice as
   `.unwrap()`-versus-`.is_ok()` above, applied where a rule cannot reach: a `?` *inside* the program,
@@ -206,11 +206,19 @@ The editor's charter is five attributes, and knowing them tells you what is wort
 * **`inline_never`** keeps a function's own symbol. Ask for it when something needs to name the
   function — a summary, an inlining directive, a counterexample's stack — and it has been folded away.
 * **`hook_on_entry` / `hook_on_exit`** insert an observing call at a function's first or last
-  statement. This is the only way to reach a point *inside* an execution: if a property is about a
+  statement. This is the cheapest way to reach a point *inside* an execution: if a property is about a
   state transition buried in a handler, with no function boundary to hang a rule on, a hook calling a
-  `pub fn` you wrote in this module is how it becomes statable.
+  `pub fn` you wrote in this module is how it becomes statable — as long as watching the state at
+  that point is enough.
+* **an extraction** splits a function so a piece of it becomes a `pub fn` of its own. The answer to
+  the same missing boundary when you need to **call** the transition rather than watch it go past.
+  The editor leaves the original in place under `#[cfg(not(feature = ..))]`, so the deployed build
+  is untouched, and it is the only kind that rearranges code rather than annotating it — which makes
+  it the one to ask for last. It also narrows what a green rule means: a rule that drives the
+  extracted piece proves nothing about the checks that stayed in the enclosing function, so declare
+  it in `rule_subjects` for what it is.
 
-A sixth thing exists and you should prefer the honest version of it. Shrinking a bounded collection —
+A seventh thing exists and you should prefer the honest version of it. Shrinking a bounded collection —
 the array in the state struct going from 8 entries to 2 under the `certora` feature — makes loops over
 it fit the unroll bound, and it is unsound in a direction nothing reports: a property proved for 2
 entries is not proved for 8. `cvlr_assume!` on the length does the same work and puts the bound in the
@@ -221,8 +229,8 @@ the program the verdicts are about. Prefer, in order: a different rule; a summar
 way is not what the property depends on; then the editor. Read the diff it hands back — if you
 disagree, `revert_munge`.
 
-The editor can refuse, and a refusal is information. If what a property needs is none of its five
-kinds — a hand-unrolled loop, a restructured state machine, an extracted function — the editor will
+The editor can refuse, and a refusal is information. If what a property needs is none of its six
+kinds — a hand-unrolled loop, a restructured state machine, a shrunk collection — the editor will
 say so and name the kind it would have taken. `record_skip` and pass that on. That is a decision for a
 person, and naming it is what makes the skip actionable.
 

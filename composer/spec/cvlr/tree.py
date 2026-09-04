@@ -19,7 +19,7 @@ Three things follow from *derived*, and each was a bug in the arrangement this r
   pristine copy and then replayed, rather than edited in place — so rewinding to an earlier
   checkpoint no longer leaves an attribute on disk that nothing in state knows about.
 * **The union is replayed, not one unit's share.** A unit's munge is dormant for every other unit
-  (:class:`~composer.spec.cvlr.munge.FunctionMunge`), so the union is well defined; replaying only
+  (:class:`~composer.spec.cvlr.munge.Munge`), so the union is well defined; replaying only
   the staging unit's would delete its siblings' lines and have them re-added on the next gate,
   churning the file and rebuilding the crate for nothing.
 * **Writes are content-compared.** Cargo fingerprints on mtime, so rewriting a file with identical
@@ -40,7 +40,8 @@ from pathlib import Path, PurePosixPath
 from graphcore.tools.vfs import DictBackend, DirBackend, PersistentMaterializer
 
 from composer.spec.cvlr.munge import (
-    FunctionMunge,
+    FunctionExtraction,
+    Munge,
     Munged,
     MungeAttempt,
     NOT_PROJECT_SOURCE,
@@ -88,7 +89,7 @@ class UnitEdits:
     #: the package rather than a spec beside a conf.
     module_path: Path
     draft: str
-    munges: tuple[FunctionMunge, ...] = ()
+    munges: tuple[Munge, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -98,13 +99,14 @@ class Drifted:
     The pristine copy is the developer's tree, and it can move between the run that recorded a munge
     and the run that replays it. ``why`` is one of
     :class:`~composer.spec.cvlr.munge.FunctionNotFound`,
-    :class:`~composer.spec.cvlr.munge.FunctionAmbiguous` or
-    :class:`~composer.spec.cvlr.munge.AlreadyMunged` — the same typed refusals the tool uses, which
-    is why replay onto drifted source is detectable at all rather than silently mis-applied — or one
-    of the two path refusals, or prose for the file simply being unreadable.
+    :class:`~composer.spec.cvlr.munge.FunctionAmbiguous`,
+    :class:`~composer.spec.cvlr.munge.AlreadyMunged` or — for an extraction, whose region has to
+    still read as it did — :class:`~composer.spec.cvlr.munge.SourceDrifted`: the same typed refusals
+    the tool uses, which is why replay onto drifted source is detectable at all rather than silently
+    mis-applied. Or one of the two path refusals, or prose for the file simply being unreadable.
     """
 
-    munge: FunctionMunge
+    munge: Munge
     why: MungeAttempt | NotInWorkdir | NotProjectSource | str
 
     def describe(self) -> str:
@@ -132,16 +134,22 @@ class Reconciled:
 
 
 
-def replay(source: str, munges: tuple[FunctionMunge, ...]) -> tuple[str, tuple[Drifted, ...]]:
+def replay(source: str, munges: tuple[Munge, ...]) -> tuple[str, tuple[Drifted, ...]]:
     """Apply ``munges`` to pristine ``source``, reporting the ones that did not take.
 
-    Ordered by :attr:`~composer.spec.cvlr.munge.FunctionMunge.edit_id` rather than by the order they
-    were recorded in. Two munges of the same function each insert a line immediately above its
-    signature, so the order decides the file's bytes — and bytes that depend on which unit happened
-    to stage first would make the crate's fingerprint depend on scheduling.
+    Ordered rather than taken as recorded, because the order decides the file's bytes: two munges of
+    one function each insert a line immediately above its signature, and bytes that depended on
+    which unit happened to stage first would make the crate's fingerprint depend on scheduling.
+
+    Attributes go on before extractions, and that is the interesting half of the order. An
+    extraction replaces a function with a gated pair, so an attribute applied afterwards would find
+    two definitions of one name and refuse; applied first, its ``cfg_attr`` line ends up above the
+    ``#[cfg(not(..))]`` the pair opens with — which is the *right* place, because a unit that
+    recorded an attribute is a unit building with somebody else's extraction feature off, and the
+    half it compiles is the original.
     """
     drifted: list[Drifted] = []
-    for munge in sorted(munges, key=lambda m: m.edit_id):
+    for munge in sorted(munges, key=lambda m: (isinstance(m, FunctionExtraction), m.edit_id)):
         match apply_munge(source, munge):
             case Munged(source=updated):
                 source = updated
@@ -150,7 +158,7 @@ def replay(source: str, munges: tuple[FunctionMunge, ...]) -> tuple[str, tuple[D
     return source, tuple(drifted)
 
 
-def munge_diff(pristine: Path, munges: tuple[FunctionMunge, ...]) -> str:
+def munge_diff(pristine: Path, munges: tuple[Munge, ...]) -> str:
     """A unified diff from the project's own source to what ``munges`` make of it.
 
     Computed from state rather than read off a working tree, which is what makes it both correct and
@@ -280,6 +288,23 @@ class SharedTree:
             return NotProjectSource(path=relative, directory=inside.parts[0])
         return candidate
 
+    def pristine_of(self, relative: str) -> Path | NotInWorkdir | NotProjectSource:
+        """The developer's copy of the file a munge names — what replay actually reads.
+
+        The tool that records an edit has to look at the same bytes :meth:`reconcile` will replay
+        onto, and those are the pristine project's rather than the tree's. For an attribute the
+        difference is cosmetic; for an extraction it is not, because the text it captures *is* its
+        identity, and capturing a sibling unit's already-derived version of the file would record an
+        edit that can never be replayed onto anything.
+
+        Validated by :meth:`resolve`, so there is one answer to which paths a munge may name.
+        """
+        match self.resolve(relative):
+            case Path() as inside:
+                return self.pristine / inside.relative_to(self.root.resolve())
+            case refusal:
+                return refusal
+
     async def reconcile(self, unit: str, edits: UnitEdits) -> Reconciled:
         """Make the tree agree with state, and say what it took.
 
@@ -302,7 +327,7 @@ class SharedTree:
         for staged in self._units.values():
             derived[self._relative(staged.module_path)] = staged.draft
 
-        by_path: dict[str, list[FunctionMunge]] = {}
+        by_path: dict[str, list[Munge]] = {}
         for staged in self._units.values():
             for munge in staged.munges:
                 by_path.setdefault(munge.path, []).append(munge)

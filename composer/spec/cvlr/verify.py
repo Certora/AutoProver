@@ -69,7 +69,7 @@ from composer.spec.cvlr.munge import (
     AlreadyMunged,
     EarlyPanic,
     FunctionAmbiguous,
-    FunctionMunge,
+    Munge,
     FunctionNotFound,
     MockFn,
     MungeKind,
@@ -150,21 +150,25 @@ class HarnessTarget:
         async with self.build_sem:
             yield
 
-    def source_path(self, relative: str) -> Path | NotInWorkdir | NotProjectSource:
-        """Resolve a tree-relative path a munge may write to, or say why it may not.
+    def pristine_source(self, relative: str) -> Path | NotInWorkdir | NotProjectSource:
+        """The developer's copy of a file a munge names, or why the path is not one it may name.
 
-        The tree's own answer (:meth:`composer.spec.cvlr.tree.SharedTree.resolve`), asked here so a
-        munge is refused when it is *recorded* rather than only when it is replayed. One
+        The tree's own answer (:meth:`composer.spec.cvlr.tree.SharedTree.pristine_of`), asked here
+        so a munge is refused when it is *recorded* rather than only when it is replayed. One
         implementation, because a check the tool and the replay could disagree about is a check that
         lets an edit through on one path and not the other.
+
+        Pristine rather than the tree's copy for the same reason: replay acts on the pristine
+        source, so a tool that dry-runs an edit against a tree already carrying a sibling unit's
+        must reach a different verdict from the replay that follows it.
         """
-        return self.tree.resolve(relative)
+        return self.tree.pristine_of(relative)
 
     async def stage(
         self,
         draft: str,
         summaries: Sequence[SummaryDirective] = (),
-        munges: Sequence[FunctionMunge] = (),
+        munges: Sequence[Munge] = (),
     ) -> Reconciled:
         """Make the tree agree with this unit's state, and report what could not be carried over.
 
