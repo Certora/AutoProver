@@ -87,10 +87,7 @@ class VerificationGroup:
     #: a monotone / injective ghost, a model, …). A function absent here is left as the base
     #: spec has it — PRECISE only if the base spec itself leaves it unsummarized; a base-global
     #: summary (e.g. a curated/oracle model) still applies. Groups add on top of the shared base,
-    #: they do not remove its summaries. Drives ``spec_contents`` and the cap merge
-    #: (:func:`cap_groups`): the cheapest merges are the pairs that agree on the most summaries;
-    #: on disagreement a function drops out of the merged group summaries (:func:`merge_summaries`),
-    #: back to the base spec's treatment.
+    #: they do not remove its summaries.
     summaries: Mapping[str, str] = field(default_factory=dict)
 
 

@@ -2,7 +2,7 @@
 
 The transparent, agent-controlled splitting policy. Rather than infer a partition,
 the CVL author *declares* it: a set of groups, each naming the properties it
-verifies, the summaries it installs (per function), and any conf overrides. This
+verifies and the summaries it installs (per function). This
 rides the structure autoprover already has — the property -> rule mapping and its
 coverage guarantee (every non-skipped property is mapped to rules) — so a group is
 expressed in the agent's native unit (properties), and coverage composes: every
@@ -15,7 +15,8 @@ per-group conf overlay, but the agent-facing tool does not expose it yet — a
 per-group prover-config knob is new, unvalidated, and unreviewed by the judge, so it
 is deferred to a follow-up with proper guardrails.)
 The machinery only expands properties to rules, enforces a disjoint rule partition,
-validates coverage, and bounds the count to the cap. The per-group spec is the
+and validates coverage; the group count is capped by rejecting an over-cap declaration
+(:func:`over_cap_message`), not by merging. The per-group spec is the
 shared base spec plus a `methods{}` block of the summaries that group declared
 (:func:`composer.spec.source.verification_groups.append_summaries`); a function a
 group does not summarize is verified precise there.
@@ -90,9 +91,8 @@ def owned_rules_per_group(specs: list[VerificationGroupSpec]) -> list[frozenset[
     """Each spec's owned rules under first-declaration-wins, aligned to ``specs`` by index.
 
     A group's owned rules are the union of its properties' rules; a rule declared by more than
-    one group is owned by the FIRST that declares it, so the partition stays disjoint (the
-    ``merge_group_results`` / per-group-completion invariant that every rule has exactly one
-    owner)."""
+    one group is owned by the FIRST that declares it, so the partition stays disjoint — every
+    rule has exactly one owner."""
     claimed: set[str] = set()
     owned_per: list[frozenset[str]] = []
     for s in specs:
@@ -149,7 +149,7 @@ def groups_from_specs(
             owned_rules=owned,
             spec_contents=append_summaries(base_spec, s.summaries),
             summaries=dict(s.summaries),
-            # conf_overlay left at its substrate default ({}): the agent tool does not expose it yet.
+            # conf_overlay left at its substrate default: not exposed to the agent.
         )
         for s, owned in zip(specs, owned_rules_per_group(specs))
     ]
@@ -197,10 +197,7 @@ def render_group_plan_for_judge(specs: list["VerificationGroupSpec"]) -> str | N
                 lines.append(f"//     {func}: {s.summaries[func].strip()}")
         else:
             lines.append("//   installs summaries: (none — all functions precise)")
-        # No per-group conf is shown: the agent-facing group carries none yet (deferred), and even
-        # the substrate's conf overlay would be moot here — the judge is handed the spec, not the
-        # .conf, so it has neither a base to compare against nor a mandate to review conf soundness.
-        # If groups gain agent-set conf AND the judge starts reviewing .conf files, list each
-        # group's conf diff here.
+        # No per-group conf is shown (the agent-facing group carries none). If groups gain
+        # agent-set conf and the judge starts reviewing .conf files, list each group's conf diff here.
         lines.append("//")
     return "\n".join(lines)

@@ -246,8 +246,7 @@ class DeclareVerificationGroups(
                 (dup if m.property_title in seen else seen).add(m.property_title)
         if dup:
             return f"Each property must belong to exactly one group; these appear in more than one: {sorted(dup)}"
-        # Cap: too many groups is rejected here (not silently auto-merged) so the split stays the agent's
-        # to control; the message shows the merge the run would otherwise force.
+        # Reject an over-cap declaration; over_cap_message suggests a valid merge to adopt.
         if (over := over_cap_message(specs, resolved_max_groups())) is not None:
             return over
         return tool_state_update(

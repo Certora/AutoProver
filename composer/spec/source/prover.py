@@ -122,12 +122,7 @@ class ProverRunLog(TypedDict):
     sort: Literal["run"]
     declared_rules: list[str]
     state_digest: str
-    # Which verification group this run belongs to (see verification_groups). Absent
-    # (=> None) for a single-group / ungrouped run — the behavior-preserving default.
-    # Completion is computed per group over the group's own runs, because groups have
-    # different specs (hence different state_digests) and _iterate_history stops at the
-    # first foreign digest: interleaving foreign-group runs would otherwise truncate a
-    # group's digest streak. Tagging lets us filter to one group's linear history first.
+    # The verification group this run belongs to; absent (None) for an ungrouped run.
     group: NotRequired[str | None]
 
 class NagMarker(TypedDict):
@@ -150,6 +145,10 @@ def _executed_rules(
 #: How many consecutive runs must end in the identical failure before the author is nagged
 #: about a rule. Counts the run being processed, so 3 means "this run plus the two before it".
 STUCK_RULE_NAG_THRESHOLD = 3
+
+#: Statuses that make a rule "stuck" — a failure worth warning/nagging about (a genuine
+#: VIOLATED is a real verdict, not stuck).
+STUCK_STATUSES: frozenset[StatusCodes] = frozenset({"TIMEOUT", "ERROR", "SANITY_FAILED"})
 
 
 def stuck_rule_warnings(
@@ -395,11 +394,9 @@ class ProverStateExtra(TypedDict):
     # only ever replaced wholesale (commit_edit / revert_to_edit).
     vfs: NotRequired[dict[str, str]]
 
-    # The agent's declared verification-group partition (see agent_groups). When set
-    # (via the group-declaration tool), verify_spec splits the rules into these groups
-    # — each with its own per-function summaries and conf overlay — and runs them in
-    # parallel. Absent => the single-spec/single-run default. Replaced wholesale: a
-    # declaration is a full snapshot of the partition.
+    # The agent's declared verification-group partition (see agent_groups), set via the
+    # group-declaration tool; absent => the single-spec/single-run default. Replaced wholesale
+    # on redeclaration.
     verification_groups: NotRequired[list[VerificationGroupSpec]]
 
 type ProverEvents = CEXAnalysisStart | CloudPollingEvent | ProverOutputEvent | RuleAnalysisResult | ProverRun | ProverLink | ProverResult
@@ -696,6 +693,59 @@ def get_prover_tool(
         prover_msg = f"{component} iteration number {iteration}"
 
 
+        def _finalize_run(
+            *,
+            status_map: Mapping[RulePath, StatusCodes],
+            prover_update: list[ProverHistoryItem],
+            all_verified: bool,
+            content: str,
+            link: str | None,
+        ) -> Command:
+            """Post-run bookkeeping shared by the grouped and single-run paths: nag on rules stuck on
+            repeated identical failures, then build the tool_state_update. The caller supplies this
+            pass's own status map, history items, completion verdict, and result text/link."""
+            stuck_rules = {
+                k: v for (k, v) in status_map.items()
+                if v in STUCK_STATUSES and k.rule not in state["rule_skips"]
+            }
+            known_tc_ids = {
+                l["id"] for msg in state["messages"] if isinstance(msg, AIMessage)
+                for l in msg.tool_calls if l["name"] == "verify_spec"
+            }
+            to_warn, seen_post_compaction_history = stuck_rule_warnings(
+                stuck_rules, state["prover_history"], known_tc_ids
+            )
+            nag_channel: dict = {}
+            if len(to_warn) > 0:
+                prover_update.append(NagMarker(sort="nag", nagged_rules=list(to_warn)))
+                nag_channel["reminders_channel"] = [
+                    "The following rule(s) have had identical failures on the last 3 runs of the prover:",
+                    *(f"- {it.pprint()}" for it in to_warn),
+                    "You may need to significantly change your approach, or skip the property if this is a persistent issue (you may need to use rebuttals to communicate"
+                    " these failures to the feedback judge).",
+                    "If these are TIMEOUTs, re-running the same spec will not help. Consider "
+                    "`declare_verification_groups` to split the properties into parallel runs, each keeping only "
+                    "what it needs precise and summarizing the rest — a monolithic run pays the intersection of every "
+                    "rule's precision needs.",
+                ]
+                if seen_post_compaction_history:
+                    nag_channel["reminders_channel"].append(
+                        "(NB: Some of these prover calls happened before your most recent task history summarization)"
+                    )
+            if all_verified:
+                nag_channel.setdefault("reminders_channel", []).append(
+                    "You have successfully verified over your prior prover run(s) that all rules verify. This task is completed."
+                )
+                return tool_state_update(
+                    tool_call_id=tool_call_id, content=content,
+                    prover_link=link, validations=stamper(state, state["version_history"]),
+                    prover_history=prover_update, **nag_channel
+                )
+            return tool_state_update(
+                tool_call_id=tool_call_id, content=content, prover_link=link,
+                prover_history=prover_update, **nag_channel
+            )
+
         async def run_grouped(
             run_root: str, all_rules: list[str], groups: list[VerificationGroup]
         ) -> str | Command:
@@ -716,8 +766,7 @@ def get_prover_tool(
                     state["skipped"], state["version_history"],
                 )
 
-            # Drop phantom owned rules (declared but absent from the compiled spec) so a typo can't wedge
-            # a group in a silent perpetual re-run (never submitted, yet forever pending). Warn once.
+            # Drop phantom owned rules — declared but absent from the compiled spec; warn once.
             groups, phantom = prune_phantom_owned_rules(groups, all_rules)
             if phantom:
                 _logger.warning(
@@ -773,18 +822,6 @@ def get_prover_tool(
             ) or "All verification groups already covered by prior runs; nothing to re-run."
             link = next((res.link for (_gr, res) in executed if res.link is not None), None)
 
-            stuck_rules = {
-                k: v for (k, v) in merged.items()
-                if v in ("TIMEOUT", "ERROR", "SANITY_FAILED") and k.rule not in state["rule_skips"]
-            }
-            known_tc_ids = {
-                l["id"] for msg in state["messages"] if isinstance(msg, AIMessage)
-                for l in msg.tool_calls if l["name"] == "verify_spec"
-            }
-            to_warn, seen_post_compaction_history = stuck_rule_warnings(
-                stuck_rules, state["prover_history"], known_tc_ids
-            )
-
             prover_update: list[ProverHistoryItem] = [
                 ProverRunLog(
                     tool_call_id=tool_call_id,
@@ -798,7 +835,6 @@ def get_prover_tool(
                 )
                 for (gr, res) in executed
             ]
-
             all_verified = all(
                 group_is_complete(
                     state["prover_history"], group=gr.group.name, curr_digest=gr.digest,
@@ -808,36 +844,9 @@ def get_prover_tool(
                 )
                 for (gr, res) in outcomes
             )
-
-            nag_channel: dict = {}
-            if len(to_warn) > 0:
-                prover_update.append(NagMarker(sort="nag", nagged_rules=list(to_warn)))
-                nag_channel["reminders_channel"] = [
-                    "The following rule(s) have had identical failures on the last 3 runs of the prover:",
-                    *(f"- {it.pprint()}" for it in to_warn),
-                    "You may need to significantly change your approach, or skip the property if this is a persistent issue (you may need to use rebuttals to communicate"
-                    " these failures to the feedback judge).",
-                    "If these are TIMEOUTs, re-running the same spec will not help. Consider "
-                    "`declare_verification_groups` to split the properties into parallel runs, each keeping only "
-                    "what it needs precise and summarizing the rest — a monolithic run pays the intersection of every "
-                    "rule's precision needs.",
-                ]
-                if seen_post_compaction_history:
-                    nag_channel["reminders_channel"].append(
-                        "(NB: Some of these prover calls happened before your most recent task history summarization)"
-                    )
-            if all_verified:
-                nag_channel.setdefault("reminders_channel", []).append(
-                    "You have successfully verified over your prior prover run(s) that all rules verify. This task is completed."
-                )
-                return tool_state_update(
-                    tool_call_id=tool_call_id, content=combined_str,
-                    prover_link=link, validations=stamper(state, state["version_history"]),
-                    prover_history=prover_update, **nag_channel
-                )
-            return tool_state_update(
-                tool_call_id=tool_call_id, content=combined_str, prover_link=link,
-                prover_history=prover_update, **nag_channel
+            return _finalize_run(
+                status_map=merged, prover_update=prover_update,
+                all_verified=all_verified, content=combined_str, link=link,
             )
 
         async def run_in(run_root: str) -> str | Command:
@@ -859,10 +868,9 @@ def get_prover_tool(
                     )
                 except SpecCompilationError as exc:
                     return f"The spec failed to compile:\n{exc.output}"
-            # Partition into verification groups from the agent's declaration, if any.
-            # No declaration => one shared-spec group, which routes to the unchanged
-            # single-run path below. A declaration yields multiple groups (or a group
-            # with its own spec/conf), which run in parallel via run_grouped.
+            # Groups from the agent's declaration, else one shared-spec group. Only a genuine
+            # split — more than one group, or a group carrying its own spec/conf — takes
+            # run_grouped; a trivial single group falls through to the single-run path below.
             declared = state.get("verification_groups")
             if declared:
                 groups = groups_from_specs(
@@ -898,26 +906,10 @@ def get_prover_tool(
             if isinstance(result, str):
                 return result
 
-            stuck_rules = {
-                k: v for (k,v) in result.raw_rule_status.items() if v in ("TIMEOUT", "ERROR", "SANITY_FAILED") and k.rule not in state["rule_skips"]
-            }
-
-            known_tc_ids = {
-                l["id"]
-                for msg in state["messages"] if isinstance(msg, AIMessage)
-                for l in msg.tool_calls if l["name"] == "verify_spec"
-            }
-
-            to_warn, seen_post_compaction_history = stuck_rule_warnings(
-                stuck_rules, state["prover_history"], known_tc_ids
-            )
-
             curr_state_digest = spec_digest(
                 spec, state["skipped"], state["version_history"]
             )
-
-            prover_results : list[tuple[RulePath, StatusCodes]] = [(k, v) for (k,v) in result.raw_rule_status.items()]
-
+            prover_results: list[tuple[RulePath, StatusCodes]] = [(k, v) for (k, v) in result.raw_rule_status.items()]
             all_verified = _is_completion_history(
                 l=state["prover_history"],
                 curr_digest=curr_state_digest,
@@ -925,11 +917,10 @@ def get_prover_tool(
                 curr_status=prover_results,
                 all_rules=all_rules
             )
-
-            prover_update : list[ProverHistoryItem] = [
+            prover_update: list[ProverHistoryItem] = [
                 ProverRunLog(
                     tool_call_id=tool_call_id,
-                    prover_results=[(k, v) for (k,v) in result.raw_rule_status.items()],
+                    prover_results=prover_results,
                     rules={"sort": "exclude", "selector": exclude_rules } if exclude_rules is not None else \
                         {"sort": "include", "selector": rules} if rules is not None else None,
                     spec_digest=spec_hash,
@@ -938,44 +929,9 @@ def get_prover_tool(
                     state_digest=curr_state_digest
                 )
             ]
-            nag_channel = {
-
-            }
-            if len(to_warn) > 0:
-                prover_update.append(NagMarker(
-                    sort="nag",
-                    nagged_rules=list(to_warn)
-                ))
-                nag_channel["reminders_channel"] = [
-                    "The following rule(s) have had identical failures on the last 3 runs of the prover:",
-                    *(f"- {it.pprint()}" for it in to_warn),
-                    "You may need to significantly change your approach, or skip the property if this is a persistent issue (you may need to use rebuttals to communicate"
-                    " these failures to the feedback judge).",
-                    "If these are TIMEOUTs, re-running the same spec will not help. Consider "
-                    "`declare_verification_groups` to split the properties into parallel runs, each keeping only "
-                    "what it needs precise and summarizing the rest — a monolithic run pays the intersection of every "
-                    "rule's precision needs.",
-                ]
-                if seen_post_compaction_history:
-                    nag_channel["reminders_channel"].append(
-                        "(NB: Some of these prover calls happened before your most recent task history summarization)"
-                    )
-            if all_verified:
-                nag_channel.setdefault("reminders_channel", []).append(
-                    "You have successfully verified over your prior prover run(s) that all rules verify. This task is completed."
-                )
-                # Completing the coverage stamps, however the completing run was scoped:
-                # every declared rule was verified against exactly this authoring state
-                # (the state_digest match), so a piecemeal completion is as good as a
-                # full-run one.
-                return tool_state_update(
-                    tool_call_id=tool_call_id, content=result.result_str,
-                    prover_link=result.link, validations=stamper(state, state["version_history"]),
-                    prover_history=prover_update, **nag_channel
-                )
-            return tool_state_update(
-                tool_call_id=tool_call_id, content=result.result_str, prover_link=result.link,
-                prover_history=prover_update, **nag_channel
+            return _finalize_run(
+                status_map=result.raw_rule_status, prover_update=prover_update,
+                all_verified=all_verified, content=result.result_str, link=result.link,
             )
 
         # The author's working copy decides where this run executes (in-situ for
