@@ -538,9 +538,10 @@ class FileRegistry:
     Unlike ``StubRegistry``, this is a plain registration — no agent decisions,
     but ``register`` rejects paths that don't exist in the layered FS the
     registry closes over (``_materializer``). Each contract gets its own KV
-    entry under ``_namespace`` keyed by contract name; ``read_all_contracts``
-    enumerates via ``asearch``. The lock serializes the read-modify-write that
-    backs ``register``'s per-path dedupe within a single contract.
+    entry under ``_namespace`` keyed by contract name; ``composer.cli.cache_natspec``
+    enumerates them via ``asearch``. The lock serializes the read-modify-write
+    behind ``register``'s per-path dedupe and ``unregister``'s removal, within a
+    single contract.
 
     ``_non_units`` holds paths that must never become compilation units — the
     generated interfaces. Certora's scene assembly requires every entry in the
@@ -667,6 +668,28 @@ class FileRegistry:
             await self._write_contract(contract_identifier, files)
         return f"Registered {new_entry.as_prover_arg()} for {contract_identifier}."
 
+    async def unregister(self, contract_identifier: SolidityIdentifier, path: str) -> str:
+        """Drop ``path`` from ``contract_identifier``'s file list.
+
+        A registration is otherwise permanent: this namespace is keyed by
+        document digest, so an entry outlives the run that wrote it and every
+        later run on the same document, whatever cache namespace it uses.
+        """
+        _log.debug(
+            "FileRegistry.unregister: ns=%r contract=%s path=%s",
+            self._namespace, contract_identifier, path,
+        )
+        async with self._lock:
+            files = await self._read_contract(contract_identifier)
+            remaining = [e for e in files if e.path != path]
+            if len(remaining) == len(files):
+                return (
+                    f"{path} is not registered for {contract_identifier}; "
+                    f"nothing to remove."
+                )
+            await self._write_contract(contract_identifier, remaining)
+        return f"Unregistered {path} for {contract_identifier}."
+
     def get_tools(self, contract_identifier: SolidityIdentifier) -> list[BaseTool]:
         """Return tools scoped to ``contract_identifier`` for injection into that
         contract's property agents.
@@ -693,6 +716,9 @@ class FileRegistry:
             source tools if unsure). Registration of a path that does not
             exist in the project tree is rejected — verify with `list_files`
             or `get_file` before calling this tool. Registering the same path twice is a no-op.
+
+            A registration you regret is not permanent: `unregister_verification_file`
+            takes it back.
             """
             path: str = PydanticField(
                 description="Project-relative path to a .sol file"
@@ -702,10 +728,38 @@ class FileRegistry:
             async def run(self) -> str:
                 return await registry.register(contract_identifier, self.path)
 
+        @tool_display(
+            lambda d: f"Unregistering spec file: {d['path']}",
+            "Spec file removal result",
+        )
+        class UnregisterSpecFile(WithAsyncImplementation[str]):
+            """Remove a source file you previously added with
+            `register_verification_file`, so it is no longer pulled into the
+            verification task.
+
+            Use this when a registered file turns out not to belong in the
+            build — most often when the typecheck reports that one of your
+            files has no bytecode. Every registered file must compile to
+            bytecode, and one that does not fails the build for every spec in
+            this session, so removing it is the way out.
+
+            `list_verification_files` shows what is currently registered. Note
+            that the Prover can only see the files that remain: if your spec
+            still references the contract, register the right file rather than
+            leaving it out.
+            """
+            path: str = PydanticField(
+                description="Project-relative path of the file to unregister"
+            )
+
+            @override
+            async def run(self) -> str:
+                return await registry.unregister(contract_identifier, self.path)
+
         @tool_display("Listing registered source files", None)
         class ListSpecFiles(WithAsyncImplementation[str]):
             """List every Solidity source file currently registered for this
-            contract's verification unit unit.
+            contract's verification unit.
             """
 
             @override
@@ -717,5 +771,6 @@ class FileRegistry:
 
         return [
             RegisterSpecFile.as_tool("register_verification_file"),
+            UnregisterSpecFile.as_tool("unregister_verification_file"),
             ListSpecFiles.as_tool("list_verification_files"),
         ]
