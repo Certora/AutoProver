@@ -5,6 +5,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, AsyncContextManager, Awaitable, ContextManager, Iterator, Mapping, Self, TypedDict
 
+from graphcore.tools.vfs import GlobalExcludeArg
+
 from composer.spec.gen_types import ITypedTemplate
 from composer.spec.natspec.models import (
     InterfaceDeclModel,
@@ -180,6 +182,10 @@ class MentalModel[A: NatspecApplication, I: InterfaceDeclModel, S: StubDeclarati
     interface_desc: AgentDescription[InterfaceResult[I], InterfaceGenCallParams]
     stub_desc: AgentDescription[S, StubGenCallParams]
     source_root: pathlib.Path | None = None
+    #: What ``source_root`` is served to the agent through, so anything checking a path the agent
+    #: wrote asks the same question its file tools answer. ``None`` in greenfield, which has no
+    #: tree to serve.
+    forbidden_read: GlobalExcludeArg = None
     config_init: dict | None = None
 
     @property

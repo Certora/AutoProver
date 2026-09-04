@@ -65,7 +65,8 @@ class Ecosystem[App: BaseApplication, Main, Unit: FeatureUnit]:
     system_model: type[App]                          # the pydantic type analysis produces
     analysis_prompts: PromptPair                      # (system, initial) template names
     property_prompts: PromptPair
-    validate_analysis: Callable[[BaseApplication, SourceIdentifier | None, Path | None], str | None]
+    validate_analysis: Callable[[BaseApplication, SourceIdentifier | None,
+                                 Path | None, GlobalExcludeArg], str | None]
     locate_main: Callable[[App, SourceCode], Main]    # find the "main" contract/program
     units: Callable[[Main], list[Unit]]               # split into per-unit extraction items
     analysis_extra_input: Callable[[SourceCode], list[str | dict]]
@@ -176,10 +177,11 @@ SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaComponentInsta
   are *references* the unit wrapper resolves, so a name that doesn't resolve silently drops an
   instruction's account detail from the extraction prompt — and an instruction no component
   claims is an entry point no property will ever cover.
-  Validators also receive the run's project root, so an ecosystem whose model carries source file
-  paths can require those paths to name a real file — the agent then corrects them inside its own
-  retry loop instead of the bad path reaching a downstream tool. That is EVM's rule; the Solana
-  and Soroban models carry no paths and ignore the argument.
+  Validators also receive the surface the run's source is served through: the project root, and the
+  `forbidden_read` narrowing it. An ecosystem whose model carries source file paths can then require
+  those paths to name a file the agent's own tools hand back, so the agent corrects them inside its
+  retry loop instead of the bad path reaching a downstream tool. That is EVM's rule; the Solana and
+  Soroban models carry no paths and ignore both arguments.
 
 ### Prompt composition — the shared Rust fragment
 
@@ -287,8 +289,8 @@ async def run_pipeline[..., U, Main, App](
   Solidity-only otherwise (solc, CVL, interface/stub generation). Its analyzed model comes from
   its `MentalModel` — `Application` / `FromSourceApplication`, siblings of `EVM.system_model`
   under `BaseApplication` rather than subtypes — so `ecosystem.validate_analysis` does not
-  typecheck there and it names `validate_solidity_connectivity` directly, passing its
-  `MentalModel`'s source root as the project root (`None` in greenfield, which declares no paths).
+  typecheck there and it names `validate_solidity_connectivity` directly, passing the source root
+  and `forbidden_read` off its `MentalModel` (both `None` in greenfield, which declares no paths).
 - **`_extract_all`** iterates `ecosystem.units(main)`, running one property-inference agent per
   unit — one per component for EVM, Solana, and Soroban.
 

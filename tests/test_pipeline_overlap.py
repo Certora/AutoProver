@@ -21,6 +21,7 @@ import pytest
 import composer.pipeline.core as core
 from composer.pipeline.core import run_pipeline
 from composer.pipeline.ecosystem import EVM
+from composer.spec.util import fs_forbidden_read
 
 # The driver needs *an* ecosystem to reach the overlap under test, but never exercises this one:
 # the analysis and extraction it feeds are both monkeypatched below. EVM is the convenient real
@@ -105,11 +106,12 @@ class _Ctx:
 
 class _Source:
     """The source fields the shared front half reads: two that go into the analysis prompt, and
-    the project root the analysis validator resolves declared paths against."""
+    the surface the analysis validator resolves declared paths against."""
 
     contract_name = "Counter"
     relative_path = "src/Counter.sol"
     project_root = "/nonexistent/project"
+    forbidden_read = staticmethod(fs_forbidden_read)
 
 
 class _Run:
@@ -140,8 +142,9 @@ async def _drive(
     seen: dict = {"backend": backend}
 
     async def fake_analysis(*_a, **_kw):
-        # What the driver resolved the source's project root to, for the analysis validator.
+        # The source surface the driver resolved for the analysis validator.
         seen["project_root"] = _kw.get("project_root")
+        seen["forbidden_read"] = _kw.get("forbidden_read")
         return await analysis.run()
 
     async def fake_extract_all(*_a, **_kw):
@@ -281,8 +284,9 @@ async def test_both_succeeding_still_reaches_the_drivers_own_checks(monkeypatch)
 
     assert extract.finished and not extract.cancelled
     assert prep.finished
-    # The analysis validator resolves the model's declared source paths against this root, so the
-    # driver has to hand it the source's own, not a default.
+    # The analysis validator resolves the model's declared source paths against this surface, so
+    # the driver has to hand it the source's own, not a default.
     assert seen["project_root"] == Path(_Source.project_root)
+    assert seen["forbidden_read"] is fs_forbidden_read
     assert isinstance(seen["raised"], ValueError)
     assert "No properties extracted" in str(seen["raised"])

@@ -12,7 +12,7 @@ and can report a path missing the leading directory that the file tools show.
 """
 
 import os
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
 
 import pytest
@@ -29,6 +29,7 @@ from composer.spec.system_model import (
     SourceApplication,
 )
 from composer.spec.types import SourceIdentifier
+from composer.spec.util import fs_forbidden_read
 
 MAIN_ID = SourceIdentifier("Vault")
 
@@ -107,7 +108,7 @@ def _contract_named(raw: dict[str, Any], name: str) -> dict[str, Any]:
 
 
 def test_declared_paths_that_exist_are_accepted(project: Path) -> None:
-    assert validate_solidity_connectivity(_app(_raw()), MAIN_ID, project) is None
+    assert validate_solidity_connectivity(_app(_raw()), MAIN_ID, project, fs_forbidden_read) is None
 
 
 def test_a_path_missing_its_leading_directory_is_rejected(project: Path) -> None:
@@ -117,7 +118,7 @@ def test_a_path_missing_its_leading_directory_is_rejected(project: Path) -> None
     dropped = LEDGER_PATH.split("/", 1)[1]
     _contract_named(raw, "Ledger")["path"] = dropped
 
-    result = validate_solidity_connectivity(_app(raw), MAIN_ID, project)
+    result = validate_solidity_connectivity(_app(raw), MAIN_ID, project, fs_forbidden_read)
 
     assert result is not None
     assert "Contract Ledger declares path" in result
@@ -133,7 +134,7 @@ def test_several_files_share_the_name(project: Path) -> None:
     raw = _raw()
     _contract_named(raw, "Ledger")["path"] = "Ledger.sol"
 
-    result = validate_solidity_connectivity(_app(raw), MAIN_ID, project)
+    result = validate_solidity_connectivity(_app(raw), MAIN_ID, project, fs_forbidden_read)
 
     assert result is not None
     assert LEDGER_PATH in result
@@ -150,18 +151,79 @@ def test_a_declared_path_under_a_withheld_directory_is_rejected(project: Path) -
     raw = _raw()
     _contract_named(raw, "Ledger")["path"] = WITHHELD_LEDGER_PATH
 
-    result = validate_solidity_connectivity(_app(raw), MAIN_ID, project)
+    result = validate_solidity_connectivity(_app(raw), MAIN_ID, project, fs_forbidden_read)
 
     assert result is not None
     assert "Contract Ledger declares path" in result
     assert "not readable through your file tools" in result
 
 
+def _withholds_the_ledger_directory(path: PurePath) -> bool:
+    """A run whose own rule withholds a directory the Solidity default hands back."""
+    return "ledger" in path.parts
+
+
+def test_the_runs_own_rule_decides_what_is_readable(project: Path) -> None:
+    # The check asks the question the run's file tools answer, so a file the Solidity default
+    # allows is still withheld when this run would not serve it.
+    raw = _raw()
+    _contract_named(raw, "Ledger")["path"] = LEDGER_PATH
+
+    result = validate_solidity_connectivity(
+        _app(raw), MAIN_ID, project, _withholds_the_ledger_directory
+    )
+
+    assert result is not None
+    assert "not readable through your file tools" in result
+
+
+def test_a_forbidden_read_written_as_a_regex_is_read_the_same_way(project: Path) -> None:
+    # A run started from the command line supplies its exclusion as a pattern rather than a
+    # predicate, and both forms mean the same thing here.
+    raw = _raw()
+    _contract_named(raw, "Ledger")["path"] = LEDGER_PATH
+
+    result = validate_solidity_connectivity(_app(raw), MAIN_ID, project, r".*/ledger/.*")
+
+    assert result is not None
+    assert "not readable through your file tools" in result
+
+
+def test_relocation_hints_are_drawn_from_the_same_rule(project: Path) -> None:
+    # The hint has to name a file the agent can then open, so the walk behind it withholds what
+    # the run withholds. Only the decoy is left to offer.
+    raw = _raw()
+    _contract_named(raw, "Ledger")["path"] = "core/src/ledger/Ledger.sol"
+
+    result = validate_solidity_connectivity(
+        _app(raw), MAIN_ID, project, _withholds_the_ledger_directory
+    )
+
+    assert result is not None
+    assert LEDGER_PATH not in result
+    assert DECOY_LEDGER_PATH in result
+
+
+def test_prover_scratch_stays_off_the_walk(project: Path) -> None:
+    # ``fs_withheld_subtree`` prunes prover and VCS scratch to keep the walk cheap, which is a
+    # separate matter from what the run withholds: a run that withholds nothing still gets no hint
+    # pointing into a prover's own working directory.
+    scratch = project / ".certora_internal" / "latest" / "run" / "Scratch.sol"
+    scratch.write_text("// solidity\n")
+    raw = _raw()
+    _contract_named(raw, "Ledger")["path"] = f"{BUILD_DIR}/core/src/Scratch.sol"
+
+    result = validate_solidity_connectivity(_app(raw), MAIN_ID, project, None)
+
+    assert result is not None
+    assert "No file named 'Scratch.sol' is readable anywhere in the project" in result
+
+
 def test_no_file_of_that_name_anywhere(project: Path) -> None:
     raw = _raw()
     _contract_named(raw, "Ledger")["path"] = f"{BUILD_DIR}/core/src/Absent.sol"
 
-    result = validate_solidity_connectivity(_app(raw), MAIN_ID, project)
+    result = validate_solidity_connectivity(_app(raw), MAIN_ID, project, fs_forbidden_read)
 
     assert result is not None
     assert "No file named 'Absent.sol' is readable anywhere in the project" in result
@@ -172,7 +234,7 @@ def test_a_directory_is_reported_as_a_directory(project: Path) -> None:
     raw = _raw()
     _contract_named(raw, "Ledger")["path"] = f"{BUILD_DIR}/core/src/ledger"
 
-    result = validate_solidity_connectivity(_app(raw), MAIN_ID, project)
+    result = validate_solidity_connectivity(_app(raw), MAIN_ID, project, fs_forbidden_read)
 
     assert result is not None
     assert "is a directory, not a Solidity file" in result
@@ -187,7 +249,7 @@ def test_absolute_and_escaping_paths_are_rejected(project: Path, escaping: str) 
     raw = _raw()
     _contract_named(raw, "Ledger")["path"] = escaping
 
-    result = validate_solidity_connectivity(_app(raw), MAIN_ID, project)
+    result = validate_solidity_connectivity(_app(raw), MAIN_ID, project, fs_forbidden_read)
 
     assert result is not None
     assert "does not name a file under the project root" in result
@@ -209,7 +271,7 @@ def test_a_symlinked_dependency_is_accepted(project: Path) -> None:
     raw = _raw()
     _contract_named(raw, "Ledger")["path"] = f"{BUILD_DIR}/core/lib/dep/src/Dep.sol"
 
-    assert validate_solidity_connectivity(_app(raw), MAIN_ID, project) is None
+    assert validate_solidity_connectivity(_app(raw), MAIN_ID, project, fs_forbidden_read) is None
 
 
 def test_every_bad_path_is_reported_in_one_message(project: Path) -> None:
@@ -217,7 +279,7 @@ def test_every_bad_path_is_reported_in_one_message(project: Path) -> None:
     _contract_named(raw, "Vault")["path"] = "core/src/Vault.sol"
     _contract_named(raw, "Ledger")["path"] = "core/src/ledger/Ledger.sol"
 
-    result = validate_solidity_connectivity(_app(raw), MAIN_ID, project)
+    result = validate_solidity_connectivity(_app(raw), MAIN_ID, project, fs_forbidden_read)
 
     assert result is not None
     assert result.startswith("Multiple validation errors found; fix all of them before resubmitting:")
@@ -234,7 +296,7 @@ def test_graph_errors_and_path_errors_arrive_together(project: Path) -> None:
     raw["components"].append(_contract("Ledger", LEDGER_PATH))
     _contract_named(raw, "Vault")["path"] = "core/src/Vault.sol"
 
-    result = validate_solidity_connectivity(_app(raw), MAIN_ID, project)
+    result = validate_solidity_connectivity(_app(raw), MAIN_ID, project, fs_forbidden_read)
 
     assert result is not None
     assert "Duplicate contract names: Ledger" in result
@@ -245,14 +307,14 @@ def test_an_external_actor_without_a_path_is_accepted(project: Path) -> None:
     raw = _raw()
     next(c for c in raw["components"] if c["name"] == "Oracle")["path"] = None
 
-    assert validate_solidity_connectivity(_app(raw), MAIN_ID, project) is None
+    assert validate_solidity_connectivity(_app(raw), MAIN_ID, project, fs_forbidden_read) is None
 
 
 def test_an_external_actor_with_a_missing_path_is_rejected(project: Path) -> None:
     raw = _raw()
     next(c for c in raw["components"] if c["name"] == "Oracle")["path"] = "core/src/interfaces/IOracle.sol"
 
-    result = validate_solidity_connectivity(_app(raw), MAIN_ID, project)
+    result = validate_solidity_connectivity(_app(raw), MAIN_ID, project, fs_forbidden_read)
 
     assert result is not None
     assert "External actor Oracle declares path" in result
@@ -264,7 +326,7 @@ def test_no_project_root_means_no_path_check(project: Path) -> None:
     raw = _raw()
     _contract_named(raw, "Ledger")["path"] = "nowhere/at/all/Ledger.sol"
 
-    assert validate_solidity_connectivity(_app(raw), MAIN_ID, None) is None
+    assert validate_solidity_connectivity(_app(raw), MAIN_ID, None, fs_forbidden_read) is None
 
 
 def test_greenfield_application_is_unaffected(project: Path) -> None:
@@ -273,7 +335,9 @@ def test_greenfield_application_is_unaffected(project: Path) -> None:
     for component in raw["components"]:
         component.pop("path", None)
 
-    assert validate_solidity_connectivity(Application.model_validate(raw), MAIN_ID, project) is None
+    assert validate_solidity_connectivity(
+        Application.model_validate(raw), MAIN_ID, project, fs_forbidden_read
+    ) is None
 
 
 def test_from_source_paths_are_checked_and_new_contracts_are_not(project: Path) -> None:
@@ -287,7 +351,9 @@ def test_from_source_paths_are_checked_and_new_contracts_are_not(project: Path) 
     fresh["tag"] = "new"
     raw["components"].append(fresh)
 
-    result = validate_solidity_connectivity(FromSourceApplication.model_validate(raw), MAIN_ID, project)
+    result = validate_solidity_connectivity(
+        FromSourceApplication.model_validate(raw), MAIN_ID, project, fs_forbidden_read
+    )
 
     assert result is not None
     assert "Contract Ledger declares path" in result
@@ -335,6 +401,7 @@ async def _analyze(ctx: _Ctx, project: Path) -> SourceApplication | None:
         [],
         MAIN_ID,
         project_root=project,
+        forbidden_read=fs_forbidden_read,
         system_template=ANALYSIS_SYSTEM_TEMPLATE,
         initial_template=ANALYSIS_INITIAL_TEMPLATE,
         validate=validate_solidity_connectivity,

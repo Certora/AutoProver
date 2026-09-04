@@ -2,10 +2,11 @@ import enum
 import logging
 import os
 from dataclasses import dataclass
-from pathlib import Path, PurePath, PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Mapping, NotRequired, Any, Callable, TypedDict
 
 from graphcore.graph import MessagesState, FlowInput
+from graphcore.tools.vfs import GlobalExcludeArg, make_exclude_pred
 
 
 from composer.spec.context import (
@@ -19,7 +20,7 @@ from composer.spec.system_model import (
 )
 from composer.spec.types import SourceIdentifier
 from composer.spec.service_host import ServiceHost, Sort
-from composer.spec.util import fs_forbidden_read, fs_withheld_subtree, slugify_filename
+from composer.spec.util import fs_withheld_subtree, slugify_filename
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 from composer.diagnostics.budget import budget_monitor
 
@@ -59,9 +60,10 @@ class _PathFault(enum.Enum):
     WITHHELD = "is not readable through your file tools; name a file they hand back instead."
 
 
-def _path_fault(root: Path, declared: str) -> _PathFault | None:
+def _path_fault(root: Path, declared: str, withheld: Callable[[str], bool]) -> _PathFault | None:
     """What is wrong with a declared source path, or ``None`` when it names a file under *root*
-    that the agent's own file tools hand back.
+    that the agent's own file tools hand back. *withheld* is the run's own ``forbidden_read``,
+    normalized, so the check asks the same question the tools serving those files answer.
 
     Containment is lexical — relative, and never stepping up out of the root. Resolving the path
     would follow symlinks, and a dependency tree symlinked in under ``lib/`` or ``node_modules/``
@@ -81,29 +83,34 @@ def _path_fault(root: Path, declared: str) -> _PathFault | None:
         return _PathFault.DIRECTORY
     if not candidate.is_file():
         return _PathFault.MISSING
-    if fs_forbidden_read(PurePath(declared)):
+    if withheld(declared):
         return _PathFault.WITHHELD
     return None
 
 
-def _readable_files_named(root: Path, names: set[str]) -> dict[str, list[str]]:
+def _readable_files_named(
+    root: Path, names: set[str], withheld: Callable[[str], bool]
+) -> dict[str, list[str]]:
     """Project-root-relative paths of every readable file whose base name is in *names*, from a
     single walk of the tree.
 
     One walk for all the wanted names rather than one per name: a project that sits a directory
     below the root drops the same leading component from every path it declares, so a whole
-    submission's worth of distinct base names goes wrong together. Wholly withheld directories are
-    pruned on the way down instead of filtered out of the results, which keeps a report directory
-    or a ``.certora_internal`` tree off the walk entirely. This runs while the agent waits on its
-    retry, so both matter.
+    submission's worth of distinct base names goes wrong together. This runs while the agent waits
+    on its retry, so the cost of the walk itself matters: ``fs_withheld_subtree`` prunes prover and
+    VCS scratch on the way down, keeping a report directory or a ``.certora_internal`` tree off the
+    walk entirely. That prune is a cost measure, not the readability rule — *withheld* is, and it
+    cannot serve as a prune, since a directory it excludes whole (``lib/``, say) still holds .sol
+    the agent may read.
     """
     found: dict[str, list[str]] = {name: [] for name in names}
     for dirpath, dirnames, filenames in os.walk(root):
         rel_dir = Path(dirpath).relative_to(root)
         dirnames[:] = [d for d in dirnames if not fs_withheld_subtree(rel_dir / d)]
         for filename in filenames:
-            if filename in found and not fs_forbidden_read(rel_dir / filename):
-                found[filename].append((rel_dir / filename).as_posix())
+            rel = (rel_dir / filename).as_posix()
+            if filename in found and not withheld(rel):
+                found[filename].append(rel)
     return {name: sorted(paths) for name, paths in found.items()}
 
 
@@ -152,19 +159,23 @@ class _PathComplaint:
         )
 
 
-def _path_complaints(app: BaseApplication, project_root: Path) -> list[str]:
+def _path_complaints(
+    app: BaseApplication, project_root: Path, forbidden_read: GlobalExcludeArg
+) -> list[str]:
     """Every declared source path in *app* that names no readable file under *project_root*,
-    worded for the agent's retry."""
+    worded for the agent's retry. *forbidden_read* is normalized once here rather than per path,
+    so its regex form is compiled once for the whole submission."""
+    withheld = make_exclude_pred(forbidden_read)
     complaints: list[_PathComplaint] = []
     for c in app.components:
         if isinstance(c, SourceExplicitContract | ExistingFromSource):
-            fault = _path_fault(project_root, c.path)
+            fault = _path_fault(project_root, c.path, withheld)
             if fault is not None:
                 complaints.append(
                     _PathComplaint(f"Contract {c.solidity_identifier}", c.path, fault)
                 )
         elif isinstance(c, SourceExternalActor) and c.path is not None:
-            fault = _path_fault(project_root, c.path)
+            fault = _path_fault(project_root, c.path, withheld)
             if fault is not None:
                 complaints.append(_PathComplaint(
                     f"External actor {c.name}", c.path, fault,
@@ -175,12 +186,15 @@ def _path_complaints(app: BaseApplication, project_root: Path) -> list[str]:
         PurePosixPath(complaint.declared).name
         for complaint in complaints if complaint.fault is _PathFault.MISSING
     }
-    same_named = _readable_files_named(project_root, wanted) if wanted else {}
+    same_named = _readable_files_named(project_root, wanted, withheld) if wanted else {}
     return [complaint.render(same_named) for complaint in complaints]
 
 
 def validate_solidity_connectivity(
-    app: BaseApplication, expected_main_id: SourceIdentifier | None, project_root: Path | None
+    app: BaseApplication,
+    expected_main_id: SourceIdentifier | None,
+    project_root: Path | None,
+    forbidden_read: GlobalExcludeArg,
 ) -> str | None:
     """Connectivity/shape validation for the Solidity model *family*: typed over
     ``BaseApplication`` because it checks only the contract/actor/interaction graph that
@@ -188,15 +202,19 @@ def validate_solidity_connectivity(
     ``FromSourceApplication`` all share. Both callers name it directly; neither can use the
     other's ``Ecosystem.validate_analysis``, which is narrowed to one ``system_model``.
 
-    The source-carrying subtypes additionally declare project-root-relative paths, and
-    ``project_root`` is the tree those are required to name a file in; ``None`` means the run has
-    no source tree, where no component declares a path in the first place. Path complaints join
-    the same accumulated message as the graph ones, so a submission wrong in both ways is
-    corrected in a single retry."""
+    The source-carrying subtypes additionally declare project-root-relative paths, and the tree
+    those are required to name a file in travels as a pair: ``project_root``, and the
+    ``forbidden_read`` the run serves that tree through, so a path is held to the rule the agent's
+    own file tools apply rather than to a default. ``project_root`` is ``None`` when the run has no
+    source tree, where no component declares a path in the first place. Path complaints join the
+    same accumulated message as the graph ones, so a submission wrong in both ways is corrected in
+    a single retry."""
     # The path complaints lead: they are gathered in one go so the tree behind the relocation
     # hints is walked once, and whether there are any decides if the reference block below
     # carries the path frame.
-    path_errors: list[str] = [] if project_root is None else _path_complaints(app, project_root)
+    path_errors: list[str] = (
+        [] if project_root is None else _path_complaints(app, project_root, forbidden_read)
+    )
     errors: list[str] = list(path_errors)
     known_components: dict[str, set[str]] = {}
     known_external: set[str] = set()
@@ -279,9 +297,10 @@ async def run_component_analysis[T: BaseApplication](
     expected_main_id: SourceIdentifier | None = None,
     *,
     project_root: Path | None,
+    forbidden_read: GlobalExcludeArg,
     system_template: TypedTemplate[AnalysisPromptParams],
     initial_template: TypedTemplate[AnalysisPromptParams],
-    validate: Callable[[T, SourceIdentifier | None, Path | None], str | None],
+    validate: Callable[[T, SourceIdentifier | None, Path | None, GlobalExcludeArg], str | None],
 ) -> T | None:
     """Analyze application components from a system doc and optionally source code.
 
@@ -292,8 +311,10 @@ async def run_component_analysis[T: BaseApplication](
     no-doc prompt branch and never dereferences a missing ``content``.
 
     ``project_root`` is the tree the validator resolves any source paths the model declares
-    against; it is required (not defaulted) so a new call site has to say what the model's paths
-    mean, and is ``None`` only when the run has no source tree.
+    against, and ``forbidden_read`` is what that tree is served through, so the validator holds a
+    path to the same readability rule the agent's file tools do. Both are required (not defaulted)
+    so a new call site has to say what the model's paths mean; ``project_root`` is ``None`` only
+    when the run has no source tree.
 
     The cache is the other way into an analyzed model, so a hit is held to the same validation a
     freshly generated model is. Its key covers the project and the contract, nothing about the
@@ -303,7 +324,7 @@ async def run_component_analysis[T: BaseApplication](
     """
 
     def _check(app: T) -> str | None:
-        return validate(app, expected_main_id, project_root)
+        return validate(app, expected_main_id, project_root, forbidden_read)
 
     if (cached := await child_ctxt.cache_get(ty)) is not None:
         stale = _check(cached)
