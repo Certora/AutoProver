@@ -14,10 +14,12 @@ not the language the AutoProver backend is implemented in (see :class:`Language`
 Solana model + prompts and reuses the shared ``RUST`` language facet. See ``docs/ecosystem-abstraction.md``.
 """
 
+import re
 from dataclasses import dataclass
 from pathlib import PurePath
 from typing import Any, Callable, Collection, Literal, Mapping, TypedDict
 
+from composer.layout import INTERNAL_DIR
 from composer.spec.context import SourceCode
 from composer.spec.code_explorer import CodeExplorerPromptParams
 from composer.spec.gen_types import TypedTemplate
@@ -250,13 +252,38 @@ EVM: EvmEcosystem = Ecosystem(
 #: Cargo/Anchor project layout: hide build output, VCS, lockfiles, and the JS side; keep the
 #: crate sources and `tests/`. A pattern suffices here — unlike the Foundry-shaped
 #: ``fs_forbidden_read``, nothing needs carving back out of an excluded directory.
-RUST_FORBIDDEN_READ = r"(^target/.*)|(^\.git.*)|(^node_modules/.*)|(.*\.lock$)"
-# NOTE: the confined-build scratch dirs (``.sandbox_cargo`` / ``.sandbox_rustup`` /
-# ``.sandbox_tmp`` and nested ``target/``) also have to be excluded — a build fills them with
-# hundreds of MB the source tools' file-listing would pull into the model's context — but that
-# extension lives with the *backend* that runs confined Rust builds inside the workdir. Nothing in
-# the front half, and nothing in the Rust application framework itself, creates them: a Rust
-# backend need not build a crate to validate the program, nor use the sandbox at all.
+#: The second group covers the hundreds of MB of build and scratch output a confined Rust build
+#: generates *inside* the workdir, which the source tools' file listing would otherwise pull into
+#: the model's context:
+#:
+#: * ``INTERNAL_DIR`` — the whole of it, which is what that directory is for: the sandbox's
+#:   per-run scratch (a private ``CARGO_HOME`` holding an entire cargo registry — measured at
+#:   730 MB on one Solana program), a run's diagnostics, and a backend's own accumulating output.
+#:   Named as a whole rather than subdirectory by subdirectory, because the next thing to grow
+#:   without bound is the one nobody remembered to add. This matches ``fs_forbidden_read``, which
+#:   has always withheld the directory whole for Solidity.
+#: * **the same directory nested anywhere below the root**, which is not the same rule and was
+#:   learned by leaving it out. A CVLR run builds in a working copy under the project, and the
+#:   sandbox puts that build's private ``CARGO_HOME`` inside *it* — so the cargo registry sat at
+#:   ``.cvlr_work/build/.certora_internal/sandbox/cargo/`` where the anchored pattern could not
+#:   see it. One ``list_files`` returned 28,904 lines, 28,739 of them from that tree, and the
+#:   authoring agent's next request was 2,272,575 tokens against a 1,000,000 limit.
+#: * nested ``target/`` — cargo output below the root, which the anchored ``^target/`` misses.
+#:
+#: This was deferred to "the backend that runs confined Rust builds", on the grounds that nothing
+#: in the front half or the Rust framework creates these. That backend now exists and its CLI
+#: hands this very pattern to its source tools, so the note has become the rule.
+RUST_FORBIDDEN_READ = "|".join(
+    (
+        r"(^target/.*)",
+        r"(^\.git.*)",
+        r"(^node_modules/.*)",
+        r"(.*\.lock$)",
+        rf"(^{re.escape(INTERNAL_DIR.as_posix())}/.*)",
+        rf"(.*/{re.escape(INTERNAL_DIR.as_posix())}/.*)",
+        r"(.*/target/.*)",
+    )
+)
 
 RUST = Language(
     name="rust",

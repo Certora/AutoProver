@@ -16,6 +16,7 @@ import os
 import shutil
 from pathlib import Path
 
+from composer.layout import INTERNAL_DIR
 from composer.sandbox.policy import SandboxPolicy
 
 # Benign build vars passed through to the child (values read from the current env).
@@ -34,6 +35,27 @@ DEFAULT_ENV_PASSTHROUGH: tuple[str, ...] = (
     "SSL_CERT_FILE",
     "SSL_CERT_DIR",
 )
+
+#: The private, per-run scratch directories a sandboxed build gets *under the workdir* (see
+#: :func:`sandbox_cargo_home` and the ``TMPDIR`` redirect in :func:`rust_build_policy` for why each
+#: is private rather than shared). They live under ``.certora_internal/``, where every other
+#: generated, non-source, non-deliverable output goes (``AUTOPROVE_INTERNAL_DIR``,
+#: ``FOUNDRY_INTERNAL_DIR``) — so a project that already ignores that directory ignores these too,
+#: and a copy or clean that skips it skips these too.
+#:
+#: **Not a contradiction of the rule next door.** ``composer.spec.cvlr.pipeline.WORK_DIR`` is
+#: deliberately *outside* ``.certora_internal`` because the prover's source collector skips that
+#: directory, and a working tree living there uploads no Rust. These are the other case: a private
+#: ``CARGO_HOME`` and a scratch ``TMPDIR`` are not source and must never be collected, so being
+#: skipped is the point rather than the hazard.
+#:
+#: Named constants because consumers outside this module have to agree on the spellings — notably
+#: ``composer.pipeline.ecosystem.RUST_FORBIDDEN_READ``, which hides them from the source tools'
+#: file listing so the hundreds of MB they hold never reach the model's context.
+SANDBOX_INTERNAL_DIR = INTERNAL_DIR / "sandbox"
+SANDBOX_CARGO_DIR = SANDBOX_INTERNAL_DIR / "cargo"
+SANDBOX_TMP_DIR = SANDBOX_INTERNAL_DIR / "tmp"
+
 
 # Read-only system directories the toolchain + its dynamic linker need. ``/etc`` is
 # included because glibc NSS (``getpwuid`` via ``getuser``, CA-cert lookup) reads
@@ -73,7 +95,7 @@ def sandbox_cargo_home(workdir: str | Path) -> Path:
     a shared *read-only* index/cache to avoid re-download is a deferred optimization
     (command-sandbox.md §11 item 5).
     """
-    return Path(workdir).resolve() / ".sandbox_cargo"
+    return Path(workdir).resolve() / SANDBOX_CARGO_DIR
 
 
 def shared_cargo_ro_paths(cargo_home: str | Path) -> tuple[Path, ...]:
@@ -150,7 +172,7 @@ def rust_build_policy(
     # — notably the linker, which writes to $TMPDIR (default /tmp) during `cargo build` —
     # work without granting the shared /tmp (which may hold host/other-run secrets and
     # would defeat the escape test). Created here so $TMPDIR points at an existing dir.
-    sandbox_tmp = wd / ".sandbox_tmp"
+    sandbox_tmp = wd / SANDBOX_TMP_DIR
     sandbox_tmp.mkdir(parents=True, exist_ok=True)
     for var in ("TMPDIR", "TMP", "TEMP"):
         env[var] = str(sandbox_tmp)

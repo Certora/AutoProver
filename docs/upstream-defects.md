@@ -18,7 +18,8 @@ entry, and unlike the others it was corrupting our own output rather than merely
 
 **Group T — the recommended starting template.** A public repository, and every one of these has a
 concrete fix we have already verified locally. `composer/spec/cvlr/env_paths.py` works around T1 at
-emit time; the rest are worked around by not reproducing them.
+emit time and `composer/spec/cvlr/munge.py` works around T7 by writing the fork redirect the
+template omits; the rest are worked around by not reproducing them.
 
 One note on naming, because it constrains how T2 is written up: this repository is public, so no
 client, project or repository names appear in it. T2 is about a canonical file that carries one, and

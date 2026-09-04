@@ -21,6 +21,7 @@ until the bug disappeared. The marking is what makes that an explicit, recorded 
 import asyncio
 import dataclasses
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import (
@@ -46,6 +47,7 @@ from graphcore.tools.schemas import (
 )
 
 from composer.authoring.state import ValidationStamper, make_validation_stamper
+from composer.diagnostics.timing import get_run_summary
 from composer.cargo.sbf import Built, PlatformToolsMissing, SbfRun
 from composer.cargo.session import CargoSession, CompileFailed, Compiled
 from composer.cargo.symbols import defined_functions, nearest, unmatched
@@ -190,7 +192,46 @@ class HarnessTarget:
         )
 
 
-class _CaptureCallbacks(ProverCallbacks):
+class _RunAccounting(ProverCallbacks):
+    """The run's prover bookkeeping: the link, the prover's own runtime, and the wall clock.
+
+    ``ProverCallbacks``' defaults are no-ops, so a backend that overrides only the events it cares
+    about silently opts out of all three — which is how every CVLR run so far reported zero prover
+    time while spending most of its wall clock in the cloud. These are the ``_SpecCallbacks`` (EVM)
+    set, and they are what ``summary.format()``, the per-task link and ``job_info.json``'s
+    ``prover_usage`` are computed from.
+
+    A base of its own rather than three more methods on :class:`_CaptureCallbacks`, because the two
+    are needed independently: a submission with no analysis store still costs prover time.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._started_mono: float | None = None
+
+    @override
+    async def on_prover_run(self, args: list[str]) -> None:
+        self._started_mono = time.perf_counter()
+
+    @override
+    async def on_prover_link(self, link: str) -> None:
+        get_run_summary().record_prover_link(link)
+
+    @override
+    async def on_prover_runtime(self, ms: int) -> None:
+        """The prover's own queue-free start-to-end time, which is the number a cost question is
+        actually about — distinct from the wall clock in :meth:`on_prover_result`, which includes
+        however long the job sat in the queue."""
+        get_run_summary().record_prover_runtime(ms)
+
+    @override
+    async def on_prover_result(self, results: dict[str, RuleResult]) -> None:
+        if self._started_mono is not None:
+            get_run_summary().add_prover_call(time.perf_counter() - self._started_mono)
+            self._started_mono = None
+
+
+class _CaptureCallbacks(_RunAccounting):
     """Keeps each violated rule's analysis where the report phase can find it.
 
     Two responsibilities, and the split between them is the point:
@@ -225,6 +266,7 @@ class _CaptureCallbacks(ProverCallbacks):
         # before the handler writes fresh ones is what stops a rule that failed in an earlier
         # iteration and passes now from surviving into the report as a current failure. Fires before
         # the handler by contract, so what is recorded below is always this run's.
+        await super().on_prover_result(results)
         self._incomplete = {}
         for result in results.values():
             if result.status != "VIOLATED":
@@ -447,7 +489,7 @@ class VerifyRules(
                         deps.target.session,
                         prepared,
                         prover_opts=deps.prover_opts,
-                        callbacks=capture if capture is not None else ProverCallbacks(),
+                        callbacks=capture if capture is not None else _RunAccounting(),
                         cex=(
                             analysis.handler(self.state) if analysis else UnanalyzedCexHandler()
                         ),

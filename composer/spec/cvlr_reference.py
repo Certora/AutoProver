@@ -160,10 +160,22 @@ class ChainReference:
     #: The chain crate every project on this chain declares.
     chain: CrateRelease
     platform: PlatformGeneration
-    #: Chain crates that model one specific on-chain program rather than the chain itself, so a
-    #: target declares them only if it verifies that program. Separate from :attr:`chain` because
-    #: the two answer different questions: the corpus is compiled against all of them, while a
-    #: scaffold that declared all of them would add a dependency nobody uses.
+    #: Chain crates that model one specific on-chain program rather than the chain itself — the SPL
+    #: token account model, the stake program's state. Separate from :attr:`chain` because they
+    #: answer a narrower question, not because a project gets fewer of them: :meth:`scaffold_crates`
+    #: declares all of them.
+    #:
+    #: **That is the reverse of what this said, and the reason is that nothing can add one later.**
+    #: The original argument was that scaffolding every specialization "would add a dependency
+    #: nobody uses" — true, and the cost is one compile of a small optional crate behind the
+    #: ``certora`` feature. What it weighed that against was wrong: the alternative is not
+    #: declaring it on demand, because there is no demand-time. The author writes spec code and has
+    #: no manifest-editing tool (deliberately — a dependency changes how the project builds for
+    #: everyone, which the scaffold refuses to guess at), and the munge editor's vocabulary is
+    #: attributes on program source. So a specialization the scaffold omits is a capability the run
+    #: cannot reach at all, and the first target that needed one — a stake pool, whose invariants
+    #: are pool-token supply against staked lamports — would have been handed neither of the two
+    #: libraries that model what it does.
     specializations: tuple[CrateRelease, ...] = ()
     unpublished: tuple[UnpublishedCapability, ...] = ()
 
@@ -172,8 +184,14 @@ class ChainReference:
         return (self.core, self.chain, *self.specializations)
 
     def scaffold_crates(self) -> tuple[CrateRelease, ...]:
-        """What a fresh project declares in its ``Cargo.toml``."""
-        return (self.core, self.chain)
+        """What a fresh project declares in its ``Cargo.toml`` — every crate in the reference set.
+
+        Identical to :meth:`crates` today. Kept as its own method because the two are asking
+        different questions — "what was the corpus compiled against" and "what does this project
+        pin" — and a future reference set that names a crate no project should declare would need
+        them to differ again.
+        """
+        return self.crates()
 
     def cargo_dependencies(self) -> str:
         """A ``[dependencies]`` body pinning this reference set, for a probe or scaffold crate.
@@ -193,7 +211,15 @@ _CORE = CrateRelease("cvlr", "0.6.1")
 SOLANA = ChainReference(
     core=_CORE,
     chain=CrateRelease("cvlr-solana", "0.5.0"),
-    specializations=(CrateRelease("cvlr-solana-stake", "0.5.0"),),
+    specializations=(
+        CrateRelease("cvlr-solana-stake", "0.5.0"),
+        # The SPL token account model — nondet token accounts and mints, and the token instruction
+        # summaries. This was recorded as an *unpublished* capability, on the strength of a real
+        # project reaching it through a `[patch.crates-io]` git redirect. That project's own comment
+        # says why ("use git dependency until v0.5 ... is released"), and the release happened: it
+        # is on crates.io at 0.5.0, the same version as the chain crate it was factored out of.
+        CrateRelease("cvlr-spl-token", "0.5.0"),
+    ),
     platform=PlatformGeneration(
         label="solana-program 2.x (the last monolithic line)",
         crates=(CrateRequirement("solana-program", "2.2"),),
@@ -243,17 +269,6 @@ SOLANA = ChainReference(
             # its never-inline default. It matched two symbols on the first real target this backend
             # was pointed at, because the layer had moved out from under it.
             NamespacePattern("solana_program::.*", "solana_[a-z0-9_]*::.*"),
-        ),
-    ),
-    unpublished=(
-        UnpublishedCapability(
-            names=("cvlr-spl-token", "cvlr-solana-token"),
-            missing=(
-                "the SPL Token account model — nondet token accounts and mints, and the token "
-                "instruction summaries. It was factored out of cvlr-solana on the unreleased 0.6 "
-                "line and published under neither name, so entries needing it must model the "
-                "token account themselves. Revisit the corpus if it is ever published."
-            ),
         ),
     ),
 )

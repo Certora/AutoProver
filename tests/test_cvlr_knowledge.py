@@ -715,3 +715,33 @@ def test_the_test_scenario_still_has_the_core_the_example_descends_to():
     # munge tool has no trigger anywhere in this fixture (plan §7.6.6).
     assert vault.count("?;") >= 1
     assert "vault_accounting::apply_withdrawal(" in vault, "the handler must call it"
+
+
+def test_the_author_is_not_sent_to_a_file_it_cannot_write():
+    """``put_harness`` replaces one file — this unit's module under ``specs/`` — and the munge editor
+    writes the program's own source. Nothing writes the harness siblings the scaffold creates.
+
+    The prompt used to say to add a ``CvlrLog`` impl "in `certora/log.rs`", attached to the habit it
+    calls the highest-return one on this backend, and no tool could carry that out. A trait impl is
+    legal anywhere in the crate when the type is the crate's own, so the instruction costs nothing to
+    honour in the place the author can actually write.
+    """
+    prompt = _author_system_prompt()
+    assert "certora/log.rs" not in prompt
+    assert "in your own harness module" in prompt
+    # And it says so, rather than leaving the agent to discover it by failing.
+    assert "no tool that writes them" in prompt
+
+
+def test_the_author_is_told_how_to_quantify_over_an_enum():
+    """``nondet()`` covers scalars and a struct can be written field by field, but a variant of an
+    enum has no inline spelling — so a program with enum inputs needs a ``Nondet`` impl, and the
+    first real target's hand-written harness is three of them out of four.
+
+    The catch-all arm is asserted because its absence is the silent failure: a ``match`` naming only
+    the discriminants it lists quantifies over a subset of the enum while reading like a proof about
+    all of it."""
+    prompt = _author_system_prompt()
+    assert "impl cvlr::nondet::Nondet for" in prompt
+    assert "match nondet::<u64>()" in prompt
+    assert "catch-all arm" in prompt

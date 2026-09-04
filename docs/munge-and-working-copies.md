@@ -17,8 +17,10 @@
 > by one tree for the run, with each unit's module behind its own cargo feature —
 > [single-working-tree.md](single-working-tree.md) is the argument and what was built. §7's trigger 3
 > is what fired, one step earlier than expected: the per-unit arithmetic did not survive being
-> checked against what cargo actually caches. §4's charter and §5's argument about *who* applies a
-> munge are untouched, though §4's count of the vocabulary is wrong — see the note there.
+> checked against what cargo actually caches. §5's argument about *who* applies a munge has since
+> been settled the other way and built — program source has one owner, a munge editor agent with a
+> reviewer of its own ([who-edits-the-program.md](who-edits-the-program.md) §9) — and §4's charter
+> stands except for its count of the vocabulary; see the note there.
 
 **This document is a snapshot of reasoning, not a conclusion.** Every measurement in it was taken
 while the CVLR backend still had a blocking prover defect ([upstream-defects.md](upstream-defects.md)
@@ -157,13 +159,18 @@ results.
 
 ## 3. The reasoning chain
 
-> **Steps (1)–(4) no longer hold.** (1) is false as stated: the compile gate is whole-crate only
-> while every unit's module is compiled, and each is now behind its own cargo feature, so a module
-> that is `cfg`'d out is neither compiled nor in rustc's dep-info. (2), (3) and (4) were forced by
-> (1) and fall with it. **(5) and (6) survive, and for the reason given** — cargo's input is source
-> plus `CARGO_HOME` plus `target/`, so a VFS would still be the wrong instrument, and edits are still
-> real writes. What changed is that the writes are now *derived* from state rather than being the
-> state. [single-working-tree.md](single-working-tree.md) §4 is the difference.
+> **The whole chain is superseded.** (1)–(4) fell to
+> [single-working-tree.md](single-working-tree.md): the compile gate is whole-crate only while every
+> unit's module is compiled, and each is now behind its own cargo feature, so a `cfg`'d-out module is
+> neither compiled nor in rustc's dep-info; (2), (3) and (4) were forced by (1) and fall with it.
+>
+> **(5) and (6) were then said to survive. They do not** —
+> [the-tree-is-a-vfs.md](the-tree-is-a-vfs.md). (5) is an assumption about how a VFS materializes
+> (a temp dir per check) rather than a property of cargo, and the incremental persistent
+> materialization it treats as impossible is what `SharedTree` already does. (6) is false twice
+> over: `revert_munge` exists, and the overlay's remaining purchase — the author reading what the
+> build compiles — is exactly what its absence cost. A run against a real program died on a
+> 2,272,575-token prompt, 28,739 lines of which were the run's own working tree.
 
 Each step below was forced by the one above it. None of them is a preference, and only the last one
 is about munging at all.
@@ -229,9 +236,9 @@ logical behavior may not."*
 > `derive(Copy)` (2). Three of the six are now offered
 > ([who-edits-the-program.md](who-edits-the-program.md) §9.3).
 > The hooks matter most: they are in the pinned reference set (`cvlr-hook-0.6.1`, re-exported from
-> `cvlr` as `hook_on_entry` / `hook_on_exit`), this backend has never heard of them, and they are the
-> spec-side observation instrument §7 trigger 5 asks about. Rewriting this section against that
-> evidence has not been done.
+> `cvlr` as `hook_on_entry` / `hook_on_exit`), this backend had never heard of them when this note
+> was written and the editor now offers both, and they are the spec-side observation instrument §7
+> trigger 5 asks about. Rewriting this section against that evidence has not been done.
 >
 > One thing the corpus also settles: `cvlr::mock_fn` takes a `when` parameter naming a cargo feature,
 > and the conf's `cargo_features` selects which mocks are live per run — kamino metavault declares
@@ -252,9 +259,10 @@ whose every source hunk is one of six kinds:
 | a hand-unrolled loop | 1 | the only hunk that is none of the above, and the only one its author commented |
 
 Five of six are a CVLR attribute or the `cfg`/`use` bookkeeping those attributes need. Both
-attributes are in the pinned reference set. The backend exposes the first two as `munge_function`,
-and that closed set **is** the give-up boundary: a change needing a third kind is a `record_skip`
-naming the kind it would have needed (plan §7.6.4, closing open question 4).
+attributes are in the pinned reference set. The backend first exposed these two as `munge_function`;
+the vocabulary is now five, and the closed set **is** the give-up boundary either way: a change
+needing a kind that is not in it is a `record_skip` naming the kind it would have needed (plan
+§7.6.4, closing open question 4).
 
 ---
 
@@ -376,26 +384,31 @@ check these rather than to re-read the argument.
 
 Carried here so §7's revisit has them in one place. Ranked by what a wrong answer costs.
 
-1. ~~**The judge cannot see what the author changed.**~~ **Closed** — the CVLR judge is contextual,
-   and `HarnessAssumptions` (the summaries and the munges, each with the author's justification)
-   rides into its input on every review. See plan §7.7.5. Note what remains uncovered: EVM's
-   reviewer receives a *diff* and its approval is void the moment anything changes, whereas this
-   judge receives a description and its stamp is invalidated by `tuning_history` rather than by the
-   judge itself. Same effect, different mechanism, and only the digest enforces it.
-2. **Nothing checks that a munge reached the build.** Plan §5.2 predicted this analogue of
-   `EditsNotCompiled` and it is not built. The Rust failure is quiet: an attribute inserted into a
-   file the `certora` feature gates out changes nothing and reports nothing, and the report still
-   carries a source-edit record claiming a change that had no effect. **Half closed**: a munge whose
-   *function* cannot be found on replay is now a typed refusal put in front of the author rather than
-   a log line ([single-working-tree.md](single-working-tree.md) §4.3). A munge that lands in a file
-   the feature gates out is still silent.
-3. **Munges accumulate and cannot be undone — half closed, and the half that is left is the tool.**
-   The *representation* now supports removal: each munged file is rebuilt from the pristine copy and
-   replayed from state on every build, so a `FunctionMunge` that is not in state is not on disk,
-   including across a resume. That is what makes a rewound checkpoint mean something, and it is a
-   property a text overlay could not have had. But no tool removes one — `merge_munges` appends and
-   deduplicates, and `munge_function` is its only writer — so *within* a run an author still cannot
-   undo a munge it regrets. A `revert_munge` is now a small thing to add and was not added; the
+1. ~~**The judge cannot see what the author changed.**~~ **Closed, twice over.** The CVLR judge is
+   contextual, and `HarnessAssumptions` (the summaries and the munges, each with its justification)
+   rides into its input on every review — plan §7.7.5. What this entry then recorded as still
+   uncovered was that EVM's reviewer receives a *diff* while this judge received a description; that
+   is closed too. `HarnessAssumptions` now carries a diff computed from the munge records, and the
+   briefing tells the judge to read it *rather than* the summary, because the summary is the
+   editor's account of its own work ([who-edits-the-program.md](who-edits-the-program.md) §9.1).
+2. ~~**Nothing checks that a munge reached the build.**~~ **Closed.** Plan §5.2 predicted this
+   analogue of `EditsNotCompiled`, and the Rust failure was the quietest one this backend had: an
+   attribute inserted into a file no enabled feature reaches changes nothing, reports nothing, and
+   leaves the report claiming a source edit that did not happen. Two halves, closed separately. A
+   munge whose *function* cannot be found on replay is a typed refusal put in front of the author
+   ([single-working-tree.md](single-working-tree.md) §4.3). And the editor's submit gate now reads
+   cargo's dep-info — the `.d` file beside the artifact for *this* feature variant, identified by a
+   file only this build compiles — and answers whether the munged paths are in it; a build whose
+   dep-info cannot be identified reports `NotChecked` rather than passing
+   ([who-edits-the-program.md](who-edits-the-program.md) §9.2).
+3. ~~**Munges accumulate and cannot be undone.**~~ **Closed.** The *representation* already
+   supported removal: each munged file is rebuilt from the pristine copy and replayed from state on
+   every build, so a `FunctionMunge` that is not in state is not on disk, including across a resume
+   — which is what makes a rewound checkpoint mean something and is a property a text overlay could
+   not have had. What was missing was the tool, and `revert_munge` is now on the author's belt: with
+   program-source edits owned by the editor agent, the author's say over an edit it regrets *is* the
+   undo ([who-edits-the-program.md](who-edits-the-program.md) §9.1, §9.4). The history log EVM's
+   edit store keeps is still absent.
    history log EVM's edit store keeps is still absent.
 4. **No findings-staleness oracle.** Not yet applicable — CVLR findings are synthesized per run, so
    there is no cross-version store for an oracle to answer about. It becomes a real gap the moment

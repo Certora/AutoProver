@@ -13,6 +13,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from composer.layout import INTERNAL_DIR
+from composer.sandbox.recipes import SANDBOX_CARGO_DIR
+
 from composer.cargo.depinfo import compiled_sources
 from composer.spec.cvlr import editor as editor_mod
 from composer.spec.cvlr.editor import (
@@ -160,12 +163,12 @@ async def test_a_munge_of_a_dependency_is_refused(tmp_path: Path):
         MungeFunction,
         _target(tmp_path),
         _editor_state(),
-        path=".sandbox_cargo/registry/src/idx/anchor-lang-0.31.1/src/error.rs",
+        path=str(SANDBOX_CARGO_DIR / "registry/src/idx/anchor-lang-0.31.1/src/error.rs"),
         function="fmt",
         munge=ApplyEarlyPanic(),
         why="w",
     )
-    assert isinstance(answer, str) and ".sandbox_cargo" in answer
+    assert isinstance(answer, str) and INTERNAL_DIR.name in answer
 
 
 @pytest.mark.asyncio

@@ -183,7 +183,9 @@ def test_the_manifest_a_fresh_project_ends_up_with_still_parses(tmp_path):
     apply(plan, workspace.root)
     parsed = tomllib.loads((tmp_path / "Cargo.toml").read_text())
 
-    assert parsed["features"]["certora"] == ["dep:cvlr", "dep:cvlr-solana"]
+    assert parsed["features"]["certora"] == [
+        "dep:cvlr", "dep:cvlr-solana", "dep:cvlr-solana-stake", "dep:cvlr-spl-token",
+    ]
     # Optional is what keeps CVLR out of a release build, and what makes `dep:` legal above.
     assert parsed["dependencies"]["cvlr"] == {"version": "=0.6.1", "optional": True}
     metadata = parsed["package"]["metadata"]["certora"]
@@ -226,7 +228,10 @@ def test_a_feature_table_that_exists_is_edited_rather_than_reopened(tmp_path):
     assert parsed["features"]["no-entrypoint"] == []
     # no-entrypoint leads because suppressing the program's entrypoint is what lets a rule call a
     # handler directly; it is enabled only because this package has it.
-    assert parsed["features"]["certora"] == ["no-entrypoint", "dep:cvlr", "dep:cvlr-solana"]
+    assert parsed["features"]["certora"] == [
+        "no-entrypoint", "dep:cvlr", "dep:cvlr-solana", "dep:cvlr-solana-stake",
+        "dep:cvlr-spl-token",
+    ]
 
 
 def test_a_package_with_no_entrypoint_feature_does_not_get_one_invented(tmp_path):
@@ -343,6 +348,35 @@ def test_the_platform_is_not_second_guessed_when_the_project_pins_cvlr_itself(tm
         cvlr_resolved={"cvlr": "0.4.1", "cvlr-solana": "0.4.5"},
     )
     assert not plan.blocked
+
+
+def test_specializations_are_withheld_from_a_project_that_chose_its_own_cvlr_line(tmp_path):
+    """The scaffold sets the reference set up whole, or leaves the project's choice alone.
+
+    Mixing is the failure this prevents: a project on the 0.4 line given a 0.5.0 specialization gets
+    two generations of ``AccountInfo`` in one graph — not a warning, a build that does not compile.
+    It also keeps the exemption above meaningful, since anything introduced re-arms the platform
+    gate.
+    """
+    manifest = STANDALONE.replace(
+        "[dependencies]\nsolana-program",
+        '[dependencies]\ncvlr = "0.4"\ncvlr-solana = "0.4"\nsolana-program',
+    )
+    plan, project = _plan(
+        tmp_path,
+        manifest=manifest,
+        workspace_manifest=manifest,
+        platform="1.18.26",
+        cvlr_resolved={"cvlr": "0.4.1", "cvlr-solana": "0.4.5"},
+    )
+
+    written = "".join(
+        c.contents for c in plan.changes if getattr(c, "path", None) == Path("Cargo.toml")
+    )
+    # The positive half, so this cannot pass by writing nothing at all.
+    assert 'certora = ["dep:cvlr", "dep:cvlr-solana"]' in written
+    assert "cvlr-solana-stake" not in written
+    assert "cvlr-spl-token" not in written
 
 
 def test_a_partly_pinned_project_is_still_checked(tmp_path):

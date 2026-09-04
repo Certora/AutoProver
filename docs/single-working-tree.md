@@ -360,10 +360,13 @@ Two findings from the corpus survey that motivated this plan but belong in a rev
   universally sound when observation-only), `inline(never)` (5) and `derive(Copy)` (2).
 
 The hooks matter beyond bookkeeping: they are in the pinned reference set (`cvlr-hook-0.6.1`,
-re-exported from `cvlr` as `hook_on_entry`/`hook_on_exit`), this backend has never heard of them
-(no occurrence in `composer/spec/cvlr/`), and they are a spec-side observation instrument — which is
+re-exported from `cvlr` as `hook_on_entry`/`hook_on_exit`), this backend had never heard of them when
+this was written, and they are a spec-side observation instrument — which is
 [munge-and-working-copies.md](munge-and-working-copies.md) §7 trigger 5, and a plausible answer to
 trigger 1's already-observed case where a property wanted a state-transition function extracted.
+**Since acted on**: the munge editor offers both
+([who-edits-the-program.md](who-edits-the-program.md) §9.3), which leaves extraction as the one kind
+those skips wanted and the vocabulary still lacks.
 
 Separately: a fully separate spec crate — the Crucible shape — is **not** available, and the reason
 is not Rust versus Solidity. Crucible's harness can live outside the crate because it is black-box:

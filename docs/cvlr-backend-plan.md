@@ -52,7 +52,7 @@ source ─analyze─▶ App model ─extract─▶ properties ─formalize─▶
 | `backend_guidance` injection point in the property system prompt | **Built; Solana's text written** (§7.3.1) | [prop_inference.py:76](../composer/spec/prop_inference.py#L76), [cvlr/guidance.py](../composer/spec/cvlr/guidance.py) |
 | Per-component `units()` split | **Built** | both models |
 | Null Solana backend (front-half test double) | **Built** | [solana/null_backend.py](../composer/spec/solana/null_backend.py) |
-| Sandbox: Landlock+seccomp launcher, `rust_build_policy`, private per-run `CARGO_HOME`, offline | **Built, never driven from a Python backend** | [composer/sandbox/](../composer/sandbox/), [rust/run-confined/](../rust/run-confined/) |
+| Sandbox: Landlock+seccomp launcher, `rust_build_policy`, private per-run `CARGO_HOME`, offline | **Built; the CLI now defaults to it** (§7.8.1) — but every run so far, the expensive gate included, has been unconfined, so no CVLR build has yet been made under it | [composer/sandbox/](../composer/sandbox/), [rust/run-confined/](../rust/run-confined/) |
 | `project_toolchain` seam (the analyzed project's build system, keyed by `ChainTag`) | **Solana registered** (§7.2); Soroban still has no entry | [rustapp/toolchain.py](../composer/rustapp/toolchain.py), [cargo/toolchain.py](../composer/cargo/toolchain.py) |
 | Munge subsystem: editor agent, versioned edit store, VFS diff, compile-check gate, staleness oracle | **Built for EVM**; spine reusable | [source/munge/](../composer/spec/source/munge/) |
 | Prover result parsing (treeView JSON → `RuleResult`), cloud polling, callbacks | **Built, chain-neutral** | [prover/results.py](../composer/prover/results.py), [prover/cloud.py](../composer/prover/cloud.py) |
@@ -60,7 +60,10 @@ source ─analyze─▶ App model ─extract─▶ properties ─formalize─▶
 | RAG corpus registry (`KNOWLEDGE_BASES`, `rag_env`) | **`cvlr_kb` registered** — the first corpus in either map | [rag/db.py](../composer/rag/db.py), [tools/rag_env.py](../composer/tools/rag_env.py) |
 | CVLR corpus · CVLR KB articles | **Three manifests under one tag** (§7.3.1): published docs, generated crate reference, project-derived idioms — all produced in and shipped from the private repo | [rag/import_format.py](../composer/rag/import_format.py), [rag/html_manual.py](../composer/rag/html_manual.py) |
 | Preflight scaffold | **Done** (§7.4): deterministic, idempotent, refuses two decisions rather than guessing | [cvlr/scaffold.py](../composer/spec/cvlr/scaffold.py), [cvlr/preflight.py](../composer/spec/cvlr/preflight.py) |
-| Authoring loop | **Built** (§7.5), not yet exercised end to end. The feedback judge is contextual (§7.7.5): the author's summaries and munges ride into its input, since neither shows in the draft it reviews | [cvlr/author.py](../composer/spec/cvlr/author.py), [cvlr/pipeline.py](../composer/spec/cvlr/pipeline.py) |
+| Authoring loop | **Built and exercised end to end** (§7.5): successive gate runs against a real Anchor program have published harnesses, and what each found is recorded from §7.5.5 on. The feedback judge is contextual (§7.7.5): the author's summaries ride into its input, and since §7.10 so does the munge diff | [cvlr/author.py](../composer/spec/cvlr/author.py), [cvlr/pipeline.py](../composer/spec/cvlr/pipeline.py) |
+| Program-source edits | **Built, with one owner** (§7.6.6, §7.10): the munge editor agent holds the edit tools and a reviewer rules on the request; the author asks through `code_editor` and can `revert_munge` | [cvlr/editor.py](../composer/spec/cvlr/editor.py), [who-edits-the-program.md](./who-edits-the-program.md) |
+| Working tree | **One tree for the run**, each unit's module and each munge behind that unit's own cargo feature, one build permit | [cvlr/tree.py](../composer/spec/cvlr/tree.py), [single-working-tree.md](./single-working-tree.md) |
+| CLI entry points | **Built** (§7.8.1): `console-solana` / `tui-solana`, with the package resolved from the main program's owning crate, confinement on by default and the `cvlr_kb` corpus wired | [cvlr/entry.py](../composer/spec/cvlr/entry.py), [cli/console_solana.py](../composer/cli/console_solana.py) |
 | Solana CEX analysis | **Done** (§7.7): traces rendered per chain, analyses captured as findings evidence, and a violation that stopped on the prover's own assertion kept out of both | [prover/results.py](../composer/prover/results.py), [cvlr/verify.py](../composer/spec/cvlr/verify.py) |
 
 **Phase 0 (hands-on experience) is done.** Several team members have completed real Solana
@@ -242,21 +245,29 @@ What also changes: the **munge charter** ([templates/munge_charter.j2](../compos
 needs a CVLR version, and an explicit give-up boundary. EVM munging is bounded fixup; Solana
 munging can approach a rewrite, and the loop needs a stopping rule.
 
-**Both since done, and the CVLR charter is not a second template** (§7.6.3, §7.6.4). EVM's charter is
-a `.j2` because a separate munge agent reads it; on this backend the author holds `munge_function`
-itself, so the charter belongs in the author's own system prompt and a template would be the same
-rules stated twice. The structures converged anyway — EVM's three kinds and "Lines You Do Not Cross"
-against CVLR's two kinds and a boundary that is the vocabulary — which is some evidence the shape is
-right rather than local. The Solana charter came out *narrower* than the EVM one, not wider: the one
-real source munge in the corpus is almost entirely CVLR attributes, so "Solana munging can approach a
-rewrite" turned out to be true of one hunk in 1097 lines.
+**Both since done** (§7.6.3, §7.6.4), and the charter's home moved twice. It was first written into
+the author's own system prompt, on the reasoning that EVM's charter is a `.j2` only because a
+separate munge agent reads it, so a template here would state the same rules twice. That premise is
+gone: program source now has one owner, a munge editor agent with a reviewer of its own
+([who-edits-the-program.md](who-edits-the-program.md)), so the charter is a template pair again —
+`cvlr_munge_editor_system.j2` and `cvlr_munge_review_system.j2`. The structures converged anyway —
+EVM's three kinds and "Lines You Do Not Cross" against CVLR's five declared kinds and a boundary that
+*is* the vocabulary — which is some evidence the shape is right rather than local.
+
+"Solana munging can approach a rewrite" is still not what the corpus shows, but the first count
+behind that sentence was wrong in both directions: a wider survey finds source munging in nine of
+eleven projects rather than one, and finds the vocabulary is still attributes rather than rewrites
+([single-working-tree.md](single-working-tree.md) §7).
 
 The whole comparison — what each backend virtualizes, whether a subprocess can see it, what a
 per-unit workdir costs, and the chain of forced decisions behind both answers — is
-[munge-and-working-copies.md](munge-and-working-copies.md). **Revisit that reasoning once this
-backend verifies a real program end to end** (§7.10): every measurement in it is a *cost*, taken
-while P6 still blocked, so it weighs a working arrangement against a hypothetical one on cost
-alone.
+[munge-and-working-copies.md](munge-and-working-copies.md). It has **since been re-read and both of
+its answers reversed** (§7.10): the per-unit workdir is one shared tree
+([single-working-tree.md](single-working-tree.md)), and the author no longer edits the program
+itself ([who-edits-the-program.md](who-edits-the-program.md)). Its CVLR half is therefore a record of
+the reasoning rather than a description of the code, and the caveat it carries is why: every
+measurement in it is a *cost*, taken while P6 blocked and nothing had been verified end to end, so
+it weighed a working arrangement against a hypothetical one on cost alone.
 
 ### 5.3 Counterexamples are only as legible as the rule's `clog!`s
 
@@ -268,6 +279,11 @@ The other half is not a parsing problem — it is an **authoring-discipline** pr
 counterexample is interpretable only if the rule was written with `clog!` instrumentation of
 the values that matter. That pushes the work into prompts and KB articles ("instrument before
 you assert"), plus a lint in the compile gate that flags an assert with no logged operands.
+
+**The lint was not built, and the legibility problem turned out to be somewhere else.** The
+discipline lives in the authoring prompt and the judge's checklist (§7.5.1); what actually made
+Solana counterexamples readable was the renderer, because 95 % of a real trace is account
+materialization and EVM's frame filter was deleting the *failure* along with the noise (§7.7.1).
 
 The EVM-shaped calltrace analyzer ([analyzer/](../analyzer/)) does not port; a CVLR
 counterexample analyzer is new work, and it is chain-neutral (both chains log through `cvlr`).
@@ -406,7 +422,7 @@ Stated up front because it constrains the phase order.
   generated models — this is what catches a field rename breaking a prompt.
 - **Replay tapes.** A Solana smoke scenario under [test_scenarios/](../test_scenarios/) with a
   recorded tape (`generate-tape` skill) gives LLM-free end-to-end CI coverage, as with the EVM
-  and Foundry backends.
+  and Foundry backends. **Not built** — see §7.8, where it is the largest remaining item.
 - **Expensive gate.** One `expensive`-marked end-to-end test that submits a real cloud job,
   matching the existing convention (never run without `-m "not expensive"`).
 - **Routine gate unchanged**: `uv run --no-sync pytest tests/ -m "not expensive" -q` and
@@ -814,7 +830,7 @@ the crate source is present and authoritative — check it rather than guess.
 | `clog!` discipline | **In the prompt and in the judge's checklist**, not in a lint. See below |
 | Crate source in the authoring env | **Done** — bound to the author *and* the judge, and named as authoritative in both system prompts |
 | Property-feedback judge, skip accounting | **Reused** — `composer/authoring/` is already backend-neutral; this backend supplies wording, prompts and the mapping vocabulary |
-| Exercised end to end | **No.** Every gate and every deterministic part is unit-tested; nothing has yet authored a rule against a live prover |
+| Exercised end to end | **Yes** — [test_cvlr_gate.py](../tests/test_cvlr_gate.py) drives the real backend against a real Anchor program with live models, cargo and cloud submissions. §7.5.5 onward is what successive runs found |
 
 **The loop is not a loop.** Worth recording because it is the most misleading thing about §7.5's own
 wording: "author → compile → build → prover → analyze → revise" describes what the *agent* does, not
@@ -971,8 +987,11 @@ Recording them because the mis-diagnoses were confident and each cost real time:
   `cvlr_assume!(x > y); cvlr_assert!(x != y)`, which does not touch the program — but the stated
   cause was wrong. They never received a counterexample to fail to interpret. They received
   `"status FAILED"` and simplified the harness looking for something the submitter would accept.
-  §7.5.4's claim that missing CEX analysis is the biggest limiter on loop quality is **untested**:
-  no run has yet reached the point where it would bind.
+  §7.5.4's claim that missing CEX analysis is the biggest limiter on loop quality was **untested**
+  then, and has since been overtaken rather than confirmed: the analysis landed in §7.7, and what
+  bounds loop quality on this target is P6 — a summarized CPI havocking the caller's deserialized
+  `Account<T>` ([upstream-defects.md](upstream-defects.md) P6), which no account of a counterexample
+  can talk an author out of.
 
 The general lesson, and the reason both mis-diagnoses landed: when the first thing in a pipeline is
 broken, every later stage reports its own starvation, and each of those reports looks like an
@@ -1001,18 +1020,29 @@ being proved, about the wrong program. All five pass the mapping gate and the ac
 **This is a third gate gap and it is not the vacuity gap.** Sanity catches "assume the conclusion";
 nothing catches "verify a copy instead of the original", and no verdict-shaped check can, because the
 verdicts are honest. The missing check is about *what the rule touches*: a rule is evidence about the
-program only if its call graph reaches the program's own code. Two ways to get it, neither built:
-statically, refuse a draft in which no rule reaches a function defined outside the harness module; or
-from the run, require the program's code in the job's coverage.
+program only if its call graph reaches the program's own code.
 
-**Its cause is a blocker larger than the inlining gaps.** Both units that got that far reported prover
-error **[3006] "illegal store of a stack pointer"**, attributed to Anchor 0.31's
+**Since built, and it had to be per rule rather than per draft.** The first version asked whether
+*any* rule in the draft reaches the program, and a later run walked straight through it: two rules
+drove the vault while a third proved that `anchor_lang` rejects a non-signer — true, and nothing
+whatever about the program. So every rule now *declares* what it drives, and
+`validate_rule_subjects` ([state.py](../composer/spec/cvlr/state.py)) requires every declared subject
+to be reachable as `crate::…` — a subject in a dependency is refused, as is a declared function whose
+name appears nowhere in the draft. The gate test asserts the complement: no harness that has rules
+of which none drives the program, and no phantom declared function. A harness with *zero* rules and a
+skip per property is deliberately not caught by this, because that is the honest answer when nothing
+is provable, not a failure to reach the program.
+
+**Its cause looked like a blocker larger than the inlining gaps, and the ordering it forced was
+satisfied from an unexpected direction.** Both units that got that far reported prover error
+**[3006] "illegal store of a stack pointer"**, attributed to Anchor 0.31's
 `Error::AnchorError(Box::new(e))`, which lies on every path through Anchor dispatch — `entry()`,
-`try_accounts()`, `Account::try_from()`. If that holds, an Anchor program cannot currently be
-*invoked* under the prover at all, which is a stronger claim than any property being unprovable. It
-also means a reach-the-program gate added today would convert this backend's output from "confidently
-wrong" to "always empty" on Anchor targets. Both changes are needed and the gate is the safety
-property, but the order matters: **[3006] first.**
+`try_accounts()`, `Account::try_from()`. The attribution was right — §7.5.6 confirmed it from the
+prover's own source lines — and the conclusion drawn from it was wrong: it is a property of
+*crates.io* `anchor-lang`, which no real verification project depends on. Pointing the target at
+`Certora/anchor` clears it (§7.6.1). So this paragraph's rule — [3006] before any reach gate, or the
+backend's output goes from confidently wrong to always empty — was discharged by a
+`[patch.crates-io]` stanza rather than by anything upstream, and both changes are now in.
 
 Worth recording in the backend's favour: the author was transparent. The replica, the reason for it,
 and the skipped property are all documented in the module header and the published commentary. It did
@@ -1100,12 +1130,15 @@ tautology. It skipped all six properties with the diagnosis above as its reason,
 skip mechanism is for and the right answer when a batch genuinely cannot be verified. The vacuity fix
 matters for the case where an author is blocked and does not notice.
 
-Three follow-ups this opens, none done: the vendored tuning needs `exit` / `AccountSerialize`
-inlined and needs `invoke_signed_unchecked` to model account creation before Anchor post-state
-properties are provable at all — a prerequisite for this backend being useful on Anchor rather than
-a refinement — and
-`cvlr_inlining_anchor.txt` line 39 carries an inlining rule naming one specific program, which is
-upstream's to remove from a file that claims to be canonical.
+Of the three follow-ups this opened, two have since been retracted rather than done. Post-state
+properties on an Anchor handler do **not** need `exit` / `AccountSerialize` inlined — a rule that
+retains a handle to the account observes the handler's effect with no write-back at all, and one such
+property is verified (§7.6.2). And `invoke_signed_unchecked` does get its summary once the path
+dialect emits both spellings (§7.5.6); what that exposed is P6, the stand-in havocking the caller's
+deserialized `Account<T>`, which is the live blocker and not a tuning gap. What survives is the
+third: `cvlr_inlining_anchor.txt` line 39 carries an inlining rule naming one specific program, which
+is upstream's to remove from a file that claims to be canonical
+([upstream-defects.md](upstream-defects.md) T2).
 
 **The mount covers CVLR's API but not the target's generated one.** A draft named
 `crate::__client_accounts_withdraw::WithdrawBumps`, an Anchor-generated path. §5.5 mounts the CVLR
@@ -1318,9 +1351,11 @@ options below are what it superseded:
   data, deserialization and post-state arithmetic all work. A rule that avoids error-constructing
   paths is real evidence about a real program. It is not most of what a client wants.
 
-The probe test asserts all three tiers verify, so it is **red today on purpose** — the same choice
-§7.5.5's gate makes. A test that encoded the current breakage would go green on a run that fixed
-nothing.
+The probe test was written asserting all three tiers verify, **red on purpose** — the same choice
+§7.5.5's gate makes. It is green now: the fork clears [3006] on the two tiers that matter (§7.6.2),
+and the dispatch tier is ungated behind a tripwire that fires if it ever starts to verify, because its
+[3308] turned out to be our own `.is_ok()` worked example rather than a property of Anchor
+([upstream-defects.md](upstream-defects.md) P4, the correction).
 
 ### 7.6 Phase 5 — Munge
 
@@ -1469,9 +1504,15 @@ reader of the reference project would not have been: it called `entry`, it re-de
 post-state, and it built the account array on the stack. All three are visible in that project's
 harness, none of them is in the `backend_guidance` the authoring loop hands its agent, and the agent's
 own output made the same mistakes. §7.1 exists to extract exactly this and has extracted the conf
-shape and the munge but not the *rule idioms*. That is now the highest-value work in the plan:
-retaining handles, `Box`ing the account array, `Context::new` over dispatch, and the parametric-rule
-and account-construction helpers that project keeps in its own library.
+shape and the munge but not the *rule idioms*.
+
+**Three of those idioms have since been written into the authoring prompt by hand** — observing
+post-state through the handle the context borrowed, `Box`ing the nondet account array, and
+`Context::new` in place of dispatch, each with the reason it matters rather than as a recipe. That
+was the highest-value work in the plan and it was done the cheap way, one target at a time. What is
+still Phase 1a's is the general form: the parametric-rule and account-construction helpers the
+reference project keeps in its own library, and the same extraction for the next target's shape
+rather than this one's.
 
 **[3308] is not fixed by the remedy the prover recommends.** `-solanaAggressiveGlobalDetection true`
 reached the jar (confirmed in `jarSettings`) and changed nothing. Its trace runs from the vault's own
@@ -1480,26 +1521,18 @@ reached the jar (confirmed in `jarSettings`) and changed nothing. Its trace runs
 `alloc::fmt::format::format_inner`, and that symbol *is* present in this binary — so the summary
 applies and the failing path is not the one it covers. Recorded as `docs/upstream-defects.md` P4.
 
-**And it matters less than it looks.** The reference project's spec never calls `entry` at all — zero
-occurrences across its harness, against four of `Context::new`. Invoking a handler with a hand-built
-context is the practice; going through Anchor's dispatch is something this probe invented. So [3308]
-bounds an edge case rather than the supported path, and the tier that matters is the middle one.
+**And it matters less than it looks — though not for the reason first given here.** This section
+argued that [3308] bounds an edge case because the reference project's spec never calls `entry` at
+all: zero occurrences across its harness, against four of `Context::new`. That inference does not
+hold, and P4 records why — a rule that builds a context and calls the handler directly reaches the
+same path the moment the handler's own error path constructs an `#[error_code]` value. What actually
+bounds it is the correction above: the `.is_ok()` form was ours.
 
 The middle row is the result this phase exists for. The counterexample's call trace runs through
 `cvlr_solana::layout::cvlr_deserialize_nondet_accounts`, `Account<T>::try_from_0`, and then
 `vault::vault_program::deposit(...)` — **the program's own handler** — to `assert FAIL`. That is the
-first time this backend has produced evidence about a target's real code.
-
-And the violation is almost certainly honest rather than a rule bug: the rule re-reads the account
-with `Account::try_from` after the handler returns, and Anchor writes a modified `Account` back only
-in `exit`, which §7.5.5 established is *absent from the inlining allowlist*. So the write-back is
-invisible and the balance appears unchanged. That is exactly the gap the authoring loop's agent
-diagnosed and could not act on, now reproduced deterministically with a hand-written rule.
-
-The third row is a new error at a new place. [3308] "illegal dereference of an absolute address",
-reached from the vault's own `#[error_code]` enum through `format!` → `String` → `Vec::extend`. Note
-`cvlr_summaries_core.txt:104` summarizes `alloc::fmt::format::format_inner`, and §7.5.6's symbol check
-found that directive matches nothing in this binary — so the `format!` path is unsummarized, which is
+first time this backend produced evidence about a target's real code, and rewriting the rule to
+observe through the retained handle turned it into a verified post-state property.
 consistent. The prover names its own remedies this time (`-solanaAggressiveGlobalDetection true`, or a
 summary), which makes it the next thing to try rather than the next thing to investigate.
 
@@ -1507,8 +1540,8 @@ summary), which makes it the next thing to try rather than the next thing to inv
 #### 7.6.3 The charter, read off a real munge
 
 §9's mitigation for unbounded munging says the charter should be "derived from real diffs, not
-imagination", so before writing one: exactly one project in the corpus carries a
-source-level munge, and it carries the whole apparatus with it — apply and revert scripts, a
+imagination", so before writing one: one project in the corpus carries a source-level munge *with the
+whole apparatus around it* — apply and revert scripts, a
 recorded patch, a diff-recording script and a pinned lockfile. 22 files, 1097 lines. Every source hunk in it is one of **six kinds**, and five of the six are a CVLR attribute or
 a feature-gated `use` rather than a rewrite:
 
@@ -1546,6 +1579,18 @@ type puts it nowhere.
 **The one hunk that is not one of the six kinds is a hand-unrolled loop**, and it carries a comment
 its author wrote to justify it. That is the right home for that class of change, and it is the
 evidence for the boundary below.
+
+**Two corrections from a wider survey, pulling in opposite directions**
+([single-working-tree.md](single-working-tree.md) §7). Source munging is not one project's habit:
+nine of eleven corpus projects carry `cfg_attr`-with-`certora` outside their `certora/` trees, with
+`early_panic` at 152 sites and `mock_fn` at ~47. And the vocabulary counted across all of them is a
+*different* six — `early_panic`, `mock_fn`, `certora_make_pub`, the `cvlr_hook_on_entry`/`on_exit`
+pair, `inline(never)` and `derive(Copy)`. The implemented charter settled on **five** of those: the
+hooks and `inline_never` came in with the editor agent, and `certora_make_pub` was dropped because it
+is a project-local proc macro with no counterpart in `cvlr`
+([who-edits-the-program.md](who-edits-the-program.md) §9.3). Neither correction changes the shape of
+the answer — every kind is still an attribute — but "one project, six kinds" is not the evidence base
+and should not be cited as one.
 
 #### 7.6.4 The give-up boundary — open question 4, answered
 
@@ -1593,11 +1638,19 @@ scaffold this backend wrote, and visible in one pass over projects it did not.
 
 #### 7.6.6 Applying one — `munge_function`, on the shared source-edit path
 
-The author can now apply a munge, and only the two kinds §7.6.3 read off the real diff.
-`munge_function(path, function, munge, why)` inserts the attribute one line above the function's
-signature in **this unit's own copy** of the workspace — every unit already works in a private copy
-under `.cvlr_work/` and nothing writes back, so the user's tree is never touched. The path is
-resolved and refused if it leaves the workdir.
+> **Two things here have since moved, and neither changes what a munge *is*.** `munge_function` is no
+> longer the author's tool: program source has one owner, the munge editor agent, and the author
+> reaches it through `code_editor(request)` / `revert_munge(edit_id)`
+> ([who-edits-the-program.md](who-edits-the-program.md) §9.1). And there is no per-unit copy of the
+> workspace — the run has one tree, with each unit's module *and each munge* gated on that unit's
+> cargo feature ([single-working-tree.md](single-working-tree.md) §2.3).
+
+A munge is one of the declared kinds and nothing else. `munge_function(path, function, munge, why)`
+inserts the attribute one line above the function's signature in the run's working tree — a copy
+under `.cvlr_work/` that nothing writes back, so the user's tree is never touched. The path is
+resolved and refused if it leaves the workdir, and refused again if it is inside the workdir but is
+not the project's own source: confinement puts the run's private `CARGO_HOME` in there too, so
+containment alone would let a munge rewrite Anchor for every crate in the graph.
 
 **Reported through `Formalizer.source_edits()`, not a munge-specific channel.** That hook,
 `SourceEditRecord` and `AppliedEditRecord` already exist; the EVM backend fills them and this one
@@ -1856,6 +1909,86 @@ symbol. The gate that would have caught it is a live run, which is the argument 
 pattern), the Docker image gaining the Rust + Solana platform-tools toolchain, the replay tape
 and smoke scenario, the expensive-gate test, and user-facing docs.
 
+**Where this stands.** The entry points are built (§7.8.1–§7.8.2) and the expensive gates exist
+([test_cvlr_end_to_end.py](../tests/test_cvlr_end_to_end.py) for the plumbing,
+[test_cvlr_gate.py](../tests/test_cvlr_gate.py) for the loop) — but they still run *unconfined*,
+which §3 item 3 forbids, so no CVLR build has yet been made under the launcher. Not built at all:
+the Docker image's Rust + platform-tools toolchain, the replay tape and its LLM-free smoke scenario,
+and user-facing documentation.
+
+#### 7.8.1 The entry points, and the three decisions they had to make
+
+[`cvlr/entry.py`](../composer/spec/cvlr/entry.py) with a console and a TUI frontend, built when the
+expensive gate had passed and the only way to reach the backend was still that test — which
+hard-codes the scenario path, the package, the design doc and an empty corpus. Mostly it is
+foundry's entry point with different pieces plugged in; three places it could not be.
+
+**The source surface was Solidity's.** `cli_pipeline` built its `SourceFields` with
+`fs_forbidden_read` for every caller, and on a Cargo project that rule withholds nothing it should
+and admits `target/` — after one build, larger than the rest of the tree together. It now takes a
+`forbidden_read`, defaulted to what it always did, and the CVLR entry passes
+`SOLANA.language.default_forbidden_read`. The Rust wheel path had already met this and avoided it by
+not using `cli_pipeline` at all.
+
+**Which package to verify is decided before the run starts.** The artifact store has to be pointed
+at the crate the harness lands in, and that is a constructor argument on the backend, so the caller
+needs the answer before preflight computes it. `preflight.select_package` is that answer, and it
+resolves better than preflight can: cargo's `Workspace.owning` says which member owns the main
+program's *source file*, so a workspace with five programs needs no second flag — where preflight's
+own rule (exactly one library target, else refuse) would refuse it. An explicit `--package` still
+wins, and both failure modes — not a member, and nothing to choose between — now cost a usage error
+instead of a run that has spent an analysis agent.
+
+**Confinement defaults on.** §3 item 3 said the backend defaults to `launcher`; nothing had ever
+implemented it, because `SandboxConfig.from_env` defaults to `none` and every caller so far — the
+expensive gate included — took that default. `build_confinement` is the fail-closed version, with
+`$CERTORA_PLATFORM_TOOLS_ROOT` added to the read-only grants (`rust_build_policy` already grants the
+two default locations, not an overridden one), and an unconfined run says so on stderr. **The
+expensive gate still runs unconfined**, which item 3 also forbids; that is a separate change, and
+the first confined run is where the offline registry and the private `CARGO_HOME` get tested for
+real.
+
+One thing wired here that the gate deliberately left out: the `cvlr_kb` corpus. `build_rag_tools`
+degrades to no RAG when the database is absent, which is the documented behaviour for a search aid,
+so `--rag-corpus` defaults to the corpus and costs a developer without one nothing.
+
+#### 7.8.2 What comparing it against the autoprove entry point found
+
+Written against foundry's entry point, which has no prover; read afterwards against
+[autoprove_common.py](../composer/spec/source/autoprove_common.py), which does. Three of the four
+differences were bugs rather than choices, and the first is not in the entry point at all.
+
+**No CVLR run has ever recorded what its prover jobs cost.** `ProverCallbacks`' methods are no-op
+defaults, so a backend overriding only the events it cares about opts out of the run's prover
+accounting *silently* — and `_CaptureCallbacks` overrode exactly one, `on_prover_result`, for the
+findings capture. `on_prover_link`, `on_prover_runtime` and the wall-clock tally were all the base's
+no-ops, so `summary.prover_usage_summary()` was empty for every run this backend has ever done,
+`summary.format()` reported zero prover time on a run that spent most of its wall clock in the
+cloud, and no phase record carried a prover link. Fixed by lifting the three into a `_RunAccounting`
+base that `_CaptureCallbacks` extends — a base of its own because the two are needed independently:
+a submission with no analysis store still costs prover time, and the `else` branch that used to
+construct a bare `ProverCallbacks()` now constructs that.
+
+**`job_info.json` recorded the smaller half of the cost.** `ProverArtifactStore` extends the shared
+manifest with `prover_usage`; `CvlrArtifactStore` did not, and the exit logger logged only
+`token_usage`. Both now match the autoprove side — which is only worth anything given the fix above.
+
+**The corpus was loading a second embedding model.** `build_rag_tools` called `get_model()`, which
+is not memoized, while `cli_pipeline` had already staged one — two copies of the same
+multi-hundred-megabyte transformer per run. It now takes the model as an optional argument, and the
+entry passes the staged one. (The Rust wheel path, `rustapp.build_default_env`, has the same shape
+and was left alone.)
+
+**Two smaller alignments.** `autoprove_executor` is split from its parser so a caller holding an
+args object reaches the run without `sys.argv`; `cvlr_executor` now is too, and the tests use it.
+And `--threat-model` is offered, because the front half is the ecosystem's and reads one exactly as
+the EVM pipeline does — foundry's absence of the flag was not a precedent worth following.
+
+Deliberately *not* aligned: `--cloud` (§3 item 1 makes it the only mode), `--rag-db` as a connection
+string (the tag is the corpus's name in both the importer and the search registry), and the
+`SourceEditing` kit autoprove threads through its backend — CVLR's editor is built per authoring
+session from the tree and needs nothing from the entry point.
+
 ### 7.9 Phase 8 — Soroban
 
 Only after Solana verifies end-to-end. Expected content: build recipe, conf shape, prover CLI,
@@ -1870,45 +2003,56 @@ versus Rust, which predicts Soroban inherits the Solana shape essentially whole.
 
 ### 7.10 Revisit — the working-copy and munge reasoning, once the backend works
 
-**The working-copy half is done: [single-working-tree.md](./single-working-tree.md), and the munge
-half now has a design note of its own: [who-edits-the-program.md](./who-edits-the-program.md).** It reopened
-§7.5.2 rather than the triggers below, because the premise that made the per-unit workdir "forced"
-did not survive being checked — and the corpus survey it started from also moved two of the triggers:
-trigger 1's "seventh munge kind" is already four kinds (`certora_make_pub`, the `cvlr_hook_*` pair,
-`inline(never)`, `derive(Copy)`), and trigger 5's "spec-side approximation" partly exists in
-`cvlr::hook_on_entry` / `hook_on_exit`, which are in the pinned reference set and which this backend
-does not use. Both belong in a revision of that document's §4, which has not been written. The munge
-half — sub-agent or no sub-agent — is still unbuilt, but the argument has moved: that note finds §5's
-"no reviewer could rule on this" false for CVLR, and recommends two small changes (one owner for
-program source; the judge gets the diff) ahead of any agent.
+**Both halves are done.** The working-copy half is [single-working-tree.md](./single-working-tree.md)
+— one tree for the run, per-unit cargo features, one build permit. The munge half is
+[who-edits-the-program.md](./who-edits-the-program.md), and it is now built rather than proposed: the
+program source has one owner (the munge editor agent), the judge receives the munge *diff* rather
+than the editor's account of its own work, the author's `revert_munge` is the undo that was missing,
+and a dep-info check refuses a munge that reached no build.
 
-Not a phase; a scheduled re-read. [munge-and-working-copies.md](munge-and-working-copies.md) argues
-that this backend should keep a physical per-unit workdir rather than a VFS, and should let the
-author apply munges itself rather than commission an editor sub-agent. Both arguments are sound and
-both are **built on cost measured against a backend that had not yet verified anything** — P6 was
-still blocking, no run had produced a finding, and no target outside the test scenario had been
-attempted. A cost-only comparison favours the cheaper arrangement by construction.
+The re-read reopened §7.5.2 rather than the triggers below, because the premise that made the
+per-unit workdir "forced" did not survive being checked — and the corpus survey it started from also
+moved two of the triggers: trigger 1's "seventh munge kind" was already four, and trigger 5's
+"spec-side approximation" exists in `cvlr::hook_on_entry` / `hook_on_exit`, which the editor now
+uses. Both still belong in a revision of
+[munge-and-working-copies.md](munge-and-working-copies.md) §4, which has not been written. What is
+left is to watch the metric both notes name — **the skip rate**, and specifically skips naming a kind
+the vocabulary lacks. Extraction is the one that keeps coming back, and it is the one kind that is
+not an attribute ([who-edits-the-program.md](./who-edits-the-program.md) §9.4–§9.5).
 
-That document's §7 states the triggers as falsifiable conditions rather than caveats, so this is a
-checklist rather than a re-argument:
+**Why it was scheduled at all**, since that is what the triggers below are for.
+[munge-and-working-copies.md](munge-and-working-copies.md) argued that this backend should keep a
+physical per-unit workdir rather than a VFS, and should let the author apply munges itself rather
+than commission an editor sub-agent. Both arguments were sound and both were **built on cost
+measured against a backend that had not yet verified anything** — P6 was still blocking, no run had
+produced a finding, and no target outside the test scenario had been attempted. A cost-only
+comparison favours the cheaper arrangement by construction, and both answers reversed once there was
+a benefit side to weigh.
 
-1. **A seventh munge kind appears** — the vocabulary is closed on one project's diff, and a kind that
-   is not an attribute puts soundness back on the delegatable side, where EVM's charter already has
-   the prose and a sub-agent starts making sense.
-2. **Skips naming a would-be munge become common** — the five-of-six-are-attributes finding was about
-   one project's style rather than about CVLR.
-3. **Unit counts grow** — the workdir arithmetic was taken on a three-unit run; at ten it is ~10 GB
-   and ten dependency builds, and the deferred shared read-only cache stops being optional.
-4. **Production confinement relaxes** — the private `CARGO_HOME` is confinement's doing, and it is
-   step (3) of that document's chain that makes a VFS expensive here.
-5. **CVLR gains a spec-side approximation that computes** — the whole argument against the EVM split
-   turns on `summarize_for_prover` havocking rather than computing.
-6. **The backend verifies a real program end to end** — which is the trigger for reading the other
-   five at all, because only then is there a benefit side to weigh.
+That document's §7 states the triggers as falsifiable conditions rather than caveats, so this was a
+checklist rather than a re-argument. Where each stands now:
 
-Do this before §7.9 rather than after: Soroban is where the "would the other chain need this
-different?" question gets asked for real, and re-deciding the working-copy shape after a second chain
-has been built on it is the expensive order.
+1. ~~**A seventh munge kind appears**~~ — **fired.** The vocabulary was closed on one project's diff
+   and the wider survey found four more kinds; five are now offered and the one that is *not* an
+   attribute — extraction — is the one still outstanding (§7.6.3, [who-edits-the-program.md](./who-edits-the-program.md) §9.4).
+2. **Skips naming a would-be munge become common** — **the live metric.** Two of the last run's eight
+   skips wanted an extracted state-transition function, which the vocabulary cannot express. This is
+   what to watch.
+3. **Unit counts grow** — moot as stated: one tree is one dependency graph, so the arithmetic that
+   made ten units ~10 GB is gone. What replaces it is §3 of
+   [single-working-tree.md](./single-working-tree.md): at some N the single build permit is the
+   bottleneck instead.
+4. **Production confinement relaxes** — unchanged, and still the assumption the cargo-home saving
+   rests on.
+5. ~~**CVLR gains a spec-side approximation that computes**~~ — **it already had one.**
+   `cvlr::hook_on_entry` / `hook_on_exit` are in the pinned reference set, and the editor now offers
+   both.
+6. ~~**The backend verifies a real program end to end**~~ — **done**, which is what made the other
+   five worth reading.
+
+Doing this before §7.9 rather than after was the right order: Soroban is where the "would the other
+chain need this different?" question gets asked for real, and re-deciding the working-copy shape
+after a second chain had been built on it would have been the expensive order.
 
 ---
 
@@ -1929,7 +2073,9 @@ has been built on it is the expensive order.
 | Setup | Templated preflight; no AutoSetup — and it turned out to need no agent at all (§7.4.1) |
 | Authoring gate | Two checker tiers, one stamp: the cheap compile is ungated and the prover run is the gate, because a prover run builds first (§7.5.1) |
 | Rule granularity | Both forms offered, and the *generated* names are the unit of attribution; a parametric invocation stays grouped in the record (§7.5.3) |
-| Workdir lifetime | **One tree for the run**, with each unit's module behind its own cargo feature — which is what makes the compile gate per-unit and undoes §7.5.2's "forced" ([single-working-tree.md](./single-working-tree.md)) |
+| Program-source ownership | One entity edits the program under verification — the munge editor agent, with a reviewer of its own; the author requests an edit and can revert one ([who-edits-the-program.md](./who-edits-the-program.md)) |
+| Munge vocabulary | A closed set of five CVLR attributes — `early_panic`, `mock_fn`, `inline_never`, `hook_on_entry`, `hook_on_exit`; a change needing a sixth is a skip that names it |
+| Workdir lifetime | **One tree for the run**, with each unit's module behind its own cargo feature — which is what makes the compile gate per-unit and undoes §7.5.2's "forced" ([single-working-tree.md](./single-working-tree.md)). **Reopened again**: the tree should be a VFS the author reads *through*, not a directory beside it ([the-tree-is-a-vfs.md](./the-tree-is-a-vfs.md)) |
 | Scaffold shape | From `Certora/solana-spec-template`, the recommended starting point, not from a vote over client layouts; the public examples break ties about what actually runs |
 | Scaffold safety | Never overwrite, compute every manifest change from the parsed manifest, and refuse rather than guess where a decision changes how the project builds for everyone |
 | Env (inlining/summaries) files | Vendored with a provenance stamp naming the upstream commit, in the template's three-layer split so the project's own layer is never a canonical file |
@@ -1963,10 +2109,10 @@ has been built on it is the expensive order.
    without losing its incremental cache.
 4. ~~**Where the munge give-up boundary sits**, in edits or in wall-clock.~~ **Answered: in
    neither — the boundary is the vocabulary** (§7.6.4). Both proxies measure the wrong thing: the
-   one real source munge in the corpus is 1097 lines and entirely routine, while its single
-   hand-unrolled loop is the change that needed a person. A munge is in charter if it is one of the
-   six kinds read off that diff; a change needing a new kind is a give-up, and the give-up is a skip
-   naming the kind it would have needed.
+   one fully-apparatused source munge in the corpus is 1097 lines and entirely routine, while its
+   single hand-unrolled loop is the change that needed a person. A munge is in charter if it is one
+   of the declared kinds — five of them, since the editor agent landed; a change needing a new kind
+   is a give-up, and the give-up is a skip naming the kind it would have needed.
 5. **Rule granularity per property** — one `#[rule]` per property, or parametric rules /
    `cvlr_rules!` batching. *Partially answered* (§7.5.3): both forms are offered, the prompt says to
    prefer parametric when one property spans handlers, and the *generated* names are what the mapping
@@ -1982,8 +2128,8 @@ has been built on it is the expensive order.
 | **Loop latency** | A build-gated loop may be 10–50× slower per iteration than CVL's typecheck gate; it compounds with retries | Measured in Phase 1b before any agent work; two-tier gate; warm workdir; shared RO cache in reserve |
 | **Cold-start hallucination** | Thin CVLR training data means invented macros and helpers | Two independent defenses: the crate source is readable and authoritative (§5.5), which prevents the guess; and the compile gate catches whatever slips through — but only if the gate is in the loop, which loops back to the latency risk. That coupling is the central tension of the project, and source access is the cheaper half of the answer |
 | **Reading the wrong CVLR** | Source that disagrees with the version the build resolves is confidently wrong — worse than no source | The host resolves the version from `cargo metadata` and mounts exactly that tree; the agent never picks a version, and the version is stated in the prompt |
-| **Unbounded munging** | Solana munging can approach a rewrite | **Both halves done and from evidence** (§7.6.3–4): the charter is six kinds read off the one real source munge in the corpus, five of them a CVLR attribute rather than a rewrite; the boundary is that vocabulary rather than an edit or time budget, because the real diff is 1097 routine lines and one hand-unrolled loop |
-| **Illegible counterexamples** | Verdicts the agent cannot act on stall the loop | `clog!` discipline enforced at authoring time, not diagnosed at analysis time |
+| **Unbounded munging** | Solana munging can approach a rewrite | **Both halves done and from evidence** (§7.6.3–4): the charter is a closed vocabulary of five CVLR attributes, and the boundary is that vocabulary rather than an edit or time budget — a change needing a new kind is a skip that names it. Since §7.10 the edits also have one owner, a reviewer that reads the diff, and a dep-info check that refuses an edit no build reached |
+| **Illegible counterexamples** | Verdicts the agent cannot act on stall the loop | `clog!` discipline enforced at authoring time, not diagnosed at analysis time — plus a per-chain `TraceShape` (§7.7.1), because 95 % of a Solana trace is account materialization and EVM's filter was deleting the failure with the noise |
 | **Premature Soroban abstraction** | An interface designed against a guess costs more than a later refactor, and is harder to undo | No per-chain bundle (§4.1); Soroban's pieces deferred to Phase 8; "would Soroban need this different?" asked at review time against the existing Soroban model |
 | **The dev opt-out leaking into production** | An unconfined build runs untrusted `build.rs` and proc-macros with the developer's full environment; if it becomes the silent default, the whole confinement story is decorative | Explicit env-var opt-out only, never an automatic degrade; production/CI assert the launcher; unconfined runs marked in output and report |
 | **Unconfined dev runs behave differently** | Passthrough means no policy at all — so no forced `CARGO_NET_OFFLINE`, no private `CARGO_HOME`, no filesystem grants. A build that works on a Mac may fail confined on Linux for reasons unrelated to the code | Treat Linux-confined as the reference environment; the smoke scenario and expensive gate both run confined |

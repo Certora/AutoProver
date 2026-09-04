@@ -31,7 +31,7 @@ import asyncio
 import enum
 import functools
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import (
     Protocol, Any, ClassVar, Concatenate, cast, Awaitable, Sequence, Callable, ContextManager, overload
 )
@@ -305,6 +305,32 @@ class _Batch[U: FeatureUnit](BackendJob[U]):
     feat_ctx: WorkflowContext[ComponentGroup]
 
 
+def _capped[U: FeatureUnit](batches: list[_Batch[U]], limit: int | None) -> list[_Batch[U]]:
+    """The first ``limit`` properties across all components, and only the components that keep one.
+
+    A deliberately blunt instrument, for easing into an unfamiliar target: it bounds what a run
+    *attempts* before any of it is paid for, where a budget bounds what it spends after the fact and
+    curtails whatever happens to be in flight when the money runs out. The two are complementary —
+    a small cap makes the first run on a new program legible, and the budget is still what stops it.
+
+    Applied before the staged formalizer begins, so a component with nothing left to author never
+    gets a harness module or a cargo feature declared for it. Order is the extractor's, which is the
+    only order there is: nothing here ranks properties, and a reader of a capped run should treat
+    the selection as arbitrary rather than as a judgement about which properties matter.
+    """
+    if limit is None:
+        return batches
+    kept: list[_Batch[U]] = []
+    remaining = limit
+    for batch in batches:
+        if remaining <= 0:
+            break
+        take = batch.props[:remaining]
+        remaining -= len(take)
+        kept.append(replace(batch, props=take))
+    return kept
+
+
 def extract_task_id(idx: int) -> str:
     return f"extract-{idx}"
 
@@ -428,7 +454,8 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     max_bug_rounds: int = 3,
     ecosystem: Ecosystem[App, Main, U],
     budget: RunBudget | None = None,
-    time_budget_s : float | None = None
+    time_budget_s : float | None = None,
+    max_properties: int | None = None,
 ) -> CorePipelineResult[FormT]:
     with (
         _budget_context(budget),
@@ -437,7 +464,8 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
         return await _run_pipeline_inner(
             backend, run, interactive=interactive, 
             max_bug_rounds=max_bug_rounds, threat_model=threat_model,
-            extra_context=extra_context, ecosystem=ecosystem
+            extra_context=extra_context, ecosystem=ecosystem,
+            max_properties=max_properties,
         )
 
 async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
@@ -449,6 +477,7 @@ async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: Artifact
     extra_context: Sequence[Document],
     max_bug_rounds: int,
     ecosystem: Ecosystem[App, Main, U],
+    max_properties: int | None = None,
 ) -> CorePipelineResult[FormT]:
     # Only the plugins whose hooks accept this ecosystem's unit are loaded (and only those pay
     # their ``initialize`` cost); the driver below can hand them its units unconditionally.
@@ -456,6 +485,7 @@ async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: Artifact
         return await run_pipeline_inner(
             backend, run, plugins, interactive=interactive, threat_model=threat_model,
             extra_context=extra_context, max_bug_rounds=max_bug_rounds, ecosystem=ecosystem,
+            max_properties=max_properties,
         )
 
 # ---- the driver --------------------------------------------------------------
@@ -480,6 +510,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     extra_context: Sequence[Document] = (),
     max_bug_rounds: int = 3,
     ecosystem: Ecosystem[App, Main, U],
+    max_properties: int | None = None,
 ) -> CorePipelineResult[FormT]:
     spec, phases = backend.analysis_spec, backend.core_phases
     source = run.source
@@ -558,6 +589,14 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     staged = await staged_task
     if not batches:
         raise ValueError("No properties extracted from any component.")
+    if max_properties is not None:
+        extracted, components = sum(len(b.props) for b in batches), len(batches)
+        batches = _capped(batches, max_properties)
+        _log.info(
+            "property cap %d: authoring %d of %d extracted properties, across %d of %d components",
+            max_properties, sum(len(b.props) for b in batches), extracted,
+            len(batches), components,
+        )
 
     # 4. A backend whose units share an artifact handed back a ``StagedFormalizer`` instead of a
     #    formalizer: the artifact is authored HERE — once, from every unit's properties — and the

@@ -44,7 +44,7 @@ from composer.cargo.metadata import CratePackage, Workspace
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.env_paths import PathDialect, dialect_for
 from composer.spec.cvlr import munge
-from composer.spec.cvlr_reference import ChainReference
+from composer.spec.cvlr_reference import ChainReference, CrateRelease
 
 _log = logging.getLogger(__name__)
 
@@ -485,7 +485,7 @@ def _check_platform(workspace: Workspace, reference: ChainReference) -> list[Blo
 
 
 def _plan_workspace_manifest(
-    workspace: Workspace, reference: ChainReference
+    workspace: Workspace, package: CratePackage, reference: ChainReference
 ) -> tuple[list[Change], list[str]]:
     """Pins in ``[workspace.dependencies]``, when the root manifest has a ``[workspace]``."""
     parsed = _read_toml(workspace.root / "Cargo.toml")
@@ -494,7 +494,7 @@ def _plan_workspace_manifest(
 
     declared = parsed.get("workspace", {}).get("dependencies", {})
     stanzas, satisfied = [], []
-    for crate in reference.scaffold_crates():
+    for crate in _scaffold_pins(workspace, package, reference):
         if crate.name in declared:
             satisfied.append(
                 f"{crate.name} is already a workspace dependency — the project's pin wins, and a "
@@ -515,7 +515,12 @@ def _plan_workspace_manifest(
 
 
 def _plan_package_manifest(
-    package: CratePackage, relative: Path, reference: ChainReference, *, inherit: bool
+    workspace: Workspace,
+    package: CratePackage,
+    relative: Path,
+    reference: ChainReference,
+    *,
+    inherit: bool,
 ) -> tuple[list[Change], list[str], list[Blocked]]:
     manifest_rel = relative / "Cargo.toml"
     parsed = _read_toml(package.root / "Cargo.toml")
@@ -543,7 +548,7 @@ def _plan_package_manifest(
         )
 
     dependencies = parsed.get("dependencies", {})
-    wanted = reference.scaffold_crates()
+    wanted = _scaffold_pins(workspace, package, reference)
     missing = [c for c in wanted if c.name not in dependencies]
     satisfied += [
         f"{c.name} is already a dependency of {package.name}" for c in wanted if c not in missing
@@ -755,7 +760,7 @@ def plan_scaffold(
     changes: list[Change] = []
     satisfied: list[str] = []
     for planned, notes in (
-        _plan_workspace_manifest(workspace, reference),
+        _plan_workspace_manifest(workspace, package, reference),
         _plan_harness(package, relative),
         _plan_envs(package, relative, dialect),
         _plan_gitignore(workspace),
@@ -768,7 +773,7 @@ def plan_scaffold(
     satisfied += munge_notes
 
     manifest_changes, manifest_notes, blocked = _plan_package_manifest(
-        package, relative, reference, inherit=inherit
+        workspace, package, relative, reference, inherit=inherit
     )
     # Only when the scaffold would write a *reference-set* pin. A project that already pins CVLR
     # has made its own pairing decision — the scaffold inherits that pin, so the reference set's
@@ -787,20 +792,52 @@ def plan_scaffold(
     )
 
 
+def _declared(workspace: Workspace, package: CratePackage) -> set[str]:
+    """Every crate this project already names, across both manifests that can name one.
+
+    A project may pin CVLR in ``[workspace.dependencies]`` without any member depending on it yet,
+    in which case the resolved graph does not mention it at all — so this reads the manifests rather
+    than the graph. Getting that wrong is how the platform gate refuses a project whose own pin is
+    consistent, which is what it did on the first project it was pointed at.
+    """
+    root = _read_toml(workspace.root / "Cargo.toml")
+    return set(root.get("workspace", {}).get("dependencies", {})) | set(
+        _read_toml(package.root / "Cargo.toml").get("dependencies", {})
+    )
+
+
+def _scaffold_pins(
+    workspace: Workspace, package: CratePackage, reference: ChainReference
+) -> tuple[CrateRelease, ...]:
+    """The reference-set crates this scaffold offers to pin.
+
+    Everything the reference set names, **except** that specializations are withheld from a project
+    that already declares the chain crate. That project has chosen its own CVLR line and the
+    scaffold inherits it; adding a reference-version specialization on top would pair, say, a 0.5.0
+    token model with the 0.4 line the project picked — two generations of ``AccountInfo``, and a
+    build that does not compile rather than a warning. So the scaffold sets the reference set up
+    whole, or leaves the project's choice alone; it never mixes lines.
+
+    Core and chain themselves are still offered per-crate, which is the behaviour that was here
+    before specializations were scaffolded at all: a project pinning one of them and not the other
+    has a half-configured manifest, and completing it is what the platform gate is then checked
+    against.
+    """
+    declared = _declared(workspace, package)
+    if reference.chain.name in declared:
+        return (reference.core, reference.chain)
+    return reference.scaffold_crates()
+
+
 def _introduced(
     workspace: Workspace, package: CratePackage, reference: ChainReference
 ) -> tuple[str, ...]:
-    """The reference set's crates this scaffold would pin *at the reference version*.
-
-    A project may already pin CVLR in ``[workspace.dependencies]`` without any member depending on
-    it yet, in which case the resolved graph does not mention it at all — so this reads the
-    manifests rather than the graph. Getting that wrong is how the platform gate refuses a project
-    whose own pin is consistent, which is what it did on the first project it was pointed at.
-    """
-    root = _read_toml(workspace.root / "Cargo.toml")
-    pinned = set(root.get("workspace", {}).get("dependencies", {}))
-    pinned |= set(_read_toml(package.root / "Cargo.toml").get("dependencies", {}))
-    return tuple(c.name for c in reference.scaffold_crates() if c.name not in pinned)
+    """The crates this scaffold would pin *at the reference version* — the ones not already
+    declared. Empty means the project's own pins stand, which is what the platform gate keys on."""
+    declared = _declared(workspace, package)
+    return tuple(
+        c.name for c in _scaffold_pins(workspace, package, reference) if c.name not in declared
+    )
 
 
 # ---------------------------------------------------------------------------------------------
