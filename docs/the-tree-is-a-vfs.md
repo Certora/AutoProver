@@ -9,7 +9,9 @@
 > The recommendation is to replace `SharedTree`'s bespoke half with graphcore's
 > `fs_tools_layered`, keeping the materialization strategy that makes cargo cheap.
 >
-> **Not built.** §7 is the plan. §6 is the honest list of what could still sink it.
+> **Built.** §7's steps 1–3 are done — graphcore's `eric/persistent-materializer` branch and
+> `cvlr: the tree materializes through the VFS`. Step 4 turned out to need no code; §7 says why.
+> Of §6's five risks, one was answered by building it and four are still open.
 
 ---
 
@@ -192,10 +194,25 @@ Ordered so that each step is independently revertible and none is a flag day.
 3. **Retire `SharedTree`'s own materialization** in favour of the stack's, keeping `resolve()`'s
    typed refusals as the munge-boundary check they also serve
    ([munge.py](../composer/spec/cvlr/munge.py)'s `NOT_PROJECT_SOURCE`).
-4. **Rewrite diagnostics paths** back to project-relative before they reach the author. Independent
-   of the rest, and worth doing regardless.
+4. ~~**Rewrite diagnostics paths** back to project-relative before they reach the author.~~
+   **Not needed — step 2 subsumed it.** cargo emits diagnostic paths relative to its workdir, and
+   its workdir is the tree; the author's read stack is now rooted at the same place, so the path
+   the compiler prints is already a key the composite view serves. Measured, not assumed: a
+   deliberate error produced `--> program/src/lib.rs:2:5`, and `get_file` on that exact string
+   opens the file. The gap was never in the paths — it was that the reads were rooted somewhere
+   else, and re-rooting them closed both halves at once. A rewriter would have been code that does
+   nothing, and that would start corrupting paths the moment either root moved.
 
 Step 2 is where the value is. Steps 1 and 3 are what make it not a second reimplementation.
+
+### What building it settled
+
+§6's risk 1 — that `DirBackend.list`'s `rglob("*")` over a tree holding a warm `target/` and a
+730 MB `CARGO_HOME` would re-create the listing problem from the other side — is answered: the
+exclusion is passed, and a probe over a tree seeded with a 500-file vendored registry listed **two**
+entries, the project's own sources. Risks 2 through 5 (`cache_listing` staleness, the prover's
+eager-materialization requirement, non-UTF-8 content, and landing the materializer upstream) are
+untouched by this work and stand as written.
 
 ---
 
