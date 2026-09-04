@@ -9,10 +9,11 @@ a constructor dependency rather than a call-order convention; there is no half-i
 
 Two links are *overlapped* with the LLM steps they don't depend on, since both are usually builds:
 ``preflight`` runs alongside system analysis, and ``prepare_formalization`` alongside property
-extraction. ``preflight`` is additionally a *gate*: it and the analysis run in a task group, so a
-failure on either side cancels the other rather than letting it spend on a run that can no longer
-complete — a broken toolchain does not wait out the analysis agent, and a failed analysis does not
-wait out the workspace build. The second pair is simply awaited in turn.
+extraction. Each pair is also a *gate*: the two sides share a task group, so a failure on either
+cancels the other rather than letting it spend on a run that can no longer complete — a broken
+toolchain does not wait out the analysis agent, a failed analysis does not wait out the workspace
+build, and a failed setup does not wait out the extraction agents whose properties it would have
+formalized.
 
 A backend whose units all build on one *shared* artifact inserts a link rather than a call-order
 convention: ``prepare_formalization`` returns a :class:`StagedFormalizer`, and its ``begin`` — handed
@@ -39,7 +40,7 @@ from abc import ABC, abstractmethod
 from contextlib import nullcontext
 
 
-from composer.io.multi_job import TaskInfo
+from composer.io.multi_job import TaskInfo, gated_group
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import (
     WorkflowContext, ComponentGroup
@@ -501,17 +502,9 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 ),
             )
 
-    try:
-        async with asyncio.TaskGroup() as overlap:
-            preflight_task = overlap.create_task(backend.preflight(run))
-            analysis_task = overlap.create_task(_run_analysis())
-    except BaseExceptionGroup as eg:
-        # Callers expect the failure itself, not a wrapper, so unwrap the usual case: one side
-        # failed and the other was cancelled, and a cancelled task adds nothing to the group.
-        # Both failing at once is the only case with two real errors; keep the group there.
-        if len(eg.exceptions) == 1:
-            raise eg.exceptions[0] from None
-        raise
+    async with gated_group() as overlap:
+        preflight_task = overlap.create_task(backend.preflight(run))
+        analysis_task = overlap.create_task(_run_analysis())
     preflight, analyzed = preflight_task.result(), analysis_task.result()
     if analyzed is None:
         raise ValueError("System analysis produced no result.")
@@ -521,30 +514,34 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
         prepared = await backend.prepare_system(analyzed, run, preflight)
 
     # 3. Pre-formalization setup runs CONCURRENTLY with extraction (neither needs the other) —
-    #    this preserves the prover's autosetup ∥ bug-analysis overlap, generically.
+    #    this preserves the prover's autosetup ∥ bug-analysis overlap, generically. The pair is
+    #    also a gate: extraction's properties have nowhere to be formalized if the setup fails,
+    #    and a setup nobody will read is worth no more minutes, so whichever side breaks first
+    #    cancels the other instead of letting it spend on a run that can no longer complete.
     #    The budget scope is entered inside the coroutine (not around create_task) so the
     #    cost-center binding lives in the spawned task's own context.
     async def _prepare_formalization() -> Formalizer[FormT, U] | StagedFormalizer[FormT, U]:
         with named_budget_or_nop("formalization_preparation"):
             return await prepared.prepare_formalization(run)
-    staged_task = asyncio.create_task(_prepare_formalization())
 
-    batches: list[_Batch[U]] = await _extract_all(
-        backend.analysis_spec.properties_key,
-        prepared.main,
-        backend.backend_guidance,
-        run,
-        phases["extraction"],
-        interactive,
-        threat_model,
-        extra_context,
-        max_bug_rounds,
-        ecosystem,
-        plugin_manager.bind_phase(
-            phases.get("extraction_plugin") or phases["extraction"],
-        )
-    )
-    staged = await staged_task
+    async with gated_group() as overlap:
+        staged_task = overlap.create_task(_prepare_formalization())
+        extract_task = overlap.create_task(_extract_all(
+            backend.analysis_spec.properties_key,
+            prepared.main,
+            backend.backend_guidance,
+            run,
+            phases["extraction"],
+            interactive,
+            threat_model,
+            extra_context,
+            max_bug_rounds,
+            ecosystem,
+            plugin_manager.bind_phase(
+                phases.get("extraction_plugin") or phases["extraction"],
+            )
+        ))
+    staged, batches = staged_task.result(), extract_task.result()
     if not batches:
         raise ValueError("No properties extracted from any component.")
 
@@ -741,12 +738,13 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
                 feat, runner.bind(str(feat.unit_index), ctxt)
             )
 
-        got = await asyncio.gather(*[
-            run_one(r) for r in plugins.runners(
-                sub_phase_id="pre-inference", sub_phase_label="Property Pre-Inference"
-            )
-        ])
-        return [t for t in got if t is not None]
+        async with gated_group() as fanout:
+            hooks = [
+                fanout.create_task(run_one(r)) for r in plugins.runners(
+                    sub_phase_id="pre-inference", sub_phase_label="Property Pre-Inference"
+                )
+            ]
+        return [t for h in hooks if (t := h.result()) is not None]
 
     async def _post_plugin_props(
         feat: U, props: list[PropertyFormulation]
@@ -811,8 +809,9 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
         with named_budget_or_nop("property_extraction"):
             return await _one(u)
 
-    got = await asyncio.gather(*[budgeted_task(u) for u in ecosystem.units(main)])
-    return [b for b in got if b is not None]
+    async with gated_group() as fanout:
+        tasks = [fanout.create_task(budgeted_task(u)) for u in ecosystem.units(main)]
+    return [b for t in tasks if (b := t.result()) is not None]
 
 
 def _tally[FormT: BackendResult, U: FeatureUnit](

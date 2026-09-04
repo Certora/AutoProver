@@ -6,9 +6,9 @@ don't depend on them.
 * ``backend.preflight`` (Crucible's program build + harness-skeleton build) with **system analysis**;
 * ``prepared.prepare_formalization`` (the prover's autosetup) with **property extraction**.
 
-Neither side of either pair needs the other. The preflight is additionally a *gate*: it shares a task
-group with the analysis, so a failure on either side cancels the other rather than letting it spend
-on a run that can no longer complete. Nothing else is cancelled — the second pair is awaited in turn.
+Neither side of either pair needs the other. Each pair is additionally a *gate*: the two sides share
+a task group, so a failure on either cancels the other rather than letting it spend on a run that can
+no longer complete.
 
 Stubs throughout — no LLM, no DB, no backend wheel.
 """
@@ -46,8 +46,12 @@ class _Step:
         self.delay, self.error, self.value = delay, error, value
         self.finished = False
         self.cancelled = False
+        #: Set once the step is running, so a test that cancels mid-flight can wait for the
+        #: thing it means to cancel instead of guessing how long the driver takes to get there.
+        self.started = asyncio.Event()
 
     async def run(self):
+        self.started.set()
         try:
             await asyncio.sleep(self.delay)
         except asyncio.CancelledError:
@@ -225,7 +229,7 @@ async def test_cancelling_the_run_cancels_the_steps_it_was_waiting_on(monkeypatc
             max_bug_rounds=1, ecosystem=ECOSYSTEM,
         )
     )
-    await asyncio.sleep(0.05)  # both overlapped steps are now in flight
+    await asyncio.gather(analysis.started.wait(), preflight.started.wait())
     driver.cancel()
     with pytest.raises(asyncio.CancelledError):
         await driver
@@ -246,26 +250,56 @@ async def test_the_preflight_result_is_handed_to_prepare_system(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-async def test_a_setup_failure_ends_the_run_once_extraction_is_done(monkeypatch):
-    # This pair is only overlapped, not gated: extraction runs to completion, and setup's failure is
-    # then reported as itself — not as a downstream "no properties extracted", which is what an
-    # entirely *unobserved* setup failure would look like.
-    boom = RuntimeError("cargo-build-sbf failed (exit 101)")
-    extract = _Step(0.03, None)
+async def test_a_setup_failure_cancels_extraction(monkeypatch):
+    # Extraction is where the money goes, and its properties have nowhere to be formalized once the
+    # setup is dead: the agents stop the moment the setup fails, and that failure is what surfaces —
+    # not a downstream "no properties extracted", which is what an *unobserved* setup failure would
+    # eventually look like.
+    boom = RuntimeError("the formalization setup failed")
+    extract = _Step(30, None)
     seen = await _drive(monkeypatch, prep=_Step(0.01, boom), extract=extract)
 
     assert seen["raised"] is boom
-    assert extract.finished and not extract.cancelled
+    assert extract.cancelled and not extract.finished
 
 
-async def test_an_extraction_failure_ends_the_run_with_its_own_error(monkeypatch):
-    # The other direction: extraction is awaited first, so its failure is what surfaces.
+async def test_an_extraction_failure_cancels_the_setup(monkeypatch):
+    # Symmetric: a setup whose properties will never arrive is stopped rather than run out its
+    # build, and the extraction error is what the caller sees.
     boom = RuntimeError("extraction blew up")
-    prep = _Step(0, None)
+    prep = _Step(30, None)
     seen = await _drive(monkeypatch, prep=prep, extract=_Step(0.01, boom))
 
     assert seen["raised"] is boom
-    assert prep.finished
+    assert prep.cancelled and not prep.finished
+
+
+async def test_cancelling_the_run_cancels_the_second_pair_too(monkeypatch):
+    # As with the first pair, a caller that goes away takes both sides with it: neither the setup
+    # nor the extraction agents outlive the run that started them.
+    prep = _Step(30, None)
+    extract = _Step(30, None)
+
+    async def fake_analysis(*_a, **_kw):
+        return "analyzed"
+
+    async def fake_extract_all(*_a, **_kw):
+        return await extract.run()
+
+    monkeypatch.setattr(core, "run_component_analysis", fake_analysis)
+    monkeypatch.setattr(core, "_extract_all", fake_extract_all)
+    driver = asyncio.create_task(
+        run_pipeline(  # type: ignore[arg-type]
+            _Backend(_Prepared(prep)), _Run(), max_bug_rounds=1, ecosystem=ECOSYSTEM,
+        )
+    )
+    await asyncio.gather(prep.started.wait(), extract.started.wait())
+    driver.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await driver
+
+    assert prep.cancelled and not prep.finished
+    assert extract.cancelled and not extract.finished
 
 
 async def test_both_succeeding_still_reaches_the_drivers_own_checks(monkeypatch):
