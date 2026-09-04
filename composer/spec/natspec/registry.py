@@ -9,6 +9,7 @@ which is validated against the Solidity compiler before acceptance.
 """
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass, field
 from typing import Callable, NotRequired, override, Iterable
@@ -104,15 +105,24 @@ async def _compile_stub(
     the tmpdir so relative ``import`` statements in the stub resolve the
     same way they will in the real project tree. Returns ``None`` on
     success, an error string on failure.
+
+    Compiling is necessary but not sufficient: an ``abstract contract`` — or
+    one that leaves an inherited function unimplemented, which makes it
+    implicitly abstract — compiles with exit status 0 and emits no bytecode.
+    Certora's scene assembly then rejects the verification unit ("Contract X
+    has no bytecode"), failing every subsequent typecheck with nothing in the
+    spec able to fix it. So ask solc for the bytecode and require it to be
+    non-empty, rather than trusting the exit status alone.
     """
     solc_name = f"solc{solc_version}"
+    identifier = pathlib.Path(stub_path).stem
     async with assembler.project_directory() as tmpdir:
         stub_abs = tmpdir / stub_path
         stub_abs.parent.mkdir(parents=True, exist_ok=True)
         stub_abs.write_text(stub)
         try:
             proc = await asyncio.create_subprocess_exec(
-                solc_name, stub_path,
+                solc_name, "--combined-json", "bin", stub_path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=tmpdir,
@@ -123,6 +133,18 @@ async def _compile_stub(
             return f"Solidity compiler {solc_name} not found"
         if proc.returncode != 0:
             return f"stdout:\n{stdout.decode()}\nstderr:\n{stderr.decode()}"
+        try:
+            compiled = json.loads(stdout.decode())["contracts"]
+        except (json.JSONDecodeError, KeyError) as e:
+            return f"Could not read the Solidity compiler's output ({e})"
+        if not compiled.get(f"{stub_path}:{identifier}", {}).get("bin"):
+            return (
+                f"{identifier} compiles but produces no bytecode, so it cannot "
+                f"be verified. A contract yields no bytecode when it is declared "
+                f"`abstract`, or when it inherits a function it does not "
+                f"implement. Declare it as a plain `contract` and give every "
+                f"member of the interface a body."
+            )
         return None
 
 
@@ -516,22 +538,35 @@ class FileRegistry:
     Unlike ``StubRegistry``, this is a plain registration — no agent decisions,
     but ``register`` rejects paths that don't exist in the layered FS the
     registry closes over (``_materializer``). Each contract gets its own KV
-    entry under ``_namespace`` keyed by contract name; ``read_all_contracts``
-    enumerates via ``asearch``. The lock serializes the read-modify-write that
-    backs ``register``'s per-path dedupe within a single contract.
+    entry under ``_namespace`` keyed by contract name; ``composer.cli.cache_natspec``
+    enumerates them via ``asearch``. The lock serializes the read-modify-write
+    behind ``register``'s per-path dedupe and ``unregister``'s removal, within a
+    single contract.
+
+    ``_non_units`` holds paths that must never become compilation units — the
+    generated interfaces. Certora's scene assembly requires every entry in the
+    conf's ``files`` to compile to bytecode, and an interface does not, so one
+    such entry fails the build for every spec in the session. Interfaces reach
+    the scene anyway, via the stub's ``import``. ``register`` refuses them, and
+    ``read_all`` filters them, so entries persisted by an earlier run (this
+    namespace is keyed by document digest, not by cache namespace) can't
+    resurface.
     """
     _store: BaseStore
     _materializer: Materializer
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _namespace: tuple[str, ...] = ()
+    _non_units: frozenset[str] = frozenset()
 
     @staticmethod
     async def acreate(
         store: BaseStore,
         namespace: tuple[str, ...],
         materializer: Materializer,
+        non_units: frozenset[str] = frozenset(),
     ) -> "FileRegistry":
         return FileRegistry(
+            _non_units=non_units,
             _store=store, _materializer=materializer, _namespace=namespace,
         )
 
@@ -562,8 +597,16 @@ class FileRegistry:
 
         Each entry is either ``path`` or ``path:Identifier`` depending on
         whether a Solidity identifier was supplied at registration.
+
+        Non-compilation units are filtered here as well as refused at
+        registration, so entries written before that guard existed stay out of
+        the conf.
         """
-        return [e.as_prover_arg() for e in await self._read_contract(contract_identifier)]
+        return [
+            e.as_prover_arg()
+            for e in await self._read_contract(contract_identifier)
+            if e.path not in self._non_units
+        ]
 
     async def register(
         self,
@@ -574,14 +617,29 @@ class FileRegistry:
         """Register ``path`` as a compilation-unit file for ``contract_identifier``.
 
         Rejects paths that don't exist in the layered FS this registry closes
-        over. If ``path`` is already registered for this contract, the
-        existing entry's ``solidity_identifier`` is overwritten (latest call
-        wins). Each path appears at most once per contract.
+        over, and paths in ``_non_units`` (the generated interfaces). If
+        ``path`` is already registered for this contract, the existing entry's
+        ``solidity_identifier`` is overwritten (latest call wins). Each path
+        appears at most once per contract.
         """
         _log.debug(
             "FileRegistry.register: ns=%r contract=%s path=%s ident=%s",
             self._namespace, contract_identifier, path, solidity_identifier,
         )
+        if path in self._non_units:
+            _log.debug(
+                "FileRegistry.register: REJECTED ns=%r contract=%s "
+                "path=%s (interface, not a compilation unit)",
+                self._namespace, contract_identifier, path,
+            )
+            return (
+                f"{path} is an interface, so it cannot be a compilation unit: "
+                f"Certora requires every registered file to compile to "
+                f"bytecode, and registering this one would fail the build for "
+                f"every spec in this session. It is already part of the scene "
+                f"— the stub that implements it imports it — so the spec can "
+                f"reference it without registration."
+            )
         if self._materializer.get(path) is None:
             _log.debug(
                 "FileRegistry.register: REJECTED ns=%r contract=%s "
@@ -610,6 +668,28 @@ class FileRegistry:
             await self._write_contract(contract_identifier, files)
         return f"Registered {new_entry.as_prover_arg()} for {contract_identifier}."
 
+    async def unregister(self, contract_identifier: SolidityIdentifier, path: str) -> str:
+        """Drop ``path`` from ``contract_identifier``'s file list.
+
+        A registration is otherwise permanent: this namespace is keyed by
+        document digest, so an entry outlives the run that wrote it and every
+        later run on the same document, whatever cache namespace it uses.
+        """
+        _log.debug(
+            "FileRegistry.unregister: ns=%r contract=%s path=%s",
+            self._namespace, contract_identifier, path,
+        )
+        async with self._lock:
+            files = await self._read_contract(contract_identifier)
+            remaining = [e for e in files if e.path != path]
+            if len(remaining) == len(files):
+                return (
+                    f"{path} is not registered for {contract_identifier}; "
+                    f"nothing to remove."
+                )
+            await self._write_contract(contract_identifier, remaining)
+        return f"Unregistered {path} for {contract_identifier}."
+
     def get_tools(self, contract_identifier: SolidityIdentifier) -> list[BaseTool]:
         """Return tools scoped to ``contract_identifier`` for injection into that
         contract's property agents.
@@ -623,14 +703,22 @@ class FileRegistry:
         class RegisterSpecFile(WithAsyncImplementation[str]):
             """Register a Solidity source file that must be pulled into the
             verification task for the spec you're authoring. Use this for any
-            contract source the spec references, e.g.,
+            *deployable* contract source the spec references, e.g.,
             other stubs, extant code the stubs don't cover (if applicable)
+
+            Do NOT register interfaces. Every registered file must compile to
+            bytecode, which an interface never does. The interfaces your stubs
+            implement are already in the scene through the stubs' ``import``
+            statements, so your spec can reference them without registration.
 
             The path must be project-relative and point to a ``.sol`` file
             already present in the source tree (inspect the tree with the
             source tools if unsure). Registration of a path that does not
             exist in the project tree is rejected — verify with `list_files`
             or `get_file` before calling this tool. Registering the same path twice is a no-op.
+
+            A registration you regret is not permanent: `unregister_verification_file`
+            takes it back.
             """
             path: str = PydanticField(
                 description="Project-relative path to a .sol file"
@@ -640,10 +728,38 @@ class FileRegistry:
             async def run(self) -> str:
                 return await registry.register(contract_identifier, self.path)
 
+        @tool_display(
+            lambda d: f"Unregistering spec file: {d['path']}",
+            "Spec file removal result",
+        )
+        class UnregisterSpecFile(WithAsyncImplementation[str]):
+            """Remove a source file you previously added with
+            `register_verification_file`, so it is no longer pulled into the
+            verification task.
+
+            Use this when a registered file turns out not to belong in the
+            build — most often when the typecheck reports that one of your
+            files has no bytecode. Every registered file must compile to
+            bytecode, and one that does not fails the build for every spec in
+            this session, so removing it is the way out.
+
+            `list_verification_files` shows what is currently registered. Note
+            that the Prover can only see the files that remain: if your spec
+            still references the contract, register the right file rather than
+            leaving it out.
+            """
+            path: str = PydanticField(
+                description="Project-relative path of the file to unregister"
+            )
+
+            @override
+            async def run(self) -> str:
+                return await registry.unregister(contract_identifier, self.path)
+
         @tool_display("Listing registered source files", None)
         class ListSpecFiles(WithAsyncImplementation[str]):
             """List every Solidity source file currently registered for this
-            contract's verification unit unit.
+            contract's verification unit.
             """
 
             @override
@@ -655,5 +771,6 @@ class FileRegistry:
 
         return [
             RegisterSpecFile.as_tool("register_verification_file"),
+            UnregisterSpecFile.as_tool("unregister_verification_file"),
             ListSpecFiles.as_tool("list_verification_files"),
         ]
