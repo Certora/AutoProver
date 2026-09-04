@@ -77,6 +77,20 @@ class HarnessModule:
         return f"cvlr_{self.module}"
 
     @property
+    def feature(self) -> str:
+        """The cargo feature that compiles this unit — and only this unit — into the crate.
+
+        The whole of ``docs/single-working-tree.md`` rests on this name. Every unit's module is
+        declared behind ``#[cfg(feature = "<this>")]``, so a module that is not selected is never
+        read by rustc, never appears in its dep-info, and therefore cannot break or dirty another
+        unit's build. That is the property the per-unit workdir used to buy.
+
+        Prefixed rather than bare because it shares a namespace with the project's own features, and
+        a component slug like ``serde`` or ``staging`` would otherwise silently mean something else.
+        """
+        return f"unit_{self.module}"
+
+    @property
     def artifact_file(self) -> str:
         return f"{self.module}.rs"
 
@@ -171,13 +185,28 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
             )
         )
 
-    def declare_modules(self, modules: list[HarnessModule]) -> Path:
-        """Write ``specs/mod.rs`` declaring every unit's module, and create any that do not exist.
+    def declare_modules(self, modules: list[HarnessModule]) -> tuple[Path, ...]:
+        """Write ``specs/mod.rs`` declaring every unit's module behind its own cargo feature.
 
-        Called once, before any unit authors, because ``mod x;`` with no ``x.rs`` is a compile error
-        — so a unit whose sibling has not been written yet would fail its own compile gate for a
-        reason that has nothing to do with it. The placeholder is a doc comment: an empty module
-        compiles and declares no rules, which is exactly the right starting state.
+        Returns every path it is responsible for, ``mod.rs`` first, so a caller sharing one working
+        tree across units can re-sync exactly these
+        (:meth:`composer.spec.cvlr.tree.SharedTree.adopt`).
+
+        Called once, before any unit authors, because the file has to name every unit and no single
+        unit knows them all. Each declaration is gated on :attr:`HarnessModule.feature`, which is
+        what lets the units share one working tree: a module behind a disabled ``cfg`` is never
+        compiled, never enters rustc's dep-info, and so cannot break — or force a rebuild of —
+        another unit's build (``docs/single-working-tree.md`` §2.1–2.2).
+
+        Files are still created up front. Under the gate a missing file is only an error for the
+        unit that selects it, but an empty module is a better starting state than a compile error
+        the *author* cannot act on, and creating them here keeps one writer for this directory. The
+        placeholder is a doc comment: an empty module compiles and declares no rules.
+
+        A second consequence worth naming: two units are now never compiled together, so two units
+        that each write ``impl Nondet for Foo`` in their own module no longer collide (``E0119``).
+        That hazard was previously hidden by each unit having its own workspace, and would have
+        surfaced the moment the trees were shared.
 
         Two units whose slugs reduce to one module name are refused here rather than tolerated.
         This is the only place that sees every name at once, and the alternative is silent: they
@@ -198,21 +227,30 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
                 f"punctuation collide; rename the components so they differ in more than that."
             )
         target = self._artifact_dir()
+        written: list[Path] = []
         for module in modules:
             path = target / module.artifact_file
+            written.append(path)
             if not path.exists():
                 path.write_text(
                     f"//! Harness for {module.slug}. Written by the CVLR author.\n"
                 )
         declarations = "".join(
-            f"pub mod {m.module};\n" for m in sorted(modules, key=lambda m: m.module)
+            f'#[cfg(feature = "{m.feature}")]\npub mod {m.module};\n'
+            for m in sorted(modules, key=lambda m: m.module)
         )
         mod_rs = target / "mod.rs"
         mod_rs.write_text(
             "//! The rules. One module per unit, declared here by the CVLR backend.\n"
             "//!\n"
-            "//! Every module named here must exist as a file, or the crate does not compile — so\n"
-            "//! this is written once for the whole run rather than appended to per unit.\n"
+            "//! Each module is gated on its own cargo feature, so a build selects exactly one\n"
+            "//! unit's rules. That is what lets every unit share one working tree: a module\n"
+            "//! behind a disabled `cfg` is never compiled and never enters rustc's dep-info, so\n"
+            "//! one unit's draft cannot break or dirty another's build.\n"
+            "//!\n"
+            "//! Written once for the whole run rather than appended to per unit.\n"
             "\n" + declarations
         )
-        return mod_rs
+        # `mod.rs` first: it is the one a caller logs, and the rest are what a shared working tree
+        # has to be re-synced with when a resumed run's component set has changed.
+        return (mod_rs, *written)

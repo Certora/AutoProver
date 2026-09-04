@@ -15,11 +15,21 @@ for a reason spelled out in :mod:`composer.cargo.sbf`: the backend builds inside
 hands the prover a script that reruns that same build, so a base conf naming its own build script —
 which 15 of 16 surveyed projects do — must not win.
 
-What the run *does not* own is as deliberate. ``solana_inlining`` and ``solana_summaries`` are left
-unset, because ``cargo certora-sbf`` reads them out of the package's own
-``[package.metadata.certora]`` and reports them through the build manifest, and
-``certoraParseBuildScript`` applies them only when the context has none. Setting them here would
-override the project's own declaration with our guess at it.
+What the run *does not* own is as deliberate. ``solana_inlining`` is left unset, because
+``cargo certora-sbf`` reads it out of the package's own ``[package.metadata.certora]`` and reports it
+through the build manifest, and ``certoraParseBuildScript.add_solana_files_to_context`` applies that
+only when the context has none. Setting it here would override the project's own declaration with our
+guess at it, and nothing in the authoring loop writes an inlining directive anyway.
+
+``solana_summaries`` **is** owned, and that reverses the position above. Every unit of a run now
+shares one working tree (``docs/single-working-tree.md``), and a summary is the one thing a cargo
+feature cannot scope: it is a regex over symbols that the prover applies to the whole build, so a
+single package-level file would apply one unit's summaries to every other unit's submission — and a
+wrongly-scoped summary produces a green rule that checked less than it appears to
+(:mod:`composer.spec.cvlr.tuning`). The run therefore names a *per-unit* composite, which is composed
+from the same canonical layers plus the project's own ``_package`` layer, so nothing the project
+declared is lost. Anything the base conf named is kept alongside it rather than replaced, because a
+project that names its own file knows something this code does not.
 """
 
 import dataclasses
@@ -233,6 +243,11 @@ class RunOverlay:
     build_script: str
     rules: RuleSelection = dataclasses.field(default_factory=InheritRules)
     msg: str = ""
+    #: Points-to summary files, as the prover will read them — same relative-to-the-workdir spelling
+    #: as ``build_script``. Added to whatever the base conf already names rather than replacing it;
+    #: empty leaves the key unset, so the package's ``[package.metadata.certora]`` declaration still
+    #: answers, which is what a submission that came from no authoring loop wants.
+    summaries: tuple[str, ...] = ()
     #: Extra keys, applied last. For the run-shaped settings that are not a conf *policy* —
     #: ``multi_assert_check`` for a variant run, ``rule_sanity`` when a caller wants to force it.
     extra: dict[str, object] = dataclasses.field(default_factory=dict)
@@ -273,6 +288,13 @@ def solana_conf(base: dict, overlay: RunOverlay) -> dict:
     conf = {k: v for k, v in base.items() if k not in OVERLAY_OWNED_KEYS}
     conf["build_script"] = overlay.build_script
     conf["msg"] = safe_msg(overlay.msg)
+    if overlay.summaries:
+        # Kept alongside the base's, not in place of them. Naming *any* value here stops
+        # `add_solana_files_to_context` from applying the package's declaration, so dropping the
+        # base's entries would silently narrow what the prover reads.
+        conf["solana_summaries"] = list(
+            dict.fromkeys([*_str_list(base.get("solana_summaries")), *overlay.summaries])
+        )
     match overlay.rules:
         case SelectRules(names):
             conf["rule"] = list(names)

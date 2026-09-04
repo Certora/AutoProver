@@ -44,6 +44,13 @@ from composer.spec.cvlr.scaffold import ENV_FAMILIES, SUMMARIES, EnvFamily, comp
 #: over.
 _TYPE_ANNOTATION = "#[type({body})]"
 
+#: Header of the per-unit layer, so a reader of the file knows who owns it and that editing it is
+#: pointless — the next build rewrites it from the run's state.
+_UNIT_LAYER_HEADER = (
+    ";;; Summaries added by the CVLR authoring loop for unit `{unit}`.\n"
+    ";;; DO NOT EDIT: rewritten from the run's state on every build."
+)
+
 
 @dataclasses.dataclass(frozen=True)
 class SummaryDirective:
@@ -73,18 +80,38 @@ def package_layer(header: str, directives: tuple[SummaryDirective, ...]) -> str:
 
 @dataclasses.dataclass(frozen=True)
 class TuningFiles:
-    """Where a unit's tuning files are, and how paths in them must be spelled.
+    """Where one unit's tuning files are, and how paths in them must be spelled.
 
     Held rather than derived from the harness module's path: the envs directory and the specs
     directory are siblings by convention, and reconstructing one from the other would encode that
     convention in a second place.
+
+    ``unit`` names the file this unit's directives land in. Every unit now shares one working tree
+    (``docs/single-working-tree.md``), and a summary is the one thing a cargo feature cannot scope:
+    it is a regex over symbols that the prover applies to the whole build, so a shared file would
+    apply one unit's summaries to another unit's submission. Since
+    :mod:`composer.spec.cvlr.tuning`'s own warning is that a wrong summary produces "a green rule
+    that checked less than it appears to", that leak is exactly the failure that must not be
+    possible. The unit's conf names the unit's composite; the project's own declaration in
+    ``[package.metadata.certora]`` is left alone and still answers for anything this run does not
+    submit.
     """
 
     envs_dir: Path
     dialect: PathDialect
+    #: The harness module name, which is what makes these files this unit's.
+    unit: str
 
-    def _layer_path(self, family: EnvFamily) -> Path:
+    def _package_layer_path(self, family: EnvFamily) -> Path:
         return self.envs_dir / family.package
+
+    def unit_layer_path(self, family: EnvFamily = SUMMARIES) -> Path:
+        """This unit's own layer — machine-owned, rewritten from state on every build."""
+        return self.envs_dir / family.unit_layer(self.unit)
+
+    def composite_path(self, family: EnvFamily = SUMMARIES) -> Path:
+        """The composite this unit's conf names."""
+        return self.envs_dir / family.unit_composite(self.unit)
 
     def read_header(self, family: EnvFamily = SUMMARIES) -> str:
         """The comment header the scaffold wrote, so rewriting the layer preserves it.
@@ -93,41 +120,66 @@ class TuningFiles:
         directives that follow are separated by blank lines, so this reads back what was written
         without the layer's format having to be parsed.
         """
-        existing = self._layer_path(family)
+        existing = self._package_layer_path(family)
         if not existing.is_file():
             return ""
         return existing.read_text().split("\n\n", 1)[0]
 
+    def read_package_layer(self, family: EnvFamily = SUMMARIES) -> str:
+        """The project's own layer, unchanged. Empty when the scaffold has not written one."""
+        existing = self._package_layer_path(family)
+        return existing.read_text() if existing.is_file() else ""
+
     def write(self, directives: tuple[SummaryDirective, ...]) -> None:
-        """Rewrite the summaries layer and recompose the file the build names.
+        """Rewrite this unit's summaries layer and recompose the file its conf names.
 
         Rewritten wholesale from ``directives`` rather than appended to, so the state the run
         recorded and the file on disk cannot drift — and a run that ends up with no directives
-        leaves the layer as the scaffold wrote it.
+        leaves a layer with nothing in it but the header, which composes to the project's own
+        content. That is what makes this a *derived* file in the sense
+        ``docs/single-working-tree.md`` §4 needs: dropping a directive from state removes it from
+        disk, where an appending writer would have kept it forever.
+
+        The project's ``_package.txt`` is **not** touched. It is the project's file; this run's
+        directives are the run's, and mixing them is how a unit's summary outlives the unit.
 
         Called from the build path rather than from the tool that records a directive. One writer,
         reading state the reducer has already merged: a tool writing its own view of the list would
         race a concurrent sibling and drop one of the two, which is the same bug as the unreduced
         state key and would not have raised.
         """
-        layer = package_layer(self.read_header(), directives)
-        self._layer_path(SUMMARIES).write_text(layer)
-        (self.envs_dir / SUMMARIES.composite).write_text(
-            compose_env(SUMMARIES, package_layer=layer, dialect=self.dialect)
+        header = _UNIT_LAYER_HEADER.format(unit=self.unit)
+        layer = package_layer(header, directives)
+        self.envs_dir.mkdir(parents=True, exist_ok=True)
+        self.unit_layer_path(SUMMARIES).write_text(layer)
+        self.composite_path(SUMMARIES).write_text(
+            compose_env(
+                SUMMARIES,
+                package_layer=self.read_package_layer(SUMMARIES),
+                unit_layer=layer,
+                dialect=self.dialect,
+            )
         )
 
     def missing(self) -> tuple[str, ...]:
-        """Tuning files the scaffold should have written and did not.
+        """Tuning files that should be on disk and are not.
 
-        Checked because the failure is otherwise mute: a summary written to a file the conf does not
-        name changes nothing, and the author would read a successful tool result and a second
+        Checked because the failure is otherwise mute: a summary written to a file the build does not
+        read changes nothing, and the author would read a successful tool result and a second
         identical [3308].
+
+        Both kinds are checked. The package composites are the scaffold's and are what the build
+        manifest declares — inlining still reaches the prover that way, since nothing in the loop
+        writes an inlining directive. The unit summaries composite is this run's and is what the
+        unit's conf names; :meth:`write` creates it, so its absence means no build has staged yet.
         """
-        return tuple(
+        package = tuple(
             family.composite
             for family in ENV_FAMILIES
             if not (self.envs_dir / family.composite).is_file()
         )
+        unit = () if self.composite_path().is_file() else (SUMMARIES.unit_composite(self.unit),)
+        return package + unit
 
 
 def merge_summaries(

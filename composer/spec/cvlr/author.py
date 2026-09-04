@@ -27,6 +27,7 @@ Four things are CVLR's own:
 
 import asyncio
 import dataclasses
+from pathlib import Path
 from typing import Literal, Sequence, TypedDict, override
 
 from langchain_core.tools import BaseTool
@@ -65,6 +66,7 @@ from composer.diagnostics.budget import (
     raise_budget_exceeded,
 )
 from composer.spec.context import CvlrGeneration, CvlrJudge, WorkflowContext
+from composer.spec.cvlr.editor import editor_tools
 from composer.spec.cvlr.harness import GeneratedHarness
 from composer.spec.cvlr.rules import rule_names
 from composer.spec.cvlr.state import (
@@ -204,6 +206,9 @@ class Rebuttal(RebuttalBase):
 class FeedbackDependencies:
     thunk: ContextualFeedbackThunk[Rebuttal, HarnessAssumptions]
     stamper: ValidationStamper
+    #: The developer's project, so the judge is shown the munge *diff* rather than a description of
+    #: it (``docs/who-edits-the-program.md`` §4, move B).
+    pristine: Path
 
 
 @tool_display("Getting feedback", "Feedback")
@@ -240,7 +245,7 @@ class FeedbackTool(
         skipped = self.state["skipped"]
         with self.tool_deps() as deps:
             verdict = await deps.thunk(
-                harness_assumptions(self.state),
+                harness_assumptions(self.state, deps.pristine),
                 draft,
                 skipped,
                 self.rebuttals,
@@ -533,6 +538,7 @@ async def batch_cvlr_generation(
     cvlr_versions: str,
     target: HarnessTarget,
     verify: VerifyDeps,
+    pristine: Path,
     crate_tools: Sequence[BaseTool] = (),
 ) -> BatchHarnessResult:
     """Author one harness module covering ``props``.
@@ -540,10 +546,13 @@ async def batch_cvlr_generation(
     The graph ends when the agent calls ``result`` (publish) or ``give_up``. Both ``verify_rules``
     and the feedback judge must have stamped the *current* buffer for ``result`` to be accepted.
 
-    ``target`` and ``verify`` are the caller's: they carry the warm cargo session and where the draft
-    is staged. One session per unit, because the compile gate is whole-crate — a shared workdir would
-    have unit A's gate failing on unit B's half-written module, which is worse than a slow gate
-    because it is not reproducible.
+    ``target`` and ``verify`` are the caller's: they carry the shared cargo session, the run's one
+    working tree and where this unit's draft is staged. One tree for every unit, because each unit's
+    module is behind its own cargo feature and a module a build does not compile cannot break it
+    (``docs/single-working-tree.md``).
+
+    ``pristine`` is the developer's project — the *from* side of every munge diff, and the only thing
+    the editor sub-agent needs that is not on ``target``.
 
     ``crate_tools`` mounts the resolved CVLR source (§5.5). They go to the author *and* the judge;
     the prompt states the source is present and authoritative.
@@ -566,6 +575,7 @@ async def batch_cvlr_generation(
             judge_ctx, env, props, component, program, cvlr_versions, crate_tools
         ),
         stamper=make_validation_stamper(FEEDBACK),
+        pristine=pristine,
     )
 
     sys_prompt: list[RawPromptInput | type[CacheMarker]] = [
@@ -594,6 +604,9 @@ async def batch_cvlr_generation(
                 ExpectRuleFailure.as_tool("expect_rule_failure"),
                 ExpectRulePassage.as_tool("expect_rule_passage"),
                 *gate_tools(target, verify),
+                *editor_tools(
+                    ctx, env, target=target, pristine=pristine, read_tools=env.source_tools
+                ),
                 FeedbackTool.bind(feedback_deps).as_tool("feedback_tool"),
                 PublishResultTool.bind(titles).as_tool("result"),
                 give_up_tool(

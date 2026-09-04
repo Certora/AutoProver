@@ -621,20 +621,31 @@ def test_the_author_is_told_when_to_stop_summarizing():
     assert "inlined *into the handler itself*" in prompt
 
 
-def test_the_munge_vocabulary_is_exactly_the_two_kinds_and_no_more():
+def test_the_author_knows_the_charter_without_holding_the_tool():
     """The charter as the author sees it (`docs/cvlr-backend-plan.md` §7.6.3).
 
-    `early_panic` is the most common munge in the corpus by a wide margin, and it is the
-    source-level form of the `.unwrap()` choice this prompt already teaches — applied to a `?`
-    below the handler, where a rule cannot reach it. The closed list is the point: the give-up
-    boundary is the vocabulary, so a third kind has to be a skip rather than an improvisation.
+    The author no longer applies a munge — `code_editor` commissions one — but it still has to know
+    what is worth asking for, because it owns the diagnosis and the editor owns the remedy. The
+    closed list is the point either way: the give-up boundary is the vocabulary, so a kind that is
+    not on it has to become a skip rather than an improvisation, and here that arrives as the
+    editor's refusal.
     """
     prompt = _flat(_author_system_prompt())
-    assert "munge_function(path, function, munge, why)" in prompt
-    assert "there are exactly two kinds" in prompt
-    assert "do not improvise a third" in prompt
+    assert "code_editor(request)" in prompt
+    assert "You do not make it" in prompt
+    assert "charter is five attributes" in prompt
+    assert "The editor can refuse, and a refusal is information" in prompt
     # early_panic must not be sold as the answer to the one thing it cannot do.
     assert "does **not** help an acceptance property" in prompt
+
+
+def test_every_kind_the_editor_offers_is_named_to_the_author():
+    """A request is only as good as the author's sense of what is available. The two kinds added
+    with the editor are the two that answer problems the author previously had to skip: a folded-away
+    symbol nothing can name, and a property about a point inside an execution."""
+    prompt = _flat(_author_system_prompt())
+    for kind in ("early_panic", "mock_fn", "inline_never", "hook_on_entry", "hook_on_exit"):
+        assert kind in prompt, kind
 
 
 def test_the_author_is_told_where_a_mock_stand_in_can_actually_live():
@@ -646,7 +657,9 @@ def test_the_author_is_told_where_a_mock_stand_in_can_actually_live():
     """
     prompt = _flat(_author_system_prompt())
     assert "crate::certora::specs::" in prompt
-    assert "a `pub fn` you write in this module" in prompt
+    assert "put a `pub fn` in this module" in prompt
+    # And who writes it, since the editor cannot.
+    assert _flat("**You write the stand-in, the editor never does**") in prompt
     # The kind whose sound use is narrow, said as a condition rather than a caution.
     assert "only when the property is not about what the stand-in computes" in prompt
 
@@ -654,7 +667,7 @@ def test_the_author_is_told_where_a_mock_stand_in_can_actually_live():
 def test_a_munge_is_ranked_last_among_the_ways_out():
     """It changes the program the verdicts are about, which nothing else on the tool list does."""
     prompt = _flat(_author_system_prompt())
-    assert "most consequential thing you can do" in prompt
+    assert "most consequential thing in this run" in prompt
     assert _flat("a different rule; a summary, if the code in the way is not") in prompt
 
 

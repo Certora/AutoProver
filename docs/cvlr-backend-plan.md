@@ -843,7 +843,13 @@ to a property — without waiting for a submission, because both CVLR declaratio
 deterministically (§7.5.3). It therefore also works in the budget wrap-up window, where no run is
 available at all.
 
-#### 7.5.2 Open question 3 is answered, and the answer is forced
+#### 7.5.2 Open question 3 is answered, and the answer is forced — superseded
+
+> **Superseded by [single-working-tree.md](./single-working-tree.md).** The answer below was not
+> forced, and the section is kept because *which* premise failed is the useful part. Two of the three
+> alternatives were rejected on grounds that do not hold — see the annotations in the table — and
+> they were considered separately where only their combination works. What is built now is one tree
+> for the run, each unit's module behind its own cargo feature, and one build permit.
 
 **Each unit gets its own workdir.** Not a preference — the compile gate is whole-crate. `cargo check`
 on the package compiles *every* unit's harness module, so in a shared workdir unit A's gate fails
@@ -854,14 +860,17 @@ Three alternatives were considered and rejected:
 
 | Alternative | Why not |
 |---|---|
-| One workdir, a run-wide lock around stage-and-check | The lock does not help: the *sibling file* is still broken on disk while A checks. Emptying siblings first makes concurrent units clobber each other |
-| A `--cfg` or cargo feature per unit, so each build compiles only its own module | Sound, and cheap on disk. But feature- and flag-varying builds get separate fingerprints anyway, so the cache cost is the same one it was meant to avoid — and it puts per-unit features into the target's own manifest |
+| One workdir, a run-wide lock around stage-and-check | The lock does not help: the *sibling file* is still broken on disk while A checks. Emptying siblings first makes concurrent units clobber each other. **Half right.** The lock is indeed not sufficient alone — but a sibling file behind a disabled `cfg` is not compiled and not in rustc's dep-info, so it is not on disk as far as A's build is concerned |
+| A `--cfg` or cargo feature per unit, so each build compiles only its own module | Sound, and cheap on disk. But feature- and flag-varying builds get separate fingerprints anyway, so the cache cost is the same one it was meant to avoid — and it puts per-unit features into the target's own manifest. **Wrong, and this is the load-bearing error.** Feature-varying gives the *program crate* separate fingerprints — 4 of 519 artifacts. The dependencies keep one fingerprint and compile once, provided the unit features are empty, and the dependencies are the whole cost the per-unit workdir was avoiding. Measured. Per-unit features in the manifest is also what the corpus already does: kamino metavault declares eleven, klend-audit eleven more |
 | Author units sequentially | Not this backend's call; the driver batches them |
 
 The cost is one dependency graph per unit, which promotes the **shared read-only cargo cache** §5.1
 held in reserve from an optimization to something load-bearing. It is not built: the confinement
 policy forces a private per-run `CARGO_HOME`, so sharing one needs a policy that grants a read-only
 mount of a common cache. That is the next real performance decision on this backend.
+
+> That last paragraph is the tell. The cost being named here is entirely the dependency graph — and
+> the alternative rejected one row above is the one that does not duplicate it.
 
 #### 7.5.3 What building it found
 
@@ -1861,6 +1870,18 @@ versus Rust, which predicts Soroban inherits the Solana shape essentially whole.
 
 ### 7.10 Revisit — the working-copy and munge reasoning, once the backend works
 
+**The working-copy half is done: [single-working-tree.md](./single-working-tree.md), and the munge
+half now has a design note of its own: [who-edits-the-program.md](./who-edits-the-program.md).** It reopened
+§7.5.2 rather than the triggers below, because the premise that made the per-unit workdir "forced"
+did not survive being checked — and the corpus survey it started from also moved two of the triggers:
+trigger 1's "seventh munge kind" is already four kinds (`certora_make_pub`, the `cvlr_hook_*` pair,
+`inline(never)`, `derive(Copy)`), and trigger 5's "spec-side approximation" partly exists in
+`cvlr::hook_on_entry` / `hook_on_exit`, which are in the pinned reference set and which this backend
+does not use. Both belong in a revision of that document's §4, which has not been written. The munge
+half — sub-agent or no sub-agent — is still unbuilt, but the argument has moved: that note finds §5's
+"no reviewer could rule on this" false for CVLR, and recommends two small changes (one owner for
+program source; the judge gets the diff) ahead of any agent.
+
 Not a phase; a scheduled re-read. [munge-and-working-copies.md](munge-and-working-copies.md) argues
 that this backend should keep a physical per-unit workdir rather than a VFS, and should let the
 author apply munges itself rather than commission an editor sub-agent. Both arguments are sound and
@@ -1908,7 +1929,7 @@ has been built on it is the expensive order.
 | Setup | Templated preflight; no AutoSetup — and it turned out to need no agent at all (§7.4.1) |
 | Authoring gate | Two checker tiers, one stamp: the cheap compile is ungated and the prover run is the gate, because a prover run builds first (§7.5.1) |
 | Rule granularity | Both forms offered, and the *generated* names are the unit of attribution; a parametric invocation stays grouped in the record (§7.5.3) |
-| Workdir lifetime | Per unit, forced by the whole-crate compile gate rather than chosen (§7.5.2) |
+| Workdir lifetime | **One tree for the run**, with each unit's module behind its own cargo feature — which is what makes the compile gate per-unit and undoes §7.5.2's "forced" ([single-working-tree.md](./single-working-tree.md)) |
 | Scaffold shape | From `Certora/solana-spec-template`, the recommended starting point, not from a vote over client layouts; the public examples break ties about what actually runs |
 | Scaffold safety | Never overwrite, compute every manifest change from the parsed manifest, and refuse rather than guess where a decision changes how the project builds for everyone |
 | Env (inlining/summaries) files | Vendored with a provenance stamp naming the upstream commit, in the template's three-layer split so the project's own layer is never a canonical file |
@@ -1930,12 +1951,16 @@ has been built on it is the expensive order.
    found `build_script` in 15 of 16 projects and `[package.metadata.certora]` with exactly three
    keys, and the implementation found the harder half of the reason: the `files` path collects no
    Rust sources into `.certora_sources`, and the CLI's own from-sources path builds unconfined.
-3. ~~**Warm-workdir lifetime**~~ **Answered: per unit, and forced** (§7.5.2). The compile gate is
-   whole-crate, so a shared workdir makes one unit's gate fail on another unit's half-written module —
-   nondeterministically. The follow-on is no longer a question but a task: the shared read-only cargo
-   cache is now load-bearing rather than an optimization, and needs a confinement policy that grants
-   a read-only mount of a common cache. One constraint still holds: a workdir may not switch
-   confinement posture mid-run without losing its incremental cache (§5.1).
+3. ~~**Warm-workdir lifetime**~~ ~~**Answered: per unit, and forced**~~ **Reopened and answered
+   the other way: one tree for the run** ([single-working-tree.md](./single-working-tree.md)).
+   §7.5.2's answer rested on the compile gate being whole-crate. It need not be: each unit's module
+   is declared behind its own cargo feature, so a module behind a disabled `cfg` is never compiled,
+   never enters rustc's dep-info, and cannot break or dirty a sibling's build. §7.5.2 considered a
+   feature-per-unit and a run-wide lock as *separate* alternatives and rejected each; together they
+   work. The follow-on task disappears with it — the shared read-only cargo cache and the shared
+   dependency build cache were both workarounds for the per-unit split, and one tree is both. The
+   constraint that still holds is §5.1's: a workdir may not switch confinement posture mid-run
+   without losing its incremental cache.
 4. ~~**Where the munge give-up boundary sits**, in edits or in wall-clock.~~ **Answered: in
    neither — the boundary is the vocabulary** (§7.6.4). Both proxies measure the wrong thing: the
    one real source munge in the corpus is 1097 lines and entirely routine, while its single

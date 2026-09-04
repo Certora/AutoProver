@@ -108,9 +108,14 @@ class Submission:
     #: Conf file stem, which is also this submission's identity on disk.
     stem: str = "cvlr"
     #: Cargo features for the build. Empty means "whatever the base conf's ``cargo_features`` says,
-    #: or ``certora``" — resolved in :func:`submit` so the gate build and the prover's rerun cannot
-    #: end up with different feature sets.
+    #: or ``certora``" — resolved in :func:`prepare_submission` so the gate build and the prover's
+    #: rerun cannot end up with different feature sets. An authoring run always names two: the
+    #: harness feature and the unit's own, which is what selects one unit's rules out of a shared
+    #: crate (``docs/single-working-tree.md`` §2.1).
     features: tuple[str, ...] = ()
+    #: Points-to summary files this submission reads, workdir-relative. One per unit; see
+    #: :class:`~composer.spec.cvlr.conf.RunOverlay`.
+    summaries: tuple[str, ...] = ()
 
     def resolved_features(self) -> tuple[str, ...]:
         return self.features or cargo_features(self.base_conf) or (DEFAULT_FEATURE,)
@@ -153,12 +158,75 @@ async def write_submission(
     )
     conf = solana_conf(
         submission.base_conf,
-        RunOverlay(build_script=str(script), rules=submission.rules, msg=submission.msg),
+        RunOverlay(
+            build_script=str(script),
+            rules=submission.rules,
+            msg=submission.msg,
+            summaries=submission.summaries,
+        ),
     )
     conf_path = session.workdir / CONF_DIR / f"{submission.stem}.conf"
     conf_path.parent.mkdir(parents=True, exist_ok=True)
     conf_path.write_text(dump_conf(conf))
     return conf_path
+
+
+@dataclasses.dataclass(frozen=True)
+class Prepared:
+    """A built ``.so`` and the conf that will verify it — everything before the cloud is involved."""
+
+    build: SbfRun
+    conf_path: Path
+
+
+async def prepare_submission(
+    session: CargoSession, submission: Submission, *, timeout_s: int = BUILD_TIMEOUT_S
+) -> BuildRejected | Prepared:
+    """The local half: build the program with the harness in, then write the conf that checks it.
+
+    Split from :func:`run_submission` because only this half touches the working tree, and the two
+    halves want different concurrency. Every unit of a run shares one tree and one ``target/``, so
+    this is what a caller holds the run's build permit across
+    (``docs/single-working-tree.md`` §2.4); the other half waits on a cloud job for minutes and
+    holding a permit across it would serialize the whole run behind one prover.
+    """
+    build = await build_for_submission(session, submission, timeout_s=timeout_s)
+    if not isinstance(build.verdict, Built):
+        return BuildRejected(build)
+    return Prepared(build, await write_submission(session, submission, timeout_s=timeout_s))
+
+
+async def run_submission(
+    session: CargoSession,
+    prepared: Prepared,
+    *,
+    prover_opts: ProverOptions,
+    callbacks: ProverCallbacks | None = None,
+    cex: CexHandler | None = None,
+    tool_call_id: str = "cvlr-submit",
+) -> CvlrOutcome:
+    """The remote half: hand the conf to the prover and shape what comes back.
+
+    ``prover_opts.app`` must select the Solana CLI; it is not forced here, because forcing it would
+    hide the one case where a caller legitimately disagrees (a Soroban submission reaching this same
+    code once §7.9 lands), and a mismatched app fails loudly at the first conf key the wrong CLI does
+    not recognize.
+
+    ``cex`` defaults to the no-analysis handler: a caller with no LLM is the normal case at this
+    layer, and the alternative — requiring one to get verdicts — is what would make the plumbing
+    untestable without an agent.
+    """
+    result = await run_prover(
+        session.workdir,
+        [str(prepared.conf_path)],
+        tool_call_id,
+        prover_opts,
+        callbacks if callbacks is not None else ProverCallbacks(),
+        cex if cex is not None else UnanalyzedCexHandler(),
+    )
+    if isinstance(result, str):
+        return SubmissionFailed(prepared.build, result)
+    return Checked(prepared.build, result)
 
 
 async def submit(
@@ -173,28 +241,18 @@ async def submit(
 ) -> CvlrOutcome:
     """Build, configure, and verify — the deterministic half of the CVLR backend, end to end.
 
-    ``prover_opts.app`` must select the Solana CLI; it is not forced here, because forcing it would
-    hide the one case where a caller legitimately disagrees (a Soroban submission reaching this same
-    code once §7.9 lands), and a mismatched app fails loudly at the first conf key the wrong CLI does
-    not recognize.
-
-    ``cex`` defaults to the no-analysis handler: a caller with no LLM is the normal case at this
-    layer, and the alternative — requiring one to get verdicts — is what would make the plumbing
-    untestable without an agent.
+    The two halves in one call, for a caller with no working tree to share: the deterministic gates
+    and the anchor-reach probe both own their workspace outright. The authoring loop calls the
+    halves separately so it can hold the run's build permit across the first and not the second.
     """
-    build = await build_for_submission(session, submission, timeout_s=build_timeout_s)
-    if not isinstance(build.verdict, Built):
-        return BuildRejected(build)
-
-    conf_path = await write_submission(session, submission, timeout_s=build_timeout_s)
-    result = await run_prover(
-        session.workdir,
-        [str(conf_path)],
-        tool_call_id,
-        prover_opts,
-        callbacks if callbacks is not None else ProverCallbacks(),
-        cex if cex is not None else UnanalyzedCexHandler(),
+    prepared = await prepare_submission(session, submission, timeout_s=build_timeout_s)
+    if isinstance(prepared, BuildRejected):
+        return prepared
+    return await run_submission(
+        session,
+        prepared,
+        prover_opts=prover_opts,
+        callbacks=callbacks,
+        cex=cex,
+        tool_call_id=tool_call_id,
     )
-    if isinstance(result, str):
-        return SubmissionFailed(build, result)
-    return Checked(build, result)

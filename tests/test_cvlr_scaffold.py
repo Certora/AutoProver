@@ -208,7 +208,7 @@ def test_the_path_a_mock_names_resolves_from_the_programs_own_file(tmp_path):
     assert "pub mod specs;" in root and "pub mod mocks;" in root
 
     store = CvlrArtifactStore(tmp_path, Path("."))
-    declared = store.declare_modules([HarnessModule("withdraw")]).read_text()
+    declared = store.declare_modules([HarnessModule("withdraw")])[0].read_text()
     assert "pub mod withdraw;" in declared
 
 
