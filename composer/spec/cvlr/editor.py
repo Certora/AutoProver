@@ -250,7 +250,7 @@ async def gate_edits(
     simply is not there (``docs/single-working-tree.md`` §4).
     """
     async with target.build_slot():
-        target.stage(draft, summaries, candidate)
+        await target.stage(draft, summaries, candidate)
         run = await target.session.check(package=target.package, features=target.features)
         if isinstance(run.verdict, CompileFailed):
             return DoesNotCompile(run.verdict.diagnostics)

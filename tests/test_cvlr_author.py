@@ -14,7 +14,7 @@ what makes it testable in the routine env — and the machinery is where the int
   to weaken rules until findings disappear, and accepting anything makes the gate decorative.
 """
 
-from pathlib import Path
+from pathlib import Path, PurePath
 
 import asyncio
 import json
@@ -381,6 +381,9 @@ async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeyp
     from composer.spec.cvlr import verify as verify_mod
     from composer.spec.cvlr.tree import Reconciled
 
+    async def _stubbed_stage(draft, summaries=(), munges=()) -> Reconciled:
+        return Reconciled(written=(), drifted=())
+
     captured: dict = {}
 
     async def fake_prepare(session, submission, **kwargs):
@@ -393,7 +396,7 @@ async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeyp
         lock=asyncio.Lock(),
         target=SimpleNamespace(
             session=None,
-            stage=lambda draft, summaries=(), munges=(): Reconciled(written=(), drifted=()),
+            stage=_stubbed_stage,
             build_slot=contextlib.nullcontext,
         ),
         submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), base_conf={}),
@@ -432,11 +435,12 @@ def test_the_working_tree_is_not_inside_a_prover_internal_directory():
     """
     from composer.spec.cvlr.pipeline import WORK_DIR
     from composer.spec.cvlr.scaffold import GITIGNORE_LINES
-    from composer.spec.cvlr.tree import _NOT_COPIED
+    from composer.spec.cvlr.tree import _NOT_MATERIALIZED
 
     assert ".certora_internal" not in WORK_DIR.parts
     assert WORK_DIR.name in GITIGNORE_LINES
-    assert _NOT_COPIED("anywhere", [WORK_DIR.name, "src"]) == {WORK_DIR.name}
+    assert _NOT_MATERIALIZED(PurePath(WORK_DIR.name) / "build" / "x.rs")
+    assert not _NOT_MATERIALIZED(PurePath("src") / "lib.rs")
 
 
 def test_the_default_conf_enables_vacuity_checking():
