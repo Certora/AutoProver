@@ -30,12 +30,29 @@ consequence of a violation. Do not score how hard the property looks to prove; a
 matters beats an easy one that does not.
 
 **Group the candidates into claims.** Several properties often say one thing between them. Put each
-candidate in exactly one group and name what that group, taken together, establishes. Keep groups
-small — two to four properties is typical, and a group of one is fine when a property stands alone.
+candidate in exactly one group and name what that group, taken together, establishes. A group of
+one is fine when a property stands alone.
 
-The run pursues the group containing the highest-scoring property, so the scores decide what is
-proved. Every member of a group must belong to the same component: a run works on one component's
-properties, and a group spanning two of them could not be pursued.
+The run pursues the group containing the highest-scoring property, and it pursues all of it, so a
+group must hold everything its claim rests on. A property that has to hold for the claim to mean
+anything belongs in the group even when its own score is low; leaving it out does not make the run
+cheaper, it makes the claim unproven. Equally, a property the claim does not need belongs in its
+own group — padding a group spends the run's budget on properties nobody chose.
+
+    Good example: claim "the vault is solvent — every share is backed by a unit of collateral it
+      can be redeemed for", grouping the supply/collateral identity, the ledger-sums-correctly
+      property, the no-burn-past-your-balance property, and the redemption property that says what
+      solvency is *for*. The last one scores lower on its own and is the point of the other three.
+    Bad example: the same claim, with the redemption property split into a group of its own
+      because the first three were "enough". The run proves an accounting identity and never
+      establishes that anyone can get their money out.
+    Bad example: that solvency group with the ERC-20 `name()`/`symbol()` properties added because
+      they are in the same component. They are not what solvency rests on.
+
+Every member of a group must belong to the same component: a run works on one component's
+properties, and a group spanning two of them could not be pursued. Where the same claim genuinely
+arises in two components, group it in the component that states it best and score the other
+component's copies on their own merits.
 
 # Scoring
 
@@ -83,5 +100,6 @@ everything makes it meaningless.
   H2. Every candidate appears in exactly one group.
   H3. Every [component, title] pair is copied exactly from the listing.
   H4. All members of a group belong to the same component.
+  H5. A group contains every property its claim rests on — the run pursues the whole group.
 
 Return the structured output exactly matching the requested schema.

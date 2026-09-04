@@ -38,11 +38,6 @@ from composer.templates.loader import load_jinja_template
 
 _log = logging.getLogger(__name__)
 
-#: Ceiling on the pursued group. A claim stated by more properties than this is either not one
-#: claim or not a focused unit of work; past it the batch is a component again and the mode has
-#: bought nothing. A backstop, not the target — the prompt asks for small groups.
-MAX_FOCUS_PROPERTIES = 3
-
 #: What a property the user actually raised is worth against one we inferred unaided. A bounded
 #: boost rather than a tiebreak or a dominator: a flagged concern should win at a comparable
 #: score, but should not drag a trivial property past a critical one.
@@ -208,23 +203,18 @@ def select(candidates: Sequence[Candidate], r: PropertyRanking) -> Selection:
     decides, and whatever else states the same claim comes with it. ``max`` keeps the first of
     equal-priority entries, so the model's own ordering breaks ties — but the choice is ours,
     which is what makes ``property_ranking.json`` and the run's actual subject the same thing by
-    construction."""
+    construction.
+
+    The whole group is pursued. A claim is established by all the properties that state it or by
+    none of them, so there is no size at which dropping one is the right trade: a partial batch
+    spends most of the budget and leaves the claim open. The saving comes from the group being
+    one claim out of the whole candidate set, not from trimming the claim itself."""
     best = max(r.ranked, key=priority)
     group = next(g for g in r.groups if best.key in g.members)
     home = next(c for c in candidates if c.label == best.key[0])
 
     by_priority = {rp.key: priority(rp) for rp in r.ranked}
     members = sorted(group.members, key=lambda k: -by_priority[k])
-    if len(members) > MAX_FOCUS_PROPERTIES:
-        # The claim this group named is no longer fully established once we cut it, so say so
-        # rather than quietly pursuing a subset under the group's name.
-        _log.warning(
-            "focus group %r has %d members; pursuing the top %d only, so the claim is not "
-            "established in full",
-            group.claim, len(members), MAX_FOCUS_PROPERTIES,
-        )
-        members = members[:MAX_FOCUS_PROPERTIES]
-
     return Selection(home.unit_index, [k[1] for k in members], group.claim, r)
 
 
@@ -248,7 +238,6 @@ async def rank_properties(
         "property_prioritization_prompt.j2",
         contract_name=contract_name,
         candidates=candidates,
-        max_supporting=MAX_FOCUS_PROPERTIES,
     )
     docs = [d for d in (design_doc, threat_model, *extra_context) if d is not None]
     content: list[dict | str] = [

@@ -8,7 +8,7 @@ structured-output response and a run that proves the wrong thing (or nothing).
 import pytest
 
 from composer.spec.prioritize import (
-    CRITICAL_MATCH_BONUS, MAX_FOCUS_PROPERTIES, Candidate, PropertyGroup, PropertyRanking,
+    CRITICAL_MATCH_BONUS, Candidate, PropertyGroup, PropertyRanking,
     RankedProperty, build_candidates, priority, select, validate_ranking,
 )
 from composer.spec.types import ComponentName, PropertyFormulation, PropertyTitle
@@ -114,18 +114,36 @@ def test_a_flagged_concern_does_not_drag_a_trivial_property_past_a_critical_one(
     assert priority(_e(VAULT, "x", 30, critical=True)) == 30 + CRITICAL_MATCH_BONUS
 
 
-def test_an_over_large_group_is_truncated_to_its_best_members(caplog):
-    props = [_prop(f"p{i}") for i in range(MAX_FOCUS_PROPERTIES + 3)]
+def test_a_large_group_is_pursued_whole():
+    # The claim is the unit of work: every property stating it is formalized, however many that
+    # is. Dropping the tail would spend most of the budget and leave the claim open.
+    props = [_prop(f"p{i}") for i in range(6)]
     cands = build_candidates([(0, ComponentName("Vault"), props)])
     label = "0: Vault"
     entries = [_e(label, p.title, 100 - i) for i, p in enumerate(props)]
     r = _ranking(entries, [_g("everything at once", *[(label, p.title) for p in props])])
     assert validate_ranking(cands, r) is None
 
-    sel = select(cands, r)
-    assert sel.titles == [p.title for p in props[:MAX_FOCUS_PROPERTIES]]
-    # Truncating means the claim is no longer established in full; that must not be silent.
-    assert any("not established in full" in rec.message for rec in caplog.records)
+    assert select(cands, r).titles == [p.title for p in props]
+
+
+def test_a_low_scoring_member_of_the_winning_group_is_still_pursued():
+    # The shape that motivated dropping the cap: the claim's own conclusion, outscored by the
+    # properties it depends on because they carry critical_match. It is in the group, so it is
+    # pursued.
+    props = [_prop("identity"), _prop("ledger_sums"), _prop("no_over_burn"), _prop("redemption")]
+    cands = build_candidates([(0, ComponentName("Vault"), props)])
+    label = "0: Vault"
+    entries = [
+        _e(label, "identity", 100, critical=True),
+        _e(label, "ledger_sums", 92, critical=True),
+        _e(label, "no_over_burn", 90, critical=True),
+        _e(label, "redemption", 95),
+    ]
+    r = _ranking(entries, [_g("solvency", *[(label, p.title) for p in props])])
+    assert validate_ranking(cands, r) is None
+
+    assert set(select(cands, r).titles) == {p.title for p in props}
 
 
 def test_selection_never_yields_an_empty_batch():
