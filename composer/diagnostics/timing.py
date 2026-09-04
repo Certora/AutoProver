@@ -16,16 +16,18 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator, Iterable, Protocol
 import uuid
 
-from graphcore.utils import TokenUsageDict
+from graphcore.utils import NormalizedTokenUsage
 
 
 @dataclass(frozen=True)
 class TokenTotals:
-    """Raw LLM token counts accumulated across one or more calls.
+    """LLM token counts accumulated across one or more calls. ``input`` is fresh
+    (uncached) input only; the two cache buckets are counted separately.
 
-    ``from_dict`` builds one from a ``graphcore.utils.TokenUsageDict`` (its
-    ``input_tokens`` / ``output_tokens`` / ``cache_read_input_tokens`` /
-    ``cache_creation_input_tokens`` keys).
+    ``from_normalized`` builds one from a ``graphcore.utils.NormalizedTokenUsage``,
+    whose ``total_input_tokens`` *includes* both cache buckets — they are subtracted
+    back out so the stored fields (and everything serialized from them) keep the
+    same meaning they always had.
     """
     input: int = 0
     output: int = 0
@@ -45,12 +47,14 @@ class TokenTotals:
         return self.input > 0 or self.output > 0 or self.cache_read > 0 or self.cache_write > 0
 
     @classmethod
-    def from_dict(cls, u: TokenUsageDict) -> "TokenTotals":
+    def from_normalized(cls, u: NormalizedTokenUsage) -> "TokenTotals":
+        cache_read = u["cache_read_tokens"]
+        cache_write = u["cache_write_tokens"]
         return TokenTotals(
-            input=u["input_tokens"],
-            output=u["output_tokens"],
-            cache_read=u["cache_read_input_tokens"],
-            cache_write=u["cache_creation_input_tokens"],
+            input=max(0, u["total_input_tokens"] - cache_read - cache_write),
+            output=u["total_output_tokens"],
+            cache_read=cache_read,
+            cache_write=cache_write,
         )
 
     def as_dict(self) -> dict[str, int]:
@@ -145,12 +149,12 @@ class RunSummary:
                 self._active_prover_reported_by_task.get(task_id, 0) + ms
             )
 
-    def record_token_usage(self, usage: TokenUsageDict, *, task_id: str | None = None) -> None:
+    def record_token_usage(self, usage: NormalizedTokenUsage, *, task_id: str | None = None) -> None:
         """Accumulate one LLM call's token counts into the run-wide per-model totals
         and (if a task is active) into that task's in-flight bucket, later folded into
         its ``PhaseRecord`` by ``record_phase``. Defaults attribution to the active task."""
         model = usage.get("model_name") or "unknown"
-        update = TokenTotals.from_dict(usage)
+        update = TokenTotals.from_normalized(usage)
         self.token_usage_by_model[model] = self.token_usage_by_model.get(model, TokenTotals()) + update
         if (task_id := task_id or get_current_task_id()) is not None:
             bucket = self._active_tokens_by_task.setdefault(task_id, {})
