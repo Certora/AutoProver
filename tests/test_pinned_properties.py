@@ -256,3 +256,56 @@ def _source(root: pathlib.Path):
         project_root=str(root), relative_path="program/src/lib.rs",
         contract_name="spl_stake_pool", content=None, forbidden_read=None,
     )
+
+
+# ---------------------------------------------------------------------------------------------
+# the checked-in fixture
+
+
+PIN_FILE = pathlib.Path(__file__).resolve().parent / "data" / "pins" / "spl-stake-pool.pin.json"
+
+
+def test_the_checked_in_stake_pool_pin_still_loads() -> None:
+    """A cheap guard on an expensive artifact.
+
+    The fixture was recovered from a checkpoint database for a run that cost ~$100, and the run
+    that would notice it had rotted is the one it exists to make cheap. So the format change that
+    invalidates it should be caught here, in the fast suite, by the real loader.
+    """
+    from composer.pipeline.ecosystem import SOLANA
+
+    pin = load_pinned_run(PIN_FILE, SOLANA.system_model)
+
+    assert pin.total() == 219, "the run this was taken from logged 219 extracted properties"
+    assert len(pin.properties) == 10
+    assert pin.target_commit == "22834f8fee10484e8393a1be7a051035193ed312"
+
+
+def test_every_pinned_component_answers_to_a_unit_of_its_own_analysis() -> None:
+    """The invariant the two-halves design exists to give, checked on the real fixture rather than
+    on a constructed one: a replay's units come from the pin, so every pinned key addresses a unit.
+    """
+    from composer.pipeline.ecosystem import SOLANA
+
+    pin = load_pinned_run(PIN_FILE, SOLANA.system_model)
+    main = SOLANA.locate_main(pin.analysis, _source(pathlib.Path("/nonexistent")))
+
+    slugs = {u.slug for u in SOLANA.units(main)}
+
+    assert set(pin.properties) == slugs, (
+        "the fixture pins every component its analysis produces; a key that answered to nothing "
+        "would formalize no rules while looking like a cheap pass"
+    )
+
+
+def test_the_component_the_gate_should_pin_is_present() -> None:
+    """``Pool_Initialization`` is component 0 and the wrong default — the normative verification of
+    this program has no Initialize rule, and no successful Initialize exists in the Prover's model
+    with accounts unconstrained. ``Admin_Fee_Configuration`` covers ``set_fee``, which the
+    normative verification does cover. See this directory's README."""
+    from composer.pipeline.ecosystem import SOLANA
+
+    pin = load_pinned_run(PIN_FILE, SOLANA.system_model)
+
+    assert "Admin_Fee_Configuration" in pin.properties
+    assert len(pin.properties["Admin_Fee_Configuration"]) == 23
