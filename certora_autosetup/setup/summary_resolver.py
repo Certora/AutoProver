@@ -439,8 +439,15 @@ def curated_scene_contracts(
             if not path.is_file():
                 log(f"Curated companion contract not copied: {path}", "WARNING")
                 continue
+            # Relative to the project root, like every other entry in a conf: an absolute
+            # path here would bake the build machine's layout into a conf that travels with
+            # the run.
+            try:
+                conf_path = path.resolve().relative_to(Path.cwd().resolve())
+            except ValueError:
+                conf_path = path
             entries.extend(
-                f"{path.as_posix()}:{name}"
+                f"{conf_path.as_posix()}:{name}"
                 for name in extract_definitions_from_solidity(str(path))
             )
     return entries
