@@ -3,8 +3,10 @@
 from composer.spec.source.spec_buffers import (
     NamedBuffer,
     buffer_digest,
+    buffer_files,
     import_closure,
     merge_buffers,
+    plan_buffer_runs,
     run_targets,
     validate_coverage,
     validate_disjoint_rules,
@@ -87,6 +89,19 @@ def test_digest_folds_in_extra_parts():
     assert buffer_digest(b, "easy", extra_parts=["skipped:P-x"]) != buffer_digest(b, "easy")
 
 
+# --- materialization -------------------------------------------------------
+
+
+def test_buffer_files_includes_buffer_and_its_imports():
+    files = buffer_files(_buffers(), "easy")
+    assert set(files) == {"easy.spec", "shared.spec"}  # easy + its import, not hard
+    assert files["easy.spec"] == EASY and files["shared.spec"] == SHARED
+
+
+def test_buffer_files_shared_only_itself():
+    assert set(buffer_files(_buffers(), "shared")) == {"shared.spec"}
+
+
 # --- run targets -----------------------------------------------------------
 
 
@@ -128,6 +143,22 @@ def test_coverage_unknown_property():
     b["hard"] = NamedBuffer(name="hard", cvl=HARD, property_rules={"P-ghost": ["r_hard"]}, imports=("shared",))
     err = validate_coverage(b, all_properties={"P-easy", "P-hard"}, skipped=set())
     assert err is not None and "unknown" in err
+
+
+# --- run planning ----------------------------------------------------------
+
+
+def test_plan_buffer_runs_skips_complete_and_excludes_shared():
+    b = _buffers()
+    plan = plan_buffer_runs(
+        b,
+        digest_of=lambda buf: f"d-{buf.name}",
+        is_complete=lambda buf, d: buf.name == "easy",  # easy already verified at its digest
+    )
+    by = {r.buffer.name: r for r in plan}
+    assert set(by) == {"easy", "hard"}  # shared is not a run target
+    assert by["easy"].needs_run is False and by["hard"].needs_run is True
+    assert by["easy"].digest == "d-easy"
 
 
 # --- buffers-map reducer ---------------------------------------------------
