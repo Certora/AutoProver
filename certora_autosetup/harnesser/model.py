@@ -171,6 +171,7 @@ class StorageReader:
     solidity_type: str
     access_expression: str
     params: tuple[LibParam, ...] = ()
+    location: str = ""
 
 
 @dataclass(frozen=True)
