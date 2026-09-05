@@ -1,17 +1,29 @@
-"""Properties supplied instead of extracted.
+"""Pinning a run's analysis and properties so a later run starts at formalization.
 
-The point of the mechanism is a cheap end-to-end run over a large program, so the tests are about
-the two things that would make it untrustworthy: a pin file that silently means something other
-than it says, and a pin file that has quietly drifted away from what analysis now produces.
+The mechanism exists to make an end-to-end run over a large program cheap, so these tests are about
+what would make it untrustworthy. Chiefly: pinning properties *without* pinning the analysis would
+let a component's properties attach to a component that had changed underneath its name. That is
+why the fixture carries both halves, and the round-trip test is the one that pins it down.
 """
 
 import json
 import pathlib
-from dataclasses import dataclass
 
 import pytest
 
-from composer.pipeline.pinned import PinnedProperties, load_pinned_properties
+from composer.pipeline.pinned import (
+    PIN_VERSION,
+    PinnedRun,
+    git_head,
+    load_pinned_run,
+    write_pinned_run,
+)
+from composer.spec.solana.model import (
+    ProgramComponent,
+    SolanaApplication,
+    SolanaInstruction,
+    SolanaProgram,
+)
 from composer.spec.types import PropertyFormulation
 
 PROPS = [
@@ -21,148 +33,226 @@ PROPS = [
      "description": "Pool token supply equals the reserve excess."},
 ]
 
+def _analysis() -> SolanaApplication:
+    """A minimal but *real* analysis — one that actually yields a program and a component.
 
-@dataclass(frozen=True)
-class _Unit:
-    """Enough of ``FeatureUnit`` for the matcher; the pipeline's real units satisfy it."""
+    Built rather than hand-written as JSON, because a hand-written literal validated happily while
+    producing zero programs, which would have made the round-trip test pass on a model no unit
+    could ever be derived from.
+    """
+    return SolanaApplication(
+        application_type="Liquid staking pool",
+        description="A stake pool that mints pool tokens against delegated stake.",
+        components=[
+            SolanaProgram(
+                name="spl_stake_pool",
+                program_identifier="spl_stake_pool",
+                description="The stake pool program.",
+                instructions=[
+                    SolanaInstruction(
+                        name="Initialize", description="Create a pool.",
+                        requirements=["the manager signs"],
+                    )
+                ],
+                components=[
+                    ProgramComponent(
+                        name="Pool Initialization",
+                        description="Creating a pool and its validator list.",
+                        instructions=["Initialize"], account_types=["StakePool"],
+                        interactions=[], requirements=["the manager signs"],
+                    )
+                ],
+            )
+        ],
+    )
 
-    slug: str
 
-    @property
-    def display_name(self) -> str:
-        return self.slug.replace("_", " ").title()
-
-    @property
-    def unit_index(self) -> int:
-        return 0
-
-    def cache_material(self) -> str:
-        return self.slug
-
-    def context_tag(self) -> dict[str, object]:
-        return {"component": self.slug}
-
-    def feature_json(self) -> dict[str, object]:
-        return {}
+ANALYSIS = _analysis().model_dump(mode="json")
 
 
-def _write(tmp_path: pathlib.Path, payload: object, name: str = "pins.json") -> pathlib.Path:
-    p = tmp_path / name
+def _fixture(tmp_path: pathlib.Path, **over: object) -> pathlib.Path:
+    payload: dict[str, object] = {
+        "version": PIN_VERSION,
+        "target_commit": "22834f8",
+        "analysis": ANALYSIS,
+        "properties": {"Pool_Initialization": PROPS},
+    }
+    payload.update(over)
+    p = tmp_path / "pin.json"
     p.write_text(json.dumps(payload))
     return p
 
 
-def test_an_object_keyed_by_slug_loads(tmp_path: pathlib.Path) -> None:
-    pinned = load_pinned_properties(_write(tmp_path, {"pool_initialization": PROPS}))
+def test_a_fixture_round_trips_through_the_real_model(tmp_path: pathlib.Path) -> None:
+    """Write then read, with the ecosystem's own model doing the validating both ways.
 
-    assert pinned.slugs == {"pool_initialization"}
-    assert pinned.total() == 2
-    got = pinned.get(_Unit("pool_initialization"))
-    assert got is not None and [p.title for p in got] == ["manager_must_sign", "supply_matches_reserve"]
-    assert all(isinstance(p, PropertyFormulation) for p in got)
+    This is the property the whole design rests on: the analysis travels *with* the properties, so
+    the units a replay formalizes against are the units the properties were written about.
+    """
+    analysis = SolanaApplication.model_validate(ANALYSIS)
+    props = {"Pool_Initialization": [PropertyFormulation.model_validate(p) for p in PROPS]}
+    path = tmp_path / "out" / "pin.json"
 
+    write_pinned_run(path, analysis, props, tmp_path)
+    back = load_pinned_run(path, SolanaApplication)
 
-def test_a_bare_list_takes_its_slug_from_the_artifact_filename(tmp_path: pathlib.Path) -> None:
-    """The round trip that makes pinning a copy rather than an edit: the artifact store writes
-    ``cvlr_<slug>.properties.json`` holding a bare list, and that file is usable as-is."""
-    path = _write(tmp_path, PROPS, name="cvlr_pool_initialization.properties.json")
-
-    pinned = load_pinned_properties(path)
-
-    assert pinned.slugs == {"pool_initialization"}
-
-
-def test_a_bare_list_without_a_usable_filename_is_refused(tmp_path: pathlib.Path) -> None:
-    """Guessing a slug here would attach the properties to the wrong component and formalize them
-    against source they were never written about."""
-    with pytest.raises(ValueError, match="needs a filename of the form"):
-        load_pinned_properties(_write(tmp_path, PROPS, name="properties.json"))
+    assert back.analysis == analysis, "the analysis must survive the round trip intact"
+    assert [p.title for p in back.properties["Pool_Initialization"]] == [
+        "manager_must_sign", "supply_matches_reserve"
+    ]
+    assert back.total() == 2
 
 
-def test_a_pin_naming_no_unit_is_an_error(tmp_path: pathlib.Path) -> None:
-    """A fixture exists to catch analysis drifting out from under it, so this is the load-bearing
-    case: silently formalizing nothing would look like a passing cheap run."""
-    pinned = load_pinned_properties(_write(tmp_path, {"stake_rebalancing": PROPS}))
+def test_the_writer_creates_missing_directories(tmp_path: pathlib.Path) -> None:
+    path = tmp_path / "nested" / "deeper" / "pin.json"
 
-    with pytest.raises(ValueError) as exc:
-        pinned.check_every_pin_matched([_Unit("pool_initialization"), _Unit("deposits")])
+    write_pinned_run(path, SolanaApplication.model_validate(ANALYSIS), {}, tmp_path)
 
-    msg = str(exc.value)
-    assert "stake_rebalancing" in msg, "the failure must name the pin that missed"
-    assert "pool_initialization" in msg and "deposits" in msg, (
-        "and the units analysis produced, since re-pinning against them is the next action"
-    )
+    assert path.is_file()
 
 
-def test_matching_pins_pass_the_check(tmp_path: pathlib.Path) -> None:
-    pinned = load_pinned_properties(_write(tmp_path, {"deposits": PROPS}))
+def test_loading_validates_the_analysis_against_the_ecosystem_model(tmp_path: pathlib.Path) -> None:
+    """A fixture from another ecosystem fails here, not at the first attribute that is missing."""
+    path = _fixture(tmp_path, analysis={"nothing": "like a solana application"})
 
-    pinned.check_every_pin_matched([_Unit("deposits"), _Unit("withdrawals")])
+    with pytest.raises(Exception):
+        load_pinned_run(path, SolanaApplication)
 
 
-def test_unmentioned_units_are_dropped_not_extracted(tmp_path: pathlib.Path) -> None:
-    """Pinning one component of ten is what makes the run cheap; a unit the file omits must
-    produce no batch rather than falling back to the extraction agent."""
-    pinned = load_pinned_properties(_write(tmp_path, {"deposits": PROPS}))
+def test_a_future_pin_version_is_refused(tmp_path: pathlib.Path) -> None:
+    """Fails on its version rather than on whatever downstream error the old shape produces."""
+    path = _fixture(tmp_path, version=PIN_VERSION + 1)
 
-    assert pinned.get(_Unit("deposits")) is not None
-    assert pinned.get(_Unit("withdrawals")) is None
+    with pytest.raises(ValueError, match="pin format"):
+        load_pinned_run(path, SolanaApplication)
+
+
+@pytest.mark.parametrize("missing", ["analysis", "properties"])
+def test_a_half_written_fixture_is_refused(tmp_path: pathlib.Path, missing: str) -> None:
+    """Both halves or neither — a fixture with only properties is the design this replaced."""
+    payload = json.loads(_fixture(tmp_path).read_text())
+    del payload[missing]
+    path = tmp_path / "half.json"
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match=missing):
+        load_pinned_run(path, SolanaApplication)
 
 
 def test_an_empty_property_list_is_refused(tmp_path: pathlib.Path) -> None:
-    """An empty list and an absent key mean the same thing to the run, so only one of them is
-    allowed to express it."""
+    """An empty list and an absent key mean the same thing to a run; only one may express it."""
+    path = _fixture(tmp_path, properties={"Pool_Initialization": []})
+
     with pytest.raises(ValueError, match="drop the key instead"):
-        load_pinned_properties(_write(tmp_path, {"deposits": []}))
+        load_pinned_run(path, SolanaApplication)
+
+
+def test_no_components_pinned_is_refused(tmp_path: pathlib.Path) -> None:
+    with pytest.raises(ValueError, match="no components pinned"):
+        load_pinned_run(_fixture(tmp_path, properties={}), SolanaApplication)
 
 
 def test_a_malformed_property_is_refused_at_load(tmp_path: pathlib.Path) -> None:
-    """Validation happens while reading the file, not when a unit reaches formalization an hour in."""
+    """Validation happens while reading, not when a unit reaches formalization an hour in."""
+    path = _fixture(tmp_path, properties={"Pool_Initialization": [{"title": "no_sort"}]})
+
     with pytest.raises(Exception):
-        load_pinned_properties(_write(tmp_path, {"deposits": [{"title": "no_sort_or_description"}]}))
+        load_pinned_run(path, SolanaApplication)
 
 
-def test_a_non_list_value_is_refused(tmp_path: pathlib.Path) -> None:
-    with pytest.raises(ValueError, match="must map to a list"):
-        load_pinned_properties(_write(tmp_path, {"deposits": {"sort": "invariant"}}))
+def test_an_unknowable_checkout_is_silent(
+    tmp_path: pathlib.Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A target that is not a git checkout cannot be compared, so nothing is claimed about it."""
+    pinned = load_pinned_run(_fixture(tmp_path, target_commit="0" * 40), SolanaApplication)
+
+    with caplog.at_level("WARNING"):
+        pinned.check_target(tmp_path)
+
+    assert not caplog.records
 
 
-def test_an_empty_file_is_refused(tmp_path: pathlib.Path) -> None:
-    with pytest.raises(ValueError, match="no components pinned"):
-        load_pinned_properties(_write(tmp_path, {}))
+def test_no_recorded_commit_is_silent(tmp_path: pathlib.Path, caplog: pytest.LogCaptureFixture) -> None:
+    pinned = load_pinned_run(_fixture(tmp_path, target_commit=None), SolanaApplication)
+
+    with caplog.at_level("WARNING"):
+        pinned.check_target(tmp_path)
+
+    assert not caplog.records
 
 
-def test_the_source_path_is_carried_for_the_error_message(tmp_path: pathlib.Path) -> None:
-    path = _write(tmp_path, {"deposits": PROPS})
-
-    pinned = load_pinned_properties(path)
-
-    assert pinned.source == path
-    with pytest.raises(ValueError, match=str(path)):
-        pinned.check_every_pin_matched([_Unit("other")])
+def test_git_head_is_none_outside_a_repository(tmp_path: pathlib.Path) -> None:
+    """The fixture must be usable against a plain directory, so this is a supported answer."""
+    assert git_head(tmp_path) is None
 
 
-def test_a_real_artifact_file_round_trips(tmp_path: pathlib.Path) -> None:
-    """The shape the CVLR artifact store actually writes, verbatim from run 6 of SPL stake-pool."""
-    path = _write(tmp_path, [
-        {"sort": "safety_property",
-         "title": "initialize_requires_manager_signature",
-         "description": "The `Initialize` handler must fail unless the `manager` account "
-                        "(account index 1) has `is_signer == true`."},
-    ], name="cvlr_pool_initialization.properties.json")
+def test_git_head_reads_a_real_repository() -> None:
+    """And a real one round-trips, since that is what --pin-to records."""
+    head = git_head(pathlib.Path(__file__).resolve().parent.parent)
 
-    pinned = load_pinned_properties(path)
-
-    props = pinned.get(_Unit("pool_initialization"))
-    assert props is not None and len(props) == 1
-    assert props[0].title == "initialize_requires_manager_signature"
-    assert props[0].sort == "safety_property"
+    assert head is not None and len(head) == 40
 
 
-def test_construction_is_direct_for_callers_that_already_have_properties() -> None:
-    """``PinnedProperties`` is usable without a file, so a test fixture need not write one."""
-    pinned = PinnedProperties(
-        {"deposits": [PropertyFormulation.model_validate(PROPS[0])]}, pathlib.Path("<memory>")
+def test_a_moved_checkout_is_reported_when_both_commits_are_known(
+    tmp_path: pathlib.Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    repo = pathlib.Path(__file__).resolve().parent.parent
+    pinned = PinnedRun(
+        SolanaApplication.model_validate(ANALYSIS), {}, "0" * 40, tmp_path / "pin.json"
     )
 
-    assert pinned.total() == 1
+    with caplog.at_level("WARNING"):
+        pinned.check_target(repo)
+
+    assert any("may no longer describe this source" in r.message for r in caplog.records)
+
+
+def test_a_matching_checkout_is_silent(tmp_path: pathlib.Path, caplog: pytest.LogCaptureFixture) -> None:
+    repo = pathlib.Path(__file__).resolve().parent.parent
+    head = git_head(repo)
+    assert head is not None
+    pinned = PinnedRun(SolanaApplication.model_validate(ANALYSIS), {}, head, tmp_path / "pin.json")
+
+    with caplog.at_level("WARNING"):
+        pinned.check_target(repo)
+
+    assert not caplog.records
+
+
+def test_the_written_commit_is_the_projects_not_the_cwds(tmp_path: pathlib.Path) -> None:
+    """``--pin-to`` records the *target's* commit; a fixture stamped with AutoProver's own HEAD
+    would say nothing about the source the analysis describes."""
+    path = tmp_path / "pin.json"
+
+    write_pinned_run(path, SolanaApplication.model_validate(ANALYSIS), {}, tmp_path)
+
+    assert json.loads(path.read_text())["target_commit"] is None
+
+
+def test_units_derive_from_the_pinned_analysis(tmp_path: pathlib.Path) -> None:
+    """The whole reason both halves travel together.
+
+    A replay's units come from the fixture's own analysis, so the component a pinned slug names is
+    the component its properties were written about — by construction, with no name to match
+    against a freshly generated model and therefore nothing to drift.
+    """
+    from composer.pipeline.ecosystem import SOLANA
+
+    pinned = load_pinned_run(_fixture(tmp_path), SolanaApplication)
+    main = SOLANA.locate_main(pinned.analysis, _source(tmp_path))
+
+    slugs = [u.slug for u in SOLANA.units(main)]
+
+    assert set(pinned.properties) <= set(slugs), (
+        f"pinned slugs {sorted(pinned.properties)} must be answerable by the fixture's own "
+        f"analysis, which yields {slugs}"
+    )
+
+
+def _source(root: pathlib.Path):
+    from composer.spec.context import SourceCode
+
+    return SourceCode(
+        project_root=str(root), relative_path="program/src/lib.rs",
+        contract_name="spl_stake_pool", content=None, forbidden_read=None,
+    )
