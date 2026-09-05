@@ -1,4 +1,4 @@
-from typing import AsyncIterator, NotRequired, override, Literal, Annotated, Sequence, Protocol, Callable
+from typing import AsyncIterator, NotRequired, override, Literal, Annotated, Sequence, Protocol, Callable, cast
 
 from typing_extensions import TypedDict
 from contextlib import asynccontextmanager
@@ -14,7 +14,7 @@ from graphcore.tools.schemas import (
     WithAsyncImplementation, WithImplementation, WithInjectedId, WithInjectedState,
     WithAsyncDependencies
 )
-from graphcore.graph import tool_state_update, RawPromptInput, CacheMarker, SummaryConfig
+from graphcore.graph import tool_state_update, tool_return, RawPromptInput, CacheMarker, SummaryConfig
 from graphcore.tools.vfs import VFSAccessor, VFSState
 
 from composer.authoring.judge import PropertyFeedbackProtocol
@@ -28,8 +28,16 @@ from composer.spec.cvl_generation import (
 from composer.prover.core import run_prover, CexHandler, ProverCallbacks, ProverReport
 from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools, WIPE_HISTORY
 from composer.spec.source.prover import setup_prover_config_in
+from composer.spec.source.spec_buffers import (
+    SpecBuffersExtra, buffer_review_text, buffer_state_digest, check_buffer_completion,
+    combined_buffers_view, run_targets, spec_buffers_enabled, validate_coverage,
+    validate_disjoint_rules,
+)
+from composer.spec.source.buffer_tools import (
+    put_buffer, get_buffer, edit_buffer, list_buffers, delete_buffer,
+)
 from composer.spec.context import WorkflowContext, CVLGeneration, CacheKey, SourceCode
-from composer.spec.types import PropertyFormulation, PropertyTitle
+from composer.spec.types import PropertyFormulation, PropertyTitle, RuleName
 from composer.pipeline.core import GaveUp, ToolBinder, InjectingToolExtension, Curtailed
 from composer.pipeline.plugin_api import ProvidedTools
 from composer.spec.source.plugin import CertoraProverTools, CVLAuthorState
@@ -86,7 +94,7 @@ class SourceAuthorExtra(TypedDict):
 # ``vfs`` comes from ProverStateExtra (NotRequired, no merge op — replaced
 # wholesale by commit_edit / revert_to_edit); the generation input always
 # seeds it explicitly.
-class SourceCVLGenerationExtra(CVLGenerationExtra, ProverStateExtra, SourceAuthorExtra, VersionedHistory):
+class SourceCVLGenerationExtra(CVLGenerationExtra, ProverStateExtra, SourceAuthorExtra, VersionedHistory, SpecBuffersExtra):
     pass
 
 class SourceCVLGenerationInput(SourceCVLGenerationExtra, FlowInput):
@@ -156,16 +164,38 @@ class PublishResultTool(
 
     @override
     async def run(self) -> Command | str:
-        if (err := check_completion(self.state, self.state["version_history"])) is not None:
-            return err
-        with self.tool_deps() as titles:
-            if (err := validate_property_rules(self.property_rules, self.state["skipped"], titles)) is not None:
+        buffers = self.state.get("buffers") or {}
+        if run_targets(buffers):
+            # Multi-buffer completion: every run-target buffer verified AND reviewed at its current
+            # digest (per-buffer stamps), plus a clean property/rule partition across buffers.
+            skipped_pairs = [(str(s.property_title), str(s.reason)) for s in self.state["skipped"]]
+            if (err := check_buffer_completion(
+                buffers, self.state["validations"], self.state["required_validations"],
+                skipped=skipped_pairs, version_history=self.state["version_history"],
+            )) is not None:
                 return err
+            with self.tool_deps() as titles:
+                skip_titles = {str(s.property_title) for s in self.state["skipped"]}
+                if (err := validate_coverage(buffers, all_properties=set(titles), skipped=skip_titles)) is not None:
+                    return f"Completion REJECTED: {err}"
+            if (err := validate_disjoint_rules(buffers)) is not None:
+                return f"Completion REJECTED: {err}"
+            pr = [
+                PropertyRuleMapping(property_title=cast(PropertyTitle, p), rules=cast(list[RuleName], rs))
+                for b in run_targets(buffers) for p, rs in b.property_rules.items()
+            ]
+        else:
+            if (err := check_completion(self.state, self.state["version_history"])) is not None:
+                return err
+            with self.tool_deps() as titles:
+                if (err := validate_property_rules(self.property_rules, self.state["skipped"], titles)) is not None:
+                    return err
+            pr = self.property_rules
         return tool_state_update(
             self.tool_call_id,
             "Accepted",
             result=self.commentary,
-            property_rules=self.property_rules,
+            property_rules=pr,
             failed=False,
         )
 
@@ -655,6 +685,39 @@ class EditorAwareFeedbackTool(
     def _version_history(self) -> Sequence[str]:
         return self.state["version_history"]
 
+    @override
+    async def run(self) -> Command:
+        """Single-spec: the base flow. Multi-buffer: review each run-target buffer whose feedback
+        stamp is missing or stale (its text or an import changed) in isolation, and stamp
+        ``feedback:<buffer>`` per approved buffer — so an approved, unchanged buffer is never
+        re-reviewed and the hard buffer is reviewed alone."""
+        buffers = self.state.get("buffers") or {}
+        targets = run_targets(buffers)
+        if not targets:
+            return await super().run()
+
+        skipped = self.state["skipped"]
+        skipped_pairs = [(str(s.property_title), str(s.reason)) for s in skipped]
+        vh = self.state["version_history"]
+        validations = self.state["validations"]
+
+        def digest(name: str) -> str:
+            return buffer_state_digest(buffers, name, skipped=skipped_pairs, version_history=vh)
+
+        stale = [b for b in targets if validations.get(f"feedback:{b.name}") != digest(b.name)]
+        if not stale:
+            return tool_return(
+                self.tool_call_id, "All buffers already reviewed and approved at their current state."
+            )
+        new_stamps: dict[str, str] = {}
+        blocks: list[str] = []
+        for b in stale:
+            verdict = await self._get_feedback(buffer_review_text(buffers, b.name), skipped)
+            blocks.append(f"=== buffer {b.name} ===\nGood? {verdict.good}\nFeedback {verdict.feedback}")
+            if verdict.good:
+                new_stamps[f"feedback:{b.name}"] = digest(b.name)
+        return tool_state_update(self.tool_call_id, "\n\n".join(blocks), validations=new_stamps)
+
 
 _PropertyGenTemplate = TypedTemplate[PropertyGenParams]("property_generation_prompt.j2")
 
@@ -662,6 +725,35 @@ class PropertyGenSystemParams(TypedDict):
     source_editing: bool
 
 _PropertyGenSysTemplate = TypedTemplate[PropertyGenSystemParams]("property_generation_system_prompt.j2")
+
+#: Appended to the system prompt only when multi-buffer authoring is enabled (spec_buffers_enabled).
+_SPEC_BUFFERS_GUIDANCE = """
+## Splitting the spec into verification buffers
+
+Instead of one spec, you may author several named CVL **buffers**, each a self-contained spec that is
+verified and reviewed on its own. Use `put_buffer` / `edit_buffer` / `get_buffer` / `list_buffers` /
+`delete_buffer` instead of the single-spec put/get/edit tools when you split.
+
+When to split:
+- Properties have **conflicting precision needs** — one buffer can summarize a function that another
+  keeps exact (each buffer has its own `methods{}`), with no global-methods-block conflict.
+- To **isolate the hard/slow properties**: put the many easy properties in one buffer that verifies and
+  is approved once and never re-touched, while you iterate on a small hard buffer in isolation — its
+  re-verification and re-review cost only that buffer.
+
+How:
+- Put **shared** infrastructure (ghosts, common invariants, helper CVL functions, token/oracle models)
+  in a buffer with `is_run_target=false`, and have run-target buffers `import "<shared>.spec"` and list
+  it in their `imports`.
+- Each **run-target** buffer declares its `property_rules` (the properties it verifies + their rule
+  names). Across all run-target buffers, every non-skipped property must appear in **exactly one**
+  buffer, and each rule lives in exactly one buffer.
+- `verify_spec` then verifies every run-target buffer independently and in parallel; a buffer already
+  verified at its current content is skipped. Editing a shared buffer re-verifies every buffer that
+  imports it.
+
+A single run-target buffer is exactly the one-spec case, so only split when it helps.
+"""
 
 #: The prover's tool extension: contributions come from plugins deriving
 #: ``CertoraProverTools``, dispatched via their ``certora_prover_tools`` hook.
@@ -790,6 +882,8 @@ async def batch_cvl_generation(
     sys_prompt : list[RawPromptInput | type[CacheMarker]] = [
         _PropertyGenSysTemplate.bind({"source_editing": editing is not None}).render_to
     ]
+    if spec_buffers_enabled():
+        sys_prompt.append(_SPEC_BUFFERS_GUIDANCE)
 
     added_tools : list[BaseTool] = []
     if editing_tools is not None:
@@ -893,8 +987,17 @@ async def batch_cvl_generation(
         )
     else:
         b = b.with_tools(env.source_tools)
+    # Multi-buffer authoring tools (opt-in): the agent partitions the spec into several named
+    # buffers verified independently. Off by default so the single-curr_spec flow is untouched.
+    buffer_authoring: list[BaseTool] = [
+        put_buffer(SourceCVLGenerationState), get_buffer(SourceCVLGenerationState),
+        edit_buffer(SourceCVLGenerationState), list_buffers(SourceCVLGenerationState),
+        delete_buffer(SourceCVLGenerationState),
+    ] if spec_buffers_enabled() else []
     task_graph = b.with_tools(
         static_tools()
+    ).with_tools(
+        buffer_authoring
     ).with_tools(
         feedback_suite
     ).with_tools(
@@ -972,7 +1075,8 @@ async def batch_cvl_generation(
                 reminders_channel=[],
                 vfs=restored_vfs,
                 version_history=restored_history,
-                spec_stem=spec_stem
+                spec_stem=spec_stem,
+                buffers={},
             )
         )
     except BudgetExceeded as e:
@@ -998,8 +1102,13 @@ async def batch_cvl_generation(
             # unformalizable" judgment — it's the budget talking. Keep the agent's account.
             return Curtailed(None, detail=res_state["result"])
         return GaveUp(reason=res_state["result"])
-    d = res_state["curr_spec"]
-    assert d is not None
+    # In multi-buffer mode the artifact is the buffers combined into one document; else curr_spec.
+    _buffers = res_state.get("buffers") or {}
+    if run_targets(_buffers):
+        d = combined_buffers_view(_buffers)
+    else:
+        d = res_state["curr_spec"]
+        assert d is not None
     applied_edits: list[AppliedEdit] = []
     if editing is not None:
         for edit_id in res_state["version_history"]:

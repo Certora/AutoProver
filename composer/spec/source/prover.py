@@ -53,6 +53,9 @@ from composer.spec.util import temp_certora_file
 from composer.spec.gen_types import CERTORA_DIR, SPECS_DIR
 from composer.spec.util import string_hash
 from composer.spec.source.cex_capture import CexAnalysisStore
+from composer.spec.source.spec_buffers import (
+    BufferRun, NamedBuffer, SpecBuffersExtra, buffer_state_digest, plan_buffer_runs, run_targets,
+)
 
 
 _logger = logging.getLogger("composer.prover")
@@ -113,6 +116,9 @@ class ProverRunLog(TypedDict):
     sort: Literal["run"]
     declared_rules: list[str]
     state_digest: str
+    # The spec buffer this run belongs to; absent for a single-curr_spec run. Each buffer has its own
+    # spec/digest, so completion is evaluated per buffer over its own runs (see _history_for_buffer).
+    buffer: NotRequired[str]
 
 class NagMarker(TypedDict):
     nagged_rules: list[RulePath]
@@ -246,6 +252,33 @@ def _is_completion_history(
             return True
     return False
 
+def _history_for_buffer(l: list[ProverHistoryItem], buffer: str) -> list[ProverHistoryItem]:
+    """The prover history restricted to one buffer's runs (nag markers pass through). Each buffer has
+    its own spec, hence its own ``state_digest``; filtering first keeps :func:`_iterate_history`'s
+    digest streak from being truncated by an interleaved run of a different buffer."""
+    return [it for it in l if it["sort"] != "run" or it.get("buffer") == buffer]
+
+
+def buffer_is_complete(
+    l: list[ProverHistoryItem],
+    *,
+    buffer: str,
+    curr_digest: str,
+    expected_to_fail: set[str],
+    curr_status: list[tuple[RulePath, StatusCodes]],
+    all_rules: list[str],
+) -> bool:
+    """Whether one buffer's rules are all verified against its current digest, evaluated over that
+    buffer's own runs. Overall completion is the AND of this across every run-target buffer."""
+    return _is_completion_history(
+        l=_history_for_buffer(l, buffer),
+        curr_digest=curr_digest,
+        expected_to_fail=expected_to_fail,
+        curr_status=curr_status,
+        all_rules=all_rules,
+    )
+
+
 def _merge_prover_history(left: list[ProverHistoryItem], right: list[ProverHistoryItem]) -> list[ProverHistoryItem]:
     to_ret = left.copy()
     to_ret.extend(right)
@@ -276,7 +309,7 @@ type ProverEvents = CEXAnalysisStart | CloudPollingEvent | ProverOutputEvent | R
 # (structural invariants, never-edited authors), in which case it contributes
 # nothing to the digest. The prover's validation stamp is bound to it so a
 # post-run edit invalidates the stamp.
-class StateWithSkips(CVLGenerationState, ProverStateExtra, VersionedHistory):
+class StateWithSkips(CVLGenerationState, ProverStateExtra, VersionedHistory, SpecBuffersExtra):
     pass
 
 class _SpecCallbacks(ProverEventCallbacks):
@@ -496,6 +529,51 @@ def setup_prover_config_in(
         ) as conf_path:
             yield (conf_path, config)
 
+@contextmanager
+def materialize_buffers(
+    working_dir: str, buffers: Mapping[str, NamedBuffer]
+) -> Iterator[dict[str, str]]:
+    """Write every buffer as ``{name}.spec`` into the specs dir (all at once), so any buffer's
+    ``import "X.spec"`` resolves to its sibling. Yields ``name -> on-disk spec path``; every file is
+    removed on exit. Buffer names are unique, so there is no same-name write race across the set."""
+    with ExitStack() as stack:
+        yield {
+            name: stack.enter_context(tmp_spec(root=working_dir, content=buf.cvl, name=name))
+            for name, buf in buffers.items()
+        }
+
+
+@contextmanager
+def buffer_conf(
+    *,
+    working_dir: str,
+    config: dict,
+    main_contract: str,
+    spec_path: str,
+    buffer_name: str,
+    conf_dir: Path,
+    rule: list[str] | None,
+    msg: str,
+) -> Iterator[tuple[str, dict]]:
+    """Build a conf verifying an already-materialized buffer spec at ``spec_path`` (its imports resolve
+    to the sibling ``.spec`` files written by :func:`materialize_buffers`). Yields (conf_path, config)."""
+    cfg = prover_config_overlay(
+        config, main_contract=main_contract, verify_target=f"{main_contract}:{spec_path}"
+    )
+    if rule is not None:
+        cfg["rule"] = rule
+    cfg["msg"] = msg
+    with temp_certora_file(
+        root=working_dir,
+        content=json.dumps(cfg, indent=2),
+        ext="conf",
+        name=f"verify_{buffer_name}",
+        prefix="verify",
+        dest_dir=conf_dir,
+    ) as conf_path:
+        yield (conf_path, cfg)
+
+
 def get_prover_tool(
     llm: LLM,
     main_contract: str,
@@ -531,15 +609,18 @@ def get_prover_tool(
         if rules is not None and exclude_rules is not None:
             return "Cannot invoke the prover with both `rules` and `exclude_rules` set to non-none"
 
+        # Multi-buffer mode when the agent has declared run-target buffers; otherwise the single
+        # curr_spec path below (unchanged).
+        buffers = state.get("buffers") or {}
+        targets = run_targets(buffers)
+
         spec = state["curr_spec"]
-        if spec is None:
+        if not targets and spec is None:
             return "Specification not yet put on VFS"
 
-        spec_hash = string_hash(
-            spec
-        )
+        spec_hash = string_hash(spec) if spec is not None else ""
 
-        if (last_run := last_prover_run(state["prover_history"])) is not None:
+        if not targets and (last_run := last_prover_run(state["prover_history"])) is not None:
             if any(i == "TIMEOUT" for (_,i) in last_run["prover_results"]) and last_run["spec_digest"] == spec_hash:
                 return "Refusing to re-run prover on identical spec with a known TIMEOUT result; timeouts are not transient " \
                     "errors and will not go away by re-running the tool."
@@ -564,6 +645,7 @@ def get_prover_tool(
 
 
         async def run_in(run_root: str) -> str | Command:
+            assert spec is not None  # single-spec path; buffers mode dispatches to run_buffers
             with setup_prover_config_in(
                 working_dir=run_root,
                 main_contract=main_contract,
@@ -686,6 +768,109 @@ def get_prover_tool(
         # The author's working copy decides where this run executes (in-situ for
         # an empty VFS, a temp materialization otherwise); the same-stem lock
         # guards the deterministic spec/conf names within it.
+        async def run_buffers(run_root: str, targets: list[NamedBuffer]) -> str | Command:
+            """Verify each run-target buffer as its own spec, concurrently; overall completion is the
+            AND of per-buffer completion. A buffer already complete at its current digest is skipped."""
+            conf = state["config"]
+            summary = get_run_summary()
+            conf_dir = CERTORA_DIR / "confs"
+            expected = set(state["rule_skips"].keys())
+            vh = state["version_history"]
+            skipped_pairs = [(str(s.property_title), str(s.reason)) for s in state["skipped"]]
+
+            def digest_of(b: NamedBuffer) -> str:
+                return buffer_state_digest(buffers, b.name, skipped=skipped_pairs, version_history=vh)
+
+            plan = plan_buffer_runs(
+                buffers,
+                digest_of=digest_of,
+                is_complete=lambda b, d: buffer_is_complete(
+                    state["prover_history"], buffer=b.name, curr_digest=d,
+                    expected_to_fail=expected, curr_status=[], all_rules=list(b.owned_rules),
+                ),
+            )
+            pending = [r for r in plan if r.needs_run]
+            if not pending:
+                return tool_state_update(
+                    tool_call_id=tool_call_id,
+                    content="All buffers already verified at their current state; nothing to re-run.",
+                )
+
+            with materialize_buffers(run_root, buffers) as paths:
+                async def run_one(r: BufferRun):
+                    b = r.buffer
+                    spec_path = paths[b.name]
+                    with buffer_conf(
+                        working_dir=run_root, config=conf, main_contract=main_contract,
+                        spec_path=spec_path, buffer_name=b.name, conf_dir=conf_dir, rule=None, msg="",
+                    ) as (cpath, _cfg):
+                        try:
+                            all_rules = await declared_rules_list(folder=Path(run_root), args=[cpath])
+                        except SpecCompilationError as exc:
+                            return (r, f"[buffer {b.name}] failed to compile:\n{exc.output}", [])
+                    with buffer_conf(
+                        working_dir=run_root, config=conf, main_contract=main_contract,
+                        spec_path=spec_path, buffer_name=b.name, conf_dir=conf_dir, rule=None,
+                        msg=f"{b.name} iteration {len(state['prover_history']) + 1}",
+                    ) as (cpath, cfg):
+                        async with sem:
+                            res = await run_prover(
+                                Path(run_root), [cpath], tool_call_id, prover_opts,
+                                _SpecCallbacks(get_stream_writer(), tool_call_id, summary, cfg,
+                                               analysis_store=analysis_store),
+                                DefaultCexHandler(llm, state, summarization_threshold=10),
+                            )
+                    return (r, res, all_rules)
+
+                outcomes = await asyncio.gather(*(run_one(r) for r in pending))
+
+            for (_r, res, _rules) in outcomes:
+                if isinstance(res, str):  # a hard compile/toolchain error in any buffer aborts the pass
+                    return res
+
+            prover_update: list[ProverHistoryItem] = []
+            fresh: dict[str, list[tuple[RulePath, StatusCodes]]] = {}
+            link: str | None = None
+            parts: list[str] = []
+            for (r, res, all_rules) in outcomes:
+                assert not isinstance(res, str)
+                results: list[tuple[RulePath, StatusCodes]] = [(k, v) for (k, v) in res.raw_rule_status.items()]
+                fresh[r.buffer.name] = results
+                link = res.link or link
+                parts.append(f"=== buffer {r.buffer.name} ===\n{res.result_str}")
+                prover_update.append(ProverRunLog(
+                    tool_call_id=tool_call_id,
+                    prover_results=results,
+                    rules=None,
+                    spec_digest=string_hash(r.buffer.cvl),
+                    sort="run",
+                    declared_rules=all_rules,
+                    state_digest=r.digest,
+                    buffer=r.buffer.name,
+                ))
+
+            # Stamp the prover validation per buffer that is complete at its current digest (fresh
+            # results for the ones we ran, history for those skipped as already complete). Overall
+            # completion is checked per buffer at publish (check_buffer_completion).
+            history_after = state["prover_history"] + prover_update
+            prover_stamps: dict[str, str] = {}
+            for b in targets:
+                if buffer_is_complete(
+                    history_after, buffer=b.name, curr_digest=digest_of(b),
+                    expected_to_fail=expected, curr_status=fresh.get(b.name, []),
+                    all_rules=list(b.owned_rules),
+                ):
+                    prover_stamps[f"prover:{b.name}"] = digest_of(b)
+
+            return tool_state_update(
+                tool_call_id=tool_call_id, content="\n\n".join(parts), prover_link=link,
+                validations=prover_stamps, prover_history=prover_update,
+            )
+
+        if targets:
+            async with spec_locks.setdefault("__buffers__", asyncio.Lock()), \
+                    project_directory(state.get("vfs") or {}) as run_root:
+                return await run_buffers(run_root, targets)
         async with lock, project_directory(state.get("vfs") or {}) as run_root:
             return await run_in(run_root)
 
