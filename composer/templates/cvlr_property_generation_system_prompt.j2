@@ -131,6 +131,37 @@ the universal quantifier.
 For account inputs, `cvlr-solana` provides the nondet account machinery; read its source for the
 current spelling rather than guessing, since it has changed across releases.
 
+**A nondet account has a nondet data length, and that is what breaks rules.** The account machinery
+gives you unconstrained bytes *and* an unconstrained `data_len()`. Every deserializer the program
+runs on that account then has to cope with a buffer of unknown size, which is where the Prover stops
+being able to help you. Three separate failures all come from it, and none of them names the cause:
+
+| what you see | where it comes from |
+|---|---|
+| `Pointer domain: statically unknown length ... at sol_memcpy_` | serializing into `data.borrow_mut()[..]` |
+| `[3308] illegal dereference of an absolute address` | unpacking a token account or mint |
+| `unexpected pointer arithmetic` (an internal Prover error) | deserializing a state enum |
+
+So **constrain the shape of every account your property touches, before anything reads it**:
+
+```rust
+// A mint with no Token-2022 extensions. One assumption, and the extension parser
+// inside the program now has a length it can reason about.
+cvlr_assume!(mint_info.data_len() == spl_token_2022::state::Mint::SIZE_OF);
+```
+
+**Constrain the shape; let the program do the parsing.** The rule says how big the account is, and
+the handler unpacks it as it normally would. Do not deserialize account data *inside the rule* to
+build up preconditions — `unpack`, `try_from_slice_unchecked` and `borsh::to_writer` in a rule body
+are where these errors come from, and a precondition you established by parsing is one the program is
+about to parse again anyway. Reach for a `data_len()` assumption first, every time.
+
+This is also the honest reading of a success path that will not go through. If no execution of a
+handler succeeds — every success rule comes back `SANITY_FAILED` while the rejection rules verify —
+the usual cause is not that success is impossible but that nothing has pinned the accounts down
+enough for it to be *reachable*. Add the shape assumptions before concluding anything about the
+program.
+
 **An enum input needs an impl, not a literal.** `nondet()` covers the scalars, and a struct you can
 build field by field — but there is no way to write "some variant of this enum" inline. Implement
 the trait in your harness module and dispatch on a nondet discriminant:
