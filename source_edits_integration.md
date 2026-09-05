@@ -55,9 +55,7 @@ Record semantics:
   never carry entries.
 - An invariant a component authored to support one of its own properties is covered by
   that component's edit record, so it is established against exactly the source that
-  component's rules were proven against. There is no longer a phase that proves
-  invariants against the pristine source ahead of everything else, and so no separate
-  entry for one.
+  component's rules were proven against.
 - `applied_edits` lists every edit that survived to the final working copy, in the
   order they were applied. `executive_summary` and `why_sound` are free prose from
   the editor; the reference renderer treats both as markdown.
