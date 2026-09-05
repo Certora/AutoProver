@@ -8,7 +8,6 @@ from composer.spec.source.spec_buffers import (
     combined_buffers_view,
     import_closure,
     merge_buffers,
-    plan_buffer_runs,
     run_targets,
     validate_coverage,
     validate_disjoint_rules,
@@ -139,22 +138,6 @@ def test_coverage_unknown_property():
     b["hard"] = NamedBuffer(name="hard", cvl=HARD, property_rules={"P-ghost": ["r_hard"]}, imports=("shared",))
     err = validate_coverage(b, all_properties={"P-easy", "P-hard"}, skipped=set())
     assert err is not None and "unknown" in err
-
-
-# --- run planning ----------------------------------------------------------
-
-
-def test_plan_buffer_runs_skips_complete_and_excludes_shared():
-    b = _buffers()
-    plan = plan_buffer_runs(
-        b,
-        digest_of=lambda buf: f"d-{buf.name}",
-        is_complete=lambda buf, d: buf.name == "easy",  # easy already verified at its digest
-    )
-    by = {r.buffer.name: r for r in plan}
-    assert set(by) == {"easy", "hard"}  # shared is not a run target
-    assert by["easy"].needs_run is False and by["hard"].needs_run is True
-    assert by["easy"].digest == "d-easy"
 
 
 # --- per-buffer completion (validation stamps) -----------------------------

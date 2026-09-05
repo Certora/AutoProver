@@ -19,7 +19,6 @@ while correctly invalidating its importers.
 
 import os
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
 from typing import Annotated
 
 from pydantic import BaseModel, Field
@@ -215,38 +214,10 @@ def validate_coverage(
     return "; ".join(problems) if problems else None
 
 
-@dataclass(frozen=True)
-class BufferRun:
-    """One run-target buffer's execution decision for a verify pass."""
-
-    buffer: NamedBuffer
-    #: The buffer's current content digest (its text + import closure); keys its completion history.
-    digest: str
-    #: False when the buffer is already complete at this digest, so its prover run is skipped.
-    needs_run: bool
-
-
-def plan_buffer_runs(
-    buffers: Mapping[str, NamedBuffer],
-    *,
-    digest_of: Callable[[NamedBuffer], str],
-    is_complete: Callable[[NamedBuffer, str], bool],
-) -> list[BufferRun]:
-    """Decide, per run-target buffer, whether this verify pass must (re-)run it. A buffer already
-    complete at its current digest is skipped; editing it or any buffer it imports changes the digest
-    (:func:`buffer_digest`) and forces a re-run. ``digest_of`` and ``is_complete`` are injected so this
-    stays pure — the prover layer supplies the history-backed checks."""
-    plan: list[BufferRun] = []
-    for b in run_targets(buffers):
-        d = digest_of(b)
-        plan.append(BufferRun(buffer=b, digest=d, needs_run=not is_complete(b, d)))
-    return plan
-
-
 def validate_disjoint_rules(buffers: Mapping[str, NamedBuffer]) -> str | None:
-    """Whether every rule is owned by exactly one run-target buffer. Unlike overlay groups, buffers
-    hold their rules physically, so a rule name appearing in two buffers is an authoring mistake
-    (ambiguous ownership). Returns None when disjoint, else a message naming the shared rules."""
+    """Whether every rule is owned by exactly one run-target buffer — a rule name appearing in two
+    buffers is an authoring mistake (ambiguous ownership). Returns None when disjoint, else a message
+    naming the shared rules."""
     seen: set[str] = set()
     dup: set[str] = set()
     for b in run_targets(buffers):

@@ -730,9 +730,9 @@ _PropertyGenSysTemplate = TypedTemplate[PropertyGenSystemParams]("property_gener
 _SPEC_BUFFERS_GUIDANCE = """
 ## Splitting the spec into verification buffers
 
-Instead of one spec, you may author several named CVL **buffers**, each a self-contained spec that is
-verified and reviewed on its own. Use `put_buffer` / `edit_buffer` / `get_buffer` / `list_buffers` /
-`delete_buffer` instead of the single-spec put/get/edit tools when you split.
+Instead of one spec, you author several named CVL **buffers**, each a self-contained spec verified and
+reviewed on its own. Use `put_buffer` / `edit_buffer` / `get_buffer` / `list_buffers` / `delete_buffer`
+to author them, and `submit_buffer` / `collect_results` (NOT `verify_spec`) to verify them.
 
 When to split:
 - Properties have **conflicting precision needs** — one buffer can summarize a function that another
@@ -741,16 +741,60 @@ When to split:
   is approved once and never re-touched, while you iterate on a small hard buffer in isolation — its
   re-verification and re-review cost only that buffer.
 
-How:
+Structuring buffers:
 - Put **shared** infrastructure (ghosts, common invariants, helper CVL functions, token/oracle models)
   in a buffer with `is_run_target=false`, and have run-target buffers `import "<shared>.spec"` and list
   it in their `imports`.
 - Each **run-target** buffer declares its `property_rules` (the properties it verifies + their rule
   names). Across all run-target buffers, every non-skipped property must appear in **exactly one**
   buffer, and each rule lives in exactly one buffer.
-- `verify_spec` then verifies every run-target buffer independently and in parallel; a buffer already
-  verified at its current content is skipped. Editing a shared buffer re-verifies every buffer that
-  imports it.
+
+Summaries — over-approximate up front (this is your main lever for tractability):
+- For each run-target buffer, look at the functions its properties exercise, and **summarize now**, in
+  that buffer's `methods{}`, every function the buffer's properties do not need exact — an
+  over-approximation (e.g. a `NONDET`/havoc return, or a weaker constraint than the real body).
+  **Do this preemptively, before the first `submit_buffer`** — do not wait for a timeout to force it.
+  Aggressive preemptive summarization is how the hard properties become tractable; a nonlinear-math,
+  hashing, or heavy-external function a property only reads through is the prime candidate.
+- **Soundness rule: an over-approximating summary is sound for `assert` rules but UNSOUND for `satisfy`
+  rules.** An over-approximation *adds* behaviors: an `assert` that holds over the larger behavior set
+  still holds over the real one (sound), whereas a `satisfy` may be witnessed only by an added, non-real
+  behavior (unsound — its witness need not correspond to a real execution). So over-approximate freely
+  in a buffer whose rules are **all `assert`**; in a buffer that contains any `satisfy` rule (or a
+  reachability check), keep the functions it exercises **exact**. This is a first-class reason to
+  partition: group `assert`-only properties (which share aggressive over-approximations) apart from
+  `satisfy` properties (which need those functions exact).
+- **Refine on a spurious counterexample.** A too-coarse over-approximation produces a *spurious* cex —
+  one reachable only because the summary admits behavior the real function cannot. When a buffer returns
+  VIOLATED, analyze the cex: if it hinges on behavior your summary allows but the real function forbids,
+  it is spurious → tighten that summary (add the missing constraint) or drop the over-approximation for
+  that function with `edit_buffer`, then re-`submit_buffer`. If the cex reproduces against the exact
+  function, it is a real bug. Start from the simplest sound over-approximation and tighten only as
+  spurious cexes force you to.
+
+Verifying — submit / collect (buffers prove in parallel; never wait on a slow buffer to work on a fast
+one):
+- **Settle the shared base before submitting anything that imports it.** Submit a run-target buffer only
+  once BOTH (i) that buffer is finished AND (ii) every shared buffer it imports is finished — you do not
+  expect to edit them again. Editing a shared buffer after submitting invalidates every buffer that
+  imports it (submitted or already verified): those prover jobs are wasted and must be re-run. So author
+  and stabilize the shared infrastructure first, then submit the run-target buffers that depend on it.
+- `submit_buffer(name)` starts a buffer's prover job in the **background** and returns immediately.
+  Submit each run-target buffer as soon as it and its shared imports are ready — they prove concurrently.
+- `collect_results()` returns the outcomes of jobs that have **finished so far** (without blocking) plus
+  a status board: which buffers are `complete`, `running`, or `needs (re)submission`. Process a finished
+  buffer immediately — fix its counterexample and `submit_buffer` it again — while the others keep
+  proving.
+- Work this priority order, and only ever block at the last step:
+  1. A finished result not yet processed → handle it. If the fix is in a **shared** buffer (e.g. an
+     under-approximation), edit the shared buffer; that invalidates every buffer importing it — the
+     board lists them under `needs (re)submission` (including ones already verified) — so re-submit
+     each of them.
+  2. Else a buffer still to author/submit → author it and `submit_buffer` it.
+  3. Else everything is submitted and running with nothing finished to process → call
+     `collect_results(wait=true)` to sleep until the next job finishes.
+- Editing a buffer (or a shared buffer it imports) makes its prior verification stale; re-submit it. A
+  buffer already verified at its current content is not re-run.
 
 A single run-target buffer is exactly the one-spec case, so only split when it helps.
 """
@@ -764,6 +808,9 @@ _PROVER_TOOLS = InjectingToolExtension(
 @dataclass
 class ProverTool:
     lg_tool: BaseTool
+    #: The async multi-buffer tools (submit_buffer / collect_results), bound in place of ``lg_tool``
+    #: when spec-buffer authoring is enabled.
+    buffer_tools: list[BaseTool]
     options: ProverOptions
 
 @dataclass
@@ -987,13 +1034,20 @@ async def batch_cvl_generation(
         )
     else:
         b = b.with_tools(env.source_tools)
-    # Multi-buffer authoring tools (opt-in): the agent partitions the spec into several named
-    # buffers verified independently. Off by default so the single-curr_spec flow is untouched.
-    buffer_authoring: list[BaseTool] = [
-        put_buffer(SourceCVLGenerationState), get_buffer(SourceCVLGenerationState),
-        edit_buffer(SourceCVLGenerationState), list_buffers(SourceCVLGenerationState),
-        delete_buffer(SourceCVLGenerationState),
-    ] if spec_buffers_enabled() else []
+    # Multi-buffer authoring (opt-in): the agent partitions the spec into several named buffers,
+    # each submitted and verified independently via the async submit_buffer / collect_results tools
+    # (bound in place of the single-spec verify_spec). Off by default so the single-curr_spec flow is
+    # untouched.
+    if spec_buffers_enabled():
+        buffer_authoring: list[BaseTool] = [
+            put_buffer(SourceCVLGenerationState), get_buffer(SourceCVLGenerationState),
+            edit_buffer(SourceCVLGenerationState), list_buffers(SourceCVLGenerationState),
+            delete_buffer(SourceCVLGenerationState),
+        ]
+        prover_binding: list[BaseTool] = list(prover_tool.buffer_tools)
+    else:
+        buffer_authoring = []
+        prover_binding = [prover_tool.lg_tool]
     task_graph = b.with_tools(
         static_tools()
     ).with_tools(
@@ -1001,7 +1055,7 @@ async def batch_cvl_generation(
     ).with_tools(
         feedback_suite
     ).with_tools(
-        [prover_tool.lg_tool,
+        [*prover_binding,
          ExpectRulePassage.as_tool("expect_rule_passage"),
          ExpectRuleFailure.as_tool("expect_rule_failure"),
          give_up_tool(name="give_up", description=_GIVE_UP_DESCRIPTION, label="CVL generation")

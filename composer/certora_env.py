@@ -28,12 +28,32 @@ class CertoraEnvironmentError(Exception):
     """
 
 
-def certora_home() -> Path | None:
-    """The Certora source checkout pointed to by ``$CERTORA``.
+# Overrides ``$CERTORA`` for AutoProver's own Certora resolution, set by
+# console-autoprove's ``--certora-run-command``. The sentinel ``"pip"`` forces
+# the pip-installed CLI. This lets a session keep ``$CERTORA`` pointed at a local
+# build (for direct local-prover work) while AutoProver dispatches its cloud jobs
+# through the pip ``certora_cli``: a source checkout is not a pip distribution, so
+# ``get_package_and_version`` reports "not installed" and a cloud submission
+# aborts demanding ``prover_version``/``commit_sha1`` — whereas the pip package
+# carries the version that drives the submission.
+CERTORA_HOME_OVERRIDE_ENV = "AUTOPROVER_CERTORA_HOME"
+_FORCE_PIP = "pip"
 
-    Returns ``None`` when ``$CERTORA`` is unset (i.e. we run against the
-    pip-installed ``certora_cli`` / ``certora_jars`` packages).
+
+def certora_home() -> Path | None:
+    """The Certora source checkout to resolve against, or ``None`` to use the
+    pip-installed ``certora_cli`` / ``certora_jars`` packages.
+
+    ``$AUTOPROVER_CERTORA_HOME`` wins over ``$CERTORA`` when set: a filesystem
+    path selects that source checkout; the sentinel ``"pip"`` forces the pip
+    packages (returns ``None``). With the override unset, falls back to
+    ``$CERTORA`` (a checkout), else the pip packages.
     """
+    override = os.environ.get(CERTORA_HOME_OVERRIDE_ENV)
+    if override is not None:
+        if override.strip().lower() == _FORCE_PIP or not override.strip():
+            return None
+        return Path(override)
     path = os.environ.get("CERTORA")
     return Path(path) if path else None
 

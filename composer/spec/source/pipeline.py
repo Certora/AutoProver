@@ -44,7 +44,7 @@ from composer.spec.source.harness import (
 from composer.spec.source.summarizer import setup_summaries
 from composer.spec.source.struct_invariant import get_invariant_formulation
 from composer.spec.source.autosetup import SetupSuccess
-from composer.spec.source.prover import get_prover_tool, materializing_project
+from composer.spec.source.prover import get_prover_tool, materializing_project, ProverToolset
 from composer.spec.source.plugin import CertoraProverTools
 from composer.spec.source.author import (
     batch_cvl_generation, EditingTools, FocusPolicy, SourceEditing, ProverTool,
@@ -83,8 +83,10 @@ class _ProverPipelineDeps:
     analysis_store: CexAnalysisStore
     editing: SourceEditing
 
-    def to_prover_tool(self, tool: BaseTool) -> ProverTool:
-        return ProverTool(lg_tool=tool, options=self.prover_options)
+    def to_prover_tool(self, tools: ProverToolset) -> ProverTool:
+        return ProverTool(
+            lg_tool=tools.verify_spec, buffer_tools=tools.buffer_tools, options=self.prover_options
+        )
 
 #: The invariant CVL's slot in the report: a real delivery (imported by every component spec)
 #: or the quarantined leftovers of a budget-curtailed generation (appendix only).
@@ -96,7 +98,7 @@ class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
     """Immutable formalizer: per-batch CVL generation against a fixed prover
     config + resource set (already including ``invariants.spec`` when there are
     structural invariants), plus the in-memory invariant result for the report."""
-    _prover_tool: BaseTool
+    _prover_tool: ProverToolset
     _prover_config: dict
     _resources: list[CVLResource]
     _invariant: tuple[list[PropertyFormulation], InvariantResult] | None
@@ -210,7 +212,7 @@ class ProverPrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance, Con
     prover-only pre-formalization fan-out in ``prepare_formalization``."""
     _sys_desc: SystemDescriptionHarnessed
     _harnessed: HarnessedApplication
-    _prover_tool: BaseTool
+    _prover_tool: ProverToolset
     _analyzed: SourceApplication
 
     _deps: _ProverPipelineDeps
