@@ -128,6 +128,18 @@ def run_targets(buffers: Mapping[str, NamedBuffer]) -> list[NamedBuffer]:
     return [buffers[n] for n in sorted(buffers) if buffers[n].is_run_target]
 
 
+def combined_buffers_view(buffers: Mapping[str, NamedBuffer]) -> str:
+    """All buffers (shared and run-target) concatenated into one reviewable document, each under a
+    header. For a judge or report that consumes the spec as a single text — NOT for verification
+    (each buffer is compiled and run separately)."""
+    parts: list[str] = []
+    for name in sorted(buffers):
+        b = buffers[name]
+        kind = "run-target" if b.is_run_target else "shared"
+        parts.append(f"// ===== buffer {name} ({kind}) =====\n{b.cvl.rstrip()}")
+    return "\n\n".join(parts)
+
+
 def validate_coverage(
     buffers: Mapping[str, NamedBuffer], *, all_properties: set[str], skipped: set[str]
 ) -> str | None:
