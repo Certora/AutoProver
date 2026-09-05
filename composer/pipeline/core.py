@@ -31,6 +31,7 @@ import asyncio
 import enum
 import functools
 import logging
+import pathlib
 from dataclasses import dataclass, replace
 from typing import (
     Protocol, Any, ClassVar, Concatenate, cast, Awaitable, Sequence, Callable, ContextManager, overload
@@ -61,7 +62,7 @@ from composer.spec.source.report.schema import (
     AutoProverReport, RuleName, ReportBackend, SourceEditRecord, VerificationArtifactRecord,
 )
 from composer.spec.source.report import build as report_build
-from composer.pipeline.pinned import PinnedProperties
+from composer.pipeline.pinned import PinnedRun, write_pinned_run
 from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_ID
 from composer.pipeline.ecosystem import Ecosystem
 from .keys import (
@@ -457,7 +458,8 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     budget: RunBudget | None = None,
     time_budget_s : float | None = None,
     max_properties: int | None = None,
-    pinned: PinnedProperties | None = None,
+    pinned: PinnedRun[App] | None = None,
+    pin_to: pathlib.Path | None = None,
 ) -> CorePipelineResult[FormT]:
     with (
         _budget_context(budget),
@@ -469,6 +471,7 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
             extra_context=extra_context, ecosystem=ecosystem,
             max_properties=max_properties,
             pinned=pinned,
+            pin_to=pin_to,
         )
 
 async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
@@ -481,7 +484,8 @@ async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: Artifact
     max_bug_rounds: int,
     ecosystem: Ecosystem[App, Main, U],
     max_properties: int | None = None,
-    pinned: PinnedProperties | None = None,
+    pinned: PinnedRun[App] | None = None,
+    pin_to: pathlib.Path | None = None,
 ) -> CorePipelineResult[FormT]:
     # Only the plugins whose hooks accept this ecosystem's unit are loaded (and only those pay
     # their ``initialize`` cost); the driver below can hand them its units unconditionally.
@@ -491,6 +495,7 @@ async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: Artifact
             extra_context=extra_context, max_bug_rounds=max_bug_rounds, ecosystem=ecosystem,
             max_properties=max_properties,
             pinned=pinned,
+            pin_to=pin_to,
         )
 
 # ---- the driver --------------------------------------------------------------
@@ -516,7 +521,8 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     max_bug_rounds: int = 3,
     ecosystem: Ecosystem[App, Main, U],
     max_properties: int | None = None,
-    pinned: PinnedProperties | None = None,
+    pinned: PinnedRun[App] | None = None,
+    pin_to: pathlib.Path | None = None,
 ) -> CorePipelineResult[FormT]:
     spec, phases = backend.analysis_spec, backend.core_phases
     source = run.source
@@ -549,20 +555,32 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 ),
             )
 
-    try:
-        async with asyncio.TaskGroup() as overlap:
-            preflight_task = overlap.create_task(backend.preflight(run))
-            analysis_task = overlap.create_task(_run_analysis())
-    except BaseExceptionGroup as eg:
-        # Callers expect the failure itself, not a wrapper, so unwrap the usual case: one side
-        # failed and the other was cancelled, and a cancelled task adds nothing to the group.
-        # Both failing at once is the only case with two real errors; keep the group there.
-        if len(eg.exceptions) == 1:
-            raise eg.exceptions[0] from None
-        raise
-    preflight, analyzed = preflight_task.result(), analysis_task.result()
-    if analyzed is None:
-        raise ValueError("System analysis produced no result.")
+    if pinned is not None:
+        # The preflight still runs: it builds the workspace and gates a skeleton harness through the
+        # real toolchain, which is a thing worth exercising and cheap. Only the agent is skipped.
+        pinned.check_target(pathlib.Path(run.source.project_root))
+        preflight = await backend.preflight(run)
+        analyzed = pinned.analysis
+        _log.info(
+            "pinned run %s: analysis and extraction skipped, %d propert%s across %d component(s)",
+            pinned.source, pinned.total(), "y" if pinned.total() == 1 else "ies",
+            len(pinned.properties),
+        )
+    else:
+        try:
+            async with asyncio.TaskGroup() as overlap:
+                preflight_task = overlap.create_task(backend.preflight(run))
+                analysis_task = overlap.create_task(_run_analysis())
+        except BaseExceptionGroup as eg:
+            # Callers expect the failure itself, not a wrapper, so unwrap the usual case: one side
+            # failed and the other was cancelled, and a cancelled task adds nothing to the group.
+            # Both failing at once is the only case with two real errors; keep the group there.
+            if len(eg.exceptions) == 1:
+                raise eg.exceptions[0] from None
+            raise
+        preflight, analyzed = preflight_task.result(), analysis_task.result()
+        if analyzed is None:
+            raise ValueError("System analysis produced no result.")
 
     # 2. Backend transform + main-contract location (prover: harness lift; foundry: identity).
     with named_budget_or_nop("system_preparation"):
@@ -602,7 +620,16 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     )
     staged = await staged_task
     if not batches:
-        raise ValueError("No properties extracted from any component.")
+        raise ValueError(
+            f"Pinned run {pinned.source} selected no components." if pinned is not None
+            else "No properties extracted from any component."
+        )
+    if pin_to is not None:
+        write_pinned_run(
+            pin_to, analyzed,
+            {b.feat.slug: list(b.props) for b in batches},
+            pathlib.Path(run.source.project_root),
+        )
     if max_properties is not None:
         extracted, components = sum(len(b.props) for b in batches), len(batches)
         batches = _capped(batches, max_properties)
@@ -794,35 +821,38 @@ async def _pinned_batches[P: enum.Enum, H, Main, U: FeatureUnit](
     run: PipelineRun[P, H],
     ecosystem: Ecosystem[Any, Main, U],
     plugins: PluginPhaseManager[P, U],
-    pinned: PinnedProperties,
+    pinned: PinnedRun[Any],
 ) -> list[_Batch[U]]:
-    """:func:`_extract_all`'s shape, filled from disk instead of from ten agents.
+    """:func:`_extract_all`'s shape, filled from the fixture instead of from N agents.
 
-    The contexts are created the same way the extracting path creates them, so everything
-    downstream — cache keys, checkpoints, task ids — cannot tell the difference. Property
-    post-processing plugins are deliberately *not* run: a pin file is what a previous run's
-    post-processing produced, and running them again would process it twice.
+    ``main`` is derived from the *pinned* analysis, so the units here are the units the properties
+    were written about — there is no name to match and nothing to drift. A slug the fixture carries
+    that no unit answers to can therefore only be a hand-edit, and it is reported as one.
+
+    The contexts are created the way the extracting path creates them, so cache keys, checkpoints
+    and task ids cannot tell the difference. Post-inference plugins are deliberately not re-run: a
+    fixture is what a previous run's post-processing produced.
     """
     units = list(ecosystem.units(main))
-    pinned.check_every_pin_matched(units)
-    prop_ctx = run.ctx.child(PROPERTIES_KEY(prop_key))
+    by_slug = {u.slug: u for u in units}
+    if stray := sorted(set(pinned.properties) - set(by_slug)):
+        raise ValueError(
+            f"{pinned.source}: names component(s) its own pinned analysis does not contain: "
+            f"{', '.join(stray)}. The analysis has: {', '.join(sorted(by_slug))}. "
+            "This fixture has been edited by hand; re-pin it with --pin-to."
+        )
 
+    prop_ctx = run.ctx.child(PROPERTIES_KEY(prop_key))
     batches: list[_Batch[U]] = []
     for feat in units:
-        props = pinned.get(feat)
+        props = pinned.properties.get(feat.slug)
         if props is None:
             continue
         feat_ctx = await prop_ctx.child(
             COMPONENT_KEY(feat, plugins.plugin_digest),
             {**feat.context_tag(), "plugins": plugins.plugin_manifest},
         )
-        batches.append(_Batch(feat, props, feat_ctx))
-
-    _log.info(
-        "pinned properties from %s: %d propert%s across %d of %d components, extraction skipped",
-        pinned.source, pinned.total(), "y" if pinned.total() == 1 else "ies",
-        len(batches), len(units),
-    )
+        batches.append(_Batch(feat, list(props), feat_ctx))
     return batches
 
 

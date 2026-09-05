@@ -22,7 +22,7 @@ from composer.diagnostics.logging_setup import setup_autoprove_logging
 from composer.spec.context import SourceFields, WorkflowContext, SourceCode
 from composer.spec.service_host import ServiceHost
 from composer.workflow.services import IndexedConnections, standard_connections
-from composer.pipeline.pinned import PinnedProperties
+from composer.pipeline.pinned import PinnedRun
 from composer.pipeline.ptypes import (
     PipelineRun, BackendResult,
     CorePipelineResult, PhaseBudget, RunBudget
@@ -233,7 +233,8 @@ async def cli_pipeline[P: enum.Enum, H](
     at_exit: AtExit | None = None,
     forbidden_read: GlobalExcludeArg = fs_forbidden_read,
     max_properties: int | None = None,
-    pinned: PinnedProperties | None = None,
+    pinned: PinnedRun | None = None,
+    pin_to: pathlib.Path | None = None,
     **metadata
 ) -> AsyncIterator[tuple[StagedPipeline, Continuation[P, H]]]:
     """``forbidden_read`` is what the run's source tools withhold, and defaults to the Solidity
@@ -245,8 +246,9 @@ async def cli_pipeline[P: enum.Enum, H](
     :func:`composer.pipeline.core._capped`). Independent of ``budget``, which bounds what a run
     spends rather than what it takes on.
 
-    ``pinned`` supplies the properties instead of extracting them, which skips the phase that
-    dominates a real target's cost — see :mod:`composer.pipeline.pinned`."""
+    ``pinned`` supplies the analysis and the properties, skipping the two phases that between
+    them dominate a real target's cost; ``pin_to`` writes that fixture from a full run. See
+    :mod:`composer.pipeline.pinned`."""
     project_root = pathlib.Path(args.project_root).resolve()
     main_contract_path, contract_name = args.main_contract.split(":", 1)
 
@@ -427,6 +429,7 @@ async def cli_pipeline[P: enum.Enum, H](
                     ecosystem=ecosystem,
                     max_properties=max_properties,
                     pinned=pinned,
+                    pin_to=pin_to,
                 )
 
             yield (StagedPipeline(
