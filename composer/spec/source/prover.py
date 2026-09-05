@@ -47,6 +47,7 @@ from composer.diagnostics.stream import (
 )
 from composer.authoring.state import make_validation_stamper, spec_digest
 from composer.spec.cvl_generation import CVLGenerationState
+from composer.diagnostics.budget import exhausted_constraint, raise_budget_exceeded
 from composer.diagnostics.timing import RunSummary, get_run_summary
 from graphcore.graph import tool_state_update
 from composer.spec.util import temp_certora_file
@@ -303,6 +304,18 @@ class _SpecCallbacks(ProverEventCallbacks):
             f"cloud poll tool_call={self._tool_call_id} status={status} "
             f"elapsed={elapsed:.1f}s msg={message}"
         )
+        # A cloud prover job is the longest single wait in the run, and waiting for one
+        # is a tool call: the author's monitor gets no turn to sample the budget while it
+        # blocks, so a run can sit here hours past its deadline. Poll the budget on each
+        # status tick instead. The author catches BudgetExceeded and curtails, the same
+        # way it does when its monitor trips; the job itself is left to finish in the
+        # cloud, since its link is already recorded.
+        if (sort := exhausted_constraint()) is not None:
+            _logger.info(
+                f"budget exhausted while polling tool_call={self._tool_call_id} "
+                f"sort={sort} elapsed={elapsed:.1f}s"
+            )
+            raise_budget_exceeded(sort)
         await super().on_cloud_poll(
             status, message
         )

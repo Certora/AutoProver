@@ -305,6 +305,16 @@ def budget_pressure() -> bool:
     return any(r.pressured() for r in res)
 
 
+def exhausted_constraint() -> ConstraintType | None:
+    """The sort of the first active constraint that is past 100%, or ``None``.
+
+    ``budget_monitor`` only samples the budget between agent turns, so a single
+    long-blocking tool call runs unchecked however far past the deadline it goes.
+    Callers that wait on external work poll this themselves.
+    """
+    return next((r.sort for r in _get_constraints() if r.overbudget()), None)
+
+
 def pressure_abort_monitor() -> StateMonitor[MessagesState]:
     """Monitor for auxiliary agents (feedback judges) that should not outlive
     the main agent's wrap-up window: raises ``BudgetPressureAbort`` between
