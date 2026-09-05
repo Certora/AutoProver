@@ -18,8 +18,9 @@ from graphcore.graph import tool_state_update, RawPromptInput, CacheMarker, Summ
 from graphcore.tools.vfs import VFSAccessor, VFSState
 
 from composer.authoring.judge import PropertyFeedbackProtocol
-from composer.authoring.state import SkippedProperty, check_completion
+from composer.authoring.state import SkippedProperty, check_completion, spec_digest
 from composer.authoring.tools import gated_give_up_tool, give_up_tool
+from composer.spec.guidance import StructuralInvariantGuidance
 from composer.spec.cvl_generation import (
     static_tools, property_tools, skip_tools, CVLGenerationExtra, FEEDBACK_VALIDATION_KEY,
     validate_property_rules, CVL_JUDGE_KEY, run_cvl_generator,
@@ -36,7 +37,7 @@ from composer.spec.source.plugin import CertoraProverTools, CVLAuthorState
 from composer.spec.system_model import ContractComponentInstance, SolidityIdentifier, component_context
 from composer.spec.source.prover import (
     OVERLAY_OWNED_KEYS, ProverStateExtra, DELETE_SKIP, VALIDATION_KEY as PROVER_VALIDATION_KEY,
-    materializing_project,
+    declared_rules_at, materializing_project,
 )
 from langgraph.graph import MessagesState
 from pathlib import Path
@@ -101,6 +102,9 @@ type BatchGeneratedCVLResult = GeneratedCVL | Curtailed[GeneratedCVL] | GaveUp
 class ExpectRuleFailure(WithAsyncImplementation[Command], WithInjectedId):
     """
     Mark a rule name as expected to fail.
+
+    Never mark an invariant that another rule or `preserved` block cites with `requireInvariant`:
+    that citation is sound only because the invariant is proved in this same spec.
     """
     rule_name: str = Field(description="The name of the rule")
     reason: str = Field(description="The reason the rule is expected to fail")
@@ -156,10 +160,21 @@ class PublishResultTool(
 
     @override
     async def run(self) -> Command | str:
-        if (err := check_completion(self.state, self.state["version_history"])) is not None:
+        st = self.state
+        if (err := check_completion(st, st["version_history"])) is not None:
             return err
+        spec = st["curr_spec"]
+        assert spec is not None, "check_completion admits no spec-less state"
+        # What the typechecker actually found in the published spec, so the mapping is checked
+        # in both directions: a supporting invariant the author proved but never tied back to a
+        # property would otherwise be dropped from the report as an orphan.
+        declared = declared_rules_at(
+            st["prover_history"], spec_digest(spec, st["skipped"], st["version_history"])
+        )
         with self.tool_deps() as titles:
-            if (err := validate_property_rules(self.property_rules, self.state["skipped"], titles)) is not None:
+            if (err := validate_property_rules(
+                self.property_rules, st["skipped"], titles, declared
+            )) is not None:
                 return err
         return tool_state_update(
             self.tool_call_id,
@@ -214,7 +229,7 @@ class ResourceView(TypedDict):
 @component_context
 class PropertyGenParams(TypedDict):
     sort: Literal["existing"]
-    context: ContractComponentInstance | None
+    context: ContractComponentInstance
     resources: list[ResourceView]
     properties: list[PropertyFormulation]
     contract_name: str
@@ -224,17 +239,12 @@ class PropertyGenParams(TypedDict):
     focused: bool
 
 class PropertyGenerationConfig(SummaryConfig[SourceCVLGenerationState]):
-    def __init__(self, source_editing: bool = False):
-        super().__init__()
-        self._source_editing = source_editing
-
     @override
     def get_summarization_prompt(self, state: SourceCVLGenerationState) -> str:
             edit_item = (
                 "\n7. The source edits you have applied (their edit ids and what each was for), "
                 "any edit ids the editor produced that you chose NOT to apply, and any plans "
                 "you had to request further edits"
-                if self._source_editing else ""
             )
             return f"""
 You are approaching the context limit for your task. After this point, your context will be cleared
@@ -263,7 +273,6 @@ If your current task itself began with a summary, include the salient parts of t
         edit_note = (
             "\nAny source edits you applied remain in effect on your working copy; "
             f"the `{EDIT_HISTORY_LOG}` tool shows each applied edit and its diff.\n"
-            if self._source_editing else ""
         )
         return f"""
 You are resuming this task already in progress. The current version of your spec (if any) is available via the `get_cvl` tool.
@@ -563,9 +572,7 @@ def generate_edit_management_tools(
 class SourceEditing:
     """The editing-enabled generation phase's kit: the live tool suite
     (vfs-aware reads + versioned explorer + live doc ref, plus the write tools
-    the editor sub-agent uses) and the edit snapshot store. Phases whose output
-    must hold against the unedited source — structural invariants — run
-    without one."""
+    the editor sub-agent uses) and the edit snapshot store."""
     live: LiveEditTools
     store: EditStore
 
@@ -576,8 +583,7 @@ class EditingTools:
     staged :class:`CVLAuthorState` proposes edits into the editing kit's store
     and materializes against its working copy, so a binder without an editing
     kit is unusable. Fusing them makes "tools provided ⟺ editing enabled" a
-    fact of the type rather than an assert (the structural-invariant phase
-    passes None: neither)."""
+    fact of the type rather than an assert."""
     editing: SourceEditing
     tool_provider: ToolBinder[ContractComponentInstance]
 
@@ -658,10 +664,7 @@ class EditorAwareFeedbackTool(
 
 _PropertyGenTemplate = TypedTemplate[PropertyGenParams]("property_generation_prompt.j2")
 
-class PropertyGenSystemParams(TypedDict):
-    source_editing: bool
-
-_PropertyGenSysTemplate = TypedTemplate[PropertyGenSystemParams]("property_generation_system_prompt.j2")
+_PROPERTY_GEN_SYS_PROMPT = "property_generation_system_prompt.j2"
 
 #: The prover's tool extension: contributions come from plugins deriving
 #: ``CertoraProverTools``, dispatched via their ``certora_prover_tools`` hook.
@@ -753,7 +756,7 @@ async def batch_cvl_generation(
     ctx: WorkflowContext[CVLGeneration],
     init_config: dict,
     props: list[PropertyFormulation],
-    component: ContractComponentInstance | None,
+    component: ContractComponentInstance,
     resources: list[CVLResource],
     prover_tool: ProverTool,
     env: ServiceHost,
@@ -761,7 +764,7 @@ async def batch_cvl_generation(
     source: SourceCode,
     spec_dir: Path,
     spec_stem: str,
-    editing_tools: EditingTools | None,
+    editing_tools: EditingTools,
     focus: FocusPolicy | None = None,
 ) -> BatchGeneratedCVLResult:
     # *spec_dir* (project-root-relative) is where the caller will persist the spec
@@ -769,7 +772,7 @@ async def batch_cvl_generation(
     # directory, so resource imports are expressed relative to *spec_dir*.
     # *spec_stem* is the basename it is persisted under; the prover materializes its
     # transient spec/conf under the same stem so on-disk names match the dump.
-    editing = editing_tools.editing if editing_tools is not None else None
+    editing = editing_tools.editing
     resource_views: list[ResourceView] = [
         {
             "description": r.description,
@@ -788,64 +791,61 @@ async def batch_cvl_generation(
     })
 
     sys_prompt : list[RawPromptInput | type[CacheMarker]] = [
-        _PropertyGenSysTemplate.bind({"source_editing": editing is not None}).render_to
+        lambda load: load(_PROPERTY_GEN_SYS_PROMPT)
     ]
 
     added_tools : list[BaseTool] = []
-    if editing_tools is not None:
-        task_host = TaskHost()
-        kit = editing_tools.editing
-        # The same run-root strategy verify_spec uses (see ProjectDirectory): an
-        # empty working copy is read in-situ, a non-empty one against a temporary
-        # materialization whose lifetime is the contributed tool's invocation.
-        project_directory = materializing_project(source.project_root, kit.live.mat)
+    task_host = TaskHost()
+    kit = editing_tools.editing
+    # The same run-root strategy verify_spec uses (see ProjectDirectory): an
+    # empty working copy is read in-situ, a non-empty one against a temporary
+    # materialization whose lifetime is the contributed tool's invocation.
+    project_directory = materializing_project(source.project_root, kit.live.mat)
 
-        @asynccontextmanager
-        async def yield_state(
-            plugin_id: str,
-            st: SourceCVLGenerationState
-        ) -> AsyncIterator[CVLAuthorState]:
-            class _PluginStore:
-                async def propose(
-                    self, vfs: dict[str, str], *, executive_summary: str, why_sound: str
-                ) -> str:
-                    # Snapshot completion (the EditProposer contract): the
-                    # proposer's overlay is relative to the working copy this
-                    # read staged, but ApplyEditTool snapshots are wholesale —
-                    # so fold the author's own overlay back in, or applying
-                    # the proposal would silently revert prior edits.
-                    return await kit.store.commit(
-                        {**(st.get("vfs") or {}), **vfs},
-                        executive_summary=executive_summary,
-                        why_sound=why_sound,
-                        attribution=PluginEditor(plugin_id)
-                    )
-            async with project_directory(st.get("vfs") or {}) as run_root:
-                yield CVLAuthorState(
-                    working_dir=pathlib.Path(run_root),
-                    curr_spec=st["curr_spec"],
-                    prover_runner=WrappedProverRunner(
-                        st["config"],
-                        prover_tool.options,
-                        source.contract_name
-                    ).run,
-                    host=task_host,
-                    edit_store=_PluginStore()
+    @asynccontextmanager
+    async def yield_state(
+        plugin_id: str,
+        st: SourceCVLGenerationState
+    ) -> AsyncIterator[CVLAuthorState]:
+        class _PluginStore:
+            async def propose(
+                self, vfs: dict[str, str], *, executive_summary: str, why_sound: str
+            ) -> str:
+                # Snapshot completion (the EditProposer contract): the
+                # proposer's overlay is relative to the working copy this
+                # read staged, but ApplyEditTool snapshots are wholesale —
+                # so fold the author's own overlay back in, or applying
+                # the proposal would silently revert prior edits.
+                return await kit.store.commit(
+                    {**(st.get("vfs") or {}), **vfs},
+                    executive_summary=executive_summary,
+                    why_sound=why_sound,
+                    attribution=PluginEditor(plugin_id)
                 )
+        async with project_directory(st.get("vfs") or {}) as run_root:
+            yield CVLAuthorState(
+                working_dir=pathlib.Path(run_root),
+                curr_spec=st["curr_spec"],
+                prover_runner=WrappedProverRunner(
+                    st["config"],
+                    prover_tool.options,
+                    source.contract_name
+                ).run,
+                host=task_host,
+                edit_store=_PluginStore()
+            )
 
-        tools = await editing_tools.tool_provider(
-            _PROVER_TOOLS, yield_state, SourceCVLGenerationState
-        )
-        if tools:
-            # The retrieval surface for whatever the contributed tools launch;
-            # dead prompt weight when no plugin contributed, so gated on a
-            # non-empty contribution.
-            added_tools.extend([
-                TaskListTool.bind(task_host).as_tool(TASK_LIST),
-                RetrieveTask.bind(task_host).as_tool(RETRIEVE_TASK),
-            ])
-    else:
-        tools = []
+    tools = await editing_tools.tool_provider(
+        _PROVER_TOOLS, yield_state, SourceCVLGenerationState
+    )
+    if tools:
+        # The retrieval surface for whatever the contributed tools launch;
+        # dead prompt weight when no plugin contributed, so gated on a
+        # non-empty contribution.
+        added_tools.extend([
+            TaskListTool.bind(task_host).as_tool(TASK_LIST),
+            RetrieveTask.bind(task_host).as_tool(RETRIEVE_TASK),
+        ])
 
     for inj in tools:
         added_tools.extend(inj.tools)
@@ -859,22 +859,16 @@ async def batch_cvl_generation(
     judge_prompt = FeedbackTemplate.bind({
         "sort": "existing",
         "context": component,
-        "source_editing": editing is not None,
+        "source_editing": True,
     })
     protected = focus.protected if focus is not None else ()
-    if editing is None:
-        feedback_suite = property_tools(
-            property_feedback_judge(judge_ctx, env, judge_prompt, props),
-            protected=protected,
-        )
-    else:
-        judge_impl = source_feedback_judge(
-            judge_ctx, _LiveJudgeHost(env, editing), judge_prompt, props
-        )
-        feedback_suite = [
-            EditorAwareFeedbackTool.bind(judge_impl).as_tool("feedback_tool"),
-            *skip_tools(titles, protected=protected),
-        ]
+    judge_impl = source_feedback_judge(
+        judge_ctx, _LiveJudgeHost(env, editing), judge_prompt, props
+    )
+    feedback_suite = [
+        EditorAwareFeedbackTool.bind(judge_impl).as_tool("feedback_tool"),
+        *skip_tools(titles, protected=protected),
+    ]
 
     # use "cache=long" to account for very long prover runs.
     # on anthropic (the only backend we support) a long cache is 1hr
@@ -883,18 +877,19 @@ async def batch_cvl_generation(
     b = env.builder_heavy(cache_level=CacheLevel.LONG).with_tools(
         env.rag_tools
     )
-    if editing is not None:
-        b = b.with_tools(
-            editing.live.read_tools
-        ).with_tools(
-            [editing.live.explorer, editing.live.doc_tool]
-        ).with_tools(
-            generate_edit_management_tools(ctx, env, editing.store, editing.live)
-        )
-    else:
-        b = b.with_tools(env.source_tools)
+    b = b.with_tools(
+        editing.live.read_tools
+    ).with_tools(
+        [editing.live.explorer, editing.live.doc_tool]
+    ).with_tools(
+        generate_edit_management_tools(ctx, env, editing.store, editing.live)
+    )
     task_graph = b.with_tools(
         static_tools()
+    ).with_tools(
+        # Prover-only: the natspec author shares ``static_tools()`` but has no
+        # prover and so no counterexample to remediate.
+        [StructuralInvariantGuidance.as_tool("structural_invariant_guidance")]
     ).with_tools(
         feedback_suite
     ).with_tools(
@@ -924,7 +919,7 @@ async def batch_cvl_generation(
     ).with_tools(
         added_tools
     ).with_summary_config(
-        PropertyGenerationConfig(source_editing=editing is not None)
+        PropertyGenerationConfig()
     ).compile_async()
 
     # Crash recovery for the working copy, sibling to cvl_generation's draft
@@ -935,22 +930,21 @@ async def batch_cvl_generation(
     restored_vfs: dict[str, str] = {}
     restored_config: dict = init_config
     resume_note: list[str | dict] = []
-    if editing is not None:
-        prior = await ctx.child(LAST_ATTEMPT_EDITS_KEY).cache_get(_LastAttemptEdits)
-        if prior is not None:
-            if prior.config is not None:
-                restored_config = prior.config
-            if prior.version_history:
-                tail = await editing.store.read(prior.version_history[-1])
-                assert tail is not None, (
-                    f"recovered edit {prior.version_history[-1]} absent from the edit store"
-                )
-                restored_history = prior.version_history
-                restored_vfs = tail.vfs
-                resume_note = [
-                    "Source edits applied during your previous attempt at this task have "
-                    f"been restored to your working copy; use `{EDIT_HISTORY_LOG}` to review them."
-                ]
+    prior = await ctx.child(LAST_ATTEMPT_EDITS_KEY).cache_get(_LastAttemptEdits)
+    if prior is not None:
+        if prior.config is not None:
+            restored_config = prior.config
+        if prior.version_history:
+            tail = await editing.store.read(prior.version_history[-1])
+            assert tail is not None, (
+                f"recovered edit {prior.version_history[-1]} absent from the edit store"
+            )
+            restored_history = prior.version_history
+            restored_vfs = tail.vfs
+            resume_note = [
+                "Source edits applied during your previous attempt at this task have "
+                f"been restored to your working copy; use `{EDIT_HISTORY_LOG}` to review them."
+            ]
 
     try:
         res_state = await run_cvl_generator(
@@ -978,17 +972,16 @@ async def batch_cvl_generation(
     except BudgetExceeded as e:
         return Curtailed(None, detail=str(e))
     finally:
-        if editing is not None:
-            last_state = (
-                await task_graph.aget_state({"configurable": {"thread_id": ctx.thread_id}})
-            ).values
-            hist = last_state.get("version_history")
-            if hist is not None:
-                await ctx.child(LAST_ATTEMPT_EDITS_KEY).cache_put(
-                    _LastAttemptEdits(
-                        version_history=list(hist), config=last_state.get("config"),
-                    )
+        last_state = (
+            await task_graph.aget_state({"configurable": {"thread_id": ctx.thread_id}})
+        ).values
+        hist = last_state.get("version_history")
+        if hist is not None:
+            await ctx.child(LAST_ATTEMPT_EDITS_KEY).cache_put(
+                _LastAttemptEdits(
+                    version_history=list(hist), config=last_state.get("config"),
                 )
+            )
 
     assert "result" in res_state
     assert res_state["failed"] is not None
@@ -1001,15 +994,14 @@ async def batch_cvl_generation(
     d = res_state["curr_spec"]
     assert d is not None
     applied_edits: list[AppliedEdit] = []
-    if editing is not None:
-        for edit_id in res_state["version_history"]:
-            rec = await editing.store.read(edit_id)
-            assert rec is not None, f"edit {edit_id} in history but absent from the edit store"
-            applied_edits.append(AppliedEdit(
-                edit_id=edit_id,
-                executive_summary=rec.executive_summary,
-                why_sound=rec.why_sound,
-            ))
+    for edit_id in res_state["version_history"]:
+        rec = await editing.store.read(edit_id)
+        assert rec is not None, f"edit {edit_id} in history but absent from the edit store"
+        applied_edits.append(AppliedEdit(
+            edit_id=edit_id,
+            executive_summary=rec.executive_summary,
+            why_sound=rec.why_sound,
+        ))
     # Persist the base prover config and last run link from the final state so a later cache
     # hit (which skips the prover) can still reconstruct certora/confs and retain the link.
 

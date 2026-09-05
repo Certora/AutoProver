@@ -131,7 +131,10 @@ class CVLGenerationExtra(AuthoringExtra):
 #: How the CVL author words its publish-time mapping. The prover reports no rule-name ground truth
 #: (unlike forge), so ``validate_property_rules`` passes no ``ran`` set and the mapping is checked
 #: for coverage only.
-_CVL_MAPPING = MappingVocab(check_noun="rule", field_name="property_rules")
+_CVL_MAPPING = MappingVocab(
+    check_noun="rule", field_name="property_rules",
+    ran_source="the prover's typecheck of your spec",
+)
 
 
 def validate_property_rules(

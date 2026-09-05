@@ -1,0 +1,61 @@
+A counterexample that starts from a state the contract could never actually reach is telling you that the
+prover does not know something you do: the contract's fields stand in some relationship that the code
+maintains, and nothing in your spec says so. For example, the prover may hand you a starting state where a
+user's balance of a token is significantly greater than that token's total supply — clearly infeasible for a
+well-behaved token, but perfectly admissible to a tool that was never told otherwise.
+
+The fix is to state that relationship as an invariant and prove it. This document is about *choosing* what
+to state. The mechanics — the induction shape, strengthening, lemma invariants, `preserved` blocks,
+`requireInvariant`, `strong`, the soundness audit — are in the "CVL Invariants and Quantifiers" guide that
+is already in your context.
+
+## What makes a good candidate
+
+The line between this kind of invariant and a safety property is not well defined; it is arguably a safety
+property that a user's balance does not exceed the total supply. There is no definite rule of thumb, but
+these are the key indicators:
+
+1. It is "obvious" to an informed reader of the code.
+2. It is more structural than mathematical. For example: the owner of an active auction must appear in the
+   "approved users" mapping. Or: every position slot with a non-zero `owner` field must also have a
+   non-zero `backingAsset` field.
+3. It is, with high probability, fundamental to *other* security properties.
+
+This list is not exhaustive, and a candidate need not satisfy all or even any of them. The total-supply
+invariant above clearly involves math, so it appears to fail indicator 2 — but it meets indicator 3, and it
+is a good invariant.
+
+## Where to look
+
+The contract's storage layout, its state-modifying functions, its access control patterns, and the
+relationships between its data structures.
+
+## Four ways a candidate goes wrong
+
+Check your candidate against these before you spend a prover run on it.
+
+- **Not structural.** What you have is a safety or security property rather than a relationship the code
+  maintains. Consider whether it can be restated as a simpler, structural relationship.
+- **Not inductive.** The statement cannot be proven by induction — usually because it references specific
+  functions or call sequences. Reformulate it so it holds regardless of which function was called.
+- **Unlikely to hold.** The relationship probably is not maintained by this implementation. Re-read the
+  source before formalizing it.
+- **Not formal.** The statement is too vague to formalize. Make it precise enough to be a logical formula
+  over the contract's state.
+
+The bars are not symmetric. Drop a candidate on any real doubt about its inductiveness or its
+formalizability. Do *not* drop one merely because it looks mathematical.
+
+## The postcondition tell
+
+An inductive invariant holds regardless of which function was called, or in what order. If you find
+yourself naming a specific function in the statement — "after calling `deposit`, X holds" — you are
+describing a postcondition, not an invariant. That is the single most common way a candidate fails.
+
+## Invariants that depend on each other
+
+Invariant i1 depends on i2 when proving i1 preserved requires assuming i2 in the prestate — that is,
+without i2 the prover would consider states where i1 is spuriously violated. If i1 states "every active
+position has a non-zero owner" and i2 states "the position count never exceeds the array length", then i1
+likely depends on i2: without i2 the prover can consider out-of-bounds positions that vacuously violate i1.
+When that happens, prove i2 as well and cite it in i1's `preserved` block.

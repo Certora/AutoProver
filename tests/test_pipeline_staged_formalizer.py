@@ -70,7 +70,6 @@ class _Formalizer:
         self.calls.append((f"formalize:{feat.display_name}", [p.title for p in props]))
         return _Result()
 
-    def extra_report_inputs(self): return []
     def findings_evidence(self): return None
     async def fetch_verdicts(self, _inp): return {}
     async def finalize(self, _outcomes, _run): return None
@@ -327,8 +326,8 @@ def test_an_unmapped_focus_property_does_not_satisfy_the_focus():
 
 async def test_ranking_does_not_wait_for_pre_formalization(monkeypatch):
     """The ranking reads nothing ``prepare_formalization`` produces, so it must not queue
-    behind it. On a real contract that setup is hours of autosetup and invariant proving, and
-    the focus is knowable the moment extraction lands."""
+    behind it. On a real contract that setup is a full AutoSetup build, and the focus is
+    knowable the moment extraction lands."""
     order: list[str] = []
     started = asyncio.Event()
     release = asyncio.Event()

@@ -22,9 +22,9 @@ it, and no formalizer ever exists without it.
 
 The driver owns the genuinely-shared steps: system analysis, per-component property extraction, the
 result-type-keyed cache, and (since the report is backend-agnostic) building + persisting the
-property-keyed report. Everything backend-specific — the harnessed lift, autosetup/summaries/
-invariant fan-out, the formalizer itself, per-unit verdicts — is contributed through the three
-phase objects, and never inspected by the driver.
+property-keyed report. Everything backend-specific — the harnessed lift, the autosetup/summaries
+pre-work, the formalizer itself, per-unit verdicts — is contributed through the three phase
+objects, and never inspected by the driver.
 """
 
 import asyncio
@@ -160,7 +160,7 @@ class ToolBinder[U: FeatureUnit](Protocol):
 class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
     """Immutable, fully constructed by whatever produced it — ``prepare_formalization``, or
     :meth:`StagedFormalizer.begin` for a backend with a shared artifact. Carries the prover's
-    config/resources/prover_tool/invariant-results (or nothing, for foundry) as constructor
+    config/resources/prover_tool (or nothing, for foundry) as constructor
     state — never set post-hoc. `FormT: ReportableResult` is what makes the report a core step.
 
     Generic over ``U``, the *formalized unit* type it consumes (EVM's ``ContractComponentInstance``,
@@ -189,11 +189,6 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
         backend's :class:`ToolExtension` and the extension's tail (the authoring
         graph's state type and staged-state reader)."""
         ...
-
-    def extra_report_inputs(self) -> list[ReportComponentInput[FormT]]:
-        """Synthetic report inputs beyond the per-component outcomes — the prover folds in its
-        'Structural Invariants' here. Default: none."""
-        return []
 
     async def source_edits(
         self, outcomes: list[ComponentOutcome[FormT, U]], run: PipelineRun
@@ -233,8 +228,8 @@ class StagedFormalizer[FormT: BackendResult, U: FeatureUnit](ABC):
     then told to work within — harmless at one unit, silently wrong at several. ``begin`` sits
     between the two, where extraction is done and no unit has been formalized.
 
-    Some backends need none of this and return a ``Formalizer`` directly; the prover's shared peer
-    (``invariants.spec``) is staged in ``prepare_formalization``."""
+    Some backends need none of this and return a ``Formalizer`` directly; the prover is one of
+    them — its units share no authored artifact, only AutoSetup's config and summaries."""
 
     @abstractmethod
     async def begin(
@@ -718,9 +713,8 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
 
     await formalizer.finalize(outcomes, run)
 
-    # 6. Report (shared, backend-agnostic). The driver assembles the per-component inputs; backends
-    # contribute only synthetic extras (prover: structural invariants). Best-effort: a failure here
-    # never fails the run.
+    # 6. Report (shared, backend-agnostic). The driver assembles the per-component inputs.
+    # Best-effort: a failure here never fails the run.
     inputs = [
         ReportComponentInput(
             name=o.feat.display_name,
@@ -728,7 +722,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
             formalized=o.result if isinstance(o.result, (Delivered, Curtailed)) else None,
         )
         for o in outcomes
-    ] + formalizer.extra_report_inputs()
+    ]
     artifact_records = [
         VerificationArtifactRecord(
             component=o.feat.display_name,
