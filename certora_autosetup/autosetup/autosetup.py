@@ -736,7 +736,11 @@ class Autosetup:
         final_config = self.config_manager.create_config(
             main_contract,
             self.contract_handles,
-            [],  # TODO: should we include also self.config.additional_contracts?
+            # The curated companions specifically: this config exists to typecheck the
+            # summaries that were just set up, and a summary rerouting through a companion
+            # cannot typecheck against a scene the companion is missing from. Whether the
+            # run's own --additional-contracts belong here too is still open.
+            self._curated_scene_contracts,
             sanity_spec_path,
             conf_path=test_config_path,
             properties=compilation_properties,
