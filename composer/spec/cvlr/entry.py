@@ -43,6 +43,7 @@ from composer.input.types import DEFAULT_RECURSION_LIMIT, ExtendedModelOptions
 from composer.io.multi_job import HandlerFactory
 from composer.io.thread_logging import RunDataLogger
 from composer.pipeline.cli import AtExit, cli_pipeline, user_ns
+from composer.pipeline.pinned import load_pinned_properties
 from composer.pipeline.ecosystem import SOLANA
 from composer.pipeline.ptypes import DEFAULT_MAX_CPU_TASKS, CorePipelineResult
 from composer.prover.core import make_prover_options
@@ -90,6 +91,7 @@ class CvlrArgs(ExtendedModelOptions, Protocol):
     interactive: bool
     max_bug_rounds: int
     max_properties: int | None
+    properties: str | None
     recursion_limit: int
     budget: str | None
     time_budget: float | None
@@ -152,6 +154,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Author rules for at most this many extracted properties, taken in order across "
              "components. Omit for all of them. Bounds what the run takes on, where --budget bounds "
              "what it spends — the two are worth pairing on a program this backend has not seen.",
+    )
+    parser.add_argument(
+        "--properties", default=None, metavar="PATH",
+        help="Formalize these properties instead of extracting them, skipping the extraction "
+             "phase — the one that dominates a real target's cost. A JSON object keyed by "
+             "component slug, or the bare list the artifact store writes under "
+             "certora/cvlr/properties/. Components the file does not name are dropped from the "
+             "run; a name analysis did not produce is an error.",
     )
     parser.add_argument("--budget", default=None, help="Path to a run-budget file (JSON or YAML): {total: USD, caps: {phase: USD, ...}}. Omit to run unbudgeted.")
     parser.add_argument("--time-budget", default=None, type=float, help="Total wall time to run the entire execution. Omit to run without in process limit")
@@ -324,6 +334,13 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
             "analysis will be told to declare %r",
             identifier, crate, identifier,
         )
+    # Read before any service starts: a malformed pin file should cost nothing, and the shape
+    # error is far easier to act on when it is the first thing printed.
+    pinned = (
+        load_pinned_properties(pathlib.Path(args.properties).resolve())
+        if args.properties is not None else None
+    )
+
     sandbox = build_confinement()
     announce_confinement(sandbox)
 
@@ -337,6 +354,7 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
             at_exit=_usage_exit_logger(summary, selected),
             forbidden_read=SOLANA.language.default_forbidden_read,
             max_properties=args.max_properties,
+            pinned=pinned,
             workflow="cvlr",
             package=selected.name,
             confined=sandbox.enabled,
