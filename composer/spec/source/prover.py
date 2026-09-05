@@ -113,6 +113,9 @@ class ProverRunLog(TypedDict):
     sort: Literal["run"]
     declared_rules: list[str]
     state_digest: str
+    # The spec buffer this run belongs to; absent for a single-curr_spec run. Each buffer has its own
+    # spec/digest, so completion is evaluated per buffer over its own runs (see _history_for_buffer).
+    buffer: NotRequired[str]
 
 class NagMarker(TypedDict):
     nagged_rules: list[RulePath]
@@ -245,6 +248,33 @@ def _is_completion_history(
         if not remaining_rules:
             return True
     return False
+
+def _history_for_buffer(l: list[ProverHistoryItem], buffer: str) -> list[ProverHistoryItem]:
+    """The prover history restricted to one buffer's runs (nag markers pass through). Each buffer has
+    its own spec, hence its own ``state_digest``; filtering first keeps :func:`_iterate_history`'s
+    digest streak from being truncated by an interleaved run of a different buffer."""
+    return [it for it in l if it["sort"] != "run" or it.get("buffer") == buffer]
+
+
+def buffer_is_complete(
+    l: list[ProverHistoryItem],
+    *,
+    buffer: str,
+    curr_digest: str,
+    expected_to_fail: set[str],
+    curr_status: list[tuple[RulePath, StatusCodes]],
+    all_rules: list[str],
+) -> bool:
+    """Whether one buffer's rules are all verified against its current digest, evaluated over that
+    buffer's own runs. Overall completion is the AND of this across every run-target buffer."""
+    return _is_completion_history(
+        l=_history_for_buffer(l, buffer),
+        curr_digest=curr_digest,
+        expected_to_fail=expected_to_fail,
+        curr_status=curr_status,
+        all_rules=all_rules,
+    )
+
 
 def _merge_prover_history(left: list[ProverHistoryItem], right: list[ProverHistoryItem]) -> list[ProverHistoryItem]:
     to_ret = left.copy()
