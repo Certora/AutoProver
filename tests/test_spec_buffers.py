@@ -4,6 +4,8 @@ from composer.spec.source.spec_buffers import (
     NamedBuffer,
     buffer_digest,
     buffer_files,
+    buffer_state_digest,
+    check_buffer_completion,
     combined_buffers_view,
     import_closure,
     merge_buffers,
@@ -167,6 +169,56 @@ def test_plan_buffer_runs_skips_complete_and_excludes_shared():
     assert set(by) == {"easy", "hard"}  # shared is not a run target
     assert by["easy"].needs_run is False and by["hard"].needs_run is True
     assert by["easy"].digest == "d-easy"
+
+
+# --- per-buffer completion (validation stamps) -----------------------------
+
+
+def _stamp(buffers, name, key):
+    d = buffer_state_digest(buffers, name, skipped=[], version_history=[])
+    return {f"{key}:{name}": d}
+
+
+def test_buffer_completion_ok_when_all_stamped_at_digest():
+    b = _buffers()
+    validations = {}
+    for name in ("easy", "hard"):
+        validations.update(_stamp(b, name, "feedback"))
+        validations.update(_stamp(b, name, "prover"))
+    assert check_buffer_completion(
+        b, validations, ["feedback", "prover"], skipped=[], version_history=[]
+    ) is None
+
+
+def test_buffer_completion_rejects_missing_stamp():
+    b = _buffers()
+    validations = _stamp(b, "easy", "feedback")  # hard + prover missing
+    err = check_buffer_completion(b, validations, ["feedback", "prover"], skipped=[], version_history=[])
+    assert err is not None and ("hard" in err or "prover" in err)
+
+
+def test_buffer_completion_stamp_goes_stale_on_edit():
+    b = _buffers()
+    validations = {}
+    for name in ("easy", "hard"):
+        validations.update(_stamp(b, name, "feedback"))
+        validations.update(_stamp(b, name, "prover"))
+    # Edit `easy`: its digest changes, so its stamps go stale.
+    b["easy"] = NamedBuffer(name="easy", cvl=EASY + "// edit\n", property_rules={"P-easy": ["r_easy"]}, imports=("shared",))
+    err = check_buffer_completion(b, validations, ["feedback", "prover"], skipped=[], version_history=[])
+    assert err is not None and "easy" in err
+
+
+def test_buffer_completion_stamp_goes_stale_on_shared_import_edit():
+    b = _buffers()
+    validations = {}
+    for name in ("easy", "hard"):
+        validations.update(_stamp(b, name, "feedback"))
+        validations.update(_stamp(b, name, "prover"))
+    # Editing the shared buffer invalidates BOTH importers' stamps.
+    b["shared"] = NamedBuffer(name="shared", cvl=SHARED + "// edit\n", is_run_target=False)
+    err = check_buffer_completion(b, validations, ["feedback", "prover"], skipped=[], version_history=[])
+    assert err is not None
 
 
 # --- buffers-map reducer ---------------------------------------------------
