@@ -105,7 +105,7 @@
     "library_names": ["BitMaps"],
     "summary_file": "specs/summaries/OpenZeppelin/OZ_BitMaps.spec",
     "description": "OpenZeppelin BitMaps operations",
-    "additional_contracts": ["specs/summaries/OpenZeppelin/harnesses/OZ_BitMaps.sol"]
+    "additional_contracts": ["specs/summaries/OpenZeppelin/harnesses/OZ_BitMaps.template.sol"]
   },
   "oz_arrays_unsafeMemoryAccess": {
     "names": ["unsafeMemoryAccess"],

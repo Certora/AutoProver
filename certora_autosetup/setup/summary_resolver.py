@@ -430,7 +430,12 @@ def curated_scene_contracts(
         if not info:
             continue
         for ac in info.get("additional_contracts", []):
-            path = user_summaries_dir / Path(ac).relative_to(SUMMARIES_SUBDIR)
+            # A companion shipped as a template is emitted under its untemplated name, since
+            # what reaches the conf is the filled-in file, not the template.
+            rel = Path(ac).relative_to(SUMMARIES_SUBDIR)
+            if ".template." in rel.name:
+                rel = rel.with_name(rel.name.replace(".template.", ".", 1))
+            path = user_summaries_dir / rel
             if not path.is_file():
                 log(f"Curated companion contract not copied: {path}", "WARNING")
                 continue

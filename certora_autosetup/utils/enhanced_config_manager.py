@@ -260,6 +260,17 @@ class ConfigManager:
                 parsed_args[normalized_key] = arg_value
             conf_template["prover_args"] = self._build_prover_args_list(parsed_args)
 
+        # A file in `files` with no compiler_map entry makes certoraRun reject the conf as
+        # "not matched in compiler_map". The scene contracts come with their entries from the
+        # build-system properties above; the additional ones are added here and have none, so
+        # they get the same per-contract resolution add_files_to_config gives them.
+        if any(key.endswith("_map") for key in conf_template):
+            for handle in parse_contract_files(additional_files):
+                self.update_compiler_map_for_contract(conf_template, handle, self.reference_compiler_maps or None)
+                self.update_via_ir_map_for_contract(conf_template, handle, self.reference_compiler_maps or None)
+                self.update_optimize_map_for_contract(conf_template, handle, self.reference_compiler_maps or None)
+                self.update_evm_version_map_for_contract(conf_template, handle, self.reference_compiler_maps or None)
+
         # Write configuration file
         if not conf_path:
             raise ValueError("conf_path is required; ConfigManager no longer defaults a conf output path")

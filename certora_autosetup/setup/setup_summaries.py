@@ -52,12 +52,14 @@ from certora_autosetup.utils.llm_util import (
     is_local_backend,
 )
 
-from certora_autosetup.setup.solidity_utils import DEPENDENCIES, find_all_library_files as util_find_all_library_files
+from certora_autosetup.setup.solidity_utils import DEPENDENCIES, find_all_library_files_and_names
+from certora_autosetup.setup.solidity_utils import find_all_library_files as util_find_all_library_files
 from certora_autosetup.setup.solidity_utils import find_all_solidity_files as util_find_all_solidity_files
 from certora_autosetup.setup.solidity_utils import walk_files_by_suffix
 
 # Import method parser
 from certora_autosetup.parsers.method_parser import MethodParser
+from certora_autosetup.utils.solc_version_resolver import read_pragma_from_source_file
 from certora_autosetup.parsers.spec_imports import parse_imports_from_spec
 from certora_autosetup.setup.summary_resolver import curated_scene_contracts, resolve_summary_specs
 from certora_autosetup.setup.signature_types import InheritanceGraph
@@ -775,7 +777,7 @@ class SummarySetup:
 
         copied = 0
         for rel in sorted(closure):
-            # Templates are read from the package source by _materialize_template;
+            # Spec templates are read from the package source by _materialize_template;
             # never copy them to the user's dir.
             if str(rel).endswith(".template.spec"):
                 continue
@@ -785,11 +787,96 @@ class SummarySetup:
                 self.log(f"Bundled summary file missing: {src}", "WARNING")
                 continue
             dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(src, dst)
+            if str(rel).endswith(".template.sol"):
+                # A companion contract the summary reroutes through cannot be shipped ready to
+                # use: its parameter types have to come from the project's own copy of the
+                # library, so the import is filled in here.
+                if not self._materialize_companion(rel, src, self._untemplated(dst)):
+                    continue
+            else:
+                shutil.copyfile(src, dst)
             copied += 1
 
         self.log(f"Copied {copied} curated summary file(s) to {target_summaries}")
         return target_summaries
+
+    @staticmethod
+    def _untemplated(path: Path) -> Path:
+        """``X.template.sol`` -> ``X.sol``; anything else unchanged.
+
+        Deliberately not ``_versioned_template_relpath``: that one is ``.spec``-shaped and
+        appends the main contract's name, while a companion's content depends only on the
+        project, so two main contracts in one project share a single companion.
+        """
+        name = path.name
+        return path.with_name(name.replace(".template.", ".", 1)) if ".template." in name else path
+
+    def _library_for_companion(self, rel: Path) -> Optional[str]:
+        """The library name a companion template belongs to, from the registry.
+
+        Read from the entry that declares the companion rather than parsed out of its
+        filename, so the two cannot drift apart.
+        """
+        wanted = (SUMMARIES_SUBDIR / rel).as_posix()
+        for info in self.function_summaries.values():
+            if wanted in info.get("additional_contracts", []):
+                names = info.get("library_names") or []
+                return names[0] if names else None
+        return None
+
+    def _project_library_file(self, library_name: str) -> Optional[Path]:
+        """The project's own file declaring ``library <library_name>``."""
+        found = find_all_library_files_and_names(
+            include_test_files=False, include_dependencies=True, log_func=self.log
+        )
+        for file_path, names in found.items():
+            if library_name in names:
+                return Path(file_path)
+        return None
+
+    def _materialize_companion(self, rel: Path, template: Path, destination: Path) -> bool:
+        """Fill a companion template in from the project and write it. False if we cannot.
+
+        Returns False rather than raising so the caller can drop the key: a summary whose
+        companion never materialized is worse than no summary, because the reroute would send
+        the library's calls to a contract that is not in the scene.
+        """
+        library_name = self._library_for_companion(rel)
+        if library_name is None:
+            self.log(f"No registry entry claims companion {rel}", "WARNING")
+            return False
+
+        library_file = self._project_library_file(library_name)
+        if library_file is None:
+            self.log(
+                f"Cannot generate {destination.name}: the project has no library "
+                f"{library_name} to take its types from",
+                "WARNING",
+            )
+            return False
+
+        # The library's own spec, so the companion can never fall outside the range the
+        # library itself compiles under.
+        pragma_spec = read_pragma_from_source_file(library_file, Path.cwd())
+        if not pragma_spec:
+            self.log(
+                f"Cannot generate {destination.name}: {library_file} declares no pragma",
+                "WARNING",
+            )
+            return False
+
+        # Relative, because the emitted file sits under certora/ while the library can be
+        # anywhere; an absolute path would also bake the build machine's layout into a source
+        # file that gets uploaded with the run.
+        import_path = os.path.relpath(library_file.resolve(), destination.parent.resolve())
+        content = (
+            template.read_text()
+            .replace("$PRAGMA$", f"pragma solidity {pragma_spec};")
+            .replace("$BITMAPS_IMPORT$", import_path)
+        )
+        destination.write_text(content)
+        self.log(f"Generated {destination.name} against {library_file}")
+        return True
 
     def process_template_in_place(
         self,
