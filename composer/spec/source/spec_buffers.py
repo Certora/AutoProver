@@ -1,0 +1,146 @@
+"""Multi-buffer CVL specs: the agent authors several independent spec buffers that share
+infrastructure through CVL ``import``.
+
+Policy-neutral substrate for generalizing the single ``curr_spec`` buffer
+(:mod:`composer.authoring.buffer`) into a named *set* of buffers. A *run-target* buffer is a
+self-contained spec — its own rules, its ``methods{}`` block, and ``import`` statements pulling in
+shared buffers — verified and reviewed on its own. A *shared* buffer holds common ghosts, invariants,
+and models that run-target buffers import; it runs no rules itself. Every non-skipped property is
+owned by exactly one run-target buffer, and every rule lives in exactly one buffer.
+
+Each buffer has a content *digest* over its own text plus its transitive import closure (reusing the
+autosetup content-cache hashing). Editing a shared buffer therefore changes the digest of every buffer
+that imports it, which is what lets the pipeline skip re-verifying / re-reviewing an unchanged buffer
+while correctly invalidating its importers.
+
+(``NamedBuffer`` is the value object — one buffer's text plus metadata — distinct from
+:class:`composer.authoring.buffer.SpecBuffer`, which is the single-buffer *state* shape.)
+"""
+
+from collections.abc import Mapping, Sequence
+from typing import Annotated
+
+from pydantic import BaseModel, Field
+from typing_extensions import TypedDict
+
+from certora_autosetup.cache.content_cache import hash_content_parts, hash_text
+
+
+class NamedBuffer(BaseModel):
+    """One named CVL spec buffer the agent authors. Frozen and pydantic so it is both the substrate's
+    algorithm type and the shape stored (serializably) in graph state."""
+
+    model_config = {"frozen": True}
+
+    #: Stable identifier; also the on-disk stem when the buffer is materialized to a ``.spec`` file.
+    name: str
+    #: The buffer's own CVL text — its rules, its ``methods{}`` block, and its ``import`` statements.
+    cvl: str
+    #: For a run-target buffer, its property -> rule mapping: each property title it verifies -> the
+    #: rule/invariant names in ``cvl`` that verify it. Empty for a shared (imported-only) buffer.
+    property_rules: dict[str, list[str]] = Field(default_factory=dict)
+    #: Names of the buffers this one imports (its shared dependencies), used to build the digest
+    #: closure. Should track the actual ``import`` statements in ``cvl``.
+    imports: tuple[str, ...] = ()
+    #: False for a shared buffer that only supplies imports and runs no rules of its own.
+    is_run_target: bool = True
+
+    @property
+    def properties(self) -> frozenset[str]:
+        """The property titles this buffer covers (the keys of ``property_rules``)."""
+        return frozenset(self.property_rules)
+
+    @property
+    def owned_rules(self) -> frozenset[str]:
+        """The rules this buffer verifies (the union of its ``property_rules`` values)."""
+        return frozenset(r for rs in self.property_rules.values() for r in rs)
+
+
+def merge_buffers(
+    left: Mapping[str, NamedBuffer], right: Mapping[str, "NamedBuffer | None"]
+) -> dict[str, NamedBuffer]:
+    """State reducer for the buffers map: right-wins per name; a ``None`` value removes that buffer
+    (so a tool can merge/drop buffers). Granularity is the whole buffer — a tool that edits one
+    buffer's text passes the updated :class:`NamedBuffer` under its name."""
+    out = dict(left)
+    for name, val in right.items():
+        if val is None:
+            out.pop(name, None)
+        else:
+            out[name] = val
+    return out
+
+
+class SpecBuffersExtra(TypedDict):
+    """Graph-state slice holding the agent's spec buffers, keyed by name. Empty until the agent
+    creates buffers; a single run-target buffer is the behavior-preserving single-spec case."""
+
+    buffers: Annotated[dict[str, NamedBuffer], merge_buffers]
+
+
+def import_closure(buffers: Mapping[str, NamedBuffer], name: str) -> list[NamedBuffer]:
+    """Buffer ``name`` plus every buffer reachable through its ``imports``, transitively — deduped and
+    returned sorted by name. An import naming no known buffer is skipped here (a dangling import is a
+    coverage/validation concern, not a hashing one), and import cycles terminate safely."""
+    seen: set[str] = set()
+    stack = [name]
+    while stack:
+        n = stack.pop()
+        if n in seen or n not in buffers:
+            continue
+        seen.add(n)
+        stack.extend(buffers[n].imports)
+    return [buffers[n] for n in sorted(seen)]
+
+
+def buffer_digest(
+    buffers: Mapping[str, NamedBuffer], name: str, *, extra_parts: Sequence[str] = ()
+) -> str:
+    """A content digest of buffer ``name`` and its transitive import closure, plus any ``extra_parts``
+    (e.g. skipped-property or conf-flag markers). Editing the buffer OR any buffer it imports changes
+    the digest, so it keys the buffer's cached verify/review. Mirrors
+    :meth:`ContentCache.compute_cache_key` (content-keyed, order-independent)."""
+    parts = [f"{b.name}:{hash_text(b.cvl)}" for b in import_closure(buffers, name)]
+    parts += [f"extra:{p}" for p in extra_parts]
+    return hash_content_parts(parts)
+
+
+def run_targets(buffers: Mapping[str, NamedBuffer]) -> list[NamedBuffer]:
+    """The run-target buffers (those that verify rules), sorted by name."""
+    return [buffers[n] for n in sorted(buffers) if buffers[n].is_run_target]
+
+
+def validate_coverage(
+    buffers: Mapping[str, NamedBuffer], *, all_properties: set[str], skipped: set[str]
+) -> str | None:
+    """Whether the run-target buffers cover the property space exactly once — the publish-time contract:
+    every non-skipped property assigned to exactly one buffer, and no unknown or skipped property
+    assigned. Returns None when valid, else one message enumerating every problem."""
+    assigned: list[str] = [p for b in run_targets(buffers) for p in b.properties]
+    seen: set[str] = set()
+    duplicated: set[str] = set()
+    for p in assigned:
+        (duplicated if p in seen else seen).add(p)
+    required = all_properties - skipped
+    problems: list[str] = []
+    if duplicated:
+        problems.append(f"properties assigned to more than one buffer: {sorted(duplicated)}")
+    if missing := required - seen:
+        problems.append(f"non-skipped properties assigned to no buffer: {sorted(missing)}")
+    if unknown := seen - all_properties:
+        problems.append(f"unknown property titles: {sorted(unknown)}")
+    if skipped_assigned := seen & skipped:
+        problems.append(f"skipped properties should not be assigned to a buffer: {sorted(skipped_assigned)}")
+    return "; ".join(problems) if problems else None
+
+
+def validate_disjoint_rules(buffers: Mapping[str, NamedBuffer]) -> str | None:
+    """Whether every rule is owned by exactly one run-target buffer. Unlike overlay groups, buffers
+    hold their rules physically, so a rule name appearing in two buffers is an authoring mistake
+    (ambiguous ownership). Returns None when disjoint, else a message naming the shared rules."""
+    seen: set[str] = set()
+    dup: set[str] = set()
+    for b in run_targets(buffers):
+        for r in b.owned_rules:
+            (dup if r in seen else seen).add(r)
+    return f"rules owned by more than one buffer: {sorted(dup)}" if dup else None

@@ -15,6 +15,19 @@ from certora_autosetup.cache.cache_fs import cache_path, get_fs
 from certora_autosetup.utils.constants import DIR_CERTORA_INTERNAL, DIR_CONTENT_CACHE
 
 
+def hash_text(text: str) -> str:
+    """SHA-256 of a string's UTF-8 bytes (first 16 hex chars) — the in-memory analog of
+    :meth:`ContentCache._hash_file`, for content that isn't on disk (e.g. an in-state spec buffer)."""
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+def hash_content_parts(parts: list[str]) -> str:
+    """Combine already-hashed content parts (e.g. ``"name:<hash>"`` and ``"extra:<flag>"`` strings)
+    into one 32-char cache key. The final step shared by :meth:`ContentCache.compute_cache_key` and
+    any in-memory content digest."""
+    return hashlib.sha256("\n".join(parts).encode()).hexdigest()[:32]
+
+
 class ContentCache:
     """Content-hash-based cache for arbitrary data keyed by file contents.
 
@@ -72,8 +85,7 @@ class ContentCache:
             for part in extra_key_parts:
                 parts.append(f"extra:{part}")
 
-        combined = "\n".join(parts)
-        return hashlib.sha256(combined.encode()).hexdigest()[:32]
+        return hash_content_parts(parts)
 
     def get(self, cache_key: str) -> dict[str, Any] | None:
         """Retrieve cached data for the given key.
