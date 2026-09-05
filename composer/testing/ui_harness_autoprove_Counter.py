@@ -121,6 +121,36 @@ invariant not_valid_cvl()
     this is definitely not valid CVL syntax;
 """
 
+# The author's first draft: the two increment() rules, but nothing for
+# ``other_increments_by_one``. Typechecks (it is COMPONENT_CVL minus its last rule),
+# so it is the feedback judge rather than the Typechecker that rejects it, on
+# coverage. Drives the good=False -> revise -> good=True round of the tape.
+PARTIAL_COMPONENT_CVL = """\
+methods {
+    function count() external returns (uint256) envfree;
+    function increments(address) external returns (uint256) envfree;
+    function increment() external;
+    function incrementOther(address) external;
+}
+
+rule increment_increases_count {
+    env e;
+    mathint before = count();
+    increment(e);
+    assert to_mathint(count()) == before + 1,
+        "increment() must increase count by exactly 1";
+}
+
+rule increment_increases_sender_tally {
+    env e;
+    address s = e.msg.sender;
+    mathint before = increments(s);
+    increment(e);
+    assert to_mathint(increments(s)) == before + 1,
+        "increment() must increase increments[msg.sender] by exactly 1";
+}
+"""
+
 # Component-CVL spec: three rules covering all three extracted properties.
 # The first two rules verify on the first prover run. The third rule —
 # ``incrementOther_credits_target_when_distinct`` — CEXes against
@@ -550,7 +580,8 @@ _BUG_TAPE: list[BaseMessage] = [
     # ───────────────────────────────────────────────────────────────────
     # The only authoring lane, so it carries the file's whole tool coverage
     # (research, guidance, skip/unskip, expect-fail/passage, the Typechecker
-    # rejection path) as well as the surface-a-real-bug path.
+    # rejection path) as well as the judge good=False -> revise -> good=True
+    # round and the surface-a-real-bug path.
     #
     # 3 refined properties from P3b.
     #
@@ -719,24 +750,66 @@ _CVL_TAPE: list[BaseMessage] = [
 
     # ── The component spec proper ──────────────────────────────────────
 
-    # R1 — put the three-rule component spec. Typechecks; covers all three
-    # refined props.
+    # R1 — put the incomplete first draft. Typechecks, so it reaches the judge.
     _ai(
-        "Writing the component spec covering all three properties.",
-        _tc("put_cvl_raw", cvl_file=COMPONENT_CVL),
+        "Writing a first pass at the component spec.",
+        _tc("put_cvl_raw", cvl_file=PARTIAL_COMPONENT_CVL),
     ),
 
-    # R2 — request feedback. Spawns J3.{1-3}. Judge returns good=True on
-    # first pass (the spec faithfully encodes all three properties; whether
-    # the rules pass against the implementation is the prover's question).
+    # R2 — request feedback. Spawns J1.{1-3}. The judge returns good=False, so
+    # validations["feedback"] is NOT stamped and the author must revise.
     _ai(
-        "Requesting judge feedback on the component spec.",
+        "Requesting judge feedback on the first draft.",
         _tc("feedback_tool"),
     ),
 
-    # J3.1 — feedback judge, single pass, turn 1.
+    # J1.1 — feedback judge, first invocation, turn 1.
     _ai(
-        "Judge: inspecting the component spec.",
+        "Judge: inspecting the draft.",
+        _tc("get_cvl"),
+        _tc(
+            "write_rough_draft",
+            rough_draft=(
+                "Two rules, both about increment(). Nothing addresses "
+                "other_increments_by_one, and it carries no skip "
+                "declaration. Coverage is incomplete. Verdict: NOT GOOD."
+            ),
+        ),
+    ),
+    _ai(
+        "Judge: reading the draft.",
+        _tc("read_rough_draft"),
+    ),
+    # J1.3 — good=False. No digest stamped; the author has to come back.
+    _ai(
+        "Judge: rejecting the draft on coverage.",
+        _tc(
+            "result",
+            good=False,
+            feedback=(
+                "The property other_increments_by_one is neither formalized "
+                "nor skipped. Add a rule for incrementOther(address), or "
+                "record a skip with a justification."
+            ),
+        ),
+    ),
+
+    # R3 — author addresses the feedback with the full three-rule spec.
+    # Mutates curr_spec, so any prior stamp would be stale regardless.
+    _ai(
+        "Adding the missing incrementOther rule.",
+        _tc("put_cvl_raw", cvl_file=COMPONENT_CVL),
+    ),
+
+    # R4 — second feedback round. Spawns J2.{1-3}, which approves.
+    _ai(
+        "Requesting judge feedback on the revised spec.",
+        _tc("feedback_tool"),
+    ),
+
+    # J2.1 — feedback judge, second invocation, turn 1.
+    _ai(
+        "Judge: inspecting the revised spec.",
         _tc("get_cvl"),
         _tc(
             "write_rough_draft",
@@ -752,7 +825,7 @@ _CVL_TAPE: list[BaseMessage] = [
         "Judge: reading the draft.",
         _tc("read_rough_draft"),
     ),
-    # J3.3 — good=True verdict. Stamps validations["feedback"] with
+    # J2.3 — good=True verdict. Stamps validations["feedback"] with
     # digest(COMPONENT_CVL, skipped=[]). rule_skips is NOT part of the
     # digest, so the later expect_rule_failure won't invalidate this
     # stamp.
@@ -761,7 +834,7 @@ _CVL_TAPE: list[BaseMessage] = [
         _tc("result", good=True, feedback=""),
     ),
 
-    # R3 — first prover run. The two increment() rules verify; the
+    # R5 — first prover run. The two increment() rules verify; the
     # incrementOther rule CEXes (msg.sender credited instead of other).
     # all_verified=False → validations[prover] NOT stamped, tool returns
     # raw report string. Exactly ONE failing rule → exactly ONE
@@ -773,7 +846,7 @@ _CVL_TAPE: list[BaseMessage] = [
 
     # CEX.2 — inline analysis of the incrementOther CEX. Plain AIMessage,
     # no tool_calls, mirrors the CEX.1 entry in the invariant-CVL phase.
-    # Critical placement: between R3 and R4 in the global tape cursor.
+    # Critical placement: between R5 and R6 in the global tape cursor.
     _ai(
         "Counter-example analysis for rule "
         "``incrementOther_credits_target_when_distinct``:\n\n"
@@ -790,7 +863,7 @@ _CVL_TAPE: list[BaseMessage] = [
         "so a human can fix the Solidity."
     ),
 
-    # R4 — author responds to the surfaced bug by marking the rule as
+    # R6 — author responds to the surfaced bug by marking the rule as
     # expected-to-fail. ``expect_rule_failure`` writes into ``rule_skips``
     # via a Command. ``rule_skips`` is NOT part of the digest used by
     # validation stamps, so the prior feedback stamp remains valid.
@@ -813,11 +886,11 @@ _CVL_TAPE: list[BaseMessage] = [
         ),
     ),
 
-    # R5 — re-run prover. With the buggy rule in rule_skips, the
+    # R7 — re-run prover. With the buggy rule in rule_skips, the
     # all_verified loop in verify_spec ignores it; the two increment()
     # rules pass, so all_verified=True and rules=None → stamps
     # validations[prover] at digest(COMPONENT_CVL, skipped=[]), which
-    # matches the feedback stamp from J3.3.
+    # matches the feedback stamp from J2.3.
     _ai(
         "Re-running the prover with the buggy rule excluded.",
         _tc("verify_spec", rules=None),
@@ -838,8 +911,8 @@ _CVL_TAPE: list[BaseMessage] = [
         "so a human can fix the Solidity."
     ),
 
-    # R6 — final result. Both stamps current, curr_spec unchanged since
-    # R1. Commentary documents the surfaced bug so the downstream
+    # R8 — final result. Both stamps current, curr_spec unchanged since
+    # R3. Commentary documents the surfaced bug so the downstream
     # ``natspec_report`` / file-on-disk autospec output flags it for the
     # human reviewer.
     _ai(
@@ -1288,6 +1361,7 @@ def install_nag_tape(
 __all__ = [
     "BROKEN_PARSE_CVL",
     "COMPONENT_CVL",
+    "PARTIAL_COMPONENT_CVL",
     "NAG_COMPONENT_CVL",
     "NAG_STUCK_RULE",
     "autoprove_nag_lanes",

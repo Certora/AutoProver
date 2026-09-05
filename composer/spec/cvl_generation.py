@@ -128,9 +128,10 @@ class CVLGenerationExtra(AuthoringExtra):
     property_rules: list[PropertyRuleMapping]
 
 
-#: How the CVL author words its publish-time mapping. The prover reports no rule-name ground truth
-#: (unlike forge), so ``validate_property_rules`` passes no ``ran`` set and the mapping is checked
-#: for coverage only.
+#: How the CVL author words its publish-time mapping. The source author supplies a ``ran`` set
+#: from the typechecker's declaration list (see ``declared_rules_at``), so its mapping is checked
+#: in both directions; a caller with no prover run behind it passes none and gets the
+#: coverage-only check.
 _CVL_MAPPING = MappingVocab(
     check_noun="rule", field_name="property_rules",
     ran_source="the prover's typecheck of your spec",
@@ -145,10 +146,13 @@ def validate_property_rules(
 ) -> str | None:
     """Validate the property->rules mapping declared at completion time. ``titles`` is the batch's
     full set of property titles; returns None if valid, else one message enumerating all problems."""
+    # ``None`` means the caller has no ground truth (no prover run covered this state); an
+    # EMPTY set means the prover typechecked the spec and found nothing declared. Those are
+    # different answers, and collapsing them would let a publish claiming a nonexistent rule
+    # through on the second one.
     return validate_check_mapping(
-        [(m.property_title, m.rules) for m in property_rules], skipped, titles, _CVL_MAPPING, ran=[
-            CheckName(it) for it in known_rules
-        ] if known_rules else None
+        [(m.property_title, m.rules) for m in property_rules], skipped, titles, _CVL_MAPPING,
+        ran=None if known_rules is None else [CheckName(it) for it in known_rules],
     )
 
 
