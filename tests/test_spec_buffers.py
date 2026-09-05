@@ -3,7 +3,6 @@
 from composer.spec.source.spec_buffers import (
     NamedBuffer,
     buffer_digest,
-    buffer_files,
     buffer_state_digest,
     check_buffer_completion,
     combined_buffers_view,
@@ -90,19 +89,6 @@ def test_digest_stable_and_independent_across_buffers():
 def test_digest_folds_in_extra_parts():
     b = _buffers()
     assert buffer_digest(b, "easy", extra_parts=["skipped:P-x"]) != buffer_digest(b, "easy")
-
-
-# --- materialization -------------------------------------------------------
-
-
-def test_buffer_files_includes_buffer_and_its_imports():
-    files = buffer_files(_buffers(), "easy")
-    assert set(files) == {"easy.spec", "shared.spec"}  # easy + its import, not hard
-    assert files["easy.spec"] == EASY and files["shared.spec"] == SHARED
-
-
-def test_buffer_files_shared_only_itself():
-    assert set(buffer_files(_buffers(), "shared")) == {"shared.spec"}
 
 
 # --- run targets -----------------------------------------------------------

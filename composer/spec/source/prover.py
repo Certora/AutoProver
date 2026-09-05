@@ -529,6 +529,41 @@ def setup_prover_config_in(
         ) as conf_path:
             yield (conf_path, config)
 
+def stuck_rule_nag(
+    status_pairs: list[tuple[RulePath, StatusCodes]],
+    prover_update: list[ProverHistoryItem],
+    state: StateWithSkips,
+) -> list[str]:
+    """Warn when a rule has repeated the identical failure across recent runs: append a NagMarker to
+    ``prover_update`` and return the reminder lines (empty when nothing is stuck). Shared by the
+    single-spec and per-buffer verify paths."""
+    stuck_rules = {
+        k: v for (k, v) in status_pairs
+        if v in ("TIMEOUT", "ERROR", "SANITY_FAILED") and k.rule not in state["rule_skips"]
+    }
+    known_tc_ids = {
+        l["id"] for msg in state["messages"] if isinstance(msg, AIMessage)
+        for l in msg.tool_calls if l["name"] == "verify_spec"
+    }
+    to_warn, seen_post_compaction_history = stuck_rule_warnings(
+        stuck_rules, state["prover_history"], known_tc_ids
+    )
+    if not to_warn:
+        return []
+    prover_update.append(NagMarker(sort="nag", nagged_rules=list(to_warn)))
+    reminders = [
+        "The following rule(s) have had identical failures on the last 3 runs of the prover:",
+        *(f"- {it.pprint()}" for it in to_warn),
+        "You may need to significantly change your approach, or skip the property if this is a persistent issue (you may need to use rebuttals to communicate"
+        " these failures to the feedback judge).",
+    ]
+    if seen_post_compaction_history:
+        reminders.append(
+            "(NB: Some of these prover calls happened before your most recent task history summarization)"
+        )
+    return reminders
+
+
 @contextmanager
 def materialize_buffers(
     working_dir: str, buffers: Mapping[str, NamedBuffer]
@@ -689,20 +724,6 @@ def get_prover_tool(
             if isinstance(result, str):
                 return result
 
-            stuck_rules = {
-                k: v for (k,v) in result.raw_rule_status.items() if v in ("TIMEOUT", "ERROR", "SANITY_FAILED") and k.rule not in state["rule_skips"]
-            }
-
-            known_tc_ids = {
-                l["id"]
-                for msg in state["messages"] if isinstance(msg, AIMessage)
-                for l in msg.tool_calls if l["name"] == "verify_spec"
-            }
-
-            to_warn, seen_post_compaction_history = stuck_rule_warnings(
-                stuck_rules, state["prover_history"], known_tc_ids
-            )
-
             curr_state_digest = spec_digest(
                 spec, state["skipped"], state["version_history"]
             )
@@ -729,24 +750,9 @@ def get_prover_tool(
                     state_digest=curr_state_digest
                 )
             ]
-            nag_channel = {
-
-            }
-            if len(to_warn) > 0:
-                prover_update.append(NagMarker(
-                    sort="nag",
-                    nagged_rules=list(to_warn)
-                ))
-                nag_channel["reminders_channel"] = [
-                    "The following rule(s) have had identical failures on the last 3 runs of the prover:",
-                    *(f"- {it.pprint()}" for it in to_warn),
-                    "You may need to significantly change your approach, or skip the property if this is a persistent issue (you may need to use rebuttals to communicate"
-                    " these failures to the feedback judge)."
-                ]
-                if seen_post_compaction_history:
-                    nag_channel["reminders_channel"].append(
-                        "(NB: Some of these prover calls happened before your most recent task history summarization)"
-                    )
+            nag_channel: dict = {}
+            if reminders := stuck_rule_nag(prover_results, prover_update, state):
+                nag_channel["reminders_channel"] = reminders
             if all_verified:
                 nag_channel.setdefault("reminders_channel", []).append(
                     "You have successfully verified over your prior prover run(s) that all rules verify. This task is completed."
@@ -862,9 +868,15 @@ def get_prover_tool(
                 ):
                     prover_stamps[f"prover:{b.name}"] = digest_of(b)
 
+            # Nag on rules stuck on repeated failures across all buffers' runs (shared with run_in).
+            all_status = [pair for results in fresh.values() for pair in results]
+            nag_channel: dict = {}
+            if reminders := stuck_rule_nag(all_status, prover_update, state):
+                nag_channel["reminders_channel"] = reminders
+
             return tool_state_update(
                 tool_call_id=tool_call_id, content="\n\n".join(parts), prover_link=link,
-                validations=prover_stamps, prover_history=prover_update,
+                validations=prover_stamps, prover_history=prover_update, **nag_channel,
             )
 
         if targets:

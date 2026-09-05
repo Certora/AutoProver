@@ -117,13 +117,6 @@ def buffer_digest(
     return hash_content_parts(parts)
 
 
-def buffer_files(buffers: Mapping[str, NamedBuffer], name: str) -> dict[str, str]:
-    """The ``.spec`` files to materialize in order to run buffer ``name``: the buffer itself plus its
-    transitive import closure, each as ``"{buffer_name}.spec" -> its CVL``. A buffer's own
-    ``import "X.spec"`` lines resolve against these siblings written into the same directory."""
-    return {f"{b.name}.spec": b.cvl for b in import_closure(buffers, name)}
-
-
 def run_targets(buffers: Mapping[str, NamedBuffer]) -> list[NamedBuffer]:
     """The run-target buffers (those that verify rules), sorted by name."""
     return [buffers[n] for n in sorted(buffers) if buffers[n].is_run_target]
@@ -172,27 +165,30 @@ def check_buffer_completion(
     return None
 
 
+def _render_buffers(ordered: Sequence[NamedBuffer], label: Callable[[NamedBuffer], str]) -> str:
+    """The given buffers concatenated into one document, each under a ``// ===== buffer <name>
+    (<label>) =====`` header. For a judge or report that consumes the spec as a single text — NOT for
+    verification (each buffer is compiled and run separately)."""
+    return "\n\n".join(
+        f"// ===== buffer {b.name} ({label(b)}) =====\n{b.cvl.rstrip()}" for b in ordered
+    )
+
+
 def buffer_review_text(buffers: Mapping[str, NamedBuffer], name: str) -> str:
-    """One buffer's reviewable text for the judge: the buffer plus its transitive import closure, each
-    under a header marking the one under review vs its imports — so the judge sees the buffer in the
-    context it is actually verified in, without the unrelated buffers."""
-    parts: list[str] = []
-    for b in import_closure(buffers, name):
-        role = "under review" if b.name == name else "imported"
-        parts.append(f"// ===== buffer {b.name} ({role}) =====\n{b.cvl.rstrip()}")
-    return "\n\n".join(parts)
+    """One buffer's reviewable text for the judge: the buffer plus its transitive import closure, so
+    the judge sees it in the context it is actually verified in, without the unrelated buffers."""
+    return _render_buffers(
+        import_closure(buffers, name),
+        lambda b: "under review" if b.name == name else "imported",
+    )
 
 
 def combined_buffers_view(buffers: Mapping[str, NamedBuffer]) -> str:
-    """All buffers (shared and run-target) concatenated into one reviewable document, each under a
-    header. For a judge or report that consumes the spec as a single text — NOT for verification
-    (each buffer is compiled and run separately)."""
-    parts: list[str] = []
-    for name in sorted(buffers):
-        b = buffers[name]
-        kind = "run-target" if b.is_run_target else "shared"
-        parts.append(f"// ===== buffer {name} ({kind}) =====\n{b.cvl.rstrip()}")
-    return "\n\n".join(parts)
+    """All buffers (shared and run-target) concatenated into one reviewable document."""
+    return _render_buffers(
+        [buffers[n] for n in sorted(buffers)],
+        lambda b: "run-target" if b.is_run_target else "shared",
+    )
 
 
 def validate_coverage(
