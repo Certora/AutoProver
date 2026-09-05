@@ -17,7 +17,8 @@ while correctly invalidating its importers.
 :class:`composer.authoring.buffer.SpecBuffer`, which is the single-buffer *state* shape.)
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Annotated
 
 from pydantic import BaseModel, Field
@@ -105,6 +106,13 @@ def buffer_digest(
     return hash_content_parts(parts)
 
 
+def buffer_files(buffers: Mapping[str, NamedBuffer], name: str) -> dict[str, str]:
+    """The ``.spec`` files to materialize in order to run buffer ``name``: the buffer itself plus its
+    transitive import closure, each as ``"{buffer_name}.spec" -> its CVL``. A buffer's own
+    ``import "X.spec"`` lines resolve against these siblings written into the same directory."""
+    return {f"{b.name}.spec": b.cvl for b in import_closure(buffers, name)}
+
+
 def run_targets(buffers: Mapping[str, NamedBuffer]) -> list[NamedBuffer]:
     """The run-target buffers (those that verify rules), sorted by name."""
     return [buffers[n] for n in sorted(buffers) if buffers[n].is_run_target]
@@ -132,6 +140,34 @@ def validate_coverage(
     if skipped_assigned := seen & skipped:
         problems.append(f"skipped properties should not be assigned to a buffer: {sorted(skipped_assigned)}")
     return "; ".join(problems) if problems else None
+
+
+@dataclass(frozen=True)
+class BufferRun:
+    """One run-target buffer's execution decision for a verify pass."""
+
+    buffer: NamedBuffer
+    #: The buffer's current content digest (its text + import closure); keys its completion history.
+    digest: str
+    #: False when the buffer is already complete at this digest, so its prover run is skipped.
+    needs_run: bool
+
+
+def plan_buffer_runs(
+    buffers: Mapping[str, NamedBuffer],
+    *,
+    digest_of: Callable[[NamedBuffer], str],
+    is_complete: Callable[[NamedBuffer, str], bool],
+) -> list[BufferRun]:
+    """Decide, per run-target buffer, whether this verify pass must (re-)run it. A buffer already
+    complete at its current digest is skipped; editing it or any buffer it imports changes the digest
+    (:func:`buffer_digest`) and forces a re-run. ``digest_of`` and ``is_complete`` are injected so this
+    stays pure — the prover layer supplies the history-backed checks."""
+    plan: list[BufferRun] = []
+    for b in run_targets(buffers):
+        d = digest_of(b)
+        plan.append(BufferRun(buffer=b, digest=d, needs_run=not is_complete(b, d)))
+    return plan
 
 
 def validate_disjoint_rules(buffers: Mapping[str, NamedBuffer]) -> str | None:
