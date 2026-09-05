@@ -4,8 +4,8 @@
 the shape the pipeline has always had. ``prioritized`` ranks the whole candidate set
 once, keeps the highest-contribution property plus the properties needed to support
 it, and spends the formalization phase on that alone. The rest of the run (analysis,
-harness, autosetup, structural invariants, property inference) is identical either
-way; only the batches reaching formalization differ.
+harness, autosetup, property inference) is identical either way; only the batches
+reaching formalization differ.
 
 The mode is settable from the environment as well as the command line so the cloud
 can turn it on by adding one variable to the Batch job, without a code change on

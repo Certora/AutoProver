@@ -103,12 +103,6 @@ class CacheKey[Parent, Curr]:
 
 
 # Phantom marker types for the cache hierarchy.
-class InvJudge:
-    """Invariant formulation feedback judge step."""
-
-class InvFormal:
-    """Grouping step for individual invariant formalization."""
-
 class Properties:
     """Grouping step for property-level analysis."""
 
@@ -140,7 +134,7 @@ class EditorJudge:
 
 
 type Marker = (
-    InvJudge | InvFormal | Properties | ComponentGroup
+    Properties | ComponentGroup
     | CVLJudge | FoundryJudge | Abstraction | Contract | EditorAgent | EditorJudge
 )
 

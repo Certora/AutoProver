@@ -53,7 +53,7 @@ The five phase names (the keys of `PhaseBudget` in `composer/pipeline/ptypes.py`
 |---|---|
 | `system_analysis` | component analysis of the contract system |
 | `system_preparation` | harness construction |
-| `formalization_preparation` | prover pre-formalization fan-out: structural invariants, custom summaries, protocol-specific setup |
+| `formalization_preparation` | prover pre-formalization: AutoSetup, then custom summaries and protocol-specific setup |
 | `property_extraction` | per-component property inference |
 | `formalization` | per-component CVL / test authoring (usually the dominant cost) |
 
@@ -204,6 +204,10 @@ published)`.
   never cached, so re-running a curtailed run re-spends on exactly those components.
 - **Autosetup subprocess spend is invisible.** LLM calls made inside the autosetup
   subprocess do not flow through the meter and count toward no cap.
+- **`formalization_preparation` is attribution-only.** Nothing left under it installs a
+  budget monitor — AutoSetup is an unmetered subprocess and the custom-summaries agent
+  installs none — so the cap can neither warn nor hard-stop. Spend still accrues into
+  the shared pool, where it goes on pressuring formalization.
 - **Sub-agents accrue to their parent's phase.** Judges, researchers, and other
   spawned helpers spend from whatever named scope their root agent runs under; there
   is no separate accounting knob for them.
@@ -226,8 +230,9 @@ conversation used. Calibrate on the 1h bound (the authors run with the long cach
 Sub-agent threads fold into their root thread, matching how budget scopes accrue.
 
 `--emit-matrix DIR` writes a ready-made live-test budget matrix (a control budget
-plus budgets that trip the formalization cap, the preparation cap, and the shared
-pool) with a `manifest.md` of expected outcomes per test.
+plus budgets that trip the formalization cap and the shared pool) with a
+`manifest.md` of expected outcomes per test. There is no preparation-cap test: nothing
+under that phase can trip a monitor.
 
 Phase attribution rides on **cost-center telemetry**: every logged thread records the
 named budget scope it ran under (`ThreadMeta.cost_center`), stamped unconditionally —

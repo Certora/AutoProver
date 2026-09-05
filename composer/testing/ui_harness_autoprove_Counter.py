@@ -15,9 +15,9 @@ Scenario inputs and wiring instructions live under
 
 The scenario is deliberately constrained to one contract with one component
 so that the per-component ``asyncio.gather`` fan-outs in the extraction and
-CVL phases collapse to a single lane each. Multiple invariants and multiple
-properties are still authored per-phase — a single authoring agent services
-them sequentially, so each lane stays linear.
+CVL phases collapse to a single lane each. Multiple properties are still
+authored per-phase — a single authoring agent services them sequentially, so
+each lane stays linear.
 
 ``AutoProveTaskHandler.format_hitl_prompt`` raises ``NotImplementedError``
 — there is no Textual-side HITL prompt in this pipeline. The interactive
@@ -38,23 +38,20 @@ The pipeline runs several phases concurrently (``asyncio.gather``), so there
 is no single global call order any more. ``HarnessFakeLLM`` routes each call
 to a per-phase *lane* keyed by the ``run_task`` task_id (read from the
 ``get_current_task_id`` ContextVar that ``run_task`` sets). Within a lane the
-calls happen in the order authored below; sub-agents (invariant_feedback, CEX
-analyzer, cvl_research, code_explorer) inherit their parent phase's task_id,
-so their responses live in the parent's lane.
+calls happen in the order authored below; sub-agents (CEX analyzer,
+cvl_research, code_explorer) inherit their parent phase's task_id, so their
+responses live in the parent's lane.
 
     system-analysis : run_component_analysis (+ code_explorer sub-agent)
     harness         : run_harness_creation / classifier_agent
     autosetup       : run_autosetup_phase — a subprocess, makes NO LLM calls,
                       so it has no lane
     ── after harness creation, these lanes run concurrently ──
-    invariants       : get_invariant_formulation (+ invariant_feedback ×3)
     extract-0        : run_property_inference (+ refinement when --interactive)
-    ── staged CVL join, after the concurrent branch completes ──
-    invariant-cvl    : batch_cvl_generation, component=None
-                        (+ cvl_research, code_explorer, feedback ×2, CEX ×1)
+    ── formalization, after the pre-formalization setup joins ──
     formalize-0      : batch_cvl_generation, component=<one>
-                        (+ feedback ×1, CEX ×1 — surfaces the real
-                        ``incrementOther`` implementation bug)
+                        (+ cvl_research, code_explorer, feedback ×2, CEX ×1 —
+                        surfaces the real ``incrementOther`` implementation bug)
     ── final, best-effort report phase ──
     report           : build_report → call_grouping_llm (one structured-output
                         call partitioning the formalized properties into groups)
@@ -70,8 +67,7 @@ from composer.testing.harness_tape import HarnessFakeLLM, install_fake_llm
 from composer.spec.source.prover import STUCK_RULE_NAG_THRESHOLD
 from composer.spec.source.task_ids import (
     DESIGN_DOC_DISCOVERY_TASK_ID,
-    SYSTEM_ANALYSIS_TASK_ID, HARNESS_TASK_ID, INVARIANTS_TASK_ID,
-    INVARIANT_CVL_TASK_ID, REPORT_TASK_ID,
+    SYSTEM_ANALYSIS_TASK_ID, HARNESS_TASK_ID, REPORT_TASK_ID,
 )
 from composer.pipeline.core import extract_task_id, formalize_task_id
 
@@ -110,64 +106,19 @@ def _ai(text: str = "", *tool_calls: ToolCall) -> AIMessage:
 #
 # The Solidity source is staged on disk in
 # ``composer/testing/scenarios/autoprove_counter/src/Counter.sol``. These CVL
-# strings are emitted as ``put_cvl_raw`` arguments during the invariant-CVL
-# and component-CVL phases. Real tools validate them:
+# strings are emitted as ``put_cvl_raw`` arguments during the component-CVL
+# phase. Real tools validate them:
 #
 #   - Typechecker.jar  — gatekeeps ``put_cvl_raw`` (rejects parse errors).
 #   - Certora prover   — gatekeeps ``verify_spec`` (proves or CEXes).
 
 
 # Intentionally malformed surface-syntax CVL. Triggers the Typechecker.jar
-# rejection path on the first ``put_cvl_raw`` of the invariant-CVL phase;
+# rejection path on the first ``put_cvl_raw`` of the component-CVL phase;
 # the tape's next turn resubmits valid CVL.
 BROKEN_PARSE_CVL = """\
 invariant not_valid_cvl()
     this is definitely not valid CVL syntax;
-"""
-
-# Typechecks but the invariant is obviously false: after ``increment()`` runs,
-# ``count`` is 1, so ``count == 0`` no longer holds. Used as the first
-# (easy-to-catch) semantic-error candidate — the feedback judge rejects this
-# on first pass without involving the prover at all.
-BAD_INV_CVL = """\
-invariant increments_sum_is_count() currentContract.count == 0;
-"""
-
-# Typechecks and declares the two ostensibly-correct invariant names, but the
-# ``increments_sum_is_count`` is subtly wrong; without an init state axiom, the
-# prover can choose an initial value of incrementsSum that violates the base case.
-# The feedback judge approves by name-coverage; the prover catches it on the
-# base case (initial state has ``count == 0``, violating ``count > 0``).
-# This is the artifact that drives the verify_spec → analyze_cex_raw round-trip
-# in the tape — exactly one failing rule (``count_nonneg``), so exactly one
-# CEX LLM call is consumed.
-SUBTLE_INV_CVL = """\
-ghost uint256 incrementsSum;
-
-hook Sstore currentContract.increments[KEY address who] uint256 newValue (uint256 oldValue) {
-	incrementsSum = require_uint256(incrementsSum + (newValue - oldValue));
-}
-
-invariant zero_address_is_zero() currentContract.increments[0] == 0;
-
-invariant increments_sum_is_count() currentContract.count == incrementsSum;
-"""
-
-# Two trivially-true invariants over the Counter state. Both should verify
-# against Counter.sol on first try, so verify_spec stamps the prover digest
-# and the author can call `result` to terminate the invariant-CVL author graph.
-GOOD_INV_CVL = """\
-ghost uint256 incrementsSum {
-	init_state axiom incrementsSum == 0; 
-}
-
-hook Sstore currentContract.increments[KEY address who] uint256 newValue (uint256 oldValue) {
-	incrementsSum = require_uint256(incrementsSum + (newValue - oldValue));
-}
-
-invariant zero_address_is_zero() currentContract.increments[0] == 0;
-
-invariant increments_sum_is_count() currentContract.count == incrementsSum;
 """
 
 # Component-CVL spec: three rules covering all three extracted properties.
@@ -531,220 +482,98 @@ _HARNESS_TAPE: list[BaseMessage] = [
     ),
 
     # ───────────────────────────────────────────────────────────────────
-    # P3. Structural invariant formulation (get_invariant_formulation)
+    # P3. Bug analysis (run_bug_analysis, 1 component)
     # ───────────────────────────────────────────────────────────────────
-    # Main-agent tools: memory, source_tools, invariant_feedback, result.
-    # Feedback sub-agent tools: memory, rough_draft, source_tools, result
-    #   (schema: InvariantFeedback{sort, explanation}).
-    # Validator `_validate_invariants`: every inv in the final result must
-    #   appear in state["invariant_data"] with (description, "GOOD") matching
-    #   exactly. The state dict merges on name, so resubmitting the same
-    #   name with a different description overwrites the prior entry.
+    # Tools available: rough_draft (via get_rough_draft_tools),
+    #   bug_analysis_tools (= source_tools), result.
+    # Validator: standard bind_standard (output_key). Result schema is
+    #   (list[PropertyFormulation], "The security properties ..."), so args
+    #   are {"value": [...]}.
     #
-    # The tape uses 3 invariant_feedback rounds (1 bad + 2 good) to exercise
-    # the NOT_INDUCTIVE → resubmit recovery path, and delivers 2 invariants
-    # in the final result.
+    # `refinement` is None from the pipeline, so there is NO refinement-loop
+    # conversation after this — once `result` fires, the phase ends.
 
 ]
 
-_INVARIANTS_TAPE: list[BaseMessage] = [
+_BUG_TAPE: list[BaseMessage] = [
 
-    # P3.1 — exercise source_tools in the main invariant agent.
+    # P3.1 — exercise source_tools + rough_draft. No did_read requirement,
+    # kept for coverage.
     _ai(
-        "Reading Counter.sol to understand the state shape.",
-        _tc("get_file", path="src/Counter.sol"),
-    ),
-
-    # P3.2 — first invariant_feedback call: candidate "count_zero" (count is
-    # always 0) — intentionally bad. This spawns F1.{1-3}.
-    _ai(
-        "Proposing count_zero as a structural candidate.",
-        _tc(
-            "invariant_feedback",
-            inv={
-                "name": "count_zero",
-                "description": "The global count is always zero.",
-            },
-        ),
-    ),
-
-    # F1.1 — invariant feedback judge, first invocation, turn 1. Judge tools:
-    # memory, rough_draft, source_tools, result. Validator on this sub-agent
-    # is the standard `bind_standard` without custom checks — the only
-    # implicit requirement is providing `result` to set output_key.
-    _ai(
-        "Judge: inspecting the source + drafting a verdict.",
+        "Bug analysis: inspecting the entry point source.",
         _tc("get_file", path="src/Counter.sol"),
         _tc(
             "write_rough_draft",
             rough_draft=(
-                "count_zero claims count is always 0, but increment() "
-                "mutates count upward. The post-state of any increment() "
-                "call already violates this claim. Verdict: NOT_INDUCTIVE."
+                "increment() unconditionally adds 1 to count and 1 to "
+                "increments[msg.sender]. incrementOther(other) is meant "
+                "to credit increments[other] but the implementation looks "
+                "off — flag a property over its intended behavior. Three "
+                "safety properties total: (a) increment() bumps count "
+                "by 1, (b) increment() bumps increments[msg.sender] by 1, "
+                "(c) incrementOther(other) bumps increments[other] by 1."
             ),
         ),
     ),
 
-    # F1.2 — judge: read the draft before emitting result.
+    # P3.2 — read draft before emitting result.
     _ai(
-        "Judge: re-reading the draft.",
+        "Bug analysis: re-reading the draft.",
         _tc("read_rough_draft"),
     ),
 
-    # F1.3 — judge: NOT_INDUCTIVE verdict. This stores
-    # state["invariant_data"]["count_zero"] = ("The global count is always
-    # zero.", "NOT_INDUCTIVE"). The main agent sees the ToolMessage and can
-    # try a different candidate.
+    # P3.3 — emit all three properties in one result call. Schema is the
+    # ``_AgentRoundResult`` BaseModel (composer/spec/bug.py): ``items`` is the
+    # property list and ``reasoning`` is a required narrative field — there
+    # is no ``value`` wrapper here, unlike the tuple-shaped result tools.
     _ai(
-        "Judge: delivering NOT_INDUCTIVE verdict.",
+        "Delivering the three extracted properties.",
         _tc(
             "result",
-            sort="NOT_INDUCTIVE",
-            explanation=(
-                "The claim fails immediately after any call to increment(): "
-                "count transitions from k to k+1 and the invariant does not "
-                "hold in the post-state. Consider a non-negativity "
-                "invariant (count >= 0) or a correlation between count and "
-                "the increments mapping instead."
+            items=_BUG_ANALYSIS_PROPS,
+            reasoning=(
+                "increment() unconditionally mutates two storage slots: it "
+                "adds 1 to `count` and 1 to `increments[msg.sender]`. "
+                "incrementOther(other) is documented to credit "
+                "`increments[other]` by 1; whether the implementation "
+                "actually does that is a question for the prover. The "
+                "three pre/post equalities on those slots are the obvious "
+                "safety properties; nothing else in the contract surface "
+                "is worth formalizing at this stage."
             ),
         ),
     ),
 
-    # P3.3 — main agent resubmits with a stronger invariant name:
-    # "count_nonneg" (trivially true on uint256). Spawns F2.{1-3}.
-    _ai(
-        "Addressing the feedback — proposing count_nonneg instead.",
-        _tc(
-            "invariant_feedback",
-            inv={
-                "name": "increments_sum_is_count",
-                "description": (
-                    "`count` is the sum of all values in the `increments` map"
-                ),
-            },
-        ),
-    ),
-
-    # F2.1 — judge, second invocation, turn 1.
-    _ai(
-        "Judge: evaluating count_nonneg.",
-        _tc(
-            "write_rough_draft",
-            rough_draft=(
-                "Sums can be reasoned about in CVL. Formal and inductive. Verdict: GOOD."
-            ),
-        ),
-    ),
-    _ai(
-        "Judge: reading the draft.",
-        _tc("read_rough_draft"),
-    ),
-    # F2.3 — GOOD verdict. Stamps state["invariant_data"]["count_nonneg"].
-    _ai(
-        "Judge: GOOD verdict on increments_sum_is_count.",
-        _tc(
-            "result",
-            sort="GOOD",
-            explanation=(
-                "The invariant is inductive and formalizable."
-            ),
-        ),
-    ),
-
-    # P3.4 — main agent proposes second invariant. Spawns F3.{1-3}.
-    _ai(
-        "Proposing the second invariant.",
-        _tc(
-            "invariant_feedback",
-            inv={
-                "name": "zero_address_is_zero",
-                "description": (
-                    "The zero address' `increments` value is always 0."
-                ),
-            },
-        ),
-    ),
-
-    # F3.1 — judge, third invocation.
-    _ai(
-        "Judge: evaluating zero_address_is_zero.",
-        _tc(
-            "write_rough_draft",
-            rough_draft=(
-                "Trivially implied by the implementation, "
-                "but formal and inductive. Verdict: GOOD."
-            ),
-        ),
-    ),
-    _ai(
-        "Judge: reading the draft.",
-        _tc("read_rough_draft"),
-    ),
-    _ai(
-        "Judge: GOOD verdict on zero_address_is_zero.",
-        _tc(
-            "result",
-            sort="GOOD",
-            explanation=(
-                "The invariant is trivially true"
-            ),
-        ),
-    ),
-
-    # P3.5 — main agent delivers both invariants. Descriptions must match
-    # the ones in state["invariant_data"] verbatim (merged on name).
-    _ai(
-        "Delivering the validated invariants.",
-        _tc(
-            "result",
-            inv=[
-                {
-                    "name": "increments_sum_is_count",
-                    "description": (
-                        "`count` is the sum of all values in the `increments` map"
-                    ),
-                },
-                {
-                    "name": "zero_address_is_zero",
-                    "description": (
-                        "The zero address' `increments` value is always 0."
-                    ),
-                },
-            ],
-        ),
-    ),
 
     # ───────────────────────────────────────────────────────────────────
-    # P4. Invariant CVL generation (batch_cvl_generation, component=None)
+    # P4. Component CVL generation (batch_cvl_generation, component=<one>)
     # ───────────────────────────────────────────────────────────────────
-    # Author-agent tools:
-    #   - cvl_authorship_tools (source_tools + rag_tools): list_files,
-    #     get_file, grep_files, code_explorer, code_document_ref,
-    #     cvl_manual_search, cvl_keyword_search, get_cvl_manual_section,
-    #     get_cvl_recipe, cvl_research, cvl_document_ref.
-    #   - static_tools: put_cvl, put_cvl_raw, feedback_tool, record_skip,
-    #     unskip_property, get_cvl, erc20_guidance, unresolved_call_guidance.
-    #   - prover_tool: verify_spec.
-    #   - ExpectRuleFailure.as_tool("expect_rule_failure"),
-    #     ExpectRulePassage.as_tool("expect_rule_passage").
-    #   - result (str commentary), memory.
+    # The only authoring lane, so it carries the file's whole tool coverage
+    # (research, guidance, skip/unskip, expect-fail/passage, the Typechecker
+    # rejection path) as well as the surface-a-real-bug path.
     #
-    # Result digest: validations[feedback] AND validations[prover] must
-    # both equal digest(curr_spec, skipped) before `result` is accepted.
-    # feedback_tool (good=True) stamps feedback; verify_spec (rules=None,
-    # all_verified) stamps prover. Any put_cvl_raw / record_skip /
-    # unskip_property invalidates both stamps.
+    # 3 refined properties from P3b.
     #
-    # 2 invariants — record_skip / unskip_property accept the property titles
-    # `increments_sum_is_count` and `zero_address_is_zero`.
+    # The spec contains three rules: two that hold against the
+    # implementation and one (``incrementOther_credits_target_when_distinct``)
+    # that CEXes because ``Counter.incrementOther`` has a real bug — it
+    # credits ``msg.sender`` instead of ``other``. The author marks that
+    # rule as expected-to-fail with a reason explaining the surfaced bug,
+    # then re-runs the prover with the rule excluded so
+    # ``validations[prover]`` can be stamped.
 
 ]
 
-_INVARIANT_CVL_TAPE: list[BaseMessage] = [
+_CVL_TAPE: list[BaseMessage] = [
+
+    # ── Tool coverage (Q1-Q9) ──────────────────────────────────────────
+    # These turns exist to exercise tool dispatch, not to advance the spec.
+    # They ran in the structural-invariant CVL lane until that phase was
+    # removed; this is now the only authoring lane, so they live here.
 
     # Q1 — exercise the similarity + keyword search paths.
     _ai(
-        "Surveying the CVL manual for invariant patterns.",
+        "Surveying the CVL manual for rule and invariant patterns.",
         _tc(
             "cvl_manual_search",
             question=(
@@ -765,14 +594,15 @@ _INVARIANT_CVL_TAPE: list[BaseMessage] = [
         _tc("get_cvl_recipe", id="R1"),
     ),
 
-    # Q3 — exercise the recipe miss path + both guidance tools + memory view.
-    # The recipe id is expected to miss — the harness only cares
-    # about exercising the tool dispatch, not the result value.
+    # Q3 — exercise the recipe miss path + all three guidance tools + memory
+    # view. The recipe id is expected to miss — the harness only cares about
+    # exercising the tool dispatch, not the result value.
     _ai(
         "Checking for a recipe and pulling guidance.",
         _tc("get_cvl_recipe", id="R99"),
         _tc("erc20_guidance"),
         _tc("unresolved_call_guidance"),
+        _tc("structural_invariant_guidance"),
         _tc("memory", command="view", path="/memories"),
     ),
 
@@ -841,26 +671,17 @@ _INVARIANT_CVL_TAPE: list[BaseMessage] = [
     # Typechecker.jar rejects the parse and the tool returns the error text
     # without mutating curr_spec.
     _ai(
-        "Attempting an initial draft.",
+        "Drafting the component spec.",
         _tc("put_cvl_raw", cvl_file=BROKEN_PARSE_CVL),
     ),
 
-    # Q6 — put the BAD_INV_CVL. Typechecks fine — the bug is semantic
-    # (the invariant is false), not syntactic. Mutates state["curr_spec"]
-    # and resets did_read.
-    _ai(
-        "Putting an initial count_zero-style invariant.",
-        _tc("put_cvl_raw", cvl_file=BAD_INV_CVL),
-    ),
-
-    # Q7 — exercise get_cvl + record_skip. The two invariant titles are
-    # `increments_sum_is_count` (1st) and `zero_address_is_zero` (2nd).
+    # Q6 — exercise get_cvl + record_skip against a real batch title.
     _ai(
         "Reading back the draft + recording a tentative skip.",
         _tc("get_cvl"),
         _tc(
             "record_skip",
-            property_title="increments_sum_is_count",
+            property_title="other_increments_by_one",
             reason=(
                 "Tentative — will be undone on the next turn to exercise "
                 "unskip_property."
@@ -868,17 +689,18 @@ _INVARIANT_CVL_TAPE: list[BaseMessage] = [
         ),
     ),
 
-    # Q8 — exercise unskip_property. Empty-reason sentinel in merge_skips
+    # Q7 — exercise unskip_property. Empty-reason sentinel in merge_skips
     # filters the entry out, so state["skipped"] returns to [].
     _ai(
         "Undoing the tentative skip.",
-        _tc("unskip_property", property_title="increments_sum_is_count"),
+        _tc("unskip_property", property_title="other_increments_by_one"),
     ),
 
-    # Q9 — exercise expect_rule_failure + expect_rule_passage. The rule
-    # name here needn't match any actual rule in curr_spec — both tools just
-    # record a rule_skips entry. `expect_rule_passage` then removes it with
-    # the DELETE_SKIP sentinel, so state["rule_skips"] returns to {}.
+    # Q8 — exercise expect_rule_failure + expect_rule_passage as a pair. The
+    # rule name needn't match anything in curr_spec — both tools just record a
+    # rule_skips entry. `expect_rule_passage` removes it with the DELETE_SKIP
+    # sentinel, so state["rule_skips"] returns to {} before R1 puts the real
+    # spec. (The load-bearing expect_rule_failure is R4, further down.)
     _ai(
         "Marking a rule expected-to-fail...",
         _tc(
@@ -895,289 +717,7 @@ _INVARIANT_CVL_TAPE: list[BaseMessage] = [
         _tc("expect_rule_passage", rule_name="count_zero"),
     ),
 
-    # Q10 — first feedback_tool invocation against BAD_INV_CVL. Spawns the
-    # feedback judge sub-agent (J1.{1-3}). The judge returns good=False so
-    # validations["feedback"] is NOT stamped.
-    _ai(
-        "Seeking judge feedback on the current (bad) draft.",
-        _tc("feedback_tool"),
-    ),
-
-    # J1.1 — feedback judge, first invocation, turn 1. Tools: memory,
-    # rough_draft, get_cvl, feedback_tools (= cvl_authorship_tools), result
-    # (PropertyFeedback). Validator `did_rough_draft_read` rejects result
-    # until did_read=True.
-    _ai(
-        "Judge: gathering the spec + drafting a verdict.",
-        _tc("memory", command="view", path="/memories"),
-        _tc("get_cvl"),
-        _tc(
-            "write_rough_draft",
-            rough_draft=(
-                "First-pass: the current spec encodes `count == 0` as an "
-                "invariant, which directly contradicts the property that "
-                "increment() increases count by 1. Verdict: BAD — spec does "
-                "not faithfully express the two target invariants "
-                "(increments_sum_is_count, zero_address_is_zero)."
-            ),
-        ),
-    ),
-
-    # J1.2 — judge: read the draft.
-    _ai(
-        "Judge: reading the draft before verdict.",
-        _tc("read_rough_draft"),
-    ),
-
-    # J1.3 — judge: good=False verdict. Does NOT stamp the feedback digest.
-    _ai(
-        "Judge: delivering the first (rejecting) verdict.",
-        _tc(
-            "result",
-            good=False,
-            feedback=(
-                "The submitted spec states `count == 0` as an invariant "
-                "but the properties to formalize are `count_nonneg` and "
-                "`zero_address_is_zero`. Please replace the spec with "
-                "invariants that match the approved property list."
-            ),
-        ),
-    ),
-
-    # Q11 — author addresses the feedback by replacing the spec with
-    # SUBTLE_INV_CVL (has the two expected invariant names but `count_nonneg`
-    # is subtly wrong — body says ``count > 0`` instead of ``>= 0``).
-    # Mutates curr_spec, resets did_read. The feedback digest stamped for
-    # BAD_INV_CVL (if any — here J1 returned good=False so there was no
-    # stamp) is now stale regardless.
-    _ai(
-        "Addressing the judge feedback with the two named invariants.",
-        _tc("put_cvl_raw", cvl_file=SUBTLE_INV_CVL),
-    ),
-
-    # Q12 — second feedback_tool invocation against SUBTLE_INV_CVL. Spawns
-    # J2.{1-3}. The judge approves by name-coverage (both expected names
-    # present, both trivially typecheck) — missing the subtle `count > 0`
-    # semantic bug in the first invariant. good=True stamps
-    # validations["feedback"] = digest(SUBTLE_INV_CVL, skipped=[]).
-    _ai(
-        "Re-running the judge on the updated draft.",
-        _tc("feedback_tool"),
-    ),
-
-    # J2.1 — feedback judge, second invocation, turn 1.
-    _ai(
-        "Judge: re-evaluating the updated spec.",
-        _tc("get_cvl"),
-        _tc(
-            "write_rough_draft",
-            rough_draft=(
-                "Second pass: the spec declares both increments_sum_is_count and "
-                "zero_address_is_zero as separate invariants matching the "
-                "approved property list. Coverage looks complete. "
-                "Verdict: GOOD."
-            ),
-        ),
-    ),
-    _ai(
-        "Judge: reading the draft.",
-        _tc("read_rough_draft"),
-    ),
-    # J2.3 — good=True verdict. Stamps validations["feedback"] =
-    # digest(SUBTLE_INV_CVL, []). Judge did not catch the `count > 0`
-    # typo; the prover will.
-    _ai(
-        "Judge: approving the spec.",
-        _tc(
-            "result",
-            good=True,
-            feedback="",
-        ),
-    ),
-
-    # Q13 — run verify_spec against SUBTLE_INV_CVL. The base-case check
-    # for `count_nonneg` fires on the initial state (count == 0), where
-    # the body `count > 0` is false. One rule violated → one
-    # ``analyze_cex_raw`` LLM call fires INSIDE verify_spec (between this
-    # tape entry and the next author turn). ``all_verified=False`` so
-    # the tool returns the raw report string; validations[prover] is NOT
-    # stamped.
-    _ai(
-        "Running the prover on the updated draft.",
-        _tc("verify_spec", rules=None),
-    ),
-
-    # CEX.1 — inline counter-example analysis. ``analyze_cex_raw`` in
-    # ``composer/prover/analysis.py`` calls ``llm.ainvoke(messages)`` (via
-    # ``acached_invoke``) with a human-framed instruction template. It
-    # expects a plain-text AIMessage back — NO tool_calls, because the
-    # call bypasses the LangGraph agent loop entirely.
-    #
-    # Placement is critical: ``FakeMessagesListChatModel`` has a single
-    # global cursor, so this entry must sit between the verify_spec turn
-    # (Q13) and the next author turn (Q14). If the author reorders or
-    # verify_spec is invoked twice without an intervening CEX, the tape
-    # will drift.
-    _ai(
-        "Counter-example analysis for rule ``increments_sum_is_count``:\n\n"
-        "The prover found a spurious starting state where incrementsSum is initialized to be"
-        " non-zero in the invariant base case (constructor) which causes a trivial failure.\n\n"
-        "Suggested fix: add an init_state axiom to constrain the value of the ghost in the base case."
-
-    ),
-
-    # Q14 — author responds to the CEX by replacing SUBTLE_INV_CVL with
-    # GOOD_INV_CVL (uses ``>=`` instead of ``>``). Mutates curr_spec,
-    # invalidates validations["feedback"] (digest changes).
-    _ai(
-        "Fixing the count_nonneg operator as the CEX suggests.",
-        _tc("put_cvl_raw", cvl_file=GOOD_INV_CVL),
-    ),
-
-    # Q15 — third feedback_tool invocation. Spawns J3.{1-3}. Digest stale
-    # since curr_spec changed; re-stamping is required before result.
-    _ai(
-        "Re-running the judge to re-stamp the feedback digest.",
-        _tc("feedback_tool"),
-    ),
-
-    # J3.1 — feedback judge, third invocation, turn 1.
-    _ai(
-        "Judge: re-evaluating with the operator fix applied.",
-        _tc("get_cvl"),
-        _tc(
-            "write_rough_draft",
-            rough_draft=(
-                "The init state axiom is well justified given that the sum of increments is 0 on creation."
-                 " Verdict: GOOD."
-            ),
-        ),
-    ),
-    _ai(
-        "Judge: reading the draft.",
-        _tc("read_rough_draft"),
-    ),
-    # J3.3 — good=True. Stamps validations["feedback"] =
-    # digest(GOOD_INV_CVL, []).
-    _ai(
-        "Judge: approving the fixed spec.",
-        _tc("result", good=True, feedback=""),
-    ),
-
-    # Q16 — run verify_spec on GOOD_INV_CVL. Both invariants reduce to
-    # uint256 non-negativity and hold trivially. all_verified=True with
-    # rules=None → validations["prover"] stamped with
-    # digest(GOOD_INV_CVL, []) — same digest as feedback.
-    _ai(
-        "Running the prover on the fixed invariants.",
-        _tc("verify_spec", rules=None),
-    ),
-
-    # Q17 — final result. Both validations current, curr_spec unchanged
-    # since Q14 / J3. PublishResultTool requires `commentary` plus a
-    # `property_rules` mapping covering every (non-skipped) batch title —
-    # here the two invariant titles, each verified by the invariant of the
-    # same name in GOOD_INV_CVL.
-    _ai(
-        "Finalizing the invariant CVL.",
-        _tc(
-            "result",
-            commentary=(
-                "Formalized the two structural invariants (increments_sum_is_count, "
-                "zero_address_is_zero)."
-            ),
-            property_rules=[
-                {"property_title": "increments_sum_is_count", "rules": ["increments_sum_is_count"]},
-                {"property_title": "zero_address_is_zero", "rules": ["zero_address_is_zero"]},
-            ],
-        ),
-    ),
-
-    # ───────────────────────────────────────────────────────────────────
-    # P5. Bug analysis (run_bug_analysis, 1 component)
-    # ───────────────────────────────────────────────────────────────────
-    # Tools available: rough_draft (via get_rough_draft_tools),
-    #   bug_analysis_tools (= source_tools), result.
-    # Validator: standard bind_standard (output_key). Result schema is
-    #   (list[PropertyFormulation], "The security properties ..."), so args
-    #   are {"value": [...]}.
-    #
-    # `refinement` is None from the pipeline, so there is NO refinement-loop
-    # conversation after this — once `result` fires, the phase ends.
-
-]
-
-_BUG_TAPE: list[BaseMessage] = [
-
-    # P5.1 — exercise source_tools + rough_draft. No did_read requirement,
-    # kept for coverage.
-    _ai(
-        "Bug analysis: inspecting the entry point source.",
-        _tc("get_file", path="src/Counter.sol"),
-        _tc(
-            "write_rough_draft",
-            rough_draft=(
-                "increment() unconditionally adds 1 to count and 1 to "
-                "increments[msg.sender]. incrementOther(other) is meant "
-                "to credit increments[other] but the implementation looks "
-                "off — flag a property over its intended behavior. Three "
-                "safety properties total: (a) increment() bumps count "
-                "by 1, (b) increment() bumps increments[msg.sender] by 1, "
-                "(c) incrementOther(other) bumps increments[other] by 1."
-            ),
-        ),
-    ),
-
-    # P5.2 — read draft before emitting result.
-    _ai(
-        "Bug analysis: re-reading the draft.",
-        _tc("read_rough_draft"),
-    ),
-
-    # P5.3 — emit all three properties in one result call. Schema is the
-    # ``_AgentRoundResult`` BaseModel (composer/spec/bug.py): ``items`` is the
-    # property list and ``reasoning`` is a required narrative field — there
-    # is no ``value`` wrapper here, unlike the tuple-shaped result tools.
-    _ai(
-        "Delivering the three extracted properties.",
-        _tc(
-            "result",
-            items=_BUG_ANALYSIS_PROPS,
-            reasoning=(
-                "increment() unconditionally mutates two storage slots: it "
-                "adds 1 to `count` and 1 to `increments[msg.sender]`. "
-                "incrementOther(other) is documented to credit "
-                "`increments[other]` by 1; whether the implementation "
-                "actually does that is a question for the prover. The "
-                "three pre/post equalities on those slots are the obvious "
-                "safety properties; nothing else in the contract surface "
-                "is worth formalizing at this stage."
-            ),
-        ),
-    ),
-
-
-    # ───────────────────────────────────────────────────────────────────
-    # P6. Component CVL generation (batch_cvl_generation, component=<one>)
-    # ───────────────────────────────────────────────────────────────────
-    # Same author-agent shape as P4 but streamlined — we do not re-exercise
-    # every tool. Tool coverage is satisfied by P4; P6 covers the
-    # surface-a-real-bug path.
-    #
-    # 3 refined properties from P5b — record_skip would accept their titles,
-    # but the tape doesn't exercise record_skip in this phase.
-    #
-    # The spec contains three rules: two that hold against the
-    # implementation and one (``incrementOther_credits_target_when_distinct``)
-    # that CEXes because ``Counter.incrementOther`` has a real bug — it
-    # credits ``msg.sender`` instead of ``other``. The author marks that
-    # rule as expected-to-fail with a reason explaining the surfaced bug,
-    # then re-runs the prover with the rule excluded so
-    # ``validations[prover]`` can be stamped.
-
-]
-
-_CVL_TAPE: list[BaseMessage] = [
+    # ── The component spec proper ──────────────────────────────────────
 
     # R1 — put the three-rule component spec. Typechecks; covers all three
     # refined props.
@@ -1326,19 +866,18 @@ _CVL_TAPE: list[BaseMessage] = [
 
 
 # ───────────────────────────────────────────────────────────────────────────
-# P7. Report grouping (build_report → call_grouping_llm)
+# P5. Report grouping (build_report → call_grouping_llm)
 # ───────────────────────────────────────────────────────────────────────────
 # The final, best-effort phase. ``call_grouping_llm`` makes ONE structured-output
 # call (``llm.with_structured_output(GroupingResult)``), so this lane has exactly
 # one entry: an AIMessage whose ``GroupingResult`` tool call (the tool name is the
 # pydantic model's class name) partitions every formalized property into groups.
 #
-# The five formalized properties this run produces (component, title):
+# The three formalized properties this run produces (component, title):
 #   ("Increment", count_increments_by_one / sender_increments_by_one /
-#    other_increments_by_one)  +  ("Structural Invariants",
-#    increments_sum_is_count / zero_address_is_zero).
-# ``coverage.validate`` requires each appear in exactly one group, so the two
-# groups below must cover all five with no overlap or omission. Without this lane
+#    other_increments_by_one).
+# ``coverage.validate`` requires each appear in exactly one group, so the group
+# below must cover all three with no overlap or omission. Without this lane
 # the call raised ``no tape lane``, which ``build_report`` swallows into its
 # fallback single-bucket grouping — so the report path ran but the grouping step
 # was never actually exercised.
@@ -1362,18 +901,6 @@ _REPORT_TAPE: list[BaseMessage] = [
                         ["Increment", "other_increments_by_one"],
                     ],
                 },
-                {
-                    "slug": "counter-structural-invariants",
-                    "title": "Counter state respects its structural invariants",
-                    "description": (
-                        "The global counter stays consistent with the sum of the per-address "
-                        "tallies and the zero address is never credited."
-                    ),
-                    "members": [
-                        ["Structural Invariants", "increments_sum_is_count"],
-                        ["Structural Invariants", "zero_address_is_zero"],
-                    ],
-                },
             ],
         ),
     ),
@@ -1383,46 +910,18 @@ _REPORT_TAPE: list[BaseMessage] = [
 # ───────────────────────────────────────────────────────────────────────────
 # Budget-curtailment variant lanes
 # ───────────────────────────────────────────────────────────────────────────
-# Alternate invariant-CVL / formalize-0 lanes for the curtailment integration
-# test, which runs the pipeline with the ``formalization_preparation`` and
-# ``formalization`` caps at 0.0: the budget monitor's wrap-up alert fires on the
-# first tool-result tick (0 >= 0.8 * 0), lifting the validation gates and
-# stamping ``budget_curtailed`` — while the hard stop never fires (taped runs
-# accrue no cost, and 0 > 0 is false). Each lane therefore: puts a typechecking
-# draft, skips one property "for budget", and publishes WITHOUT ever consulting
-# the feedback judge or the prover — the lifted gates accept it. No judge or
-# CEX entries, and no live prover run, are consumed.
-
-_CURTAILED_INVARIANT_CVL_TAPE: list[BaseMessage] = [
-    # V1 — put a valid draft (real Typechecker.jar gatekeeps this put).
-    _ai(
-        "Drafting the structural invariants.",
-        _tc("put_cvl_raw", cvl_file=GOOD_INV_CVL),
-    ),
-    # The wrap-up alert lands before this turn: skip what isn't finished.
-    _ai(
-        "Budget pressure — skipping the remaining invariant and wrapping up.",
-        _tc(
-            "record_skip",
-            property_title="zero_address_is_zero",
-            reason="Budget exhausted before this invariant could be validated.",
-        ),
-    ),
-    # V3 — publish the partial under the lifted gates (no feedback/prover stamps).
-    _ai(
-        "Publishing the partial invariant spec.",
-        _tc(
-            "result",
-            commentary=(
-                "Budget-curtailed partial: increments_sum_is_count is drafted but "
-                "unverified; zero_address_is_zero was skipped."
-            ),
-            property_rules=[
-                {"property_title": "increments_sum_is_count", "rules": ["increments_sum_is_count"]},
-            ],
-        ),
-    ),
-]
+# Alternate formalize-0 lane for the curtailment integration test, which runs the
+# pipeline with the ``formalization`` cap at 0.0: the budget monitor's wrap-up
+# alert fires on the first tool-result tick (0 >= 0.8 * 0), lifting the
+# validation gates and stamping ``budget_curtailed`` — while the hard stop never
+# fires (taped runs accrue no cost, and 0 > 0 is false). The lane therefore puts
+# a typechecking draft, skips one property "for budget", and publishes WITHOUT
+# ever consulting the feedback judge or the prover — the lifted gates accept it.
+# No judge or CEX entries, and no live prover run, are consumed.
+#
+# Only formalization is curtailable now: nothing under
+# ``formalization_preparation`` makes an LLM call, so that cap can no longer
+# trip a monitor.
 
 _CURTAILED_CVL_TAPE: list[BaseMessage] = [
     # W1 — put the full three-rule draft (typechecks; never sent to the prover).
@@ -1523,59 +1022,6 @@ rule incrementOther_credits_target_when_distinct {
         "incrementOther(other) must increase increments[other] by exactly 1 when other != msg.sender";
 }
 """
-
-
-# Minimal happy-path invariant lane: the nag test doesn't re-pay the
-# broken-parse / bad-draft / CEX detours the main tape covers — one judge
-# round, one (passing) prover run, publish.
-_NAG_INVARIANT_CVL_TAPE: list[BaseMessage] = [
-    _ai(
-        "Drafting the structural invariants.",
-        _tc("put_cvl_raw", cvl_file=GOOD_INV_CVL),
-    ),
-    _ai(
-        "Requesting judge feedback.",
-        _tc("feedback_tool"),
-    ),
-    _ai(
-        "Judge: inspecting the spec.",
-        _tc("get_cvl"),
-        _tc(
-            "write_rough_draft",
-            rough_draft=(
-                "Both approved invariants (increments_sum_is_count, "
-                "zero_address_is_zero) are faithfully encoded, with the ghost "
-                "seeded by an init_state axiom. Verdict: GOOD."
-            ),
-        ),
-    ),
-    _ai(
-        "Judge: reading the draft.",
-        _tc("read_rough_draft"),
-    ),
-    _ai(
-        "Judge: approving the spec.",
-        _tc("result", good=True, feedback=""),
-    ),
-    _ai(
-        "Running the prover on the invariants.",
-        _tc("verify_spec", rules=None),
-    ),
-    _ai(
-        "Finalizing the invariant CVL.",
-        _tc(
-            "result",
-            commentary=(
-                "Formalized the two structural invariants "
-                "(increments_sum_is_count, zero_address_is_zero)."
-            ),
-            property_rules=[
-                {"property_title": "increments_sum_is_count", "rules": ["increments_sum_is_count"]},
-                {"property_title": "zero_address_is_zero", "rules": ["zero_address_is_zero"]},
-            ],
-        ),
-    ),
-]
 
 
 def _nag_attempt_spec(i: int) -> str:
@@ -1739,8 +1185,6 @@ _AUTOPROVE_TAPE: dict[str, list[BaseMessage]] = {
     DESIGN_DOC_DISCOVERY_TASK_ID: _DESIGN_DOC_TAPE,
     SYSTEM_ANALYSIS_TASK_ID: _SYSTEM_ANALYSIS_TAPE,
     HARNESS_TASK_ID: _HARNESS_TAPE,
-    INVARIANTS_TASK_ID: _INVARIANTS_TAPE,
-    INVARIANT_CVL_TASK_ID: _INVARIANT_CVL_TAPE,
     extract_task_id(0): _BUG_TAPE,
     formalize_task_id(0): _CVL_TAPE,
     REPORT_TASK_ID: _REPORT_TAPE,
@@ -1755,8 +1199,6 @@ _AUTOPROVE_CURTAILED_TAPE: dict[str, list[BaseMessage]] = {
     DESIGN_DOC_DISCOVERY_TASK_ID: _DESIGN_DOC_TAPE,
     SYSTEM_ANALYSIS_TASK_ID: _SYSTEM_ANALYSIS_TAPE,
     HARNESS_TASK_ID: _HARNESS_TAPE,
-    INVARIANTS_TASK_ID: _INVARIANTS_TAPE,
-    INVARIANT_CVL_TASK_ID: _CURTAILED_INVARIANT_CVL_TAPE,
     extract_task_id(0): _BUG_TAPE,
     formalize_task_id(0): _CURTAILED_CVL_TAPE,
 }
@@ -1769,8 +1211,6 @@ _AUTOPROVE_NAG_TAPE: dict[str, list[BaseMessage]] = {
     DESIGN_DOC_DISCOVERY_TASK_ID: _DESIGN_DOC_TAPE,
     SYSTEM_ANALYSIS_TASK_ID: _SYSTEM_ANALYSIS_TAPE,
     HARNESS_TASK_ID: _HARNESS_TAPE,
-    INVARIANTS_TASK_ID: _INVARIANTS_TAPE,
-    INVARIANT_CVL_TASK_ID: _NAG_INVARIANT_CVL_TAPE,
     extract_task_id(0): _BUG_TAPE,
     formalize_task_id(0): _NAG_CVL_TAPE,
     REPORT_TASK_ID: _REPORT_TAPE,
@@ -1846,13 +1286,10 @@ def install_nag_tape(
 
 
 __all__ = [
-    "BAD_INV_CVL",
     "BROKEN_PARSE_CVL",
     "COMPONENT_CVL",
-    "GOOD_INV_CVL",
     "NAG_COMPONENT_CVL",
     "NAG_STUCK_RULE",
-    "SUBTLE_INV_CVL",
     "autoprove_nag_lanes",
     "get_autoprove_Counter_llm",
     "get_autoprove_Counter_curtailment_llm",
@@ -1863,7 +1300,7 @@ __all__ = [
 
 
 # ---------------------------------------------------------------------------
-# Operator notes for the interactive refinement conversation (P5b)
+# Operator notes for the interactive refinement conversation (P3b)
 # ---------------------------------------------------------------------------
 #
 # The refinement conversation kicks in only when the auto-prove pipeline is
@@ -1875,7 +1312,7 @@ __all__ = [
 #         property 3 — I want to make sure it's right.
 #
 # (Or any prompt that asks the AI to discuss the properties; the AI's
-# scripted P5b.1 response presupposes a question along those lines.)
+# scripted P3b.1 response presupposes a question along those lines.)
 #
 # Subsequent human turns have ``[TAPE EXPECTATION: respond '...']`` markers
 # embedded in the preceding AI message — type those verbatim to advance the

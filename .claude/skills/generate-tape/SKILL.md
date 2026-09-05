@@ -40,8 +40,8 @@ work for:
   checkpointed to any thread. Recording captures it in the right lane and position;
   reconstruction has to recover it separately (e.g. by logging the side-channel
   messages, or scraping the `verify_spec` tool output).
-- **Subagent interleaving** (code_explorer / feedback / cvl_research /
-  invariant_feedback) — these inherit the parent phase's task_id, so recording
+- **Subagent interleaving** (code_explorer / feedback / cvl_research) — these
+  inherit the parent phase's task_id, so recording
   lands them in the parent lane in exact call order; reconstruction has to stitch
   the separate threads back together (e.g. by matching tool calls).
 
@@ -130,7 +130,7 @@ The recorder prints, at exit:
 
 ```
 [record_tape] wrote N entries across K lane(s) to .../ui_harness_<name>.py
-[record_tape]   lanes: system-analysis=.., harness=.., invariants=.., ...
+[record_tape]   lanes: system-analysis=.., harness=.., extract-0=.., ...
 ```
 
 A `__no_task__` lane in that summary means some LLM call fired outside any
@@ -205,8 +205,8 @@ again — it's an iterate-to-green loop:
   these); remove the trailing/empty message objects in that lane.
 - `no tape lane for task_id '<x>'` — replay took a phase the recording never hit
   (usually a flag mismatch, or a non-deterministic branch). Match flags; if a phase
-  legitimately makes no LLM calls (e.g. `invariant-cvl` on a stateless contract) it
-  correctly has no lane.
+  legitimately makes no LLM calls (e.g. `summaries` on a system with no external
+  contracts) it correctly has no lane.
 - `LLM call outside any run_task scope` — a `__no_task__` lane entry; move or drop it.
 
 ## How it wires together (for debugging)

@@ -1,6 +1,6 @@
 """Collect the report's inputs from in-memory pipeline results + per-unit verdicts.
 
-For each component (and the structural invariants) the report phase hands us the inferred
+For each component the report phase hands us the inferred
 properties, the generation result (a `ReportableResult`: its skip list + property->unit mapping;
 a `Curtailed` wrapper when the budget cut the generation short; ``None`` if the component gave up
 or crashed), and a per-component run link. We split the properties into the ones a rule formalizes
@@ -45,8 +45,8 @@ class ReportableResult(Protocol):
 
 class Formalized[R: ReportableResult](Protocol):
     """The report's view of a generation result persisted to disk: the result, the project-relative
-    path it was written to, the basename of the file its units live in (``autospec_<slug>.spec`` /
-    ``invariants.spec`` / a ``.t.sol``) — the unit-identity fallback when a verdict carries no
+    path it was written to, the basename of the file its units live in (``autospec_<slug>.spec``
+    / a ``.t.sol``) — the unit-identity fallback when a verdict carries no
     source location — and the verification-run link (``None`` for backends with no run service)."""
     @property
     def result(self) -> R: ...
@@ -60,7 +60,7 @@ class Formalized[R: ReportableResult](Protocol):
 
 @dataclass(frozen=True)
 class ReportComponentInput[R: ReportableResult]:
-    """One unit to collect: a component or the structural invariants. ``formalized`` carries the
+    """One unit to collect. ``formalized`` carries the
     generation result and its unit file / run link; a `Curtailed` wrapper when the budget cut the
     generation short (its ``partial`` is the quarantined encoding, or ``None`` if nothing was
     published); or ``None`` when the component gave up or crashed — in which case no units were
@@ -181,9 +181,9 @@ async def collect[R: ReportableResult](
     """Assemble the report inputs.
 
     Returns ``(formalized_properties, rules, skipped, gave_up_components, curtailed_components,
-    dropped_orphan_count)``. Rules are identified by ``(unit_file, name)``: a single definition
-    seen through several runs (e.g. a structural invariant imported into a component spec)
-    collapses to one entry. Orphan units — reported by the backend but referenced by no property —
+    dropped_orphan_count)``. Rules are identified by ``(unit_file, name)``: a name is only unique
+    within a spec, so two components that independently author a rule of the same name stay
+    distinct, while one definition seen through several runs collapses to one entry. Orphan units — reported by the backend but referenced by no property —
     are dropped and counted. Verdicts are fetched concurrently via the backend `fetch_verdicts`
     hook, for delivered inputs only: a curtailed component's verification state is unreliable by
     construction, so nothing is fetched for it.

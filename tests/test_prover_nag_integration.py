@@ -75,8 +75,8 @@ async def _fake_run_prover(
     calls through (the same seam the ``certora_prover`` conftest fixture
     patches). Parses the conf the tool just wrote, reads the spec it verifies,
     and reports every declared rule/invariant VERIFIED except the permanently
-    stuck ``NAG_STUCK_RULE`` → SANITY_FAILED. Content-derived, so both
-    authoring lanes are served without ordering assumptions."""
+    stuck ``NAG_STUCK_RULE`` → SANITY_FAILED. Content-derived, so the
+    authoring lane is served without ordering assumptions."""
     conf = conf_of_prover_call(folder, args)
     spec_text = spec_of_prover_conf(folder, conf)
     statuses: dict[RulePath, StatusCodes] = {

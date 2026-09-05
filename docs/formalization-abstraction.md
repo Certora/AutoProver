@@ -91,7 +91,7 @@ report = await build_report(..., fetch_verdicts=formalizer.fetch_verdicts)
 
 The key structural point is the two overlaps, and both fall out of the driver generically. For the
 CVL backend, launching `prepare_formalization` before awaiting extraction is what overlaps the slow
-AutoSetup / summary / structural-invariant work with per-component property inference — so Foundry
+AutoSetup / summary work with per-component property inference — so Foundry
 gets the same overlap with zero extra code.
 
 `preflight` is the earlier peer, for pre-work that needs *nothing at all* from the run: Crucible
@@ -149,7 +149,6 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
     @abstractmethod
     async def fetch_verdicts(self, inp: ReportComponentInput[FormT]) -> dict[RuleName, Verdict]: ...
 
-    def extra_report_inputs(self) -> list[ReportComponentInput[FormT]]:
         return []                     # synthetic report rows; default none
 
     async def finalize(self, outcomes, run) -> None:
@@ -198,8 +197,9 @@ class StagedFormalizer[FormT: BackendResult, U: FeatureUnit](ABC):
 
 Which of the two a backend returns is its own declared signature, so a backend with no shared
 artifact never mentions staging at all. The prover is one of those: its shared peer
-(`invariants.spec`) is produced inside `prepare_formalization` (§4.2), because the invariants are
-formulated from the *model*, not from the extracted properties.
+The prover is not one of those backends: its units share only AutoSetup's config and summaries,
+which are not authored from anyone's properties. The one `StagedFormalizer` in the tree is
+Rust/Crucible's.
 
 ### 3.4 The outcome types the driver produces
 
@@ -284,61 +284,39 @@ the shared `verify_spec` prover tool once, and packages everything the next phas
 an immutable `ProverPrepared`. (Foundry's `prepare_system` is an identity transform — no
 harness, no tool.)
 
-### 4.2 `prepare_formalization` — the concurrent setup fan-out
+### 4.2 `prepare_formalization` — the pre-formalization setup
 
-This is where the CVL backend does its expensive pre-work, and it is the richest method in
-the abstraction. From `ProverPrepared` in [pipeline.py](../composer/spec/source/pipeline.py):
+This is where the CVL backend does its pre-work. From `ProverPrepared` in
+[pipeline.py](../composer/spec/source/pipeline.py):
 
 ```python
 async def prepare_formalization(self, run) -> Formalizer[GeneratedCVL, ContractComponentInstance]:
-    # AutoSetup (+ custom summaries) ∥ structural-invariant formulation — both depend only
-    # on the harnessed app, so they run concurrently.
-    (setup_config, resources), invariants = await asyncio.gather(
-        self._autosetup(run), self._invariants(run),
-    )
+    setup_config = await run.runner(TaskInfo(AUTOSETUP_TASK_ID, ...),
+        lambda: run_autosetup_phase(run.ctx, run.source, self._sys_desc, self._analyzed, ...))
+    resources = [CVLResource(path=certora_relative_to_project(setup_config.summaries_path),
+        required=True, description="AutoSetup-generated summaries", sort="import")]
 
-    invariant = None
-    if invariants.inv:
-        inv_props = [PropertyFormulation(title=inv.name, description=inv.description, sort="invariant")
-                     for inv in invariants.inv]
-        self._store.write_properties(InvariantSpec(), inv_props)
+    # The custom summaries build on AutoSetup's config, so they follow it rather than
+    # running alongside it.
+    if self._sys_desc.erc20_contracts or self._sys_desc.external_interfaces:
+        resources.append(await run.runner(TaskInfo(SUMMARIES_TASK_ID, ...),
+            lambda: setup_summaries(ctx=run.ctx, app=self._harnessed, ...)))
 
-        # Generate invariants.spec ONCE, with cache short-circuit
-        inv_cvl_ctx = run.ctx.child(INV_CVL_KEY)
-        cached = await inv_cvl_ctx.cache_get(GeneratedCVL)
-        if cached is not None:
-            inv_cvl = cached
-        else:
-            inv_result = await run.runner(TaskInfo(INVARIANT_CVL_TASK_ID, ...),
-                lambda: batch_cvl_generation(inv_cvl_ctx.abstract(CVLGeneration),
-                    setup_config.prover_config, inv_props, None, resources, self._prover_tool, ...))
-            if isinstance(inv_result, GaveUp):
-                raise RuntimeError(f"Structural invariant CVL generation gave up: {inv_result.reason}")
-            inv_cvl = inv_result
-            await inv_cvl_ctx.cache_put(inv_cvl)
-
-        inv_path = self._store.write_artifact(InvariantSpec(), inv_cvl)
-        # Append invariants.spec to the resource set so EVERY per-component spec imports it.
-        resources = [*resources, CVLResource(path=inv_path, required=False,
-            description="Structural invariants that may be assumed as preconditions", sort="import")]
-        invariant = (inv_props, Delivered(inv_cvl, inv_path))
-
-    return ProverRunner(GeneratedCVL, "prover", self._store, self._prover_tool,
-                        setup_config.prover_config, resources, invariant, make_prover_fetcher())
+    return ProverRunner(GeneratedCVL, "prover", self._prover_tool,
+                        setup_config.prover_config, resources, make_prover_fetcher(), self._deps)
 ```
 
-Three things worth calling out:
+Two things worth calling out:
 
-- **Concurrency inside the method.** AutoSetup+summaries and invariant *formulation* are
-  independent, so they `gather`. This nests under the driver-level overlap (this whole
-  method already runs concurrently with property extraction).
-- **Structural invariants are formalized eagerly, here, not per-component.** They are
-  generated once into `invariants.spec`, then injected into `resources` so every later
-  per-component spec can `import` them as preconditions. The invariant CVL goes through the
-  exact same `batch_cvl_generation` path that components do (with `component=None`).
-- **The returned `ProverRunner` is fully loaded.** Its config, resource set (now including
-  `invariants.spec`), prover tool, and the in-memory invariant result are all constructor
-  fields. `formalize` adds nothing — it only *reads* them.
+- **No authoring agent runs here.** This method is joined at a barrier before any component is
+  formalized, so everything in it delays every property in the run. It used to also formulate
+  structural invariants and prove them into a shared `invariants.spec` — a full
+  `batch_cvl_generation` with real prover jobs ahead of the barrier, which on a real contract
+  was hours. An invariant is now authored by the component that needs one, in that component's
+  own spec, and proven in the same `verify_spec` run as the rule citing it. The barrier itself
+  stays: `batch_cvl_generation` is constructed with AutoSetup's `prover_config`.
+- **The returned `ProverRunner` is fully loaded.** Its config, resource set and prover tool are
+  all constructor fields. `formalize` adds nothing — it only *reads* them.
 
 ### 4.3 `formalize` — per-component authoring + verification loop
 
@@ -441,23 +419,6 @@ point — `batch_cvl_generation`, `batch_foundry_test_generation`,
 [`run_session`](../composer/rustapp/session.py). They differ in exactly the parameters the core takes,
 so collapsing them into one function would buy nothing.
 
-### 4.4 `extra_report_inputs` — folding in the invariants
-
-Per-component outcomes are assembled by the driver. The structural invariants are a
-*synthetic* component the backend contributes ([pipeline.py](../composer/spec/source/pipeline.py)):
-
-```python
-def extra_report_inputs(self) -> list[ReportComponentInput[GeneratedCVL]]:
-    if self._invariant is None:
-        return []
-    inv_props, inv = self._invariant
-    return [ReportComponentInput(name="Structural Invariants", props=inv_props, formalized=inv)]
-```
-
-This is the report-side payoff of formalizing invariants in `prepare_formalization`: the
-in-memory `Delivered[GeneratedCVL]` is replayed straight into the report with no special
-casing in the driver.
-
 ### 4.5 `fetch_verdicts` — pass/fail per rule
 
 ```python
@@ -468,7 +429,7 @@ async def fetch_verdicts(self, inp) -> dict[RuleName, Verdict]:
 The fetcher resolves each spec's prover run (via `inp.formalized.run_link`) and rolls per-rule
 outcomes into `Verdict`s. The `collect` step
 ([report/collect.py](../composer/spec/source/report/collect.py)) then keys rules by
-`(unit_file, name)` so a structural invariant imported into several component specs collapses
+`(unit_file, name)` so one definition seen through several runs collapses
 to one entry, and uses `Verdict.merge` (priority `BAD > ERROR > TIMEOUT > UNKNOWN > GOOD`) to
 roll up multiple results for one rule. Foundry's fetcher instead reads pass/fail straight off
 the result with no run service — same protocol, different source.
@@ -479,8 +440,6 @@ the result with no run service — same protocol, different source.
 async def finalize(self, outcomes, run) -> None:
     runs = {ComponentSpec(o.feat.slugified_name).run_key: o.result.run_link
             for o in outcomes if isinstance(o.result, Delivered) and o.result.run_link}
-    if self._invariant and self._invariant[1].run_link:
-        runs[InvariantSpec().run_key] = self._invariant[1].run_link
     self._store.write_component_runs(runs)   # → components_to_prover_runs.json
 ```
 
@@ -560,11 +519,6 @@ class ComponentSpec:            # autospec_<slug>.spec
     def stem(self): return f"autospec_{self.slug}"
     @property
     def run_key(self): return self.slug
-
-@dataclass(frozen=True)
-class InvariantSpec:            # invariants.spec
-    @property
-    def stem(self): return "invariants"
 ```
 
 `ProverBackend.to_artifact_id(component)` maps a component instance to its `ComponentSpec`;
@@ -574,7 +528,6 @@ The resulting on-disk layout (all under the project's `certora/`):
 
 ```
 certora/specs/autospec_<slug>.spec      # per-component CVL
-certora/specs/invariants.spec           # structural invariants (imported by the above)
 certora/confs/<stem>.conf               # prover config per spec
 certora/properties/<stem>.properties.json        # inferred properties
 certora/properties/<stem>.property_rules.json    # property → [rule names]
@@ -610,8 +563,7 @@ The cache key is the hash of the *property batch* (`_batch_cache_key`), under th
 context, under the `properties` context — the hierarchical scheme described in
 [ARCHITECTURE.md §7](../ARCHITECTURE.md). Because the result type carries `config` and
 `final_link`, a cache hit can rebuild the `.conf` and keep the run link without touching the
-prover. The structural-invariant CVL has its own cache short-circuit inside
-`prepare_formalization` (`INV_CVL_KEY`, §4.2) for the same reason.
+prover.
 
 ---
 
@@ -623,12 +575,11 @@ The abstraction encodes three distinct failure modes, each handled differently:
 |---|---|---|
 | Agent declines a component | `formalize` returns `GaveUp(reason)` | recorded as a `ComponentOutcome`, surfaced in `failures`, rendered in report as a gap; **not cached** |
 | Component crashes | `formalize` raises | `asyncio.gather(..., return_exceptions=True)` captures it into `ComponentOutcome.result` |
-| Invariant CVL gives up | `prepare_formalization` raises `RuntimeError` | **fatal** — invariants are a shared precondition, so the whole run aborts |
 | Report build fails | exception in `build_report` | best-effort: logged, run still succeeds — unless `report_build.RERAISE_REPORT_FAILURES` is set, which tests flip to make a silent report failure fail loudly |
 
-The asymmetry is intentional: a single component giving up is a normal, reportable outcome,
-but the shared invariant spec failing would silently weaken every downstream component, so it
-fails loud.
+A component giving up is a normal, reportable outcome. The one remaining way
+`prepare_formalization` kills a run is AutoSetup itself failing — without a `prover_config`
+there is nothing for any component to verify against.
 
 ---
 
@@ -644,11 +595,10 @@ system analysis, property extraction, caching, and the report, and contributes o
 | `FormT` | `GeneratedCVL` | `GeneratedFoundryTest` |
 | `preflight` | none (its pre-work needs the harnessed model) | none (`forge` builds the project already) |
 | `prepare_system` | harness lift + prover tool | identity |
-| `prepare_formalization` | AutoSetup ∥ summaries ∥ invariants | trivial (pre-built formalizer) |
-| shared artifact (`StagedFormalizer`) | none — `invariants.spec` is built from the model, in `prepare_formalization` | none |
+| `prepare_formalization` | AutoSetup, then custom summaries | trivial (pre-built formalizer) |
+| shared artifact (`StagedFormalizer`) | none — units share only AutoSetup's config and summaries | none |
 | `formalize` | authoring session, gated by `verify_spec` | authoring session, gated by `forge_test` |
 | `fetch_verdicts` | query prover output off-thread | read ran/expected tests off the result |
-| `extra_report_inputs` | synthetic "Structural Invariants" | none |
 | `finalize` | `components_to_prover_runs.json` | none |
 | artifact bundle | `.spec` + `.conf` | `.t.sol` + metadata |
 
@@ -666,8 +616,7 @@ A backend author's checklist:
 4. Implement `PreparedSystem.prepare_formalization` returning a fully-constructed
    `Formalizer` — or, if every unit builds on one shared artifact, a `StagedFormalizer` whose
    `begin` authors it from the union of all units' properties (§3.3).
-5. Implement `Formalizer.formalize` + `fetch_verdicts`; override `extra_report_inputs` /
-   `finalize` only if needed. `formalize` should assemble the shared authoring session (§4.3.1)
+5. Implement `Formalizer.formalize` + `fetch_verdicts`; override `finalize` only if needed. `formalize` should assemble the shared authoring session (§4.3.1)
    rather than grow its own loop — what it supplies is the gate tools, the prompts, and its own
    noun for a check.
 
@@ -688,10 +637,9 @@ _entry_point → cli_pipeline → cont(env, ProverBackend, EVM)
         get_prover_tool       ─▶ verify_spec tool
                                  ▶ ProverPrepared(main=located main contract, ...)
    3. ┌ create_task: ProverPrepared.prepare_formalization
-      │    gather( _autosetup → (config, [summaries]) , _invariants → [BaseInvariant] )
-      │    batch_cvl_generation(component=None) ─▶ invariants.spec  (cached under INV_CVL_KEY)
-      │    resources += invariants.spec
-      │                                         ▶ ProverRunner(config, resources, invariant, fetch)
+      │    run_autosetup_phase → (config, [summaries resource])
+      │    setup_summaries (only when the system has erc20s/external interfaces)
+      │                                         ▶ ProverRunner(config, resources, fetch)
       └ _extract_all ─▶ [ _Batch(component, props) , ... ]     # runs concurrently with the above
    4. for each batch (parallel, semaphore-bounded):
         write_properties(ComponentSpec(slug), props)
@@ -705,7 +653,7 @@ _entry_point → cli_pipeline → cont(env, ProverBackend, EVM)
         write_artifact ─▶ autospec_<slug>.spec (+ .conf)   ⇒ Delivered(result, path)
                                               ─▶ ComponentOutcome
       ProverRunner.finalize(outcomes) ─▶ components_to_prover_runs.json
-   5. build_report( per-component inputs + extra_report_inputs(),
+   5. build_report( per-component inputs,
                     fetch_verdicts=ProverRunner.fetch_verdicts ) ─▶ certora/ap_report/report.json
 ```
 
