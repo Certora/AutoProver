@@ -20,8 +20,10 @@ from composer.cargo.metadata import CratePackage, Workspace
 from composer.spec.cvlr.env_paths import PathDialect, dialect_for
 from composer.spec.cvlr.scaffold import (
     CANONICAL_ENVS,
+    DEVIATIONS,
     ENV_DIR,
     INLINING,
+    Deviation,
     canonical_env,
     compose_env,
 )
@@ -417,3 +419,57 @@ def test_the_dialect_measurably_restores_coverage_and_costs_none(split: PathDial
         assert (lb, la) == directives, f"{name} directives: {lb} -> {la}"
         assert (len(cb), len(ca)) == coverage, f"{name} symbols: {len(cb)} -> {len(ca)}"
         assert cb <= ca, f"{name} lost coverage of {sorted(cb - ca)}"
+
+
+# ---------------------------------------------------------------------------------------------
+# deviations from upstream
+
+
+def test_the_deviation_reaches_the_composite() -> None:
+    """The point of the whole mechanism: what a target's build reads is the corrected line.
+
+    Measured on SPL stake-pool — with upstream's ``inline(never)`` in force, an unsummarized
+    ``ProgramError::from`` is treated as external, which havocs the ``Result`` discriminant every
+    handler returns and makes ``res.is_err()`` unprovable.
+    """
+    composite = compose_env(INLINING, package_layer="")
+    from_u64 = [ln for ln in composite.splitlines() if "From<u64>>::from$" in ln and ln.startswith("#[")]
+    assert from_u64 == [
+        "#[inline] ^<solana_program::program_error::ProgramError as core::convert::From<u64>>::from$"
+    ]
+
+
+def test_the_deviation_survives_the_dialect(split: PathDialect) -> None:
+    """It has to hold in the spelling that actually matches: upstream's line names
+    ``solana_program::program_error::`` and is inert on a post-split target, and the rewrite into
+    ``solana_program_error::`` is exactly what makes the directive bite."""
+    composite = compose_env(INLINING, package_layer="", dialect=split)
+    assert (
+        "#[inline] ^<solana_program_error::ProgramError as core::convert::From<u64>>::from$"
+        in composite
+    )
+    assert "#[inline(never)] ^<solana_program_error::ProgramError" not in composite
+
+
+def test_the_vendored_copy_is_untouched_by_deviations() -> None:
+    """A deviation is applied on the way into a composite, never to ``envs/``. Otherwise the next
+    refresh reports our change as upstream's — the same contract
+    :func:`test_the_vendored_files_are_returned_verbatim_without_a_dialect` pins."""
+    for deviation in DEVIATIONS:
+        assert deviation.canonical in (ENV_DIR / deviation.env).read_text()
+        assert deviation.replacement not in (ENV_DIR / deviation.env).read_text()
+
+
+def test_a_deviation_upstream_has_rewritten_fails_loudly(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The refresh-safety property. If upstream edits the line we deviate from, composing must
+    raise rather than silently ship upstream's version — the reason for deviating may be gone, and
+    that is a judgement for a person."""
+    stale = Deviation(
+        env=INLINING.core,
+        canonical="#[inline(never)] ^this::line::is::not::in::the::file$",
+        replacement="#[inline] ^this::line::is::not::in::the::file$",
+        why="test",
+    )
+    monkeypatch.setattr("composer.spec.cvlr.scaffold.DEVIATIONS", (stale,))
+    with pytest.raises(ValueError, match="upstream has changed it"):
+        compose_env(INLINING, package_layer="")

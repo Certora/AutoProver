@@ -131,6 +131,59 @@ ENV_FAMILIES = (INLINING, SUMMARIES)
 #: The upstream-maintained halves, which :mod:`composer.scripts.refresh_cvlr_envs` vendors.
 CANONICAL_ENVS = tuple(name for f in ENV_FAMILIES for name in (f.core, f.anchor))
 
+
+@dataclasses.dataclass(frozen=True)
+class Deviation:
+    """One canonical line this backend deliberately does not ship as upstream wrote it.
+
+    Kept here rather than in ``envs/`` because those files are a *copy*: the refresh script
+    re-vendors them wholesale, so an edit there survives only until the next refresh and makes
+    every later diff report our change as upstream's. A deviation is applied at composition
+    instead, and :func:`_deviated` raises when :attr:`canonical` is not found exactly once — a
+    refresh that rewrites the line is meant to fail loudly and be re-reviewed, since the reason
+    for deviating may have gone away.
+
+    Written in upstream's spelling, and applied before the dialect renders it, so an entry matches
+    the vendored bytes rather than whatever a given target's platform generation calls the symbol.
+    """
+
+    env: str
+    canonical: str
+    replacement: str
+    why: str
+
+
+#: Applied to the vendored layers on the way into a composite.
+#:
+#: The one entry is a soundness defect, not a preference. ``ProgramError`` is returned through an
+#: ``sret`` out-pointer, so a prover that treats its constructor as external havocs the write —
+#: including the ``Result`` discriminant. Every error a native program builds with ``SomeError
+#: .into()`` then has a nondeterministic ``is_err()``, and no rule asserting that a handler rejects
+#: bad input can be proved. Upstream marks the function ``inline(never)`` and ships no summary to
+#: stand in for it, which is what makes the pair unsound rather than merely slow.
+#:
+#: It is dormant upstream and ours to trip: the directive names ``solana_program::program_error::``,
+#: the post-split symbol is ``solana_program_error::``, and so upstream's line matches nothing on
+#: any modern generation. :mod:`composer.spec.cvlr.env_paths` rewrites it into the spelling that
+#: does match — correctly, and that is precisely what activates it. Measured on SPL stake-pool:
+#: identical rules verify with the line as ``#[inline]`` and with the un-rewritten spelling, and are
+#: violated with the rewritten ``#[inline(never)]``; ``#[inline(never)]`` on the callee and the
+#: harness's own shape were both ruled out first.
+DEVIATIONS: tuple[Deviation, ...] = (
+    Deviation(
+        env=INLINING.core,
+        canonical=(
+            "#[inline(never)] "
+            "^<solana_program::program_error::ProgramError as core::convert::From<u64>>::from$"
+        ),
+        replacement=(
+            "#[inline] "
+            "^<solana_program::program_error::ProgramError as core::convert::From<u64>>::from$"
+        ),
+        why="unsummarized inline(never) havocs every ProgramError a handler returns",
+    ),
+)
+
 _GENERATED_HEADER = """;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; DO NOT EDIT. THIS FILE HAS BEEN AUTOMATICALLY GENERATED
 ;;; Composed from {core}, {anchor} and {package}.
@@ -259,6 +312,29 @@ def env_provenance() -> str:
     return stamp.read_text().strip() if stamp.is_file() else f"{TEMPLATE_REPO} (unrecorded)"
 
 
+def deviations_for(name: str) -> tuple[Deviation, ...]:
+    """The deviations that apply to one vendored file."""
+    return tuple(d for d in DEVIATIONS if d.env == name)
+
+
+def _deviated(name: str, dialect: PathDialect) -> str:
+    """One vendored file with :data:`DEVIATIONS` applied, then spelled for the target.
+
+    Deliberately not part of :func:`canonical_env`: that function answers "what was vendored", and
+    the refresh script's round-trip depends on it staying that.
+    """
+    text = (ENV_DIR / name).read_text()
+    for deviation in deviations_for(name):
+        found = text.count(deviation.canonical)
+        if found != 1:
+            raise ValueError(
+                f"{name}: deviation matched {found} lines, expected 1 — upstream has changed it. "
+                f"Re-review whether it is still needed ({deviation.why}) and update DEVIATIONS."
+            )
+        text = text.replace(deviation.canonical, deviation.replacement)
+    return dialect.render(text)
+
+
 def compose_env(
     family: EnvFamily,
     *,
@@ -289,9 +365,17 @@ def compose_env(
             f";;; Platform paths rewritten for this target's generation "
             f"({len(dialect.aliases)} aliases) — see composer/spec/cvlr/env_paths.py\n"
         )
+    applied = [d for d in DEVIATIONS if d.env in (family.core, family.anchor)]
+    if applied:
+        # Same reason as the note above: a reader diffing this against upstream must not conclude
+        # it was hand-edited. Each line says what it is and why, since one of these is a soundness
+        # fix and a reader deciding whether to keep it needs the reason, not just the fact.
+        parts.append(
+            "".join(f";;; Deviates from upstream: {d.why} — {d.replacement}\n" for d in applied)
+        )
     parts += [
-        canonical_env(family.core, dialect),
-        canonical_env(family.anchor, dialect),
+        _deviated(family.core, dialect),
+        _deviated(family.anchor, dialect),
         package_layer,
     ]
     if unit_layer.strip():
