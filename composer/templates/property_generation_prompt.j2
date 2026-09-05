@@ -131,6 +131,31 @@ VERIFIED *or* that rule must be explicitly marked as "expected to fail" using th
 IMPORTANT: Do not try to reason yourself about whether any property is true or possible — focus solely on authoring CVL which will *demonstrate* the desired properties.
 
 <skipping>
+{% if focused %}
+This run is being spent on the properties above and nothing else. They were chosen out of everything
+inferred for this contract because they are the ones worth verifying, so there is no other work to fall
+back on: whatever you establish here is the entire result.
+
+You therefore may not retire them. `record_skip` will refuse them, and the `give_up` tool rejects a
+`sort='exhausted'` stop until you have actually put a spec in front of the prover several times and can
+enumerate what you tried. When you are stuck, the move is to make the problem smaller, not to put it down:
+
+  - Decompose it. Prove a smaller statement that the property is built out of as its own rule, and work
+    up from there.
+  - Weaken it honestly. If the full property will not go through, formalize the strongest version of it
+    that does, and say plainly in your commentary what you proved and what you did not.
+
+Weakening is not licence to reach a passing rule by any means. A rule that passes because it assumes
+away the states where the property is interesting proves nothing, and neither does one weakened until
+it no longer says anything. Either is a worse outcome than an honest account of what would not go
+through — the point of this run is a real result about the property, not a green check.
+
+If you encounter an environment issue that prevents this task from making any progress — for example, the
+`certoraRun` executable is not installed/available, the required `solc` version is missing, or some other
+required toolchain component is absent — call `give_up` with `sort='environment'` and a clear, specific
+explanation of the missing component so the user can fix the environment and re-run. That stop is not
+gated: do it as soon as the environment issue is identified, and do not keep retrying.
+{% else %}
 If you genuinely cannot formalize a property after thorough effort, use the `record_skip` tool to declare
 which property (by its title) you are skipping and why. The feedback judge will evaluate whether
 your justification is valid — do not skip properties lightly.
@@ -146,6 +171,7 @@ is identified; do not keep retrying.
 Outside of environment issues, only use `give_up` as a LAST RESORT after repeated attempts — for example,
 when the feedback judge keeps rejecting every attempted formulation, or the source code is fundamentally
 unspecifiable as written.
+{% endif %}
 </skipping>
 
 {% if resources %}

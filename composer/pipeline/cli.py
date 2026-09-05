@@ -32,6 +32,7 @@ from composer.spec.service_host import ModelProvider
 from composer.spec.types import SourceIdentifier
 from composer.pipeline.ecosystem import Ecosystem
 from .core import PipelineBackend, run_pipeline
+from .run_mode import RunMode
 from .plugins import applicable_plugin_manifest
 from .run_tags import AutoProveCacheTags, CACHE_ROOT_RECORD
 from composer.io.multi_job import HandlerFactory, run_task, TaskInfo
@@ -53,11 +54,28 @@ from composer.spec.util import fs_forbidden_read
 import hashlib
 
 
+def autoprover_version() -> str:
+    """The git commit recorded for a ``git+``-installed ``ai-composer`` (its ``direct_url.json``),
+    else the package version, else ``"unknown"``."""
+    try:
+        from importlib.metadata import distribution
+        dist = distribution("ai-composer")
+        raw = dist.read_text("direct_url.json")
+        if raw:
+            commit = json.loads(raw).get("vcs_info", {}).get("commit_id")
+            if commit:
+                return str(commit)
+        return dist.version
+    except Exception:
+        return "unknown"
+
+
 def root_cache_key(
     project_root: str,
     system_doc_path: pathlib.Path | None,
     relative_path: str,
     contract_name: str,
+    tool_version: str,
 ):
     # A source-only run (no design doc) hashes a fixed sentinel in place of the doc
     # bytes, so it gets a stable key that is distinct from any real document.
@@ -66,7 +84,7 @@ def root_cache_key(
         if system_doc_path is not None
         else "no-design-doc"
     )
-    combined = "|".join([project_root, doc_hash, relative_path, contract_name])
+    combined = "|".join([project_root, doc_hash, relative_path, contract_name, tool_version])
     return hashlib.sha256(combined.encode()).hexdigest()
 
 
@@ -229,6 +247,7 @@ async def cli_pipeline[P: enum.Enum, H](
     task_handler: HandlerFactory[P, H],
     design_doc_phase: P,
     at_exit: AtExit | None = None,
+    run_mode: RunMode = RunMode.COMPREHENSIVE,
     **metadata
 ) -> AsyncIterator[tuple[StagedPipeline, Continuation[P, H]]]:
     project_root = pathlib.Path(args.project_root).resolve()
@@ -334,7 +353,8 @@ async def cli_pipeline[P: enum.Enum, H](
                 project_root=str(project_root),
                 contract_name=contract_name,
                 relative_path=relative_path,
-                system_doc_path=system_doc
+                system_doc_path=system_doc,
+                tool_version=autoprover_version(),
             )
             cache_root = user_ns(args.cache_ns, root_key) if args.cache_ns is not None else None
 
@@ -378,6 +398,7 @@ async def cli_pipeline[P: enum.Enum, H](
                     threat_model_digest=threat_model.to_digest() if threat_model is not None else None,
                     extra_context_digests=[d.to_digest() for d in extra_context],
                     interactive=args.interactive,
+                    run_mode=run_mode.value,
                 ).model_dump())
                 full_ctx = WorkflowContext.create(
                     services=conns.memory,
@@ -391,6 +412,7 @@ async def cli_pipeline[P: enum.Enum, H](
                     ctx=full_ctx,
                     source=full_source,
                     env=env,
+                    run_mode=run_mode,
                     _agent_semaphore=semaphore,
                     _cpu_semaphore=cpu_semaphore,
                     _handler_factory=task_handler

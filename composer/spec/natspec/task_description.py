@@ -5,6 +5,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, AsyncContextManager, Awaitable, ContextManager, Iterator, Mapping, Self, TypedDict
 
+from graphcore.tools.vfs import GlobalExcludeArg
+
 from composer.spec.gen_types import ITypedTemplate
 from composer.spec.natspec.models import (
     InterfaceDeclModel,
@@ -113,7 +115,7 @@ class ConfigurationBuilder:
         return self._replace(files=list(files))
 
     def with_verify(self, *, main_contract: SolidityIdentifier, spec_file: str) -> Self:
-        return self._replace(verify=f"{main_contract}:certora/{spec_file}")
+        return self._replace(verify=f"{main_contract}:{spec_file}")
 
     def with_solc(self, version: str) -> Self:
         return self._replace(
@@ -156,8 +158,10 @@ class ConfigurationBuilder:
             root=str(path),
             ext="conf",
             prefix="run",
-        ) as basename:
-            yield path / "certora" / basename
+        ) as rel_conf:
+            # temp_certora_file yields a project-root-relative path that already
+            # carries the `certora/` segment, so join it to the root verbatim.
+            yield path / rel_conf
 
 
 class Assembler(ABC):
@@ -180,6 +184,10 @@ class MentalModel[A: NatspecApplication, I: InterfaceDeclModel, S: StubDeclarati
     interface_desc: AgentDescription[InterfaceResult[I], InterfaceGenCallParams]
     stub_desc: AgentDescription[S, StubGenCallParams]
     source_root: pathlib.Path | None = None
+    #: What ``source_root`` is served to the agent through, so anything checking a path the agent
+    #: wrote asks the same question its file tools answer. ``None`` in greenfield, which has no
+    #: tree to serve.
+    forbidden_read: GlobalExcludeArg = None
     config_init: dict | None = None
 
     @property

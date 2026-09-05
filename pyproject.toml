@@ -23,7 +23,7 @@ authors = [
 ]
 
 dependencies = [
-    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@54a6852eac72896d17d3bc4f3068a775f9200d1f",
+    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@2177f57929c1a9a2052013cf0754e55b0c8f2790",
     "aiohttp>=3.13",
     "attrs>=26.1",
     "Jinja2>=3.1",
@@ -73,7 +73,7 @@ s3 = ["s3fs>=2023.1.0"]
 # exactly one extra must be selected at install time (enforced via the
 # [tool.uv] conflicts block below). Each extra is named after the package it
 # pulls.
-certora-cli = ["certora-cli>=8.18.0"]
+certora-cli = ["certora-cli>=8.19.1"]
 certora-cli-beta = ["certora-cli-beta>=8.18.0"]
 certora-cli-beta-mirror = ["certora-cli-beta-mirror>=8.18.0"]
 # Back-compat alias: `prover` == stable channel.
@@ -206,6 +206,9 @@ certora-fixconf = "certora_autosetup.fixconf:main"
 autosetup = "certora_autosetup.autosetup.cli:main"
 fixconf = "certora_autosetup.fixconf:main"
 
+# summarization_detector entry points
+detect-summaries = "summarization_detector.cli:main"
+
 # Command-sandbox providers, resolved by composer.sandbox.config.SandboxConfig.resolve_provider.
 # Adding a provider = adding a line here (and re-running the editable install so the
 # dist-info picks it up); the seam never imports a concrete mechanism itself.
@@ -214,7 +217,7 @@ none = "composer.sandbox.policy:NoneProvider"
 launcher = "composer.sandbox.launcher:LauncherProvider"
 
 [tool.setuptools.packages.find]
-include = ["composer*", "sanity_analyzer*", "analyzer*", "certora_autosetup*"]
+include = ["composer*", "sanity_analyzer*", "analyzer*", "certora_autosetup*", "summarization_detector*"]
 
 [tool.setuptools.package-dir]
 "" = "."

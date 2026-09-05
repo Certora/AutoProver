@@ -122,11 +122,13 @@ class ProverArtifactStore(ArtifactStore[SpecIdentity, GeneratedCVL]):
         (out_dir / "components_to_prover_runs.json").write_text(json.dumps(runs, indent=2))
 
     @override
-    def _job_info_payload(self, summary: RunSummary, *, user_id: str) -> dict[str, object]:
+    def _job_info_payload(
+        self, summary: RunSummary, *, user_id: str, run_mode: str
+    ) -> dict[str, object]:
         """Extends the shared manifest body with the prover-reported runtime: the
         autoprove ``job_info.json`` also records ``prover_usage`` (summed prover
         start-to-end time), alongside the base identity + ``token_usage``."""
         return {
-            **super()._job_info_payload(summary, user_id=user_id),
+            **super()._job_info_payload(summary, user_id=user_id, run_mode=run_mode),
             "prover_usage": summary.prover_usage_summary(),
         }

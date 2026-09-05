@@ -15,6 +15,7 @@ Covers:
 The prover core is mocked throughout (the ``certora_prover`` fixture's seams:
 ``run_prover`` + ``declared_rules_list``); no prover jobs run.
 """
+import asyncio
 import json
 from pathlib import Path
 from typing import Annotated
@@ -25,7 +26,9 @@ from langchain_core.tools import InjectedToolCallId, tool
 from langgraph.types import Command
 
 from composer.authoring.state import check_completion, spec_digest
-from composer.prover.core import ProverReport, declared_rules_list
+from composer.prover.core import (
+    ProverReport, SpecCompilationError, declared_rules_list
+)
 from composer.prover.ptypes import RulePath, StatusCodes
 from composer.spec.cvl_generation import PropertyRuleMapping, validate_property_rules
 from composer.spec.source.author import ExpectRuleFailure
@@ -193,11 +196,12 @@ class TestCompletionHistory:
 
 
 class _FakeProc:
-    def __init__(self, rc: int):
-        self._rc = rc
+    def __init__(self, rc: int, stdout: bytes = b"", stderr: bytes = b""):
+        self.returncode = rc
+        self._streams = (stdout, stderr)
 
-    async def wait(self) -> int:
-        return self._rc
+    async def communicate(self) -> tuple[bytes, bytes]:
+        return self._streams
 
 
 def _install_fake_prover_procs(
@@ -207,6 +211,8 @@ def _install_fake_prover_procs(
     java_rc: int = 0,
     rules_text: str = "a\nb\n",
     conf_msg: str | None = None,
+    certora_output: bytes = b"",
+    java_output: bytes = b"",
 ):
     """Fake the two subprocesses of ``declared_rules_list``: certoraRun materializes a
     build-mirror dir whose run.conf carries the ``--msg`` key it was passed (or
@@ -230,10 +236,10 @@ def _install_fake_prover_procs(
             (build / "run.conf").write_text(
                 json.dumps({"msg": conf_msg if conf_msg is not None else key})
             )
-            return _FakeProc(certora_rc)
+            return _FakeProc(certora_rc, stderr=certora_output)
         assert argv[0] == "java"
         Path(argv[argv.index("-listRules") + 1]).write_text(rules_text)
-        return _FakeProc(java_rc)
+        return _FakeProc(java_rc, stderr=java_output)
 
     monkeypatch.setattr("asyncio.subprocess.create_subprocess_exec", fake_exec)
 
@@ -250,20 +256,56 @@ class TestDeclaredRulesList:
         with pytest.raises(ValueError, match="msg"):
             await declared_rules_list(tmp_path, ["x.conf", "--msg", "hello"])
 
-    async def test_build_failure_raises(self, tmp_path, monkeypatch):
-        _install_fake_prover_procs(monkeypatch, certora_rc=1)
-        with pytest.raises(ValueError):
+    async def test_build_failure_carries_the_compiler_output(
+        self, tmp_path, monkeypatch
+    ):
+        """The output is the whole point: it names the file and line, which is what
+        an authoring agent needs to repair the spec."""
+        _install_fake_prover_procs(
+            monkeypatch, certora_rc=1,
+            certora_output=b'Error in spec file (invariants.spec:34:5): could not '
+                           b'type expression "sdai.pot()"',
+        )
+        with pytest.raises(SpecCompilationError) as caught:
             await declared_rules_list(tmp_path, ["x.conf"])
+        assert "invariants.spec:34:5" in caught.value.output
 
-    async def test_typechecker_failure_raises(self, tmp_path, monkeypatch):
-        _install_fake_prover_procs(monkeypatch, java_rc=1)
-        with pytest.raises(ValueError):
+    async def test_typechecker_failure_carries_the_compiler_output(
+        self, tmp_path, monkeypatch
+    ):
+        _install_fake_prover_procs(
+            monkeypatch, java_rc=1, java_output=b"rule 'foo' is not well typed",
+        )
+        with pytest.raises(SpecCompilationError) as caught:
             await declared_rules_list(tmp_path, ["x.conf"])
+        assert "not well typed" in caught.value.output
 
     async def test_unmatched_build_dir_raises(self, tmp_path, monkeypatch):
         _install_fake_prover_procs(monkeypatch, conf_msg="someone else's run")
         with pytest.raises(ValueError, match="build dir"):
             await declared_rules_list(tmp_path, ["x.conf"])
+
+    async def test_a_chatty_child_does_not_deadlock(self, tmp_path, monkeypatch):
+        """Real subprocess, real pipes: a child that outfills the ~64KB pipe buffer
+        blocks forever if nobody drains it, so this is the one case the fakes above
+        cannot cover."""
+        import sys
+
+        from composer.prover.core import BUILD_TIMEOUT_S, _run_captured
+
+        rc, output = await asyncio.wait_for(
+            _run_captured(
+                sys.executable, "-c",
+                "import sys; sys.stdout.write('o' * 200_000); "
+                "sys.stderr.write('e' * 200_000); sys.exit(3)",
+                cwd=tmp_path,
+                timeout=BUILD_TIMEOUT_S,
+            ),
+            timeout=30,
+        )
+        assert rc == 3
+        assert output  # drained, not lost
+
 
     async def test_discovery_ignores_decoy_entries(self, tmp_path, monkeypatch):
         # Pre-existing .certora_internal clutter: a plain file, a dir without a
@@ -386,6 +428,35 @@ def _is_result_rejection(st: StateWithSkips) -> bool:
 
 @pytest.mark.asyncio
 class TestStripedVerification:
+    async def test_a_spec_that_does_not_compile_comes_back_to_the_agent(
+        self, certora_prover: ProverMock, monkeypatch
+    ):
+        """The rule-listing pre-pass runs the compiler before the prover. A spec that
+        fails to compile is the author agent's to fix and the compiler says exactly
+        where, so it has to arrive as a tool result — raising past the agent ends the
+        whole run over a repairable mistake."""
+        async def failing(**_kwargs):
+            raise SpecCompilationError(
+                'Error in spec file (invariants.spec:34:5): could not type '
+                'expression "sdai.pot()", message: Missing environment parameter '
+                'to non-envfree function SavingsDai.pot()'
+            )
+
+        monkeypatch.setattr(
+            "composer.spec.source.prover.declared_rules_list", failing
+        )
+        msg = await _scenario(
+            certora_prover, curr_spec=_spec_decls("a", "b"),
+        ).turn(
+            _verify()
+        ).run_last_single_tool(_PROVER)
+        assert "failed to compile" in msg
+        assert "invariants.spec:34:5" in msg
+        assert "non-envfree" in msg
+        # The prover is never reached — there is nothing to verify.
+        assert certora_prover.calls == []
+
+
     async def test_rules_and_exclude_rules_mutually_exclusive(self, certora_prover: ProverMock):
         msg = await _scenario(
             certora_prover, curr_spec=_spec_decls("a", "b"),

@@ -188,11 +188,16 @@ class FunctionDefinition(SolcNode):
 
 
 class SymbolAlias(BaseModel):
-    """One ``{symbol as local}`` entry of an ImportDirective's symbolAliases."""
+    """One ``{symbol as local}`` entry of an ImportDirective's symbolAliases.
+
+    solc writes ``foreign`` as an Identifier node from 0.6.1 on. Through
+    0.5.16 it writes the referenced declaration's id there instead, which the
+    vendored schema does not cover because that schema unions solc >= 0.6.
+    """
 
     model_config = ConfigDict(extra="allow")
 
-    foreign: "Identifier"
+    foreign: "Identifier | int"
     local: str | None = None
     nameLocation: str | None = None
 
