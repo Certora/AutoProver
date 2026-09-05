@@ -43,7 +43,7 @@ from composer.input.types import DEFAULT_RECURSION_LIMIT, ExtendedModelOptions
 from composer.io.multi_job import HandlerFactory
 from composer.io.thread_logging import RunDataLogger
 from composer.pipeline.cli import AtExit, cli_pipeline, user_ns
-from composer.pipeline.pinned import load_pinned_properties
+from composer.pipeline.pinned import load_pinned_run
 from composer.pipeline.ecosystem import SOLANA
 from composer.pipeline.ptypes import DEFAULT_MAX_CPU_TASKS, CorePipelineResult
 from composer.prover.core import make_prover_options
@@ -92,6 +92,7 @@ class CvlrArgs(ExtendedModelOptions, Protocol):
     max_bug_rounds: int
     max_properties: int | None
     properties: str | None
+    pin_to: str | None
     recursion_limit: int
     budget: str | None
     time_budget: float | None
@@ -157,11 +158,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--properties", default=None, metavar="PATH",
-        help="Formalize these properties instead of extracting them, skipping the extraction "
-             "phase — the one that dominates a real target's cost. A JSON object keyed by "
-             "component slug, or the bare list the artifact store writes under "
-             "certora/cvlr/properties/. Components the file does not name are dropped from the "
-             "run; a name analysis did not produce is an error.",
+        help="Re-enter the pipeline at formalization using a fixture written by --pin-to: its "
+             "analysis and its properties are used instead of running those two phases, which "
+             "between them are most of what a run on a real target costs. Components the fixture "
+             "omits are dropped, so pinning one of ten is what makes it cheap.",
+    )
+    parser.add_argument(
+        "--pin-to", default=None, metavar="PATH", dest="pin_to",
+        help="After analysis and extraction, write both to PATH as a fixture --properties can "
+             "replay. Records the target's commit so a later run can say when the checkout has "
+             "moved out from under it.",
     )
     parser.add_argument("--budget", default=None, help="Path to a run-budget file (JSON or YAML): {total: USD, caps: {phase: USD, ...}}. Omit to run unbudgeted.")
     parser.add_argument("--time-budget", default=None, type=float, help="Total wall time to run the entire execution. Omit to run without in process limit")
@@ -337,7 +343,7 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
     # Read before any service starts: a malformed pin file should cost nothing, and the shape
     # error is far easier to act on when it is the first thing printed.
     pinned = (
-        load_pinned_properties(pathlib.Path(args.properties).resolve())
+        load_pinned_run(pathlib.Path(args.properties).resolve(), SOLANA.system_model)
         if args.properties is not None else None
     )
 
@@ -355,6 +361,7 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
             forbidden_read=SOLANA.language.default_forbidden_read,
             max_properties=args.max_properties,
             pinned=pinned,
+            pin_to=pathlib.Path(args.pin_to).resolve() if args.pin_to else None,
             workflow="cvlr",
             package=selected.name,
             confined=sandbox.enabled,
