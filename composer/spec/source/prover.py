@@ -131,6 +131,21 @@ def _executed_rules(
         to_filt = set(r["rules"]["selector"])
         return [ r_id for r_id in r["declared_rules"] if r_id not in to_filt ]
 
+def declared_rules_at(
+    history: Sequence[ProverHistoryItem], state_digest: str
+) -> set[str] | None:
+    """The rule/invariant names the typechecker found in the spec that ``state_digest`` identifies,
+    or None if no run covered that state.
+
+    Every ``verify_spec`` records what the prover declared, so this is ground truth about the
+    published spec rather than the author's account of it. None is the honest answer under a lifted
+    publish gate: a budget wrap-up publishes without ever having run the prover."""
+    for item in reversed(history):
+        if item["sort"] == "run" and item["state_digest"] == state_digest:
+            return set(item["declared_rules"])
+    return None
+
+
 #: How many consecutive runs must end in the identical failure before the author is nagged
 #: about a rule. Counts the run being processed, so 3 means "this run plus the two before it".
 STUCK_RULE_NAG_THRESHOLD = 3
@@ -272,9 +287,8 @@ class ProverStateExtra(TypedDict):
 type ProverEvents = CEXAnalysisStart | CloudPollingEvent | ProverOutputEvent | RuleAnalysisResult | ProverRun | ProverLink | ProverResult
 
 # ``verify_spec`` only runs in the source pipeline, whose state always seeds
-# ``version_history`` — permanently empty in phases without the edit tools
-# (structural invariants, never-edited authors), in which case it contributes
-# nothing to the digest. The prover's validation stamp is bound to it so a
+# ``version_history`` — permanently empty for an author that never edited, in
+# which case it contributes nothing to the digest. The prover's validation stamp is bound to it so a
 # post-run edit invalidates the stamp.
 class StateWithSkips(CVLGenerationState, ProverStateExtra, VersionedHistory):
     pass

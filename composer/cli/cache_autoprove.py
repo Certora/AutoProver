@@ -58,11 +58,10 @@ from composer.io.run_index import get_run_data
 from composer.spec.util import combine_digests
 from composer.spec.source.keys import (
     AP_PROPERTIES_KEY_NAME, CVL_JUDGE_KEY, HARNESS_ANALYSIS_KEY,
-    HARNESS_GENERATION_KEY, INV_CVL_KEY, LAST_ATTEMPT_KEY, STRUCTURAL_INV_KEY,
+    HARNESS_GENERATION_KEY, LAST_ATTEMPT_KEY,
     SUMMARY_KEY, SYSTEM_SETUP_KEY, config_key,
 )
 from composer.spec.source.summarizer import _SummaryCache
-from composer.spec.source.struct_invariant import Invariants
 from composer.spec.prop_inference import (
     _BugAnalysisCache, _AgentResult, _AgentRoundWithHistory,
 )
@@ -94,7 +93,6 @@ type AutoProveCachedValue = (
     | AgentSystemDescription
     | HarnessResult
     | _SummaryCache
-    | Invariants
     | GeneratedCVL
     | _LastAttemptCache
     | _BugAnalysisCache
@@ -304,11 +302,6 @@ async def build_tree_inner(
     if config_val is not None:
         yield await leaf(root_ctx, SUMMARY_KEY(config_val), "summary", _SummaryCache)
 
-    yield await leaf(root_ctx, STRUCTURAL_INV_KEY, "structural-inv", Invariants)
-    async with node_for(root_ctx, INV_CVL_KEY, "invariant-cvl", GeneratedCVL) as inv_cvl_ctx:
-        async for n in _build_cvl_gen_nodes(inv_cvl_ctx.abstract(CVLGeneration)):
-            yield n
-
     # Properties — per-component plugin pre-inference + bug analysis + CVL generation
     if sa_leaf.value is None:
         with section("properties (no source analysis)"):
@@ -434,11 +427,6 @@ def format_value(val: AutoProveCachedValue) -> list[str]:
 
         case _SummaryCache(content=content):
             lines.extend(content.splitlines())
-
-        case Invariants(inv=invs):
-            lines.append(f"Invariants ({len(invs)}):")
-            for inv in invs:
-                lines.append(f"  {inv.description}")
 
         case GeneratedCVL(commentary=commentary, cvl=cvl, skipped=skipped):
             lines.append(f"Commentary: {commentary}")

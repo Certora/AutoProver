@@ -147,7 +147,6 @@ class AutoProvePhase(enum.Enum):
     DISCOVER_DESIGN_DOC = "discover_design_doc"
     HARNESS = "harness"
     AUTOSETUP = "autosetup"
-    INVARIANTS = "invariants"
     SUMMARIES = "summaries"
     COMPONENT_ANALYSIS = "component_analysis"
     BUG_ANALYSIS = "bug_analysis"
@@ -187,14 +186,15 @@ The phase serves two roles:
   ]
   ```
 
-  A phase may be absent from the labels (foundry's `REPORT` is): the label map drives *sections*,
-  so an unlabelled phase simply gets no section of its own.
+  A phase must be labelled: `MultiJobApp` looks the label up by subscript, so an unlabelled phase
+  raises `KeyError` when its first task starts. (Foundry's `REPORT` has no label — a latent bug in
+  the foundry TUI, not a supported way to hide a section. Delete a phase and its label together.)
 
 - **The driver ↔ backend contract.** The shared driver tags four *core* phases; the
   backend maps its own enum onto them via `CorePhases[P]` (see §6). Note the two enums
-  above differ in granularity: foundry has five phases, autoprove has nine — the
-  prover contributes several extra prep phases (harness, autosetup, summaries,
-  invariants) that the driver never knows about. The enum is the application's own
+  above differ in granularity: foundry has five phases, autoprove has eight — the
+  prover contributes several extra prep phases (harness, autosetup, summaries)
+  that the driver never knows about. The enum is the application's own
   vocabulary; only the four core slots are shared.
 
 ---
@@ -356,7 +356,7 @@ of the contrast:
 | `FormT` | `GeneratedCVL` | `GeneratedFoundryTest` |
 | `preflight` | none | none (a building backend — Crucible — puts its build here, overlapping analysis) |
 | `prepare_system` | harness lift + build prover tool | identity (`main_instance` only) |
-| `prepare_formalization` | AutoSetup ∥ summaries ∥ invariants fan-out | trivial (formalizer already built) |
+| `prepare_formalization` | AutoSetup, then custom summaries | trivial (formalizer already built) |
 | `formalize` | author CVL, run prover, revise on CEX | author `.t.sol`, run `forge test` |
 | `backend_guidance` | `CERTORA_BACKEND_GUIDANCE` | `FOUNDRY_BACKEND_GUIDANCE` |
 

@@ -100,7 +100,7 @@ five steps and never inspects anything backend-specific:
    the source app into a *harnessed* application (generating harness contracts for external
    dependencies); the Foundry backend is an identity transform.
 3. **`prepared.prepare_formalization()` runs concurrently with property extraction.** Neither
-   depends on the other, so the prover's expensive AutoSetup/summary/invariant work overlaps
+   depends on the other, so the prover's expensive AutoSetup/summary work overlaps
    with per-unit property inference. Property extraction fans out one agent per *unit* —
    `ecosystem.units(main)` — one per **component** of the main contract/program in both
    ecosystems — bounded by a semaphore (`--max-concurrent`).
@@ -135,7 +135,7 @@ and per-unit values flow through without casts:
 | Object | Responsibility | Prover impl | Foundry impl |
 |---|---|---|---|
 | `PipelineBackend` | Phase-enum map, analysis prompt, artifact store, `prepare_system` | [spec/source/pipeline.py](composer/spec/source/pipeline.py) | [foundry/pipeline.py](composer/foundry/pipeline.py) |
-| `PreparedSystem` | Holds the located `Main`; builds the `Formalizer` | harness-lifted app + AutoSetup/invariants | identity |
+| `PreparedSystem` | Holds the located `Main`; builds the `Formalizer` | harness-lifted app + AutoSetup/summaries | identity |
 | `Formalizer` | `formalize()` one unit; `fetch_verdicts`; `finalize` | `batch_cvl_generation` + prover | `batch_foundry_test_generation` + `forge test` |
 
 The phase enum (`CorePhases`) lets each backend label its own phases while the driver tags the
@@ -180,7 +180,7 @@ type-safe framework.
 ## 6. The prover (default) backend — phase by phase
 
 Implemented under [composer/spec/source/](composer/spec/source/). The phases map onto the
-README's Phase 0–5:
+README's Phase 0–4:
 
 - **System analysis** ([spec/system_analysis.py](composer/spec/system_analysis.py),
   [system_model.py](composer/spec/system_model.py)) — an agent reads the design doc and source
@@ -194,10 +194,6 @@ README's Phase 0–5:
   prover `compilation_config.conf` plus summaries for known externals.
 - **Custom summaries** ([spec/source/summarizer.py](composer/spec/source/summarizer.py)) —
   generates CVL summaries for ERC20s and external interfaces.
-- **Structural invariants** ([spec/source/struct_invariant.py](composer/spec/source/struct_invariant.py))
-  — a two-agent loop: one proposes invariants, a judge accepts/rejects each (not structural /
-  not inductive / unlikely to hold / …). Survivors become `certora/specs/invariants.spec`,
-  importable by later phases.
 - **Per-component property extraction** ([spec/prop_inference.py](composer/spec/prop_inference.py))
   — multi-round agent producing `PropertyFormulation`s (attack vectors, safety properties,
   invariants), optionally refined interactively or against a threat model.
@@ -206,8 +202,11 @@ README's Phase 0–5:
   authors CVL with `put_cvl`/`edit_cvl` (type-checked on every write), runs the prover via a
   `verify_spec` tool, analyzes any counterexamples, and revises. A property-feedback judge
   validates coverage and adjudicates the agent's objections (e.g. "this property is vacuous
-  because…"). Output is a `GeneratedCVL` carrying the spec, skipped properties with reasons,
-  the property→rule mapping, and the final prover run link.
+  because…"). Where a counterexample starts from a state the contract cannot reach, the agent
+  states that relationship as an invariant, proves it in the same spec, and cites it with
+  `requireInvariant` — there is no separate invariant phase, so nothing is proven speculatively
+  ahead of the property that needs it. Output is a `GeneratedCVL` carrying the spec, skipped
+  properties with reasons, the property→rule mapping, and the final prover run link.
 
 ### Outputs and artifacts
 
