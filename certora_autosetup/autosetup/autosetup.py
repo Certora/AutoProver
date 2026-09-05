@@ -648,6 +648,19 @@ class Autosetup:
             trivial_spec, warmup_spec, sanity_spec
         )
 
+    @property
+    def _curated_scene_contracts(self) -> List[str]:
+        """Companion contracts the matched curated summaries reroute through.
+
+        A curated spec can summarize a library by sending its calls to a companion of its
+        own, and CVL can only name what the conf puts in the scene. Empty before
+        setup_prover has run, and on every project whose summaries need no companion.
+        """
+        setup = self.setup_prover.summary_setup
+        if setup is None:
+            return []
+        return setup.curated_scene_contracts()
+
     def create_base_config(
         self, main_contract: str, spec_path: Path
     ) -> FileContent:
@@ -682,7 +695,7 @@ class Autosetup:
         final_config = self.config_manager.create_config(
             main_contract,
             self.contract_handles,
-            self.config.additional_contracts,
+            self.config.additional_contracts + self._curated_scene_contracts,
             spec_path,
             conf_path=conf_path,
             additional_args=base_prover_args,

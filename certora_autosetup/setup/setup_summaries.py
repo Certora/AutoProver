@@ -59,7 +59,7 @@ from certora_autosetup.setup.solidity_utils import walk_files_by_suffix
 # Import method parser
 from certora_autosetup.parsers.method_parser import MethodParser
 from certora_autosetup.parsers.spec_imports import parse_imports_from_spec
-from certora_autosetup.setup.summary_resolver import resolve_summary_specs
+from certora_autosetup.setup.summary_resolver import curated_scene_contracts, resolve_summary_specs
 from certora_autosetup.setup.signature_types import InheritanceGraph
 
 
@@ -715,6 +715,15 @@ class SummarySetup:
             include_dependencies=include_dependencies,
             verbose=self.verbose >= 1,
             log_func=self.log,
+        )
+
+    def curated_scene_contracts(self) -> List[str]:
+        """Conf entries for the contracts the matched curated summaries reroute through."""
+        return curated_scene_contracts(
+            self.matched_functions,
+            self.function_summaries,
+            self.user_summaries_dir,
+            self.log,
         )
 
     def copy_summaries_folder(self, matched_function_keys: Iterable[str]) -> Path:
