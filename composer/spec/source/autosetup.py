@@ -10,6 +10,7 @@ import logging
 import re
 import sys
 import tempfile
+import time
 from collections.abc import Callable
 from pydantic import BaseModel, Field
 from pathlib import Path
@@ -99,6 +100,7 @@ async def _reap(proc: asyncio.subprocess.Process) -> int | None:
     will not die tells us nothing about whether AutoSetup succeeded, so the caller treats that as
     a failure.
     """
+    started = time.monotonic()
     for escalate in (False, True):
         if escalate and proc.returncode is None:
             _logger.warning(
@@ -108,10 +110,19 @@ async def _reap(proc: asyncio.subprocess.Process) -> int | None:
         try:
             async with asyncio.timeout(_REAP_TIMEOUT_S):
                 # Shielded: the timeout must cancel our wait, not the child's exit plumbing.
-                return await asyncio.shield(proc.wait())
+                returncode = await asyncio.shield(proc.wait())
         except TimeoutError:
             continue
-    _logger.error("AutoSetup child outlived a kill, giving up on it and continuing")
+        # Logged where it ends, not only where it begins: a wait that says nothing on the way out
+        # cannot be told apart, afterwards, from one that never returned.
+        _logger.info(
+            "AutoSetup child exited %d after %.1fs", returncode, time.monotonic() - started
+        )
+        return returncode
+    _logger.error(
+        "AutoSetup child outlived a kill after %.1fs, giving up on it and continuing",
+        time.monotonic() - started,
+    )
     return proc.returncode
 
 
