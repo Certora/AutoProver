@@ -36,7 +36,8 @@ from typing import (
     Protocol, Any, ClassVar, Concatenate, cast, Awaitable, Sequence, Callable, ContextManager, overload
 )
 from abc import ABC, abstractmethod
-from contextlib import nullcontext
+from contextlib import nullcontext, asynccontextmanager
+from collections.abc import AsyncIterator, Coroutine
 
 
 from composer.io.multi_job import TaskInfo
@@ -458,6 +459,24 @@ async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: Artifact
             extra_context=extra_context, max_bug_rounds=max_bug_rounds, ecosystem=ecosystem,
         )
 
+
+@asynccontextmanager
+async def _alongside[T](coro: Coroutine[Any, Any, T]) -> AsyncIterator[asyncio.Task[T]]:
+    """Run ``coro`` beside the body, and end it with the body rather than letting it outlive it.
+
+    A task still running when its scope is left is reachable only by ``asyncio.run``'s teardown,
+    which cancels it after the run's exit handlers have finished and then waits for it with no
+    bound of its own. Whatever the task is holding at that point is held there.
+    """
+    task = asyncio.create_task(coro)
+    try:
+        yield task
+    except BaseException:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        raise
+
+
 # ---- the driver --------------------------------------------------------------
 async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
     backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
@@ -527,23 +546,22 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     async def _prepare_formalization() -> Formalizer[FormT, U] | StagedFormalizer[FormT, U]:
         with named_budget_or_nop("formalization_preparation"):
             return await prepared.prepare_formalization(run)
-    staged_task = asyncio.create_task(_prepare_formalization())
-
-    batches: list[_Batch[U]] = await _extract_all(
-        backend.analysis_spec.properties_key,
-        prepared.main,
-        backend.backend_guidance,
-        run,
-        phases["extraction"],
-        interactive,
-        threat_model,
-        extra_context,
-        max_bug_rounds,
-        ecosystem,
-        plugin_manager.bind_phase(
-            phases.get("extraction_plugin") or phases["extraction"],
+    async with _alongside(_prepare_formalization()) as staged_task:
+        batches: list[_Batch[U]] = await _extract_all(
+            backend.analysis_spec.properties_key,
+            prepared.main,
+            backend.backend_guidance,
+            run,
+            phases["extraction"],
+            interactive,
+            threat_model,
+            extra_context,
+            max_bug_rounds,
+            ecosystem,
+            plugin_manager.bind_phase(
+                phases.get("extraction_plugin") or phases["extraction"],
+            )
         )
-    )
     staged = await staged_task
     if not batches:
         raise ValueError("No properties extracted from any component.")
