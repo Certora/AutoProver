@@ -1109,7 +1109,13 @@ class SummarySetup:
         # Then any other emitted spec (LLM per-contract, call resolution) — lower dedup precedence.
         for spec in walk_files_by_suffix(self.user_summaries_dir, ".spec"):
             _add(spec)
-        resolve_summary_specs(ordered_specs, PATH_ALL_METHODS_JSON, log=self.log)
+        # The companions are in the conf but not in the index, which is built from the
+        # project's own compilation; without this their summaries would be pruned as out of
+        # scene and the reroute would land on the companion's unsummarized bodies.
+        companions = {entry.split(":")[-1] for entry in self.curated_scene_contracts()}
+        resolve_summary_specs(
+            ordered_specs, PATH_ALL_METHODS_JSON, exempt_receivers=companions, log=self.log
+        )
 
     def should_process_file(self, file_path: str) -> bool:
         """Check if a file should be processed (not a dependency or internal file).
