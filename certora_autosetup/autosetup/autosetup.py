@@ -838,6 +838,10 @@ class Autosetup:
                     files_to_include = (
                         [contract_handle.to_config_str()]
                         + autosetup.config.additional_contracts
+                        # This rewrite is the third place a conf's scene is decided, and a
+                        # summary that reroutes through a companion cannot typecheck against a
+                        # scene the companion was stripped out of.
+                        + autosetup._curated_scene_contracts
                     )
                     props = {"files": files_to_include}
                     autosetup.log(
