@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, Iterator, List, Optional,
 if TYPE_CHECKING:
     from certora_autosetup.setup.setup_summaries import SummarySetup
 
+from certora_autosetup.harnesser.swap import library_behind_harness
 from certora_autosetup.build_systems.base import BuildSystemConfig
 from certora_autosetup.parsers.build_system_detector import BuildSystem, BuildSystemDetector
 from certora_autosetup.parsers.foundry import FoundryContractExtractor
@@ -1488,7 +1489,12 @@ class SetupProver:
             self.log(f"Traceback: {traceback.format_exc()}", "ERROR")
             return False
 
-    def run_setup_summaries(self, contract_files: List[str], main_contract: str) -> bool:
+    def run_setup_summaries(
+        self,
+        contract_files: List[str],
+        main_contract: str,
+        harnessed_library: Optional[str] = None,
+    ) -> bool:
         """
         Run setup_summaries to detect and configure library summaries. On success,
         the constructed ``SummarySetup`` is stored on ``self.summary_setup`` so
@@ -1512,6 +1518,7 @@ class SetupProver:
                     include_dependencies=True,
                     enable_llm=not self.skip_llm,
                     custom_recipe=None,
+                    harnessed_library=harnessed_library,
                 )
                 if configured:
                     # Summarize the initial scene (main + additional contracts); call resolution
@@ -1583,8 +1590,15 @@ class SetupProver:
         # recipe analysis scans only the files passed directly. If contract A imports and
         # uses B, and B uses mulDiv from PRBMath, scanning just A would miss the mulDiv
         # call from B. Including all contract files ensures we catch transitive usage.
+        # A harness is the verification target precisely so the library it wraps can be
+        # verified, so that library is the one contract a summary must never replace. The
+        # manifest is what names it: AutoProver's pipeline swaps in an earlier process, and by
+        # the time we run the main contract is simply not a library any more.
+        harnessed_library = library_behind_harness(Path.cwd(), main_contract_handle)
         success_summaries = self.run_setup_summaries(
-            [ch.source_file for ch in surviving_contracts], main_contract_name
+            [ch.source_file for ch in surviving_contracts],
+            main_contract_name,
+            harnessed_library=harnessed_library.contract_name if harnessed_library else None,
         )
         if not success_summaries:
             raise SummarySetupError("Setup summaries generation failed")
