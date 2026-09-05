@@ -25,6 +25,7 @@ from certora_autosetup.harnesser.render import plan_hash, read_sentinel, render_
 from certora_autosetup.utils.constants import DIR_CERTORA_INTERNAL
 from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.paths import user_harness_path
+from certora_autosetup.utils.remappings import build_packages_from_remapping_sources
 from certora_autosetup.utils.solc_version_resolver import read_pragma_from_source_file
 
 #: Prefix of the generated contract, so a harness is recognisable in a conf, a report and
@@ -112,6 +113,14 @@ def _run_probe_build(
     ]
     if solc:
         command += ["--solc", solc]
+    # Resolve the packages ourselves rather than letting certora-cli fall back to its own
+    # scan. That fallback concatenates package.json with remappings.txt and refuses the
+    # build outright when a key appears in both, which is the normal state of a project
+    # whose remappings were generated with node_modules installed. This is the same merge
+    # AutoSetup performs, and the probe build is the one build that runs before it.
+    packages = build_packages_from_remapping_sources(project_root, logger.log)
+    if packages:
+        command += ["--packages", *packages]
 
     logger.log(f"Probe build: {' '.join(command)}", "INFO", "Harnesser")
     completed = subprocess.run(
