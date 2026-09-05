@@ -69,7 +69,7 @@ def put_buffer[S: WithBuffers](ty: type[S]) -> BaseTool:
     def put_buffer(**args) -> str | Command:
         if (err := cvl_syntax_error(args["cvl"])) is not None:
             return err
-        existing = args["state"]["buffers"].get(args["name"])
+        existing = (args["state"].get("buffers") or {}).get(args["name"])
         buf = NamedBuffer(
             name=args["name"], cvl=args["cvl"], imports=tuple(args["imports"]),
             is_run_target=args["is_run_target"],
@@ -105,7 +105,7 @@ def edit_buffer[S: WithBuffers](ty: type[S]) -> BaseTool:
     @tool_display_of(_edit_display)
     @tool(args_schema=schema)
     def edit_buffer(**args) -> str | Command:
-        existing = args["state"]["buffers"].get(args["name"])
+        existing = (args["state"].get("buffers") or {}).get(args["name"])
         if existing is None:
             return f"No buffer named {args['name']!r}. Create it with put_buffer first."
         match replace_unique(existing.cvl, args["old_string"], args["new_string"]):
@@ -132,7 +132,7 @@ def get_buffer[S: WithBuffers](ty: type[S]) -> BaseTool:
     @tool_display_of(_get_display)
     @tool(args_schema=schema)
     def get_buffer(**args) -> str:
-        buf = args["state"]["buffers"].get(args["name"])
+        buf = (args["state"].get("buffers") or {}).get(args["name"])
         return buf.cvl if buf is not None else f"No buffer named {args['name']!r}."
     return get_buffer
 
@@ -146,7 +146,7 @@ def list_buffers[S: WithBuffers](ty: type[S]) -> BaseTool:
     @tool_display_of(_list_display)
     @tool(args_schema=schema)
     def list_buffers(**args) -> str:
-        buffers: dict[str, NamedBuffer] = args["state"]["buffers"]
+        buffers: dict[str, NamedBuffer] = (args["state"].get("buffers") or {})
         if not buffers:
             return "No spec buffers yet."
         lines = []
@@ -171,7 +171,7 @@ def delete_buffer[S: WithBuffers](ty: type[S]) -> BaseTool:
     @tool_display_of(_delete_display)
     @tool(args_schema=schema)
     def delete_buffer(**args) -> str | Command:
-        if args["name"] not in args["state"]["buffers"]:
+        if args["name"] not in (args["state"].get("buffers") or {}):
             return f"No buffer named {args['name']!r}."
         return tool_state_update(
             tool_call_id=args["tool_call_id"], content="Deleted", buffers={args["name"]: None}
