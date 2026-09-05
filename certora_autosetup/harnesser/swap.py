@@ -10,13 +10,69 @@ call into it, and the build only reports a library's own functions when it is na
 file in its own right.
 """
 
+import json
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
 from certora_autosetup.harnesser.detect import is_library_main_contract
 from certora_autosetup.harnesser.run import HarnessResult, ensure_library_harness
+from certora_autosetup.utils.contract_utils import split_contract_spec
 from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.types import ContractHandle
+
+
+def library_behind_harness(
+    project_root: Path, main_contract_handle: ContractHandle
+) -> Optional[ContractHandle]:
+    """The library a generated harness wraps, or ``None`` if this is not one of ours.
+
+    A run can reach AutoSetup with the swap already done: AutoProver's pipeline swaps
+    before it invokes AutoSetup, which then sees a contract that is not a library and has
+    nothing to detect. The manifest written beside the harness is what still names the
+    library, and the library has to be in the conf either way, because the Prover's scene
+    is the files the conf lists and solc inlining does not put it there.
+    """
+    manifest = (project_root / main_contract_handle.source_file).with_suffix(".manifest.json")
+    if not manifest.is_file():
+        return None
+    try:
+        record = json.loads(manifest.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    if record.get("harness_name") != main_contract_handle.contract_name:
+        return None
+    library_name = record.get("library_name")
+    library_file = record.get("library_file")
+    if not library_name or not library_file:
+        return None
+    return ContractHandle(contract_name=library_name, source_file=library_file)
+
+
+def with_harnessed_library(
+    project_root: Path,
+    main_contract_handle: ContractHandle,
+    additional_contracts: Sequence[str],
+    swapped_from: Optional[ContractHandle] = None,
+) -> List[str]:
+    """``additional_contracts`` plus the library the harness wraps, if there is one.
+
+    The conf is the Prover's scene, and a library reaches it only by being listed in its
+    own right: solc inlines the calls, which leaves curated summaries that name the
+    library unable to typecheck and the build reporting none of its functions.
+
+    ``swapped_from`` is the library this run just swapped away from. Without it the
+    library is recovered from the harness manifest, which is the case that matters when
+    the swap happened in an earlier process.
+    """
+    library = swapped_from or library_behind_harness(project_root, main_contract_handle)
+    if library is None or library == main_contract_handle:
+        return list(additional_contracts)
+    # Compare on the (file, name) pair rather than the string: ``to_config_str`` drops the
+    # name when it matches the file stem, so one contract has two spellings.
+    already = {split_contract_spec(spec) for spec in additional_contracts}
+    if (library.source_file, library.contract_name) in already:
+        return list(additional_contracts)
+    return [*additional_contracts, library.to_config_str()]
 
 
 def swap_library_main_contract(
@@ -38,7 +94,11 @@ def swap_library_main_contract(
     if not is_library_main_contract(
         absolute_source, main_contract_handle.contract_name, project_root, solc
     ):
-        return main_contract_handle, list(contract_handles), None
+        scene = list(contract_handles)
+        library = library_behind_harness(project_root, main_contract_handle)
+        if library is not None and library not in scene:
+            scene.append(library)
+        return main_contract_handle, scene, None
 
     logger.log(
         f"Main contract {main_contract_handle.contract_name} is a library; the Prover "

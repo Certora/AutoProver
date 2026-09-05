@@ -15,7 +15,7 @@ from certora_autosetup.autosetup.autosetup import Autosetup
 from certora_autosetup.autosetup.cli_args import create_parser
 from certora_autosetup.autosetup.types import AutosetupConfig
 from certora_autosetup.cache.cache_fs import get_fs, init_cache_fs
-from certora_autosetup.harnesser.swap import swap_library_main_contract
+from certora_autosetup.harnesser.swap import swap_library_main_contract, with_harnessed_library
 from certora_autosetup.cache.content_cache import ContentCache
 from certora_autosetup.reporting.reporter import Reporter
 from certora_autosetup.setup.sanity_rule_generator import SanityRuleGenerator
@@ -90,12 +90,21 @@ def main():
     # A library cannot be a verification target — the Prover accepts it and instantiates
     # no parametric methods. Swap in a generated harness before anything downstream keys
     # on the contract name (sanity spec, base conf, verify target, result keys).
+    harnessed_library = main_contract_handle
     main_contract_handle, contract_handles, _library_harness = swap_library_main_contract(
         project_root=cwd,
         main_contract_handle=main_contract_handle,
         contract_handles=contract_handles,
         solc=args.solc_default,
         certora_run_command=args.certora_run_command,
+    )
+    # AutoProver's pipeline swaps before it invokes us, so on that path the target
+    # arrives already harnessed and only the manifest still names the library.
+    args.additional_contracts = with_harnessed_library(
+        cwd,
+        main_contract_handle,
+        args.additional_contracts or [],
+        swapped_from=harnessed_library if _library_harness is not None else None,
     )
 
     # TODO: a bare `path.sol` spec drops only the contract whose name matches the file
