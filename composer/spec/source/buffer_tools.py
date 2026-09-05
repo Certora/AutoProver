@@ -49,6 +49,12 @@ invalidate this one. Re-putting an existing buffer keeps its property->rule mapp
 class _PutBufferTemplate(BaseModel):
     name: str = Field(description="Unique buffer name (also its on-disk spec stem).")
     cvl: str = Field(description="The buffer's full CVL text (rules, methods{}, imports).")
+    property_rules: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="The properties this buffer verifies and, for each (by its snake_case title), the "
+        "rule/invariant names in this buffer's CVL that verify it. Across all run-target buffers every "
+        "non-skipped property must appear in exactly one buffer. Omit for a shared buffer.",
+    )
     imports: list[str] = Field(
         default_factory=list, description="Names of the buffers this one imports."
     )
@@ -70,10 +76,11 @@ def put_buffer[S: WithBuffers](ty: type[S]) -> BaseTool:
         if (err := cvl_syntax_error(args["cvl"])) is not None:
             return err
         existing = (args["state"].get("buffers") or {}).get(args["name"])
+        # Keep the prior property->rule mapping when the agent re-puts text without restating it.
+        prop_rules = args["property_rules"] or (dict(existing.property_rules) if existing else {})
         buf = NamedBuffer(
             name=args["name"], cvl=args["cvl"], imports=tuple(args["imports"]),
-            is_run_target=args["is_run_target"],
-            property_rules=dict(existing.property_rules) if existing else {},
+            is_run_target=args["is_run_target"], property_rules=prop_rules,
         )
         return tool_state_update(
             tool_call_id=args["tool_call_id"], content="Accepted", buffers={args["name"]: buf}
