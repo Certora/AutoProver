@@ -4,6 +4,7 @@ from composer.spec.source.spec_buffers import (
     NamedBuffer,
     buffer_digest,
     buffer_files,
+    combined_buffers_view,
     import_closure,
     merge_buffers,
     plan_buffer_runs,
@@ -107,6 +108,13 @@ def test_buffer_files_shared_only_itself():
 
 def test_run_targets_excludes_shared():
     assert [b.name for b in run_targets(_buffers())] == ["easy", "hard"]
+
+
+def test_combined_buffers_view_includes_all_with_headers():
+    out = combined_buffers_view(_buffers())
+    assert "buffer easy (run-target)" in out
+    assert "buffer shared (shared)" in out
+    assert "r_easy" in out and "ghost g" in out
 
 
 # --- coverage --------------------------------------------------------------

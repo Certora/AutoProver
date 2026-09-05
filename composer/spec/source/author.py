@@ -28,7 +28,9 @@ from composer.spec.cvl_generation import (
 from composer.prover.core import run_prover, CexHandler, ProverCallbacks, ProverReport
 from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools, WIPE_HISTORY
 from composer.spec.source.prover import setup_prover_config_in
-from composer.spec.source.spec_buffers import SpecBuffersExtra, spec_buffers_enabled
+from composer.spec.source.spec_buffers import (
+    SpecBuffersExtra, combined_buffers_view, run_targets, spec_buffers_enabled,
+)
 from composer.spec.source.buffer_tools import (
     put_buffer, get_buffer, edit_buffer, list_buffers, delete_buffer,
 )
@@ -653,7 +655,10 @@ class EditorAwareFeedbackTool(
                 vfs=self.state["vfs"],
                 version_history=self.state["version_history"],
             )
-            return await judge(snap, spec, skipped, self.rebuttals, self.tool_call_id)
+            # In multi-buffer mode the single curr_spec is empty; review the buffers as one document.
+            buffers = self.state.get("buffers") or {}
+            review_spec = combined_buffers_view(buffers) if run_targets(buffers) else spec
+            return await judge(snap, review_spec, skipped, self.rebuttals, self.tool_call_id)
 
     @override
     def _version_history(self) -> Sequence[str]:
@@ -666,6 +671,35 @@ class PropertyGenSystemParams(TypedDict):
     source_editing: bool
 
 _PropertyGenSysTemplate = TypedTemplate[PropertyGenSystemParams]("property_generation_system_prompt.j2")
+
+#: Appended to the system prompt only when multi-buffer authoring is enabled (spec_buffers_enabled).
+_SPEC_BUFFERS_GUIDANCE = """
+## Splitting the spec into verification buffers
+
+Instead of one spec, you may author several named CVL **buffers**, each a self-contained spec that is
+verified and reviewed on its own. Use `put_buffer` / `edit_buffer` / `get_buffer` / `list_buffers` /
+`delete_buffer` instead of the single-spec put/get/edit tools when you split.
+
+When to split:
+- Properties have **conflicting precision needs** — one buffer can summarize a function that another
+  keeps exact (each buffer has its own `methods{}`), with no global-methods-block conflict.
+- To **isolate the hard/slow properties**: put the many easy properties in one buffer that verifies and
+  is approved once and never re-touched, while you iterate on a small hard buffer in isolation — its
+  re-verification and re-review cost only that buffer.
+
+How:
+- Put **shared** infrastructure (ghosts, common invariants, helper CVL functions, token/oracle models)
+  in a buffer with `is_run_target=false`, and have run-target buffers `import "<shared>.spec"` and list
+  it in their `imports`.
+- Each **run-target** buffer declares its `property_rules` (the properties it verifies + their rule
+  names). Across all run-target buffers, every non-skipped property must appear in **exactly one**
+  buffer, and each rule lives in exactly one buffer.
+- `verify_spec` then verifies every run-target buffer independently and in parallel; a buffer already
+  verified at its current content is skipped. Editing a shared buffer re-verifies every buffer that
+  imports it.
+
+A single run-target buffer is exactly the one-spec case, so only split when it helps.
+"""
 
 #: The prover's tool extension: contributions come from plugins deriving
 #: ``CertoraProverTools``, dispatched via their ``certora_prover_tools`` hook.
@@ -794,6 +828,8 @@ async def batch_cvl_generation(
     sys_prompt : list[RawPromptInput | type[CacheMarker]] = [
         _PropertyGenSysTemplate.bind({"source_editing": editing is not None}).render_to
     ]
+    if spec_buffers_enabled():
+        sys_prompt.append(_SPEC_BUFFERS_GUIDANCE)
 
     added_tools : list[BaseTool] = []
     if editing_tools is not None:
@@ -1012,8 +1048,13 @@ async def batch_cvl_generation(
             # unformalizable" judgment — it's the budget talking. Keep the agent's account.
             return Curtailed(None, detail=res_state["result"])
         return GaveUp(reason=res_state["result"])
-    d = res_state["curr_spec"]
-    assert d is not None
+    # In multi-buffer mode the artifact is the buffers combined into one document; else curr_spec.
+    _buffers = res_state.get("buffers") or {}
+    if run_targets(_buffers):
+        d = combined_buffers_view(_buffers)
+    else:
+        d = res_state["curr_spec"]
+        assert d is not None
     applied_edits: list[AppliedEdit] = []
     if editing is not None:
         for edit_id in res_state["version_history"]:
