@@ -28,6 +28,10 @@ from composer.spec.cvl_generation import (
 from composer.prover.core import run_prover, CexHandler, ProverCallbacks, ProverReport
 from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools, WIPE_HISTORY
 from composer.spec.source.prover import setup_prover_config_in
+from composer.spec.source.spec_buffers import SpecBuffersExtra, spec_buffers_enabled
+from composer.spec.source.buffer_tools import (
+    put_buffer, get_buffer, edit_buffer, list_buffers, delete_buffer,
+)
 from composer.spec.context import WorkflowContext, CVLGeneration, CacheKey, SourceCode
 from composer.spec.types import PropertyFormulation, PropertyTitle
 from composer.pipeline.core import GaveUp, ToolBinder, InjectingToolExtension, Curtailed
@@ -86,7 +90,7 @@ class SourceAuthorExtra(TypedDict):
 # ``vfs`` comes from ProverStateExtra (NotRequired, no merge op — replaced
 # wholesale by commit_edit / revert_to_edit); the generation input always
 # seeds it explicitly.
-class SourceCVLGenerationExtra(CVLGenerationExtra, ProverStateExtra, SourceAuthorExtra, VersionedHistory):
+class SourceCVLGenerationExtra(CVLGenerationExtra, ProverStateExtra, SourceAuthorExtra, VersionedHistory, SpecBuffersExtra):
     pass
 
 class SourceCVLGenerationInput(SourceCVLGenerationExtra, FlowInput):
@@ -893,8 +897,17 @@ async def batch_cvl_generation(
         )
     else:
         b = b.with_tools(env.source_tools)
+    # Multi-buffer authoring tools (opt-in): the agent partitions the spec into several named
+    # buffers verified independently. Off by default so the single-curr_spec flow is untouched.
+    buffer_authoring: list[BaseTool] = [
+        put_buffer(SourceCVLGenerationState), get_buffer(SourceCVLGenerationState),
+        edit_buffer(SourceCVLGenerationState), list_buffers(SourceCVLGenerationState),
+        delete_buffer(SourceCVLGenerationState),
+    ] if spec_buffers_enabled() else []
     task_graph = b.with_tools(
         static_tools()
+    ).with_tools(
+        buffer_authoring
     ).with_tools(
         feedback_suite
     ).with_tools(
@@ -972,7 +985,8 @@ async def batch_cvl_generation(
                 reminders_channel=[],
                 vfs=restored_vfs,
                 version_history=restored_history,
-                spec_stem=spec_stem
+                spec_stem=spec_stem,
+                buffers={},
             )
         )
     except BudgetExceeded as e:

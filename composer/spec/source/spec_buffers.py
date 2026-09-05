@@ -17,6 +17,7 @@ while correctly invalidating its importers.
 :class:`composer.authoring.buffer.SpecBuffer`, which is the single-buffer *state* shape.)
 """
 
+import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Annotated
@@ -25,6 +26,15 @@ from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
 from certora_autosetup.cache.content_cache import hash_content_parts, hash_text
+
+
+SPEC_BUFFERS_ENV = "AUTOPROVER_SPEC_BUFFERS"
+
+
+def spec_buffers_enabled() -> bool:
+    """Whether the multi-buffer authoring tools are offered to the agent (opt-in). Off by default so
+    the single ``curr_spec`` flow is untouched until multi-buffer is fully wired (publish, report)."""
+    return os.environ.get(SPEC_BUFFERS_ENV, "").strip().lower() in ("1", "true", "yes", "on")
 
 
 class NamedBuffer(BaseModel):
