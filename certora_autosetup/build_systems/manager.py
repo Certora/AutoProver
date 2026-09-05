@@ -7,11 +7,12 @@ and artifact management. Concrete managers only implement build-system-specific
 parsing and artifact filtering.
 """
 
+import json
 import os
 import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Callable, List, Set
+from typing import Callable, List, Optional, Set
 
 from certora_autosetup.build_systems.base import BuildSystemConfig
 
@@ -25,16 +26,22 @@ class BuildSystemManager(ABC):
     build-system-specific parsing and command generation.
     """
 
-    def __init__(self, project_root: Path, scope, component_name: str):
+    def __init__(self, project_root: Path, scope, component_name: str, run_root: Optional[Path] = None):
         """
         Initialize build system manager.
 
         Args:
-            project_root: Root directory of the project
+            project_root: Directory the build config is anchored on — where config discovery
+                starts and artifacts are read from. In a monorepo this is the sub-project that
+                owns the main contract, not the run root.
             scope: Centralized scope for consistent filtering
             component_name: Name for logging (e.g. "FoundryManager", "HardhatManager")
+            run_root: Directory certoraRun is invoked from. Remapping contexts are expressed
+                against it and the hoisted-package walk is bounded by it. Defaults to
+                project_root, which is correct whenever the build config sits at the run root.
         """
         self.project_root = project_root
+        self.run_root = run_root or project_root
         self.scope = scope
         self.component = component_name
 
@@ -100,6 +107,98 @@ class BuildSystemManager(ABC):
             Build command string
         """
         pass
+
+    @staticmethod
+    @abstractmethod
+    def holds_artifacts(artifacts_dir: Path) -> bool:
+        """
+        Whether *artifacts_dir* holds output written by this build system.
+
+        Recognises the build system's own layout inside the directory, so a directory that
+        merely exists under the expected name does not pass for a built project. That
+        happens for real: a project whose configured output dir is nested (Foundry's
+        ``out = "out/foundry"``) has a bare ``out/`` holding only subdirectories, and a
+        project that shipped a second build config often has an empty artifact dir left by
+        the tool that no longer runs.
+
+        Args:
+            artifacts_dir: Directory to inspect; need not exist
+
+        Returns:
+            True if the directory holds this build system's artifacts
+        """
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def recorded_source(artifact: dict) -> Optional[str]:
+        """
+        The source path *artifact* records having been compiled from, or None.
+
+        Every build system stamps this into its artifacts, under its own key and in its own
+        frame: some relative to the project that ran the build, some absolute. Callers get
+        the value as written and decide what to do with it; ``artifacts_belong_to`` is the
+        one that cares. None covers both a payload this build system did not write (a
+        sidecar or a build-info file caught by the same directory walk) and one that records
+        no source at all.
+
+        Args:
+            artifact: Parsed JSON of a single artifact file
+
+        Returns:
+            Source path as recorded, or None if this artifact records none
+        """
+        pass
+
+    @classmethod
+    def artifacts_belong_to(cls, config_dir: Path, artifacts_dir: Path, limit: int = 20) -> bool:
+        """
+        Whether the artifacts in *artifacts_dir* were written by the project at *config_dir*.
+
+        Two configs can name the same physical artifact directory — a root ``foundry.toml``
+        with ``out = 'pkg/out'`` next to ``pkg/foundry.toml`` with the default ``out`` — and
+        only one of them ran. The artifacts settle it: the source path each one records
+        resolves against the project that produced it, so if none of them lands inside
+        *config_dir*, these are somebody else's artifacts and this is the wrong frame to
+        read them in.
+
+        An absolute recorded path is tested for containment; a relative one is resolved
+        against *config_dir* and tested for existence. Sampling stops at the first artifact
+        that answers, so the common case reads one file.
+
+        Artifacts that record no source at all (older Foundry, metadata stripped) answer
+        True: absence of evidence leaves the caller where it was.
+
+        Args:
+            config_dir: Candidate project directory
+            artifacts_dir: Directory holding this build system's artifacts
+            limit: How many artifacts to read before giving up on finding a recorded source
+
+        Returns:
+            True if these artifacts are this project's, or record nothing to judge by
+        """
+        read = 0
+        for json_file in artifacts_dir.rglob("*.json"):
+            if read >= limit:
+                break
+            try:
+                with json_file.open() as f:
+                    data = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            source = cls.recorded_source(data)
+            if source is None:
+                continue
+            read += 1
+            candidate = Path(source)
+            if candidate.is_absolute():
+                if candidate.is_relative_to(config_dir):
+                    return True
+            elif (config_dir / candidate).exists():
+                return True
+        return read == 0
 
     @abstractmethod
     def filter_artifacts(self, artifacts_dir: Path) -> List[Path]:

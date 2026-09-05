@@ -127,8 +127,19 @@ s3 = [
 ]
 
 [package.dev-dependencies]
+apps = [
+    { name = "echoprover" },
+    { name = "maturin-import-hook" },
+    { name = "run-confined", marker = "sys_platform == 'linux' or (extra == 'extra-11-ai-composer-certora-cli' and extra == 'extra-11-ai-composer-certora-cli-beta') or (extra == 'extra-11-ai-composer-certora-cli' and extra == 'extra-11-ai-composer-certora-cli-beta-mirror') or (extra == 'extra-11-ai-composer-certora-cli-beta' and extra == 'extra-11-ai-composer-certora-cli-beta-mirror') or (extra == 'extra-11-ai-composer-cpu' and extra == 'extra-11-ai-composer-cuda')" },
+]
 ci = [
     { name = "pyright" },
+]
+dev = [
+    { name = "echoprover" },
+    { name = "maturin" },
+    { name = "maturin-import-hook" },
+    { name = "run-confined", marker = "sys_platform == 'linux' or (extra == 'extra-11-ai-composer-certora-cli' and extra == 'extra-11-ai-composer-certora-cli-beta') or (extra == 'extra-11-ai-composer-certora-cli' and extra == 'extra-11-ai-composer-certora-cli-beta-mirror') or (extra == 'extra-11-ai-composer-certora-cli-beta' and extra == 'extra-11-ai-composer-certora-cli-beta-mirror') or (extra == 'extra-11-ai-composer-cpu' and extra == 'extra-11-ai-composer-cuda')" },
 ]
 ragbuild = [
     { name = "beautifulsoup4" },
@@ -153,7 +164,7 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.13" },
     { name = "anthropic", specifier = ">=0.18.0" },
     { name = "attrs", specifier = ">=26.1" },
-    { name = "certora-cli", marker = "extra == 'certora-cli'", specifier = ">=8.18.0" },
+    { name = "certora-cli", marker = "extra == 'certora-cli'", specifier = ">=8.19.1" },
     { name = "certora-cli-beta", marker = "extra == 'certora-cli-beta'", specifier = ">=8.18.0" },
     { name = "certora-cli-beta-mirror", marker = "extra == 'certora-cli-beta-mirror'", specifier = ">=8.18.0" },
     { name = "certora-prover-cli" },
@@ -194,7 +205,18 @@ requires-dist = [
 provides-extras = ["ml", "s3", "certora-cli", "certora-cli-beta", "certora-cli-beta-mirror", "prover", "cpu", "cuda"]
 
 [package.metadata.requires-dev]
+apps = [
+    { name = "echoprover", editable = "rust/example-app" },
+    { name = "maturin-import-hook", specifier = ">=0.3.0" },
+    { name = "run-confined", marker = "sys_platform == 'linux'", directory = "rust/run-confined" },
+]
 ci = [{ name = "pyright" }]
+dev = [
+    { name = "echoprover", editable = "rust/example-app" },
+    { name = "maturin", specifier = ">=1.14.1" },
+    { name = "maturin-import-hook", specifier = ">=0.3.0" },
+    { name = "run-confined", marker = "sys_platform == 'linux'", directory = "rust/run-confined" },
+]
 ragbuild = [
     { name = "beautifulsoup4", specifier = "==4.13.5" },
     { name = "einops" },
@@ -629,7 +651,7 @@ wheels = [
 
 [[package]]
 name = "certora-cli"
-version = "8.18.0"
+version = "8.19.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -645,11 +667,11 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "wcmatch" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/63/2b/d7c4f7f8c6509def6289da1fdd9f41e764269160180e7b1ad8bcbb596ced/certora_cli-8.18.0.tar.gz", hash = "sha256:d059116e852aafbfbfca7f6d8090968e9ea2bbcc056989ed9a282e3f6fed07dd", size = 43347710, upload-time = "2026-07-30T09:09:51.057Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ad/cd/0bcd2b5ff1b5f2b31ef18e59e6316d194b88cde0e8e7161fc88b345dd84f/certora_cli-8.19.1.tar.gz", hash = "sha256:05a429ebd2463df1b6c5aae6ed65b3585dd13bee668f2160193e797e38d5f4d9", size = 43395773, upload-time = "2026-08-28T20:01:40.072Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/44/47/a7fbf0247b7fc7b0319709ec0b58814503da1c7d2e09129b5103b968a1e1/certora_cli-8.18.0-py3-none-any.whl", hash = "sha256:a13d46298784561a5c71cfdf103d3578df944a8514a859751a609c6ac175dc31", size = 43402889, upload-time = "2026-07-30T09:09:43.12Z" },
-    { url = "https://files.pythonhosted.org/packages/de/c9/b38f13ec5807e8fb03a3ad30737b0d0997d6d62c17abed058043fce767d3/certora_cli-8.18.0-py3-none-macosx_10_9_universal2.whl", hash = "sha256:441269bc7bd2a8d77955660403c361ac8b6ec051a3b82618c706e55693231c5d", size = 44929014, upload-time = "2026-07-30T09:09:48.593Z" },
-    { url = "https://files.pythonhosted.org/packages/86/76/d957d151848e091c4bec1014d15e6658d2c1a06463f195236085e1b17bf6/certora_cli-8.18.0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:7d0849908bd8b8102424e8e63fd91afae0aee174cd750d4f874792e3614876bf", size = 44238961, upload-time = "2026-07-30T09:09:45.825Z" },
+    { url = "https://files.pythonhosted.org/packages/f7/05/4e919576e253c16894e842d08db1e03b62ecfb1b785ea0738c1dea16b73e/certora_cli-8.19.1-py3-none-any.whl", hash = "sha256:2e4b1c9c79fe84bb91eb116f241d8a58923859f2d198d7a7fb0af4843bfcb2ab", size = 43450543, upload-time = "2026-08-28T20:01:31.239Z" },
+    { url = "https://files.pythonhosted.org/packages/47/43/da1321852dbb753d871d07bb152a062b30123f7e276616eab96a11c63d89/certora_cli-8.19.1-py3-none-macosx_10_9_universal2.whl", hash = "sha256:689f59dce81d9b97298b349e50f864740f62740478180c7dc61dd2ed3f02d738", size = 44976667, upload-time = "2026-08-28T20:01:36.925Z" },
+    { url = "https://files.pythonhosted.org/packages/39/f0/b0f2b24be05a7cfc8f6d302ff78d5812e346ab0d374b04aba0776a73630d/certora_cli-8.19.1-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:9ae2c66b0399c4a472f80f62e5f7600ed7528b5deedaa18f6dc257db9ad077a9", size = 44286614, upload-time = "2026-08-28T20:01:33.972Z" },
 ]
 
 [[package]]
@@ -725,7 +747,7 @@ wheels = [
 
 [[package]]
 name = "certora-prover-cli"
-version = "0.1.0"
+version = "0.2.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boto3" },
@@ -734,9 +756,9 @@ dependencies = [
     { name = "requests" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e7/2b/74f10094265c2bb3ed9c246266534b7f01363d7ec5ff19038932086823f4/certora_prover_cli-0.1.0.tar.gz", hash = "sha256:954aba1d9ec5db8e3f15e0e38768de7609c0f0e11a6a7efed7441c756c72d981", size = 65865, upload-time = "2026-06-18T19:33:25.77Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d6/54/73dc7f810bd4c8b8da92ca1f1074d4dd6d8edbb537cde6f13a9f7c845c34/certora_prover_cli-0.2.1.tar.gz", hash = "sha256:ee6f4d95a440e7be3edfed6d93f7ba07386482e5eb939a41128a48f1198a33de", size = 67439, upload-time = "2026-08-28T10:51:36.83Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/37/e7/1b6c307f7ddebb2d3b237966925dc60d5161c3ce6b2848939b82884e62d5/certora_prover_cli-0.1.0-py3-none-any.whl", hash = "sha256:ec7c6349cc3ede32f46c6d1cf63e73864dbfcd2d5b643aa526b685b861ccc205", size = 78393, upload-time = "2026-06-18T19:33:24.393Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/d9/fca95f34a9598bdd5c0df9bf8ff5787137786bbb49cca873d6c34bac6bac/certora_prover_cli-0.2.1-py3-none-any.whl", hash = "sha256:72dfdf20d204403c3bb3c353b76d02171fb27a91082b4a41f82d4878f6061782", size = 79828, upload-time = "2026-08-28T10:51:35.455Z" },
 ]
 
 [[package]]
@@ -1270,6 +1292,11 @@ wheels = [
 ]
 
 [[package]]
+name = "echoprover"
+version = "0.1.0"
+source = { editable = "rust/example-app" }
+
+[[package]]
 name = "einops"
 version = "0.8.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1447,6 +1474,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 ci = [{ name = "pyright" }]
 test = [
+    { name = "hypothesis" },
     { name = "pytest", specifier = ">=9.0" },
     { name = "pytest-asyncio", specifier = ">=1.3" },
     { name = "testcontainers", specifier = ">=4.0" },
@@ -2392,6 +2420,39 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/fb/df/5bd7a48c256faecd1d36edc13133e51397e41b73bb77e1a69deab746ebac/markupsafe-3.0.3-cp314-cp314t-win32.whl", hash = "sha256:915c04ba3851909ce68ccc2b8e2cd691618c4dc4c4232fb7982bca3f41fd8c3d", size = 14819, upload-time = "2025-09-27T18:37:26.285Z" },
     { url = "https://files.pythonhosted.org/packages/1a/8a/0402ba61a2f16038b48b39bccca271134be00c5c9f0f623208399333c448/markupsafe-3.0.3-cp314-cp314t-win_amd64.whl", hash = "sha256:4faffd047e07c38848ce017e8725090413cd80cbc23d86e55c587bf979e579c9", size = 15426, upload-time = "2025-09-27T18:37:27.316Z" },
     { url = "https://files.pythonhosted.org/packages/70/bc/6f1c2f612465f5fa89b95bead1f44dcb607670fd42891d8fdcd5d039f4f4/markupsafe-3.0.3-cp314-cp314t-win_arm64.whl", hash = "sha256:32001d6a8fc98c8cb5c947787c5d08b0a50663d139f1305bac5885d98d9b40fa", size = 14146, upload-time = "2025-09-27T18:37:28.327Z" },
+]
+
+[[package]]
+name = "maturin"
+version = "1.14.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e7/b3/addd877f871fb1860d46d3a4f206ecb10b946c85846805e6367631926fd3/maturin-1.14.1.tar.gz", hash = "sha256:9d6577a62cd08e0ceba7a0db06fb098e0c9b1b3429bad747a4f3a18215a1b3df", size = 369637, upload-time = "2026-06-19T05:19:49.774Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f4/f0/97c5a5bd9c71653a066c0976a484eaaae50b9369557838a4176b7b0bdaa5/maturin-1.14.1-py3-none-linux_armv6l.whl", hash = "sha256:522292398945442cdafa9daeb2271b2340fbde57027b818f923f88eab04174f8", size = 10207496, upload-time = "2026-06-19T05:19:09.321Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/83/294bca639b0e052f1e2f65199b3db258780c7d4e31408b934c9c974a1379/maturin-1.14.1-py3-none-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:ffe5ad71f21d1e6603c4dd75f7fee34adf5ed5ebcebb692886549888ebb329ed", size = 19680113, upload-time = "2026-06-19T05:19:13.43Z" },
+    { url = "https://files.pythonhosted.org/packages/43/b6/79c881410a3b1c187f7eb3d407aecae646c6a4433d630d72200359015e83/maturin-1.14.1-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:f3306078070c1508fd715b9116070cbcaff5959024272a9f1e6f5cb29768b86c", size = 10169205, upload-time = "2026-06-19T05:19:16.615Z" },
+    { url = "https://files.pythonhosted.org/packages/93/9d/44b6f26dcb7f7a04c5501ac2dbb6ca1490150682baa525ca5860504f9eab/maturin-1.14.1-py3-none-manylinux_2_12_i686.manylinux2010_i686.musllinux_1_1_i686.whl", hash = "sha256:cd457cd88961156e26379e1155bd287cc0ec1c8b2f1582b0660fb31b87c8842d", size = 10188098, upload-time = "2026-06-19T05:19:19.736Z" },
+    { url = "https://files.pythonhosted.org/packages/1a/bd/9c0d5d6983905ce2c9edaa073a7e89355a9cf7f396988e05d32f1c37785d/maturin-1.14.1-py3-none-manylinux_2_12_x86_64.manylinux2010_x86_64.musllinux_1_1_x86_64.whl", hash = "sha256:dfc54ae32e6fcb18302193ab9a30b0b25eefffba994ae13238974805533ef75e", size = 10627576, upload-time = "2026-06-19T05:19:22.713Z" },
+    { url = "https://files.pythonhosted.org/packages/e5/33/b096412bd6a7cb399652b260666f901adf88a687181a6dbd6a3f89f0a94e/maturin-1.14.1-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl", hash = "sha256:a131d912b5267e640bc96d70f4914e10590aed64082ec9abacba7cea52004224", size = 10085181, upload-time = "2026-06-19T05:19:25.69Z" },
+    { url = "https://files.pythonhosted.org/packages/56/8d/08c3bf469c38a23c9e6c877e338193001eb604d010fedc08341974e38528/maturin-1.14.1-py3-none-manylinux_2_17_armv7l.manylinux2014_armv7l.musllinux_1_1_armv7l.whl", hash = "sha256:be18fc568fb76884c0205456336892a75105ec398e6b667cd777c6268bd06d69", size = 10026363, upload-time = "2026-06-19T05:19:28.904Z" },
+    { url = "https://files.pythonhosted.org/packages/3a/a4/c4d1a92839f8745ab4aab988a7db884a79d6d710bd3b286fcf9316dece1a/maturin-1.14.1-py3-none-manylinux_2_17_ppc64le.manylinux2014_ppc64le.musllinux_1_1_ppc64le.whl", hash = "sha256:994a0c8ba3ad8a92b3a9ee1b02645d200d610216b15cff5102b0fe65e8e08666", size = 13321347, upload-time = "2026-06-19T05:19:32.411Z" },
+    { url = "https://files.pythonhosted.org/packages/b3/fa/170f04624d03fd07d2a8b1b67de83a127af93aef9eaa425839553347297b/maturin-1.14.1-py3-none-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:be80866363e605d137991b491a741a84cde9ae350183c4c85f49690ca9aaaa65", size = 10877609, upload-time = "2026-06-19T05:19:35.448Z" },
+    { url = "https://files.pythonhosted.org/packages/61/ad/1ae2e1d0ded282bf2c55ac13f0811d87deb425e200ae64a15785675dede9/maturin-1.14.1-py3-none-manylinux_2_31_riscv64.musllinux_1_1_riscv64.whl", hash = "sha256:5282dffd4b539d2be245f4e5b1a5ab6bc1033b58f4a4872f5833f9d43c954aa4", size = 10417316, upload-time = "2026-06-19T05:19:38.28Z" },
+    { url = "https://files.pythonhosted.org/packages/fb/27/bf677183920718da49cd7982d6a3ffc440aad8919329f571d189f81b7bdf/maturin-1.14.1-py3-none-win32.whl", hash = "sha256:1a04de0a20188f95c721b5702eed18140bdcccb28c386797093eca3f62f4d4e0", size = 8931293, upload-time = "2026-06-19T05:19:41.183Z" },
+    { url = "https://files.pythonhosted.org/packages/63/4b/585adeb9167b08d3cdff0032a938b0e72655c92003df4f52c3f696a1bcc2/maturin-1.14.1-py3-none-win_amd64.whl", hash = "sha256:3c9f94640ecc4895e94abaf834a0684430032c865b2748a36c12461fd9252fdd", size = 10314067, upload-time = "2026-06-19T05:19:44.389Z" },
+    { url = "https://files.pythonhosted.org/packages/51/d4/dac8c0720ae246be1700afb6fbdbbea20fe35b13f6570b2f70faa005df77/maturin-1.14.1-py3-none-win_arm64.whl", hash = "sha256:15cea8fcb3ba47dd636f50092bb34baea8b04ac777392f23e6bf8a9a61efb894", size = 9718943, upload-time = "2026-06-19T05:19:47.49Z" },
+]
+
+[[package]]
+name = "maturin-import-hook"
+version = "0.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "filelock" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/75/a1/3b007a4132265d5da19096d6835cd4c7e9908afb9156afb96d19ff190f39/maturin_import_hook-0.3.0.tar.gz", hash = "sha256:cdd51ce267663c437c4aea1bfd5f7ee5884b54a9d866ea924227d68d758bbba2", size = 30785, upload-time = "2025-06-08T15:43:57.801Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9f/55/0c17a1fccec90dffbb1d904d7ddb7971e4e95f994c6264637e8fe66a5b86/maturin_import_hook-0.3.0-py3-none-any.whl", hash = "sha256:f5d20b4bc3056d84170dc08fe655160421b28d2b5128b48f55312315cdbb2cfe", size = 30848, upload-time = "2025-06-08T15:43:56.298Z" },
 ]
 
 [[package]]
@@ -4375,6 +4436,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/20/53/7c7e784abfa500a2b6b583b147ee4bb5a2b3747a9166bab52fec4b5b5e7d/rpds_py-0.30.0-cp314-cp314t-win32.whl", hash = "sha256:dc824125c72246d924f7f796b4f63c1e9dc810c7d9e2355864b3c3a73d59ade0", size = 211570, upload-time = "2025-11-30T20:24:12.735Z" },
     { url = "https://files.pythonhosted.org/packages/d0/02/fa464cdfbe6b26e0600b62c528b72d8608f5cc49f96b8d6e38c95d60c676/rpds_py-0.30.0-cp314-cp314t-win_amd64.whl", hash = "sha256:27f4b0e92de5bfbc6f86e43959e6edd1425c33b5e69aab0984a72047f2bcf1e3", size = 226532, upload-time = "2025-11-30T20:24:14.634Z" },
 ]
+
+[[package]]
+name = "run-confined"
+version = "0.1.0"
+source = { directory = "rust/run-confined" }
 
 [[package]]
 name = "s3fs"

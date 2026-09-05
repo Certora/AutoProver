@@ -3,12 +3,22 @@
 Phase chain — each link is immutable and its existence proves the prior phase ran, so ordering is
 a constructor dependency rather than a call-order convention; there is no half-initialized state:
 
-    Backend ──prepare_system──▶ PreparedSystem ──prepare_formalization──▶ Formalizer
-    (config, source)            (.main: structure)                        (formalize / persist / report)
+    Backend ──preflight──▶ Pre ──prepare_system──▶ PreparedSystem ──prepare_formalization──▶ Formalizer
+    (config, source)       (built    (.main: structure)                                      (formalize /
+                            workspace)                                                        persist / report)
 
-A backend whose units all build on one *shared* artifact inserts a link: ``prepare_formalization`` returns
-a :class:`StagedFormalizer`, and its ``begin`` — handed every unit's properties — is what produces the
-:class:`Formalizer`.
+Two links are *overlapped* with the LLM steps they don't depend on, since both are usually builds:
+``preflight`` runs alongside system analysis, and ``prepare_formalization`` alongside property
+extraction. ``preflight`` is additionally a *gate*: it and the analysis run in a task group, so a
+failure on either side cancels the other rather than letting it spend on a run that can no longer
+complete — a broken toolchain does not wait out the analysis agent, and a failed analysis does not
+wait out the workspace build. The second pair is simply awaited in turn.
+
+A backend whose units all build on one *shared* artifact inserts a link rather than a call-order
+convention: ``prepare_formalization`` returns a :class:`StagedFormalizer`, and its ``begin`` — handed
+every unit's properties — is what produces the :class:`Formalizer`. Same rule as the rest of the
+chain, so it needs no new rule: the artifact is a constructor argument to the only object that uses
+it, and no formalizer ever exists without it.
 
 The driver owns the genuinely-shared steps: system analysis, per-component property extraction, the
 result-type-keyed cache, and (since the report is backend-agnostic) building + persisting the
@@ -19,47 +29,133 @@ phase objects, and never inspected by the driver.
 
 import asyncio
 import enum
+import functools
 import logging
 from dataclasses import dataclass
-from typing import Protocol, Any, cast
-from collections.abc import Sequence
+from pathlib import Path
+from typing import (
+    Protocol, Any, ClassVar, Concatenate, cast, Awaitable, Sequence, Callable, ContextManager, overload
+)
 from abc import ABC, abstractmethod
+from contextlib import nullcontext
 
 
 from composer.io.multi_job import TaskInfo
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import (
-    WorkflowContext, CacheKey, Properties, ComponentGroup, SourceCode
+    WorkflowContext, ComponentGroup
 )
 from composer.spec.system_model import (
-    BaseApplication, ContractComponentInstance, FeatureUnit
+    BaseApplication, FeatureUnit
 )
-from composer.spec.types import PropertyFormulation, ArtifactIdentifier
+from composer.spec.util import combine_digests
+from composer.spec.types import PropertyFormulation, ArtifactIdentifier, VerificationArtifact
 from composer.spec.system_analysis import run_component_analysis
+from composer.spec.prioritize import (
+    Candidate, PropertyRanking, Selection, build_candidates, rank_properties, select,
+)
 from composer.spec.prop_inference import (
     run_property_inference, AnyPropertyGenerationInput, CacheablePropertyGenerationInput,
 )
 from composer.llm.types import CacheLevel
-from composer.spec.util import string_hash
 from composer.input.files import Document
 from composer.spec.source.report.build import build_report
-from composer.spec.source.report.collect import ReportComponentInput, Verdict, EvidenceFetcher
+from composer.spec.source.report.collect import ReportComponentInput, Verdict, EvidenceFetcher, Formalized
 from composer.spec.source.report.schema import (
-    AutoProverReport, RuleName, ReportBackend, SourceEditRecord,
+    AutoProverReport, DeprioritizedProperty, RuleName, ReportBackend, SourceEditRecord,
+    VerificationArtifactRecord,
 )
 from composer.spec.source.report import build as report_build
 from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_ID
 from composer.pipeline.ecosystem import Ecosystem
-from .ptypes import (
-    BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult, Delivered, GaveUp,
-    PipelineRun, SystemAnalysisSpec
+from .keys import (
+    COMPONENT_KEY, FINAL_PROPERTIES_KEY, FORMALIZATION_KEY, PLUGIN_ARTIFACTS_KEY,
+    POST_PROPERTY_KEY, PRE_PROPERTY_KEY, PRIORITIZATION_KEY, PROPERTIES_KEY,
+    SYSTEM_ANALYSIS_KEY, PLUGIN_FORMALIZATION_KEY, candidates_digest
 )
-from .plugin_api import PrePropertyInference, PostPropertyInference
+from composer.diagnostics.budget import total_budget, named_budget_or_nop, time_budget
+
+from .run_mode import RunMode, run_mode_name
+from .ptypes import (
+    DEFAULT_MAX_CPU_TASKS,
+    BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult,
+    Curtailed,  Delivered, RunBudget,
+    FinalProperties, GaveUp, PersistedPluginArtifact, PipelineRun, PluginArtifact,
+    RegisteredArtifacts, SystemAnalysisSpec
+)
+from .plugin_api import (
+    AnyBackendTools, ArtifactRegistrar, FormalizationTool, PipelinePlugin,
+    PluginToolContext, ProvidedTools,
+)
 from .plugins import load_plugins, PluginManager, PluginPhaseManager, PluginPhaseRunner
 
-COMMON_SYSTEM_CACHE_KEY = "system-analysis"
-
 _log = logging.getLogger(__name__)
+
+
+@dataclass
+class ToolExtension[TP: PipelinePlugin[Any], U: FeatureUnit, **P]:
+    """A backend's tool-extension point, handed to the :class:`ToolBinder` at
+    dispatch time: the provider class whose derivers contribute (``provider``) and
+    the selection of their hook method (``project`` — canonically
+    ``lambda p: p.<backend>_tools``, threading the dispatch leg itself, not a
+    wrapper). ``P`` captures the hook's backend-specific tail (its ``st`` /
+    ``state_reader``), which the binder forwards from the dispatch call. The bound
+    ``TP <: PipelinePlugin[U]`` is inexpressible, so unit agreement rides
+    ``project``'s signature statically — and, at runtime, the provider classes
+    deriving ``PipelinePlugin[U]`` plus the load-time scope check."""
+    provider: type[TP]
+    project: Callable[
+        [TP],
+        Callable[
+            Concatenate[U, Sequence[PropertyFormulation], PluginToolContext[FormalizationTool], P],
+            Awaitable[ProvidedTools | None],
+        ],
+    ]
+
+@dataclass
+class InjectingToolExtension[
+    TP: PipelinePlugin[Any],
+    U: FeatureUnit,
+    **P,
+    Ext
+]:
+    """A :class:`ToolExtension` whose hook additionally receives a backend-supplied
+    callable. The backend passes the binder a ``Callable[Concatenate[str, I], R]``;
+    the binder curries in the asking plugin's id, so the hook sees a
+    ``Callable[I, R]`` that already knows who it is serving — attribution is
+    stamped by the driver, never self-reported (the registrar in
+    :class:`_ArtifactCollector` works the same way)."""
+    provider: type[TP]
+    project: Callable[
+        [TP],
+        Callable[
+            Concatenate[U, Sequence[PropertyFormulation], PluginToolContext[FormalizationTool], Ext, P],
+            Awaitable[ProvidedTools | None]
+        ]
+    ]
+
+
+
+class ToolBinder[U: FeatureUnit](Protocol):
+    """What ``formalize`` receives — the core ↔ backend tool seam, naming no
+    backend. The backend calls it exactly once, with its own
+    :class:`ToolExtension` and the extension's tail arguments (its authoring
+    graph's state type and staged-state reader); the binder applies every
+    contributing plugin's hook — always including :class:`AnyBackendTools`
+    derivers — and returns the yielded bundles. Empty when no plugin contributes,
+    so backends need no special-casing."""
+
+    @overload
+    async def __call__[TP: PipelinePlugin[Any], **P](
+        self, ext: ToolExtension[TP, U, P], *args: P.args, **kwargs: P.kwargs
+    ) -> Sequence[ProvidedTools]:
+        ...
+
+    @overload
+    async def __call__[TP: PipelinePlugin[Any], **P, **I, R](
+        self, ext: InjectingToolExtension[TP, U, P, Callable[I, R]], inj: Callable[Concatenate[str, I], R], /, *args: P.args, **kwargs: P.kwargs
+    ) -> Sequence[ProvidedTools]:
+        ...
 
 @dataclass
 class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
@@ -74,6 +170,12 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
     formalized_type: type[FormT]
     backend_tag: ReportBackend
 
+    #: The provider class whose derivers contribute tools to this backend — the
+    #: driver matches it for both the dispatch gate and the formalization cache
+    #: key. None (the default) for a backend with no tool extension;
+    #: :class:`AnyBackendTools` derivers count regardless.
+    tool_provider_type: ClassVar[type[PipelinePlugin[Any]] | None] = None
+
     @abstractmethod
     async def formalize(
         self,
@@ -81,8 +183,13 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
         feat: U,
         props: list[PropertyFormulation],
         ctx: WorkflowContext[FormT],
-        run: PipelineRun
-    ) -> FormT | GaveUp: ...
+        run: PipelineRun,
+        extra_tools: ToolBinder[U]
+    ) -> FormT | Curtailed[FormT] | GaveUp:
+        """``extra_tools`` is the run's tool binder: call it exactly once with this
+        backend's :class:`ToolExtension` and the extension's tail (the authoring
+        graph's state type and staged-state reader)."""
+        ...
 
     def extra_report_inputs(self) -> list[ReportComponentInput[FormT]]:
         """Synthetic report inputs beyond the per-component outcomes — the prover folds in its
@@ -97,9 +204,10 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
         return []
 
     @abstractmethod
-    async def fetch_verdicts(self, inp: ReportComponentInput[FormT]) -> dict[RuleName, Verdict]:
-        """Per-unit outcomes. Prover: query ProverOutputUtility via inp.formalized.run_link
-        off-thread. Foundry: read straight off inp.formalized.result."""
+    async def fetch_verdicts(self, formalized: Formalized[FormT]) -> dict[RuleName, Verdict]:
+        """Per-unit outcomes for one delivered result. Prover: query ProverOutputUtility via
+        ``formalized.run_link`` off-thread. Foundry: read straight off ``formalized.result``.
+        Never called for gave-up or budget-curtailed components."""
         ...
 
     def findings_evidence(self) -> EvidenceFetcher | None:
@@ -159,7 +267,7 @@ class PreparedSystem[FormT: BackendResult, U: FeatureUnit, Main](ABC):
         ...
 
 
-class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](Protocol):
+class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](Protocol):
     @property
     def backend_guidance(self) -> str: ...
 
@@ -172,39 +280,35 @@ class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifi
     @property
     def artifact_store(self) -> ArtifactStore[A, FormT]: ...
 
+
+    async def preflight(self, run: PipelineRun[P, H]) -> Pre:
+        """Whatever the backend can do before it knows anything about the program — run
+        *concurrently with system analysis*, and awaited before :meth:`prepare_system`.
+
+        This is where a backend that must build something puts the build. Crucible prepares its
+        harness crate, compiles the program to sBPF, and gates a wheel-authored skeleton harness
+        through the real toolchain; none of that reads the analyzed model, so serializing it behind
+        analysis buys nothing, while running it alongside means a broken dependency graph or an
+        unbuildable program surfaces before the run has spent meaningfully on the model.
+
+        ``Pre`` is opaque to the driver — it only carries the result to ``prepare_system``, so a
+        backend can hand its own prep forward as immutable state rather than stashing it on itself.
+        ``None`` for a backend with nothing to do ahead of time."""
+        ...
+
     async def prepare_system(
         self, analyzed: App,
-        run: PipelineRun[P, H]
+        run: PipelineRun[P, H],
+        preflight: Pre,
     ) -> PreparedSystem[FormT, U, Main]: ...
 
     def to_artifact_id(self, c: U) -> A: ...
 
 
-# ---- shared helpers (the de-duplicated cache keys + batch) -------------------
-def PROPERTIES_KEY(nm: str):
-    return CacheKey[None, Properties](nm)
-
-
+# ---- the per-unit batch -------------------------------------------------------
 @dataclass
 class _Batch[U: FeatureUnit](BackendJob[U]):
     feat_ctx: WorkflowContext[ComponentGroup]
-
-def _component_digest(c: FeatureUnit) -> str:
-    # ``cache_material`` is the ecosystem-agnostic view of what identifies a unit; EVM's
-    # implementation reproduces the previous inline key (app JSON | ind | contract ind) exactly.
-    return string_hash(c.cache_material())
-
-def _component_cache_key(c: FeatureUnit, plugin_digest: str | None) -> CacheKey[Properties, ComponentGroup]:
-    raw_digest = _component_digest(c)
-    if plugin_digest is not None:
-        raw_digest += f"-{plugin_digest}"
-    return CacheKey(raw_digest)
-
-
-def _batch_cache_key[FormT: BackendResult](
-    props: list[PropertyFormulation],
-) -> CacheKey[ComponentGroup, FormT]:  # pyright: ignore[reportInvalidTypeVarUse]
-    return CacheKey(string_hash("|".join(p.model_dump_json() for p in props)))
 
 
 def extract_task_id(idx: int) -> str:
@@ -214,13 +318,142 @@ def extract_task_id(idx: int) -> str:
 def formalize_task_id(idx: int) -> str:
     return f"formalize-{idx}"
 
-async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
-    backend: PipelineBackend[P, FormT, H, A, U, Main, App],
+
+# ---- plugin tool contribution -------------------------------------------------
+
+class _ArtifactCollector:
+    """Per-batch sink for the verification artifacts plugin tools register at
+    dispatch time. ``for_plugin`` stamps the attribution, so a plugin never
+    handles its own id; the driver snapshots the collected set into the
+    formalization namespace (cache replays skip the tools) and persists it via
+    the run's artifact store."""
+
+    def __init__(self) -> None:
+        self.items: list[PluginArtifact] = []
+
+    def for_plugin(self, plugin_id: str) -> ArtifactRegistrar:
+        collector = self
+
+        class _Registrar:
+            def register(self, artifact: VerificationArtifact) -> None:
+                collector.items.append(
+                    PluginArtifact(plugin=plugin_id, artifact=artifact)
+                )
+
+        return _Registrar()
+
+
+def _contributes_tools(
+    plugin: PipelinePlugin[Any], provider_type: type[PipelinePlugin[Any]] | None
+) -> bool:
+    """Whether ``plugin`` counts for the running backend's tool dispatch — and so
+    for its ``FORMALIZATION_KEY``: a deriver of the formalizer's declared provider
+    class, or of the always-projected :class:`AnyBackendTools`. One predicate for
+    the gate and the key, so what the binder can reach and what the key says
+    cannot drift."""
+    if isinstance(plugin, AnyBackendTools):
+        return True
+    return provider_type is not None and isinstance(plugin, provider_type)
+
+
+@dataclass
+class _Binder[U: FeatureUnit]:
+    """Core's :class:`ToolBinder` over the batch's contributing plugins, each
+    pre-paired with its id and plugin context. Plugins fire in the deterministic
+    plugin-id order the gate collected them (injection order is prompt content);
+    per plugin, the extension's hook fires before the any-backend hook. Plugin
+    hook code runs only here — at the backend's dispatch — never as a top-level
+    tool-setup task. On an :class:`InjectingToolExtension` dispatch, the
+    backend's injectable gets the asking plugin's id curried in before the hook
+    ever sees it."""
+    _plugins: Sequence[tuple[str, PipelinePlugin[U], PluginToolContext[FormalizationTool]]]
+    _comp: U
+    _props: list[PropertyFormulation]
+
+    @overload
+    async def __call__[TP: PipelinePlugin[Any], **P](
+        self, ext: ToolExtension[TP, U, P], *args: P.args, **kwargs: P.kwargs
+    ) -> Sequence[ProvidedTools]:
+        ...
+
+    @overload
+    async def __call__[TP: PipelinePlugin[Any], **P, **I, R](
+        self, ext: InjectingToolExtension[TP, U, P, Callable[I, R]], inj: Callable[Concatenate[str, I], R], /, *args: P.args, **kwargs: P.kwargs
+    ) -> Sequence[ProvidedTools]:
+        ...
+
+    async def __call__( #type: ignore[trust me bro]
+        self,
+        ext: ToolExtension[Any, U, ...] | InjectingToolExtension[Any, U, ..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Sequence[ProvidedTools]:
+        got: list[ProvidedTools] = []
+        for plugin_id, p, ctxt in self._plugins:
+            if isinstance(p, ext.provider):
+                if isinstance(ext, InjectingToolExtension):
+                    # args[0] is the backend's injectable (positional-only in
+                    # the overload); the hook receives it with this plugin's
+                    # id already bound.
+                    t = await ext.project(p)(
+                        self._comp, self._props, ctxt,
+                        functools.partial(args[0], plugin_id),
+                        *args[1:], **kwargs,
+                    )
+                else:
+                    t = await ext.project(p)(self._comp, self._props, ctxt, *args, **kwargs)
+                if t is not None:
+                    got.append(t)
+            if isinstance(p, AnyBackendTools):
+                t = await p.backend_tools(self._comp, self._props, ctxt)
+                if t is not None:
+                    got.append(t)
+        return got
+
+
+
+def _budget_context(budget: RunBudget | None) -> ContextManager[None]:
+    if budget is not None:
+        return total_budget(budget.total, cast(dict[str, float], budget.caps))
+    else:
+        return nullcontext()
+
+def _time_context(time_budget_s: float | None) -> ContextManager[None]:
+    if time_budget_s is not None:
+        return time_budget(time_budget_s)
+    else:
+        return nullcontext()
+
+async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
+    backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
     run: PipelineRun[P, H],
     *,
     interactive: bool = False,
     threat_model: Document | None = None,
+    extra_context: Sequence[Document] = (),
     max_bug_rounds: int = 3,
+    ecosystem: Ecosystem[App, Main, U],
+    budget: RunBudget | None = None,
+    time_budget_s : float | None = None
+) -> CorePipelineResult[FormT]:
+    with (
+        _budget_context(budget),
+        _time_context(time_budget_s)
+    ):
+        return await _run_pipeline_inner(
+            backend, run, interactive=interactive, 
+            max_bug_rounds=max_bug_rounds, threat_model=threat_model,
+            extra_context=extra_context, ecosystem=ecosystem
+        )
+
+async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
+    backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
+    run: PipelineRun[P, H],
+    *,
+    interactive: bool,
+    threat_model: Document | None,
+    extra_context: Sequence[Document],
+    max_bug_rounds: int,
     ecosystem: Ecosystem[App, Main, U],
 ) -> CorePipelineResult[FormT]:
     # Only the plugins whose hooks accept this ecosystem's unit are loaded (and only those pay
@@ -228,17 +461,18 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     async with load_plugins(run, ecosystem.unit_type) as plugins:
         return await run_pipeline_inner(
             backend, run, plugins, interactive=interactive, threat_model=threat_model,
-            max_bug_rounds=max_bug_rounds, ecosystem=ecosystem,
+            extra_context=extra_context, max_bug_rounds=max_bug_rounds, ecosystem=ecosystem,
         )
 
 # ---- the driver --------------------------------------------------------------
-async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
-    backend: PipelineBackend[P, FormT, H, A, U, Main, App],
+async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
+    backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
     run: PipelineRun[P, H],
     plugin_manager: PluginManager[P, U],
     *,
     interactive: bool = False,
     threat_model: Document | None = None,
+    extra_context: Sequence[Document] = (),
     max_bug_rounds: int = 3,
     ecosystem: Ecosystem[App, Main, U],
 ) -> CorePipelineResult[FormT]:
@@ -249,29 +483,59 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
         f"ecosystem {ecosystem.name!r} has no greenfield prompts; got sort='greenfield'"
     )
 
-    # 1. System analysis (shared primitive; the ecosystem supplies the analyzed model type,
-    #    prompts, validation, and front-matter — EVM reproduces prior behavior exactly).
-    analyzed = await run.runner(
-        TaskInfo(SYSTEM_ANALYSIS_TASK_ID, "System Analysis", phases["analysis"]),
-        lambda: run_component_analysis(
-            ty=ecosystem.system_model, child_ctxt=run.ctx.child(CacheKey(spec.analysis_key)),
-            input=source, env=run.env,
-            extra_input=[*ecosystem.analysis_extra_input(source), *spec.extra_input],
-            expected_main_id=source.contract_name,
-            system_template=ecosystem.analysis_prompts.system,
-            initial_template=ecosystem.analysis_prompts.initial,
-            validate=ecosystem.validate_analysis,
-        ),
-    )
+    # 1. Backend preflight ∥ system analysis. The preflight (Crucible: build the program and gate a
+    #    skeleton harness through the real toolchain) reads nothing analysis produces, so it starts
+    #    at t=0. Neither side outlives the other's failure: whichever breaks first, the group cancels
+    #    the one still running rather than let it spend — money on the analysis agent, minutes on the
+    #    workspace build — on a run that can no longer complete. The analysis itself is the shared
+    #    primitive; the ecosystem supplies the analyzed model type, prompts, validation, front-matter.
+    #    The budget scope is entered inside the coroutine (not around create_task) so the
+    #    cost-center binding lives in the spawned task's own context.
+    async def _run_analysis():
+        with named_budget_or_nop("system_analysis"):
+            return await run.runner(
+                TaskInfo(SYSTEM_ANALYSIS_TASK_ID, "System Analysis", phases["analysis"]),
+                lambda: run_component_analysis(
+                    ty=ecosystem.system_model,
+                    child_ctxt=run.ctx.child(SYSTEM_ANALYSIS_KEY(ecosystem.system_model, spec.analysis_key)),
+                    input=source, env=run.env,
+                    extra_input=[*ecosystem.analysis_extra_input(source), *spec.extra_input],
+                    expected_main_id=source.contract_name,
+                    project_root=Path(source.project_root),
+                    forbidden_read=source.forbidden_read,
+                    system_template=ecosystem.analysis_prompts.system,
+                    initial_template=ecosystem.analysis_prompts.initial,
+                    validate=ecosystem.validate_analysis,
+                ),
+            )
+
+    try:
+        async with asyncio.TaskGroup() as overlap:
+            preflight_task = overlap.create_task(backend.preflight(run))
+            analysis_task = overlap.create_task(_run_analysis())
+    except BaseExceptionGroup as eg:
+        # Callers expect the failure itself, not a wrapper, so unwrap the usual case: one side
+        # failed and the other was cancelled, and a cancelled task adds nothing to the group.
+        # Both failing at once is the only case with two real errors; keep the group there.
+        if len(eg.exceptions) == 1:
+            raise eg.exceptions[0] from None
+        raise
+    preflight, analyzed = preflight_task.result(), analysis_task.result()
     if analyzed is None:
         raise ValueError("System analysis produced no result.")
 
     # 2. Backend transform + main-contract location (prover: harness lift; foundry: identity).
-    prepared = await backend.prepare_system(analyzed, run)
+    with named_budget_or_nop("system_preparation"):
+        prepared = await backend.prepare_system(analyzed, run, preflight)
 
     # 3. Pre-formalization setup runs CONCURRENTLY with extraction (neither needs the other) —
     #    this preserves the prover's autosetup ∥ bug-analysis overlap, generically.
-    staged_task = asyncio.create_task(prepared.prepare_formalization(run))
+    #    The budget scope is entered inside the coroutine (not around create_task) so the
+    #    cost-center binding lives in the spawned task's own context.
+    async def _prepare_formalization() -> Formalizer[FormT, U] | StagedFormalizer[FormT, U]:
+        with named_budget_or_nop("formalization_preparation"):
+            return await prepared.prepare_formalization(run)
+    staged_task = asyncio.create_task(_prepare_formalization())
 
     batches: list[_Batch[U]] = await _extract_all(
         backend.analysis_spec.properties_key,
@@ -281,13 +545,36 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
         phases["extraction"],
         interactive,
         threat_model,
+        extra_context,
         max_bug_rounds,
         ecosystem,
         plugin_manager.bind_phase(
             phases.get("extraction_plugin") or phases["extraction"],
-            "Property Extraction"
         )
     )
+    # 3b. Prioritized runs formalize one property, not every component's. This is the first
+    #     point where every component's candidates exist together — inference never sees more
+    #     than the unit it was given, and the per-component plugin hook cannot compare across
+    #     units either.
+    #
+    #     It sits *before* the ``staged_task`` await rather than after because the ranking
+    #     reads nothing that pre-formalization produces: it needs the extracted batches and
+    #     the guidance documents, both of which are already in hand. Awaiting the setup first
+    #     would queue the run's cheapest decision behind its most expensive step — on a real
+    #     contract that is hours during which the focus is knowable but unknown. It also puts
+    #     the focus in hand earlier than the setup finishes, which is what a pre-formalization
+    #     step would need in order to aim at it.
+    #     The empty-batch check deliberately stays *after* the await below rather than moving
+    #     up here to guard this: a setup that failed is the more useful error than "nothing was
+    #     extracted", and raising early would mask it.
+    deprioritized: list[DeprioritizedProperty] = []
+    if batches and run.run_mode is RunMode.PRIORITIZED:
+        with named_budget_or_nop("property_extraction"):
+            batches, deprioritized = await _prioritize(
+                backend.analysis_spec.properties_key, backend.artifact_store,
+                batches, run, phases["extraction"], threat_model, extra_context,
+            )
+
     staged = await staged_task
     if not batches:
         raise ValueError("No properties extracted from any component.")
@@ -295,40 +582,137 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     # 4. A backend whose units share an artifact handed back a ``StagedFormalizer`` instead of a
     #    formalizer: the artifact is authored HERE — once, from every unit's properties — and the
     #    formalizer it yields is the only one that exists (see :class:`StagedFormalizer`).
-    formalizer = (
-        await staged.begin(batches, run) if isinstance(staged, StagedFormalizer) else staged
-    )
+    with named_budget_or_nop("formalization_preparation"):
+        formalizer = (
+            await staged.begin(batches, run) if isinstance(staged, StagedFormalizer) else staged
+        )
 
     # 5. Per-component formalization. Caching is core-owned, keyed by the backend's result type.
     async def _run(batch: _Batch[U]) -> ComponentOutcome[FormT, U]:
         result_key = backend.to_artifact_id(batch.feat)
         backend.artifact_store.write_properties(result_key, batch.props)
+
+        # Deriving the backend's declared provider class gates the dispatch AND
+        # keys the cache: whether a hook would actually yield tools is only
+        # knowable inside ``formalize`` (dispatch needs backend state that
+        # doesn't exist yet), so both run off what the plugin derives. A plugin
+        # outside this backend's gate is invisible to its binder, and so must
+        # not perturb its key either. No task machinery: tool hooks are
+        # tool-BINDING hooks, so they get the runner-less context and cannot
+        # run top-level tasks.
+        contributing_plugins : list[str] = []
+        bound_plugins : list[tuple[str, PipelinePlugin[U], PluginToolContext[FormalizationTool]]] = []
+        collected = _ArtifactCollector()
+
+        for plugin_id, plugin in plugin_manager.sorted_plugins():
+            if not _contributes_tools(plugin, formalizer.tool_provider_type):
+                continue
+            k = batch.feat_ctx.child(PLUGIN_FORMALIZATION_KEY(plugin_id))
+            bound_plugins.append((plugin_id, plugin, plugin_manager.tool_context(
+                plugin, k, collected.for_plugin(plugin_id),
+            )))
+            contributing_plugins.append(plugin_id)
+
+        # Record the formalization edge's exact derivation inputs — the final
+        # (post-plugin) batch and the gated plugin ids — as a first-class cache
+        # entry, keyed like the bug analysis (the component namespace is shared
+        # across runs). Offline walkers reconstruct the edge from this instead
+        # of sniffing the store.
+        await batch.feat_ctx.child(
+            FINAL_PROPERTIES_KEY(
+                threat_model.to_digest() if threat_model is not None else None,
+                interactive,
+                combine_digests([d.to_digest() for d in extra_context]),
+                run_mode_name(run.run_mode.value),
+            )
+        ).cache_put(FinalProperties(items=batch.props, tool_plugins=contributing_plugins))
+
         child : WorkflowContext[FormT] = await batch.feat_ctx.child(
-            _batch_cache_key(batch.props),
+            FORMALIZATION_KEY(formalizer.formalized_type, batch.props, contributing_plugins),
             {"properties": [p.model_dump() for p in batch.props]},
         )
+        artifacts_ctx = child.child(PLUGIN_ARTIFACTS_KEY)
         cached_result: FormT | None = await child.cache_get(formalizer.formalized_type)
-        result : FormT | GaveUp
+        # A prioritized batch is usually a strict subset, so it usually forks this key — but not
+        # when the focus happens to be the component's whole list (a single-property component
+        # always). There the hit may be a comprehensive result that retired the very property this
+        # run exists to establish, and a replay never runs the author's tools, so none of the
+        # protections around the focus apply to it. Re-formalize instead; the fresh result
+        # overwrites the stale entry. This cannot loop: the live tools refuse to retire the focus,
+        # and the one path that overrides them (a budget wrap-up) yields a Curtailed, never cached.
+        if (
+            cached_result is not None
+            and run.run_mode is RunMode.PRIORITIZED
+            and not _focus_satisfied(cached_result, batch.props)
+        ):
+            _log.info(
+                "%s: cached formalization does not establish the focus; re-running",
+                batch.feat.display_name,
+            )
+            cached_result = None
+        result : FormT | Curtailed[FormT] | GaveUp
         if cached_result is None:
             label = f"{batch.feat.display_name} ({len(batch.props)} properties)"
-            result : FormT | GaveUp = await run.runner(
-                TaskInfo(
-                    formalize_task_id(batch.feat.unit_index),
-                    label,
-                    phases["formalization"]
-                ),
-                lambda: formalizer.formalize(label, batch.feat, batch.props, child, run),
-            )
+            with named_budget_or_nop("formalization"):
+                result : FormT | GaveUp | Curtailed[FormT] = await run.runner(
+                    TaskInfo(
+                        formalize_task_id(batch.feat.unit_index),
+                        label,
+                        phases["formalization"]
+                    ),
+                    lambda: formalizer.formalize(
+                        label, batch.feat, batch.props, child, run,
+                        _Binder(bound_plugins, batch.feat, batch.props)
+                    ),
+                )
+            # Snapshot what the tools registered: a cache replay of this
+            # formalization never runs the tools, so the artifacts must ride
+            # the cache alongside the result they accompany.
             if not isinstance(result, GaveUp):
-                await child.cache_put(result)
+                await artifacts_ctx.cache_put(RegisteredArtifacts(items=collected.items))
+                # Envelope before result: a crash between the two puts replays
+                # as a miss (re-run, envelope rewritten) rather than a hit with
+                # silently absent artifacts. A curtailed partial is never the
+                # component's cached result — a later run redoes the
+                # formalization under a fresh budget.
+                if not isinstance(result, Curtailed):
+                    await child.cache_put(result)
         else:
             result = cached_result
+            restored = await artifacts_ctx.cache_get(RegisteredArtifacts)
+            collected.items = restored.items if restored is not None else []
 
-        outcome: Delivered[FormT] | GaveUp = (
-            result if isinstance(result, GaveUp)
-            else Delivered(result, backend.artifact_store.write_artifact(result_key, result))
-        )
-        return ComponentOutcome(batch.feat, batch.props, outcome)
+        outcome: Delivered[FormT] | Curtailed[Delivered[FormT]] | GaveUp
+        if isinstance(result, GaveUp):
+            outcome = result
+        elif isinstance(result, Curtailed):
+            # Persist the partial for inspection under a quarantined name — never as the
+            # component's deliverable.
+            outcome = Curtailed(
+                Delivered(
+                    result.partial,
+                    backend.artifact_store.write_quarantined(result_key, result.partial),
+                ) if result.partial is not None else None,
+                result.detail,
+            )
+        else:
+            outcome = Delivered(result, backend.artifact_store.write_artifact(result_key, result))
+
+        # Persist registered artifacts on every path (fresh run or cache
+        # replay), like ``write_artifact`` above — deliverables are rebuilt
+        # from cache content, never assumed to survive on disk. A gave-up
+        # component keeps whatever its tools registered before the surrender.
+        persisted = [
+            PersistedPluginArtifact(
+                plugin=pa.plugin,
+                artifact=pa.artifact,
+                path=backend.artifact_store.write_plugin_artifact(
+                    result_key, pa.plugin, pa.artifact
+                ),
+            )
+            for pa in collected.items
+        ]
+        return ComponentOutcome(batch.feat, batch.props, outcome, persisted)
 
     settled = await asyncio.gather(*[_run(b) for b in batches], return_exceptions=True)
     outcomes = [o if isinstance(o, ComponentOutcome)
@@ -344,10 +728,22 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
         ReportComponentInput(
             name=o.feat.display_name,
             props=o.props,
-            formalized=o.result if isinstance(o.result, Delivered) else None,
+            formalized=o.result if isinstance(o.result, (Delivered, Curtailed)) else None,
         )
         for o in outcomes
     ] + formalizer.extra_report_inputs()
+    artifact_records = [
+        VerificationArtifactRecord(
+            component=o.feat.display_name,
+            plugin=pa.plugin,
+            name=pa.artifact.name,
+            kind=pa.artifact.kind,
+            description=pa.artifact.description,
+            path=str(pa.path),
+        )
+        for o in outcomes
+        for pa in o.artifacts
+    ]
     findings_evidence = formalizer.findings_evidence()
     try:
         async def _report() -> AutoProverReport:
@@ -355,10 +751,12 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 contract_name=source.contract_name, backend=formalizer.backend_tag,
                 components=inputs, llm=run.env.llm_lite(), fetch_verdicts=formalizer.fetch_verdicts,
                 source_edits=await formalizer.source_edits(outcomes, run),
+                verification_artifacts=artifact_records,
                 # Findings only when the backend supplies evidence — skip the heavy model otherwise.
                 findings_llm=run.env.llm_heavy() if findings_evidence else None,
                 fetch_evidence=findings_evidence,
-
+                run_mode=run.run_mode.value,
+                deprioritized=deprioritized,
             )
         report = await run.runner(
             job=_report,
@@ -370,23 +768,111 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
             raise
         _log.warning("report phase failed (continuing)", exc_info=True)
 
-    return _tally(outcomes)
+    return _tally(outcomes, run.run_mode, len(deprioritized))
 
-def _pre_property_cache_key(feat: FeatureUnit, plugin: str) -> CacheKey[Properties, PrePropertyInference]:
-    key = f"{_component_digest(feat)}-{string_hash(plugin)}-pre"
-    return CacheKey(key)
 
-def _post_property_cache_key(feat: FeatureUnit, plugin: str, curr_props: list[PropertyFormulation]) -> CacheKey[Properties, PostPropertyInference]:
-    props = string_hash("|".join(
-        p.model_dump_json() for p in curr_props
-    ))
-    key = f"{_component_digest(feat)}-{string_hash(plugin)}-{props}"
-    return CacheKey(key)
+#: The driver-owned task id for the ranking step. Backend-agnostic, like the per-unit
+#: ``extract-{i}`` / ``formalize-{i}`` ids, so it lives here rather than in a backend's registry.
+def _focus_satisfied(result: BackendResult, props: Sequence[PropertyFormulation]) -> bool:
+    """Does this formalization actually establish every property of a prioritized batch?
+
+    Backend-agnostic: ``BackendResult`` carries the skip declarations and the property->checks
+    mapping, and an author excuses a property from that mapping precisely by skipping it. So
+    "mapped to at least one check, and not retired" is the whole test."""
+    checks = {title: names for title, names in result.property_checks()}
+    retired = {s.property_title for s in result.skipped}
+    return all(p.title not in retired and checks.get(p.title) for p in props)
+
+
+PRIORITIZE_TASK_ID = "prioritize"
+
+
+async def _prioritize[P: enum.Enum, H, U: FeatureUnit](
+    prop_key: str,
+    store: ArtifactStore,
+    batches: list[_Batch[U]],
+    run: PipelineRun[P, H],
+    phase: P,
+    threat_model: Document | None,
+    extra_context: Sequence[Document],
+) -> tuple[list[_Batch[U]], list[DeprioritizedProperty]]:
+    """Rank every extracted property and cut the run down to one claim's worth of them.
+
+    Returns the surviving batch list — always exactly one entry, so the driver's
+    "no properties extracted" guard cannot fire on our account — alongside every candidate it
+    set aside, which the report carries so a reader can see what this run did not look at.
+
+    The winning batch keeps its own ``feat`` and ``feat_ctx``: unit identity, task ids and
+    the artifact-store stem are all unchanged, so only ``FORMALIZATION_KEY`` — which is
+    derived from the property list — forks away from a comprehensive run's cache. The
+    extraction subtree is shared, and a prioritized run replays it.
+
+    An unusable ranking raises. Quietly widening back to every component would spend the
+    budget this mode exists to save, on a run that asked to be cheap.
+    """
+    candidates: list[Candidate] = build_candidates(
+        [(b.feat.unit_index, b.feat.display_name, b.props) for b in batches]
+    )
+    tm_digest = threat_model.to_digest() if threat_model is not None else None
+    xc_digest = combine_digests([d.to_digest() for d in extra_context]) or None
+    ctx = run.ctx.child(PROPERTIES_KEY(prop_key)).child(
+        PRIORITIZATION_KEY(
+            candidates_digest([(b.feat, b.props) for b in batches]), tm_digest, xc_digest,
+        )
+    )
+
+    ranking = await ctx.cache_get(PropertyRanking)
+    if ranking is None:
+        ranking = await run.runner(
+            TaskInfo(PRIORITIZE_TASK_ID, "Property Prioritization", phase),
+            lambda: rank_properties(
+                llm=run.env.llm_heavy(),
+                contract_name=run.source.contract_name,
+                candidates=candidates,
+                design_doc=run.source.content,
+                threat_model=threat_model,
+                extra_context=extra_context,
+            ),
+        )
+        await ctx.cache_put(ranking)
+
+    store.write_ranking(ranking)
+
+    selection: Selection = select(candidates, ranking)
+    chosen = next(b for b in batches if b.feat.unit_index == selection.unit_index)
+    by_title = {p.title: p for p in chosen.props}
+    props = [by_title[t] for t in selection.titles]
+
+    pursued = {(c.label, t) for c in candidates if c.unit_index == selection.unit_index
+               for t in selection.titles}
+    detail = {(c.label, p.title): p for c in candidates for p in c.props}
+    deprioritized = [
+        DeprioritizedProperty(
+            component=rp.key[0],
+            title=rp.key[1],
+            sort=detail[rp.key].sort,
+            description=detail[rp.key].description,
+            score=rp.score,
+            rationale=rp.rationale,
+        )
+        for rp in ranking.ranked
+        if rp.key not in pursued
+    ]
+
+    _log.info(
+        "prioritized: %s — %r, stated by %d propert(ies); %d propert(ies) across %d other "
+        "component(s) deprioritized",
+        chosen.feat.display_name, selection.claim, len(props),
+        len(deprioritized), len(batches) - 1,
+    )
+    return [_Batch(chosen.feat, props, chosen.feat_ctx)], deprioritized
+
 
 async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
     prop_key: str,
     main: Main, backend_guidance: str, run: PipelineRun[P, H],
-    phase: P, interactive: bool, threat_model: Document | None, max_rounds: int,
+    phase: P, interactive: bool, threat_model: Document | None,
+    extra_context: Sequence[Document], max_rounds: int,
     # ``App`` stays ``Any`` here: this helper never touches the analyzed-model axis, only
     # ``Main``/``U`` (matching the caller's), so there's nothing to tie it to.
     ecosystem: Ecosystem[Any, Main, U],
@@ -397,7 +883,7 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
     async def _pre_plugin_inputs(feat: U) -> list[AnyPropertyGenerationInput]:
         async def run_one(runner: PluginPhaseRunner[P, U]) -> AnyPropertyGenerationInput | None:
             ctxt = await prop_ctx.child(
-                _pre_property_cache_key(feat, runner.plugin_id), {"plugin-name": runner.plugin_id}
+                PRE_PROPERTY_KEY(feat, runner.plugin_id), {"plugin-name": runner.plugin_id}
             )
             return await runner.plugin.property_inference_input_hook(
                 feat, runner.bind(str(feat.unit_index), ctxt)
@@ -418,7 +904,7 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
             sub_phase_id="post-inference", sub_phase_label="Property Post-Process", sorted_run=True
         ):
             ctxt = await prop_ctx.child(
-                _post_property_cache_key(feat, runner.plugin_id, accum),
+                POST_PROPERTY_KEY(feat, runner.plugin_id, accum),
                 {
                     "plugin-name": runner.plugin_id,
                     "props": [p.model_dump() for p in accum],
@@ -442,21 +928,22 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
                 CacheablePropertyGenerationInput(
                     "certora:system-doc", "generic", "always",
                     lambda cache, doc=design_doc: [
-                        "For reference, the system document describing the entire application is as follows.",
+                        "For reference, the system document describing the entire application is as follows.\n\n",
                         doc.to_dict(CacheLevel.SHORT if cache else CacheLevel.NONE)
                     ]
                 ),
             ]
 
         feat_ctx = await prop_ctx.child(
-            _component_cache_key(feat, plugins.plugin_digest),
+            COMPONENT_KEY(feat, plugins.plugin_digest),
             {**feat.context_tag(), "plugins": plugins.plugin_manifest},
         )
         props = await run.runner(
             TaskInfo(extract_task_id(feat.unit_index), feat.display_name, phase),
             lambda conv: run_property_inference(
                 feat_ctx, run.env, feat, refinement=conv if interactive else None,
-                threat_model=threat_model, max_rounds=max_rounds, backend_guidance=backend_guidance,
+                threat_model=threat_model, extra_context=extra_context,
+                max_rounds=max_rounds, backend_guidance=backend_guidance,
                 extra_input=pre_input,
                 system_template=ecosystem.property_prompts.system,
                 render_initial=ecosystem.property_prompts.render_initial,
@@ -468,12 +955,18 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
         accum = await _post_plugin_props(feat, props)
         return _Batch(feat, accum, feat_ctx) if accum else None
 
-    got = await asyncio.gather(*[_one(u) for u in ecosystem.units(main)])
+    async def budgeted_task(u: U) -> _Batch | None:
+        with named_budget_or_nop("property_extraction"):
+            return await _one(u)
+
+    got = await asyncio.gather(*[budgeted_task(u) for u in ecosystem.units(main)])
     return [b for b in got if b is not None]
 
 
 def _tally[FormT: BackendResult, U: FeatureUnit](
-    outcomes: list[ComponentOutcome[FormT, U]]
+    outcomes: list[ComponentOutcome[FormT, U]],
+    run_mode: RunMode = RunMode.COMPREHENSIVE,
+    n_deprioritized: int = 0,
 ) -> CorePipelineResult[FormT]:
     failures: list[str] = []
     for o in outcomes:
@@ -481,8 +974,17 @@ def _tally[FormT: BackendResult, U: FeatureUnit](
             failures.append(f"{o.feat.display_name}: {o.result}")
         elif isinstance(o.result, GaveUp):
             failures.append(f"{o.feat.display_name}: GAVE_UP: {o.result.reason}")
+        elif isinstance(o.result, Curtailed):
+            what = (
+                f"unvalidated partial kept at {o.result.partial.deliverable}"
+                if o.result.partial is not None else "nothing published"
+            )
+            failures.append(
+                f"{o.feat.display_name}: BUDGET: formalization cut short ({what})"
+            )
     # The rollup is unit-agnostic; widen the concrete-unit outcomes to the protocol for storage.
     return CorePipelineResult(
         len(outcomes), sum(len(o.props) for o in outcomes),
         cast(list[ComponentOutcome[FormT, FeatureUnit]], outcomes), failures,
+        run_mode, n_deprioritized,
     )

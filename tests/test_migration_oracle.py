@@ -26,10 +26,10 @@ import pytest_asyncio
 
 from langgraph.store.memory import InMemoryStore
 
-from composer.kb.knowledge_base import DefaultEmbedder
+from composer.rag.models import DefaultEmbedder
 from composer.spec.agent_index import AgentIndex, AgentIndexConfig
 from composer.spec.source.munge.edit_oracle import mk_oracle
-from composer.spec.source.munge.edit_store import StoredEdit
+from composer.spec.source.munge.edit_store import MungeEditor, StoredEdit
 from composer.spec.source.versioned_index import (
     VersionedAgentIndex, AnswerPortability, Stale, UpToDate,
 )
@@ -61,7 +61,10 @@ def _sc(project_root) -> Any:
 
 
 def _stored(vfs: dict[str, str]) -> StoredEdit:
-    return StoredEdit(vfs=vfs, executive_summary="summary", why_sound="sound")
+    return StoredEdit(
+        vfs=vfs, executive_summary="summary", why_sound="sound",
+        attribution=MungeEditor(),
+    )
 
 
 @pytest.mark.asyncio

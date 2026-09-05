@@ -29,7 +29,7 @@ from certora_autosetup.utils.constants import (
     FILE_LLM_USAGE,
     FILE_PROVER_USAGE,
 )
-from certora_autosetup.utils.contract_utils import auto_detect_contracts, deduplicate_contract_handles, parse_contract_files, resolve_contract_handles, split_contract_spec
+from certora_autosetup.utils.contract_utils import auto_detect_contracts, deduplicate_contract_handles, parse_contract_files, resolve_contract_handles, split_contract_spec, with_contract_handle
 from certora_autosetup.utils.project_dir import find_build_config_dir
 from certora_autosetup.utils.enhanced_config_manager import ConfigManager
 from certora_autosetup.utils.llm_util import LlmUsageReport, ledger_reset
@@ -83,9 +83,30 @@ def main():
 
     contract_handles = deduplicate_contract_handles(contract_handles)
 
-    # Parse main contract
-    main_handles = parse_contract_files([args.main_contract])
+    # Parse main contract. It goes through the same artifact-backed name resolution as
+    # --contract-files-and-name, so a bare `path.sol` spec gets the contract the file really
+    # declares instead of the filename stem.
+    main_handles = resolve_contract_handles(
+        parse_contract_files([args.main_contract]), build_config_dir, profile=args.profile,
+        requested_build_system=args.build_system, handles_relative_to=cwd,
+    )
     main_contract_handle = main_handles[0]
+
+    # A contract the caller named is in scope by definition, but two upstream steps can drop
+    # it: auto-detection skips every file under a dependency directory (node_modules/, lib/,
+    # dependencies/, ...), which is where per-address verification bundles and vendored
+    # sub-projects keep real, deployed code, and deduplicate_contract_handles prefers the
+    # shortest path when two files declare the same contract name. Either way the run fails
+    # much later, from setup_prover, as "is not among the compiled contracts in the prover
+    # scene" — a compilation message for what is really a scoping decision.
+    if main_contract_handle not in contract_handles:
+        logger.log(
+            f"Main contract {main_contract_handle.contract_name}@"
+            f"{main_contract_handle.source_file} was not among the auto-detected contracts "
+            f"— adding it to the scene",
+            "INFO", "Autosetup",
+        )
+        contract_handles = with_contract_handle(contract_handles, main_contract_handle)
 
     # A library cannot be a verification target — the Prover accepts it and instantiates
     # no parametric methods. Swap in a generated harness before anything downstream keys

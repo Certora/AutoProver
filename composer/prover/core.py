@@ -27,11 +27,13 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncIterator, Callable, Protocol, cast, override, Awaitable
+from typing import Any, AsyncIterator, Callable, Protocol, cast, override, Awaitable
 from abc import ABC, abstractmethod
 import json
 import logging
 import os
+import signal
+import uuid
 
 
 from langchain_core.messages import AnyMessage, HumanMessage
@@ -45,7 +47,7 @@ from prover_output_utility import cloud_server_for_env
 
 from composer.prover.analysis import analyze_cex_raw
 from composer.prover.cloud import CloudJobError, cloud_results
-from composer.prover.ptypes import RuleResult
+from composer.prover.ptypes import RuleResult, RulePath, StatusCodes
 from composer.prover.results import read_and_format_run_result
 from composer.templates.loader import load_jinja_template
 from composer.prover.prover_protocol import ProverResult
@@ -117,10 +119,26 @@ class ProverReport:
     them through the return value.
 
     ``link`` is the prover run's URL (cloud) or local results directory.
+
+    ``certora_run_stdout`` is the captured stdout of the ``certoraRun``
+    invocation. It carries diagnostic signal that never reaches the rule
+    results — e.g. internal function summarization silently failing on
+    stack-too-deep — so it rides along even on successful runs.
     """
-    rule_status: dict[str, bool]
+    raw_rule_status: dict[RulePath, StatusCodes]
+
     result_str: str
     link: str
+    certora_run_stdout: str
+
+    @property
+    def rule_status(self) -> dict[str, bool]:
+        to_ret = {}
+        for (k, v) in self.raw_rule_status.items():
+            if k.rule in to_ret and not to_ret[k.rule]:
+                continue
+            to_ret[k.rule] = v == "VERIFIED"
+        return to_ret
 
     @property
     def all_verified(self) -> bool:
@@ -299,8 +317,25 @@ class TrivialFanoutCexHandler(CexHandler):
                 await callbacks.on_analysis_complete(instance, analysis)
             return (instance, analysis)
 
-        jobs = [_one(r) for r in all_results if r.status == "VIOLATED"]
-        results = await asyncio.gather(*jobs)
+        violated = [r for r in all_results if r.status == "VIOLATED"]
+        # One counterexample's analysis failing is not a reason to lose the
+        # prover run that produced it: the rule keeps its status and only its
+        # explanation goes missing, so the report renders without it.
+        settled = await asyncio.gather(
+            *(_one(r) for r in violated), return_exceptions=True
+        )
+        results: list[tuple[RuleResult, str | None]] = []
+        for rule, outcome in zip(violated, settled):
+            if isinstance(outcome, asyncio.CancelledError):
+                raise outcome
+            if isinstance(outcome, BaseException):
+                _logger.warning(
+                    "CEX analysis failed for rule %s, continuing without its explanation: %r",
+                    rule.name,
+                    outcome,
+                )
+                continue
+            results.append(outcome)
 
         to_cex_explanation = {
             r.name: stat for (r, stat) in results if stat is not None
@@ -321,8 +356,10 @@ class TrivialFanoutCexHandler(CexHandler):
             results=results_for_template,
         )
 
+        # Counted over every violated rule, not just the analyzed ones, so a
+        # failed analysis cannot move the summarization threshold.
         failed_count = sum(
-            1 for instance, _ in results
+            1 for instance in violated
             if instance.status != "VERIFIED"
         )
         if failed_count > self.summarization_threshold:
@@ -373,35 +410,93 @@ PROVER REPORT:
     res = await ainvoke(llm, fresh_messages)
     return res.text
 
+class ProverSubprocessTimeout(Exception):
+    """A prover subprocess outlived its bound and was killed."""
+
+
+# Bound for the subprocesses that only build and typecheck: rule listing, and
+# the build-only check behind the spec editor. None of them waits on the cloud.
+BUILD_TIMEOUT_S = 1800
+
+
+def _kill_tree(proc: asyncio.subprocess.Process) -> None:
+    """Kill the subprocess and everything it started.
+
+    ``certoraRun`` is a python front end that shells out to a JVM, so killing
+    only the direct child leaves that JVM running: it holds the pipe the parent
+    was reading, and on a container it survives until the container does.
+    Children are spawned in their own process group precisely so one signal can
+    reach the whole tree.
+    """
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        proc.kill()
+    except Exception:
+        _logger.exception("Could not kill prover subprocess group %d", proc.pid)
+
+
+@asynccontextmanager
+async def _bounded_subprocess(
+    *argv: str, cwd: str, timeout: float, **kwargs: Any
+) -> AsyncIterator[asyncio.subprocess.Process]:
+    """Run a subprocess whose whole tree is killed if the body outlives ``timeout``.
+
+    The prover's local phase (solc, the CVL typechecker) can wedge without
+    exiting or writing anything further, and every await on it is unbounded:
+    the caller waits on the child, the child waits on the JVM, and the JVM waits
+    on a lock it will never get. One observed instance sat that way for three
+    days, having consumed a second of CPU. Nothing recovers a run from that
+    state, so bound it here and let the failure surface as an ordinary error the
+    agent can act on.
+
+    ``process_group=0`` makes the child a group leader, which is what lets
+    ``_kill_tree`` reach a grandchild JVM.
+    """
+    proc = await asyncio.subprocess.create_subprocess_exec(
+        *argv, cwd=cwd, process_group=0, **kwargs
+    )
+    try:
+        async with asyncio.timeout(timeout):
+            yield proc
+    except TimeoutError:
+        _kill_tree(proc)
+        await proc.wait()
+        raise ProverSubprocessTimeout(
+            f"{argv[0]} exceeded {timeout:.0f}s and was killed"
+        ) from None
+
+
 async def run_prover_inner(
     folder: Path,
     args: list[str],
     on_err: Callable[[int | None, str, str], None],
-    on_stdout: Callable[[str], Awaitable[None]]
+    on_stdout: Callable[[str], Awaitable[None]],
+    timeout: float,
 ) -> tuple[ProverResult | str, str]:
     # 3-5. Spawn async subprocess, stream stdout, collect stderr
     wrapper_script = Path(__file__).parent / "certoraRunWrapper.py"
 
     with tempfile.NamedTemporaryFile("rb", suffix=".json") as output_file:
-        proc = await asyncio.subprocess.create_subprocess_exec(
+        async with _bounded_subprocess(
             sys.executable,
             str(wrapper_script), str(output_file.name), *args,
             cwd=str(folder),
+            timeout=timeout,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-        )
+        ) as proc:
+            stdout_lines: list[str] = []
+            assert proc.stdout is not None
+            while True:
+                raw = await proc.stdout.readline()
+                if not raw:
+                    break
+                line = raw.decode()
+                stdout_lines.append(line)
+                await on_stdout(line.rstrip("\n"))
 
-        stdout_lines: list[str] = []
-        assert proc.stdout is not None
-        while True:
-            raw = await proc.stdout.readline()
-            if not raw:
-                break
-            line = raw.decode()
-            stdout_lines.append(line)
-            await on_stdout(line.rstrip("\n"))
-
-        stderr_raw = await proc.stderr.read() if proc.stderr else b""
+            stderr_raw = await proc.stderr.read() if proc.stderr else b""
         await proc.wait()
 
         stdout = "".join(stdout_lines)
@@ -413,6 +508,98 @@ async def run_prover_inner(
         run_result = cast(ProverResult, json.load(output_file))
         return run_result, stdout
 
+
+class SpecCompilationError(Exception):
+    """The spec did not compile.
+
+    Carries the compiler's own output, which names the offending lines. An authoring
+    agent can repair a spec from that, so callers driving one should surface
+    ``output`` rather than treat this as a run-ending fault."""
+
+    def __init__(self, output: str) -> None:
+        super().__init__(output or "no output captured")
+        self.output = output
+
+
+async def _run_captured(*argv: str, cwd: Path, timeout: float) -> tuple[int, str]:
+    """Run ``argv``, returning its exit code and combined output.
+
+    ``communicate`` rather than ``wait``: the pipes have to be drained, or a child
+    that outfills the buffer blocks forever waiting for someone to read it."""
+    async with _bounded_subprocess(
+        *argv,
+        cwd=str(cwd),
+        timeout=timeout,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    ) as proc:
+        stdout, stderr = await proc.communicate()
+    output = b"".join(part for part in (stdout, stderr) if part).decode(
+        "utf-8", errors="replace"
+    )
+    return proc.returncode or 0, output
+
+
+async def declared_rules_list(
+    folder: Path,
+    args: list[str]
+) -> list[str]:
+    """
+    This is a temporary hack to work around `certoraRun` not providing a "native"
+    way to list rules. Instead we use certoraRun to build the project, hijack `msg` to find
+    the generated build dir, and then manually invoke the typechecker with `-listRules`
+    ourselves against that build dir.
+
+    Not great, obviously, but lets us work on this AP feature while waiting for support for this to
+    land upstream in certora-cli and the pip distribution channels.
+    """
+    if any(m == "--msg" for m in args):
+        raise ValueError("This unholy black magic only works if you don't pass msg")
+    tc_key = uuid.uuid4().hex
+    rc, output = await _run_captured(
+        "certoraRun", *args, "--msg", tc_key, "--compilation_steps_only",
+        cwd=folder,
+        timeout=BUILD_TIMEOUT_S,
+    )
+    if rc != 0:
+        raise SpecCompilationError(output)
+    from importlib.resources import files
+
+    tc_jar = files("certora_jars") / "Typechecker.jar"
+    if not tc_jar.is_file():
+        raise ValueError("Typechecker not installed")
+    d = folder / ".certora_internal"
+    found : Path | None = None
+    for p in d.iterdir():
+        if not p.is_dir():
+            continue
+        is_build_mirror = p / "run.conf"
+        if not is_build_mirror.is_file():
+            continue
+        try:
+            payload = json.loads(
+                is_build_mirror.read_text()
+            )
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict) or "msg" not in payload or not isinstance(payload["msg"], str):
+            continue
+        if payload["msg"] == tc_key:
+            found = p
+            break
+    if found is None:
+        raise ValueError("Couldn't find build dir")
+    with tempfile.NamedTemporaryFile("r") as f:
+        tc_rc, tc_output = await _run_captured(
+            "java", "-jar", str(tc_jar), "-buildDirectory", str(found),
+            "-typeCheck", "true", "-listRules", f.name,
+            cwd=folder,
+            timeout=BUILD_TIMEOUT_S,
+        )
+        if tc_rc != 0:
+            raise SpecCompilationError(tc_output)
+        all_rules = f.read()
+    return [s for r in all_rules.split() if (s := r.strip()) and s != "envfreeFuncsStaticCheck"]
 
 async def run_prover(
     folder: Path,
@@ -444,12 +631,28 @@ async def run_prover(
     # only submits and returns, so this isn't used — cloud runtime comes from the job's
     # execution window (see cloud_results / _job_runtime_ms).
     _t0 = time.perf_counter()
-    run_result, stdout = await run_prover_inner(
-        folder,
-        effective_args,
-        lambda ret_code, stdout, stderr: _logger.error("Process failed %d\nstdout:%s\nstderr:%s", ret_code, stdout, stderr),
-        callbacks.on_stdout_line
-    )
+    # The same bound the result poller uses (step 7): whatever the run is allowed
+    # to take, plus slack. It is a backstop against a wedged local phase, not a
+    # budget -- a healthy cloud submit finishes in minutes.
+    subprocess_timeout = prover_opts.global_timeout + 5 * 60
+    try:
+        run_result, stdout = await run_prover_inner(
+            folder,
+            effective_args,
+            lambda ret_code, stdout, stderr: _logger.error("Process failed %d\nstdout:%s\nstderr:%s", ret_code, stdout, stderr),
+            callbacks.on_stdout_line,
+            subprocess_timeout,
+        )
+    except ProverSubprocessTimeout as e:
+        # Returned rather than raised: the agent reads this as a tool result and
+        # can retry or change approach, which beats stalling the run.
+        _logger.error("Prover subprocess timed out: %s", e)
+        return (
+            f"The prover did not finish within {subprocess_timeout:.0f}s and was "
+            f"terminated. This is an infrastructure failure, not a problem with "
+            f"the specification: the local build or type-check phase stopped "
+            f"responding. Retrying may succeed."
+        )
     local_runtime_ms = int((time.perf_counter() - _t0) * 1000)
     if isinstance(run_result, str):
         return run_result
@@ -528,8 +731,13 @@ async def run_prover(
             continue
         prover_report[rule_name] = i.status == "VERIFIED"
 
+    raw_rule_results : dict[RulePath, StatusCodes] = {
+        k.path: k.status for k in parsed.values()
+    }
+
     return ProverReport(
-        rule_status=prover_report,
+        raw_rule_status=raw_rule_results,
         result_str=result_str,
         link=run_result["link"],
+        certora_run_stdout=stdout,
     )

@@ -7,7 +7,7 @@ entries). Wired as ``cache-autoprove`` in ``pyproject.toml``.
 Usage::
 
     # by run id (recommended — recovers the cache root, memory namespace,
-    # threat-model digest and plugin manifest from the run's ``cache_root``
+    # threat-model / extra-context digests and plugin manifest from the run's ``cache_root``
     # tags; works even when the design doc was auto-discovered):
     cache-autoprove run <run_id>
 
@@ -15,7 +15,7 @@ Usage::
     # the design doc, so it does NOT work for auto-discovered runs):
     cache-autoprove inputs <project_root> <main_contract> <system_doc> \\
         --cache-ns <ns> [--memory-ns <ns>] [--threat-model <path>] \\
-        [--plugins <name> ...]
+        [--extra-context <path>]... [--plugins <name> ...]
 """
 
 import argparse
@@ -29,50 +29,49 @@ from typing import AsyncGenerator
 from langgraph.store.base import BaseStore
 
 from composer.input.types import DEFAULT_RECURSION_LIMIT
-from composer.input.files import file_digest
+from composer.input.files import file_digest, resolve_document_paths
 from composer.ui.cache_explorer import (
     CacheNode, StoreNode, CacheTreeNode, CacheExplorerApp, DummyServices,
     node, section, node_for, leaf, memory, collect_tree,
 )
 from composer.spec.context import WorkflowContext, CVLGeneration, CVLJudge, CacheKey
 from composer.spec.source.harness import (
-    config_key,
-    system_setup_key,
-    harness_generation_key,
-    HARNESS_ANALYSIS_KEY,
     ContractSetup,
     SystemDescriptionHarnessed,
     AgentSystemDescription,
     HarnessResult,
 )
-from composer.pipeline.cli import root_cache_key, user_ns
-from composer.pipeline.core import (
-    COMMON_SYSTEM_CACHE_KEY, PROPERTIES_KEY,
-    _component_cache_key, _batch_cache_key, _pre_property_cache_key,
+from composer.pipeline.cli import autoprover_version, root_cache_key, user_ns
+from composer.pipeline.keys import (
+    AGENT_RESULT_KEY, AGENT_ROUND_KEY, BUG_ANALYSIS_KEY,
+    COMMON_SYSTEM_CACHE_KEY, COMPONENT_KEY, FINAL_PROPERTIES_KEY, FORMALIZATION_KEY,
+    PRE_PROPERTY_KEY, PROPERTIES_KEY, SYSTEM_ANALYSIS_KEY,
 )
+from composer.pipeline.ptypes import FinalProperties
+from composer.pipeline.run_mode import run_mode_name
+from composer.spec.types import PropertyFormulation
 from composer.pipeline.plugins import applicable_plugin_manifest, manifest_digest
 from composer.pipeline.run_tags import AutoProveCacheTags, CACHE_ROOT_RECORD
 from composer.core.user import get_uid
 from composer.workflow.services import store_context
 from composer.io.run_index import get_run_data
-from composer.spec.source.summarizer import _summary_key, _SummaryCache
-from composer.spec.source.struct_invariant import STRUCTURAL_INV_KEY, Invariants
-from composer.spec.source.pipeline import INV_CVL_KEY, AP_PROPERTIES_KEY_NAME
+from composer.spec.util import combine_digests
+from composer.spec.source.keys import (
+    AP_PROPERTIES_KEY_NAME, CVL_JUDGE_KEY, HARNESS_ANALYSIS_KEY,
+    HARNESS_GENERATION_KEY, INV_CVL_KEY, LAST_ATTEMPT_KEY, STRUCTURAL_INV_KEY,
+    SUMMARY_KEY, SYSTEM_SETUP_KEY, config_key,
+)
+from composer.spec.source.summarizer import _SummaryCache
+from composer.spec.source.struct_invariant import Invariants
 from composer.spec.prop_inference import (
     _BugAnalysisCache, _AgentResult, _AgentRoundWithHistory,
-    bug_analysis_key_from_digest, agent_round_key, AGENT_RESULT_KEY,
 )
-from composer.spec.cvl_generation import GeneratedCVL, _LastAttemptCache, LAST_ATTEMPT_KEY, CVL_JUDGE_KEY
+from composer.spec.cvl_generation import GeneratedCVL, _LastAttemptCache
 from composer.spec.system_model import (
     SourceApplication, SourceExplicitContract, SourceExternalActor,
     HarnessedApplication, HarnessedExplicitContract, HarnessDefinition,
     ContractInstance, ContractComponentInstance,
 )
-
-
-# The driver writes the analyzed SourceApplication under CacheKey(COMMON_SYSTEM_CACHE_KEY)
-# (pipeline.core.run_pipeline); mirror that key here to read it back.
-SYSTEM_ANALYSIS_KEY = CacheKey[None, SourceApplication](COMMON_SYSTEM_CACHE_KEY)
 
 
 # ---------------------------------------------------------------------------
@@ -174,19 +173,53 @@ async def _resolve_bug_key(
     feat_ctx: WorkflowContext,
     tags: AutoProveCacheTags,
 ) -> CacheKey:
-    """The bug-analysis key is parameterized on the threat-model digest and
-    the refinement (interactive) flag. Both come from the run tags; records
+    """The bug-analysis key is parameterized on the threat-model and extra-context
+    digests and the refinement (interactive) flag. All come from the run tags; records
     written before the ``interactive`` tag existed leave it ``None``, in
     which case probe both variants and use whichever was written."""
+    xc_digest = combine_digests(tags.extra_context_digests)
     if tags.interactive is not None:
-        return bug_analysis_key_from_digest(
+        return BUG_ANALYSIS_KEY(
             tags.threat_model_digest, with_refinement=tags.interactive,
+            extra_context_digest=xc_digest,
         )
     for refine in (False, True):
-        candidate = bug_analysis_key_from_digest(tags.threat_model_digest, refine)
+        candidate = BUG_ANALYSIS_KEY(
+            tags.threat_model_digest, refine, extra_context_digest=xc_digest,
+        )
         if await feat_ctx.child(candidate).cache_get(_BugAnalysisCache) is not None:
             return candidate
-    return bug_analysis_key_from_digest(tags.threat_model_digest, with_refinement=False)
+    return BUG_ANALYSIS_KEY(
+        tags.threat_model_digest, with_refinement=False, extra_context_digest=xc_digest,
+    )
+
+
+async def _resolve_formalization_key(
+    feat_ctx: WorkflowContext,
+    tags: AutoProveCacheTags,
+    bug_items: list[PropertyFormulation],
+) -> CacheKey:
+    """The formalization edge, rebuilt the way the driver derived it.
+
+    ``FinalProperties`` exists for exactly this: it records the batch as it entered
+    formalization, after any post-inference plugin rewrote it and after a prioritized run pruned
+    it, together with the plugin ids that suffix the key. Reconstructing from the raw
+    property-inference output instead misses all three, and lands on a namespace that holds
+    nothing.
+
+    Falls back to the inference output for records written before that entry existed."""
+    xc_digest = combine_digests(tags.extra_context_digests)
+    final = await feat_ctx.child(
+        FINAL_PROPERTIES_KEY(
+            tags.threat_model_digest,
+            bool(tags.interactive),
+            xc_digest,
+            run_mode_name(tags.run_mode),
+        )
+    ).cache_get(FinalProperties)
+    if final is not None:
+        return FORMALIZATION_KEY(GeneratedCVL, final.items, final.tool_plugins)
+    return FORMALIZATION_KEY(GeneratedCVL, bug_items)
 
 
 async def _build_cvl_gen_nodes(
@@ -202,13 +235,13 @@ async def _build_component_nodes(
     store: BaseStore,
     tags: AutoProveCacheTags,
 ) -> AsyncGenerator[CacheTreeNode[AutoProveCachedValue], None]:
-    comp_key = _component_cache_key(feat, manifest_digest(tags.plugins))
+    comp_key = COMPONENT_KEY(feat, manifest_digest(tags.plugins))
     async with node_for(prop_ctx, comp_key, feat.component.name) as feat_ctx:
         # Per-plugin pre-inference namespaces are siblings of the component
         # key under PROPERTIES_KEY, but they're per-component work — surface
         # them inside the component's subtree.
         for plugin in tags.plugins:
-            pre_ctx = prop_ctx.child(_pre_property_cache_key(feat, plugin))
+            pre_ctx = prop_ctx.child(PRE_PROPERTY_KEY(feat, plugin))
             with node(CacheNode(label=f"Plugin pre-inference: {plugin}", ctx=pre_ctx)):
                 async for n in _enumerate_raw_subtree(store, pre_ctx):
                     yield n
@@ -222,7 +255,7 @@ async def _build_component_nodes(
                 i = 0
                 while True:
                     round_node = await leaf(
-                        agent_ctx, agent_round_key(i),
+                        agent_ctx, AGENT_ROUND_KEY(i),
                         f"Round {i + 1}", _AgentRoundWithHistory,
                     )
                     if round_node.value is None:
@@ -233,7 +266,7 @@ async def _build_component_nodes(
         bug_cache = await feat_ctx.child(bug_key).cache_get(_BugAnalysisCache)
         if bug_cache is None:
             return
-        batch_key = _batch_cache_key(bug_cache.items)
+        batch_key = await _resolve_formalization_key(feat_ctx, tags, bug_cache.items)
         async with node_for(feat_ctx, batch_key, "CVL Generation", GeneratedCVL) as cvl_ctx:
             async for n in _build_cvl_gen_nodes(cvl_ctx.abstract(CVLGeneration)):
                 yield n
@@ -244,7 +277,11 @@ async def build_tree_inner(
     store: BaseStore,
     tags: AutoProveCacheTags,
 ) -> AsyncGenerator[CacheTreeNode[AutoProveCachedValue], None]:
-    sa_leaf = await leaf(root_ctx, SYSTEM_ANALYSIS_KEY, "system-analysis", SourceApplication)
+    sa_leaf = await leaf(
+        root_ctx,
+        SYSTEM_ANALYSIS_KEY(SourceApplication, COMMON_SYSTEM_CACHE_KEY),
+        "system-analysis", SourceApplication,
+    )
     yield sa_leaf
 
     # Read config value upfront so we can derive the summary key outside the with block
@@ -252,20 +289,20 @@ async def build_tree_inner(
 
     async with node_for(root_ctx, config_key, "config", ContractSetup) as config_ctx:
         if sa_leaf.value is not None:
-            async with node_for(config_ctx, system_setup_key(sa_leaf.value), "setup", SystemDescriptionHarnessed) as setup_ctx:
+            async with node_for(config_ctx, SYSTEM_SETUP_KEY(sa_leaf.value), "setup", SystemDescriptionHarnessed) as setup_ctx:
                 ha_leaf = await leaf(setup_ctx, HARNESS_ANALYSIS_KEY, "harness-analysis", AgentSystemDescription)
                 yield ha_leaf
                 if ha_leaf.value is not None and ha_leaf.value.needs_harnessing():
                     yield await leaf(
                         setup_ctx,
-                        harness_generation_key(ha_leaf.value),
+                        HARNESS_GENERATION_KEY(ha_leaf.value),
                         "harness-generation",
                         HarnessResult,
                     )
 
     # Summary — key derivable only once ContractSetup is cached
     if config_val is not None:
-        yield await leaf(root_ctx, _summary_key(config_val), "summary", _SummaryCache)
+        yield await leaf(root_ctx, SUMMARY_KEY(config_val), "summary", _SummaryCache)
 
     yield await leaf(root_ctx, STRUCTURAL_INV_KEY, "structural-inv", Invariants)
     async with node_for(root_ctx, INV_CVL_KEY, "invariant-cvl", GeneratedCVL) as inv_cvl_ctx:
@@ -467,7 +504,7 @@ def _resolve_from_inputs(args: argparse.Namespace) -> AutoProveCacheTags | None:
 
     root_ns = user_ns(
         args.cache_ns,
-        root_cache_key(str(project_root), sys_path, relative_path, contract_name),
+        root_cache_key(str(project_root), sys_path, relative_path, contract_name, autoprover_version()),
     )
     memory_ns = args.memory_ns
     if memory_ns:
@@ -481,6 +518,11 @@ def _resolve_from_inputs(args: argparse.Namespace) -> AutoProveCacheTags | None:
         file_digest(pathlib.Path(args.threat_model))
         if args.threat_model is not None else None
     )
+    # The run's own resolver, so the order (hence the key) is reproduced exactly.
+    xc_digests = [
+        file_digest(p)
+        for p in resolve_document_paths(args.extra_context)
+    ]
 
     return AutoProveCacheTags(
         cache_root=list(root_ns),
@@ -488,6 +530,7 @@ def _resolve_from_inputs(args: argparse.Namespace) -> AutoProveCacheTags | None:
         memory_ns=memory_ns,
         plugins=plugins,
         threat_model_digest=tm_digest,
+        extra_context_digests=xc_digests,
         # Not recoverable from the inputs — the tree builder probes both
         # refinement variants of the bug-analysis key.
         interactive=None,
@@ -546,6 +589,8 @@ async def _async_main(args: argparse.Namespace) -> int:
             status += f"  |  Plugins: {', '.join(tags.plugins)}"
         if tags.threat_model_digest:
             status += f"  |  TM digest: {tags.threat_model_digest}"
+        if tags.extra_context_digests:
+            status += f"  |  XC digests: {', '.join(tags.extra_context_digests)}"
 
         app = CacheExplorerApp(
             build_tree=lambda: build_tree(root_ctx, store, tags),
@@ -566,7 +611,8 @@ def main() -> int:
     p_run = sub.add_parser(
         "run",
         help="Explore a run by id (recommended). Reads the tags the run recorded "
-             "in its metadata (cache root, memory ns, plugins, threat-model digest) "
+             "in its metadata (cache root, memory ns, plugins, threat-model and "
+             "extra-context digests) "
              "— works even when the design doc was auto-discovered.",
     )
     p_run.add_argument("run_id", help="Run id (from the autoprove logs / ap-trail).")
@@ -591,6 +637,12 @@ def main() -> int:
                           help="Path to the threat model used for the original run — its "
                                "digest parameterizes the bug-analysis cache key. Omit for "
                                "runs without one.")
+    p_inputs.add_argument("--extra-context", dest="extra_context", action="append",
+                          default=None, metavar="PATH",
+                          help="Extra-context document (or directory of them) used for the "
+                               "original run — their combined digest also parameterizes the "
+                               "bug-analysis cache key. Repeat in the original order; a swept "
+                               "directory must still hold the same files.")
     p_inputs.add_argument("--plugins", dest="plugins", nargs="*", default=None,
                           help="Plugin names active for the original run — the manifest "
                                "digest is suffixed onto per-component cache keys. Defaults "

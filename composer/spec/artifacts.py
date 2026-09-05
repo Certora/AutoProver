@@ -16,14 +16,22 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TypedDict, Unpack
 
+from pydantic import BaseModel
+
 from composer.diagnostics.timing import RunSummary
 from composer.spec.gen_types import PROPERTIES_SUBDIR, under_project
-from composer.spec.types import PropertyFormulation
+from composer.spec.types import CheckName, PropertyFormulation, PropertyTitle, VerificationArtifact
 from composer.spec.util import ensure_dir
 from .types import ArtifactIdentifier, FormalResult
 from composer.spec.source.report.schema import AutoProverReport
 
 _log = logging.getLogger(__name__)
+
+#: Terminal suffix for artifacts persisted from a budget-curtailed generation. The
+#: suffix keeps the file inert — no conf can reference a ``.spec.unverified`` and
+#: forge won't compile a ``.t.sol.unverified`` — while stating exactly what's wrong
+#: with it: the content never passed the validation gates.
+QUARANTINE_SUFFIX = ".unverified"
 
 
 class StoreConfiguration(TypedDict):
@@ -60,8 +68,33 @@ class ArtifactStore[I: ArtifactIdentifier, FormT: FormalResult](ABC):
         self._write_commentary(i.stem, artifact.commentary)
         self._write_property_map(
             i.stem, self._property_suffix,
-            {k: v for (k,v) in artifact.property_units()},
+            {k: v for (k,v) in artifact.property_checks()},
         )
+        return target_path.relative_to(self._project_root)
+
+    def write_quarantined(self, i: I, artifact: FormT) -> Path:
+        """Persist a budget-curtailed artifact for inspection under a poisoned name
+        (``{artifact_file}.unverified``). Only the artifact text is written — no
+        commentary, property map, or backend bundle — so nothing runnable or
+        machine-readable points at content that never passed the validation gates."""
+        target_dir = ensure_dir(self._artifact_dir())
+        target_path = target_dir / (i.artifact_file + QUARANTINE_SUFFIX)
+        target_path.write_text(artifact.artifact_text)
+        return target_path.relative_to(self._project_root)
+
+    def write_plugin_artifact(
+        self, i: I, plugin: str, artifact: VerificationArtifact
+    ) -> Path:
+        """A verification-supporting artifact a plugin's tool registered for unit
+        ``i`` → ``{artifact_dir}/certificates/{stem}/{plugin}/{name}``. The name is
+        reduced to its basename and namespaced per unit and plugin, so tools cannot
+        traverse or collide. Returns the project-relative path (what the report
+        records)."""
+        target_dir = ensure_dir(
+            self._artifact_dir() / "certificates" / i.stem / plugin
+        )
+        target_path = target_dir / Path(artifact.name).name
+        target_path.write_text(artifact.content)
         return target_path.relative_to(self._project_root)
 
     def _deliverable_dir(self) -> Path:
@@ -95,7 +128,7 @@ class ArtifactStore[I: ArtifactIdentifier, FormT: FormalResult](ABC):
         (self._properties_dir() / f"{stem}.commentary.md").write_text(commentary)
 
     def _write_property_map(
-        self, stem: str, suffix: str, mapping: dict[str, list[str]],
+        self, stem: str, suffix: str, mapping: dict[PropertyTitle, list[CheckName]],
     ) -> None:
         """A ``{property title: [demonstrating names]}`` map → ``{stem}.{suffix}.json``.
         Titles are unique (enforced at extraction). ``suffix`` is the workflow's term
@@ -108,6 +141,17 @@ class ArtifactStore[I: ArtifactIdentifier, FormT: FormalResult](ABC):
         report_dir = self._report_dir()
         out = report_dir / "report.json"
         out.write_text(report.model_dump_json(indent=2) + "\n")
+
+    def write_ranking(self, ranking: BaseModel) -> Path:
+        """A prioritized run's full property ranking → ``{report}/property_ranking.json``.
+
+        Written whether or not the report phase later succeeds: it is the record of a decision
+        the run has already acted on, and the only place the scores and rationales behind the
+        deprioritized properties survive."""
+        out = self._report_dir() / "property_ranking.json"
+        out.write_text(ranking.model_dump_json(indent=2) + "\n")
+        _log.info("prioritization: wrote %s", out)
+        return out
 
 
     # -- shared run-level ---------------------------------------------------
@@ -124,21 +168,27 @@ class ArtifactStore[I: ArtifactIdentifier, FormT: FormalResult](ABC):
             json.dumps(payload, indent=2)
         )
 
-    def _job_info_payload(self, summary: RunSummary, *, user_id: str) -> dict[str, object]:
+    def _job_info_payload(
+        self, summary: RunSummary, *, user_id: str, run_mode: str
+    ) -> dict[str, object]:
         """The manifest body shared by every workflow: the tenant ``user_id``, the run's
-        ``run_id``, and the accumulated LLM ``token_usage``. Subclasses extend it with
-        any backend-specific usage they track."""
+        ``run_id``, its ``run_mode``, and the accumulated LLM ``token_usage``. Subclasses
+        extend it with any backend-specific usage they track."""
         return {
             "user_id": user_id,
             "run_id": summary.run_id,
+            "run_mode": run_mode,
             "token_usage": summary.token_usage_summary(),
         }
 
-    def write_job_info(self, summary: RunSummary, *, user_id: str) -> None:
+    def write_job_info(self, summary: RunSummary, *, user_id: str, run_mode: str) -> None:
         """The run's identity + usage manifest → ``{report}/job_info.json``, next to
-        ``report.json``. ``user_id`` is passed in so this stays a pure serializer of run
-        state; the body is :meth:`_job_info_payload`, which subclasses extend."""
-        payload = self._job_info_payload(summary, user_id=user_id)
+        ``report.json``. ``user_id`` and ``run_mode`` are passed in so this stays a pure
+        serializer of run state; the body is :meth:`_job_info_payload`, which subclasses
+        extend. ``run_mode`` is here rather than only in the report because this file is
+        written on every path, crash included, and is what the cloud reads back to tell which
+        mode a finished job ran under."""
+        payload = self._job_info_payload(summary, user_id=user_id, run_mode=run_mode)
         out = self._report_dir() / "job_info.json"
         out.write_text(json.dumps(payload, indent=2) + "\n")
         _log.info("job info: wrote %s", out)

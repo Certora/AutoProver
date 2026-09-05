@@ -1,10 +1,13 @@
 from langchain_core.messages import ToolMessage
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Any, Callable, Concatenate
 
 from contextvars import ContextVar
 from contextlib import contextmanager, asynccontextmanager
 
+
+type ToolDisplayFamily[**P] = Callable[Concatenate[dict, P], str] | str
+type ResultFamilyDisplay[**P] = str | Callable[Concatenate[str, ToolMessage, P], str | None | tuple[str, str]] | None
 
 type DisplayLabelTy = Callable[[dict], str] | str
 type ResultOutputTy = str | Callable[[str, ToolMessage], str | None | tuple[str, str]] | None
@@ -170,9 +173,9 @@ class CommonTools:
         lambda p: f"Researching CVL: {p.get('question', '?')}", "Research result",
         short_display_name="CVL research",
     )
-    scan_knowledge_base = ToolDisplay("Scanning knowledge base", "KB scan results")
-    get_knowledge_base_article = ToolDisplay("Reading KB article", "KB article")
-    knowledge_base_contribute = ToolDisplay("Contributing to KB", "KB contribution")
+    get_cvl_recipe = ToolDisplay(
+        lambda p: f"Retrieving CVL recipe: {p.get('id', '?')}", "CVL recipe",
+    )
 
     # -- Grouped display bundles ---------------------------------------------
     # Each corresponds to a capability provider (builder / service).
@@ -200,11 +203,9 @@ class CommonTools:
 
     @staticmethod
     def kb_displays() -> dict[str, "ToolDisplay"]:
-        """Display entries for tools from ``kb_tools()`` (WorkflowServices)."""
+        """Display entries for tools from ``kb_tools()``."""
         return {
-            "scan_knowledge_base": CommonTools.scan_knowledge_base,
-            "get_knowledge_base_article": CommonTools.get_knowledge_base_article,
-            "knowledge_base_contribute": CommonTools.knowledge_base_contribute,
+            "get_cvl_recipe": CommonTools.get_cvl_recipe,
         }
 
     @staticmethod
@@ -367,7 +368,7 @@ def _register_tool_spec(
 
 from typing import TypeVar
 
-from graphcore.tools.schemas import WithAsyncDependencies, WithAsyncImplementation, WithImplementation, ToolBuilder
+from graphcore.tools.schemas import ToolFamilyParams, WithAsyncDependencies, WithAsyncImplementation, WithImplementation, ToolBuilder, _TemplatedTool, tool_family
 from langchain_core.tools import BaseTool
 from functools import wraps
 
@@ -432,3 +433,42 @@ def tool_display(
             short_display_name=short_label,
         )
     )
+
+def _inject_params_call[**P](
+    m: ToolDisplayFamily[P],
+    *args: P.args,
+    **kwargs: P.kwargs
+) -> DisplayLabelTy:
+    if isinstance(m, str):
+        return m
+    else:
+        return lambda tc_dict: m(tc_dict, *args, **kwargs)
+
+def _inject_params_result[**P](
+    m: ResultFamilyDisplay[P],
+    *args: P.args,
+    **kwargs: P.kwargs
+) -> ResultOutputTy:
+    if isinstance(m, str) or m is None:
+        return m
+    return lambda nm, res_msg: m(nm, res_msg, *args, **kwargs)
+
+def tool_family_display[**P, T: type[WithAsyncDependencies] | type[WithAsyncImplementation] | type[WithImplementation]](
+    label: ToolDisplayFamily[P],
+    result: ResultFamilyDisplay[P],
+    short_label: ToolDisplayFamily[P] | None = None
+) -> Callable[[type[_TemplatedTool[T, Any, P]]], type[_TemplatedTool[T, Any, P]]]:
+    def wrapper(
+        f: type[_TemplatedTool[T, Any, P]]
+    ) -> type[_TemplatedTool[T, Any, P]]:
+        old_with_template = f.with_template
+        @wraps(old_with_template)
+        def new_with_template(*args: P.args, **kwargs: P.kwargs) -> T:
+            return tool_display(
+                _inject_params_call(label, *args, **kwargs),
+                _inject_params_result(result, *args, **kwargs),
+                _inject_params_call(short_label, *args, **kwargs) if short_label is not None else None,
+            )(old_with_template(*args, **kwargs))
+        f.with_template = new_with_template
+        return f
+    return wrapper

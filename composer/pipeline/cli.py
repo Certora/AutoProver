@@ -1,4 +1,5 @@
 from typing import Protocol, AsyncIterator, TYPE_CHECKING
+import json
 import sys
 import pathlib
 import enum
@@ -7,9 +8,15 @@ from contextlib import asynccontextmanager
 import asyncio
 from dataclasses import dataclass
 
+from pydantic import (
+    BaseModel, ConfigDict, Field, NonNegativeFloat, PositiveFloat, ValidationError,
+    field_validator,
+)
+
 from composer.input.types import (
     ExtendedModelOptions,
 )
+from composer.input.files import Document, resolve_document_paths
 
 from composer.diagnostics.logging_setup import setup_autoprove_logging
 from composer.spec.context import SourceFields, WorkflowContext, SourceCode
@@ -17,7 +24,7 @@ from composer.spec.service_host import ServiceHost
 from composer.workflow.services import IndexedConnections, standard_connections
 from composer.pipeline.ptypes import (
     PipelineRun, BackendResult,
-    CorePipelineResult
+    CorePipelineResult, PhaseBudget, RunBudget
 )
 from composer.spec.artifacts import ArtifactIdentifier
 from composer.spec.system_model import FeatureUnit, BaseApplication
@@ -25,14 +32,16 @@ from composer.spec.service_host import ModelProvider
 from composer.spec.types import SourceIdentifier
 from composer.pipeline.ecosystem import Ecosystem
 from .core import PipelineBackend, run_pipeline
+from .run_mode import RunMode
 from .plugins import applicable_plugin_manifest
 from .run_tags import AutoProveCacheTags, CACHE_ROOT_RECORD
 from composer.io.multi_job import HandlerFactory, run_task, TaskInfo
 from composer.diagnostics.timing import RunSummary, install_run_summary
+from composer.io.context import DefaultRetryPolicy, install_retry_policy
 from composer.llm.registry import get_provider_for
 from composer.rag.models import get_model
 from composer.io.thread_logging import RunDataLogger, thread_logger, default_logging_ns
-from composer.kb.knowledge_base import DefaultEmbedder
+from composer.rag.models import DefaultEmbedder
 from composer.ui.tool_display import async_tool_context
 from composer.core.user import user_data_ns, get_uid
 from composer.spec.source.design_doc_finder import (
@@ -46,11 +55,28 @@ from composer.spec.util import fs_forbidden_read
 import hashlib
 
 
+def autoprover_version() -> str:
+    """The git commit recorded for a ``git+``-installed ``ai-composer`` (its ``direct_url.json``),
+    else the package version, else ``"unknown"``."""
+    try:
+        from importlib.metadata import distribution
+        dist = distribution("ai-composer")
+        raw = dist.read_text("direct_url.json")
+        if raw:
+            commit = json.loads(raw).get("vcs_info", {}).get("commit_id")
+            if commit:
+                return str(commit)
+        return dist.version
+    except Exception:
+        return "unknown"
+
+
 def root_cache_key(
     project_root: str,
     system_doc_path: pathlib.Path | None,
     relative_path: str,
     contract_name: str,
+    tool_version: str,
 ):
     # A source-only run (no design doc) hashes a fixed sentinel in place of the doc
     # bytes, so it gets a stable key that is distinct from any real document.
@@ -59,7 +85,7 @@ def root_cache_key(
         if system_doc_path is not None
         else "no-design-doc"
     )
-    combined = "|".join([project_root, doc_hash, relative_path, contract_name])
+    combined = "|".join([project_root, doc_hash, relative_path, contract_name, tool_version])
     return hashlib.sha256(combined.encode()).hexdigest()
 
 
@@ -71,6 +97,58 @@ def user_ns(*parts: str | tuple[str, ...]) -> tuple[str, ...]:
         else:
             out.extend(p)
     return user_data_ns() + tuple(out)
+
+
+BUDGET_PHASES: tuple[str, ...] = tuple(PhaseBudget.__annotations__)
+
+
+class BudgetFile(BaseModel):
+    """Schema of a ``--budget`` file.
+
+    A phase without an explicit cap defaults to ``total`` (bounded by the pool alone —
+    caps are ceilings, not allotments). A cap of ``0.0`` is legal and puts that phase in
+    the wrap-up window from its first monitor tick."""
+    model_config = ConfigDict(extra="forbid")
+
+    total: PositiveFloat = Field(description="The run pool in USD — the real bound on overall spend.")
+    caps: dict[str, NonNegativeFloat] = Field(
+        default_factory=dict,
+        description="Per-phase ceilings in USD, drawn against the pool; any subset of the phase names.",
+    )
+
+    @field_validator("caps")
+    @classmethod
+    def _known_phases(cls, v: dict[str, float]) -> dict[str, float]:
+        if (unknown := set(v) - set(BUDGET_PHASES)):
+            raise ValueError(
+                f"unknown phase(s) {sorted(unknown)}; valid phases: {list(BUDGET_PHASES)}"
+            )
+        return v
+
+    def to_run_budget(self) -> RunBudget:
+        return RunBudget(
+            total=self.total,
+            caps=PhaseBudget(**{p: self.caps.get(p, self.total) for p in BUDGET_PHASES}),  # type: ignore[typeddict-item]
+        )
+
+
+def parse_budget_file(path: pathlib.Path) -> RunBudget:
+    """Parse a run-budget file (JSON, or YAML when PyYAML is installed) into a `RunBudget`.
+    See :class:`BudgetFile` for the schema."""
+    if path.suffix in (".yaml", ".yml"):
+        try:
+            import yaml
+        except ImportError as e:
+            raise ValueError(
+                f"budget file {path} is YAML but PyYAML is not installed; use JSON instead"
+            ) from e
+        raw = yaml.safe_load(path.read_text())
+    else:
+        raw = json.loads(path.read_text())
+    try:
+        return BudgetFile.model_validate(raw).to_run_budget()
+    except ValidationError as e:
+        raise ValueError(f"invalid budget file {path}: {e}") from e
 
 
 class PipelineArgs(ExtendedModelOptions, Protocol):
@@ -85,9 +163,20 @@ class PipelineArgs(ExtendedModelOptions, Protocol):
     @property
     def max_concurrent(self) -> int:
         ...
-    
+
+    @property
+    def max_cpu_tasks(self) -> int:
+        ...
+
     @property
     def threat_model(self) -> str | None:
+        ...
+
+    @property
+    def extra_context(self) -> list[str] | None:
+        """Documents of user-supplied background about the application, fed to property
+        inference in the order given. A directory entry is swept for the documents in
+        it."""
         ...
 
     @property
@@ -109,10 +198,21 @@ class PipelineArgs(ExtendedModelOptions, Protocol):
     @property
     def main_contract(self) -> str:
         ...
-    
+
     @property
     def system_doc(self) -> str | None:
         ...
+
+    @property
+    def budget(self) -> str | None:
+        """Path to a run-budget file (see :func:`parse_budget_file`), or None to run unbudgeted."""
+        ...
+
+    @property
+    def time_budget(self) -> float | None:
+        """
+        Time in floating point seconds that autoprover should run. None to run with unlimited, in process timeout
+        """
 
 @dataclass
 class StagedPipeline:
@@ -124,10 +224,10 @@ class StagedPipeline:
     root_key: str
 
 class Continuation[P: enum.Enum, H](Protocol):
-    async def __call__[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
+    async def __call__[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
         self,
         env: ServiceHost,
-        backend: PipelineBackend[P, FormT, H, A, U, Main, App],
+        backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
         ecosystem: Ecosystem[App, Main, U]
     ) -> CorePipelineResult[FormT]:
         ...
@@ -148,10 +248,14 @@ async def cli_pipeline[P: enum.Enum, H](
     task_handler: HandlerFactory[P, H],
     design_doc_phase: P,
     at_exit: AtExit | None = None,
+    run_mode: RunMode = RunMode.COMPREHENSIVE,
     **metadata
 ) -> AsyncIterator[tuple[StagedPipeline, Continuation[P, H]]]:
     project_root = pathlib.Path(args.project_root).resolve()
     main_contract_path, contract_name = args.main_contract.split(":", 1)
+
+    # Parse the budget up front so a malformed file fails before any services spin up.
+    budget = parse_budget_file(pathlib.Path(args.budget)) if args.budget is not None else None
 
     full_contract_path = pathlib.Path(main_contract_path).resolve()
     if not full_contract_path.is_relative_to(project_root):
@@ -172,12 +276,18 @@ async def cli_pipeline[P: enum.Enum, H](
     tiered = get_provider_for(tiered=args)
 
     semaphore = asyncio.Semaphore(args.max_concurrent)
+    cpu_semaphore = asyncio.Semaphore(args.max_cpu_tasks)
 
     model = get_model()
     text_log, events_log = setup_autoprove_logging(project_root, thread_id)
     print(f"autoprove logs: {text_log}\n           events: {events_log}", file=sys.stderr)
     print(f"Selected run id: {summary.run_id}")
     install_run_summary(summary)
+    # Run-wide retry floor: transient provider failures (as classified by the
+    # provider itself) resume any graph in the run from its last checkpoint
+    # instead of killing the whole pipeline. Installed once here — contextvar
+    # inheritance carries it into every task the run spawns.
+    install_retry_policy(DefaultRetryPolicy(tiered.provider_service.should_retry))
 
     disc_cache_ns: tuple[str, ...] | None = (
         user_ns(args.cache_ns, "discovery",
@@ -253,7 +363,8 @@ async def cli_pipeline[P: enum.Enum, H](
                 project_root=str(project_root),
                 contract_name=contract_name,
                 relative_path=relative_path,
-                system_doc_path=system_doc
+                system_doc_path=system_doc,
+                tool_version=autoprover_version(),
             )
             cache_root = user_ns(args.cache_ns, root_key) if args.cache_ns is not None else None
 
@@ -261,6 +372,21 @@ async def cli_pipeline[P: enum.Enum, H](
                 await conns.uploader.get_document(pathlib.Path(threat_path))
                 if (threat_path := args.threat_model) is not None else None
             )
+            # Gathered rather than awaited one at a time: a swept directory of PDFs is
+            # one upload round trip each. ``gather`` preserves order, which the prompt
+            # and the bug-analysis cache key both depend on.
+            context_paths = resolve_document_paths(args.extra_context)
+            loaded = await asyncio.gather(*(conns.uploader.get_document(p) for p in context_paths))
+            extra_context: list[Document] = []
+            for path, doc in zip(context_paths, loaded):
+                if doc is None:
+                    raise ValueError(f"Fatal error, failed to read extra context: {path}")
+                extra_context.append(doc)
+            if budget is not None:
+                await data_logger("budget", {
+                    "total": budget.total, "caps": dict(budget.caps),
+                })
+
             full_source = SourceCode(
                 content=system_doc_content,
                 contract_name=init_source.contract_name,
@@ -269,9 +395,9 @@ async def cli_pipeline[P: enum.Enum, H](
                 relative_path=init_source.relative_path
             )
 
-            async def cont[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
+            async def cont[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
                 env: ServiceHost,
-                backend: PipelineBackend[P, FormT, H, A, U, Main, App],
+                backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
                 ecosystem: Ecosystem[App, Main, U]
             ) -> CorePipelineResult[FormT]:
                 await data_logger(CACHE_ROOT_RECORD, AutoProveCacheTags(
@@ -280,7 +406,9 @@ async def cli_pipeline[P: enum.Enum, H](
                     memory_ns=memory_ns,
                     plugins=applicable_plugin_manifest(ecosystem.unit_type),
                     threat_model_digest=threat_model.to_digest() if threat_model is not None else None,
+                    extra_context_digests=[d.to_digest() for d in extra_context],
                     interactive=args.interactive,
+                    run_mode=run_mode.value,
                 ).model_dump())
                 full_ctx = WorkflowContext.create(
                     services=conns.memory,
@@ -294,7 +422,9 @@ async def cli_pipeline[P: enum.Enum, H](
                     ctx=full_ctx,
                     source=full_source,
                     env=env,
-                    _semaphore=semaphore,
+                    run_mode=run_mode,
+                    _agent_semaphore=semaphore,
+                    _cpu_semaphore=cpu_semaphore,
                     _handler_factory=task_handler
                 )
                 return await run_pipeline(
@@ -303,6 +433,9 @@ async def cli_pipeline[P: enum.Enum, H](
                     interactive=args.interactive,
                     max_bug_rounds=args.max_bug_rounds,
                     threat_model=threat_model,
+                    extra_context=extra_context,
+                    budget=budget,
+                    time_budget_s=args.time_budget,
                     ecosystem=ecosystem,
                 )
 

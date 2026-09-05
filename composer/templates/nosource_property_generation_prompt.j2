@@ -114,7 +114,8 @@ use the following decision procedure:
 To reference another contract's state variables within your specification or call its functions,
 you must explicitly register that contract's source as an input to the Prover. Use the `register_verification_file` tool to register
 a file for inclusion. **NOTE**: The stub for the contract containing the component under verification
-is automatically registered in the prover inputs.
+is automatically registered in the prover inputs. If a file you registered turns out not to belong in the
+build, `unregister_verification_file` removes it again.
 
 {% include "natspec_stub_tools_guidance.j2" %}
 
@@ -180,6 +181,5 @@ recorded in memory do NOT need to be re-verified.
 </task>
 
 <guidance>
-{% include "cvl_guidelines.j2" %}
 {% include "cvl_additions.j2" %}
 </guidance>

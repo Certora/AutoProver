@@ -18,7 +18,7 @@ from composer.foundry.author import GeneratedFoundryTest
 from composer.foundry.runner import infer_test_dir
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import SourceCode
-from composer.spec.cvl_generation import SkippedProperty
+from composer.authoring.state import SkippedProperty
 from composer.spec.gen_types import (
     FOUNDRY_DELIVERABLE_DIR, FOUNDRY_INTERNAL_DIR, under_project,
 )

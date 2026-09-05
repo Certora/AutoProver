@@ -43,7 +43,7 @@ of which control how the Prover reasons about the smart contract's execution, an
 the counter example it produces. You should use the `cvl_researcher` subagent to help
 understand the input CVL.
 
-{% include "prover_warning_partial.j2" %}
+{% include "prover_warning_fragment.j2" %}
 
 Importantly, you are NOT responsible for proposing how to FIX this issue. Your role is simply
 to explain the counterexample and identify the root cause.
@@ -119,12 +119,10 @@ use the source code to identify missing logic, intended external call invocation
 etc.
 
 For CVL-language questions (what does this construct mean, why would
-this annotation produce a havoc, etc.), use the `cvl_researcher` sub-agent
-or the manual / KB tools. Cite refs in your output per the protocol
-below.
+this annotation produce a havoc, etc.), use the CVL manual tools.
 
-{% with doc_ref_code = false %}
-{% include "doc_ref_author.j2" %}
+{% with cvl_kb = false, cvl_researcher = false %}
+{% include "cvl_tools_system_prompt.j2" %}
 {% endwith %}
 
 Use `write_rough_draft` and `read_rough_draft` to organize your reasoning

@@ -3,7 +3,9 @@
 Single self-contained page (inline CSS, no external assets): a header with outcome counts, one
 section per high-level `PropertyGroup` (status badge + description + a rule table whose per-rule
 descriptions are the in-group property claims that pull each rule in), a formalization-gaps section
-(declined properties + components that gave up), and a coverage footer. The HTML is built by
+(declined properties + components that gave up), an appendix for components the run budget cut
+short (counts-first summary per component, collapsed per-property breakdown), and a coverage
+footer. The HTML is built by
 ``autoprove_report.html.j2``; this module only assembles the render context — no markup here. The
 template's parameters are typed by `ReportTemplateParams` and rendered through the `TypedTemplate`
 infra, so a context/template drift is a type error.
@@ -22,13 +24,14 @@ import sys
 from collections import Counter
 from pathlib import Path
 from typing import TypedDict
+from collections.abc import Sequence
 
 from composer.spec.gen_types import TypedTemplate
 from composer.templates.loader import load_jinja_template
 from composer.spec.source.report.schema import (
-    AutoProverReport, CoverageReport, Finding, FormalizedProperty, GaveUpComponent, GroupStatus, Outcome,
-    PropertyGroup, PropertyKey, ReportBackend, RuleRef, RuleVerdict, SkippedClaim,
-    SourceEditRecord,
+    AutoProverReport, ComponentName, CoverageReport, CurtailedComponent, Finding,
+    FormalizedProperty, GaveUpComponent, GroupStatus, Outcome, PropertyGroup, PropertyKey,
+    ReportBackend, RuleRef, RuleVerdict, SkippedClaim, SourceEditRecord,
 )
 
 
@@ -66,6 +69,13 @@ _OUTCOME_LABELS: dict[ReportBackend, dict[Outcome, str]] = {
         Outcome.GOOD: "Successful test", Outcome.BAD: "Failing test", Outcome.ERROR: "Error",
         Outcome.TIMEOUT: "Timeout", Outcome.UNKNOWN: "Unknown",
     },
+    # The analysis-only backend never produces a verdict, so UNKNOWN is the label that matters:
+    # "Unverified" states why the row is empty, where "Unknown" would read as a failed attempt.
+    # The rest are neutral words, present because the table has to be total.
+    "none": {
+        Outcome.GOOD: "Passed", Outcome.BAD: "Failed", Outcome.ERROR: "Error",
+        Outcome.TIMEOUT: "Timeout", Outcome.UNKNOWN: "Unverified",
+    },
 }
 _GROUP_LABELS: dict[ReportBackend, dict[GroupStatus, str]] = {
     "prover": {
@@ -75,6 +85,10 @@ _GROUP_LABELS: dict[ReportBackend, dict[GroupStatus, str]] = {
     "foundry": {
         GroupStatus.GOOD: "All tests passing", GroupStatus.BAD: "Has failing test",
         GroupStatus.PARTIAL: "Partial", GroupStatus.UNKNOWN: "No results",
+    },
+    "none": {
+        GroupStatus.GOOD: "All passing", GroupStatus.BAD: "Has failure",
+        GroupStatus.PARTIAL: "Partial", GroupStatus.UNKNOWN: "Unverified",
     },
 }
 
@@ -97,6 +111,10 @@ _TERMS: dict[ReportBackend, ReportTerms] = {
     "foundry": ReportTerms(
         title="Foundry test report", unit_singular="test", unit_plural="tests",
         unit_cap="Test", outcomes_label="Test outcomes",
+    ),
+    "none": ReportTerms(
+        title="Property report", unit_singular="property", unit_plural="properties",
+        unit_cap="Property", outcomes_label="Property outcomes",
     ),
 }
 
@@ -132,6 +150,9 @@ class RowView(TypedDict):
     line: int | None
     link: LinkView
     descriptions: list[str]
+    #: Backend diagnostic for a non-GOOD row (e.g. the fuzzer's counterexample / failed-assertion
+    #: message). ``None`` when the backend supplied none.
+    message: str | None
 
 
 class GroupView(TypedDict):
@@ -163,6 +184,28 @@ class FindingView(TypedDict):
     spec_file: str | None
 
 
+class CurtailedRowView(TypedDict):
+    """One property row in a curtailed component's per-property breakdown. ``units`` (drafted
+    rows) and ``note`` (skip reason) feed the Notes cell; both empty renders an em-dash."""
+    description: str
+    sort: str
+    label: str
+    kind: str
+    units: Sequence[str]
+    note: str | None
+
+
+class CurtailedView(TypedDict):
+    component: str
+    status_label: str
+    status_kind: str
+    summary: str
+    artifact: str | None
+    link: LinkView
+    detail: str | None
+    rows: list[CurtailedRowView]
+
+
 class ReportTemplateParams(TypedDict):
     """The full, typed context of ``autoprove_report.html.j2``."""
     contract_name: str
@@ -177,10 +220,40 @@ class ReportTemplateParams(TypedDict):
     groups: list[GroupView]
     skipped: list[SkippedClaim]
     gave_up: list[GaveUpComponent]
+    curtailed: list[CurtailedView]
     source_edits: list[SourceEditRecord]
 
 
 _REPORT_TEMPLATE = TypedTemplate[ReportTemplateParams]("autoprove_report.html.j2")
+
+
+def outcome_label(backend: ReportBackend, outcome: Outcome) -> str:
+    """The human word an auditor reads for an ``Outcome`` under a backend (e.g. a ``prover``
+    ``GOOD`` → "Verified", a ``foundry`` ``GOOD`` → "Successful test").
+
+    The report's HTML render is the primary consumer, but the console/TUI verdict
+    rollups reuse this so the same run reads with one vocabulary everywhere — this is
+    the single place the per-backend wording lives."""
+    return _OUTCOME_LABELS[backend][outcome]
+
+
+#: One glyph per outcome, for the places a verdict has to scan at a glance rather than read: the
+#: console rollup's per-unit listing and the TUI's notice callouts. Backend-independent, unlike the
+#: labels — a ✓ means the same thing whichever prover produced it.
+_OUTCOME_GLYPHS: dict[Outcome, str] = {
+    Outcome.GOOD: "✓",
+    Outcome.BAD: "✗",
+    Outcome.TIMEOUT: "⧖",
+    Outcome.ERROR: "!",
+    Outcome.UNKNOWN: "?",
+}
+
+
+def outcome_glyph(outcome: Outcome) -> str:
+    """The at-a-glance mark for an ``Outcome``. Lives beside :func:`outcome_label` because it answers
+    the same question — how this outcome reads to a human — and every surface that shows a glyph
+    must show the same one."""
+    return _OUTCOME_GLYPHS[outcome]
 
 
 def _is_url(link: str) -> bool:
@@ -220,7 +293,7 @@ def _group_view(
     rules_by_ref: dict[RuleRef, RuleVerdict],
     unit_labels: dict[Outcome, str],
     group_labels: dict[GroupStatus, str],
-    edited_components: set[str],
+    edited_components: set[ComponentName],
 ) -> GroupView:
     """Invert the group's members into rule rows: each rule the group's properties formalize, labelled
     with the descriptions of the in-group properties that pull it in (the edge labels). The same rule
@@ -249,6 +322,7 @@ def _group_view(
             "line": rule.line if rule else None,
             "link": _link_view(rule.prover_link if rule else None),
             "descriptions": descriptions[ref],
+            "message": rule.message if rule else None,
         })
     return {
         "slug": group.slug,
@@ -283,6 +357,50 @@ def _finding_view(f: Finding) -> FindingView:
     }
 
 
+def _plural(n: int, singular: str, plural: str) -> str:
+    return f"{n} {singular if n == 1 else plural}"
+
+
+def _curtailed_view(c: CurtailedComponent) -> CurtailedView:
+    """One appendix card: a counts-first summary sentence, then a per-property breakdown row per
+    inferred property (disposition badge + the declared units / skip reason as notes)."""
+    total = len(c.drafted) + len(c.skipped) + len(c.unattempted)
+    parts: list[str] = []
+    if c.drafted:
+        parts.append(f"{len(c.drafted)} drafted but never verified")
+    if c.skipped:
+        parts.append(f"{len(c.skipped)} skipped")
+    if c.unattempted:
+        parts.append(f"{len(c.unattempted)} never attempted")
+    summary = f"Of {_plural(total, 'inferred property', 'inferred properties')}: {', '.join(parts)}."
+
+    rows: list[CurtailedRowView] = []
+    for d in c.drafted:
+        rows.append({"description": d.description, "sort": d.sort,
+                     "label": "Drafted — unverified", "kind": "warn",
+                     "units": d.units, "note": None})
+    for s in c.skipped:
+        rows.append({"description": s.description, "sort": s.sort,
+                     "label": "Skipped", "kind": "muted",
+                     "units": [], "note": s.reason})
+    for p in c.unattempted:
+        rows.append({"description": p.description, "sort": p.sort,
+                     "label": "Not attempted", "kind": "muted",
+                     "units": [], "note": None})
+
+    published = c.artifact is not None
+    return {
+        "component": c.component,
+        "status_label": "partial draft published" if published else "nothing published",
+        "status_kind": "warn" if published else "bad",
+        "summary": summary,
+        "artifact": c.artifact,
+        "link": _link_view(c.run_link),
+        "detail": c.detail,
+        "rows": rows,
+    }
+
+
 def _build_context(report: AutoProverReport) -> ReportTemplateParams:
     props_by_key = {p.key: p for p in report.properties}
     rules_by_ref = {r.ref: r for r in report.rules}
@@ -309,6 +427,7 @@ def _build_context(report: AutoProverReport) -> ReportTemplateParams:
         ],
         "skipped": report.skipped,
         "gave_up": report.gave_up_components,
+        "curtailed": [_curtailed_view(c) for c in report.curtailed_components],
         "source_edits": report.source_edits,
     }
 

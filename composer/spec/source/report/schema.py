@@ -15,26 +15,14 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from composer.spec.types import PropertyFormulation
-
-type RuleName = str
-"""A CVL rule/invariant identifier as it appears in the prover report and in a component's
-``property_rules`` mapping."""
-
-type ComponentName = str
-"""Human name of an AIComposer component (e.g. "Increment"), or "Structural Invariants"."""
-
-type PropertyTitle = str
-"""A property's unique snake_case title — the key in a component's ``property_rules`` mapping."""
+from composer.spec.types import (
+    ComponentName, PropertyFormulation, PropertyKey, PropertyTitle, PropertyType, RuleName,
+)
 
 type RuleRef = tuple[str, RuleName]
 """A rule's identity: ``(spec_file, name)``. A name is only unique within a spec, so the defining
 spec file disambiguates a rule re-stated under the same name in another spec (and collapses a single
 definition — e.g. an imported structural invariant — seen through several component runs)."""
-
-type PropertyKey = tuple[ComponentName, PropertyTitle]
-"""A property's identity: ``(component, title)`` — the cross-reference key groups use for members."""
-
 
 class Outcome(str, Enum):
     """Backend-agnostic per-unit (rule / test) result. Each backend's native analysis status maps
@@ -54,6 +42,19 @@ class Outcome(str, Enum):
     ERROR = "ERROR"
     TIMEOUT = "TIMEOUT"
     UNKNOWN = "UNKNOWN"
+
+    @classmethod
+    def parse(cls, raw: str) -> "Outcome | None":
+        """``raw`` as an outcome, or ``None`` when it names none.
+
+        For values arriving from outside this repo — a backend wheel's JSON, a ``report.json`` read
+        cold — where an unrecognized label is version skew rather than a bug, and the caller decides
+        what to do about it (record UNKNOWN, drop a glyph). For a value we produced ourselves,
+        ``Outcome(raw)`` and its ValueError remain the right thing."""
+        try:
+            return cls(raw)
+        except ValueError:
+            return None
 
 
 class GroupStatus(str, Enum):
@@ -84,6 +85,11 @@ class RuleVerdict(BaseModel):
     line: int | None = None
     duration_seconds: float | None = None
     prover_link: str | None = None
+    message: str | None = Field(
+        default=None,
+        description="Human-readable explanation of a non-GOOD outcome (e.g. the fuzzer's "
+        "counterexample / failed-assertion message). Diagnostics only; may be absent.",
+    )
 
     @property
     def ref(self) -> RuleRef:
@@ -122,6 +128,43 @@ class GaveUpComponent(BaseModel):
     properties: list[PropertyFormulation]
 
 
+class DraftedProperty(PropertyFormulation):
+    """A curtailed component's property the author claims to have encoded, with the units it
+    named at publish. Unverified: the publish gates were lifted, so the claim was never checked
+    against a judge or a verification run."""
+    units: list[RuleName] = Field(
+        default_factory=list,
+        description="The rule/test names the author declared for this property — an unchecked claim.",
+    )
+
+
+class CurtailedSkip(PropertyFormulation):
+    """A curtailed component's property the author explicitly skipped (typically citing the
+    budget) before publishing what remained."""
+    reason: str
+
+
+class CurtailedComponent(BaseModel):
+    """A component whose formalization the run budget cut short. Whatever it published was
+    accepted with the validation gates lifted, so neither the encoding nor any verification
+    result is reliable: the component contributes nothing to ``properties``/``rules``/``groups``
+    and is reported in the budget appendix instead. Its inferred properties are partitioned by
+    disposition: ``drafted`` (claimed encoded, unverified), ``skipped`` (explicitly declined,
+    with reason), ``unattempted`` (never reached)."""
+    component: ComponentName
+    #: Project-relative path of the quarantined partial encoding; None when the run was cut off
+    #: before anything was published.
+    artifact: str | None = None
+    #: Last verification-run link the partial result carried, if any (context only — its
+    #: outcome predates the final encoding and proves nothing about it).
+    run_link: str | None = None
+    #: Optional account of the termination (hard-stop message / the author's own words).
+    detail: str | None = None
+    drafted: list[DraftedProperty] = Field(default_factory=list)
+    skipped: list[CurtailedSkip] = Field(default_factory=list)
+    unattempted: list[PropertyFormulation] = Field(default_factory=list)
+
+
 class PropertyGroup(BaseModel):
     """An audit-level "P-NN" heading: a synthesized claim over a set of `FormalizedProperty`s (its
     ``members``, by identity). Members partition — each property belongs to exactly one group —
@@ -137,16 +180,24 @@ class PropertyGroup(BaseModel):
 class CoverageReport(BaseModel):
     """Validation outcomes after grouping (see :func:`coverage.validate`)."""
     total_properties: int
+    #: Properties this run inferred and then chose not to pursue — non-zero only in a
+    #: prioritized run, where formalization is deliberately narrowed to one focus. Read it
+    #: alongside ``total_properties``, which counts only what reached the groupings.
+    deprioritized_count: int = 0
     total_rules: int
     total_groups: int
     properties_per_group_min: int
     properties_per_group_max: int
     property_coverage_complete: bool
+    """Every property that reached formalization landed in a group. It says nothing about
+    whether every property the run *inferred* was pursued — a prioritized run drops most of
+    them before this point, and reports that in ``deprioritized_count``."""
     properties_in_no_group: list[PropertyKey] = Field(default_factory=list)
     #: rules whose properties span >1 group — expected (rules repeat), reported as a stat not an error
     rules_spanning_multiple_groups: list[RuleName] = Field(default_factory=list)
     skipped_count: int = 0
     gave_up_component_count: int = 0
+    curtailed_component_count: int = 0
     dropped_orphan_rules: int = 0
     warnings: list[str] = Field(default_factory=list)
 
@@ -170,10 +221,31 @@ class SourceEditRecord(BaseModel):
     cumulative_diff: str
 
 
-type ReportBackend = Literal["prover", "foundry"]
+class VerificationArtifactRecord(BaseModel):
+    """A verification-supporting file a plugin's tool produced during one component's
+    formalization — a Lean proof discharging instrumented lemmas, an auxiliary
+    certificate, etc. The content lives on disk at ``path`` (project-relative, written
+    by the artifact store); the record carries provenance and a description for the
+    deliverable. Deliberately its own model: report.json is a persisted contract."""
+    component: ComponentName
+    #: The contributing plugin's id (its entry-point name).
+    plugin: str
+    #: File basename as registered by the tool.
+    name: str
+    #: Open vocabulary, e.g. "lean-proof".
+    kind: str
+    description: str
+    path: str
+
+
+type ReportBackend = Literal["prover", "foundry", "none"]
 """Which pipeline produced this report. Provenance only — every backend fills the same fields;
-this tag just lets the renderer pick the right outcome labels ("Verified" vs "Successful test")
-for a report.json it reads cold."""
+this tag just lets the renderer pick the right outcome labels ("Verified" vs "Successful test"
+vs "Unverified") for a report.json it reads cold. The producers are the CVL prover (``"prover"``),
+Foundry (``"foundry"``), and ``"none"`` — a pipeline that records properties without verifying them
+(the analysis-only null backend, ``composer.spec.solana.null_backend``), whose reports are all
+UNKNOWN and say so. The set is closed: every backend lives in this repo, so a verification backend
+adds its own literal here, plus its wording in ``report/render.py``."""
 
 
 # ---------------------------------------------------------------------------
@@ -237,10 +309,27 @@ class Finding(BaseModel):
     provenance: FindingProvenance | None = None
 
 
+class DeprioritizedProperty(PropertyFormulation):
+    """A property this run inferred and deliberately did not pursue, with the ranker's reason.
+
+    Present only for a prioritized run. The point of recording them is that a prioritized
+    report otherwise looks exactly like a contract with very few properties: this is the list
+    that says what was set aside, and why."""
+    component: ComponentName
+    score: int
+    rationale: str
+
+
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
     schema_version: Literal["3.0", "3.1"] = "3.1"
     backend: ReportBackend = "prover"
+    #: How much of the inferred property set the run pursued ("comprehensive" or
+    #: "prioritized"). Absent on reports written before the mode existed, which are all
+    #: comprehensive.
+    run_mode: str | None = None
+    #: What a prioritized run set aside. Empty for a comprehensive run.
+    deprioritized: list[DeprioritizedProperty] = Field(default_factory=list)
     contract_name: str
     run_timestamp_utc: str | None = None
     #: component name (or "Structural Invariants") -> prover run link/path
@@ -251,9 +340,15 @@ class AutoProverReport(BaseModel):
     #: Formalization gaps — properties that exist but no rule formalizes (see the two gap types).
     skipped: list[SkippedClaim] = Field(default_factory=list)
     gave_up_components: list[GaveUpComponent] = Field(default_factory=list)
+    #: Components the run budget cut short — excluded from every table above, rendered as an
+    #: appendix.
+    curtailed_components: list[CurtailedComponent] = Field(default_factory=list)
     #: Source modifications each component's verification ran against; empty when every
     #: component was verified against the on-disk source.
     source_edits: list[SourceEditRecord] = Field(default_factory=list)
+    #: Verification-supporting artifacts registered by plugin tools during
+    #: formalization (Lean proofs et al.), written to disk by the artifact store.
+    verification_artifacts: list[VerificationArtifactRecord] = Field(default_factory=list)
     coverage: CoverageReport
     #: Violated rules surfaced as audit issues (one per BAD rule; empty
     #: when nothing is violated, when synthesis was unavailable, or for a non-prover backend). Prose

@@ -1,7 +1,7 @@
 """Anthropic LLM backend: model-name probing, Files-API uploader, and the
 ``ModelProvider`` implementation that mints ``ChatAnthropic`` instances."""
 
-from typing import Literal, TypeGuard, Any, TYPE_CHECKING
+from typing import Literal, TypeGuard, Any, TYPE_CHECKING, override, cast
 from io import BytesIO
 from dataclasses import dataclass, field
 import asyncio
@@ -14,11 +14,13 @@ from composer.input.types import ModelConfiguration
 from composer.llm.provider import (
     ProviderServiceBase, ProviderSpec, compaction_threshold
 )
+from composer.llm.pricing import PriceProvider, price_provider_for
 from .types import CacheLevel
 from .list_iter import ListIter, NoSuchElementError
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
+    from graphcore.graph import RawMessageType
 
 
 # --- model probing ---------------------------------------------------------
@@ -202,7 +204,33 @@ class AnthropicService(ProviderServiceBase):
             AnthropicFileUploader.lazy
         )
 
+    @override
+    def cache_marker(self, payload: "RawMessageType", cache_level: CacheLevel) -> "RawMessageType":
+        if (ttl := level_to_ttl(cache_level)) is None:
+            return super().cache_marker(payload, cache_level)
+        to_ret = payload
+        if not isinstance(to_ret, dict):
+            to_ret = cast(dict, {"type": "text", "text": to_ret})
+        else:
+            to_ret = to_ret.copy()
+        to_ret["cache_control"] = {
+            "type": "ephemeral",
+            "ttl": ttl
+        }
+        return to_ret
 
+    @override
+    def should_retry(self, exc: Exception) -> bool:
+        """Mirrors the SDK's own ``_should_retry`` status roster (408/409/429
+        and every 5xx, which covers 529 overloaded) plus connection-level
+        failures (``APITimeoutError`` subclasses ``APIConnectionError``).
+        400-class request errors are deterministic — an over-long prompt fails
+        identically on every attempt — and are deliberately excluded."""
+        if isinstance(exc, anthropic.APIConnectionError):
+            return True
+        if isinstance(exc, anthropic.APIStatusError):
+            return exc.status_code in (408, 409, 429) or exc.status_code >= 500
+        return False
 
 @dataclass
 class AnthropicModelProvider:
@@ -213,8 +241,10 @@ class AnthropicModelProvider:
     model_name: str
     options: ModelConfiguration
     features: ModelFeatures
+    price_provider: PriceProvider
 
     provider: AnthropicService = field(default_factory=_get_service)
+
 
     @staticmethod
     def create(model_name: str, options: ModelConfiguration) -> "AnthropicModelProvider":
@@ -222,6 +252,7 @@ class AnthropicModelProvider:
             model_name,
             options,
             _model_parser(model_name),
+            price_provider_for(model_name)
         )
 
     @property
@@ -233,6 +264,7 @@ class AnthropicModelProvider:
     ) -> "BaseChatModel":
         from langchain_anthropic import ChatAnthropic
         from composer.diagnostics.usage_callback import UsageCallback
+        from composer.diagnostics.cost_callback import CostAccumulator
 
         opts = self.options
         thinking: dict[str, Any] | None
@@ -261,13 +293,27 @@ class AnthropicModelProvider:
         return ChatAnthropic(
             model_name=self.model_name,
             max_tokens_to_sample=opts.tokens,
-            timeout=None,
+            # An explicit None DISABLES the SDK's timeouts (None != not-given), so a
+            # socket that dies silently mid-stream hangs the session forever. A float
+            # is a per-phase httpx timeout — for a streamed response, the max silence
+            # between chunks, not a cap on the whole turn.
+            timeout=300.0,
+            # Stream every request: a long authoring turn (Opus + thinking on a large
+            # prompt) can exceed the SDK's 600s non-streaming ceiling, and a silent
+            # 10-minute wait is long enough for NAT/idle killers to drop the socket
+            # (surfaces as APIConnectionError mid-run). Streaming keeps bytes flowing.
+            streaming=True,
             max_retries=8,
             stop=None,
             betas=betas,
             thinking=thinking,
             model_kwargs=model_kwargs,
-            callbacks=[UsageCallback()],
+            callbacks=[
+                UsageCallback(),
+                CostAccumulator(
+                    self.price_provider, long_cache=cache_level == CacheLevel.LONG
+                ),
+            ],
         )
 
 ANTHROPIC_SPEC = ProviderSpec(

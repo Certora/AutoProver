@@ -17,7 +17,7 @@ class FeatureUnit(Protocol):
     keys, task ids, labels, and context tags ecosystem-agnostic."""
 
     @property
-    def display_name(self) -> str:
+    def display_name(self) -> ComponentName:
         """Human label for tasks / report rows."""
         ...
 
@@ -101,11 +101,21 @@ class ExplicitContract(BaseModel):
     description : str = Field(description="A short description of what this contract's role is in the system")
     components : list[ContractComponent] = Field(description="Components making up this contract.")
 
+#: The frame every LLM-authored path field in this module is written in. Stated once and
+#: spliced into each such description so the three of them cannot drift apart.
+PROJECT_RELATIVE = (
+    "The path is relative to the project root — the directory the file tools list and read "
+    "from, not the directory the contract happens to sit in."
+)
+
 class SourceExplicitContract(ExplicitContract):
     """
     A concrete contract type in the system.
     """
-    path: str = Field(description="The relative path to the file which defines the contract type this represents")
+    path: str = Field(description=(
+        "The relative path to the file which defines the contract type this represents. "
+        + PROJECT_RELATIVE
+    ))
 
 class HarnessDefinition(BaseModel):
     path: str
@@ -128,7 +138,10 @@ class SourceExternalActor(ExternalActor):
     Some "external actor" to the system. This may be an administrator, an EOA,
     or some off-chain component, or a contract deployed and managed by someone else.
     """
-    path : str | None = Field(description="The relative path to the interface describing this external actor, if relevant.")
+    path : str | None = Field(description=(
+        "The relative path to the interface describing this external actor, if relevant. "
+        + PROJECT_RELATIVE
+    ))
 
 type SystemComponent = ExternalActor | ExplicitContract
 
@@ -191,7 +204,9 @@ class FromSourceContract(ExplicitContract):
 
 class ExistingFromSource(FromSourceContract):
     """An already-present contract in the source tree."""
-    path: str = Field(description="The relative path to the file defining this contract.")
+    path: str = Field(description=(
+        "The relative path to the file defining this contract. " + PROJECT_RELATIVE
+    ))
     tag: Literal["unchanged", "edited"] = Field(description=(
         "Relationship of this contract to the change being built: "
         "'unchanged' if it's an existing dependency left as-is, "
@@ -279,7 +294,7 @@ class ContractComponentInstance:
 
     # -- FeatureUnit protocol (the ecosystem-agnostic view the driver consumes) ---------
     @property
-    def display_name(self) -> str:
+    def display_name(self) -> ComponentName:
         return self.component.name
 
     @property

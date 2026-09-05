@@ -35,7 +35,18 @@ class AutoProveCacheTags(BaseModel):
     """``Document.to_digest()`` of the threat model, which parameterizes
     ``bug_analysis_key``; ``None`` for runs without one."""
 
+    extra_context_digests: list[str] = Field(default_factory=list)
+    """``Document.to_digest()`` of each ``--extra-context`` document, in order. Folded
+    through ``combine_digests`` to parameterize ``bug_analysis_key``; kept unfolded here
+    so the individual documents stay identifiable."""
+
     interactive: bool | None = None
     """Whether the run used interactive refinement (selects the ``|refine``
     bug-analysis key variant). ``None`` on records written before this
     field existed — readers must probe both variants."""
+
+    run_mode: str | None = None
+    """The run's :class:`~composer.pipeline.run_mode.RunMode` value. A prioritized run
+    suffixes its ``final_props`` leaf with the mode, so a reader needs this to know which
+    variant to look under. ``None`` on records written before this field existed, which
+    are all comprehensive."""

@@ -12,6 +12,33 @@ the pipeline started. The parser must register ``ExtendedModelOptions``, whose
 from composer.foundry.entry import _build_parser
 
 
+def test_foundry_parser_accepts_repeated_extra_context() -> None:
+    """``--extra-context`` is repeatable, and must not swallow the positionals — this
+    parser has three of them, one optional, which is why it is ``action="append"``
+    rather than ``nargs="+"``."""
+    args = _build_parser().parse_args([
+        "proj", "src/C.sol:C", "doc.md",
+        "--extra-context", "a.md", "--extra-context", "b.md",
+    ])
+    assert args.extra_context == ["a.md", "b.md"]
+
+    # Flag ahead of the positionals must still leave all three intact.
+    args = _build_parser().parse_args([
+        "--extra-context", "a.md", "proj", "src/C.sol:C", "doc.md",
+    ])
+    assert args.extra_context == ["a.md"]
+    assert (args.project_root, args.main_contract, args.system_doc) == (
+        "proj", "src/C.sol:C", "doc.md",
+    )
+
+
+def test_foundry_parser_defaults_extra_context_and_threat_model() -> None:
+    args = _build_parser().parse_args(["proj", "src/C.sol:C"])
+    assert args.extra_context is None
+    # Foundry does not expose --threat-model; it stays a set_defaults stub.
+    assert args.threat_model is None
+
+
 def test_foundry_parser_provides_model_tier_args() -> None:
     args = _build_parser().parse_args(["proj", "src/C.sol:C", "doc.md"])
     for attr in (

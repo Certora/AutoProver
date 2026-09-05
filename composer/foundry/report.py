@@ -11,25 +11,25 @@ from langchain_core.language_models.chat_models import BaseChatModel
 
 from composer.foundry.author import GeneratedFoundryTest
 from composer.spec.source.report.build import build_report
-from composer.spec.source.report.collect import ReportComponentInput, Verdict
+from composer.spec.source.report.collect import (
+    Formalized, ReportComponentInput, Verdict,
+)
 from composer.spec.source.report.schema import AutoProverReport, Outcome, RuleName
 
 _log = logging.getLogger(__name__)
 
 
 async def _foundry_verdicts(
-    inp: ReportComponentInput[GeneratedFoundryTest],
+    formalized: Formalized[GeneratedFoundryTest],
 ) -> dict[RuleName, Verdict]:
     """Per-test verdicts from forge ground truth: a ran test is GOOD unless the author marked it an
-    expected failure (BAD). No external service — read straight off the result."""
-    fm = inp.formalized
-    if fm is None:
-        return {}
-    res = fm.result
+    expected failure (BAD). No external service — read straight off the result. Only ever invoked
+    for delivered results (collect skips gave-up / curtailed inputs)."""
+    res = formalized.result
     return {
         name: Verdict(
             outcome=Outcome.BAD if res.expected_failures.get(name) else Outcome.GOOD,
-            unit_file=fm.unit_file,
+            unit_file=formalized.unit_file,
         )
         for name in res.ran_tests
     }
