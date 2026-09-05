@@ -1,3 +1,4 @@
+<background>
 A counterexample that starts from a state the contract could never actually reach is telling you that the
 prover does not know something you do: the contract's fields stand in some relationship that the code
 maintains, and nothing in your spec says so. For example, the prover may hand you a starting state where a
@@ -29,19 +30,35 @@ is a good invariant.
 
 The contract's storage layout, its state-modifying functions, its access control patterns, and the
 relationships between its data structures.
+</background>
 
+<guidance>
 ## Four ways a candidate goes wrong
 
 Check your candidate against these before you spend a prover run on it.
 
-- **Not structural.** What you have is a safety or security property rather than a relationship the code
-  maintains. Consider whether it can be restated as a simpler, structural relationship.
-- **Not inductive.** The statement cannot be proven by induction — usually because it references specific
-  functions or call sequences. Reformulate it so it holds regardless of which function was called.
-- **Unlikely to hold.** The relationship probably is not maintained by this implementation. Re-read the
-  source before formalizing it.
-- **Not formal.** The statement is too vague to formalize. Make it precise enough to be a logical formula
-  over the contract's state.
+1. **Not structural.** What you have is a safety or security property rather than a relationship the code
+   maintains. Consider whether it can be restated as a simpler, structural relationship.
+    Bad example: "no user can withdraw more collateral than they deposited"
+      (a safety property; it is about what an actor may do, not about how the fields stand)
+    Good example: "every position slot with a non-zero `owner` has a non-zero `backingAsset`"
+      (the same concern, restated as a relationship the code maintains)
+2. **Not inductive.** The statement cannot be proven by induction, usually because it references specific
+   functions or call sequences. Reformulate it so it holds regardless of which function was called.
+    Bad example: "after `settleAuction` runs, the auction's owner is in the approved-users mapping"
+      (names a function; this is a postcondition of that function)
+    Good example: "the owner of an active auction is in the approved-users mapping"
+      (holds in every reachable state, whichever function ran)
+3. **Unlikely to hold.** The relationship probably is not maintained by this implementation. Re-read the
+   source before formalizing it.
+    Bad example: "`backingAsset` is never the zero address"
+      (proposed without checking; the constructor leaves it zero until the first deposit)
+    Good example: "`backingAsset` is non-zero for every slot whose `owner` is non-zero"
+      (the guard the code actually maintains)
+4. **Not formal.** The statement is too vague to formalize. Make it precise enough to be a logical formula
+   over the contract's state.
+    Bad example: "the accounting is consistent"
+    Good example: "the sum over all holders of `balances[holder]` equals `totalSupply`"
 
 The bars are not symmetric. Drop a candidate on any real doubt about its inductiveness or its
 formalizability. Do *not* drop one merely because it looks mathematical.
@@ -49,8 +66,9 @@ formalizability. Do *not* drop one merely because it looks mathematical.
 ## The postcondition tell
 
 An inductive invariant holds regardless of which function was called, or in what order. If you find
-yourself naming a specific function in the statement — "after calling `deposit`, X holds" — you are
-describing a postcondition, not an invariant. That is the single most common way a candidate fails.
+yourself naming a specific function in the statement, you are describing a postcondition, not an invariant.
+That is the single most common way a candidate fails, and it is what failure mode 2 above looks like in
+practice.
 
 ## Invariants that depend on each other
 
@@ -59,3 +77,4 @@ without i2 the prover would consider states where i1 is spuriously violated. If 
 position has a non-zero owner" and i2 states "the position count never exceeds the array length", then i1
 likely depends on i2: without i2 the prover can consider out-of-bounds positions that vacuously violate i1.
 When that happens, prove i2 as well and cite it in i1's `preserved` block.
+</guidance>
