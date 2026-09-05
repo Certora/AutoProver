@@ -61,6 +61,7 @@ from composer.spec.source.report.schema import (
     AutoProverReport, RuleName, ReportBackend, SourceEditRecord, VerificationArtifactRecord,
 )
 from composer.spec.source.report import build as report_build
+from composer.pipeline.pinned import PinnedProperties
 from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_ID
 from composer.pipeline.ecosystem import Ecosystem
 from .keys import (
@@ -456,6 +457,7 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     budget: RunBudget | None = None,
     time_budget_s : float | None = None,
     max_properties: int | None = None,
+    pinned: PinnedProperties | None = None,
 ) -> CorePipelineResult[FormT]:
     with (
         _budget_context(budget),
@@ -466,6 +468,7 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
             max_bug_rounds=max_bug_rounds, threat_model=threat_model,
             extra_context=extra_context, ecosystem=ecosystem,
             max_properties=max_properties,
+            pinned=pinned,
         )
 
 async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
@@ -478,6 +481,7 @@ async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: Artifact
     max_bug_rounds: int,
     ecosystem: Ecosystem[App, Main, U],
     max_properties: int | None = None,
+    pinned: PinnedProperties | None = None,
 ) -> CorePipelineResult[FormT]:
     # Only the plugins whose hooks accept this ecosystem's unit are loaded (and only those pay
     # their ``initialize`` cost); the driver below can hand them its units unconditionally.
@@ -486,6 +490,7 @@ async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: Artifact
             backend, run, plugins, interactive=interactive, threat_model=threat_model,
             extra_context=extra_context, max_bug_rounds=max_bug_rounds, ecosystem=ecosystem,
             max_properties=max_properties,
+            pinned=pinned,
         )
 
 # ---- the driver --------------------------------------------------------------
@@ -511,6 +516,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     max_bug_rounds: int = 3,
     ecosystem: Ecosystem[App, Main, U],
     max_properties: int | None = None,
+    pinned: PinnedProperties | None = None,
 ) -> CorePipelineResult[FormT]:
     spec, phases = backend.analysis_spec, backend.core_phases
     source = run.source
@@ -571,19 +577,27 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
             return await prepared.prepare_formalization(run)
     staged_task = asyncio.create_task(_prepare_formalization())
 
-    batches: list[_Batch[U]] = await _extract_all(
-        backend.analysis_spec.properties_key,
-        prepared.main,
-        backend.backend_guidance,
-        run,
-        phases["extraction"],
-        interactive,
-        threat_model,
-        extra_context,
-        max_bug_rounds,
-        ecosystem,
-        plugin_manager.bind_phase(
-            phases.get("extraction_plugin") or phases["extraction"],
+    extraction_plugins = plugin_manager.bind_phase(
+        phases.get("extraction_plugin") or phases["extraction"],
+    )
+    batches: list[_Batch[U]] = (
+        await _pinned_batches(
+            backend.analysis_spec.properties_key, prepared.main, run, ecosystem,
+            extraction_plugins, pinned,
+        )
+        if pinned is not None
+        else await _extract_all(
+            backend.analysis_spec.properties_key,
+            prepared.main,
+            backend.backend_guidance,
+            run,
+            phases["extraction"],
+            interactive,
+            threat_model,
+            extra_context,
+            max_bug_rounds,
+            ecosystem,
+            extraction_plugins,
         )
     )
     staged = await staged_task
@@ -773,6 +787,44 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
         _log.warning("report phase failed (continuing)", exc_info=True)
 
     return _tally(outcomes)
+
+async def _pinned_batches[P: enum.Enum, H, Main, U: FeatureUnit](
+    prop_key: str,
+    main: Main,
+    run: PipelineRun[P, H],
+    ecosystem: Ecosystem[Any, Main, U],
+    plugins: PluginPhaseManager[P, U],
+    pinned: PinnedProperties,
+) -> list[_Batch[U]]:
+    """:func:`_extract_all`'s shape, filled from disk instead of from ten agents.
+
+    The contexts are created the same way the extracting path creates them, so everything
+    downstream — cache keys, checkpoints, task ids — cannot tell the difference. Property
+    post-processing plugins are deliberately *not* run: a pin file is what a previous run's
+    post-processing produced, and running them again would process it twice.
+    """
+    units = list(ecosystem.units(main))
+    pinned.check_every_pin_matched(units)
+    prop_ctx = run.ctx.child(PROPERTIES_KEY(prop_key))
+
+    batches: list[_Batch[U]] = []
+    for feat in units:
+        props = pinned.get(feat)
+        if props is None:
+            continue
+        feat_ctx = await prop_ctx.child(
+            COMPONENT_KEY(feat, plugins.plugin_digest),
+            {**feat.context_tag(), "plugins": plugins.plugin_manifest},
+        )
+        batches.append(_Batch(feat, props, feat_ctx))
+
+    _log.info(
+        "pinned properties from %s: %d propert%s across %d of %d components, extraction skipped",
+        pinned.source, pinned.total(), "y" if pinned.total() == 1 else "ies",
+        len(batches), len(units),
+    )
+    return batches
+
 
 async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
     prop_key: str,

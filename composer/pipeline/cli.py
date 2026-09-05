@@ -22,6 +22,7 @@ from composer.diagnostics.logging_setup import setup_autoprove_logging
 from composer.spec.context import SourceFields, WorkflowContext, SourceCode
 from composer.spec.service_host import ServiceHost
 from composer.workflow.services import IndexedConnections, standard_connections
+from composer.pipeline.pinned import PinnedProperties
 from composer.pipeline.ptypes import (
     PipelineRun, BackendResult,
     CorePipelineResult, PhaseBudget, RunBudget
@@ -232,6 +233,7 @@ async def cli_pipeline[P: enum.Enum, H](
     at_exit: AtExit | None = None,
     forbidden_read: GlobalExcludeArg = fs_forbidden_read,
     max_properties: int | None = None,
+    pinned: PinnedProperties | None = None,
     **metadata
 ) -> AsyncIterator[tuple[StagedPipeline, Continuation[P, H]]]:
     """``forbidden_read`` is what the run's source tools withhold, and defaults to the Solidity
@@ -241,7 +243,10 @@ async def cli_pipeline[P: enum.Enum, H](
 
     ``max_properties`` bounds how many extracted properties the run attempts to formalize (see
     :func:`composer.pipeline.core._capped`). Independent of ``budget``, which bounds what a run
-    spends rather than what it takes on."""
+    spends rather than what it takes on.
+
+    ``pinned`` supplies the properties instead of extracting them, which skips the phase that
+    dominates a real target's cost — see :mod:`composer.pipeline.pinned`."""
     project_root = pathlib.Path(args.project_root).resolve()
     main_contract_path, contract_name = args.main_contract.split(":", 1)
 
@@ -421,6 +426,7 @@ async def cli_pipeline[P: enum.Enum, H](
                     time_budget_s=args.time_budget,
                     ecosystem=ecosystem,
                     max_properties=max_properties,
+                    pinned=pinned,
                 )
 
             yield (StagedPipeline(
