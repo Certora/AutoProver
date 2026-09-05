@@ -648,6 +648,19 @@ class Autosetup:
             trivial_spec, warmup_spec, sanity_spec
         )
 
+    @property
+    def _curated_scene_contracts(self) -> List[str]:
+        """Companion contracts the matched curated summaries reroute through.
+
+        A curated spec can summarize a library by sending its calls to a companion of its
+        own, and CVL can only name what the conf puts in the scene. Empty before
+        setup_prover has run, and on every project whose summaries need no companion.
+        """
+        setup = self.setup_prover.summary_setup
+        if setup is None:
+            return []
+        return setup.curated_scene_contracts()
+
     def create_base_config(
         self, main_contract: str, spec_path: Path
     ) -> FileContent:
@@ -682,7 +695,7 @@ class Autosetup:
         final_config = self.config_manager.create_config(
             main_contract,
             self.contract_handles,
-            self.config.additional_contracts,
+            self.config.additional_contracts + self._curated_scene_contracts,
             spec_path,
             conf_path=conf_path,
             additional_args=base_prover_args,
@@ -723,7 +736,11 @@ class Autosetup:
         final_config = self.config_manager.create_config(
             main_contract,
             self.contract_handles,
-            [],  # TODO: should we include also self.config.additional_contracts?
+            # The curated companions specifically: this config exists to typecheck the
+            # summaries that were just set up, and a summary rerouting through a companion
+            # cannot typecheck against a scene the companion is missing from. Whether the
+            # run's own --additional-contracts belong here too is still open.
+            self._curated_scene_contracts,
             sanity_spec_path,
             conf_path=test_config_path,
             properties=compilation_properties,
@@ -821,6 +838,10 @@ class Autosetup:
                     files_to_include = (
                         [contract_handle.to_config_str()]
                         + autosetup.config.additional_contracts
+                        # This rewrite is the third place a conf's scene is decided, and a
+                        # summary that reroutes through a companion cannot typecheck against a
+                        # scene the companion was stripped out of.
+                        + autosetup._curated_scene_contracts
                     )
                     props = {"files": files_to_include}
                     autosetup.log(

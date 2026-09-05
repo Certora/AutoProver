@@ -36,11 +36,13 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from certora_cli.Shared.certoraUtils import find_jar
 
 from certora_autosetup.parsers.method_parser import MethodParser
+from certora_autosetup.setup.solidity_utils import extract_definitions_from_solidity
+from certora_autosetup.utils.constants import SUMMARIES_SUBDIR
 
 # A logger callable matching SummarySetup.log(message, level).
 LogFn = Callable[[str, str], None]
@@ -403,3 +405,37 @@ def resolve_summary_specs(
             continue
         kept = resolve_spec_file(spec_path, index, owned_keys=owned, log=log)
         owned.update(kept)
+
+
+def curated_scene_contracts(
+    matched_function_keys: Iterable[str],
+    function_summaries: Dict[str, Any],
+    user_summaries_dir: Path,
+    log: Callable[[str, str], None],
+) -> List[str]:
+    """Conf entries for the contracts matched curated summaries reroute through.
+
+    A curated spec may summarize a library by rerouting its calls to a companion of its
+    own: ``OZ_BitMaps.spec`` sends ``BitMaps.get`` to ``OZ_BitMaps.get``. CVL can only
+    name a contract that is in the scene, and the scene is the files the conf lists, so
+    copying the companion beside the spec does not put it there.
+
+    Emits ``path:Name`` for every top-level definition in each matched entry's
+    ``additional_contracts``, which is also what keeps them nameable when one file holds
+    more than one.
+    """
+    entries: List[str] = []
+    for key in sorted(matched_function_keys):
+        info = function_summaries.get(key)
+        if not info:
+            continue
+        for ac in info.get("additional_contracts", []):
+            path = user_summaries_dir / Path(ac).relative_to(SUMMARIES_SUBDIR)
+            if not path.is_file():
+                log(f"Curated companion contract not copied: {path}", "WARNING")
+                continue
+            entries.extend(
+                f"{path.as_posix()}:{name}"
+                for name in extract_definitions_from_solidity(str(path))
+            )
+    return entries
