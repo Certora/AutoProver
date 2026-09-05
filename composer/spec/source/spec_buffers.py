@@ -128,6 +128,60 @@ def run_targets(buffers: Mapping[str, NamedBuffer]) -> list[NamedBuffer]:
     return [buffers[n] for n in sorted(buffers) if buffers[n].is_run_target]
 
 
+def buffer_state_digest(
+    buffers: Mapping[str, NamedBuffer],
+    name: str,
+    *,
+    skipped: Sequence[tuple[str, str]],
+    version_history: Sequence[str],
+) -> str:
+    """The per-buffer analogue of ``spec_digest``: a buffer's content + import closure bound to the
+    current authoring state (skip declarations as ``(title, reason)`` pairs, and the applied-edit
+    history). Every per-buffer stamp — feedback and prover — and the completion check key off this, so
+    editing the buffer, anything it imports, a skip, or the source invalidates that buffer's stamps."""
+    return buffer_digest(
+        buffers, name,
+        extra_parts=[
+            *(f"skip:{t}:{r}" for (t, r) in sorted(skipped)),
+            *(f"edit:{e}" for e in version_history),
+        ],
+    )
+
+
+def check_buffer_completion(
+    buffers: Mapping[str, NamedBuffer],
+    validations: Mapping[str, str],
+    required_validations: Sequence[str],
+    *,
+    skipped: Sequence[tuple[str, str]],
+    version_history: Sequence[str],
+) -> str | None:
+    """None if every run-target buffer carries each required validation (e.g. ``feedback``, ``prover``)
+    stamped at its current digest, else the first buffer/validation missing or stale. The buffers
+    analogue of ``check_completion``: a per-buffer stamp is keyed ``"<validation>:<buffer>"`` and goes
+    stale when that buffer (or anything it imports, or the skips/edit history) changes."""
+    targets = run_targets(buffers)
+    if not targets:
+        return "Completion REJECTED: no run-target buffers."
+    for b in targets:
+        d = buffer_state_digest(buffers, b.name, skipped=skipped, version_history=version_history)
+        for key in required_validations:
+            if validations.get(f"{key}:{b.name}") != d:
+                return f"Completion REJECTED: buffer {b.name!r} {key} validation not satisfied or stale."
+    return None
+
+
+def buffer_review_text(buffers: Mapping[str, NamedBuffer], name: str) -> str:
+    """One buffer's reviewable text for the judge: the buffer plus its transitive import closure, each
+    under a header marking the one under review vs its imports — so the judge sees the buffer in the
+    context it is actually verified in, without the unrelated buffers."""
+    parts: list[str] = []
+    for b in import_closure(buffers, name):
+        role = "under review" if b.name == name else "imported"
+        parts.append(f"// ===== buffer {b.name} ({role}) =====\n{b.cvl.rstrip()}")
+    return "\n\n".join(parts)
+
+
 def combined_buffers_view(buffers: Mapping[str, NamedBuffer]) -> str:
     """All buffers (shared and run-target) concatenated into one reviewable document, each under a
     header. For a judge or report that consumes the spec as a single text — NOT for verification

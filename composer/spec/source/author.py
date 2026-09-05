@@ -1,4 +1,4 @@
-from typing import AsyncIterator, NotRequired, override, Literal, Annotated, Sequence, Protocol, Callable
+from typing import AsyncIterator, NotRequired, override, Literal, Annotated, Sequence, Protocol, Callable, cast
 
 from typing_extensions import TypedDict
 from contextlib import asynccontextmanager
@@ -14,7 +14,7 @@ from graphcore.tools.schemas import (
     WithAsyncImplementation, WithImplementation, WithInjectedId, WithInjectedState,
     WithAsyncDependencies
 )
-from graphcore.graph import tool_state_update, RawPromptInput, CacheMarker, SummaryConfig
+from graphcore.graph import tool_state_update, tool_return, RawPromptInput, CacheMarker, SummaryConfig
 from graphcore.tools.vfs import VFSAccessor, VFSState
 
 from composer.authoring.judge import PropertyFeedbackProtocol
@@ -29,13 +29,15 @@ from composer.prover.core import run_prover, CexHandler, ProverCallbacks, Prover
 from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools, WIPE_HISTORY
 from composer.spec.source.prover import setup_prover_config_in
 from composer.spec.source.spec_buffers import (
-    SpecBuffersExtra, combined_buffers_view, run_targets, spec_buffers_enabled,
+    SpecBuffersExtra, buffer_review_text, buffer_state_digest, check_buffer_completion,
+    combined_buffers_view, run_targets, spec_buffers_enabled, validate_coverage,
+    validate_disjoint_rules,
 )
 from composer.spec.source.buffer_tools import (
     put_buffer, get_buffer, edit_buffer, list_buffers, delete_buffer,
 )
 from composer.spec.context import WorkflowContext, CVLGeneration, CacheKey, SourceCode
-from composer.spec.types import PropertyFormulation, PropertyTitle
+from composer.spec.types import PropertyFormulation, PropertyTitle, RuleName
 from composer.pipeline.core import GaveUp, ToolBinder, InjectingToolExtension, Curtailed
 from composer.pipeline.plugin_api import ProvidedTools
 from composer.spec.source.plugin import CertoraProverTools, CVLAuthorState
@@ -162,16 +164,38 @@ class PublishResultTool(
 
     @override
     async def run(self) -> Command | str:
-        if (err := check_completion(self.state, self.state["version_history"])) is not None:
-            return err
-        with self.tool_deps() as titles:
-            if (err := validate_property_rules(self.property_rules, self.state["skipped"], titles)) is not None:
+        buffers = self.state.get("buffers") or {}
+        if run_targets(buffers):
+            # Multi-buffer completion: every run-target buffer verified AND reviewed at its current
+            # digest (per-buffer stamps), plus a clean property/rule partition across buffers.
+            skipped_pairs = [(str(s.property_title), str(s.reason)) for s in self.state["skipped"]]
+            if (err := check_buffer_completion(
+                buffers, self.state["validations"], self.state["required_validations"],
+                skipped=skipped_pairs, version_history=self.state["version_history"],
+            )) is not None:
                 return err
+            with self.tool_deps() as titles:
+                skip_titles = {str(s.property_title) for s in self.state["skipped"]}
+                if (err := validate_coverage(buffers, all_properties=set(titles), skipped=skip_titles)) is not None:
+                    return f"Completion REJECTED: {err}"
+            if (err := validate_disjoint_rules(buffers)) is not None:
+                return f"Completion REJECTED: {err}"
+            pr = [
+                PropertyRuleMapping(property_title=cast(PropertyTitle, p), rules=cast(list[RuleName], rs))
+                for b in run_targets(buffers) for p, rs in b.property_rules.items()
+            ]
+        else:
+            if (err := check_completion(self.state, self.state["version_history"])) is not None:
+                return err
+            with self.tool_deps() as titles:
+                if (err := validate_property_rules(self.property_rules, self.state["skipped"], titles)) is not None:
+                    return err
+            pr = self.property_rules
         return tool_state_update(
             self.tool_call_id,
             "Accepted",
             result=self.commentary,
-            property_rules=self.property_rules,
+            property_rules=pr,
             failed=False,
         )
 
@@ -655,14 +679,44 @@ class EditorAwareFeedbackTool(
                 vfs=self.state["vfs"],
                 version_history=self.state["version_history"],
             )
-            # In multi-buffer mode the single curr_spec is empty; review the buffers as one document.
-            buffers = self.state.get("buffers") or {}
-            review_spec = combined_buffers_view(buffers) if run_targets(buffers) else spec
-            return await judge(snap, review_spec, skipped, self.rebuttals, self.tool_call_id)
+            return await judge(snap, spec, skipped, self.rebuttals, self.tool_call_id)
 
     @override
     def _version_history(self) -> Sequence[str]:
         return self.state["version_history"]
+
+    @override
+    async def run(self) -> Command:
+        """Single-spec: the base flow. Multi-buffer: review each run-target buffer whose feedback
+        stamp is missing or stale (its text or an import changed) in isolation, and stamp
+        ``feedback:<buffer>`` per approved buffer — so an approved, unchanged buffer is never
+        re-reviewed and the hard buffer is reviewed alone."""
+        buffers = self.state.get("buffers") or {}
+        targets = run_targets(buffers)
+        if not targets:
+            return await super().run()
+
+        skipped = self.state["skipped"]
+        skipped_pairs = [(str(s.property_title), str(s.reason)) for s in skipped]
+        vh = self.state["version_history"]
+        validations = self.state["validations"]
+
+        def digest(name: str) -> str:
+            return buffer_state_digest(buffers, name, skipped=skipped_pairs, version_history=vh)
+
+        stale = [b for b in targets if validations.get(f"feedback:{b.name}") != digest(b.name)]
+        if not stale:
+            return tool_return(
+                self.tool_call_id, "All buffers already reviewed and approved at their current state."
+            )
+        new_stamps: dict[str, str] = {}
+        blocks: list[str] = []
+        for b in stale:
+            verdict = await self._get_feedback(buffer_review_text(buffers, b.name), skipped)
+            blocks.append(f"=== buffer {b.name} ===\nGood? {verdict.good}\nFeedback {verdict.feedback}")
+            if verdict.good:
+                new_stamps[f"feedback:{b.name}"] = digest(b.name)
+        return tool_state_update(self.tool_call_id, "\n\n".join(blocks), validations=new_stamps)
 
 
 _PropertyGenTemplate = TypedTemplate[PropertyGenParams]("property_generation_prompt.j2")

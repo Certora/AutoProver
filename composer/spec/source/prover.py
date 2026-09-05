@@ -54,7 +54,7 @@ from composer.spec.gen_types import CERTORA_DIR, SPECS_DIR
 from composer.spec.util import string_hash
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.spec_buffers import (
-    BufferRun, NamedBuffer, SpecBuffersExtra, buffer_digest, plan_buffer_runs, run_targets,
+    BufferRun, NamedBuffer, SpecBuffersExtra, buffer_state_digest, plan_buffer_runs, run_targets,
 )
 
 
@@ -775,16 +775,11 @@ def get_prover_tool(
             summary = get_run_summary()
             conf_dir = CERTORA_DIR / "confs"
             expected = set(state["rule_skips"].keys())
-            skipped = state["skipped"]
             vh = state["version_history"]
+            skipped_pairs = [(str(s.property_title), str(s.reason)) for s in state["skipped"]]
 
             def digest_of(b: NamedBuffer) -> str:
-                # The buffer's content + import closure, plus this authoring state (skips / edit history),
-                # so any of them changing forces a re-verify.
-                return buffer_digest(
-                    buffers, b.name,
-                    extra_parts=[f"skip:{s}" for s in sorted(str(x) for x in skipped)] + [f"vh:{len(vh)}"],
-                )
+                return buffer_state_digest(buffers, b.name, skipped=skipped_pairs, version_history=vh)
 
             plan = plan_buffer_runs(
                 buffers,
@@ -854,28 +849,22 @@ def get_prover_tool(
                     buffer=r.buffer.name,
                 ))
 
-            # Overall completion is the AND across every run target: fresh results for the ones we ran,
-            # history for those skipped as already complete.
+            # Stamp the prover validation per buffer that is complete at its current digest (fresh
+            # results for the ones we ran, history for those skipped as already complete). Overall
+            # completion is checked per buffer at publish (check_buffer_completion).
             history_after = state["prover_history"] + prover_update
-            all_verified = all(
-                buffer_is_complete(
+            prover_stamps: dict[str, str] = {}
+            for b in targets:
+                if buffer_is_complete(
                     history_after, buffer=b.name, curr_digest=digest_of(b),
                     expected_to_fail=expected, curr_status=fresh.get(b.name, []),
                     all_rules=list(b.owned_rules),
-                )
-                for b in targets
-            )
+                ):
+                    prover_stamps[f"prover:{b.name}"] = digest_of(b)
 
-            content = "\n\n".join(parts)
-            if all_verified:
-                return tool_state_update(
-                    tool_call_id=tool_call_id, content=content, prover_link=link,
-                    validations=stamper(state, state["version_history"]),
-                    prover_history=prover_update,
-                )
             return tool_state_update(
-                tool_call_id=tool_call_id, content=content, prover_link=link,
-                prover_history=prover_update,
+                tool_call_id=tool_call_id, content="\n\n".join(parts), prover_link=link,
+                validations=prover_stamps, prover_history=prover_update,
             )
 
         if targets:
