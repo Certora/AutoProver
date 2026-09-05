@@ -17,7 +17,7 @@ from composer.input.files import Document
 from composer.llm.types import CacheLevel
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.util import combine_digests
-from composer.spec.context import WorkflowContext, CacheKey, ComponentGroup
+from composer.spec.context import WorkflowContext, CacheKey, ComponentGroup, Refinement
 from composer.spec.key_family import KeyFamily
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import bind_standard, run_to_completion
@@ -142,6 +142,10 @@ def _agent_round_key(i: int) -> str:
 AGENT_ROUND_KEY = KeyFamily(_AgentResult, _AgentRoundWithHistory, _agent_round_key)
 
 AGENT_RESULT_KEY = CacheKey[_BugAnalysisCache, _AgentResult]("agent_bug_analysis")
+
+#: The refinement conversation's thread, a sibling of the agent's: deterministic,
+#: so a restarted process resumes the conversation rather than starting one.
+REFINEMENT_KEY = CacheKey[_BugAnalysisCache, Refinement]("refinement")
 
 DESCRIPTION = "Property extraction"
 
@@ -474,7 +478,7 @@ async def run_property_inference[U: FeatureUnit](
         return to_ret
 
     refined_props = await user_property_refinement(
-        env, agent_attempt, refinement
+        component_analysis.child(REFINEMENT_KEY), env, agent_attempt, refinement
     )
     await component_analysis.cache_put(_BugAnalysisCache(items = refined_props))
     return refined_props

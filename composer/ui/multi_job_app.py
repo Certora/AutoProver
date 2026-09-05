@@ -44,6 +44,7 @@ from composer.io.conversation import (
     ConversationClient, AIYapping, ToolComplete, ThinkingStart, ToolBatch, ProgressPayload,
     StateUpdate
 )
+from composer.io.conversation import HumanPrompt
 from composer.io.stream import AsyncDataQueue, ManagedQueue, managed_streamer, EndConversation, Checkpoint
 from composer.io.multi_job import HasName, TaskHandle, TaskInfo
 from composer.io.protocol import HumanInteractionBridge
@@ -152,7 +153,7 @@ class _ConversationSession(ToolCallRenderer):
       reader background task.
     - ``progress_update(payload)`` is called (sync) by ``refinement_loop``
       for each ``ProgressPayload``.  The reader drains and renders.
-    - ``human_turn(ai_response)`` renders the final AI turn text (if any),
+    - ``human_turn(prompt)`` renders the final AI turn text (if any),
       resets tool grouping (dialogue boundary), mounts an ``Input``, and
       returns the user's reply.
     - ``__aexit__`` pushes a sentinel, waits for the reader to drain, then
@@ -241,7 +242,10 @@ class _ConversationSession(ToolCallRenderer):
     def progress_update(self, progress: ProgressPayload) -> None:
         self._queue.push(progress)
 
-    async def human_turn(self, ai_response: str | None) -> str:
+    async def answer_applied(self, question_id: str) -> None:
+        pass  # the person answered in this panel; nothing to retire elsewhere
+
+    async def human_turn(self, prompt: HumanPrompt, state: RenderableType | None) -> str:
         # Wait for the reader to render every progress event that was
         # pushed before this call so that the input widget is mounted
         # strictly below the agent's output.
@@ -251,13 +255,30 @@ class _ConversationSession(ToolCallRenderer):
 
         self.reset_tool_collapsing()
 
-        if ai_response:
+        if prompt.ai_message:
             await self._mount(
                 self._panel,
-                Static(dot("blue", Text.assemble(("AI: ", "bold blue"), ai_response))),
+                Static(dot("blue", Text.assemble(("AI: ", "bold blue"), prompt.ai_message))),
             )
 
         self._set_status(TaskStatus.WAITING_HITL)
+        while True:
+            response = await self._read_input()
+            # A panel command, not a reply: show the current state and ask again.
+            if response.strip() == "/list" and state is not None:
+                await self._mount(self._panel, Static(state))
+                continue
+            break
+
+        await self._mount(
+            self._panel,
+            Static(dot("green", Text.assemble(("You: ", "bold green"), response))),
+        )
+
+        self._set_status(TaskStatus.RUNNING)
+        return response
+
+    async def _read_input(self) -> str:
         input_widget = Input(placeholder="Type here...", validate_on=["submitted"])
         hint_widget = Static(
             "Type your response and press Enter", classes="interaction-hint"
@@ -271,12 +292,6 @@ class _ConversationSession(ToolCallRenderer):
 
         await input_widget.remove()
         await hint_widget.remove()
-        await self._mount(
-            self._panel,
-            Static(dot("green", Text.assemble(("You: ", "bold green"), response))),
-        )
-
-        self._set_status(TaskStatus.RUNNING)
         return response
 
     # ── Context manager ─────────────────────────────────────────

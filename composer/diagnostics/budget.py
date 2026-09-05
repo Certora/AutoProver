@@ -1,6 +1,6 @@
-from typing import Iterator, Callable, Any, Mapping, Never, Protocol, Literal, TypedDict, LiteralString
+from typing import AsyncIterator, Iterator, Callable, Any, Mapping, Never, Protocol, Literal, TypedDict, LiteralString
 from typing_extensions import TypeVar, ReadOnly
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 import time
@@ -8,6 +8,7 @@ import time
 from langgraph.graph import MessagesState
 from graphcore.graph import StateMonitor, MonitorReturn
 from langchain_core.messages import HumanMessage, AnyMessage
+from .ambient import AmbientStateSaver
 from .timing import RunSummary, get_run_summary_or_none
 
 StateVar = TypeVar("StateVar", default=MessagesState, bound=MessagesState)
@@ -153,28 +154,67 @@ def time_budget(
     finally:
         _time_budget.reset(prev_tok)
 
-@contextmanager
-def total_budget(
+COST_BUDGET_SCHEMA = 1
+
+
+@dataclass
+class _CostBudgetState:
+    """The cost budget's ``SaveableState``: what has been spent, pool and per
+    center. The caps themselves are not saved; each execution installs its own
+    and only the spend carries over."""
+
+    pool: BudgetCounter
+    centers: dict[str, BudgetCounter]
+
+    @property
+    def id(self) -> str:
+        return "cost_budget"
+
+    def save_to(self, out: dict[str, Any]) -> None:
+        out.update({
+            "schema": COST_BUDGET_SCHEMA,
+            "pool": self.pool.curr_cost,
+            "centers": {name: counter.curr_cost for name, counter in self.centers.items()},
+        })
+
+    def restore_from(self, data: dict[str, Any]) -> None:
+        if data.get("schema") != COST_BUDGET_SCHEMA:
+            return
+        self.pool.curr_cost = float(data.get("pool", 0.0))
+        for name, spent in data.get("centers", {}).items():
+            if name in self.centers:
+                self.centers[name].curr_cost = float(spent)
+
+
+@asynccontextmanager
+async def total_budget(
     total: float,
-    caps: Mapping[str, float]
-) -> Iterator[None]:
+    caps: Mapping[str, float],
+    saver: AmbientStateSaver | None = None,
+) -> AsyncIterator[None]:
     """Install the run's budget: ``total`` is the pool (the real bound on
     spend) and ``caps`` are per-phase ceilings. Caps need not sum to the
     pool — they only bound how much a single phase may hog, so each can be
     generous; whatever a phase doesn't spend simply remains in the pool for
-    later phases."""
+    later phases.
+
+    With a ``saver`` the spend is restored from earlier executions of the run
+    and saved as it accrues, so the pool bounds the run, not the process."""
     curr = _cost_centers.get()
     if curr is not None:
         raise RuntimeError("Budget already installed, cannot overwrite existing.")
     pool = BudgetCounter(total_budget=total, curr_cost=0.0)
-    prev = _cost_centers.set({
-        k: BudgetCounter(total_budget=v, curr_cost=0.0, parent=pool) for (k, v) in caps.items()
-    })
+    centers = {k: BudgetCounter(total_budget=v, curr_cost=0.0, parent=pool) for (k, v) in caps.items()}
+    prev = _cost_centers.set(centers)
     # Work running outside any named center (e.g. the report phase) accrues
     # to — and feels pressure from — the pool directly.
     prev_accum = _budget_accumulator.set(pool)
     try:
-        yield
+        if saver is None:
+            yield
+        else:
+            async with saver.persisted(_CostBudgetState(pool, centers)):
+                yield
     finally:
         _budget_accumulator.reset(prev_accum)
         _cost_centers.reset(prev)

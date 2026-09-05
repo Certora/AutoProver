@@ -25,8 +25,11 @@ from composer.io.event_handler import NullEventHandler
 from composer.io.mailbox import (
     InboxMessage,
     MailboxInterrupts,
+    OpenQuestion,
+    QuestionSort,
     WarmWait,
-    consumed_tool_calls,
+    chat_reply,
+    consumed_answers,
     default_prompt,
     reconcile_inbox,
 )
@@ -40,20 +43,26 @@ class FakeMailbox:
     def __init__(self, messages: dict[str, str] | None = None) -> None:
         self.messages: dict[str, str] = dict(messages or {})
         self.acked: list[str] = []
-        self.questions: dict[str, str] = {}
+        self.questions: dict[str, str] = {}  # question id -> prompt
+        self.threads: dict[str, str] = {}  # question id -> the thread recorded with it
+        self.sorts: dict[str, QuestionSort] = {}  # question id -> the sort recorded with it
         self.awaiting = 0
 
     async def inbox(self) -> Sequence[InboxMessage]:
         return [
-            InboxMessage(id=QuestionId(k), kind="answer", payload=v)
+            InboxMessage(
+                id=QuestionId(k), kind="answer", payload=v, thread_id=self.threads.get(k), sort=self.sorts.get(k)
+            )
             for k, v in self.messages.items() if k not in self.acked
         ]
 
     async def ack(self, message_ids: Sequence[QuestionId]) -> None:
         self.acked.extend(message_ids)
 
-    async def record_question(self, question_id: QuestionId, prompt: str) -> None:
-        self.questions[question_id] = prompt
+    async def record_question(self, question: OpenQuestion) -> None:
+        self.questions[question.id] = question.prompt
+        self.threads[question.id] = question.thread_id
+        self.sorts[question.id] = question.sort
 
     async def awaiting_input(self) -> None:
         self.awaiting += 1
@@ -123,7 +132,11 @@ async def test_answers_present_resume_by_question_id_and_are_acked_once_consumed
     result = await run(two_questions(), handler)
     assert sorted(result["log"]) == ["call-a=A", "call-b=B"]
     assert sorted(mailbox.acked) == ["call-a", "call-b"]
-    assert mailbox.questions == {}
+    # Recorded even though answered on the first look: the record is what names
+    # the thread a later inventory would have to check.
+    assert mailbox.questions == {"call-a": "a?", "call-b": "b?"}
+    assert mailbox.threads == {"call-a": "t", "call-b": "t"}
+    assert mailbox.sorts == {"call-a": "tool", "call-b": "tool"}
 
 
 async def test_no_answers_records_the_questions_and_suspends() -> None:
@@ -132,6 +145,7 @@ async def test_no_answers_records_the_questions_and_suspends() -> None:
         await run(two_questions(), Handler(mailbox))
     assert {i.value.id for i in caught.value.interrupts} == {"call-a", "call-b"}
     assert mailbox.questions == {"call-a": "a?", "call-b": "b?"}
+    assert mailbox.threads == {"call-a": "t", "call-b": "t"}
     assert mailbox.acked == []
 
 
@@ -139,7 +153,7 @@ async def test_partial_answers_wait_for_the_rest_and_do_not_consume() -> None:
     mailbox = FakeMailbox({"call-a": "A"})
     with pytest.raises(GraphSuspended):
         await run(two_questions(), Handler(mailbox))
-    assert mailbox.questions == {"call-b": "b?"}  # only the missing one is announced
+    assert mailbox.questions == {"call-a": "a?", "call-b": "b?"}
     assert mailbox.acked == []  # the present answer stays in the inbox for the next process
 
 
@@ -199,9 +213,10 @@ async def test_only_the_landing_path_s_checkpoint_acks() -> None:
     from graphcore.tools.human import Question
 
     resume = await handler.handle_interrupts(
-        [Interrupt(value=Question(QuestionId("call-a"), {"question": "a?"}), id="i1")], {}
+        [Interrupt(value=Question(QuestionId("call-a"), {"question": "a?"}), id="i1")], {}, thread_id="parent"
     )
     assert resume == {"i1": "A"}
+    assert mailbox.threads == {"call-a": "parent"}
 
     await handler.on_checkpoint(["parent", "child"], "c1")
     assert mailbox.acked == []
@@ -228,9 +243,12 @@ async def test_suspend_then_resume_in_a_new_process_consumes_and_acks() -> None:
 
 
 async def test_startup_inventory_acks_what_a_predecessor_consumed() -> None:
-    """The graph used a tool call whose answer landed as a ToolMessage; the process died
-    before acking. The next process finds the message still in the inbox and acks it
-    without re-applying, while a message nobody consumed is left alone."""
+    """The graph consumed two answers, a tool call's as a ToolMessage and a chat turn's
+    as a tagged reply; the process died before acking either. The next process finds
+    both messages still in the inbox and acks them without re-applying, while messages
+    nobody consumed are left alone. The inventory reads only the thread each message's
+    question record names, and looks for the kind of evidence the record's sort says;
+    a message with no record has neither and is left alone too."""
 
     class MState(TypedDict):
         messages: Annotated[list, operator.add]
@@ -240,6 +258,9 @@ async def test_startup_inventory_acks_what_a_predecessor_consumed() -> None:
             "messages": [
                 AIMessage(content="", tool_calls=[{"name": "ask", "args": {}, "id": "call-a", "type": "tool_call"}]),
                 ToolMessage(content="A", tool_call_id="call-a"),
+                AIMessage(content="shall I?", id="ai-1"),
+                chat_reply("go ahead", "ai-1"),
+                AIMessage(content="done. anything else?", id="ai-2"),
             ]
         }
 
@@ -251,10 +272,19 @@ async def test_startup_inventory_acks_what_a_predecessor_consumed() -> None:
     graph = b.compile(checkpointer=saver)
     await graph.ainvoke({"messages": []}, {"configurable": {"thread_id": "t"}})
 
-    assert await consumed_tool_calls(saver, "t") == {"call-a"}
-    mailbox = FakeMailbox({"call-a": "A", "call-b": "B"})
-    assert await reconcile_inbox(mailbox, saver, ["t", "no-such-thread"]) == ["call-a"]
-    assert mailbox.acked == ["call-a"]
+    assert await consumed_answers(saver, "t") == {("tool", "call-a"), ("chat", "ai-1")}
+    mailbox = FakeMailbox({"call-a": "A", "call-b": "B", "call-c": "C", "ai-1": "go ahead", "ai-2": "no"})
+    mailbox.threads = {"call-a": "t", "call-b": "no-such-thread", "ai-1": "t", "ai-2": "t"}  # call-c: never recorded
+    mailbox.sorts = {"call-a": "tool", "call-b": "tool", "ai-1": "chat", "ai-2": "chat"}
+    assert sorted(await reconcile_inbox(mailbox, saver)) == ["ai-1", "call-a"]
+    assert sorted(mailbox.acked) == ["ai-1", "call-a"]
+
+    # The sort is what says which evidence counts: the same id recorded under the
+    # other sort has none.
+    crossed = FakeMailbox({"call-a": "A", "ai-1": "go ahead"})
+    crossed.threads = {"call-a": "t", "ai-1": "t"}
+    crossed.sorts = {"call-a": "chat", "ai-1": "tool"}
+    assert await reconcile_inbox(crossed, saver) == []
 
 
 async def test_console_bridge_sees_the_payload_not_the_envelope() -> None:

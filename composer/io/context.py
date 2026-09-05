@@ -228,8 +228,8 @@ async def run_graph[S: StateLike, C: StateLike | None, I: StateLike](
     floor = retry if isinstance(retry, RetryPolicy) else _run_retry_policy.get()
     fresh = retry if isinstance(retry, FreshRetryPolicy) else None
 
-    async def handle_interrupts(interrupts: Sequence[Interrupt], st: S) -> Mapping[InterruptId, str]:
-        return await scope.interrupts.handle_interrupts(interrupts, st)
+    async def handle_interrupts(interrupts: Sequence[Interrupt], st: S, thread_id: str) -> Mapping[InterruptId, str]:
+        return await scope.interrupts.handle_interrupts(interrupts, st, thread_id=thread_id)
 
     async def _attempt(inp: I | None, tid_: str, desc: str, fork_at: str | None) -> S:
         conf = run_conf.copy()

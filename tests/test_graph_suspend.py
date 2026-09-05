@@ -68,7 +68,9 @@ class ScriptedHandler(_Quiet):
         self.answers = answers
         self.asked: list[list[str]] = []
 
-    async def handle_interrupts(self, interrupts: Sequence[Interrupt], state: Any) -> Mapping[InterruptId, str]:
+    async def handle_interrupts(
+        self, interrupts: Sequence[Interrupt], state: Any, *, thread_id: str
+    ) -> Mapping[InterruptId, str]:
         self.asked.append([i.value["q"] for i in interrupts])
         if self.answers is None:
             raise GraphSuspended(interrupts)

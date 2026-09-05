@@ -43,7 +43,8 @@ from composer.input.types import (
     TieredModelOptions,
 )
 from composer.io.multi_job import HandlerFactory, TaskInfo, run_task
-from composer.io.thread_logging import default_logging_ns, thread_logger
+from composer.diagnostics.ambient import AmbientStateSaver
+from composer.io.thread_logging import ambient_state_ns, default_logging_ns, thread_logger
 from composer.pipeline.cli import autoprover_version, root_cache_key
 from composer.pipeline.core import CorePipelineResult, DEFAULT_MAX_CPU_TASKS
 from composer.pipeline.ecosystem import Ecosystem
@@ -277,7 +278,6 @@ async def rust_entry_point(
     thread_id = f"{descriptor.name}_{uuid.uuid4().hex[:12]}"
     text_log, events_log = setup_autoprove_logging(str(project_root), thread_id)
     print(f"{descriptor.name} logs: {text_log}\n         events: {events_log}", file=sys.stderr)
-    install_run_summary(summary)
 
     # argparse Namespace duck-types the protocol: the model flags come from ExtendedModelOptions.
     tiered = get_provider_for(tiered=cast(TieredModelOptions, args))
@@ -297,6 +297,9 @@ async def rust_entry_point(
             run_id=summary.run_id,
             execution_id=summary.execution_id,
             resumed_from=summary.resumed_from,
+        ),
+        install_run_summary(
+            summary, AmbientStateSaver(conns.store, ambient_state_ns(default_logging_ns(uid=None), summary.run_id))
         ),
     ):
         model_provider = ModelProvider(

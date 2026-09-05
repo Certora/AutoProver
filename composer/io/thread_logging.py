@@ -102,6 +102,11 @@ def executions_ns(parent_ns: tuple[str, ...], run_id: str) -> tuple[str, ...]:
     """Sub-namespace under ``parent_ns`` where a run's ``ExecutionMeta`` records live."""
     return parent_ns + ("executions", run_id)
 
+def ambient_state_ns(parent_ns: tuple[str, ...], run_id: str) -> tuple[str, ...]:
+    """Sub-namespace under ``parent_ns`` where a run's persisted ambient state (the
+    run summary, the cost budget) lives, one record per kind of state."""
+    return parent_ns + ("ambient", run_id)
+
 def default_logging_ns(uid: str | None) -> tuple[str, ...]:
     return user_data_ns(uid) + DEFAULT_META_NS
 

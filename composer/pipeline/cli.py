@@ -1,9 +1,9 @@
-from typing import Protocol, AsyncIterator, TYPE_CHECKING
+from typing import Protocol, AsyncIterator, ContextManager, TYPE_CHECKING, cast
 import json
 import sys
 import pathlib
 import enum
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, nullcontext
 
 import asyncio
 from dataclasses import dataclass
@@ -39,7 +39,9 @@ from composer.diagnostics.timing import RunSummary, install_run_summary
 from composer.io.context import DefaultRetryPolicy, install_retry_policy
 from composer.llm.registry import get_provider_for
 from composer.rag.models import get_model
-from composer.io.thread_logging import RunDataLogger, thread_logger, default_logging_ns
+from composer.diagnostics.ambient import AmbientStateSaver
+from composer.diagnostics.budget import time_budget, total_budget
+from composer.io.thread_logging import RunDataLogger, ambient_state_ns, thread_logger, default_logging_ns
 from composer.rag.models import DefaultEmbedder
 from composer.ui.tool_display import async_tool_context
 from composer.core.user import user_data_ns, get_uid
@@ -128,6 +130,24 @@ class BudgetFile(BaseModel):
             total=self.total,
             caps=PhaseBudget(**{p: self.caps.get(p, self.total) for p in BUDGET_PHASES}),  # type: ignore[typeddict-item]
         )
+
+
+def _budget_context(budget: RunBudget | None, saver: AmbientStateSaver) -> AbstractAsyncContextManager[None]:
+    """The run's cost budget, if it has one. Its spend rides the saver across
+    executions; the caps are this execution's to set."""
+    if budget is not None:
+        return total_budget(budget.total, cast(dict[str, float], budget.caps), saver=saver)
+    else:
+        return nullcontext()
+
+
+def _time_context(time_budget_s: float | None) -> ContextManager[None]:
+    """The run's wall-clock budget, if it has one. Nothing to persist: it reads
+    the run summary's clock, which already spans executions."""
+    if time_budget_s is not None:
+        return time_budget(time_budget_s)
+    else:
+        return nullcontext()
 
 
 def parse_budget_file(path: pathlib.Path) -> RunBudget:
@@ -270,7 +290,6 @@ async def cli_pipeline[P: enum.Enum](
     text_log, events_log = setup_autoprove_logging(project_root, thread_id)
     print(f"autoprove logs: {text_log}\n           events: {events_log}", file=sys.stderr)
     print(f"Selected run id: {summary.run_id}")
-    install_run_summary(summary)
     # Run-wide retry floor: transient provider failures (as classified by the
     # provider itself) resume any graph in the run from its last checkpoint
     # instead of killing the whole pipeline. Installed once here — contextvar
@@ -299,7 +318,12 @@ async def cli_pipeline[P: enum.Enum](
             "memory_ns": args.memory_ns if args.memory_ns is not None else thread_id,
             **metadata
         }, default_logging_ns(uid=None), run_id=summary.run_id, execution_id=summary.execution_id,
-           resumed_from=summary.resumed_from) as data_logger
+           resumed_from=summary.resumed_from) as data_logger,
+        # The run's ledger and its cost budget outlive the process through this
+        # saver: restored on entry, saved as they accrue, flushed on exit.
+        install_run_summary(
+            summary, saver := AmbientStateSaver(conns.store, ambient_state_ns(default_logging_ns(uid=None), summary.run_id))
+        ),
     ):
         try:
             memory_ns = args.memory_ns
@@ -414,17 +438,17 @@ async def cli_pipeline[P: enum.Enum](
                     _cpu_semaphore=cpu_semaphore,
                     _handler_factory=task_handler
                 )
-                result = await run_pipeline(
-                    backend=backend,
-                    run=run,
-                    interactive=args.interactive,
-                    max_bug_rounds=args.max_bug_rounds,
-                    threat_model=threat_model,
-                    extra_context=extra_context,
-                    budget=budget,
-                    time_budget_s=args.time_budget,
-                    ecosystem=ecosystem,
-                )
+                async with _budget_context(budget, saver):
+                    with _time_context(args.time_budget):
+                        result = await run_pipeline(
+                            backend=backend,
+                            run=run,
+                            interactive=args.interactive,
+                            max_bug_rounds=args.max_bug_rounds,
+                            threat_model=threat_model,
+                            extra_context=extra_context,
+                            ecosystem=ecosystem,
+                        )
                 if result.unfinished:
                     # The process exits cleanly, but the run is parked on questions:
                     # say so in the execution record rather than "completed".

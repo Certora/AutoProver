@@ -138,10 +138,13 @@ class EditorAgent:
 class EditorJudge:
     """judge for the editor"""
 
+class Refinement:
+    """The person's refinement conversation over a component's properties."""
+
 
 type Marker = (
     InvJudge | InvFormal | Properties | ComponentGroup
-    | CVLJudge | FoundryJudge | Abstraction | Contract | EditorAgent | EditorJudge
+    | CVLJudge | FoundryJudge | Abstraction | Contract | EditorAgent | EditorJudge | Refinement
 )
 
 # ---------------------------------------------------------------------------

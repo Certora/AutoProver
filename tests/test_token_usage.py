@@ -148,13 +148,14 @@ def _fake_model(callbacks):
     return FakeMessagesListChatModel(responses=[resp, resp], callbacks=callbacks)
 
 
-def test_callback_records_on_sync_invoke():
+@pytest.mark.asyncio
+async def test_callback_records_on_sync_invoke():
     s = RunSummary()
-    install_run_summary(s)
     model = _fake_model([UsageCallback()])
 
-    with set_current_task_id("sync-task"):
-        model.invoke("hi")
+    async with install_run_summary(s):
+        with set_current_task_id("sync-task"):
+            model.invoke("hi")
 
     assert s.token_usage_by_model["claude-test"].input == 100
     s.record_phase(task_id="sync-task", label="x", phase="p", wall_s=0.1, queue_wait_s=0.0)
@@ -167,11 +168,11 @@ async def test_callback_records_on_async_invoke_through_binding():
     on ``ainvoke`` — the same propagation the graph relies on for ``.bind_tools()`` —
     and attribute to the active task (run_inline keeps it in-context)."""
     s = RunSummary()
-    install_run_summary(s)
     model = _fake_model([UsageCallback()]).bind(stop=None)
 
-    with set_current_task_id("async-task"):
-        await model.ainvoke("hi")
+    async with install_run_summary(s):
+        with set_current_task_id("async-task"):
+            await model.ainvoke("hi")
 
     assert s.token_usage_by_model["claude-test"].input == 100
     s.record_phase(task_id="async-task", label="x", phase="p", wall_s=0.1, queue_wait_s=0.0)

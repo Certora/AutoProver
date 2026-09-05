@@ -33,10 +33,9 @@ import functools
 import logging
 from dataclasses import dataclass
 from typing import (
-    Protocol, Any, ClassVar, Concatenate, cast, Awaitable, Sequence, Callable, ContextManager, overload
+    Protocol, Any, ClassVar, Concatenate, cast, Awaitable, Sequence, Callable, overload
 )
 from abc import ABC, abstractmethod
-from contextlib import nullcontext
 
 
 from composer.io.context import GraphSuspended
@@ -69,12 +68,12 @@ from .keys import (
     POST_PROPERTY_KEY, PRE_PROPERTY_KEY, PROPERTIES_KEY, SYSTEM_ANALYSIS_KEY,
     PLUGIN_FORMALIZATION_KEY
 )
-from composer.diagnostics.budget import total_budget, named_budget_or_nop, time_budget
+from composer.diagnostics.budget import named_budget_or_nop
 
 from .ptypes import (
     DEFAULT_MAX_CPU_TASKS,
     AwaitingInput, BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult,
-    Curtailed,  Delivered, RunBudget,
+    Curtailed,  Delivered,
     FinalProperties, GaveUp, PersistedPluginArtifact, PipelineRun, PluginArtifact,
     RegisteredArtifacts, SystemAnalysisSpec
 )
@@ -407,18 +406,6 @@ class _Binder[U: FeatureUnit]:
 
 
 
-def _budget_context(budget: RunBudget | None) -> ContextManager[None]:
-    if budget is not None:
-        return total_budget(budget.total, cast(dict[str, float], budget.caps))
-    else:
-        return nullcontext()
-
-def _time_context(time_budget_s: float | None) -> ContextManager[None]:
-    if time_budget_s is not None:
-        return time_budget(time_budget_s)
-    else:
-        return nullcontext()
-
 async def run_pipeline[P: enum.Enum, FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
     backend: PipelineBackend[P, FormT, A, U, Main, App, Pre],
     run: PipelineRun[P],
@@ -428,29 +415,9 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, A: ArtifactIdentifier
     extra_context: Sequence[Document] = (),
     max_bug_rounds: int = 3,
     ecosystem: Ecosystem[App, Main, U],
-    budget: RunBudget | None = None,
-    time_budget_s : float | None = None
 ) -> CorePipelineResult[FormT]:
-    with (
-        _budget_context(budget),
-        _time_context(time_budget_s)
-    ):
-        return await _run_pipeline_inner(
-            backend, run, interactive=interactive, 
-            max_bug_rounds=max_bug_rounds, threat_model=threat_model,
-            extra_context=extra_context, ecosystem=ecosystem
-        )
-
-async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
-    backend: PipelineBackend[P, FormT, A, U, Main, App, Pre],
-    run: PipelineRun[P],
-    *,
-    interactive: bool,
-    threat_model: Document | None,
-    extra_context: Sequence[Document],
-    max_bug_rounds: int,
-    ecosystem: Ecosystem[App, Main, U],
-) -> CorePipelineResult[FormT]:
+    """Budgets (cost and time) are the caller's to install; the driver only draws
+    on whichever are ambient (see ``named_budget_or_nop``)."""
     # Only the plugins whose hooks accept this ecosystem's unit are loaded (and only those pay
     # their ``initialize`` cost); the driver below can hand them its units unconditionally.
     async with load_plugins(run, ecosystem.unit_type) as plugins:

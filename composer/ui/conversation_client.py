@@ -1,7 +1,7 @@
 import asyncio
 
 from composer.io.conversation import (
-    ProgressPayload, AIYapping, ToolBatch, ToolComplete, ThinkingStart, StateUpdate
+    ProgressPayload, AIYapping, ToolBatch, ToolComplete, ThinkingStart, StateUpdate, HumanPrompt
 )
 from composer.io.stream import managed_streamer, AsyncDataQueue, ManagedQueue, EndConversation, Checkpoint
 from rich.console import Console, RenderableType
@@ -52,15 +52,25 @@ class ConsoleConversationClient():
     ):
         self.ev_queue.push(progress)
 
-    async def human_turn(
-        self, ai_response: str | None
-    ) -> str:
+    async def answer_applied(self, question_id: str) -> None:
+        pass  # the person answered at this console; nothing to retire elsewhere
+
+    async def human_turn(self, prompt: HumanPrompt, state: RenderableType | None) -> str:
         self._reset_thinking()
         ev = asyncio.Event()
         self.ev_queue.push(Checkpoint(ev))
         await ev.wait()
-        if ai_response is not None:
-            self._console.print(Markdown(ai_response))
+        if prompt.ai_message is not None:
+            self._console.print(Markdown(prompt.ai_message))
+        while True:
+            text = await self._read_line()
+            # A console command, not a reply: show the current state and ask again.
+            if text.strip() == "/list" and state is not None:
+                self._console.print(state, markup=False)
+                continue
+            return text
+
+    async def _read_line(self) -> str:
         multiline = False
 
         @Condition

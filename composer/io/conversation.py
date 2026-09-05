@@ -39,10 +39,29 @@ class StateUpdate:
 type ProgressPayload = ToolComplete | ToolBatch | ThinkingStart | AIYapping | StateUpdate
 
 
+@dataclass(frozen=True)
+class HumanPrompt:
+    """One turn's ask of the person. ``question_id`` is the id of the AI message
+    they are replying to, the identity the reply is recorded and answered under;
+    ``ai_message`` is its text when there is any to show, none on the opening
+    turn."""
+
+    question_id: str
+    ai_message: str | None
+
+
 class ConversationClient(Protocol):
-    async def human_turn(
-        self, ai_response: str | None
-    ) -> str:
+    async def human_turn(self, prompt: HumanPrompt, state: RenderableType | None) -> str:
+        """Put the turn to the person and return their reply. ``state`` is the
+        current state of the thing under refinement, rendered, when the loop
+        has a renderer for it: a console shows it on request (``/list``), a
+        client relaying the turn elsewhere sends it along as context."""
+        ...
+
+    async def answer_applied(self, question_id: str) -> None:
+        """The reply to ``question_id`` is in the conversation's durable state.
+        A client that fetched the answer from outside the process retires it
+        here; one that asked a person directly has nothing to do."""
         ...
 
     def progress_update(

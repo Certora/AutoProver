@@ -76,12 +76,12 @@ class SinkProtocol(Protocol):
     def __call__(self, event: GraphEvents) -> None:
         ...
 
-type InterruptHandler[S] = Callable[[Sequence[Interrupt], S], Awaitable[Mapping[InterruptId, str]]]
-"""Given every interrupt pending on the thread and its current state, return a
-person's text reply for each, keyed by ``Interrupt.id``. Interrupts left out stay
-pending: the graph raises them again and the handler is asked again. A handler
-that cannot answer in this process raises; what it raises is its business, not
-the runner's.
+type InterruptHandler[S] = Callable[[Sequence[Interrupt], S, str], Awaitable[Mapping[InterruptId, str]]]
+"""Given every interrupt pending on the thread, its current state and the
+thread's id, return a person's text reply for each, keyed by ``Interrupt.id``.
+Interrupts left out stay pending: the graph raises them again and the handler is
+asked again. A handler that cannot answer in this process raises; what it raises
+is its business, not the runner's.
 """
 
 
@@ -109,7 +109,7 @@ async def run_graph[S: StateLike, I: StateLike, C: StateLike | None](
 
     When the graph pauses on interrupts, hands all of them (one per
     interrupting task) to *interrupt_handler* together with the thread's
-    state, and resumes with the map it returns.
+    state and id, and resumes with the map it returns.
     """
     config = run_conf.get("configurable", None)
     if config is None or "thread_id" not in config:
@@ -186,7 +186,7 @@ async def run_graph[S: StateLike, I: StateLike, C: StateLike | None](
                 if pending:
                     assert interrupt_handler is not None
                     curr_state = cast(S, (await graph.aget_state({"configurable": {"thread_id": tid}})).values)
-                    resume = await interrupt_handler(list(pending.values()), curr_state)
+                    resume = await interrupt_handler(list(pending.values()), curr_state, tid)
                     graph_input = Command(resume=dict(resume))
                     continue
 

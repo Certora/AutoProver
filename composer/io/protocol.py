@@ -100,10 +100,17 @@ def io_handler[T: type[IOHandler]](t: T) -> T:
 class InterruptHandler(Protocol):
     """Input: answers the interrupts a graph pauses on."""
 
-    async def handle_interrupts(self, interrupts: Sequence[Interrupt], state: Any) -> Mapping[InterruptId, str]:
+    async def handle_interrupts(
+        self, interrupts: Sequence[Interrupt], state: Any, *, thread_id: str
+    ) -> Mapping[InterruptId, str]:
         """A person's text reply for each interrupt, keyed by ``Interrupt.id``.
         Interrupts left out stay pending and are asked again. Raise
         :class:`GraphSuspended` when the answers will not arrive in this process.
+
+        ``thread_id`` is the thread that paused: the one whose checkpoints will
+        carry the answers once applied. A handler that records the questions
+        outside the process records it too, so a later execution knows where
+        the evidence of consumption lives.
 
         Called synchronously from ``run_graph()`` (not from the drainer) — the
         graph pauses until this returns.
@@ -124,7 +131,9 @@ class StateObserver(Protocol):
 class RefuseInterrupts:
     """The ``InterruptHandler`` for a run whose graphs never ask a person anything."""
 
-    async def handle_interrupts(self, interrupts: Sequence[Interrupt], state: Any) -> Mapping[InterruptId, str]:
+    async def handle_interrupts(
+        self, interrupts: Sequence[Interrupt], state: Any, *, thread_id: str
+    ) -> Mapping[InterruptId, str]:
         raise RuntimeError(
             "unexpected interrupt(s) in a run with no human interaction: "
             f"{[intr.value for intr in interrupts]!r}"
@@ -172,8 +181,10 @@ class HumanInteractionBridge[H]:
     async def human_interaction(self, ty: H) -> str:
         raise NotImplementedError
 
-    async def handle_interrupts(self, interrupts: Sequence[Interrupt], state: Any) -> Mapping[InterruptId, str]:
-        # A person at the console does not care which tool call asked.
+    async def handle_interrupts(
+        self, interrupts: Sequence[Interrupt], state: Any, *, thread_id: str
+    ) -> Mapping[InterruptId, str]:
+        # A person at the console does not care which tool call, or thread, asked.
         return {
             InterruptId(intr.id): await self.human_interaction(
                 cast(H, intr.value.payload if isinstance(intr.value, Question) else intr.value)

@@ -8,15 +8,18 @@ summary is formatted into a per-phase table.
 """
 
 from contextlib import asynccontextmanager, contextmanager
+import dataclasses
 import os
 from logging import Logger
 import time
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import AsyncIterator, Iterable, Protocol
+from typing import Any, AsyncIterator, Iterable, Protocol
 import uuid
 
 from graphcore.utils import NormalizedTokenUsage
+
+from composer.diagnostics.ambient import AmbientStateSaver
 
 
 @dataclass(frozen=True)
@@ -102,9 +105,16 @@ def execution_id_generator(run_id: str) -> str:
 def resumed_from_env() -> str | None:
     return os.getenv("AUTOPROVER_RESUMED_FROM") or None
 
+#: Bumped when ``RunSummary.save_to`` changes shape.
+SUMMARY_SCHEMA = 1
+
+
 @dataclass
 class RunSummary:
     started_at_mono: float = field(default_factory=time.perf_counter)
+    #: Wall time the run's earlier executions consumed; ``total_wall_s`` adds this
+    #: process's own. Restored from the saved summary, never charged for the gap.
+    prior_wall_s: float = 0.0
     phases: list[PhaseRecord] = field(default_factory=list)
     prover_total_s: float = 0.0
     prover_total_calls: int = 0
@@ -227,10 +237,68 @@ class RunSummary:
         self._latest_link_by_task[task_id] = link
 
     def total_wall_s(self) -> float:
-        return time.perf_counter() - self.started_at_mono
+        """Wall time the run has consumed across every execution, this one included."""
+        return self.prior_wall_s + (time.perf_counter() - self.started_at_mono)
 
     def format(self) -> str:
         return _format_summary(self)
+
+    # --- SaveableState: the run's ledger survives the process --------------------
+
+    @property
+    def id(self) -> str:
+        return "run_summary"
+
+    def save_to(self, out: dict[str, Any]) -> None:
+        out.update({
+            "schema": SUMMARY_SCHEMA,
+            "run_id": self.run_id,
+            "wall_s": self.total_wall_s(),
+            "phases": [dataclasses.asdict(p) for p in self.phases],
+            "prover_total_s": self.prover_total_s,
+            "prover_total_calls": self.prover_total_calls,
+            "prover_reported_ms_total": self.prover_reported_ms_total,
+            "token_usage_by_model": {m: t.as_dict() for m, t in self.token_usage_by_model.items()},
+            # In flight when saved: a task interrupted mid-way carries its spend into
+            # the execution that finishes it, and record_phase folds the two together.
+            "active_prover_by_task": {t: list(v) for t, v in self._active_prover_by_task.items()},
+            "active_prover_reported_by_task": dict(self._active_prover_reported_by_task),
+            "latest_link_by_task": dict(self._latest_link_by_task),
+            "active_tokens_by_task": {
+                t: {m: tt.as_dict() for m, tt in by_model.items()}
+                for t, by_model in self._active_tokens_by_task.items()
+            },
+        })
+
+    def restore_from(self, data: dict[str, Any]) -> None:
+        if data.get("run_id") != self.run_id or data.get("schema") != SUMMARY_SCHEMA:
+            return
+        self.prior_wall_s = float(data.get("wall_s", 0.0))
+        self.started_at_mono = time.perf_counter()
+        self.phases = [_phase_from_dict(p) for p in data.get("phases", [])]
+        self.prover_total_s = float(data.get("prover_total_s", 0.0))
+        self.prover_total_calls = int(data.get("prover_total_calls", 0))
+        self.prover_reported_ms_total = int(data.get("prover_reported_ms_total", 0))
+        self.token_usage_by_model = {
+            m: TokenTotals(**t) for m, t in data.get("token_usage_by_model", {}).items()
+        }
+        self._active_prover_by_task = {
+            t: (float(v[0]), int(v[1])) for t, v in data.get("active_prover_by_task", {}).items()
+        }
+        self._active_prover_reported_by_task = {
+            t: int(v) for t, v in data.get("active_prover_reported_by_task", {}).items()
+        }
+        self._latest_link_by_task = dict(data.get("latest_link_by_task", {}))
+        self._active_tokens_by_task = {
+            t: {m: TokenTotals(**tt) for m, tt in by_model.items()}
+            for t, by_model in data.get("active_tokens_by_task", {}).items()
+        }
+
+
+def _phase_from_dict(d: dict[str, Any]) -> PhaseRecord:
+    return PhaseRecord(
+        **{**d, "token_usage_by_model": {m: TokenTotals(**t) for m, t in d.get("token_usage_by_model", {}).items()}}
+    )
 
 
 _run_summary: ContextVar[RunSummary | None] = ContextVar("_run_summary", default=None)
@@ -250,9 +318,23 @@ def get_run_summary_or_none() -> RunSummary | None:
     return _run_summary.get()
 
 
-def install_run_summary(summary: RunSummary) -> None:
-    """Install ``summary`` as the active aggregator for the rest of the run."""
-    _run_summary.set(summary)
+@asynccontextmanager
+async def install_run_summary(
+    summary: RunSummary, saver: AmbientStateSaver | None = None
+) -> AsyncIterator[RunSummary]:
+    """Install ``summary`` as the active aggregator for the scope. With a
+    ``saver``, the summary is restored from what earlier executions of the run
+    saved, saved periodically, and flushed on exit, so the run's ledger and its
+    time budget span executions."""
+    tok = _run_summary.set(summary)
+    try:
+        if saver is None:
+            yield summary
+        else:
+            async with saver.persisted(summary):
+                yield summary
+    finally:
+        _run_summary.reset(tok)
 
 
 def get_current_task_id() -> str | None:

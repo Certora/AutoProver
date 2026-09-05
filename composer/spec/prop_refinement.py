@@ -4,12 +4,14 @@ import re
 from difflib import SequenceMatcher
 from pydantic import Field
 
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import interrupt, Command
 
 from langchain_core.messages import AnyMessage, SystemMessage, AIMessage, ToolMessage
 
 from graphcore.tools.schemas import WithImplementation
 
+from composer.spec.context import Refinement, WorkflowContext
 from composer.spec.types import PropertyFormulation
 from composer.spec.service_host import ServiceHost
 from composer.io.conversation import ConversationContextProvider
@@ -176,10 +178,13 @@ def render_properties_as_md(
 
 
 async def user_property_refinement(
+    ctx: WorkflowContext[Refinement],
     env: ServiceHost,
     agent_attempt: AgenticAttempt,
     refinement: ConversationContextProvider
 ) -> list[PropertyFormulation]:
+    """``ctx`` names the conversation's thread: a restarted process naming it
+    again resumes the conversation where it was."""
     msg_history = agent_attempt.final_history
     assert isinstance(msg_history[0], SystemMessage) and isinstance(msg_history[-1], ToolMessage)
     import uuid
@@ -188,6 +193,10 @@ async def user_property_refinement(
         *msg_history[1:],
         AIMessage("<task-complete>", id=uuid.uuid4().hex)
     ]
+    checkpointer = env.models.checkpointer
+    assert isinstance(checkpointer, BaseCheckpointSaver), (
+        "the refinement conversation is durable and needs the run's checkpointer"
+    )
 
     async with refinement(render_properties_as_md(agent_attempt.items)) as client:
         res = await refinement_loop(
@@ -196,6 +205,8 @@ async def user_property_refinement(
             init_messages=edited_history,
             init_data=agent_attempt.items,
             tools=[*env.analysis_tools, Exit.as_tool("finalize_properties"), SetRequirements.as_tool("update_requirements")],
+            checkpointer=checkpointer,
+            thread_id=ctx.thread_id,
             state_renderer=render_properties_as_md,
             diff_renderer=lambda a, b: \
                 Group(
