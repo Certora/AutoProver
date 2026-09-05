@@ -1,23 +1,32 @@
 """LLM-driven grouping of inferred properties into high-level audit claims.
 
-A single structured LLM call takes the `FormalizedProperty` list and partitions it into high-level
+A structured LLM call takes the `FormalizedProperty` list and partitions it into high-level
 `PropertyGroup`s (the "P-NN" headings) — each property in exactly one group, while the rules those
 properties are formalized by may surface under several groups. Each group's status is rolled up from
 its members' rules' verdicts. Groups are identified by the slug the LLM assigns — a per-run snapshot.
 
+A response that misses the schema costs the report every heading it has, so two things stand
+between a malformed answer and the fallback: a grouping the model serialized into a string is
+decoded rather than rejected, and a response that still does not validate is retried once with the
+rejection appended.
+
 A single ``general`` fallback group (every property in one group) is used by `build` when the LLM
 call raises, validation rejects the grouping, or the grouping covers no properties.
 """
+import json
+import logging
 from typing import Iterable
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from composer.templates.loader import load_jinja_template
 from composer.spec.source.report.schema import (
     FormalizedProperty, GroupStatus, Outcome, PropertyGroup, PropertyKey, RuleRef,
 )
+
+_log = logging.getLogger(__name__)
 
 FALLBACK_SLUG = "general"
 FALLBACK_TITLE = "General"
@@ -72,15 +81,43 @@ class GroupingResult(BaseModel):
         "exactly once."
     )
 
+    @field_validator("groups", mode="before")
+    @classmethod
+    def _decode_serialized_groups(cls, v: object) -> object:
+        """Accept a grouping the model serialized into a string instead of returning as a list.
+
+        Structured output sometimes arrives with the whole result document JSON-encoded into the
+        one field meant to hold the list, or with the list itself encoded. The grouping in it is
+        complete; only the envelope is wrong, so decode it rather than throwing away a usable
+        answer and heading for the single-bucket fallback. Anything that does not decode is
+        handed back untouched for pydantic to reject as it normally would."""
+        if not isinstance(v, str):
+            return v
+        try:
+            decoded = json.loads(v)
+        except json.JSONDecodeError:
+            return v
+        if isinstance(decoded, dict) and "groups" in decoded:
+            return decoded["groups"]
+        return decoded
+
 
 async def call_grouping_llm(
     *,
     llm: BaseChatModel,
     contract_name: str,
     properties: list[FormalizedProperty],
+    max_attempts: int = 2,
 ) -> GroupingResult:
     """One structured LLM call: the property list in, a `GroupingResult` out, via langchain's
-    `with_structured_output`. The model + token budget come from the passed `llm`."""
+    `with_structured_output`. The model + token budget come from the passed `llm`.
+
+    A response that does not match the schema is retried once with the rejection appended, the
+    way `spec/prioritize.py` corrects a ranking. Without it a single malformed response costs the
+    report every heading it has, and the caller's fallback is meant for a grouping that could not
+    be obtained at all, not for one the model would have got right on a second look. The
+    correction is appended to the original request rather than sent as a follow-up turn, so the
+    retry stays one self-contained user message."""
     system = load_jinja_template("autoprove_report_grouping_system.j2")
     user = load_jinja_template(
         "autoprove_report_grouping_prompt.j2",
@@ -88,9 +125,23 @@ async def call_grouping_llm(
         properties=properties,
     )
     bound = llm.with_structured_output(GroupingResult)
-    result = await bound.ainvoke([SystemMessage(system), HumanMessage(user)])
-    assert isinstance(result, GroupingResult)
-    return result
+
+    prompt = user
+    for attempt in range(max_attempts):
+        try:
+            result = await bound.ainvoke([SystemMessage(system), HumanMessage(prompt)])
+        except ValidationError as e:
+            if attempt == max_attempts - 1:
+                raise
+            _log.warning("report grouping rejected (attempt %d): %s", attempt + 1, e)
+            prompt = (
+                f"{user}\n\nA previous attempt was rejected:\n\n{e}\n\n"
+                "Return the corrected grouping as structured output matching the schema."
+            )
+            continue
+        assert isinstance(result, GroupingResult)
+        return result
+    raise AssertionError("unreachable: the loop returns or raises")
 
 
 def build_groups(
