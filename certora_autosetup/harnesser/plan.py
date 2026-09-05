@@ -174,6 +174,19 @@ def _external_location(param: LibParam) -> str:
     return LOC_MEMORY if param.is_reference else ""
 
 
+def _type_location(solidity_type: str) -> str:
+    """The data location a bare type name needs to cross the ABI boundary.
+
+    ``_external_location`` reads the location off the parameter, which works for a
+    library function's own arguments. A reader's key and leaf types come from struct
+    members instead, and a member declaration carries no location, so the type itself
+    has to say whether one is required.
+    """
+    if solidity_type in ("bytes", "string") or solidity_type.endswith("]"):
+        return LOC_MEMORY
+    return ""
+
+
 def short_type_name(solidity_type: str, library_name: str) -> str:
     """Identifier fragment for a type, without the wrapped library's own qualifier.
 
@@ -378,7 +391,14 @@ def _walk_member(
             node.value,
             f"{access}[{key_name}]",
             name_parts,
-            [*params, LibParam(name=key_name, solidity_type=key_type)],
+            [
+                *params,
+                LibParam(
+                    name=key_name,
+                    solidity_type=key_type,
+                    location=_type_location(key_type),
+                ),
+            ],
             readers,
             depth + 1,
         )
@@ -393,6 +413,7 @@ def _walk_member(
             solidity_type=node.solidity_type,
             access_expression=access,
             params=tuple(params),
+            location=_type_location(node.solidity_type),
         )
     )
 

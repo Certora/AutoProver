@@ -75,7 +75,7 @@ def _render_wrapper(wrapper: Wrapper, library_name: str) -> str:
 
 def _render_reader(reader: StorageReader) -> str:
     """Emit a getter over a member of an owned struct."""
-    location = " memory" if reader.solidity_type.endswith("[]") else ""
+    location = f" {reader.location}" if reader.location else ""
     return "\n".join(
         [
             f"    function {reader.name}({_render_params(reader.params)}) "
@@ -104,7 +104,9 @@ def plan_hash(plan: HarnessPlan) -> str:
             )
             for w in plan.wrappers
         ],
-        "readers": [(r.name, r.solidity_type, r.access_expression) for r in plan.readers],
+        "readers": [
+            (r.name, r.solidity_type, r.location, r.access_expression) for r in plan.readers
+        ],
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
