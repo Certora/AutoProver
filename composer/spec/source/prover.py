@@ -56,7 +56,7 @@ from composer.spec.gen_types import CERTORA_DIR, SPECS_DIR
 from composer.spec.util import string_hash
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.spec_buffers import (
-    NamedBuffer, SpecBuffersExtra, buffer_state_digest, run_targets,
+    NamedBuffer, SpecBuffersExtra, buffer_state_digest, duplicated_declarations, run_targets,
 )
 
 
@@ -704,6 +704,9 @@ def get_prover_tool(
     buffer_jobs: dict[str, _BufJob] = {}
     done_queue: asyncio.Queue[_BufDone] = asyncio.Queue()
     submit_counts: dict[str, int] = {}
+    # Declarations already flagged as duplicated-across-buffers, so collect_results nags about each at
+    # most once per run (advisory only — the agent may hoist them to a shared buffer or ignore).
+    reported_dupes: set[str] = set()
 
     def component_of(state: StateWithSkips) -> str:
         """The label prefix for this generation's prover runs: its seeded spec stem, or the main
@@ -1064,6 +1067,14 @@ def get_prover_tool(
             f"[buffers] running: {sorted(running)}",
             f"[buffers] needs (re)submission: {sorted(needs_submit)}",
         ]
+        # Advisory: flag declarations duplicated verbatim across run-target buffers (once each) — likely
+        # belong in a shared buffer the duplicating buffers import.
+        fresh_dupes = {d: ns for d, ns in duplicated_declarations(buffers).items() if d not in reported_dupes}
+        if fresh_dupes:
+            reported_dupes.update(fresh_dupes)
+            board.append("[buffers] NOTE: these declarations are duplicated across run-target buffers — "
+                         "consider moving each to a shared buffer the duplicating buffers import:")
+            board.extend(f"  {d}  (in {ns})" for d, ns in fresh_dupes.items())
         if not drained:
             parts.append("No finished jobs yet." if running else "No finished jobs and nothing running.")
 

@@ -21,9 +21,9 @@ from composer.authoring.judge import PropertyFeedbackProtocol
 from composer.authoring.state import SkippedProperty, check_completion
 from composer.authoring.tools import gated_give_up_tool, give_up_tool
 from composer.spec.cvl_generation import (
-    cvl_guidance_tools, property_tools, skip_tools, CVLGenerationExtra, FEEDBACK_VALIDATION_KEY,
+    cvl_guidance_tools, skip_tools, CVLGenerationExtra, FEEDBACK_VALIDATION_KEY,
     validate_property_rules, CVL_JUDGE_KEY, run_cvl_generator,
-    GeneratedCVL, PropertyRuleMapping, AppliedEdit, FeedbackToolBase,
+    GeneratedCVL, PropertyRuleMapping, AppliedEdit, FeedbackToolBase, FeedbackServices,
 )
 from composer.prover.core import run_prover, CexHandler, ProverCallbacks, ProverReport
 from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools, WIPE_HISTORY
@@ -662,9 +662,49 @@ class _LiveJudgeHost:
         )
 
 
+class _BufferReviewFeedback(FeedbackToolBase[SourceCVLGenerationState]):
+    """Feedback base that reviews each run-target buffer independently and stamps ``feedback:<buffer>``,
+    falling back to the single-spec base ``run`` when there are no buffers. Both source feedback tools —
+    editor-aware (source editing) and property-only (structural invariants / immutable source) — build
+    on it, so per-buffer review works whether or not source editing is enabled. Subclasses supply
+    ``_get_feedback`` (how the judge is reached)."""
+
+    @override
+    async def run(self) -> Command:
+        buffers = self.state.get("buffers") or {}
+        targets = run_targets(buffers)
+        if not targets:
+            return await super().run()
+
+        # Review each run-target buffer whose feedback stamp is missing or stale (its text or an import
+        # changed) in isolation, and stamp feedback:<buffer> per approved buffer — so an approved,
+        # unchanged buffer is never re-reviewed and the hard buffer is reviewed alone.
+        skipped = self.state["skipped"]
+        skipped_pairs = [(str(s.property_title), str(s.reason)) for s in skipped]
+        vh = self._version_history()
+        validations = self.state["validations"]
+
+        def digest(name: str) -> str:
+            return buffer_state_digest(buffers, name, skipped=skipped_pairs, version_history=vh)
+
+        stale = [b for b in targets if validations.get(f"feedback:{b.name}") != digest(b.name)]
+        if not stale:
+            return tool_return(
+                self.tool_call_id, "All buffers already reviewed and approved at their current state."
+            )
+        new_stamps: dict[str, str] = {}
+        blocks: list[str] = []
+        for b in stale:
+            verdict = await self._get_feedback(buffer_review_text(buffers, b.name), skipped)
+            blocks.append(f"=== buffer {b.name} ===\nGood? {verdict.good}\nFeedback {verdict.feedback}")
+            if verdict.good:
+                new_stamps[f"feedback:{b.name}"] = digest(b.name)
+        return tool_state_update(self.tool_call_id, "\n\n".join(blocks), validations=new_stamps)
+
+
 @tool_display("Getting feedback", "Feedback")
 class EditorAwareFeedbackTool(
-    FeedbackToolBase[SourceCVLGenerationState],
+    _BufferReviewFeedback,
     WithAsyncDependencies[Command, ContextualFeedbackToolImpl[SourceSnapshot]],
 ):
     __doc__ = FeedbackToolBase.__doc__
@@ -685,38 +725,27 @@ class EditorAwareFeedbackTool(
     def _version_history(self) -> Sequence[str]:
         return self.state["version_history"]
 
+
+@tool_display("Getting feedback", "Feedback")
+class BufferPropertyFeedbackTool(
+    _BufferReviewFeedback,
+    WithAsyncDependencies[Command, FeedbackServices],
+):
+    """Buffer-aware feedback for the non-editing author (structural invariants, immutable source):
+    reviews each buffer via the property judge (no source snapshot) and stamps ``feedback:<buffer>``."""
+
+    __doc__ = FeedbackToolBase.__doc__
+
     @override
-    async def run(self) -> Command:
-        """Single-spec: the base flow. Multi-buffer: review each run-target buffer whose feedback
-        stamp is missing or stale (its text or an import changed) in isolation, and stamp
-        ``feedback:<buffer>`` per approved buffer — so an approved, unchanged buffer is never
-        re-reviewed and the hard buffer is reviewed alone."""
-        buffers = self.state.get("buffers") or {}
-        targets = run_targets(buffers)
-        if not targets:
-            return await super().run()
+    async def _get_feedback(
+        self, spec: str, skipped: list[SkippedProperty]
+    ) -> PropertyFeedbackProtocol:
+        with self.tool_deps() as svc:
+            return await svc.feedback_thunk(spec, skipped, self.rebuttals, self.tool_call_id)
 
-        skipped = self.state["skipped"]
-        skipped_pairs = [(str(s.property_title), str(s.reason)) for s in skipped]
-        vh = self.state["version_history"]
-        validations = self.state["validations"]
-
-        def digest(name: str) -> str:
-            return buffer_state_digest(buffers, name, skipped=skipped_pairs, version_history=vh)
-
-        stale = [b for b in targets if validations.get(f"feedback:{b.name}") != digest(b.name)]
-        if not stale:
-            return tool_return(
-                self.tool_call_id, "All buffers already reviewed and approved at their current state."
-            )
-        new_stamps: dict[str, str] = {}
-        blocks: list[str] = []
-        for b in stale:
-            verdict = await self._get_feedback(buffer_review_text(buffers, b.name), skipped)
-            blocks.append(f"=== buffer {b.name} ===\nGood? {verdict.good}\nFeedback {verdict.feedback}")
-            if verdict.good:
-                new_stamps[f"feedback:{b.name}"] = digest(b.name)
-        return tool_state_update(self.tool_call_id, "\n\n".join(blocks), validations=new_stamps)
+    @override
+    def _version_history(self) -> Sequence[str]:
+        return self.state["version_history"]
 
 
 _PropertyGenTemplate = TypedTemplate[PropertyGenParams]("property_generation_prompt.j2")
@@ -742,9 +771,13 @@ When to split:
   re-verification and re-review cost only that buffer.
 
 Structuring buffers:
-- Put **shared** infrastructure (ghosts, common invariants, helper CVL functions, token/oracle models)
-  in a buffer with `is_run_target=false`, and have run-target buffers `import "<shared>.spec"` and list
-  it in their `imports`.
+- Put infrastructure shared by two or more run-target buffers (ghosts, common invariants, helper CVL
+  functions, token/oracle models, and summaries several groups need) in a buffer with
+  `is_run_target=false`, and `import "<shared>.spec"` it from **each run-target that uses it** (and list
+  it in that buffer's `imports`). A shared buffer is pulled in only by the buffers that import it, so
+  editing it re-verifies only those — you can make one shared buffer for a subset of groups and another
+  for a different subset. **Import the shared buffer where you need it; never restate its contents in a
+  run-target** (a duplicate `methods{}` entry or ghost is a compile error).
 - Each **run-target** buffer declares its `property_rules` (the properties it verifies + their rule
   names). Across all run-target buffers, every non-skipped property must appear in **exactly one**
   buffer, and each rule lives in exactly one buffer.
@@ -764,16 +797,13 @@ Summaries — over-approximate up front (this is your main lever for tractabilit
   reachability check), keep the functions it exercises **exact**. This is a first-class reason to
   partition: group `assert`-only properties (which share aggressive over-approximations) apart from
   `satisfy` properties (which need those functions exact).
-- **Put each summary where it is USED — do NOT default everything into the shared buffer.** A summary
-  that is sound and useful for *every* run-target buffer belongs in the shared buffer; a summary only
-  *some* buffers need belongs in *those* buffers' own `methods{}` (a run-target buffer has its own
-  `methods{}` too). A property-specific summary parked in the shared buffer makes every later edit to it
-  re-verify *every* importer — wasted work on buffers that never use it. For example, if only the
-  approvals buffer reasons about `setApprovalForAll`, summarize it there and leave the shared base free
-  of it:
+- **Put each summary where it is USED.** A summary several run-target buffers need goes in a shared
+  buffer they each `import`; a summary only one buffer needs goes in *that* buffer's own `methods{}` (a
+  run-target buffer has its own `methods{}` too). A single-buffer summary parked in a shared buffer that
+  others import makes every later edit re-verify all of them — wasted work on buffers that never use it.
+  For example, if only the approvals buffer reasons about `setApprovalForAll`, summarize it there:
 
-      // buffer "approvals" (run-target) — imports the shared base
-      import "base.spec";
+      // buffer "approvals" (run-target)
       methods {
           function _.setApprovalForAll(address o, bool a) internal with (env e)
               => recordErc1155Approval(e.msg.sender, o, a) expect void;
@@ -1022,10 +1052,12 @@ async def batch_cvl_generation(
     })
     protected = focus.protected if focus is not None else ()
     if editing is None:
-        feedback_suite = property_tools(
-            property_feedback_judge(judge_ctx, env, judge_prompt, props),
-            protected=protected,
-        )
+        feedback_suite = [
+            BufferPropertyFeedbackTool.bind(
+                property_feedback_judge(judge_ctx, env, judge_prompt, props)
+            ).as_tool("feedback_tool"),
+            *skip_tools(titles, protected=protected),
+        ]
     else:
         judge_impl = source_feedback_judge(
             judge_ctx, _LiveJudgeHost(env, editing), judge_prompt, props

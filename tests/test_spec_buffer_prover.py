@@ -155,3 +155,43 @@ class TestBufferSubmitCollect:
             _collect(wait=False),
         ).run()
         assert _prover_complete(st) is not None  # nothing verified yet
+
+    async def test_non_editing_feedback_stamps_per_buffer(self):
+        """The non-editing feedback tool (structural invariants / immutable source) must review each
+        buffer and stamp feedback:<buffer> — the path that previously read empty curr_spec and returned
+        'No spec put yet', deadlocking publish."""
+        from dataclasses import dataclass
+        from composer.spec.source.author import BufferPropertyFeedbackTool
+        from composer.spec.cvl_generation import FeedbackServices
+        from composer.spec.types import PropertyTitle
+
+        @dataclass
+        class _V:
+            good: bool
+            feedback: str
+
+        async def judge(spec, skipped, rebuttals, within_tool):
+            return _V(good=True, feedback="")
+
+        tool = BufferPropertyFeedbackTool.bind(
+            FeedbackServices(feedback_thunk=judge, titles=[PropertyTitle("P-easy")])
+        ).as_tool("feedback_tool")
+        buffers = {
+            "shared": NamedBuffer(name="shared", cvl=SHARED, is_run_target=False),
+            "easy": _buf("easy", "r_easy"),
+        }
+        state = {
+            "buffers": buffers, "curr_spec": None, "skipped": [],
+            "validations": {}, "version_history": [], "messages": [],
+            "required_validations": [], "property_rules": [], "rule_skips": {},
+            "config": {}, "prover_history": [], "reminders_channel": [],
+            "failed": None, "budget_curtailed": False,
+        }
+        res = await tool.ainvoke(
+            {"name": "feedback_tool", "args": {"state": state, "rebuttals": []},
+             "id": "t", "type": "tool_call"}
+        )
+        val = res.update.get("validations", {}) if hasattr(res, "update") else {}
+        assert val.get("feedback:easy") == buffer_state_digest(
+            buffers, "easy", skipped=[], version_history=[]
+        )

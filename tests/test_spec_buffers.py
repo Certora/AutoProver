@@ -7,6 +7,7 @@ from composer.spec.source.spec_buffers import (
     buffer_state_digest,
     check_buffer_completion,
     combined_buffers_view,
+    duplicated_declarations,
     import_closure,
     max_spec_buffers,
     merge_buffers,
@@ -14,6 +15,41 @@ from composer.spec.source.spec_buffers import (
     validate_coverage,
     validate_disjoint_rules,
 )
+
+
+_COMMON = (
+    "ghost mapping(uint => uint) gm;\n"
+    "methods {\n"
+    "    function _.foo() external => NONDET;\n"
+    "    function _.bar(address) external => NONDET;\n"
+    "}\n"
+)
+
+
+def test_duplicated_declarations_flags_copypaste_across_run_targets():
+    b = {
+        "shared": NamedBuffer(name="shared", cvl=SHARED, is_run_target=False),
+        "a": NamedBuffer(name="a", cvl=_COMMON + "rule ra { assert true; }\n",
+                         property_rules={"P-a": ["ra"]}),
+        "b": NamedBuffer(name="b", cvl=_COMMON + "rule rb { assert true; }\n",
+                         property_rules={"P-b": ["rb"]}),
+    }
+    dups = duplicated_declarations(b)
+    assert dups["ghost mapping(uint => uint) gm;"] == ["a", "b"]
+    assert dups["function _.foo() external => NONDET;"] == ["a", "b"]
+    assert dups["function _.bar(address) external => NONDET;"] == ["a", "b"]
+
+
+def test_duplicated_declarations_ignores_single_buffer_and_shared():
+    b = {
+        # a shared buffer carrying the entry is the CORRECT structure, not a duplication
+        "shared": NamedBuffer(name="shared", cvl="methods {\n function _.z() external => NONDET;\n}\n",
+                              is_run_target=False),
+        "a": NamedBuffer(name="a", cvl="methods {\n function _.foo() external => NONDET;\n}\n"
+                         "rule ra { assert true; }\n", property_rules={"P-a": ["ra"]}),
+        "b": NamedBuffer(name="b", cvl="rule rb { assert true; }\n", property_rules={"P-b": ["rb"]}),
+    }
+    assert duplicated_declarations(b) == {}  # foo only in a; z only in the shared buffer
 
 
 def test_max_spec_buffers_default_override_and_fallback(monkeypatch):

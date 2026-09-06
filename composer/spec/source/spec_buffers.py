@@ -18,6 +18,7 @@ while correctly invalidating its importers.
 """
 
 import os
+import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import Annotated
 
@@ -100,8 +101,11 @@ class SpecBuffersExtra(TypedDict):
 
 def import_closure(buffers: Mapping[str, NamedBuffer], name: str) -> list[NamedBuffer]:
     """Buffer ``name`` plus every buffer reachable through its ``imports``, transitively — deduped and
-    returned sorted by name. An import naming no known buffer is skipped here (a dangling import is a
-    coverage/validation concern, not a hashing one), and import cycles terminate safely."""
+    returned sorted by name. A run-target buffer imports a shared (``is_run_target=false``) buffer only
+    when it declares it, so a shared buffer belongs to the closure (and invalidation set) of exactly the
+    run-targets that use it — that is what lets a subset of groups share a summary without invalidating
+    the others. An import naming no known buffer is skipped (a dangling import is a coverage concern, not
+    a hashing one), and cycles terminate safely."""
     seen: set[str] = set()
     stack = [name]
     while stack:
@@ -233,3 +237,42 @@ def validate_disjoint_rules(buffers: Mapping[str, NamedBuffer]) -> str | None:
         for r in b.owned_rules:
             (dup if r in seen else seen).add(r)
     return f"rules owned by more than one buffer: {sorted(dup)}" if dup else None
+
+
+_METHODS_BLOCK = re.compile(r"methods\s*\{([^}]*)\}", re.DOTALL)
+_GHOST_DECL = re.compile(r"\bghost\b[^;{]*;", re.DOTALL)
+
+
+def _normalize_decl(s: str) -> str:
+    """Strip comments and collapse whitespace so two textually-equivalent declarations compare equal."""
+    s = re.sub(r"/\*.*?\*/", "", s, flags=re.DOTALL)
+    s = re.sub(r"//[^\n]*", "", s)
+    return " ".join(s.split())
+
+
+def _extract_decls(cvl: str) -> set[str]:
+    """The `methods{}` entries and simple `ghost` declarations in ``cvl``, normalized. A light-regex
+    heuristic: ``methods`` entries are split on ``;`` within each block; ghost decls are single-statement
+    (axiom-block ghosts and multi-line CVL function *bodies* are not extracted). Good enough to flag
+    verbatim copy-paste across buffers, not a CVL parser."""
+    decls: set[str] = set()
+    for block in _METHODS_BLOCK.findall(cvl):
+        for entry in block.split(";"):
+            n = _normalize_decl(entry)
+            if n.startswith("function "):
+                decls.add(n + ";")
+    for g in _GHOST_DECL.findall(cvl):
+        decls.add(_normalize_decl(g))
+    return decls
+
+
+def duplicated_declarations(buffers: Mapping[str, NamedBuffer]) -> dict[str, list[str]]:
+    """Declarations (``methods{}`` entries / simple ghost decls) that appear verbatim in more than one
+    run-target buffer — copy-paste that likely belongs in a shared buffer the duplicating buffers import.
+    Returns ``{declaration: sorted buffer names}`` for each duplicated declaration (heuristic, text-based;
+    see :func:`_extract_decls`)."""
+    where: dict[str, list[str]] = {}
+    for b in run_targets(buffers):
+        for decl in _extract_decls(b.cvl):
+            where.setdefault(decl, []).append(b.name)
+    return {d: sorted(names) for d, names in where.items() if len(names) > 1}
