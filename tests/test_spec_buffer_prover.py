@@ -92,6 +92,16 @@ def _prover_complete(st: StateWithSkips) -> str | None:
     )
 
 
+@pytest.fixture(autouse=True)
+def _accept_cvl(monkeypatch):
+    """put_buffer/edit_buffer validate writes by shelling out to the real CVL typechecker jar
+    (cvl_syntax_error); that jar is absent in unit-test CI, so every buffer write would be rejected.
+    This suite exercises the async submit/collect flow, not CVL parsing, so accept all writes."""
+    monkeypatch.setattr(
+        "composer.spec.source.buffer_tools.cvl_syntax_error", lambda *a, **k: None
+    )
+
+
 @pytest.mark.asyncio
 class TestBufferSubmitCollect:
     async def test_submit_then_collect_stamps_each_buffer(self, certora_prover: ProverMock):
