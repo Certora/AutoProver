@@ -31,10 +31,10 @@ SPEC_BUFFERS_ENV = "AUTOPROVER_SPEC_BUFFERS"
 
 
 def spec_buffers_enabled() -> bool:
-    """Whether the multi-buffer authoring tools are offered to the agent — ``true`` enables, anything
-    else (unset or ``false``) leaves the single ``curr_spec`` flow untouched. A boolean feature switch,
-    not a buffer count: how many buffers the agent creates is a runtime decision."""
-    return os.environ.get(SPEC_BUFFERS_ENV, "").strip().lower() == "true"
+    """Whether the multi-buffer authoring tools are offered to the agent. On by default; set
+    ``AUTOPROVER_SPEC_BUFFERS=false`` to fall back to the single ``curr_spec`` flow. A boolean feature
+    switch, not a buffer count: how many buffers the agent creates is a runtime decision."""
+    return os.environ.get(SPEC_BUFFERS_ENV, "true").strip().lower() != "false"
 
 
 class NamedBuffer(BaseModel):
