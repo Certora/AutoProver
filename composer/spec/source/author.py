@@ -763,9 +763,21 @@ Instead of one spec, you author several named CVL **buffers**, each a self-conta
 reviewed on its own. Use `put_buffer` / `edit_buffer` / `get_buffer` / `list_buffers` / `delete_buffer`
 to author them, and `submit_buffer` / `collect_results` (NOT `verify_spec`) to verify them.
 
+**Strongly prefer splitting, and add over-approximating performance summaries preemptively.** A
+single spec has ONE global `methods{}` block, so every rule is verified under the *intersection* of
+what all rules need precise — one property that needs an expensive function (nonlinear math, hashing,
+a heavy external) kept exact forces EVERY rule to pay that cost, which is the usual source of a
+timeout. Splitting breaks that coupling: each buffer keeps precise only what ITS properties need and
+over-approximates the rest, so a function one buffer must keep exact can be summarized in another.
+So decide the partition up front from the properties and **default to several buffers grouped by
+precision need** — do not start with one monolithic buffer and wait for a timeout to force the split.
+
 When to split:
 - Properties have **conflicting precision needs** — one buffer can summarize a function that another
-  keeps exact (each buffer has its own `methods{}`), with no global-methods-block conflict.
+  keeps exact (each buffer has its own `methods{}`), with no global-methods-block conflict. This is
+  the primary axis: group the properties by the set of functions they genuinely need exact.
+- Separate **`assert`-only** properties (which can share aggressive over-approximations) from
+  **`satisfy`** properties (which need those functions exact) — see the soundness rule below.
 - To **isolate the hard/slow properties**: put the many easy properties in one buffer that verifies and
   is approved once and never re-touched, while you iterate on a small hard buffer in isolation — its
   re-verification and re-review cost only that buffer.
@@ -843,7 +855,10 @@ one):
 - Editing a buffer (or a shared buffer it imports) makes its prior verification stale; re-submit it. A
   buffer already verified at its current content is not re-run.
 
-A single run-target buffer is exactly the one-spec case, so only split when it helps.
+A single run-target buffer is exactly the one-spec case; it is the exception, appropriate only when
+the properties genuinely share one precision profile and prove quickly together. When in doubt,
+split by precision need and summarize preemptively — a well-partitioned set of buffers is far more
+likely to prove than one monolith, and costs you little when the properties turn out to be easy.
 """
 
 #: The prover's tool extension: contributions come from plugins deriving
