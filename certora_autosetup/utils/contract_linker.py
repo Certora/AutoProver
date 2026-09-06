@@ -39,13 +39,11 @@ def render_wrapper_contract(
     ctor_forward: Optional[Tuple[str, List[str]]],
     body_blocks: Optional[List[str]] = None,
     header_comment_lines: Optional[List[str]] = None,
-    extra_pragma_lines: Optional[List[str]] = None,
 ) -> str:
     """Render the source of a ``contract <harness_name>`` wrapper.
 
-    Emits the SPDX header, the pragma (omitted when empty), any extra pragmas, the
-    import lines, an optional constructor forwarding to the parent, and optional
-    extra body blocks.
+    Emits the SPDX header, the pragma (omitted when empty), the import lines, an
+    optional constructor forwarding to the parent, and optional extra body blocks.
 
     ``parent_name`` names the contract to inherit from; None emits a standalone
     ``contract <harness_name> {`` — a library harness holds the library at arm's
@@ -54,11 +52,6 @@ def render_wrapper_contract(
     ``ctor_forward`` is a ``(params_source, arg_names)`` pair; None means the
     parent needs no constructor arguments and the implicit default constructor
     suffices. It requires a ``parent_name`` to forward to.
-
-    ``extra_pragma_lines`` carries file-scoped pragmas beyond the version pragma —
-    ``pragma abicoder v2;`` is per-file and is not inherited from an imported
-    library, so a wrapper whose signatures use structs or nested arrays must
-    declare it itself under solc < 0.8.
     """
     if ctor_forward is not None and parent_name is None:
         raise ValueError("ctor_forward requires a parent_name to forward to")
@@ -79,7 +72,6 @@ def render_wrapper_contract(
     lines = [
         "// SPDX-License-Identifier: UNLICENSED",
         *([pragma_line] if pragma_line else []),
-        *(extra_pragma_lines or []),
         "",
         *import_lines,
         "",

@@ -25,6 +25,7 @@ from collections import defaultdict
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 from certora_autosetup.utils.cvl_keywords import escape_reserved
+from certora_autosetup.utils.types import ContractHandle
 from certora_autosetup.harnesser.model import (
     KIND_ARRAY,
     KIND_MAPPING,
@@ -451,17 +452,16 @@ def _storage_readers(
 
 def build_plan(
     api: LibraryApi,
-    harness_name: str,
-    harness_file: str,
+    harness: ContractHandle,
     pragma_line: str,
     import_lines: Sequence[str],
-    extra_pragma_lines: Sequence[str] = (),
 ) -> HarnessPlan:
     """Decide the complete contents of the harness for ``api``.
 
     Ordering is by library source line, so regenerating an unchanged library produces a
     byte-identical file and the harness does not churn in diffs.
     """
+    library_name = api.contract.contract_name
     ordered = sorted(api.functions, key=lambda f: (f.source_line, f.name))
 
     skipped: List[Skipped] = []
@@ -474,7 +474,7 @@ def build_plan(
 
     if not wrappable:
         raise LibraryHarnessError(
-            f"no function of library {api.name} can be exposed through a harness "
+            f"no function of library {library_name} can be exposed through a harness "
             f"({len(skipped)} skipped) — verifying it would prove nothing"
         )
 
@@ -483,7 +483,7 @@ def build_plan(
         for param in fn.storage_params:
             if param.solidity_type not in owned:
                 owned[param.solidity_type] = OwnedVar(
-                    var_name=_owned_var_name(param.solidity_type, api.name),
+                    var_name=_owned_var_name(param.solidity_type, library_name),
                     solidity_type=param.solidity_type,
                 )
 
@@ -502,19 +502,16 @@ def build_plan(
         )
         for w in wrappers
     ]
-    wrappers = _mangle_collisions(wrappers, wrappable, api.name)
+    wrappers = _mangle_collisions(wrappers, wrappable, library_name)
 
     owned_vars = tuple(owned[key] for key in sorted(owned))
     return HarnessPlan(
-        harness_name=harness_name,
-        library_name=api.name,
-        library_source_file=api.source_file,
-        harness_file=harness_file,
+        harness=harness,
+        library=api.contract,
         pragma_line=pragma_line,
-        extra_pragma_lines=tuple(extra_pragma_lines),
         import_lines=tuple(import_lines),
         owned_vars=owned_vars,
         wrappers=tuple(wrappers),
-        readers=tuple(_storage_readers(owned_vars, api.struct_members, api.name)),
+        readers=tuple(_storage_readers(owned_vars, api.struct_members, library_name)),
         skipped=tuple(skipped),
     )

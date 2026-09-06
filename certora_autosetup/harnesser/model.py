@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, Optional
 
+from certora_autosetup.utils.types import ContractHandle
+
 
 class SkipReason(Enum):
     """Why a library function got no wrapper.
@@ -110,13 +112,12 @@ class LibFunction:
 class LibraryApi:
     """Everything the harnesser knows about the library it is wrapping.
 
-    ``source_file`` is the path the build reported, which is what the harness imports
-    and what disambiguates same-named libraries (solady ships 17 library names twice,
-    under ``src/utils/`` and ``src/utils/g/``).
+    ``contract.source_file`` is the path the build reported, which is what the harness
+    imports and what disambiguates same-named libraries (solady ships 17 library names
+    twice, under ``src/utils/`` and ``src/utils/g/``).
     """
 
-    name: str
-    source_file: str
+    contract: ContractHandle
     functions: tuple[LibFunction, ...]
     #: Qualified struct type (e.g. "EnumerableSet.AddressSet") -> its member tree, as
     #: the build reports it. Storage readers are derived from this; member names are
@@ -187,12 +188,9 @@ class Skipped:
 class HarnessPlan:
     """The fully-resolved decision of what the harness file contains."""
 
-    harness_name: str
-    library_name: str
-    library_source_file: str
-    harness_file: str
+    harness: ContractHandle
+    library: ContractHandle
     pragma_line: str
-    extra_pragma_lines: tuple[str, ...]
     import_lines: tuple[str, ...]
     owned_vars: tuple[OwnedVar, ...]
     wrappers: tuple[Wrapper, ...]

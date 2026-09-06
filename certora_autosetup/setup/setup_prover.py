@@ -17,7 +17,7 @@ import sys
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterable, Iterator, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
 if TYPE_CHECKING:
     from certora_autosetup.setup.setup_summaries import SummarySetup
@@ -37,13 +37,12 @@ from certora_autosetup.setup.signature_types import ContractInfo
 from certora_autosetup.setup.solidity_utils import extract_definitions_from_solidity
 from certora_autosetup.solidity_ast import (
     AstDump,
-    ContractDefinition,
-    FileAsts,
     build_parent_graph_json,
-    iter_nodes_of_type,
+    iter_contract_declarations,
     stream_raw_units,
 )
 from packaging.version import Version
+from certora_autosetup.utils.build_json import build_json_path, contract_source_file, iter_contracts
 from certora_autosetup.utils.config_manager import convert_solc_version_to_certora_format
 from certora_autosetup.cache.cache_fs import cache_path, get_fs
 from certora_autosetup.utils.file_utils import atomic_write_json_fsspec
@@ -65,53 +64,6 @@ from certora_autosetup.utils.paths import (
 )
 from certora_autosetup.utils.solc_version_resolver import VIA_IR_MIN_VERSION
 from certora_autosetup.utils.types import ContractHandle, ContractKind, TypeParseMode, parse_type_descriptor
-
-@dataclass(frozen=True)
-class _ContractDeclView:
-    """Uniform view of a ContractDefinition for declaration/inheritance scans, whether
-    it came from the typed AST or from the raw fallback of an unparsable source."""
-
-    source_path: str
-    node_id: Optional[int]
-    name: str
-    abstract: bool
-    contract_kind: str
-    linearized_base_ids: List[int]
-
-
-def _iter_contract_declarations(units: Iterable[FileAsts]) -> Iterator[_ContractDeclView]:
-    """Every contract declaration in a stream of compilation units (typically
-    ``AstDump.stream_units(...)``, so the multi-GB dump is never fully in memory):
-    typed where the models parsed, completed by a raw flat-map sweep for anything
-    the typed walk could not reach (a solc surprise cannot hide contracts from
-    setup; Vyper sources contribute nothing — no ContractDefinition nodes)."""
-    for file_asts in units:
-        for source in file_asts.sources.values():
-            yield from _unit_contract_declarations(source)
-
-
-def _unit_contract_declarations(source) -> Iterator[_ContractDeclView]:
-    for node in iter_nodes_of_type(source, ContractDefinition):
-            if isinstance(node, ContractDefinition):
-                yield _ContractDeclView(
-                    source_path=source.source_path,
-                    node_id=node.id,
-                    name=node.name,
-                    abstract=node.abstract,
-                    contract_kind=node.contractKind,
-                    linearized_base_ids=list(node.linearizedBaseContracts),
-                )
-            else:
-                yield _ContractDeclView(
-                    source_path=source.source_path,
-                    node_id=node.get("id"),
-                    name=node.get("name") or "",
-                    abstract=bool(node.get("abstract", False)),
-                    contract_kind=node.get("contractKind", "contract"),
-                    linearized_base_ids=[
-                        i for i in node.get("linearizedBaseContracts", []) if isinstance(i, int)
-                    ],
-                )
 
 
 class CompilationAnalysisError(Exception):
@@ -811,8 +763,8 @@ class SetupProver:
         ast_path = self._build_dir / FILE_BUILD_ASTS if self._build_dir else None
         if not ast_path or not ast_path.exists():
             return {}
-        for decl in _iter_contract_declarations(AstDump.stream_units(ast_path)):
-            if decl.contract_kind != "interface" and decl.name:
+        for decl in iter_contract_declarations(AstDump.stream_units(ast_path)):
+            if decl.contract_kind is not ContractKind.INTERFACE and decl.name:
                 rel = self.scope.get_relative_path(Path(decl.source_path))
                 contracts_by_file.setdefault(rel, set()).add(decl.name)
         return contracts_by_file
@@ -836,40 +788,32 @@ class SetupProver:
         all_methods: list = []
         method_counts: dict = {}  # For calculating overload counts
 
-        # Iterate through all objects in the build data
-        for key, obj in build_data.items():
-            if isinstance(obj, dict) and "contracts" in obj:
-                # Each contract object has a 'contracts' array with actual contract data
-                for contract in obj.get("contracts", []):
-                    # Get the originating contract name (the main compilation unit)
-                    originating_contract = contract.get("name", "")
+        for contract in iter_contracts(build_data):
+            # Get the originating contract name (the main compilation unit)
+            originating_contract = contract.get("name", "")
 
-                    # Process regular methods
-                    if isinstance(contract, dict) and "allMethods" in contract:
-                        for method in contract["allMethods"]:
-                            self._process_method_info(
-                                method,
-                                methods_by_sig,
-                                all_methods,
-                                method_counts,
-                                originating_contract,
-                                is_internal=False,
-                            )
+            # Process regular methods
+            for method in contract.get("allMethods", []):
+                self._process_method_info(
+                    method,
+                    methods_by_sig,
+                    all_methods,
+                    method_counts,
+                    originating_contract,
+                    is_internal=False,
+                )
 
-                    # Process internal functions
-                    if isinstance(contract, dict) and "internalFunctions" in contract:
-                        # Internal functions are stored with IDs as keys
-                        for func_id, func_data in contract["internalFunctions"].items():
-                            if "method" in func_data:
-                                method = func_data["method"]
-                                self._process_method_info(
-                                    method,
-                                    methods_by_sig,
-                                    all_methods,
-                                    method_counts,
-                                    originating_contract,
-                                    is_internal=True,
-                                )
+            # Internal functions are stored with IDs as keys
+            for func_id, func_data in contract.get("internalFunctions", {}).items():
+                if "method" in func_data:
+                    self._process_method_info(
+                        func_data["method"],
+                        methods_by_sig,
+                        all_methods,
+                        method_counts,
+                        originating_contract,
+                        is_internal=True,
+                    )
 
         # Write the processed data to all_methods.json
         output_path = Path(".certora_internal/all_methods.json")
@@ -913,106 +857,102 @@ class SetupProver:
         all_user_defined_types = []
 
         # Process user-defined types from each contract
-        for key, obj in build_data.items():
-            if isinstance(obj, dict) and "contracts" in obj:
-                # Each contract object has a 'contracts' array with actual contract data
-                for contract in obj.get("contracts", []):
-                    if isinstance(contract, dict) and "solidityTypes" in contract:
-                        for type_info in contract.get("solidityTypes", []):
-                            if isinstance(type_info, dict):
-                                type_name = None
-                                qualified_name = None
-                                base_type = None
-                                enum_members = []
-                                struct_members = []
+        for contract in iter_contracts(build_data):
+            for type_info in contract.get("solidityTypes", []):
+                if isinstance(type_info, dict):
+                    type_name = None
+                    qualified_name = None
+                    base_type = None
+                    enum_members = []
+                    struct_members = []
 
-                                # Handle UserDefinedValueType
-                                if type_info.get("type") == "UserDefinedValueType":
-                                    type_name = type_info.get("valueTypeName")
-                                    containing_contract = type_info.get(
-                                        "containingContract"
-                                    )
+                    # Handle UserDefinedValueType
+                    if type_info.get("type") == "UserDefinedValueType":
+                        type_name = type_info.get("valueTypeName")
+                        containing_contract = type_info.get(
+                            "containingContract"
+                        )
 
-                                    if containing_contract and type_name:
-                                        qualified_name = (
-                                            f"{containing_contract}.{type_name}"
-                                        )
-                                    elif type_name:
-                                        # Use canonicalId to match _qualify_user_defined_type logic
-                                        qualified_name = self._qualify_from_canonical_id(
-                                            type_info, str(type_name), contract
-                                        )
+                        if containing_contract and type_name:
+                            qualified_name = (
+                                f"{containing_contract}.{type_name}"
+                            )
+                        elif type_name:
+                            # Use canonicalId to match _qualify_user_defined_type logic
+                            qualified_name = self._qualify_from_canonical_id(
+                                type_info, str(type_name), contract
+                            )
 
-                                    # Get the base type
-                                    value_type = type_info.get(
-                                        "valueTypeAliasedName", {}
-                                    )
-                                    if value_type.get("type") == "Primitive":
-                                        base_type = value_type.get("primitiveName")
+                        # Get the base type
+                        value_type = type_info.get(
+                            "valueTypeAliasedName", {}
+                        )
+                        if value_type.get("type") == "Primitive":
+                            base_type = value_type.get("primitiveName")
 
-                                # Handle UserDefinedStruct
-                                elif type_info.get("type") == "UserDefinedStruct":
-                                    type_name = type_info.get("structName")
-                                    containing_contract = type_info.get(
-                                        "containingContract"
-                                    )
+                    # Handle UserDefinedStruct
+                    elif type_info.get("type") == "UserDefinedStruct":
+                        type_name = type_info.get("structName")
+                        containing_contract = type_info.get(
+                            "containingContract"
+                        )
 
-                                    if containing_contract and type_name:
-                                        qualified_name = (
-                                            f"{containing_contract}.{type_name}"
-                                        )
-                                    elif type_name:
-                                        # Use canonicalId to match _qualify_user_defined_type logic
-                                        qualified_name = self._qualify_from_canonical_id(
-                                            type_info, str(type_name), contract
-                                        )
+                        if containing_contract and type_name:
+                            qualified_name = (
+                                f"{containing_contract}.{type_name}"
+                            )
+                        elif type_name:
+                            # Use canonicalId to match _qualify_user_defined_type logic
+                            qualified_name = self._qualify_from_canonical_id(
+                                type_info, str(type_name), contract
+                            )
 
-                                    base_type = "struct"
-                                    # Extract struct members
-                                    struct_members = type_info.get("structMembers", [])
+                        base_type = "struct"
+                        # Extract struct members
+                        struct_members = type_info.get("structMembers", [])
 
-                                # Handle UserDefinedEnum
-                                elif type_info.get("type") == "UserDefinedEnum":
-                                    type_name = type_info.get("enumName")
-                                    containing_contract = type_info.get(
-                                        "containingContract"
-                                    )
+                    # Handle UserDefinedEnum
+                    elif type_info.get("type") == "UserDefinedEnum":
+                        type_name = type_info.get("enumName")
+                        containing_contract = type_info.get(
+                            "containingContract"
+                        )
 
-                                    if containing_contract and type_name:
-                                        qualified_name = (
-                                            f"{containing_contract}.{type_name}"
-                                        )
-                                    elif type_name:
-                                        # Use canonicalId to match _qualify_user_defined_type logic
-                                        qualified_name = self._qualify_from_canonical_id(
-                                            type_info, str(type_name), contract
-                                        )
+                        if containing_contract and type_name:
+                            qualified_name = (
+                                f"{containing_contract}.{type_name}"
+                            )
+                        elif type_name:
+                            # Use canonicalId to match _qualify_user_defined_type logic
+                            qualified_name = self._qualify_from_canonical_id(
+                                type_info, str(type_name), contract
+                            )
 
-                                    base_type = "uint8"
-                                    # Extract enum members
-                                    enum_members = type_info.get("enumMembers", [])
+                        base_type = "uint8"
+                        # Extract enum members
+                        enum_members = type_info.get("enumMembers", [])
 
-                                # Add to collection if we found a valid type
-                                if type_name and qualified_name:
-                                    user_type_info = {
-                                        "typeName": type_name,
-                                        "qualifiedName": qualified_name,
-                                        "baseType": base_type,
-                                        "typeCategory": type_info.get("type"),
-                                        "containingContract": type_info.get(
-                                            "containingContract"
-                                        ),
-                                        "main_contract": contract.get("name"),
-                                        "canonicalId": type_info.get("canonicalId", ""),
-                                    }
+                    # Add to collection if we found a valid type
+                    if type_name and qualified_name:
+                        user_type_info = {
+                            "typeName": type_name,
+                            "qualifiedName": qualified_name,
+                            "baseType": base_type,
+                            "typeCategory": type_info.get("type"),
+                            "containingContract": type_info.get(
+                                "containingContract"
+                            ),
+                            "main_contract": contract.get("name"),
+                            "canonicalId": type_info.get("canonicalId", ""),
+                        }
 
-                                    # Add enum members for UserDefinedEnum
-                                    if type_info.get("type") == "UserDefinedEnum":
-                                        user_type_info["enumMembers"] = enum_members
-                                    # Add struct members for UserDefinedStruct
-                                    if type_info.get("type") == "UserDefinedStruct":
-                                        user_type_info["structMembers"] = struct_members
-                                    all_user_defined_types.append(user_type_info)
+                        # Add enum members for UserDefinedEnum
+                        if type_info.get("type") == "UserDefinedEnum":
+                            user_type_info["enumMembers"] = enum_members
+                        # Add struct members for UserDefinedStruct
+                        if type_info.get("type") == "UserDefinedStruct":
+                            user_type_info["structMembers"] = struct_members
+                        all_user_defined_types.append(user_type_info)
 
         # Write user-defined types to JSON file
         types_output_path = PATH_ALL_USER_DEFINED_TYPES_JSON
@@ -1118,39 +1058,37 @@ class SetupProver:
         """
         bytes_mappings_list = []
 
-        # Iterate through all contracts in the build data
-        for contract_data in build_data.values():
-            for contract in contract_data.get('contracts', []):
-                contract_name = contract.get('name')
-                source_file = contract.get('file')
+        for contract in iter_contracts(build_data):
+            contract_name = contract.get('name')
+            source_file = contract.get('file')
 
-                if not contract_name or not source_file:
-                    continue
+            if not contract_name or not source_file:
+                continue
 
-                # solc <0.5.13 doesn't emit native storageLayout output — the key is present
-                # but explicitly null rather than absent, so .get(key, {}) alone doesn't catch it.
-                storage_layout = contract.get('storageLayout') or {}
-                bytes_mapping_fields = []
+            # solc <0.5.13 doesn't emit native storageLayout output — the key is present
+            # but explicitly null rather than absent, so .get(key, {}) alone doesn't catch it.
+            storage_layout = contract.get('storageLayout') or {}
+            bytes_mapping_fields = []
 
-                # Check each storage field
-                for storage_item in storage_layout.get('storage', []):
-                    descriptor = storage_item.get('descriptor', {})
+            # Check each storage field
+            for storage_item in storage_layout.get('storage', []):
+                descriptor = storage_item.get('descriptor', {})
 
-                    # Check if this is a mapping with bytes key
-                    if descriptor.get('type') == 'Mapping':
-                        key_type = descriptor.get('mappingKeyType', {})
-                        if key_type.get('type') == 'PackedBytes':
-                            field_name = storage_item.get('label', '')
-                            if field_name:
-                                bytes_mapping_fields.append(field_name)
+                # Check if this is a mapping with bytes key
+                if descriptor.get('type') == 'Mapping':
+                    key_type = descriptor.get('mappingKeyType', {})
+                    if key_type.get('type') == 'PackedBytes':
+                        field_name = storage_item.get('label', '')
+                        if field_name:
+                            bytes_mapping_fields.append(field_name)
 
-                # Add to list if we found any bytes mapping fields
-                if bytes_mapping_fields:
-                    bytes_mappings_list.append({
-                        "contract_name": contract_name,
-                        "source_file": source_file,
-                        "bytes_mapping_fields": bytes_mapping_fields
-                    })
+            # Add to list if we found any bytes mapping fields
+            if bytes_mapping_fields:
+                bytes_mappings_list.append({
+                    "contract_name": contract_name,
+                    "source_file": source_file,
+                    "bytes_mapping_fields": bytes_mapping_fields
+                })
 
         # Write through fsspec so it lands on the cache prefix (S3 in SaaS, local in CLI)
         # and the autosetup cache-hit path can read it back. The sole same-run reader
@@ -1226,7 +1164,7 @@ class SetupProver:
 
             # Stream the (multi-GB) .asts.json once, keeping only the slim per-contract
             # views needed below so the dump is never fully materialized.
-            declarations = list(_iter_contract_declarations(AstDump.stream_units(ast_file_path)))
+            declarations = list(iter_contract_declarations(AstDump.stream_units(ast_file_path)))
 
             # Build ID to contract name mapping once
             id_to_name = {
@@ -1238,7 +1176,7 @@ class SetupProver:
                 if not decl.name:
                     continue
                 # Check if abstract or interface
-                if decl.abstract or decl.contract_kind == "interface":
+                if decl.abstract or decl.contract_kind is ContractKind.INTERFACE:
                     abstract_contracts.add(decl.name)
                     self.log(f"Identified {'abstract' if decl.abstract else 'interface'}: {decl.name}", "DEBUG")
 
@@ -1277,85 +1215,75 @@ class SetupProver:
             seen_contracts = set()
 
             # Discover contracts and create ContractInfo objects
-            for contract_key, contract_data in build_data.items():
-                if (
-                    not isinstance(contract_data, dict)
-                    or "contracts" not in contract_data
-                ):
+            for contract in iter_contracts(build_data):
+                methods = contract.get("methods", [])
+                if not methods:
                     continue
 
-                for contract in contract_data.get("contracts", []):
-                    if not isinstance(contract, dict):
-                        continue
+                contract_name = contract.get("name", "Unknown")
 
-                    methods = contract.get("methods", [])
-                    if not methods:
-                        continue
+                # Skip if already processed
+                if contract_name in seen_contracts:
+                    continue
+                seen_contracts.add(contract_name)
 
-                    contract_name = contract.get("name", "Unknown")
+                # Get source file directly from contract object (canonical source)
+                source_file_str = contract_source_file(contract)
 
-                    # Skip if already processed
-                    if contract_name in seen_contracts:
-                        continue
-                    seen_contracts.add(contract_name)
-
-                    # Get source file directly from contract object (canonical source)
-                    source_file_str = contract.get("original_file") or contract.get("file")
-
-                    # Fall back to method inspection only if contract-level fields are missing
-                    if not source_file_str:
-                        fallback_source = None
-                        for method in methods:
-                            original_file = method.get("originalFile")
-                            if original_file:
-                                fallback_source = original_file
-
-                            # Prefer file that matches contract name (where contract is actually defined)
-                            if original_file.endswith(f"/{contract_name}.sol") or original_file.endswith(f"\\{contract_name}.sol"):
-                                source_file_str = original_file
-                                break
-                        if not source_file_str and fallback_source:
-                            source_file_str = fallback_source
-
-                    # Final fallback
-                    if not source_file_str:
-                        source_file_str = "unknown.sol"
-
-                    # Determine contract kind (basic heuristic)
-                    is_library = any(
-                        method.get("isLibrary", False) for method in methods
-                    )
-                    kind = ContractKind.LIBRARY if is_library else ContractKind.CONTRACT
-
-                    # Extract constructor params
-                    ctor_params = None
+                # Fall back to method inspection only if contract-level fields are missing
+                if not source_file_str:
+                    fallback_source = None
                     for method in methods:
-                        if method.get("name", "") == "constructor":
-                            params = []
-                            for arg, param_name in zip(
-                                method.get("fullArgs", []), method.get("paramNames", [])
-                            ):
-                                type_desc = arg.get("typeDesc", {})
-                                sol_type = parse_type_descriptor(type_desc, TypeParseMode.SOLIDITY)
-                                location = arg.get("location", "")
-                                if location in ("memory", "calldata", "storage"):
-                                    sol_type = f"{sol_type} {location}"
-                                params.append((sol_type, param_name))
-                            if params:
-                                ctor_params = params
+                        original_file = method.get("originalFile")
+                        if original_file:
+                            fallback_source = original_file
+
+                        # Prefer file that matches contract name (where contract is actually defined)
+                        if original_file.endswith(f"/{contract_name}.sol") or original_file.endswith(f"\\{contract_name}.sol"):
+                            source_file_str = original_file
                             break
+                    if not source_file_str and fallback_source:
+                        source_file_str = fallback_source
 
-                    # Create contract info with inheritance
-                    contract_info = ContractInfo(
-                        name=contract_name,
-                        kind=kind,
-                        source_file=Path(source_file_str),
-                        inherits_from=[],  # added later via _extract_inheritance_from_ast()
-                        artifact_path=build_json_path,
-                        constructor_params=ctor_params,
-                    )
+                # Final fallback
+                if not source_file_str:
+                    source_file_str = "unknown.sol"
 
-                    contract_infos.append(contract_info)
+                # Determine contract kind (basic heuristic)
+                is_library = any(
+                    method.get("isLibrary", False) for method in methods
+                )
+                kind = ContractKind.LIBRARY if is_library else ContractKind.CONTRACT
+
+                # Extract constructor params
+                ctor_params = None
+                for method in methods:
+                    if method.get("name", "") == "constructor":
+                        params = []
+                        for arg, param_name in zip(
+                            method.get("fullArgs", []), method.get("paramNames", [])
+                        ):
+                            type_desc = arg.get("typeDesc", {})
+                            sol_type = parse_type_descriptor(type_desc, TypeParseMode.SOLIDITY)
+                            location = arg.get("location", "")
+                            if location in ("memory", "calldata", "storage"):
+                                sol_type = f"{sol_type} {location}"
+                            params.append((sol_type, param_name))
+                        if params:
+                            ctor_params = params
+                        break
+
+                # Create contract info with inheritance
+                contract_info = ContractInfo(
+                    name=contract_name,
+                    kind=kind,
+                    source_file=Path(source_file_str),
+                    inherits_from=[],  # added later via _extract_inheritance_from_ast()
+                    artifact_path=build_json_path,
+                    constructor_params=ctor_params,
+                )
+
+                contract_infos.append(contract_info)
 
             return contract_infos
 
@@ -1436,17 +1364,16 @@ class SetupProver:
 
     def process_certora_build_json(self) -> bool:
         """Process .certora_build.json to extract method information."""
-        build_json_path = Path(".certora_internal/latest/.certora_build.json")
-        self._build_dir = build_json_path.parent
-
-        self.log(f"Processing build json: {build_json_path.resolve()}")
-
-        if not build_json_path.exists():
-            self.log(f"Build JSON not found at: {build_json_path}", "ERROR")
+        build_json = build_json_path(Path("."))
+        if not build_json:
+            self.log("Build JSON not found under .certora_internal", "ERROR")
             return False
+        self._build_dir = build_json.parent
+
+        self.log(f"Processing build json: {build_json.resolve()}")
 
         try:
-            with open(build_json_path, "r") as f:
+            with open(build_json, "r") as f:
                 build_data = json.load(f)
 
             # Generate all_methods.json
@@ -1477,7 +1404,7 @@ class SetupProver:
             self.generate_ast_graph(asts_target)
 
             # Generate signature database (uses the ast file copied before)
-            self.generate_signature_database_json(build_json_path)
+            self.generate_signature_database_json(build_json)
 
             # Generate bytes mappings JSON
             self.generate_bytes_mappings_json(build_data)
@@ -1493,7 +1420,7 @@ class SetupProver:
         self,
         contract_files: List[str],
         main_contract: str,
-        harnessed_library: Optional[str] = None,
+        excluded_library: Optional[str] = None,
     ) -> bool:
         """
         Run setup_summaries to detect and configure library summaries. On success,
@@ -1518,7 +1445,7 @@ class SetupProver:
                     include_dependencies=True,
                     enable_llm=not self.skip_llm,
                     custom_recipe=None,
-                    harnessed_library=harnessed_library,
+                    excluded_library=excluded_library,
                 )
                 if configured:
                     # Summarize the initial scene (main + additional contracts); call resolution
@@ -1594,11 +1521,11 @@ class SetupProver:
         # verified, so that library is the one contract a summary must never replace. The
         # manifest is what names it: AutoProver's pipeline swaps in an earlier process, and by
         # the time we run the main contract is simply not a library any more.
-        harnessed_library = library_behind_harness(Path.cwd(), main_contract_handle)
+        excluded_library = library_behind_harness(Path.cwd(), main_contract_handle)
         success_summaries = self.run_setup_summaries(
             [ch.source_file for ch in surviving_contracts],
             main_contract_name,
-            harnessed_library=harnessed_library.contract_name if harnessed_library else None,
+            excluded_library=excluded_library.contract_name if excluded_library else None,
         )
         if not success_summaries:
             raise SummarySetupError("Setup summaries generation failed")

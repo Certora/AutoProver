@@ -361,10 +361,9 @@ class SummarySetup:
         # summary attached and therefore should be added to the scene.
         self.matched_functions: Set[str] = set()
 
-        # The library a generated harness wraps, when this run is verifying one. Its own
-        # code is the verification target, so it is the one thing that must never be
-        # summarized. None on every ordinary run.
-        self.harnessed_library: Optional[str] = None
+        # A library whose own code is the verification target, so it is the one thing
+        # that must never be summarized. None on every ordinary run.
+        self.excluded_library: Optional[str] = None
 
         # Every contract name that has entered the verification scene so far
         # (initial main + additional + call-resolution batches). Drives the
@@ -701,24 +700,24 @@ class SummarySetup:
             log_func=self.log,
         )
 
-    def _harnessed_library_keys(self) -> Set[str]:
+    def _excluded_library_keys(self) -> Set[str]:
         """Curated keys that would summarize the library under verification."""
-        if self.harnessed_library is None:
+        if self.excluded_library is None:
             return set()
         return {
             key
             for key, info in self.function_summaries.items()
-            if self.harnessed_library in (info.get("library_names") or ())
+            if self.excluded_library in (info.get("library_names") or ())
         }
 
-    def _harnessed_library_methods(self) -> Set[Tuple[str, str]]:
+    def _excluded_library_methods(self) -> Set[Tuple[str, str]]:
         """``(contract, method)`` pairs the LLM must leave alone, in its skip-set shape."""
-        if self.harnessed_library is None:
+        if self.excluded_library is None:
             return set()
         return {
-            (self.harnessed_library, m["name"])
+            (self.excluded_library, m["name"])
             for m in self.methods_parser.get_all_methods()
-            if m.get("contractName") == self.harnessed_library and m.get("name")
+            if m.get("contractName") == self.excluded_library and m.get("name")
         }
 
     def copy_summaries_folder(self, matched_function_keys: Iterable[str]) -> Path:
@@ -2479,15 +2478,15 @@ Method signature: {method_signature}
         # single -> mixed) without re-matching oz_Math_mulDiv itself, so
         # scene-sensitive templates are re-materialized whenever they have ever
         # matched (materialization is idempotent, aggregator imports dedup).
-        # A summary replaces the code it summarizes, so summarizing the library a harness
-        # wraps would have every rule assert against the summary instead of the library the
-        # run exists to verify. Subtracted here rather than skipped inside the matcher: the
+        # A summary replaces the code it summarizes, so summarizing the library under
+        # verification would have every rule assert against the summary instead of the code
+        # the run exists to check. Subtracted here rather than skipped inside the matcher: the
         # matcher also returns the (contract, method) tuples that become per_contract_skip
         # below, and those still have to shield the same methods from the LLM step.
-        excluded = self._harnessed_library_keys()
+        excluded = self._excluded_library_keys()
         if excluded & curated_keys:
             self.log(
-                f"Not summarizing {self.harnessed_library} — it is the library under "
+                f"Not summarizing {self.excluded_library} — it is the library under "
                 f"verification; dropped curated {sorted(excluded & curated_keys)}"
             )
         curated_keys -= excluded
@@ -2506,7 +2505,7 @@ Method signature: {method_signature}
 
         # 2. LLM analysis per contract, skipping curated-covered methods.
         if self._enable_llm:
-            harnessed_methods = self._harnessed_library_methods()
+            excluded_methods = self._excluded_library_methods()
             for name in contract_names:
                 await self.analyze_contract(
                     name,
@@ -2515,7 +2514,7 @@ Method signature: {method_signature}
                     # own: its non-linear-ops recipe targets exactly the internal pure
                     # functions an arithmetic library is made of, and unlike BitMaps that
                     # failure is silent — the run comes back green having proved nothing.
-                    methods_to_skip=set(per_contract_skip.get(name) or ()) | harnessed_methods,
+                    methods_to_skip=set(per_contract_skip.get(name) or ()) | excluded_methods,
                     custom_recipe=self._custom_recipe,
                 )
 
@@ -2540,7 +2539,7 @@ Method signature: {method_signature}
         include_dependencies: bool = False,
         enable_llm: bool = False,
         custom_recipe: Optional[str] = None,
-        harnessed_library: Optional[str] = None,
+        excluded_library: Optional[str] = None,
     ) -> bool:
         """Capture the configuration for a summarization run; perform no summarization.
 
@@ -2577,7 +2576,7 @@ Method signature: {method_signature}
 
         self.main_contract = main_contract
         self.additional_names = [split_contract_spec(ac)[1] for ac in (additional_contracts or [])]
-        self.harnessed_library = harnessed_library
+        self.excluded_library = excluded_library
 
         self.log(f"Main contract for analysis: {main_contract}")
         if self.additional_names:

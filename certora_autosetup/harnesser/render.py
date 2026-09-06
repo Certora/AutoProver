@@ -89,8 +89,8 @@ def _render_reader(reader: StorageReader) -> str:
 def plan_hash(plan: HarnessPlan) -> str:
     """Stable digest of everything that determines the emitted source."""
     payload = {
-        "library": plan.library_name,
-        "source": plan.library_source_file,
+        "library": plan.library.contract_name,
+        "source": plan.library.source_file,
         "owned": [(v.var_name, v.solidity_type) for v in plan.owned_vars],
         "wrappers": [
             (
@@ -175,7 +175,7 @@ def render_harness(plan: HarnessPlan) -> str:
         body.append("")
 
     for wrapper in plan.wrappers:
-        body.append(_render_wrapper(wrapper, plan.library_name))
+        body.append(_render_wrapper(wrapper, plan.library.contract_name))
         body.append("")
 
     if plan.readers:
@@ -189,8 +189,8 @@ def render_harness(plan: HarnessPlan) -> str:
         body.pop()
 
     header = [
-        sentinel_line(plan.library_name, digest),
-        f"// Generated harness exposing library {plan.library_name} as a verifiable contract.",
+        sentinel_line(plan.library.contract_name, digest),
+        f"// Generated harness exposing library {plan.library.contract_name} as a verifiable contract.",
         "// The Prover skips libraries when instantiating parametric rules, so the library's",
         "// functions are only reachable through a contract that calls them.",
     ]
@@ -198,12 +198,11 @@ def render_harness(plan: HarnessPlan) -> str:
         header.append(f"// {len(plan.skipped)} library function(s) could not be exposed; see the run report.")
 
     return render_wrapper_contract(
-        harness_name=plan.harness_name,
+        harness_name=plan.harness.contract_name,
         parent_name=None,
         pragma_line=plan.pragma_line,
         import_lines=list(plan.import_lines),
         ctor_forward=None,
         body_blocks=body,
         header_comment_lines=header,
-        extra_pragma_lines=list(plan.extra_pragma_lines),
     )

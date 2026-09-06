@@ -67,10 +67,13 @@ def with_harnessed_library(
     library = swapped_from or library_behind_harness(project_root, main_contract_handle)
     if library is None or library == main_contract_handle:
         return list(additional_contracts)
-    # Compare on the (file, name) pair rather than the string: ``to_config_str`` drops the
-    # name when it matches the file stem, so one contract has two spellings.
-    already = {split_contract_spec(spec) for spec in additional_contracts}
-    if (library.source_file, library.contract_name) in already:
+    # Compare as handles rather than as strings: ``to_config_str`` drops the name when it
+    # matches the file stem, so one contract has two spellings in a conf.
+    already = {
+        ContractHandle(contract_name=name, source_file=path)
+        for path, name in (split_contract_spec(spec) for spec in additional_contracts)
+    }
+    if library in already:
         return list(additional_contracts)
     return [*additional_contracts, library.to_config_str()]
 
@@ -109,16 +112,13 @@ def swap_library_main_contract(
 
     result = ensure_library_harness(
         project_root=project_root,
-        library_file=source_file,
-        library_name=main_contract_handle.contract_name,
+        library=main_contract_handle,
         solc=solc,
         certora_run_command=certora_run_command,
         validate=validate,
     )
 
-    harness_handle = ContractHandle(
-        contract_name=result.harness_name, source_file=result.harness_file
-    )
+    harness_handle = result.harness
 
     scene = list(contract_handles)
     if main_contract_handle not in scene:
@@ -127,7 +127,7 @@ def swap_library_main_contract(
         scene.append(harness_handle)
 
     logger.log(
-        f"Verifying {result.harness_name} instead of {main_contract_handle.contract_name}: "
+        f"Verifying {harness_handle.contract_name} instead of {main_contract_handle.contract_name}: "
         f"{result.coverage['wrapped']}/{result.coverage['total']} library function(s) exposed, "
         f"{result.coverage['skipped']} skipped",
         "INFO",

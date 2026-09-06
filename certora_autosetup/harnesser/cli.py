@@ -1,10 +1,13 @@
 """``python -m certora_autosetup.harnesser`` — generate a library harness.
 
-AutoProver invokes this as a subprocess and reads the JSON record from the file named by
-``--output``, so the Solidity generation stays on the autosetup side while the decision
-to swap the main contract stays with the caller. The result goes to a file rather than
-stdout because the probe build and the logger both write there; this mirrors how
-autosetup already hands its result to composer via ``--composer-setup``.
+    python -m certora_autosetup.harnesser --library src/utils/BitMaps.sol:BitMaps \
+        --project-dir . --output harness.json
+
+It compiles a probe build to learn the library's API, writes
+``certora/harnesses/CertoraLibraryHarness_<Library>.sol``, and records what it wrapped.
+The JSON record goes to the file named by ``--output`` rather than to stdout, because
+the probe build and the logger both write there; whoever runs this decides what to do
+with the harness, so nothing here swaps a main contract.
 """
 
 import argparse
@@ -14,15 +17,20 @@ from pathlib import Path
 
 from certora_autosetup.harnesser.model import LibraryHarnessError
 from certora_autosetup.harnesser.run import ensure_library_harness
+from certora_autosetup.utils.contract_utils import parse_contract_files, split_contract_spec
+from certora_autosetup.utils.types import ContractHandle
 
 
-def _split_target(target: str) -> tuple[str, str]:
-    """Split ``path/To/Lib.sol:LibName``, defaulting the name to the file stem."""
-    if ":" in target:
-        path, name = target.rsplit(":", 1)
-        return path, name
-    path = target
-    return path, Path(path).stem
+def _project_relative(handle: ContractHandle, root: Path) -> ContractHandle:
+    """Probe-build file arguments are resolved from the project root, so keep them there.
+
+    ``parse_contract_files`` absolutizes against the root in order to check the file
+    exists; the build wants the path back the way the user wrote it.
+    """
+    path = Path(handle.source_file)
+    if path.is_absolute() and path.is_relative_to(root):
+        path = path.relative_to(root)
+    return ContractHandle(contract_name=handle.contract_name, source_file=path.as_posix())
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -58,18 +66,24 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    library_path, library_name = _split_target(args.library)
+    library_path, library_name = split_contract_spec(args.library)
+    project_root = Path(args.project_dir).resolve()
 
     try:
+        # Parsed rather than passed through, so a mistyped --extra-file is reported here
+        # instead of as a probe-build failure minutes later.
+        extra_files = [
+            _project_relative(handle, project_root)
+            for handle in parse_contract_files(args.extra_files, project_root)
+        ] if args.extra_files else []
         result = ensure_library_harness(
-            project_root=Path(args.project_dir),
-            library_file=Path(library_path),
-            library_name=library_name,
+            project_root=project_root,
+            library=ContractHandle(contract_name=library_name, source_file=library_path),
             solc=args.solc,
-            extra_files=args.extra_files,
+            extra_files=extra_files,
             validate=not args.skip_validation,
         )
-    except LibraryHarnessError as e:
+    except (LibraryHarnessError, ValueError) as e:
         print(f"library harness generation failed: {e}", file=sys.stderr)
         return 1
 
@@ -78,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
 
     coverage = result.coverage
     print(
-        f"{result.harness_name} -> {result.harness_file}: "
+        f"{result.harness.contract_name} -> {result.harness.source_file}: "
         f"{coverage['wrapped']}/{coverage['total']} function(s) wrapped, "
         f"{coverage['readers']} storage reader(s), {coverage['skipped']} skipped"
     )

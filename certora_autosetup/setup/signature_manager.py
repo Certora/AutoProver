@@ -18,6 +18,7 @@ from certora_autosetup.setup.signature_types import (
     compute_signature_selector,
 )
 from certora_autosetup.cache.cache_fs import cache_path, get_fs
+from certora_autosetup.utils.build_json import iter_contracts
 from certora_autosetup.utils.constants import DIR_CERTORA_INTERNAL, DIR_SIGNATURE_STATE
 from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.types import (
@@ -71,123 +72,113 @@ class SignatureManager:
 
             signatures = {}
 
-            for contract_key, contract_data in build_data.items():
-                if (
-                    not isinstance(contract_data, dict)
-                    or "contracts" not in contract_data
-                ):
+            for contract in iter_contracts(build_data):
+                methods = contract.get("methods", [])
+                if not methods:
                     continue
 
-                for contract in contract_data.get("contracts", []):
-                    if not isinstance(contract, dict):
+                # Get contract name from first method
+                contract_name = methods[0].get("contractName", "Unknown")
+
+                for method in methods:
+                    method_name = method.get("name", "")
+
+                    if method_name == "constructor":
                         continue
 
-                    methods = contract.get("methods", [])
-                    if not methods:
+                    # Get the sighash directly from Certora (this is the correct ABI selector)
+                    sighash_str = str(method.get("sighash", "0"))
+
+                    # Skip methods with zero sighash (internal/constructor methods)
+                    if sighash_str == "0":
                         continue
 
-                    # Get contract name from first method
-                    contract_name = methods[0].get("contractName", "Unknown")
+                    certora_selector = self._convert_sighash_to_selector(sighash_str)
 
-                    for method in methods:
-                        method_name = method.get("name", "")
+                    # Build canonical and internal parameter types
+                    canonical_param_types = []
+                    internal_param_types = []
+                    type_descs = []
 
-                        if method_name == "constructor":
-                            continue
+                    for arg in method.get("fullArgs", []):
+                        type_desc = arg.get("typeDesc", {})
+                        type_descs.append(type_desc)
+                        # Get canonical type (MarketId -> bytes32, InternalUserData -> (address,uint256,bool))
+                        canonical_type = parse_type_descriptor(type_desc, TypeParseMode.CANONICAL)
+                        canonical_param_types.append(canonical_type)
 
-                        # Get the sighash directly from Certora (this is the correct ABI selector)
-                        sighash_str = str(method.get("sighash", "0"))
+                        # Get internal type (keeps MarketId as MarketId, InternalUserData as InternalUserData)
+                        internal_type = parse_type_descriptor(type_desc, TypeParseMode.INTERNAL)
+                        internal_param_types.append(internal_type)
 
-                        # Skip methods with zero sighash (internal/constructor methods)
-                        if sighash_str == "0":
-                            continue
+                    # Build signatures
+                    canonical_signature = (
+                        f"{method_name}({','.join(canonical_param_types)})"
+                    )
+                    internal_type_signature = (
+                        f"{method_name}({','.join(internal_param_types)})"
+                    )
 
-                        certora_selector = self._convert_sighash_to_selector(sighash_str)
+                    # Use Certora's sighash directly - it's already computed correctly!
+                    canonical_selector = certora_selector
 
-                        # Build canonical and internal parameter types
-                        canonical_param_types = []
-                        internal_param_types = []
-                        type_descs = []
-
-                        for arg in method.get("fullArgs", []):
-                            type_desc = arg.get("typeDesc", {})
-                            type_descs.append(type_desc)
-                            # Get canonical type (MarketId -> bytes32, InternalUserData -> (address,uint256,bool))
-                            canonical_type = parse_type_descriptor(type_desc, TypeParseMode.CANONICAL)
-                            canonical_param_types.append(canonical_type)
-
-                            # Get internal type (keeps MarketId as MarketId, InternalUserData as InternalUserData)
-                            internal_type = parse_type_descriptor(type_desc, TypeParseMode.INTERNAL)
-                            internal_param_types.append(internal_type)
-
-                        # Build signatures
-                        canonical_signature = (
-                            f"{method_name}({','.join(canonical_param_types)})"
-                        )
-                        internal_type_signature = (
-                            f"{method_name}({','.join(internal_param_types)})"
-                        )
-
-                        # Use Certora's sighash directly - it's already computed correctly!
-                        canonical_selector = certora_selector
-
-                        # For internal selector: if signatures differ, compute it; otherwise reuse canonical
-                        if canonical_signature == internal_type_signature:
-                            # No user-defined types, selectors are identical
-                            internal_selector = canonical_selector
-                        else:
-                            # Different signatures due to user-defined types, compute internal selector
-                            internal_selector = compute_signature_selector(internal_type_signature)
-                            if not internal_selector or internal_selector == "0x00000000":
-                                # Fallback to canonical selector if computation fails
-                                logger.debug(
-                                    f"Internal selector computation failed for {internal_type_signature}, using canonical"
-                                )
-                                internal_selector = canonical_selector
-
-                        if not canonical_selector:
-                            logger.warning(
-                                f"Failed to get valid selectors for: {canonical_signature} / {internal_type_signature}"
+                    # For internal selector: if signatures differ, compute it; otherwise reuse canonical
+                    if canonical_signature == internal_type_signature:
+                        # No user-defined types, selectors are identical
+                        internal_selector = canonical_selector
+                    else:
+                        # Different signatures due to user-defined types, compute internal selector
+                        internal_selector = compute_signature_selector(internal_type_signature)
+                        if not internal_selector or internal_selector == "0x00000000":
+                            # Fallback to canonical selector if computation fails
+                            logger.debug(
+                                f"Internal selector computation failed for {internal_type_signature}, using canonical"
                             )
-                            continue
+                            internal_selector = canonical_selector
 
-                        # Generate dispatcher entry name with contract-qualified types
-                        dispatcher_entry_name = self._generate_dispatcher_entry_name(
-                            method_name, type_descs, contract_name
+                    if not canonical_selector:
+                        logger.warning(
+                            f"Failed to get valid selectors for: {canonical_signature} / {internal_type_signature}"
                         )
+                        continue
 
-                        # Get state mutability info
-                        state_mutability = method.get("stateMutability", "nonpayable")
-                        is_view = state_mutability in ["view", "pure"]
-                        is_pure = state_mutability == "pure"
+                    # Generate dispatcher entry name with contract-qualified types
+                    dispatcher_entry_name = self._generate_dispatcher_entry_name(
+                        method_name, type_descs, contract_name
+                    )
 
-                        # Create signature info object
-                        signature_info = {
-                            "signature": canonical_signature,
-                            "selector": canonical_selector,
-                            "internal_type_signature": internal_type_signature,
-                            "internal_type_selector": internal_selector,
-                            "dispatcher_entry_name": dispatcher_entry_name,
-                            "is_view": is_view,
-                            "is_pure": is_pure,
-                            "source_file": method.get("originalFile", ""),
-                        }
+                    # Get state mutability info
+                    state_mutability = method.get("stateMutability", "nonpayable")
+                    is_view = state_mutability in ["view", "pure"]
+                    is_pure = state_mutability == "pure"
 
-                        # Store by canonical selector, accumulating all implementing contracts
-                        if canonical_selector in signatures:
-                            signatures[canonical_selector]["contracts"].add(contract_name)
+                    # Create signature info object
+                    signature_info = {
+                        "signature": canonical_signature,
+                        "selector": canonical_selector,
+                        "internal_type_signature": internal_type_signature,
+                        "internal_type_selector": internal_selector,
+                        "dispatcher_entry_name": dispatcher_entry_name,
+                        "is_view": is_view,
+                        "is_pure": is_pure,
+                        "source_file": method.get("originalFile", ""),
+                    }
+
+                    # Store by canonical selector, accumulating all implementing contracts
+                    if canonical_selector in signatures:
+                        signatures[canonical_selector]["contracts"].add(contract_name)
+                    else:
+                        signature_info["contracts"] = {contract_name}
+                        signatures[canonical_selector] = signature_info
+
+                    # Also store by internal selector for dispatcher lookup
+                    if internal_selector != canonical_selector:
+                        if internal_selector in signatures:
+                            signatures[internal_selector]["contracts"].add(contract_name)
                         else:
-                            signature_info["contracts"] = {contract_name}
-                            signatures[canonical_selector] = signature_info
-
-                        # Also store by internal selector for dispatcher lookup
-                        if internal_selector != canonical_selector:
-                            if internal_selector in signatures:
-                                signatures[internal_selector]["contracts"].add(contract_name)
-                            else:
-                                internal_info = dict(signature_info)
-                                internal_info["contracts"] = {contract_name}
-                                signatures[internal_selector] = internal_info
+                            internal_info = dict(signature_info)
+                            internal_info["contracts"] = {contract_name}
+                            signatures[internal_selector] = internal_info
 
             logger.info(f"Extracted {len(signatures)} function signatures")
             return signatures

@@ -36,38 +36,9 @@ from certora_autosetup.harnesser.model import (
     LibraryHarnessError,
     MemberNode,
 )
-from certora_autosetup.utils.types import TypeParseMode, parse_type_descriptor
-
-#: Written by certoraRun under the run directory it reports as ``latest``.
-BUILD_JSON_RELPATH = Path(".certora_internal/latest/.certora_build.json")
-
-
-def _iter_contracts(build_data: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
-    """Yield every contract record across all compilation units in the build.
-
-    A contract reached through several units appears once per unit; callers that need
-    a single record must disambiguate themselves.
-    """
-    for obj in build_data.values():
-        if isinstance(obj, dict):
-            for contract in obj.get("contracts", []):
-                if isinstance(contract, dict):
-                    yield contract
-
-
-def _same_file(candidate: str, wanted: str) -> bool:
-    """Compare two build-reported paths that may differ in absoluteness.
-
-    The build mixes project-relative and absolute paths for the same file depending on
-    how it was reached, so equality is decided on the longest common suffix of path
-    components.
-    """
-    if not candidate or not wanted:
-        return False
-    cand_parts = Path(candidate).parts
-    want_parts = Path(wanted).parts
-    depth = min(len(cand_parts), len(want_parts))
-    return cand_parts[-depth:] == want_parts[-depth:]
+from certora_autosetup.utils.build_json import contract_source_file, iter_contracts
+from certora_autosetup.utils.paths import same_source_file
+from certora_autosetup.utils.types import ContractHandle, TypeParseMode, parse_type_descriptor
 
 
 def _param_list(raw: List[Dict[str, Any]], names: List[str], contract_name: str) -> tuple[LibParam, ...]:
@@ -176,16 +147,14 @@ def _struct_members(contract: Dict[str, Any]) -> Dict[str, tuple[MemberNode, ...
     return members
 
 
-def read_library_api(
-    build_json: Path,
-    library_name: str,
-    library_source_file: str,
-) -> LibraryApi:
-    """Extract ``library_name``'s full declared API from a completed build.
+def read_library_api(build_json: Path, library: ContractHandle) -> LibraryApi:
+    """Extract the library's full declared API from a completed build.
 
-    ``library_source_file`` disambiguates same-named libraries; it is matched against
+    ``library.source_file`` disambiguates same-named libraries; it is matched against
     the build's own path for the contract.
     """
+    library_name = library.contract_name
+    library_source_file = library.source_file
     if not build_json.exists():
         raise LibraryHarnessError(
             f"probe build produced no {build_json} — cannot read the library's API"
@@ -196,13 +165,13 @@ def read_library_api(
 
     matched: Optional[Dict[str, Any]] = None
     seen_names: List[str] = []
-    for contract in _iter_contracts(build_data):
+    for contract in iter_contracts(build_data):
         name = contract.get("name", "")
         if name != library_name:
             continue
-        seen_names.append(contract.get("original_file") or contract.get("file") or "")
-        candidate_file = contract.get("original_file") or contract.get("file") or ""
-        if _same_file(candidate_file, library_source_file):
+        candidate_file = contract_source_file(contract)
+        seen_names.append(candidate_file)
+        if same_source_file(candidate_file, library_source_file):
             matched = contract
             break
 
@@ -243,8 +212,10 @@ def read_library_api(
         )
 
     return LibraryApi(
-        name=library_name,
-        source_file=matched.get("original_file") or matched.get("file") or library_source_file,
+        contract=ContractHandle(
+            contract_name=library_name,
+            source_file=contract_source_file(matched) or library_source_file,
+        ),
         functions=tuple(functions),
         struct_members=_struct_members(matched),
     )

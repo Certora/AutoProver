@@ -20,13 +20,15 @@ from typing import List, Optional, Sequence
 
 from certora_autosetup.harnesser.model import HarnessPlan, LibraryHarnessError
 from certora_autosetup.harnesser.plan import build_plan
-from certora_autosetup.harnesser.read_build import BUILD_JSON_RELPATH, read_library_api
+from certora_autosetup.harnesser.read_build import read_library_api
 from certora_autosetup.harnesser.render import plan_hash, read_sentinel, render_harness, render_stub
+from certora_autosetup.utils.build_json import BUILD_JSON_RELPATH, build_json_path
 from certora_autosetup.utils.constants import DIR_CERTORA_INTERNAL
 from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.paths import user_harness_path
 from certora_autosetup.utils.remappings import build_packages_from_remapping_sources
 from certora_autosetup.utils.solc_version_resolver import read_pragma_from_source_file
+from certora_autosetup.utils.types import ContractHandle
 
 #: Prefix of the generated contract, so a harness is recognisable in a conf, a report and
 #: a rule name without consulting the manifest.
@@ -41,21 +43,21 @@ _PROBE_SPEC = "rule certoraLibraryHarnessProbe { assert true; }\n"
 class HarnessResult:
     """What the caller needs in order to swap the main contract and report the outcome."""
 
-    library_name: str
-    library_file: str
-    harness_name: str
-    harness_file: str
+    library: ContractHandle
+    harness: ContractHandle
     plan_hash: str
     coverage: dict
     wrappers: List[str]
     skipped: List[dict]
 
+    #: Flat keys, because the manifest is read back by ``swap.library_behind_harness``
+    #: in a later process — and, for a run that failed, by a human.
     def to_dict(self) -> dict:
         return {
-            "library_name": self.library_name,
-            "library_file": self.library_file,
-            "harness_name": self.harness_name,
-            "harness_file": self.harness_file,
+            "library_name": self.library.contract_name,
+            "library_file": self.library.source_file,
+            "harness_name": self.harness.contract_name,
+            "harness_file": self.harness.source_file,
             "plan_hash": self.plan_hash,
             "coverage": self.coverage,
             "wrappers": self.wrappers,
@@ -91,7 +93,7 @@ def _run_probe_build(
     library_file: Path,
     library_name: str,
     solc: Optional[str],
-    extra_files: Sequence[str],
+    extra_files: Sequence[ContractHandle],
     certora_run_command: str,
 ) -> None:
     """Compile the stub together with the library so the build reports the library's API."""
@@ -106,7 +108,7 @@ def _run_probe_build(
         certora_run_command,
         harness_arg,
         library_arg,
-        *extra_files,
+        *(handle.to_config_str() for handle in extra_files),
         "--verify",
         f"{harness_name}:{spec_path.relative_to(project_root).as_posix()}",
         "--compilation_steps_only",
@@ -135,10 +137,9 @@ def _run_probe_build(
 
 def ensure_library_harness(
     project_root: Path,
-    library_file: Path,
-    library_name: str,
+    library: ContractHandle,
     solc: Optional[str] = None,
-    extra_files: Sequence[str] = (),
+    extra_files: Sequence[ContractHandle] = (),
     certora_run_command: str = "certoraRun",
     validate: bool = True,
 ) -> HarnessResult:
@@ -149,6 +150,8 @@ def ensure_library_harness(
     runs and still reports success.
     """
     project_root = project_root.resolve()
+    library_name = library.contract_name
+    library_file = Path(library.source_file)
     absolute_library = library_file if library_file.is_absolute() else project_root / library_file
     if not absolute_library.exists():
         raise LibraryHarnessError(f"library source {library_file} does not exist")
@@ -177,15 +180,19 @@ def ensure_library_harness(
     )
 
     api = read_library_api(
-        project_root / BUILD_JSON_RELPATH,
-        library_name,
-        absolute_library.relative_to(project_root).as_posix(),
+        build_json_path(project_root) or project_root / BUILD_JSON_RELPATH,
+        ContractHandle(
+            contract_name=library_name,
+            source_file=absolute_library.relative_to(project_root).as_posix(),
+        ),
     )
 
     plan = build_plan(
         api,
-        harness_name=harness_name,
-        harness_file=harness_file.relative_to(project_root).as_posix(),
+        harness=ContractHandle(
+            contract_name=harness_name,
+            source_file=harness_file.relative_to(project_root).as_posix(),
+        ),
         pragma_line=pragma,
         import_lines=import_lines,
     )
@@ -222,10 +229,8 @@ def ensure_library_harness(
 
 def _result(plan: HarnessPlan) -> HarnessResult:
     return HarnessResult(
-        library_name=plan.library_name,
-        library_file=plan.library_source_file,
-        harness_name=plan.harness_name,
-        harness_file=plan.harness_file,
+        library=plan.library,
+        harness=plan.harness,
         plan_hash=plan_hash(plan),
         coverage=plan.coverage,
         wrappers=[w.name for w in plan.wrappers],

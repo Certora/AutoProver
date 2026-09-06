@@ -10,10 +10,12 @@ a failure as a hard compile error.
 
 import json
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 from graphcore.tools.vfs import VFSState, VFSAccessor
+from certora_autosetup.utils.build_json import build_json_path
+from certora_autosetup.utils.paths import strip_sources_anchor
 from composer.prover.core import BUILD_TIMEOUT_S, run_prover_inner
 
 
@@ -48,16 +50,6 @@ def _config_paths(config: dict[str, Any]) -> set[str]:
     return {str(entry).split(":", 1)[0] for entry in config.get("files", [])}
 
 
-def _find_build_json(folder: Path) -> Path | None:
-    latest = folder / ".certora_internal" / "latest" / ".certora_build.json"
-    if latest.exists():
-        return latest
-    # `latest` is normally a symlink to the timestamped run dir; fall back to the
-    # newest run dir by name (they sort chronologically) if it's absent.
-    candidates = sorted(folder.glob(".certora_internal/*/.certora_build.json"))
-    return candidates[-1] if candidates else None
-
-
 def _scrape_touched(build_json: Path) -> set[str]:
     """Union the ``srclist`` values across every SDC in ``.certora_build.json``.
     Each srclist is solc's ``sources`` map for one compilation unit — the input
@@ -70,27 +62,15 @@ def _scrape_touched(build_json: Path) -> set[str]:
     return touched
 
 
-def _strip_anchor(p: PurePosixPath) -> PurePosixPath:
-    """Drop everything up to and including a ``.certora_sources`` component, so a
-    ``.certora_sources``-relative build path can be compared to a project-relative
-    VFS key."""
-    parts = p.parts
-    if ".certora_sources" in parts:
-        i = len(parts) - 1 - parts[::-1].index(".certora_sources")
-        return PurePosixPath(*parts[i + 1:])
-    return p
-
-
 def _is_touched(vfs_key: str, touched: set[str]) -> bool:
     """A VFS key counts as compiled if its path is a trailing sub-path of some
     touched file. Suffix matching absorbs the prefix rewriting certora applies
-    when it copies sources into the instrumented tree."""
-    key_parts = _strip_anchor(PurePosixPath(vfs_key)).parts
+    when it copies sources into the instrumented tree. Deliberately one-directional,
+    unlike ``same_source_file``: a touched path shorter than the key does not answer
+    the question of whether the key was compiled."""
+    key_parts = strip_sources_anchor(vfs_key)
     n = len(key_parts)
-    return any(
-        _strip_anchor(PurePosixPath(t)).parts[-n:] == key_parts
-        for t in touched
-    )
+    return any(strip_sources_anchor(t)[-n:] == key_parts for t in touched)
 
 
 def _noop_err(code: int | None, stdout: str, stderr: str) -> None:
@@ -142,7 +122,7 @@ async def check_edits_compile(
         if isinstance(result, dict) and result.get("sort") == "failure":
             return BuildFailed(reason=f"{result.get('exc_str', '')}\n{stdout}".strip())
 
-        build_json = _find_build_json(folder)
+        build_json = build_json_path(folder)
         if build_json is None:
             return BuildFailed(reason=f"build produced no .certora_build.json\n{stdout}".strip())
 

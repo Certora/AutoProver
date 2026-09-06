@@ -14,6 +14,9 @@ and no dependency setup.
 ``stopAfter`` requires solc >= 0.7. Below that, solc refuses to emit an AST for a file
 whose imports it cannot resolve, which is every real library file, and pre-build
 detection is not possible; such a project keeps today's behavior and logs why.
+
+Reading the declarations out of that AST is shared with the post-build dump path, in
+``solidity_ast.contracts``.
 """
 
 import json
@@ -24,12 +27,14 @@ from typing import Dict, Optional
 
 from packaging.version import Version
 
+from certora_autosetup.solidity_ast import parse_only_declarations
 from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.solc_version_resolver import (
     convert_solc_version_to_certora_format,
     read_pragma_from_source_file,
     resolve_pragma_to_version,
 )
+from certora_autosetup.utils.types import ContractKind
 
 #: Below this, solc has no ``stopAfter`` and cannot parse a file with unresolved imports.
 MIN_SOLC_FOR_PARSE_ONLY = Version("0.7.0")
@@ -89,8 +94,8 @@ def contract_kind(
     contract_name: str,
     project_root: Optional[Path] = None,
     preferred_solc: Optional[str] = None,
-) -> Optional[str]:
-    """Return the declared kind of ``contract_name`` — "library", "contract", "interface".
+) -> Optional[ContractKind]:
+    """Return the declared kind of ``contract_name``.
 
     None means the question could not be answered (no usable solc, unparseable file, or
     the name is not declared here); callers treat that as "not a library" and proceed
@@ -129,9 +134,9 @@ def contract_kind(
     if not ast:
         return None
 
-    for node in ast.get("nodes", []):
-        if node.get("nodeType") == "ContractDefinition" and node.get("name") == contract_name:
-            return node.get("contractKind")
+    for decl in parse_only_declarations(ast, str(source_file)):
+        if decl.name == contract_name:
+            return decl.contract_kind
     return None
 
 
@@ -142,4 +147,4 @@ def is_library_main_contract(
     preferred_solc: Optional[str] = None,
 ) -> bool:
     """Whether verifying ``contract_name`` requires a generated harness."""
-    return contract_kind(source_file, contract_name, project_root, preferred_solc) == "library"
+    return contract_kind(source_file, contract_name, project_root, preferred_solc) is ContractKind.LIBRARY
