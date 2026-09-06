@@ -20,7 +20,7 @@ from graphcore.graph import tool_state_update
 
 from composer.core.edit import EditErr, EditOk, replace_unique
 from composer.cvl.tools import cvl_syntax_error
-from composer.spec.source.spec_buffers import NamedBuffer
+from composer.spec.source.spec_buffers import NamedBuffer, max_spec_buffers
 from composer.ui.tool_display import ToolDisplay, suppress_ack, tool_display_of
 
 
@@ -75,7 +75,17 @@ def put_buffer[S: WithBuffers](ty: type[S]) -> BaseTool:
     def put_buffer(**args) -> str | Command:
         if (err := cvl_syntax_error(args["cvl"])) is not None:
             return err
-        existing = (args["state"].get("buffers") or {}).get(args["name"])
+        buffers_now = args["state"].get("buffers") or {}
+        # Cap how far the agent partitions: a new run-target buffer beyond the cap is refused.
+        if args["is_run_target"] and args["name"] not in buffers_now:
+            cap = max_spec_buffers()
+            if sum(1 for b in buffers_now.values() if b.is_run_target) >= cap:
+                return (
+                    f"Refusing to create run-target buffer {args['name']!r}: the run-target buffer cap "
+                    f"({cap}) is already reached. Fold these properties into an existing run-target "
+                    f"buffer instead."
+                )
+        existing = buffers_now.get(args["name"])
         # Keep the prior property->rule mapping when the agent re-puts text without restating it.
         prop_rules = args["property_rules"] or (dict(existing.property_rules) if existing else {})
         buf = NamedBuffer(

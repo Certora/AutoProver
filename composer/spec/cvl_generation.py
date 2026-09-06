@@ -269,16 +269,24 @@ class VanillaFeedbackTool(
     def _version_history(self) -> Sequence[str]:
         return ()
 
+def cvl_guidance_tools() -> list[BaseTool]:
+    """The dependency-free CVL *guidance* tools — no spec-writing tools. Used by the buffer-authoring
+    agent, which writes CVL through the buffer tools (put_buffer / edit_buffer) rather than put_cvl."""
+    return [
+        ERC20TokenGuidance.as_tool("erc20_guidance"),
+        UnresolvedCallGuidance.as_tool("unresolved_call_guidance"),
+    ]
+
+
 def static_tools() -> list[BaseTool]:
-    """The dependency-free CVL authoring tools. The property-management suite
-    (feedback / skip tools) is NOT here — it carries runtime deps; see
+    """The dependency-free CVL authoring tools — the single-``curr_spec`` writing tools plus guidance.
+    The property-management suite (feedback / skip tools) is NOT here — it carries runtime deps; see
     :func:`skip_tools` and :class:`FeedbackToolBase`."""
     return [
         put_cvl, put_cvl_raw,
         get_cvl(CVLGenerationState),
         edit_cvl(CVLGenerationState),
-        ERC20TokenGuidance.as_tool("erc20_guidance"),
-        UnresolvedCallGuidance.as_tool("unresolved_call_guidance"),
+        *cvl_guidance_tools(),
     ]
 
 

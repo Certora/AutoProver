@@ -27,14 +27,23 @@ from typing_extensions import TypedDict
 from certora_autosetup.cache.content_cache import hash_content_parts, hash_text
 
 
-SPEC_BUFFERS_ENV = "AUTOPROVER_SPEC_BUFFERS"
+MAX_SPEC_BUFFERS_ENV = "AUTOPROVER_MAX_SPEC_BUFFERS"
+DEFAULT_MAX_SPEC_BUFFERS = 6
 
 
-def spec_buffers_enabled() -> bool:
-    """Whether the multi-buffer authoring tools are offered to the agent. On by default; set
-    ``AUTOPROVER_SPEC_BUFFERS=false`` to fall back to the single ``curr_spec`` flow. A boolean feature
-    switch, not a buffer count: how many buffers the agent creates is a runtime decision."""
-    return os.environ.get(SPEC_BUFFERS_ENV, "true").strip().lower() != "false"
+def max_spec_buffers() -> int:
+    """The most run-target buffers the agent may create. Multi-buffer authoring is the only mode; this
+    caps how far the agent partitions. A cap of 1 is effectively the single-spec case (one run-target
+    buffer). Overridable via ``AUTOPROVER_MAX_SPEC_BUFFERS``; a non-integer or <1 value falls back to
+    the default."""
+    raw = os.environ.get(MAX_SPEC_BUFFERS_ENV)
+    if raw is None:
+        return DEFAULT_MAX_SPEC_BUFFERS
+    try:
+        n = int(raw.strip())
+    except ValueError:
+        return DEFAULT_MAX_SPEC_BUFFERS
+    return n if n >= 1 else DEFAULT_MAX_SPEC_BUFFERS
 
 
 class NamedBuffer(BaseModel):

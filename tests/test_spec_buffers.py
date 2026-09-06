@@ -1,17 +1,30 @@
 """Unit tests for the multi-spec-buffer substrate."""
 
 from composer.spec.source.spec_buffers import (
+    DEFAULT_MAX_SPEC_BUFFERS,
     NamedBuffer,
     buffer_digest,
     buffer_state_digest,
     check_buffer_completion,
     combined_buffers_view,
     import_closure,
+    max_spec_buffers,
     merge_buffers,
     run_targets,
     validate_coverage,
     validate_disjoint_rules,
 )
+
+
+def test_max_spec_buffers_default_override_and_fallback(monkeypatch):
+    monkeypatch.delenv("AUTOPROVER_MAX_SPEC_BUFFERS", raising=False)
+    assert max_spec_buffers() == DEFAULT_MAX_SPEC_BUFFERS == 6
+    monkeypatch.setenv("AUTOPROVER_MAX_SPEC_BUFFERS", "3")
+    assert max_spec_buffers() == 3
+    monkeypatch.setenv("AUTOPROVER_MAX_SPEC_BUFFERS", "0")  # <1 -> default
+    assert max_spec_buffers() == 6
+    monkeypatch.setenv("AUTOPROVER_MAX_SPEC_BUFFERS", "nope")  # non-int -> default
+    assert max_spec_buffers() == 6
 
 SHARED = "ghost g(uint) returns uint;\n"
 EASY = 'import "shared.spec";\nrule r_easy { assert true; }\n'

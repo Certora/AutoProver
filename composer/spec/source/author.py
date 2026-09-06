@@ -21,7 +21,7 @@ from composer.authoring.judge import PropertyFeedbackProtocol
 from composer.authoring.state import SkippedProperty, check_completion
 from composer.authoring.tools import gated_give_up_tool, give_up_tool
 from composer.spec.cvl_generation import (
-    static_tools, property_tools, skip_tools, CVLGenerationExtra, FEEDBACK_VALIDATION_KEY,
+    cvl_guidance_tools, property_tools, skip_tools, CVLGenerationExtra, FEEDBACK_VALIDATION_KEY,
     validate_property_rules, CVL_JUDGE_KEY, run_cvl_generator,
     GeneratedCVL, PropertyRuleMapping, AppliedEdit, FeedbackToolBase,
 )
@@ -30,7 +30,7 @@ from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools, 
 from composer.spec.source.prover import setup_prover_config_in
 from composer.spec.source.spec_buffers import (
     SpecBuffersExtra, buffer_review_text, buffer_state_digest, check_buffer_completion,
-    combined_buffers_view, run_targets, spec_buffers_enabled, validate_coverage,
+    combined_buffers_view, max_spec_buffers, run_targets, validate_coverage,
     validate_disjoint_rules,
 )
 from composer.spec.source.buffer_tools import (
@@ -726,7 +726,7 @@ class PropertyGenSystemParams(TypedDict):
 
 _PropertyGenSysTemplate = TypedTemplate[PropertyGenSystemParams]("property_generation_system_prompt.j2")
 
-#: Appended to the system prompt only when multi-buffer authoring is enabled (spec_buffers_enabled).
+#: Appended to the CVL-generation system prompt: how to author and verify the spec as buffers.
 _SPEC_BUFFERS_GUIDANCE = """
 ## Splitting the spec into verification buffers
 
@@ -764,6 +764,23 @@ Summaries — over-approximate up front (this is your main lever for tractabilit
   reachability check), keep the functions it exercises **exact**. This is a first-class reason to
   partition: group `assert`-only properties (which share aggressive over-approximations) apart from
   `satisfy` properties (which need those functions exact).
+- **Put each summary where it is USED — do NOT default everything into the shared buffer.** A summary
+  that is sound and useful for *every* run-target buffer belongs in the shared buffer; a summary only
+  *some* buffers need belongs in *those* buffers' own `methods{}` (a run-target buffer has its own
+  `methods{}` too). A property-specific summary parked in the shared buffer makes every later edit to it
+  re-verify *every* importer — wasted work on buffers that never use it. For example, if only the
+  approvals buffer reasons about `setApprovalForAll`, summarize it there and leave the shared base free
+  of it:
+
+      // buffer "approvals" (run-target) — imports the shared base
+      import "base.spec";
+      methods {
+          function _.setApprovalForAll(address o, bool a) internal with (env e)
+              => recordErc1155Approval(e.msg.sender, o, a) expect void;
+      }
+      rule approvals_are_recorded { ... }
+
+  so editing this summary never invalidates the other buffers.
 - **Refine on a spurious counterexample.** A too-coarse over-approximation produces a *spurious* cex —
   one reachable only because the summary admits behavior the real function cannot. When a buffer returns
   VIOLATED, analyze the cex: if it hinges on behavior your summary allows but the real function forbids,
@@ -927,10 +944,11 @@ async def batch_cvl_generation(
     })
 
     sys_prompt : list[RawPromptInput | type[CacheMarker]] = [
-        _PropertyGenSysTemplate.bind({"source_editing": editing is not None}).render_to
+        _PropertyGenSysTemplate.bind({"source_editing": editing is not None}).render_to,
+        _SPEC_BUFFERS_GUIDANCE,
+        f"\nCreate at most {max_spec_buffers()} run-target buffers; fold further properties into "
+        f"existing ones. A single run-target buffer is the one-spec case.",
     ]
-    if spec_buffers_enabled():
-        sys_prompt.append(_SPEC_BUFFERS_GUIDANCE)
 
     added_tools : list[BaseTool] = []
     if editing_tools is not None:
@@ -1035,27 +1053,22 @@ async def batch_cvl_generation(
     else:
         b = b.with_tools(env.source_tools)
     # Multi-buffer authoring (opt-in): the agent partitions the spec into several named buffers,
-    # each submitted and verified independently via the async submit_buffer / collect_results tools
-    # (bound in place of the single-spec verify_spec). Off by default so the single-curr_spec flow is
-    # untouched.
-    if spec_buffers_enabled():
-        buffer_authoring: list[BaseTool] = [
-            put_buffer(SourceCVLGenerationState), get_buffer(SourceCVLGenerationState),
-            edit_buffer(SourceCVLGenerationState), list_buffers(SourceCVLGenerationState),
-            delete_buffer(SourceCVLGenerationState),
-        ]
-        prover_binding: list[BaseTool] = list(prover_tool.buffer_tools)
-    else:
-        buffer_authoring = []
-        prover_binding = [prover_tool.lg_tool]
+    # Multi-buffer authoring is the only mode: the agent writes CVL through the buffer tools and
+    # verifies each run-target buffer with the async submit_buffer / collect_results pair. Guidance-only
+    # CVL tools are bound (no put_cvl/edit_cvl/verify_spec).
+    buffer_authoring: list[BaseTool] = [
+        put_buffer(SourceCVLGenerationState), get_buffer(SourceCVLGenerationState),
+        edit_buffer(SourceCVLGenerationState), list_buffers(SourceCVLGenerationState),
+        delete_buffer(SourceCVLGenerationState),
+    ]
     task_graph = b.with_tools(
-        static_tools()
+        cvl_guidance_tools()
     ).with_tools(
         buffer_authoring
     ).with_tools(
         feedback_suite
     ).with_tools(
-        [*prover_binding,
+        [*prover_tool.buffer_tools,
          ExpectRulePassage.as_tool("expect_rule_passage"),
          ExpectRuleFailure.as_tool("expect_rule_failure"),
          give_up_tool(name="give_up", description=_GIVE_UP_DESCRIPTION, label="CVL generation")
