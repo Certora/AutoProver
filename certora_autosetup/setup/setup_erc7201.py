@@ -18,14 +18,48 @@ from certora_autosetup.utils.progress_display import make_tqdm
 from certora_autosetup.utils.logger import logger
 
 
+# certora-cli re-parses the namespace id out of the natspec tag itself, and its
+# parser is narrower than ERC-7201 allows: an id is cut at the first character
+# outside [a-zA-Z.0-9], so "my_project.storage.Token" reaches the Prover as "my"
+# and every id sharing that prefix lands on one storage slot. Probe the installed
+# parser instead of restating its alphabet here, so this check stops firing by
+# itself once the Prover is fixed.
+_FALLBACK_NAMESPACE_PATTERN = re.compile(r'[a-zA-Z.0-9]+')
+
+
+def prover_visible_namespace(namespace: str) -> str:
+    """Return `namespace` as the installed certora-cli would read it back."""
+    try:
+        from certora_cli.CertoraProver.storageExtension import (  # type: ignore[import-not-found]
+            erc7201_of_node,
+        )
+    except ImportError:
+        match = _FALLBACK_NAMESPACE_PATTERN.match(namespace)
+        return match.group(0) if match else ""
+
+    parsed = erc7201_of_node({
+        "nodeType": "StructDefinition",
+        "canonicalName": "AutosetupNamespaceProbe",
+        "documentation": {
+            "nodeType": "StructuredDocumentation",
+            "text": f"@custom:storage-location erc7201:{namespace}",
+        },
+    })
+    return parsed[1] if parsed else ""
+
+
 class ERC7201Scanner:
     """Scanner for ERC-7201 storage location patterns."""
     
     def __init__(self, verbose: bool = False, log_func=None):
         self.verbose = verbose
         self.log = log_func if log_func else logger.log
+        # solc hands the Prover the natspec text with every comment delimiter
+        # stripped, so the comment style the annotation is written in tells us
+        # nothing. Matching '///' alone misses the '/** ... */' form, which is
+        # what OpenZeppelin's upgradeable base contracts use.
         self.erc7201_pattern = re.compile(
-            r'///\s*@custom:storage-location\s+erc7201:([^\s\n]+)',
+            r'@custom:storage-location\s+erc7201:([^\s\n]+)',
             re.IGNORECASE
         )
         self.found_patterns: Dict[str, List[Tuple[str, int]]] = {}
@@ -52,7 +86,7 @@ class ERC7201Scanner:
                 for line_num, line in enumerate(f, 1):
                     match = self.erc7201_pattern.search(line)
                     if match:
-                        namespace = match.group(1).strip()
+                        namespace = match.group(1).strip().removesuffix('*/')
                         patterns.append((namespace, line_num))
                         if self.verbose:
                             self.log(f"Found ERC-7201 pattern in {file_path}:{line_num} -> {namespace}", "DEBUG")
@@ -94,6 +128,42 @@ class ERC7201Scanner:
                 namespaces.add(namespace)
         return namespaces
     
+    def truncated_namespaces(self) -> Dict[str, List[str]]:
+        """Group the detected namespaces that certora-cli would mis-read.
+
+        Returns:
+            Mapping from what the Prover keeps to the real namespaces that collapse
+            onto it. A group of two or more fails the build outright; a group of one
+            still gets the wrong storage slot.
+        """
+        by_visible: Dict[str, List[str]] = {}
+        for namespace in sorted(self.get_unique_namespaces()):
+            visible = prover_visible_namespace(namespace)
+            if visible != namespace:
+                by_visible.setdefault(visible, []).append(namespace)
+        return by_visible
+
+    def disable_config_files(self, directory: Path) -> None:
+        """Drop storage_extension_annotation from configs that already carry it.
+
+        Withholding the flag is not enough on its own: a config written by an
+        earlier run, or by hand, still carries it into the build.
+        """
+        cleared = 0
+        for conf_file in self._config_files(directory):
+            try:
+                config = json.loads(conf_file.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
+            if config.pop('storage_extension_annotation', None) is None:
+                continue
+            with open(conf_file, 'w') as f:
+                json.dump(config, f, indent=2)
+            cleared += 1
+            self.log(f"Removed storage_extension_annotation from {conf_file}", "WARNING")
+        if cleared:
+            self.log(f"Cleared storage_extension_annotation from {cleared} configuration files", "WARNING")
+
     def generate_erc7201_spec(self, output_path: Path) -> bool:
         """Generate erc7201.spec file with namespace comments including source locations."""
         if not self.found_patterns:
@@ -135,17 +205,20 @@ class ERC7201Scanner:
         self.log(f"Generated {output_path} with {len(sorted_namespaces)} ERC-7201 namespaces")
         return True
     
-    def update_config_files(self, directory: Path) -> None:
-        """Update configuration files to enable storage_extension_annotation."""
+    def _config_files(self, directory: Path) -> List[Path]:
+        """Collect the project's .conf files, skipping hidden directories."""
         config_files = []
-
-        # Look for .conf files, excluding hidden directories from traversal
         for root, dirs, files in os.walk(directory):
             dirs[:] = [d for d in dirs if not d.startswith('.')]
             for file in files:
                 if file.endswith('.conf'):
                     config_files.append(Path(root) / file)
-        
+        return config_files
+
+    def update_config_files(self, directory: Path) -> None:
+        """Update configuration files to enable storage_extension_annotation."""
+        config_files = self._config_files(directory)
+
         if not config_files:
             if self.verbose:
                 self.log("No .conf files found to update.", "DEBUG")
@@ -224,7 +297,9 @@ def run(directory=".", spec_output="certora/specs/erc7201.spec", verbose=False,
     Returns:
         Tuple of (exit_code, namespaces_found):
         - exit_code: 0 for success, 1 for error
-        - namespaces_found: True if ERC-7201 namespaces were detected
+        - namespaces_found: True if ERC-7201 namespaces were detected AND certora-cli
+          can read them back correctly. False when the Prover would truncate them,
+          so that callers do not turn storage_extension_annotation on downstream.
     """
     directory = Path(directory).resolve()
     if not directory.exists():
@@ -250,6 +325,25 @@ def run(directory=".", spec_output="certora/specs/erc7201.spec", verbose=False,
     if namespaces:
         spec_path = Path(spec_output)
         scanner.generate_erc7201_spec(spec_path)
+
+        truncated = scanner.truncated_namespaces()
+        if truncated:
+            for visible, group in sorted(truncated.items()):
+                logger.log(
+                    f"ERC-7201 namespaces {group} all read as '{visible}' by certora-cli, "
+                    f"which would put them on one storage slot.",
+                    "WARNING",
+                )
+            logger.log(
+                "Leaving storage_extension_annotation off so the build still runs; "
+                "namespaced storage stays unsplit for this project.",
+                "WARNING",
+            )
+            if not no_config_update:
+                scanner.disable_config_files(directory)
+            # Reported as "none usable" rather than "none found": the caller
+            # propagates this into every config it writes later on.
+            return 0, False
 
         # Update existing config files on disk unless disabled
         if not no_config_update:

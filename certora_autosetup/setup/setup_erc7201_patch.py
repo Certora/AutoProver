@@ -125,7 +125,8 @@ def _find_struct_line(lines: List[str], struct_name: str) -> Optional[int]:
 
 def _already_annotated(lines: List[str], struct_line_idx: int) -> bool:
     """Check if the struct at the given line already has an ERC-7201 annotation."""
-    annotation_pattern = re.compile(r"///\s*@custom:storage-location\s+erc7201:", re.IGNORECASE)
+    # Either comment style counts as annotated; solc strips the delimiters anyway.
+    annotation_pattern = re.compile(r"@custom:storage-location\s+erc7201:", re.IGNORECASE)
     for offset in range(1, 4):
         check_idx = struct_line_idx - offset
         if check_idx < 0:
