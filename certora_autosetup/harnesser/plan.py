@@ -24,7 +24,7 @@ import re
 from collections import defaultdict
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
-from certora_autosetup.harnesser.cvl_reserved import escape_reserved
+from certora_autosetup.utils.cvl_keywords import escape_reserved
 from certora_autosetup.harnesser.model import (
     KIND_ARRAY,
     KIND_MAPPING,

@@ -61,31 +61,10 @@ from certora_autosetup.parsers.method_parser import MethodParser
 from certora_autosetup.parsers.spec_imports import parse_imports_from_spec
 from certora_autosetup.setup.summary_resolver import resolve_summary_specs
 from certora_autosetup.setup.signature_types import InheritanceGraph
+from certora_autosetup.utils.cvl_keywords import escape_reserved
 
 
-# CVL grammar keyword terminals that cannot double as an identifier. A Solidity parameter whose name
-# equals one of these is lexed as that keyword inside a methods{} entry, which is a syntax error; such
-# names are suffixed with "_" before emission (see _cvl_safe_param_name).
-#
-# This deliberately EXCLUDES the terminals listed under the `usable_keywords` production in cvl.cup
-# (exists, forall, sum, usum, using, as, import, use, builtin, override, sig, description, invariant,
-# preserved, weak, strong, onTransactionBoundary, old, hook, unresolved). The grammar accepts those
-# wherever an identifier is expected, so a parameter named after one parses fine and must NOT be
-# mangled. Note: uppercase "UNRESOLVED" is a distinct summary keyword and remains reserved.
-CVL_RESERVED_WORDS = frozenset({
-    "ALL", "ALWAYS", "ASSERT_FALSE", "AUTO", "CONSTANT", "Create", "DELETE", "DISPATCH", "DISPATCHER",
-    "HAVOC_ALL", "HAVOC_ECF", "NONDET", "PER_CALLEE_CONSTANT", "STORAGE", "Sload", "Sstore", "Tload",
-    "Tstore", "UNRESOLVED", "assert", "assuming", "at", "axiom", "default", "definition", "else",
-    "event", "expect", "fallback", "false", "filtered", "function", "ghost", "good_description",
-    "havoc", "if", "in", "indexed", "lastReverted", "lastStorage", "links", "mapping", "methods",
-    "new", "norevert", "persistent", "require", "requireInvariant", "reset_storage", "return",
-    "returns", "revert", "rule", "satisfy", "sort", "true", "void", "with", "withrevert", "xor",
-})
 
-
-def _cvl_safe_param_name(name: str) -> str:
-    """The parameter name with a trailing "_" if it equals a CVL reserved word, otherwise unchanged."""
-    return f"{name}_" if name in CVL_RESERVED_WORDS else name
 
 
 try:
@@ -227,8 +206,8 @@ class DecimalSummary(BaseModel):
 
     @property
     def summary_line(self) -> str:
-        params = ", ".join([ f"{_pprint_type(p.ty)} {_cvl_safe_param_name(p.name)}" for p in self.param_list ])
-        return f"function _.{self.method_name}({params}) internal => {self.cvl_function_name}({_cvl_safe_param_name(self.amount_parameter)}) expect {self.return_type.ty_name};"
+        params = ", ".join([ f"{_pprint_type(p.ty)} {escape_reserved(p.name)}" for p in self.param_list ])
+        return f"function _.{self.method_name}({params}) internal => {self.cvl_function_name}({escape_reserved(self.amount_parameter)}) expect {self.return_type.ty_name};"
 
     @property
     def cvl_function(self) -> str:
@@ -270,7 +249,7 @@ class NondetSummary(BaseModel):
 
     @property
     def summary_line(self) -> str:
-        params = ", ".join([f"{_pprint_type(p.ty)} {_cvl_safe_param_name(p.name)}" for p in self.param_list])
+        params = ", ".join([f"{_pprint_type(p.ty)} {escape_reserved(p.name)}" for p in self.param_list])
         if self.return_type is not None:
             return_types = ", ".join([
                 _pprint_type(ty) for ty in self.return_type
@@ -1305,7 +1284,7 @@ If the function cannot be summarized (e.g., struct parameters), return an Invali
         params = []
         for i, param_type in enumerate(param_types):
             param_name = param_names[i] if i < len(param_names) and param_names[i] else f""
-            param_name = _cvl_safe_param_name(param_name)
+            param_name = escape_reserved(param_name)
             location = locations[i] if i < len(locations) else ""
 
             cvl_type, classification = classify_solidity_type(param_type)
