@@ -8,6 +8,7 @@ import asyncio
 from functools import cache
 
 import anthropic
+import httpx
 
 from composer.input.files import UploaderBase, ContentRenderer
 from composer.input.types import ModelConfiguration
@@ -223,10 +224,17 @@ class AnthropicService(ProviderServiceBase):
     def should_retry(self, exc: Exception) -> bool:
         """Mirrors the SDK's own ``_should_retry`` status roster (408/409/429
         and every 5xx, which covers 529 overloaded) plus connection-level
-        failures (``APITimeoutError`` subclasses ``APIConnectionError``).
-        400-class request errors are deterministic — an over-long prompt fails
-        identically on every attempt — and are deliberately excluded."""
+        failures (``APITimeoutError`` subclasses ``APIConnectionError``), and a
+        connection dropped mid-stream. 400-class request errors are
+        deterministic — an over-long prompt fails identically on every attempt —
+        and are deliberately excluded."""
         if isinstance(exc, anthropic.APIConnectionError):
+            return True
+        # A connection that drops mid-stream surfaces as a raw httpx.RemoteProtocolError
+        # ("peer closed connection without sending complete message body") — the SDK does not
+        # wrap streamed-body failures as APIConnectionError, so match it directly. It is a
+        # transient transport failure, retryable like any connection-level error.
+        if isinstance(exc, httpx.RemoteProtocolError):
             return True
         if isinstance(exc, anthropic.APIStatusError):
             return exc.status_code in (408, 409, 429) or exc.status_code >= 500
