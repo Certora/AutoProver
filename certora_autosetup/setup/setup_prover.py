@@ -31,11 +31,11 @@ from certora_autosetup.utils.import_diagnostics import (
     describe_unresolved_imports,
 )
 from certora_autosetup.setup.auto_munges import detect_and_apply_code_access_patches
-from certora_autosetup.setup.import_spelling_fix import (
-    ImportSpellingRewrite,
-    apply_import_spelling_fixes,
-    plan_import_spelling_fixes,
-    revert_import_spelling_fixes,
+from certora_autosetup.setup.import_case_fix import (
+    ImportCaseRewrite,
+    apply_import_case_fixes,
+    plan_import_case_fixes,
+    revert_import_case_fixes,
 )
 from certora_autosetup.setup.signature_manager import SignatureManager
 from certora_autosetup.setup.signature_types import ContractInfo
@@ -182,9 +182,9 @@ class SetupProver:
         # Track compilation configuration updates
         self.compilation_config_updates: Dict[str, Any] = {}
         self.import_patcher_applied: bool = False
-        # Import rewrites the spelling fix wrote, kept so they can be reverted when the retry
+        # Import rewrites the case fix wrote, kept so they can be reverted when the retry
         # they were made for still fails.
-        self._import_spelling_rewrites: List[ImportSpellingRewrite] = []
+        self._import_case_rewrites: List[ImportCaseRewrite] = []
         self.erc7201_namespaces_found: bool = False
         self._remappings_workaround_applied: bool = False
         self._build_dir: Path | None = None
@@ -465,44 +465,53 @@ class SetupProver:
                 self.log("Output from first compilation attempt:", "WARNING")
                 self.log(output, "WARNING")
 
-                # The spelling fix has to run before the import patcher, because the patcher
-                # resolves each relative import against its map of real files and skips the
-                # ones that miss (solidity_import_patch.create_patch). A misspelled import
-                # never resolves, so it is exactly what the patcher cannot canonicalize.
-                # Correct spellings first, canonical paths second.
-                spelling_fix_applied = self._run_import_spelling_fix(
+                # The case fix gets its own retry. It only rewrites paths the filesystem
+                # names unambiguously, while the import patcher rewrites every relative
+                # import in the project, and a project the narrow fix repaired should not
+                # have to survive the broad one as well.
+                case_fix_applied = self._run_import_case_fix(
                     output, compilation_config.get("packages") or []
                 )
-                import_patch_applied = self._run_import_patch()
-                import_patcher_applied = import_patch_applied
-
-                # Either fix on its own is a reason to compile again.
-                if spelling_fix_applied or import_patch_applied:
-                    self.log("Import fixes applied, retrying compilation...")
+                if case_fix_applied:
+                    self.log("Import case fix applied, retrying compilation...")
                     success, output, updated_config_dict = self._run_compilation_with_workarounds(
                         cmd, config_file, compilation_config, surviving_contracts, updated_config_dict
                     )
 
-                    if not success:
-                        self.log("Compilation analysis failed even after import fixes", "ERROR")
-                        self.log("Output from second compilation attempt (after import fixes):", "ERROR")
-                        self.log(output, "ERROR")
-                        self.log("Reverting import fixes as they were not useful...", "WARNING")
-                        # Reverse order of application, so each revert sees the sources in the
-                        # state the fix that wrote them recorded.
-                        if import_patch_applied:
-                            self._revert_import_patch()
-                            import_patcher_applied = False
-                        if spelling_fix_applied:
-                            self._revert_import_spelling_fix()
+                import_patch_applied = False
+                if not success:
+                    # The patcher goes on top of the case fix, not instead of it: it resolves
+                    # each relative import against its map of real files and skips the ones
+                    # that miss (solidity_import_patch.create_patch), so a corrected spelling
+                    # is one more import it can canonicalize.
+                    import_patch_applied = self._run_import_patch()
+                    import_patcher_applied = import_patch_applied
+                    if import_patch_applied:
+                        self.log("Import patch applied, retrying compilation...")
+                        success, output, updated_config_dict = self._run_compilation_with_workarounds(
+                            cmd, config_file, compilation_config, surviving_contracts, updated_config_dict
+                        )
+
+                if not success:
+                    if not case_fix_applied and not import_patch_applied:
+                        self.log("No import fix could be applied", "ERROR")
                         raise CompilationAnalysisError(
-                            "Compilation analysis failed even after import fixes"
+                            "Compilation analysis failed and no import fix could be applied"
                             + self._import_diagnostics_suffix()
                         )
-                else:
-                    self.log("No import fix could be applied", "ERROR")
+                    self.log("Compilation analysis failed even after import fixes", "ERROR")
+                    self.log("Output from the last compilation attempt:", "ERROR")
+                    self.log(output, "ERROR")
+                    self.log("Reverting import fixes as they were not useful...", "WARNING")
+                    # Reverse order of application, so each revert sees the sources in the
+                    # state the fix that wrote them recorded.
+                    if import_patch_applied:
+                        self._revert_import_patch()
+                        import_patcher_applied = False
+                    if case_fix_applied:
+                        self._revert_import_case_fix()
                     raise CompilationAnalysisError(
-                        "Compilation analysis failed and no import fix could be applied"
+                        "Compilation analysis failed even after import fixes"
                         + self._import_diagnostics_suffix()
                     )
 
@@ -519,23 +528,23 @@ class SetupProver:
             self.log(f"✗ Compilation analysis failed with exception: {e}", "ERROR")
             return False, updated_config_dict, import_patcher_applied, surviving_contracts
 
-    def _run_import_spelling_fix(
+    def _run_import_case_fix(
         self, compiler_output: str = "", packages: Sequence[str] = ()
     ) -> bool:
-        """Rewrite imports whose spelling does not match the file on disk.
+        """Rewrite imports whose letter case does not match the file on disk.
 
         Args:
             compiler_output: Output of the failed compilation, used only to log which imports
                 solc could not resolve alongside the rewrites that were planned.
             packages: The conf's packages list, which tells the fixer which imports solc
-                resolves through a remapping and are therefore not spelling problems.
+                resolves through a remapping and are therefore not case problems.
 
         Returns:
             True if at least one import was rewritten, False otherwise.
         """
         try:
             project_root = self.certora_dir.parent
-            rewrites = plan_import_spelling_fixes(
+            rewrites = plan_import_case_fixes(
                 project_root,
                 log_func=self.log,
                 compiler_output=compiler_output,
@@ -543,27 +552,27 @@ class SetupProver:
             )
             if not rewrites:
                 return False
-            self._import_spelling_rewrites = apply_import_spelling_fixes(
+            self._import_case_rewrites = apply_import_case_fixes(
                 rewrites, log_func=self.log
             )
-            return bool(self._import_spelling_rewrites)
+            return bool(self._import_case_rewrites)
         except Exception as e:
-            self.log(f"Error running import spelling fix: {e}", "ERROR")
+            self.log(f"Error running import case fix: {e}", "ERROR")
             return False
 
-    def _revert_import_spelling_fix(self) -> bool:
-        """Restore the imports the spelling fix rewrote.
+    def _revert_import_case_fix(self) -> bool:
+        """Restore the imports the case fix rewrote.
 
         Returns:
             True if successful, False otherwise
         """
         try:
-            revert_import_spelling_fixes(self._import_spelling_rewrites, log_func=self.log)
-            self._import_spelling_rewrites = []
-            self.log("✓ Import spelling fix reverted successfully")
+            revert_import_case_fixes(self._import_case_rewrites, log_func=self.log)
+            self._import_case_rewrites = []
+            self.log("✓ Import case fix reverted successfully")
             return True
         except Exception as e:
-            self.log(f"Error reverting import spelling fix: {e}", "ERROR")
+            self.log(f"Error reverting import case fix: {e}", "ERROR")
             return False
 
     def _run_import_patch(self, project_dir: str = ".") -> bool:

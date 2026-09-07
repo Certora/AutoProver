@@ -1,6 +1,6 @@
-"""Unit tests for the import spelling fixer.
+"""Unit tests for the import case fixer.
 
-Every test writes ONE real file and a mis-spelled import string, then asserts on the plan or
+Every test writes ONE real file and a mis-cased import string, then asserts on the plan or
 on the rewritten bytes. That is deliberate: the developer filesystem (macOS) is
 case-insensitive and cannot hold two files differing only in case, so a test that needed such
 a pair would pass only on a case-sensitive filesystem. The one place a pair is unavoidable —
@@ -13,13 +13,13 @@ from typing import List, Optional, Tuple
 
 import pytest
 
-from certora_autosetup.setup.import_spelling_fix import (
-    ImportSpellingRewrite,
+from certora_autosetup.setup.import_case_fix import (
+    ImportCaseRewrite,
     mask_comments,
-    apply_import_spelling_fixes,
+    apply_import_case_fixes,
     choose_spelling,
-    plan_import_spelling_fixes,
-    revert_import_spelling_fixes,
+    plan_import_case_fixes,
+    revert_import_case_fixes,
 )
 
 # Shaped like certoraRun/solc output for a source-not-found failure. solc hard-wraps its
@@ -74,12 +74,12 @@ def test_basename_case_is_fixed(tmp_path: Path, log: RecordingLog) -> None:
     main = write(tmp_path / "src" / "Main.sol", source_with_import("./iwidgetstore.sol"))
     before = main.read_bytes()
 
-    rewrites = plan_import_spelling_fixes(tmp_path, log_func=log)
+    rewrites = plan_import_case_fixes(tmp_path, log_func=log)
 
     assert [(r.file, r.original_path, r.updated_path) for r in rewrites] == [
         (main, "./iwidgetstore.sol", "./IWidgetStore.sol")
     ]
-    assert apply_import_spelling_fixes(rewrites, log_func=log) == rewrites
+    assert apply_import_case_fixes(rewrites, log_func=log) == rewrites
     assert 'from "./IWidgetStore.sol";' in main.read_text()
     # A rewrite is a single-line, in-place substitution: the line count cannot move, or the
     # import patcher's line-indexed revert would corrupt the file.
@@ -93,7 +93,7 @@ def test_directory_component_case_is_fixed(tmp_path: Path, log: RecordingLog) ->
         tmp_path / "src" / "Main.sol", source_with_import("./Interfaces/IWidgetStore.sol")
     )
 
-    rewrites = plan_import_spelling_fixes(tmp_path, log_func=log)
+    rewrites = plan_import_case_fixes(tmp_path, log_func=log)
 
     assert [r.updated_path for r in rewrites] == ["./interfaces/IWidgetStore.sol"]
 
@@ -102,7 +102,7 @@ def test_extension_case_is_fixed(tmp_path: Path, log: RecordingLog) -> None:
     write(tmp_path / "src" / "IWidgetStore.sol", "interface IWidgetStore {}\n")
     write(tmp_path / "src" / "Main.sol", source_with_import("./IWidgetStore.SOL"))
 
-    rewrites = plan_import_spelling_fixes(tmp_path, log_func=log)
+    rewrites = plan_import_case_fixes(tmp_path, log_func=log)
 
     assert [r.updated_path for r in rewrites] == ["./IWidgetStore.sol"]
 
@@ -111,14 +111,14 @@ def test_a_missing_extension_is_never_invented(tmp_path: Path, log: RecordingLog
     write(tmp_path / "src" / "IWidgetStore.sol", "interface IWidgetStore {}\n")
     write(tmp_path / "src" / "Main.sol", source_with_import("./IWidgetStore"))
 
-    assert plan_import_spelling_fixes(tmp_path, log_func=log) == []
+    assert plan_import_case_fixes(tmp_path, log_func=log) == []
 
 
 def test_windows_separators_are_normalized(tmp_path: Path, log: RecordingLog) -> None:
     write(tmp_path / "src" / "IWidgetStore.sol", "interface IWidgetStore {}\n")
     write(tmp_path / "src" / "Main.sol", source_with_import("src\\IWidgetStore.sol"))
 
-    rewrites = plan_import_spelling_fixes(tmp_path, log_func=log)
+    rewrites = plan_import_case_fixes(tmp_path, log_func=log)
 
     assert [r.updated_path for r in rewrites] == ["src/IWidgetStore.sol"]
 
@@ -137,33 +137,24 @@ def test_multiline_import_is_rewritten_on_its_path_line(
         f"{CONTRACT_BODY}",
     )
 
-    rewrites = plan_import_spelling_fixes(tmp_path, log_func=log)
+    rewrites = plan_import_case_fixes(tmp_path, log_func=log)
 
     assert len(rewrites) == 1
     # The path literal of a multi-line import sits on the closing line, not the `import` line.
     assert rewrites[0].line == 4
-    apply_import_spelling_fixes(rewrites, log_func=log)
+    apply_import_case_fixes(rewrites, log_func=log)
     assert '} from "./interfaces/IWidgetStore.sol";' in main.read_text()
 
 
-def test_right_basename_in_the_wrong_directory_is_relocated(
+def test_the_right_basename_in_the_wrong_directory_is_left_alone(
     tmp_path: Path, log: RecordingLog
 ) -> None:
+    # The file exists, one directory over. Redirecting the import there would be a guess at
+    # what the author meant, and it is not a case problem: the path fails on macOS too.
     write(tmp_path / "src" / "utils" / "Helper.sol", "library Helper {}\n")
     write(tmp_path / "src" / "Main.sol", source_with_import("./Helper.sol"))
 
-    rewrites = plan_import_spelling_fixes(tmp_path, log_func=log)
-
-    assert [r.updated_path for r in rewrites] == ["./utils/Helper.sol"]
-
-
-def test_two_candidates_for_one_basename_abort(tmp_path: Path, log: RecordingLog) -> None:
-    write(tmp_path / "src" / "a" / "Helper.sol", "library Helper {}\n")
-    write(tmp_path / "src" / "b" / "Helper.sol", "library Helper {}\n")
-    write(tmp_path / "src" / "Main.sol", source_with_import("./Helper.sol"))
-
-    assert plan_import_spelling_fixes(tmp_path, log_func=log) == []
-    assert any("2 files on disk are named" in message for message in log.messages())
+    assert plan_import_case_fixes(tmp_path, log_func=log) == []
 
 
 def test_entries_differing_only_in_case_are_not_guessed_between() -> None:
@@ -183,7 +174,7 @@ def test_package_prefix_import_is_left_alone(tmp_path: Path, log: RecordingLog) 
     write(tmp_path / "lib" / "vendor" / "src" / "Token.sol", "contract Token {}\n")
     write(tmp_path / "src" / "Main.sol", source_with_import("@vendor/src/token.sol"))
 
-    assert plan_import_spelling_fixes(tmp_path, log_func=log) == []
+    assert plan_import_case_fixes(tmp_path, log_func=log) == []
     assert any("package prefix" in message for message in log.messages())
 
 
@@ -191,7 +182,7 @@ def test_unknown_root_segment_is_left_alone(tmp_path: Path, log: RecordingLog) -
     write(tmp_path / "lib" / "vendor" / "src" / "Token.sol", "contract Token {}\n")
     write(tmp_path / "src" / "Main.sol", source_with_import("vendor/src/token.sol"))
 
-    assert plan_import_spelling_fixes(tmp_path, log_func=log) == []
+    assert plan_import_case_fixes(tmp_path, log_func=log) == []
 
 
 def test_a_project_relative_import_into_a_dependency_is_fixed(
@@ -200,7 +191,7 @@ def test_a_project_relative_import_into_a_dependency_is_fixed(
     write(tmp_path / "lib" / "vendor" / "src" / "Token.sol", "contract Token {}\n")
     write(tmp_path / "src" / "Main.sol", source_with_import("lib/vendor/src/token.sol"))
 
-    rewrites = plan_import_spelling_fixes(tmp_path, log_func=log)
+    rewrites = plan_import_case_fixes(tmp_path, log_func=log)
 
     assert [r.updated_path for r in rewrites] == ["lib/vendor/src/Token.sol"]
 
@@ -217,11 +208,11 @@ def test_a_file_inside_a_dependency_is_never_rewritten(
     write(tmp_path / "src" / "IWidgetStore.sol", "interface IWidgetStore {}\n")
     main = write(tmp_path / "src" / "Main.sol", source_with_import("./iwidgetstore.sol"))
 
-    rewrites = plan_import_spelling_fixes(tmp_path, log_func=log)
+    rewrites = plan_import_case_fixes(tmp_path, log_func=log)
 
-    # The dependency carries the same class of mis-spelling and is still not touched.
+    # The dependency carries the same class of mis-casing and is still not touched.
     assert [r.file for r in rewrites] == [main]
-    apply_import_spelling_fixes(rewrites, log_func=log)
+    apply_import_case_fixes(rewrites, log_func=log)
     assert dependency_source.read_bytes() == before
 
 
@@ -229,7 +220,7 @@ def test_a_genuinely_absent_file_is_left_alone(tmp_path: Path, log: RecordingLog
     main = write(tmp_path / "src" / "Main.sol", source_with_import("./interfaces/IMissing.sol"))
     before = main.read_bytes()
 
-    assert plan_import_spelling_fixes(tmp_path, log_func=log) == []
+    assert plan_import_case_fixes(tmp_path, log_func=log) == []
     assert main.read_bytes() == before
 
 
@@ -239,7 +230,7 @@ def test_solc_output_is_logged_but_does_not_gate_the_scan(
     write(tmp_path / "src" / "interfaces" / "IWidgetStore.sol", "interface IWidgetStore {}\n")
     write(tmp_path / "src" / "Main.sol", source_with_import("./interfaces/iwidgetstore.sol"))
 
-    rewrites = plan_import_spelling_fixes(
+    rewrites = plan_import_case_fixes(
         tmp_path, log_func=log, compiler_output=WRAPPED_SOURCE_NOT_FOUND
     )
 
@@ -257,11 +248,11 @@ def test_apply_then_revert_restores_the_bytes(tmp_path: Path, log: RecordingLog)
     )
     before = main.read_bytes()
 
-    rewrites = plan_import_spelling_fixes(tmp_path, log_func=log)
-    applied = apply_import_spelling_fixes(rewrites, log_func=log)
+    rewrites = plan_import_case_fixes(tmp_path, log_func=log)
+    applied = apply_import_case_fixes(rewrites, log_func=log)
     assert applied and main.read_bytes() != before
 
-    assert revert_import_spelling_fixes(applied, log_func=log) == applied
+    assert revert_import_case_fixes(applied, log_func=log) == applied
     assert main.read_bytes() == before
 
 
@@ -277,7 +268,7 @@ def test_a_literal_occurring_twice_on_a_line_is_skipped(
         f"{CONTRACT_BODY}",
     )
 
-    assert plan_import_spelling_fixes(tmp_path, log_func=log) == []
+    assert plan_import_case_fixes(tmp_path, log_func=log) == []
     assert any("occurs 2 times" in message for message in log.messages())
 
 
@@ -293,11 +284,11 @@ def test_a_trailing_comment_repeating_the_path_does_not_block_the_fix(
         f"{CONTRACT_BODY}",
     )
 
-    planned = plan_import_spelling_fixes(tmp_path, log_func=log)
+    planned = plan_import_case_fixes(tmp_path, log_func=log)
     assert [(r.original_path, r.updated_path) for r in planned] == [
         ("./iwidgetstore.sol", "./IWidgetStore.sol")
     ]
-    apply_import_spelling_fixes(planned, log_func=log)
+    apply_import_case_fixes(planned, log_func=log)
     text = main.read_text()
     assert text.startswith('import "./IWidgetStore.sol";')
     # The comment keeps the spelling it had; only code was rewritten.
@@ -312,58 +303,20 @@ def test_two_rewrites_on_one_line_round_trip(tmp_path: Path, log: RecordingLog) 
     source = write(tmp_path / "src" / "Main.sol", line)
     before = source.read_bytes()
     rewrites = [
-        ImportSpellingRewrite(
+        ImportCaseRewrite(
             file=source, line=0, column=line.index('"./a.sol"'),
             original='"./a.sol"', updated='"./AAAA.sol"',
         ),
-        ImportSpellingRewrite(
+        ImportCaseRewrite(
             file=source, line=0, column=line.index('"./bb.sol"'),
             original='"./bb.sol"', updated='"./B.sol"',
         ),
     ]
 
-    assert apply_import_spelling_fixes(rewrites, log_func=log) == rewrites
+    assert apply_import_case_fixes(rewrites, log_func=log) == rewrites
     assert source.read_text() == 'import "./AAAA.sol"; import "./B.sol";\n'
-    revert_import_spelling_fixes(rewrites, log_func=log)
+    revert_import_case_fixes(rewrites, log_func=log)
     assert source.read_bytes() == before
-
-
-def test_a_dependency_copy_counts_towards_the_ambiguity(
-    tmp_path: Path, log: RecordingLog
-) -> None:
-    # The rewrite would only ever point at the project's own file, but a dependency holding the
-    # same basename means the filesystem does not decide which file the import named.
-    write(tmp_path / "lib" / "vendor" / "src" / "Token.sol", "contract Token {}\n")
-    write(tmp_path / "src" / "mocks" / "Token.sol", "contract Token {}\n")
-    write(tmp_path / "src" / "Main.sol", source_with_import("./Token.sol"))
-
-    assert plan_import_spelling_fixes(tmp_path, log_func=log) == []
-    assert any("2 files on disk are named" in message for message in log.messages())
-
-
-def test_an_import_into_an_installed_dependency_is_not_redirected(
-    tmp_path: Path, log: RecordingLog
-) -> None:
-    # The dependency file the import names exists; only the directory chain leading to it is
-    # wrong, which is a dependency-layout problem and not the project's mock's business.
-    write(tmp_path / "lib" / "vendor" / "src" / "tokens" / "Token.sol", "contract Token {}\n")
-    write(tmp_path / "src" / "mocks" / "Token.sol", "contract Token {}\n")
-    write(tmp_path / "src" / "Main.sol", source_with_import("../lib/vendor/tokens/Token.sol"))
-
-    assert plan_import_spelling_fixes(tmp_path, log_func=log) == []
-    assert any("inside a dependency checkout" in message for message in log.messages())
-
-
-def test_an_import_into_an_absent_dependency_is_not_redirected(
-    tmp_path: Path, log: RecordingLog
-) -> None:
-    # No lib/ at all — the state a failed dependency install leaves, and the state in which the
-    # project's own same-named mock is the most tempting wrong answer.
-    write(tmp_path / "src" / "mocks" / "Token.sol", "contract Token {}\n")
-    write(tmp_path / "src" / "Main.sol", source_with_import("../lib/vendor/src/Token.sol"))
-
-    assert plan_import_spelling_fixes(tmp_path, log_func=log) == []
-    assert any("inside a dependency checkout" in message for message in log.messages())
 
 
 def test_a_remapped_prefix_wins_over_a_root_directory_of_the_same_name(
@@ -371,17 +324,17 @@ def test_a_remapped_prefix_wins_over_a_root_directory_of_the_same_name(
 ) -> None:
     # `contracts/` is both a real project directory and a remapping prefix: solc resolves the
     # import through the remapping, so the project tree has no say in where it leads.
-    write(tmp_path / "contracts" / "Readme.sol", "// nothing to import\n")
-    write(tmp_path / "src" / "Token.sol", "contract Token {}\n")
+    write(tmp_path / "contracts" / "TOKEN.sol", "contract Token {}\n")
     write(tmp_path / "src" / "Main.sol", source_with_import("contracts/Token.sol"))
 
-    assert plan_import_spelling_fixes(
+    assert plan_import_case_fixes(
         tmp_path, log_func=log, packages=["contracts/=lib/vendor/contracts/"]
     ) == []
     assert any("remaps the prefix 'contracts/'" in message for message in log.messages())
-    # Without that packages entry the same import is the project's to resolve.
-    assert [r.updated_path for r in plan_import_spelling_fixes(tmp_path, log_func=log)] == [
-        "src/Token.sol"
+    # Without that packages entry the same import is the project's to resolve, and the
+    # directory it names holds one file that answers to the basename case-insensitively.
+    assert [r.updated_path for r in plan_import_case_fixes(tmp_path, log_func=log)] == [
+        "contracts/TOKEN.sol"
     ]
 
 
@@ -391,12 +344,12 @@ def test_crlf_line_endings_survive_apply_and_revert(tmp_path: Path, log: Recordi
     main.write_bytes(source_with_import("./iwidgetstore.sol").replace("\n", "\r\n").encode())
     before = main.read_bytes()
 
-    rewrites = plan_import_spelling_fixes(tmp_path, log_func=log)
-    applied = apply_import_spelling_fixes(rewrites, log_func=log)
+    rewrites = plan_import_case_fixes(tmp_path, log_func=log)
+    applied = apply_import_case_fixes(rewrites, log_func=log)
 
     assert applied and b'"./IWidgetStore.sol"' in main.read_bytes()
     assert main.read_bytes().count(b"\r\n") == before.count(b"\r\n")
-    revert_import_spelling_fixes(applied, log_func=log)
+    revert_import_case_fixes(applied, log_func=log)
     assert main.read_bytes() == before
 
 
@@ -459,7 +412,7 @@ def test_a_commented_out_import_is_not_planned(tmp_path: Path, log: RecordingLog
     )
     before = main.read_bytes()
 
-    assert plan_import_spelling_fixes(root, log_func=log) == []
+    assert plan_import_case_fixes(root, log_func=log) == []
     assert main.read_bytes() == before
 
 
@@ -475,9 +428,9 @@ def test_a_real_import_after_a_commented_one_is_still_fixed(tmp_path: Path, log:
         "contract Main {}\n"
     )
 
-    planned = plan_import_spelling_fixes(root, log_func=log)
+    planned = plan_import_case_fixes(root, log_func=log)
     assert [(r.original_path, r.updated_path) for r in planned] == [("./config.sol", "./Config.sol")]
-    apply_import_spelling_fixes(planned, log_func=log)
+    apply_import_case_fixes(planned, log_func=log)
     assert 'import {Config} from "./Config.sol";' in main.read_text()
     # The commented line is untouched, comment and all.
     assert "// import {Old} from './Old.sol';" in main.read_text()

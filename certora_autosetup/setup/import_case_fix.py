@@ -1,35 +1,30 @@
-"""Rewrite imports whose spelling does not match the file that exists on disk.
+"""Rewrite imports whose letter case does not match the file that exists on disk.
 
 A project authored on a case-insensitive filesystem (macOS, Windows) can carry an import
-whose path differs from the real on-disk path — most often in letter case — and compile for
-its authors while failing everywhere else. This module compares every component of an
-import path against the actual directory entries, and when the filesystem names exactly one
-thing the import was meant to name, rewrites the quoted path literal to that spelling.
+that differs from the real on-disk path in letter case, or that separates its directories
+the Windows way, and compile for its authors while failing everywhere else. This module
+compares every component of an import path against the actual directory entries, and when
+the filesystem names exactly one thing the import was meant to name, rewrites the quoted
+path literal to that spelling.
 
 Detection reads directory entries (``os.scandir``) instead of asking whether a path exists.
-On a case-insensitive filesystem an existence check resolves the mis-spelled path, so a
-fixer built on ``Path.exists`` would report nothing where it is developed and fire only in
+On a case-insensitive filesystem an existence check resolves the mis-cased path, so a fixer
+built on ``Path.exists`` would report nothing where it is developed and fire only in
 production.
 
 In scope: the letter case of the basename, of any directory component, and of the extension;
-Windows separators and repeated slashes; and the right basename in the wrong directory, when
-exactly one file in the project carries that basename.
+and Windows separators and repeated slashes. A path that names no file even case-insensitively
+is left alone — that is an absent file, not a case problem.
 
-Out of scope, each an explicit bail rather than a silent miss:
+Three bails are worth naming, because none of them is visible from the path alone:
 
-- Fuzzy or edit-distance matching. A near-miss name is a different contract, and pointing an
-  import at it yields a project that compiles while verifying code nobody asked about.
-- Guessing at name shape: CamelCase versus snake_case, singular versus plural.
-- Inventing or changing an extension. Only its letter case may change, which follows from
-  matching whole basenames case-insensitively.
-- Renaming files on disk.
-- Imports that resolve through a remapping or package prefix. Repairing those is the
-  ``source_not_found_packages`` workaround's job, which rebuilds the conf's packages list.
-- Imports naming a path inside a dependency checkout that does not resolve. That is a
-  dependency that is absent or laid out differently, and the project's own same-named mock or
-  interface is not what the import asked for.
-- More than one candidate. Two files differing only in case are legal on a case-sensitive
-  filesystem, so an ambiguous match rewrites nothing and says why.
+- An import that resolves through a remapping or package prefix. Where it leads is the conf's
+  business, not the project tree's, and repairing it is the ``source_not_found_packages``
+  workaround's job.
+- A file inside a dependency checkout. Its sources are read, since an import may legitimately
+  point into one, but never rewritten: a dependency install overwrites them.
+- Two directory entries matching the same component case-insensitively. That is legal on a
+  case-sensitive filesystem, and choosing between them would be a guess.
 """
 
 import os
@@ -55,7 +50,7 @@ def _default_log(message: str, level: str = "INFO") -> None:
 
 
 @dataclass(frozen=True)
-class ImportSpellingRewrite:
+class ImportCaseRewrite:
     """One planned replacement of a quoted import path literal.
 
     ``line`` is a 0-based index into the file's ``readlines()`` and ``column`` the offset of
@@ -215,19 +210,6 @@ def inside_dependency_tree(path: Path, project_root: Path) -> bool:
     return any(part in DEPENDENCIES for part in relative.parts)
 
 
-def _index_by_basename(files: Sequence[Path]) -> Dict[str, List[Path]]:
-    """Map lowercased basename -> every file on disk carrying it, dependencies included.
-
-    This is the index behind the "right basename, wrong directory" case, whose condition is
-    that exactly one file on disk carries the basename. A dependency copy is one such file, so
-    it counts towards the ambiguity even though only a project file is ever redirected to.
-    """
-    index: Dict[str, List[Path]] = {}
-    for file in files:
-        index.setdefault(file.name.lower(), []).append(file)
-    return index
-
-
 def mask_comments(lines: Sequence[str]) -> List[str]:
     """The same lines with every comment byte replaced by a space.
 
@@ -342,14 +324,13 @@ def _plan_one_import(
     import_path: str,
     project_root: Path,
     entries: _DirectoryEntries,
-    basename_index: Dict[str, List[Path]],
     remap_prefixes: Sequence[str],
     log_func: LogFunc,
-) -> Optional[ImportSpellingRewrite]:
+) -> Optional[ImportCaseRewrite]:
     """Plan the rewrite for one import statement, or explain why there is none."""
 
     def skip(reason: str) -> None:
-        log_func(f"Import spelling: leaving '{import_path}' in {source_file} alone — {reason}")
+        log_func(f"Import case: leaving '{import_path}' in {source_file} alone — {reason}")
 
     normalized = _normalize_separators(import_path)
     relative = _is_relative_import(normalized)
@@ -380,37 +361,9 @@ def _plan_one_import(
     resolution = _resolve_components(base_dir, components, entries)
     target = resolution.target
     if target is None:
-        # Nothing resolves the path as written. A path that names a location inside a
-        # dependency checkout is out: an absent or differently-laid-out dependency is a
-        # dependency problem, and redirecting such an import at a same-named project file
-        # would verify the project's own mock in place of the dependency it names.
-        named = Path(os.path.normpath(base_dir / normalized))
-        if inside_dependency_tree(named, project_root):
-            skip(f"{resolution.reason}; it names a path inside a dependency checkout")
-            return None
-        # The remaining in-scope case is the right basename in the wrong directory, and only
-        # when exactly one file on disk carries that basename. Two or more is an ambiguity,
-        # none is a genuinely absent file.
-        basename = components[-1]
-        candidates = [
-            candidate
-            for candidate in basename_index.get(basename.lower(), [])
-            if candidate != source_file
-        ]
-        if len(candidates) != 1:
-            skip(
-                f"{resolution.reason}; {len(candidates)} files on disk are named "
-                f"'{basename}' (case-insensitively)"
-            )
-            return None
-        target = candidates[0]
-        if inside_dependency_tree(target, project_root):
-            skip(
-                f"{resolution.reason}; the only file named '{basename}' is {target}, inside a "
-                f"dependency checkout"
-            )
-            return None
-    elif resolution.exact and normalized == import_path:
+        skip(str(resolution.reason))
+        return None
+    if resolution.exact and normalized == import_path:
         return None
 
     updated_path = _derive_import_text(target, source_file, project_root, relative)
@@ -425,7 +378,7 @@ def _plan_one_import(
         skip(str(reason))
         return None
     line_index, column, needle = located
-    return ImportSpellingRewrite(
+    return ImportCaseRewrite(
         file=source_file,
         line=line_index,
         column=column,
@@ -434,12 +387,12 @@ def _plan_one_import(
     )
 
 
-def plan_import_spelling_fixes(
+def plan_import_case_fixes(
     project_root: Path,
     log_func: Optional[LogFunc] = None,
     compiler_output: str = "",
     packages: Sequence[str] = (),
-) -> List[ImportSpellingRewrite]:
+) -> List[ImportCaseRewrite]:
     """Plan every import rewrite the filesystem decides, for the project at ``project_root``.
 
     The scan is independent of how the compilation failure was classified: a mis-cased import
@@ -460,16 +413,15 @@ def plan_import_spelling_fixes(
         unresolved = parse_unresolved_imports(compiler_output)
         if unresolved:
             log(
-                "Import spelling: solc reported unresolved imports: "
+                "Import case: solc reported unresolved imports: "
                 + ", ".join(f"'{source}'" for source, _ in unresolved)
             )
 
     all_files = walk_files_by_suffix(project_root, SOLIDITY_SUFFIX)
     entries = _DirectoryEntries()
-    basename_index = _index_by_basename(all_files)
     remap_prefixes = package_prefixes(list(packages))
 
-    rewrites: List[ImportSpellingRewrite] = []
+    rewrites: List[ImportCaseRewrite] = []
     for source_file in all_files:
         if inside_dependency_tree(source_file, project_root):
             continue
@@ -479,7 +431,7 @@ def plan_import_spelling_fixes(
             with open(source_file, "r", encoding="utf-8", newline="") as handle:
                 lines = handle.readlines()
         except (OSError, UnicodeDecodeError) as error:
-            log(f"Import spelling: cannot read {source_file}: {error}", "WARNING")
+            log(f"Import case: cannot read {source_file}: {error}", "WARNING")
             continue
 
         # Scanning and locating both run over the comment-masked copy, so a commented-out
@@ -495,19 +447,18 @@ def plan_import_spelling_fixes(
                 import_path=import_path,
                 project_root=project_root,
                 entries=entries,
-                basename_index=basename_index,
                 remap_prefixes=remap_prefixes,
                 log_func=log,
             )
             if rewrite is not None:
                 rewrites.append(rewrite)
 
-    log(f"Import spelling: planned {len(rewrites)} rewrite(s)")
+    log(f"Import case: planned {len(rewrites)} rewrite(s)")
     return rewrites
 
 
 def _prefix_shifts(
-    rewrites: Sequence[ImportSpellingRewrite],
+    rewrites: Sequence[ImportCaseRewrite],
 ) -> Dict[Tuple[int, int], int]:
     """Per rewrite, how far its recorded column moves once the ones left of it are applied.
 
@@ -515,7 +466,7 @@ def _prefix_shifts(
     share a line, and then applying the left one moves the right one's column by the
     difference in literal lengths. Keyed by ``(line, column)``, which is unique within a plan.
     """
-    by_line: Dict[int, List[ImportSpellingRewrite]] = {}
+    by_line: Dict[int, List[ImportCaseRewrite]] = {}
     for rewrite in rewrites:
         by_line.setdefault(rewrite.line, []).append(rewrite)
 
@@ -529,10 +480,10 @@ def _prefix_shifts(
 
 
 def _write_replacements(
-    rewrites: Sequence[ImportSpellingRewrite],
+    rewrites: Sequence[ImportCaseRewrite],
     revert: bool,
     log_func: LogFunc,
-) -> List[ImportSpellingRewrite]:
+) -> List[ImportCaseRewrite]:
     """Replace one recorded slice per rewrite, verifying each before writing.
 
     Within a line, applying runs left to right and reverting right to left, so in both
@@ -542,27 +493,27 @@ def _write_replacements(
     overwritten. Both texts are single-line, so the file's line count is untouched.
     """
     action = "reverted" if revert else "rewrote"
-    by_file: Dict[Path, List[ImportSpellingRewrite]] = {}
+    by_file: Dict[Path, List[ImportCaseRewrite]] = {}
     for rewrite in rewrites:
         by_file.setdefault(rewrite.file, []).append(rewrite)
 
-    written: List[ImportSpellingRewrite] = []
+    written: List[ImportCaseRewrite] = []
     for file, file_rewrites in by_file.items():
         try:
             with open(file, "r", encoding="utf-8", newline="") as handle:
                 lines = handle.readlines()
         except (OSError, UnicodeDecodeError) as error:
-            log_func(f"Import spelling: cannot read {file}: {error}", "WARNING")
+            log_func(f"Import case: cannot read {file}: {error}", "WARNING")
             continue
 
         shifts = _prefix_shifts(file_rewrites)
-        applied_here: List[ImportSpellingRewrite] = []
+        applied_here: List[ImportCaseRewrite] = []
         for rewrite in sorted(file_rewrites, key=lambda r: (r.line, r.column), reverse=revert):
             expected = rewrite.updated if revert else rewrite.original
             replacement = rewrite.original if revert else rewrite.updated
             if rewrite.line >= len(lines):
                 log_func(
-                    f"Import spelling: {file} has no line {rewrite.line + 1} any more, "
+                    f"Import case: {file} has no line {rewrite.line + 1} any more, "
                     f"skipping {action} of {expected}",
                     "WARNING",
                 )
@@ -572,7 +523,7 @@ def _write_replacements(
             found = line[column: column + len(expected)]
             if found != expected:
                 log_func(
-                    f"Import spelling: {file}:{rewrite.line + 1} no longer holds {expected} "
+                    f"Import case: {file}:{rewrite.line + 1} no longer holds {expected} "
                     f"at column {column} (found {found!r}), skipping {action}",
                     "WARNING",
                 )
@@ -588,33 +539,32 @@ def _write_replacements(
             with open(file, "w", encoding="utf-8", newline="") as handle:
                 handle.writelines(lines)
         except OSError as error:
-            log_func(f"Import spelling: cannot write {file}: {error}", "ERROR")
+            log_func(f"Import case: cannot write {file}: {error}", "ERROR")
             continue
         for rewrite in applied_here:
             old, new = (
                 (rewrite.updated, rewrite.original) if revert
                 else (rewrite.original, rewrite.updated)
             )
-            # At WARNING because masking a genuinely absent file — a shallow clone, an
-            # uninitialised submodule, a deleted dependency — looks exactly like a spelling
-            # fix from here, so every rewrite has to be visible in the log.
+            # At WARNING because this edits the project's own sources, and the person
+            # reading a failed run's log needs to see which imports were touched.
             log_func(
-                f"Import spelling: {file}:{rewrite.line + 1} {action} {old} -> {new}",
+                f"Import case: {file}:{rewrite.line + 1} {action} {old} -> {new}",
                 "WARNING",
             )
         written.extend(applied_here)
     return written
 
 
-def apply_import_spelling_fixes(
-    rewrites: Sequence[ImportSpellingRewrite], log_func: Optional[LogFunc] = None
-) -> List[ImportSpellingRewrite]:
+def apply_import_case_fixes(
+    rewrites: Sequence[ImportCaseRewrite], log_func: Optional[LogFunc] = None
+) -> List[ImportCaseRewrite]:
     """Write the planned rewrites; returns the ones that were written."""
     return _write_replacements(rewrites, revert=False, log_func=log_func or _default_log)
 
 
-def revert_import_spelling_fixes(
-    rewrites: Sequence[ImportSpellingRewrite], log_func: Optional[LogFunc] = None
-) -> List[ImportSpellingRewrite]:
+def revert_import_case_fixes(
+    rewrites: Sequence[ImportCaseRewrite], log_func: Optional[LogFunc] = None
+) -> List[ImportCaseRewrite]:
     """Put the imports back the way they were spelled; returns the ones reverted."""
     return _write_replacements(rewrites, revert=True, log_func=log_func or _default_log)
