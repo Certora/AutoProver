@@ -293,7 +293,16 @@ class AnthropicModelProvider:
         return ChatAnthropic(
             model_name=self.model_name,
             max_tokens_to_sample=opts.tokens,
-            timeout=None,
+            # An explicit None DISABLES the SDK's timeouts (None != not-given), so a
+            # socket that dies silently mid-stream hangs the session forever. A float
+            # is a per-phase httpx timeout — for a streamed response, the max silence
+            # between chunks, not a cap on the whole turn.
+            timeout=300.0,
+            # Stream every request: a long authoring turn (Opus + thinking on a large
+            # prompt) can exceed the SDK's 600s non-streaming ceiling, and a silent
+            # 10-minute wait is long enough for NAT/idle killers to drop the socket
+            # (surfaces as APIConnectionError mid-run). Streaming keeps bytes flowing.
+            streaming=True,
             max_retries=8,
             stop=None,
             betas=betas,

@@ -37,6 +37,7 @@ from composer.foundry.pipeline import (
     FoundryPhase, FoundryPipelineResult, backend
 )
 from composer.pipeline.cli import cli_pipeline, user_ns, AtExit
+from composer.pipeline.run_mode import RunMode
 from composer.pipeline.ptypes import DEFAULT_MAX_CPU_TASKS
 from composer.pipeline.ecosystem import EVM
 
@@ -107,8 +108,11 @@ def _usage_exit_logger(summary: RunSummary) -> AtExit:
         except Exception:
             _log.exception("failed to log foundry usage to run data")
         try:
+            # The foundry entry point does not expose --run-mode: the focus protections
+            # live in the CVL author, so a pruned foundry batch would get the narrowing
+            # without the discipline. It is always comprehensive.
             FoundryArtifactStore(run.project_root).write_job_info(
-                summary, user_id=get_uid()
+                summary, user_id=get_uid(), run_mode=RunMode.COMPREHENSIVE.value
             )
         except Exception:
             _log.exception("failed to dump foundry job info")
