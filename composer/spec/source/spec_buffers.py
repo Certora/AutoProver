@@ -124,6 +124,12 @@ def buffer_digest(
     (e.g. skipped-property or conf-flag markers). Editing the buffer OR any buffer it imports changes
     the digest, so it keys the buffer's cached verify/review. Mirrors
     :meth:`ContentCache.compute_cache_key` (content-keyed, order-independent)."""
+    # TODO: a pure-comment edit (e.g. reframing a property's justification docstring) changes this
+    # digest and forces the prover to re-verify identical logic — a wasted job. A comment-stripped
+    # normalization would avoid that, but note this digest also keys the *feedback* review, and the
+    # judge legitimately reads justification comments — so stripping comments here would wrongly skip
+    # re-review after a comment-only edit. So find a solution to avoid running
+    # prover just because of comment-only change.
     parts = [f"{b.name}:{hash_text(b.cvl)}" for b in import_closure(buffers, name)]
     parts += [f"extra:{p}" for p in extra_parts]
     return hash_content_parts(parts)
