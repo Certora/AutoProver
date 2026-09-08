@@ -177,9 +177,9 @@ rather than leaving the judge to notice.
    doing the wrong thing.
 2. **One global per type aliases every account of that type.** A handler reading two `StakePool`
    accounts sees one value. For these three handlers there is exactly one, which is why the
-   normative verification gets away with it — but nothing in the kind enforces that, and a unit whose
-   handler takes a source and a destination of the same type would be verified against a program
-   that cannot distinguish them. **This is the sharpest unsoundness and the one a check must carry.**
+   normative verification gets away with it. **This is the sharpest unsoundness** — and §11 is the
+   corpus survey of how three projects actually handle it, which supplies a better check than the
+   declaration this section originally proposed.
 3. **Error paths from deserialization vanish.** `try_from_slice` returning `Ok` unconditionally
    prunes every execution that would have failed there — the same direction as `early_panic`, so the
    same restriction applies: it cannot make an *acceptance* property statable.
@@ -195,8 +195,10 @@ late:
 2. **A type not defined in this project.** A foreign type cannot have its derives edited, and the
    author's impl would break the orphan rule.
 3. **More than one account of the swapped type reachable in the unit's handlers.** §6.2. Not
-   statically decidable in general; the tractable version is to require the author to *declare* the
-   count and the reviewer to check it against the handler's account list, refusing when it is >1.
+   statically decidable, and the corpus says not to try: §11's answer is to model a bounded number
+   of instances and make exceeding the bound a *reported violation* rather than a refusal. So this
+   is not a record-time refusal at all — it is a shape the author's stand-ins must have, and the
+   reviewer's job is to check that the fall-through asserts rather than aliasing silently.
 4. **A second swap of the same type for one unit** — last-write-wins on a type is not a thing the
    dep-info check can see.
 5. **`added` containing a trait with a blanket impl conflict** — the compile gate catches this, but
@@ -278,3 +280,60 @@ rule. The program's own `try_from_slice_unchecked` and `borsh::to_writer` calls 
 **What arm B does not establish.** That the rule is *true* of the deployed program: it is true of a
 program whose `StakePool` round trip is the identity on a havoc'd global, and §6 is the list of what
 that costs. The verified sanity rule rules out the cheapest way to be wrong, not the interesting one.
+
+
+---
+
+## 11. How the corpus models more than one instance
+
+The survey §6.2 needed. Of the local checkouts, four use `alloc_havoced`; three use it for state
+indirection and they do not agree:
+
+| project | shape | instances | what happens past the bound |
+|---|---|---|---|
+| **stake-pool** | one `static mut *mut StakePool`; the borsh impls redirect to it | 1 | nothing — no second instance is representable |
+| **manifest** | named globals per instance (`MAIN_SEAT_PK`, `SECOND_SEAT_PK`, …) over one fixed backing array with constant indices; the accessors dispatch on the index | 2 seats, 1 bid, 1 ask | **`cvt_assert!(false)`** |
+| **fluid** | `[MaybeUninit<RefCell<T>>; 2]` per type, behind a `LoadMock::load(idx)` trait | 2 allocated | index discarded — see below |
+
+(The fourth, `smart-account`, uses `alloc_havoced` to build a nondet `Vec<T>` rather than to model
+state, and is not this pattern at all.)
+
+**Manifest is the one to copy.** It is the only one that makes the bound observable:
+
+```rust
+pub fn get_helper_seat(_data: &[u8], index: DataIndex) -> &'static RBNode<ClaimedSeat> {
+    if index == main_trader_index()        { get_helper(&*SEAT_DATA, MAIN_SEAT_DATA_IDX) }
+    else if index == second_trader_index() { get_helper(&*SEAT_DATA, SECOND_SEAT_DATA_IDX) }
+    else { cvt_assert!(false); /* unreachable, protected by the assert */ }
+}
+```
+
+Aliasing stops being a silent modelling error and becomes a failing rule. That is a much better
+answer than requiring the author to declare an instance count and the reviewer to believe it: the
+bound is enforced by the same machinery that checks everything else, and a rule that reaches a third
+seat *fails*, with a counterexample naming the index.
+
+It also generalises past accounts. The discriminator is whatever the program uses to tell instances
+apart — a `DataIndex` here, a `Pubkey` elsewhere — and the stand-in dispatches on it.
+
+**Fluid is the cautionary half, and worth reading before copying anything.** All three of its
+`load`/`load_mut` implementations take an index and ignore it:
+
+```rust
+fn load<'a>(&'a self, _: u32) -> Result<Ref<'a, Branch>> {
+    let branch = unsafe { BRANCH_DB[0].assume_init_ref() };   // always [0]
+    ...
+}
+```
+
+Two elements are allocated and havoc'd; element 1 is never read. Whether that is deliberate — the
+properties may only ever touch one branch — or vestigial is not something this survey can settle,
+and no assert distinguishes the two. What it does show is that **the array is not the safeguard**:
+allocating N instances and then collapsing them in the lookup is indistinguishable, from inside a
+verdict, from having modelled one. Manifest's fall-through assert is the difference between a
+bounded model and a silent one, and it costs three lines.
+
+So the guidance the seventh kind should carry is: *one global is fine when one instance is all the
+handler can reach; past that, dispatch on the program's own discriminator and assert on the
+fall-through.* The check is in the stand-in, not in the munge record — which is consistent with the
+rest of the design, since the stand-ins are the author's and the munge is only the derive swap.
