@@ -13,6 +13,7 @@ from pathlib import Path
 from dataclasses import dataclass
 
 from certora_autosetup.build_systems.base import BuildSystemConfig
+from certora_autosetup.build_systems.config_files import HARDHAT_CONFIG_FILENAMES
 from certora_autosetup.build_systems.manager import BuildSystemManager
 
 
@@ -91,7 +92,7 @@ class HardhatManager(BuildSystemManager):
 
     def get_config_filenames(self) -> List[str]:
         """Return list of config filenames to search for."""
-        return ["hardhat.config.js", "hardhat.config.ts"]
+        return list(HARDHAT_CONFIG_FILENAMES)
 
     def parse_config(self, config_file: Path, profile: str | None = None) -> HardhatConfig:
         """

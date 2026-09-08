@@ -103,6 +103,12 @@ class UntitledPropertyFormulation(BaseModel):
             case "safety_property":
                 return "Safety Property"
 
+type PropertyKey = tuple[ComponentName, PropertyTitle]
+"""A property's identity across a run: ``(component, title)``. Titles are unique within a
+component, so the pair is unique run-wide — it is what the report's groups cross-reference and
+what the prioritizer names when it points at one of many components' candidates."""
+
+
 class PropertyFormulation(UntitledPropertyFormulation):
     """
     A property or invariant that must hold for the component
