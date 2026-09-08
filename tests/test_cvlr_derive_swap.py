@@ -240,3 +240,22 @@ def test_the_gate_names_the_recording_unit(feature: str) -> None:
     out = _applied(feature=feature)
 
     assert f'feature = "{feature}"' in out
+
+
+# ---------------------------------------------------------------------------------------------
+# two edits in one step
+
+
+def test_two_edits_in_one_step_do_not_kill_the_component() -> None:
+    """Run 9 died here after 21 minutes.
+
+    Every edit tool writes `reviewed_digest`, and the model may call two in one step — which is
+    legitimate, and which `proposed` already merges. Without a reducer LangGraph rejects the step
+    with `InvalidUpdateError` and the component is lost. The bug was latent before there was a
+    third edit tool; adding one made parallel calls likely enough to hit it.
+    """
+    from composer.spec.cvlr.editor import _latest_review
+
+    assert _latest_review("approved-digest", None) is None, "an edit voids a standing approval"
+    assert _latest_review(None, None) is None, "two edits in one step fold to no approval"
+    assert _latest_review(None, "fresh") == "fresh", "a later review can still set one"
