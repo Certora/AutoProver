@@ -14,7 +14,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from graphcore.tools.vfs import VFSState, VFSAccessor
-from composer.prover.core import run_prover_inner
+from composer.prover.core import BUILD_TIMEOUT_S, run_prover_inner
 
 
 @dataclass(frozen=True)
@@ -131,6 +131,7 @@ async def check_edits_compile(
             [_CONF_NAME, "--build_only"],
             _noop_err,
             _noop_stdout,
+            BUILD_TIMEOUT_S,
         )
 
         # run_prover_inner surfaces a hard subprocess failure as a str; the

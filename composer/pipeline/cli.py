@@ -33,6 +33,7 @@ from composer.spec.service_host import ModelProvider
 from composer.spec.types import SourceIdentifier
 from composer.pipeline.ecosystem import Ecosystem
 from .core import PipelineBackend, run_pipeline
+from .run_mode import RunMode
 from .plugins import applicable_plugin_manifest
 from .run_tags import AutoProveCacheTags, CACHE_ROOT_RECORD
 from composer.io.multi_job import HandlerFactory, run_task, TaskInfo
@@ -133,6 +134,16 @@ class BudgetFile(BaseModel):
         )
 
 
+def parse_budget_scalar(total: float) -> RunBudget:
+    """A pool-only run budget: ``total`` USD with no per-phase ceilings (every cap
+    defaults to ``total``, so only the pool ever trips). The scalar form of a budget
+    file, behind ``--budget-total``."""
+    try:
+        return BudgetFile(total=total).to_run_budget()
+    except ValidationError as e:
+        raise ValueError(f"invalid --budget-total {total}: {e}") from e
+
+
 def parse_budget_file(path: pathlib.Path) -> RunBudget:
     """Parse a run-budget file (JSON, or YAML when PyYAML is installed) into a `RunBudget`.
     See :class:`BudgetFile` for the schema."""
@@ -150,6 +161,20 @@ def parse_budget_file(path: pathlib.Path) -> RunBudget:
         return BudgetFile.model_validate(raw).to_run_budget()
     except ValidationError as e:
         raise ValueError(f"invalid budget file {path}: {e}") from e
+
+
+def resolve_budget(budget: str | None, budget_total: float | None) -> RunBudget | None:
+    """The run's budget from the two flags that can express one, or None when neither
+    was given. They are alternative spellings of the same thing, so passing both is a
+    caller error rather than something to reconcile — the parsers reject it as a
+    mutually exclusive group, and this catches callers that build args directly."""
+    if budget is not None and budget_total is not None:
+        raise ValueError("--budget and --budget-total are mutually exclusive")
+    if budget is not None:
+        return parse_budget_file(pathlib.Path(budget))
+    if budget_total is not None:
+        return parse_budget_scalar(budget_total)
+    return None
 
 
 class PipelineArgs(ExtendedModelOptions, Protocol):
@@ -210,6 +235,12 @@ class PipelineArgs(ExtendedModelOptions, Protocol):
         ...
 
     @property
+    def budget_total(self) -> float | None:
+        """The run pool in USD, as a scalar alternative to ``budget`` (see
+        :func:`parse_budget_scalar`). At most one of the two is set; None for neither."""
+        ...
+
+    @property
     def time_budget(self) -> float | None:
         """
         Time in floating point seconds that autoprover should run. None to run with unlimited, in process timeout
@@ -249,13 +280,14 @@ async def cli_pipeline[P: enum.Enum, H](
     task_handler: HandlerFactory[P, H],
     design_doc_phase: P,
     at_exit: AtExit | None = None,
+    run_mode: RunMode = RunMode.COMPREHENSIVE,
     **metadata
 ) -> AsyncIterator[tuple[StagedPipeline, Continuation[P, H]]]:
     project_root = pathlib.Path(args.project_root).resolve()
     main_contract_path, contract_name = args.main_contract.split(":", 1)
 
-    # Parse the budget up front so a malformed file fails before any services spin up.
-    budget = parse_budget_file(pathlib.Path(args.budget)) if args.budget is not None else None
+    # Resolve the budget up front so a malformed one fails before any services spin up.
+    budget = resolve_budget(args.budget, args.budget_total)
 
     full_contract_path = pathlib.Path(main_contract_path).resolve()
     if not full_contract_path.is_relative_to(project_root):
@@ -399,6 +431,7 @@ async def cli_pipeline[P: enum.Enum, H](
                     threat_model_digest=threat_model.to_digest() if threat_model is not None else None,
                     extra_context_digests=[d.to_digest() for d in extra_context],
                     interactive=args.interactive,
+                    run_mode=run_mode.value,
                 ).model_dump())
                 full_ctx = WorkflowContext.create(
                     services=conns.memory,
@@ -412,6 +445,7 @@ async def cli_pipeline[P: enum.Enum, H](
                     ctx=full_ctx,
                     source=full_source,
                     env=env,
+                    run_mode=run_mode,
                     _agent_semaphore=semaphore,
                     _cpu_semaphore=cpu_semaphore,
                     _handler_factory=task_handler

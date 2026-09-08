@@ -37,6 +37,7 @@ from composer.foundry.pipeline import (
     FoundryPhase, FoundryPipelineResult, backend
 )
 from composer.pipeline.cli import cli_pipeline, user_ns, AtExit
+from composer.pipeline.run_mode import RunMode
 from composer.pipeline.ptypes import DEFAULT_MAX_CPU_TASKS
 from composer.pipeline.ecosystem import EVM
 
@@ -74,6 +75,7 @@ class FoundryArgs(ExtendedModelOptions, FoundryRAGDBOptions, Protocol):
     forge_timeout_s: int
     max_forge_runners: int
     budget: str | None
+    budget_total: float | None
     time_budget: float | None
     extra_context: list[str] | None
 
@@ -107,8 +109,11 @@ def _usage_exit_logger(summary: RunSummary) -> AtExit:
         except Exception:
             _log.exception("failed to log foundry usage to run data")
         try:
+            # The foundry entry point does not expose --run-mode: the focus protections
+            # live in the CVL author, so a pruned foundry batch would get the narrowing
+            # without the discipline. It is always comprehensive.
             FoundryArtifactStore(run.project_root).write_job_info(
-                summary, user_id=get_uid()
+                summary, user_id=get_uid(), run_mode=RunMode.COMPREHENSIVE.value
             )
         except Exception:
             _log.exception("failed to dump foundry job info")
@@ -137,7 +142,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-bug-rounds", type=int, default=3, help="Max bug-extraction rounds per component (default: 3)")
     parser.add_argument("--forge-binary", default="forge", help="`forge` executable on PATH (default: forge)")
     parser.add_argument("--forge-timeout-s", type=int, default=600, help="Per-`forge test` invocation timeout in seconds (default: 600)")
-    parser.add_argument("--budget", default=None, help="Path to a run-budget file (JSON or YAML): {total: USD, caps: {phase: USD, ...}}. Omit to run unbudgeted.")
+    # One budget, two spellings: the file shapes spend across phases, the scalar
+    # sets the pool alone. argparse reports taking both, and renders the choice in
+    # --help; resolve_budget re-checks it for callers that skip the parser.
+    budget_group = parser.add_mutually_exclusive_group()
+    budget_group.add_argument("--budget", default=None, help="Path to a run-budget file (JSON or YAML): {total: USD, caps: {phase: USD, ...}}. Omit to run unbudgeted.")
+    budget_group.add_argument("--budget-total", default=None, type=float, help="The run pool in USD as a bare number — the budget file's `total` with no per-phase caps. Omit both budget flags to run unbudgeted.")
     parser.add_argument("--time-budget", default=None, type=float, help="Total wall time to run the entire execution. Omit to run without in process limit")
     add_extra_context_args(parser)
     parser.set_defaults(threat_model=None)

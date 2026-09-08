@@ -10,8 +10,10 @@ absent-forge cases exercise the file-reading fallback (foundry.toml + remappings
 package.json), and the present-forge case feeds canned output to assert priority.
 """
 
+import shutil
 import subprocess
 from pathlib import Path
+from typing import Tuple
 
 import pytest
 
@@ -693,3 +695,242 @@ def test_parse_config_emits_run_root_relative_hoisted_packages(tmp_path: Path, m
 
     # Relative (no `../`, no absolute fallback): the walk never leaves the run root.
     assert packages == ["@vault/=node_modules/@vault/core/contracts"]
+
+
+# =============================================================================
+# Several projects under one run root: context-scoped entries
+# =============================================================================
+#
+# A run root can hold more than one built project, each declaring its own resolution for the
+# same package prefix. solc matches a remapping context against the importing file's source
+# unit name and prefers the longest match, so every project other than the anchor contributes
+# `<project>/:prefix=target` entries that govern its own files, while the anchor's unscoped
+# entries stay the default for every file no context claims.
+
+_SAME_PREFIX_REMAPPING = "@pkg/contracts/=node_modules/@pkg/contracts/\n"
+
+
+def _build_project(project: Path, remappings: str = _SAME_PREFIX_REMAPPING) -> Path:
+    """A Foundry project that compiled: a config (which is how discovery recognises it), an
+    artifact dir and its own installed copy of the remapped package.
+
+    The copy is really created: an absent target keeps the base-dir path and only warns, so a
+    forgotten mkdir would let a wrong result pass for a right one.
+    """
+    (project / "out").mkdir(parents=True, exist_ok=True)
+    (project / "foundry.toml").write_text("[profile.default]\n")
+    (project / "remappings.txt").write_text(remappings)
+    (project / "node_modules" / "@pkg" / "contracts").mkdir(parents=True, exist_ok=True)
+    return project
+
+
+def _two_project_repo(tmp_path: Path) -> Tuple[Path, Path]:
+    """Two built projects side by side under the run root, both binding @pkg/contracts/ to
+    their own node_modules copy."""
+    return _build_project(tmp_path / "app"), _build_project(tmp_path / "other")
+
+
+def test_a_sibling_project_binds_the_shared_prefix_to_its_own_copy(
+    tmp_path: Path, monkeypatch
+) -> None:
+    app, other = _two_project_repo(tmp_path)
+    _no_forge(monkeypatch)
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=app, log_fn=lambda *_: None, run_root=tmp_path
+    )
+
+    assert _path_of(packages, "@pkg/contracts/") == str(app / "node_modules/@pkg/contracts") + "/"
+    assert (
+        _path_of(packages, "other/:@pkg/contracts/")
+        == str(other / "node_modules/@pkg/contracts") + "/"
+    )
+
+
+def test_a_sibling_target_that_is_absent_leaves_the_prefix_alone(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # A scoped entry outranks the global one for every file under it, so a target already known
+    # to be missing must not replace a binding that may work.
+    app, other = _two_project_repo(tmp_path)
+    shutil.rmtree(other / "node_modules")
+    _no_forge(monkeypatch)
+    logged: list = []
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=app, log_fn=lambda m, level: logged.append((m, level)), run_root=tmp_path
+    )
+    anchor_only = build_packages_from_remapping_sources(base_dir=app, log_fn=lambda *_: None)
+
+    assert not [key for key in _keys(packages) if key.startswith("other/:")]
+    assert packages == anchor_only
+    warnings = [m for m, level in logged if level == "WARNING"]
+    assert any(
+        "@pkg/contracts/" in m
+        and str(other / "node_modules/@pkg/contracts") in m
+        and str(app / "node_modules/@pkg/contracts") in m
+        for m in warnings
+    ), warnings
+
+
+def test_a_projects_own_context_is_not_prefixed_twice(tmp_path: Path, monkeypatch) -> None:
+    # This project's authored context names a directory it really has, so `_rebase_context`
+    # expresses it run-root-relative and it is taken as it stands; prefixing it again would
+    # name nothing on disk.
+    app, other = _two_project_repo(tmp_path)
+    (other / "node_modules" / "dep").mkdir(parents=True)
+    (other / "node_modules" / "@pkg" / "alt").mkdir(parents=True)
+    (other / "remappings.txt").write_text(
+        "node_modules/dep/:@pkg/contracts/=node_modules/@pkg/alt/\n"
+    )
+    _no_forge(monkeypatch)
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=app, log_fn=lambda *_: None, run_root=tmp_path
+    )
+
+    assert (
+        _path_of(packages, "other/node_modules/dep/:@pkg/contracts/")
+        == str(other / "node_modules/@pkg/alt") + "/"
+    )
+    assert not [key for key in _keys(packages) if key.count(":") > 1]
+
+
+def test_a_sibling_context_naming_nothing_is_confined_to_the_sibling(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # `_rebase_context` leaves a context alone when it names no directory in the project, so
+    # the authored spelling reaches here as it stands. Emitted verbatim it would be longer than
+    # the anchor's empty context and would govern every file whose source unit name starts with
+    # it — the anchor's own files included.
+    # The anchor sits at the run root, so its own source unit names start with `vendored/` —
+    # the very prefix the sibling's context spells.
+    app = _build_project(tmp_path)
+    other = _build_project(tmp_path / "other")
+    (app / "vendored").mkdir()
+    (other / "node_modules" / "@pkg" / "alt").mkdir(parents=True)
+    (other / "remappings.txt").write_text("vendored/:@pkg/contracts/=node_modules/@pkg/alt/\n")
+    _no_forge(monkeypatch)
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=app, log_fn=lambda *_: None, run_root=tmp_path
+    )
+
+    assert (
+        _path_of(packages, "other/vendored/:@pkg/contracts/")
+        == str(other / "node_modules/@pkg/alt") + "/"
+    )
+    assert _keys(packages) == {"@pkg/contracts/", "other/vendored/:@pkg/contracts/"}
+
+
+def test_the_scoped_context_keeps_its_boundary_slash(tmp_path: Path, monkeypatch) -> None:
+    # The context is a source-unit-name prefix whose boundary is the slash: without it,
+    # `other` would also claim the files of a sibling named `other-tools`.
+    app, _other = _two_project_repo(tmp_path)
+    _build_project(tmp_path / "other-tools")
+    _no_forge(monkeypatch)
+
+    keys = _keys(
+        build_packages_from_remapping_sources(
+            base_dir=app, log_fn=lambda *_: None, run_root=tmp_path
+        )
+    )
+
+    assert "other/:@pkg/contracts/" in keys
+    assert "other:@pkg/contracts/" not in keys
+    assert "other-tools/:@pkg/contracts/" in keys
+
+
+def test_single_project_packages_are_identical_with_and_without_run_root(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The ordinary repo: one project at the run root with its vendored trees. Nothing else is
+    # built under it, so the list must come out byte-identical to the no-run-root result and
+    # carry no context at all.
+    _build_project(tmp_path)
+    (tmp_path / "lib" / "widget").mkdir(parents=True)
+    _no_forge(monkeypatch)
+    (tmp_path / "remappings.txt").write_text(
+        _SAME_PREFIX_REMAPPING + "widget/=lib/widget/\n@absent/pkg/=node_modules/@absent/pkg/\n"
+    )
+
+    with_root = build_packages_from_remapping_sources(
+        base_dir=tmp_path, log_fn=lambda *_: None, run_root=tmp_path
+    )
+    without_root = build_packages_from_remapping_sources(base_dir=tmp_path, log_fn=lambda *_: None)
+
+    assert with_root == without_root
+    assert not [key for key in _keys(with_root) if ":" in key]
+
+
+def test_a_sibling_whose_build_failed_is_still_scoped(tmp_path: Path, monkeypatch) -> None:
+    # A project whose own build failed has no artifact directory, and its resolution is
+    # precisely what the failure is about — a config declares the resolution whether or not
+    # anything came of it.
+    app, _other = _two_project_repo(tmp_path)
+    unbuilt = _build_project(tmp_path / "unbuilt")
+    shutil.rmtree(unbuilt / "out")
+    _no_forge(monkeypatch)
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=app, log_fn=lambda *_: None, run_root=tmp_path
+    )
+
+    assert (
+        _path_of(packages, "unbuilt/:@pkg/contracts/")
+        == str(unbuilt / "node_modules/@pkg/contracts") + "/"
+    )
+
+
+def test_projects_inside_vendored_dependencies_are_never_walked(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # A built project under lib/ or node_modules/ belongs to a dependency, not to the repo
+    # under analysis, and its files are not the ones the conf verifies.
+    app, _other = _two_project_repo(tmp_path)
+    _build_project(app / "lib" / "dep")
+    _build_project(tmp_path / "node_modules" / "pkg")
+    _no_forge(monkeypatch)
+
+    keys = _keys(
+        build_packages_from_remapping_sources(
+            base_dir=app, log_fn=lambda *_: None, run_root=tmp_path
+        )
+    )
+
+    assert not [key for key in keys if "lib/dep" in key or "node_modules/pkg" in key]
+
+
+def test_a_project_nested_under_the_anchor_is_scoped(tmp_path: Path, monkeypatch) -> None:
+    # Its context is longer than the anchor's globals, hence more specific — which is exactly
+    # what solc should prefer for its own files.
+    app, _other = _two_project_repo(tmp_path)
+    nested = _build_project(app / "modules" / "inner")
+    _no_forge(monkeypatch)
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=app, log_fn=lambda *_: None, run_root=tmp_path
+    )
+
+    assert (
+        _path_of(packages, "app/modules/inner/:@pkg/contracts/")
+        == str(nested / "node_modules/@pkg/contracts") + "/"
+    )
+
+
+def test_the_run_root_and_the_anchors_ancestors_are_never_scoped(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # An ancestor's context prefixes the anchor's own source unit names too, and being longer
+    # than the empty context it would outrank the anchor's globals for exactly those files.
+    app = tmp_path / "packages" / "app"
+    for project in (tmp_path, tmp_path / "packages", app):
+        _build_project(project)
+    _no_forge(monkeypatch)
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=app, log_fn=lambda *_: None, run_root=tmp_path
+    )
+
+    assert _keys(packages) == {"@pkg/contracts/"}
+    assert _path_of(packages, "@pkg/contracts/") == str(app / "node_modules/@pkg/contracts") + "/"

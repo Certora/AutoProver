@@ -195,6 +195,7 @@ async def _main() -> int:
 
             mental_model = build_mental_model(
                 source_root=source_root_path,
+                forbidden_read=forbidden_read,
                 config_init=config_init,
             )
 
