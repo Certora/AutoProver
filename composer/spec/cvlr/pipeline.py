@@ -297,7 +297,7 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
                     applied_edits=[
                         AppliedEditRecord(
                             edit_id=m.edit_id,
-                            executive_summary=f"{m.function} in {m.path}: {m.describe()}",
+                            executive_summary=f"{m.subject} in {m.path}: {m.describe()}",
                             why_sound=m.why,
                         )
                         for m in harness.munges

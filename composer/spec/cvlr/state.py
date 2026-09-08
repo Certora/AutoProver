@@ -262,7 +262,7 @@ class HarnessAssumptions:
                 "likewise absent from the harness:"
             )
             parts += [
-                f"  {m.function} ({m.path}): {m.describe()}\n"
+                f"  {m.subject} ({m.path}): {m.describe()}\n"
                 f"    Justification: {m.why}"
                 for m in self.munges
             ]

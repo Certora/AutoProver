@@ -2186,16 +2186,30 @@ list because most of it is not in the phase that will fix it.
 
 **Ours, and unstarted.**
 
-3. **Confinement has never actually run.** §3 item 3 makes the launcher mandatory in production and
+3. **`mock_fn` cannot reach an inherent method, and we do not fully know how the corpus works
+   around it.** `cvlr-macros`' `mock_fn` replaces the item with `use <stand-in> as <name>;`, and a
+   `use` inside an `impl` block is not a method — the attempt fails with `E0599`. So the sixth of
+   the editor's kinds reaches free functions only, while a large share of Solana state logic lives
+   in `impl` blocks. Two normative projects work around it with a *trait* carrying the method's name
+   (stake-pool's `StakePoolMock::check_manager_fee_info`, fluid's `LoadMock::load`), imported into
+   scope through a prelude. **What we could not establish is how that takes precedence**: Rust
+   resolves inherent methods before trait methods, and fluid's own `BranchAccounts::load` is
+   inherent and carries no `certora` gating in `branch.rs`. Either something in the arrangement was
+   missed or the specs call it explicitly, and guessing would put a wrong idiom in the editor's
+   charter. **Revisit once we have run against an Anchor target of our own** — the answer decides
+   whether an eighth kind is needed for method replacement or whether the existing `mock_fn` plus a
+   prelude convention is enough. Evidence in [the-state-behind-the-bytes.md](./the-state-behind-the-bytes.md)
+   §9.2 and §9.3.
+4. **Confinement has never actually run.** §3 item 3 makes the launcher mandatory in production and
    §7.8.1 made it the CLI's default, but every run to date — both expensive gates included — has
    taken the `none` provider, so no CVLR build has been made under Landlock and the offline registry
    and private `CARGO_HOME` are untested against a real Solana graph. Two smaller pieces of the same
    item are also open: production and CI must *assert* a non-`none` provider rather than trusting the
    default, and an unconfined run is currently marked on stderr but not in the report.
-4. **The rest of Phase 7** (§7.8): the Docker image's Rust + Solana platform-tools toolchain, the
+5. **The rest of Phase 7** (§7.8): the Docker image's Rust + Solana platform-tools toolchain, the
    replay tape and the LLM-free smoke scenario it drives (§6 names this as a gate and it does not
    exist), and user-facing documentation.
-5. **A recursion exhaustion still discards finished work.** A budget stop returns `Curtailed` and
+6. **A recursion exhaustion still discards finished work.** A budget stop returns `Curtailed` and
    preserves the draft; a `GraphRecursionError` propagates and the draft is lost. It is caught
    nowhere in the tree, so this is pre-existing shared behaviour and belongs to `run_to_completion`'s
    callers as one change rather than to this backend (§7.5.5).

@@ -64,6 +64,26 @@ be stale; the tool is authoritative.
    the bound that made the transition safe is in the half the rule no longer executes, the rule
    proves the arithmetic and not the property — say so, and say which rule.
 
+   A **`swap_derive`** is the one munge that changes what the program's state reads and writes
+   *mean*, and it is the one you have to gate rather than weigh. A type's derived (de)serializer has
+   been replaced by impls the author wrote: deserialization can no longer fail, and it no longer
+   reads the account's bytes at all. So in a unit carrying one, **an encoding-shaped property cannot
+   have a green verdict** — a malformed account rejected, a truncated one rejected, an account of
+   the wrong size rejected, a field surviving a round trip. Those properties are about the bytes,
+   and the bytes are no longer consulted; a rule asserting one is reporting on a program whose round
+   trip is the identity. Say so and name the rule.
+
+   Two things this does *not* condemn. A property about **who may call** an instruction, or about
+   **what a value becomes**, does not depend on how the state was encoded, and is exactly what the
+   swap is for. And note that the sanity check will not help you here: a rule of this shape passes
+   `rule_not_vacuous_cvlr` and is still meaningless, which is why the judgement is yours.
+
+   One further question for a swap, and it is the reason the kind has a stated precondition: the
+   author's impls read and write **one** value per type. If a rule drives a handler taking *two*
+   accounts of the swapped type — a transfer, a merge, a source and a destination — the two are the
+   same value in the model and no counterexample will ever show them differing. Check the account
+   list against the handler's signature and say so if it happens.
+
 2. **Vacuity and over-assumption.** `cvlr_assume!` restricts the states considered, so an assumption
    that is too strong makes a rule pass while covering almost nothing — and two contradicting
    assumptions make it pass covering nothing at all. For each rule, ask what states it actually
