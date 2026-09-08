@@ -26,8 +26,9 @@ three distinct symptoms:
 | `[3308] illegal dereference of an absolute address` | run 7 |
 | `java.lang.IllegalStateException: Check failed.` at `sbf.domains.SbfType$NumType.castToPtr` | runs 7, 8 (×3) |
 
-None is a rule defect and no rewording clears them. All three come from one place, and it is three
-lines long. Every one of these handlers does exactly this and nothing else dynamically sized:
+None is a rule defect and no rewording clears them. The first two come from one place, three lines
+long. **The third does not** — §9.2 measured it, and the crash is a different fault with a different
+remedy; this section originally claimed all three shared a cause and was wrong. Every one of these handlers does exactly this and nothing else dynamically sized:
 
 ```rust
 let mut stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
@@ -236,17 +237,51 @@ by property class, and that is testable rather than arguable:
 | "if `set_fee` succeeded, the manager signed" | **no** — it never reads back what was written |
 | "after `set_fee`, the pool's fee equals the argument" | **yes** — without it the post-read is unrelated to the write |
 
-Two rules × two arms (global / fresh `alloc_havoced` per call), four submissions, ~10 minutes on the
-pinned path. If it comes out that way, the kind's charter should say the global is required for
-*transition* properties and optional for *authorization* ones — and a simpler variant without it is
-easier to justify for the second class.
+**Measured, and it comes out exactly that way.** Two rules, two arms differing only in whether
+`serialize` stores and `deserialize` reads one value or a fresh `alloc_havoced` one per call:
+
+| rule | with global | without global |
+|---|---|---|
+| `rule_q1_authorization` — never reads back | Verified, non-vacuous | **Verified, non-vacuous** |
+| `rule_q1_transition` — asserts a field `set_fee` does not touch survives the call | Verified, non-vacuous | **Violated** |
+
+So the global is **required for transition properties and unnecessary for authorization ones**, and
+the charter should say so. The transition rule is the discriminator on purpose: preserving an
+untouched field is true of the real program and can only hold if a write is visible to a later read.
+
+That gives the kind a cheaper variant worth having. An authorization property needs only "reads
+return an unconstrained value of the right shape" — no `static mut`, no `unsafe`, no init call, and
+none of §6.2's aliasing exposure, since with no shared cell there is nothing to alias.
 
 ### 9.2 Does the swap clear the `ScalarDomain` crash? — *half answered, finishable*
 
-§10 shows the swap clears the dynamically-sized-memcpy failure. It does **not** show it clears the
-crash: the minimal probe never reproduced the crash to begin with. The crash appeared under the
-author's richer harnesses, and one of those is preserved (`run8-artifacts/`), so the finishing
-experiment is to replay that harness with and without the swap. Two submissions.
+**Answered, and the answer is no.** Run 8's own three-rule harness was replayed verbatim, with the
+swap applied and the global supplied. It compiled and still crashed with the identical stack
+(`SbfType$NumType.castToPtr` → `analyzeMem`). Bisecting by rule:
+
+| run 8 rule | with the swap |
+|---|---|
+| `rule_set_fee_requires_manager_signature` | **Verified** |
+| `rule_set_staker_requires_signing_staker_or_manager` | **Verified** |
+| `rule_set_manager_requires_current_and_new_manager_signatures` | **crashes** |
+
+Two of the author's own rules verify. The third calls
+`stake_pool.check_manager_fee_info(new_manager_fee_info)`, which unpacks an SPL **token account** —
+`StateWithExtensions::<Account>::unpack` — and that, not borsh, is what the scalar domain dies on.
+The normative verification mocks exactly this method (`mocks/state.rs`'s
+`StakePoolMock::check_manager_fee_info`), which is independent confirmation of where the fault is.
+
+So §1's "all three symptoms share a cause" was wrong: `[3005]` and the crash are two faults that
+happened to appear together, needing two different remedies — the swap for the first, a replacement
+of the token-account check for the second.
+
+**And the second remedy is not reachable either, for a reason worth recording.** `cvlr::mock_fn`
+cannot be applied to an inherent method. Its macro emits `#vis use #mock_fn as #ident;`
+(`cvlr-macros-0.6.1/src/mock.rs:44`), and a `use` item inside an `impl` block is not a method — the
+attempt fails with `E0599: no method named check_manager_fee_info found`. That is why both the
+stake-pool verification and fluid replace methods with a *trait* rather than `mock_fn`. It is a
+second gap in the editor's charter, orthogonal to this document's: `mock_fn` reaches free functions
+only, and a large share of Solana state logic lives in `impl` blocks.
 
 ### 9.3 Does this generalize past borsh? — *surveyed, and the answer narrows the kind*
 
