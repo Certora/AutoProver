@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
 from certora_autosetup.cache.content_cache import hash_content_parts, hash_text
+from certora_autosetup.parsers.spec_imports import imports_in_cvl
 
 
 MAX_SPEC_BUFFERS_ENV = "AUTOPROVER_MAX_SPEC_BUFFERS"
@@ -60,11 +61,19 @@ class NamedBuffer(BaseModel):
     #: For a run-target buffer, its property -> rule mapping: each property title it verifies -> the
     #: rule/invariant names in ``cvl`` that verify it. Empty for a shared (imported-only) buffer.
     property_rules: dict[str, list[str]] = Field(default_factory=dict)
-    #: Names of the buffers this one imports (its shared dependencies), used to build the digest
-    #: closure. Should track the actual ``import`` statements in ``cvl``.
-    imports: tuple[str, ...] = ()
     #: False for a shared buffer that only supplies imports and runs no rules of its own.
     is_run_target: bool = True
+
+    @property
+    def imports(self) -> tuple[str, ...]:
+        """The sibling-buffer names this buffer imports, derived from the ``import`` statements in
+        its ``cvl`` — a path'd resource import (e.g. ``"summaries/x.spec"``) is not a sibling buffer.
+        The CVL text is the single source of truth, so the digest closure can never disagree with
+        what the prover actually imports."""
+        return tuple(
+            t[: -len(".spec")] for t in imports_in_cvl(self.cvl)
+            if "/" not in t and t.endswith(".spec")
+        )
 
     @property
     def properties(self) -> frozenset[str]:

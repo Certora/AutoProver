@@ -18,8 +18,8 @@ def _state():
         "buffers": {
             "shared": NamedBuffer(name="shared", cvl="ghost g(uint) returns uint;\n", is_run_target=False),
             "easy": NamedBuffer(
-                name="easy", cvl="rule r_easy { assert true; }\n",
-                property_rules={"P-easy": ["r_easy"]}, imports=("shared",),
+                name="easy", cvl='import "shared.spec";\nrule r_easy { assert true; }\n',
+                property_rules={"P-easy": ["r_easy"]},
             ),
         }
     }
@@ -68,10 +68,10 @@ def test_put_buffer_enforces_run_target_cap(monkeypatch):
 
     # a third NEW run-target exceeds the cap of 2 -> rejected
     assert "cap" in put_msg(name="c", cvl="rule rc { assert true; }\n",
-                            property_rules={"P-c": ["rc"]}, imports=[], is_run_target=True)
+                            property_rules={"P-c": ["rc"]}, is_run_target=True)
     # re-putting an EXISTING run-target is always allowed (not a new one)
     assert "cap" not in put_msg(name="a", cvl="rule ra { assert true; }\n// edit\n",
-                                property_rules={"P-a": ["ra"]}, imports=[], is_run_target=True)
+                                property_rules={"P-a": ["ra"]}, is_run_target=True)
     # a new SHARED buffer (is_run_target=false) is exempt from the cap
     assert "cap" not in put_msg(name="shared", cvl="ghost g(uint) returns uint;\n",
-                                property_rules={}, imports=[], is_run_target=False)
+                                property_rules={}, is_run_target=False)

@@ -27,7 +27,6 @@ def _buf(name: str, rule: str) -> NamedBuffer:
         name=name,
         cvl=f'import "shared.spec";\nrule {rule} {{ assert true; }}\n',
         property_rules={f"P-{name}": [rule]},
-        imports=("shared",),
     )
 
 

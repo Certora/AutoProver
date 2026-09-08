@@ -41,8 +41,10 @@ its own rules, its `methods{}` block, and `import` statements pulling in shared 
 run through the CVL parser; if it fails to parse the update is rejected and the buffer is unchanged.
 
 Set `is_run_target` false for a shared buffer that only supplies imports (ghosts/invariants/models)
-and runs no rules of its own. List the names it imports in `imports` so shared-buffer edits correctly
-invalidate this one. Re-putting an existing buffer keeps its property->rule mapping.
+and runs no rules of its own. To depend on a shared buffer, just `import "<name>.spec";` in this
+buffer's CVL — the dependency is read from those import statements, so editing a shared buffer
+correctly re-verifies exactly the buffers that import it. Re-putting an existing buffer keeps its
+property->rule mapping.
 """
 
 
@@ -54,9 +56,6 @@ class _PutBufferTemplate(BaseModel):
         description="The properties this buffer verifies and, for each (by its snake_case title), the "
         "rule/invariant names in this buffer's CVL that verify it. Across all run-target buffers every "
         "non-skipped property must appear in exactly one buffer. Omit for a shared buffer.",
-    )
-    imports: list[str] = Field(
-        default_factory=list, description="Names of the buffers this one imports."
     )
     is_run_target: bool = Field(
         default=True, description="False for a shared, imported-only buffer that runs no rules."
@@ -89,7 +88,7 @@ def put_buffer[S: WithBuffers](ty: type[S]) -> BaseTool:
         # Keep the prior property->rule mapping when the agent re-puts text without restating it.
         prop_rules = args["property_rules"] or (dict(existing.property_rules) if existing else {})
         buf = NamedBuffer(
-            name=args["name"], cvl=args["cvl"], imports=tuple(args["imports"]),
+            name=args["name"], cvl=args["cvl"],
             is_run_target=args["is_run_target"], property_rules=prop_rules,
         )
         return tool_state_update(
