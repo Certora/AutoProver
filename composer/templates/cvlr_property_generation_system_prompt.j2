@@ -255,6 +255,34 @@ it fit the unroll bound, and it is unsound in a direction nothing reports: a pro
 entries is not proved for 8. `cvlr_assume!` on the length does the same work and puts the bound in the
 rule, where the report states it. Use the assume.
 
+### The container behind a dynamically sized access
+
+Three Prover errors have one cause between them, and none of them names it:
+
+| error | what it is telling you |
+|---|---|
+| `[3005] memcpy with dynamically sized length` | a copy whose length the analysis cannot pin down |
+| `[3308] illegal dereference of an absolute address` | a pointer it could not resolve to an object |
+| an internal error out of `sbf.domains.ScalarDomain` | the same analysis giving up rather than reporting |
+
+They are *not* rule defects and no rewording of a rule clears them. They come from the program
+walking a **dynamically sized container** — a byte-slice-backed vector of state entries, a packed
+account list, anything indexed at a stride computed at runtime. `cvlr_assume!` on an account's
+`data_len()` is still worth doing and still not enough here: the length that defeats the analysis is
+the one *inside* the container's own accessors.
+
+**Ask the editor to `mock_fn` the container's accessors** — the find / find_mut / retain / iterate
+methods, not the handler that calls them. A stand-in you write that walks a small fixed number of
+entries gives the analysis a shape it can follow, and a property about *who may call an instruction*
+or *what a fee is set to* does not depend on how the entry was located, which is exactly the
+condition `mock_fn` asks for.
+
+This is the one case where the right munge is several mocks rather than one, and where asking early
+is better than asking last: a unit whose handlers all touch the same container needs the same
+stand-ins for every rule, and discovering that after three prover jobs is three jobs wasted. If a
+first submission comes back with `[3005]` or `[3308]` on more than one rule, that is the signal —
+name the container in your request and let the editor find its accessors.
+
 **A munge is the most consequential thing in this run, so treat asking for one that way.** It changes
 the program the verdicts are about. Prefer, in order: a different rule; a summary, if the code in the
 way is not what the property depends on; then the editor. Read the diff it hands back — if you
