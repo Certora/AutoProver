@@ -131,6 +131,16 @@ class BudgetFile(BaseModel):
         )
 
 
+def parse_budget_scalar(total: float) -> RunBudget:
+    """A pool-only run budget: ``total`` USD with no per-phase ceilings (every cap
+    defaults to ``total``, so only the pool ever trips). The scalar form of a budget
+    file, behind ``--budget-total``."""
+    try:
+        return BudgetFile(total=total).to_run_budget()
+    except ValidationError as e:
+        raise ValueError(f"invalid --budget-total {total}: {e}") from e
+
+
 def parse_budget_file(path: pathlib.Path) -> RunBudget:
     """Parse a run-budget file (JSON, or YAML when PyYAML is installed) into a `RunBudget`.
     See :class:`BudgetFile` for the schema."""
@@ -148,6 +158,20 @@ def parse_budget_file(path: pathlib.Path) -> RunBudget:
         return BudgetFile.model_validate(raw).to_run_budget()
     except ValidationError as e:
         raise ValueError(f"invalid budget file {path}: {e}") from e
+
+
+def resolve_budget(budget: str | None, budget_total: float | None) -> RunBudget | None:
+    """The run's budget from the two flags that can express one, or None when neither
+    was given. They are alternative spellings of the same thing, so passing both is a
+    caller error rather than something to reconcile — the parsers reject it as a
+    mutually exclusive group, and this catches callers that build args directly."""
+    if budget is not None and budget_total is not None:
+        raise ValueError("--budget and --budget-total are mutually exclusive")
+    if budget is not None:
+        return parse_budget_file(pathlib.Path(budget))
+    if budget_total is not None:
+        return parse_budget_scalar(budget_total)
+    return None
 
 
 class PipelineArgs(ExtendedModelOptions, Protocol):
@@ -208,6 +232,12 @@ class PipelineArgs(ExtendedModelOptions, Protocol):
         ...
 
     @property
+    def budget_total(self) -> float | None:
+        """The run pool in USD, as a scalar alternative to ``budget`` (see
+        :func:`parse_budget_scalar`). At most one of the two is set; None for neither."""
+        ...
+
+    @property
     def time_budget(self) -> float | None:
         """
         Time in floating point seconds that autoprover should run. None to run with unlimited, in process timeout
@@ -253,8 +283,8 @@ async def cli_pipeline[P: enum.Enum, H](
     project_root = pathlib.Path(args.project_root).resolve()
     main_contract_path, contract_name = args.main_contract.split(":", 1)
 
-    # Parse the budget up front so a malformed file fails before any services spin up.
-    budget = parse_budget_file(pathlib.Path(args.budget)) if args.budget is not None else None
+    # Resolve the budget up front so a malformed one fails before any services spin up.
+    budget = resolve_budget(args.budget, args.budget_total)
 
     full_contract_path = pathlib.Path(main_contract_path).resolve()
     if not full_contract_path.is_relative_to(project_root):
