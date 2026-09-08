@@ -369,8 +369,39 @@ property class — malformed input rejected, truncated account rejected, a field
 `rule_not_vacuous_cvlr` does not catch this. §10's probe passed its sanity rule and was still only
 true of a program whose `StakePool` round trip is the identity on a havoc'd global.
 
-That points at a gate rather than a check, and it is the open question this design should be judged
-on: **a swap should require the author to state the property class it serves, and the judge should
-refuse a green verdict on any encoding-shaped property in a unit that carries one.** Neither exists
-today, and without them this kind is safe to use by hand and unsafe to hand to an agent that applies
+That points at a gate rather than a check — and the existing architecture says exactly where it
+goes, which is **the property judge, not the munge reviewer.**
+
+The split is already deliberate on both sides. The reviewer's charter states it:
+
+> **You do not see the properties being proved, and that is deliberate.** Whether these rules still
+> mean anything after this change is a different review, done later by a judge that holds the batch.
+> Yours is narrower and it is the one that has to happen before the change lands: did the editor
+> solve the stated problem, faithfully, within its charter.
+
+And the judge is already the only component handed the munge list —
+[`author.py`](../composer/spec/cvlr/author.py)'s `with_assumptions`, "the only callback that sees the
+invocation's context". So "does this rule still mean anything given this munge" is the judge's
+existing remit, and it already holds both inputs the question needs.
+
+Asking the *reviewer* to gate on property class would break that separation on purpose-built
+grounds: it would start refusing faithful edits on an assessment it is structurally not equipped to
+make.
+
+So the gate is **a line in the judge's charter**, of the same shape as the one extraction already
+carries there ("extraction cannot hollow out a rule, it narrows one"):
+
+> A unit carrying a `swap_derive` cannot return a green verdict on a property about encoding, layout
+> or malformed input. The swap made that property's subject unobservable, and a rule asserting it is
+> reporting on a program whose round trip is the identity.
+
+Two consequences worth stating rather than discovering later. **The author does not declare
+anything** — an earlier draft of this section proposed that, and self-report from the party with an
+incentive to ship is both the weakest available version and unnecessary, since the judge holds the
+property text and can classify for itself. And **the gate is late by construction**: it fires after
+the prover job is spent. That is the price of the reviewer's blindness, and it is the right trade —
+catching a meaningless green verdict late beats blocking a faithful edit early on a judgement the
+reviewer cannot make.
+
+Until that line exists, this kind is safe to use by hand and unsafe to hand to an agent that applies
 it wherever it sees `[3005]` — which is exactly what the guidance in `56b2b78e` would have led to.
