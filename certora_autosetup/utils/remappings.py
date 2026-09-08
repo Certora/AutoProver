@@ -23,8 +23,8 @@ from typing import Callable, Dict, List, Literal, Optional, Tuple
 
 import tomllib
 
+from certora_autosetup.build_systems.config_files import BUILD_CONFIG_FILENAMES
 from certora_autosetup.setup.solidity_utils import DEPENDENCIES
-from certora_autosetup.utils.project_dir import BUILD_CONFIG_FILENAMES
 
 # (message, level) -> None; matches BuildSystemManager.log / CompilationWorkaroundManager.log.
 LogFn = Callable[[str, str], None]
