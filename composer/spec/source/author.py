@@ -18,11 +18,11 @@ from graphcore.graph import tool_state_update, tool_return, RawPromptInput, Cach
 from graphcore.tools.vfs import VFSAccessor, VFSState
 
 from composer.authoring.judge import PropertyFeedbackProtocol
-from composer.authoring.state import SkippedProperty, check_completion
+from composer.authoring.state import SkippedProperty
 from composer.authoring.tools import gated_give_up_tool, give_up_tool
 from composer.spec.cvl_generation import (
     cvl_guidance_tools, skip_tools, CVLGenerationExtra, FEEDBACK_VALIDATION_KEY,
-    validate_property_rules, CVL_JUDGE_KEY, run_cvl_generator,
+    CVL_JUDGE_KEY, run_cvl_generator,
     GeneratedCVL, PropertyRuleMapping, AppliedEdit, FeedbackToolBase, FeedbackServices,
 )
 from composer.prover.core import run_prover, CexHandler, ProverCallbacks, ProverReport
@@ -155,42 +155,32 @@ class PublishResultTool(
     Call to signal your completed cvl generation.
     """
     commentary: str = Field(description="Commentary on your generated spec")
-    property_rules: list[PropertyRuleMapping] = Field(
-        description="The property->rules mapping. For every property you did NOT skip "
-        "(referenced by its unique snake_case title from the batch listing), list the "
-        "name(s) of the rule(s)/invariant(s) in your spec that verify it. Every non-skipped "
-        "property must appear with at least one rule."
-    )
 
     @override
     async def run(self) -> Command | str:
+        # Completion requires every run-target buffer verified AND reviewed at its current digest
+        # (per-buffer stamps), with a clean property/rule partition across buffers. Each run-target
+        # declares its own property->rules on ``put_buffer``, so the published mapping is derived
+        # from the buffers. When every property is skipped there are no run-target buffers: the
+        # stamp check is then vacuous and ``validate_coverage`` alone decides whether publishing is
+        # allowed.
         buffers = self.state.get("buffers") or {}
-        if run_targets(buffers):
-            # Multi-buffer completion: every run-target buffer verified AND reviewed at its current
-            # digest (per-buffer stamps), plus a clean property/rule partition across buffers.
-            skipped_pairs = [(str(s.property_title), str(s.reason)) for s in self.state["skipped"]]
-            if (err := check_buffer_completion(
-                buffers, self.state["validations"], self.state["required_validations"],
-                skipped=skipped_pairs, version_history=self.state["version_history"],
-            )) is not None:
-                return err
-            with self.tool_deps() as titles:
-                skip_titles = {str(s.property_title) for s in self.state["skipped"]}
-                if (err := validate_coverage(buffers, all_properties=set(titles), skipped=skip_titles)) is not None:
-                    return f"Completion REJECTED: {err}"
-            if (err := validate_disjoint_rules(buffers)) is not None:
+        skipped_pairs = [(str(s.property_title), str(s.reason)) for s in self.state["skipped"]]
+        if (err := check_buffer_completion(
+            buffers, self.state["validations"], self.state["required_validations"],
+            skipped=skipped_pairs, version_history=self.state["version_history"],
+        )) is not None:
+            return err
+        with self.tool_deps() as titles:
+            skip_titles = {str(s.property_title) for s in self.state["skipped"]}
+            if (err := validate_coverage(buffers, all_properties=set(titles), skipped=skip_titles)) is not None:
                 return f"Completion REJECTED: {err}"
-            pr = [
-                PropertyRuleMapping(property_title=cast(PropertyTitle, p), rules=cast(list[RuleName], rs))
-                for b in run_targets(buffers) for p, rs in b.property_rules.items()
-            ]
-        else:
-            if (err := check_completion(self.state, self.state["version_history"])) is not None:
-                return err
-            with self.tool_deps() as titles:
-                if (err := validate_property_rules(self.property_rules, self.state["skipped"], titles)) is not None:
-                    return err
-            pr = self.property_rules
+        if (err := validate_disjoint_rules(buffers)) is not None:
+            return f"Completion REJECTED: {err}"
+        pr = [
+            PropertyRuleMapping(property_title=cast(PropertyTitle, p), rules=cast(list[RuleName], rs))
+            for b in run_targets(buffers) for p, rs in b.property_rules.items()
+        ]
         return tool_state_update(
             self.tool_call_id,
             "Accepted",
@@ -761,7 +751,7 @@ _SPEC_BUFFERS_GUIDANCE = """
 
 Instead of one spec, you author several named CVL **buffers**, each a self-contained spec verified and
 reviewed on its own. Use `put_buffer` / `edit_buffer` / `get_buffer` / `list_buffers` / `delete_buffer`
-to author them, and `submit_buffer` / `collect_results` (NOT `verify_spec`) to verify them.
+to author them, and `submit_buffer` / `collect_results` to verify them.
 
 **Strongly prefer splitting, and add over-approximating performance summaries preemptively.** A
 single spec has ONE global `methods{}` block, so every rule is verified under the *intersection* of
@@ -869,9 +859,7 @@ _PROVER_TOOLS = InjectingToolExtension(
 
 @dataclass
 class ProverTool:
-    lg_tool: BaseTool
-    #: The async multi-buffer tools (submit_buffer / collect_results), bound in place of ``lg_tool``
-    #: when spec-buffer authoring is enabled.
+    #: The async multi-buffer tools (submit_buffer / collect_results) the agent verifies with.
     buffer_tools: list[BaseTool]
     options: ProverOptions
 
@@ -999,9 +987,9 @@ async def batch_cvl_generation(
     if editing_tools is not None:
         task_host = TaskHost()
         kit = editing_tools.editing
-        # The same run-root strategy verify_spec uses (see ProjectDirectory): an
-        # empty working copy is read in-situ, a non-empty one against a temporary
-        # materialization whose lifetime is the contributed tool's invocation.
+        # Run-root strategy (see ProjectDirectory): an empty working copy is read
+        # in-situ, a non-empty one against a temporary materialization whose lifetime
+        # is the contributed tool's invocation.
         project_directory = materializing_project(source.project_root, kit.live.mat)
 
         @asynccontextmanager
@@ -1027,7 +1015,7 @@ async def batch_cvl_generation(
             async with project_directory(st.get("vfs") or {}) as run_root:
                 yield CVLAuthorState(
                     working_dir=pathlib.Path(run_root),
-                    curr_spec=st["curr_spec"],
+                    curr_spec=None,
                     prover_runner=WrappedProverRunner(
                         st["config"],
                         prover_tool.options,
@@ -1102,7 +1090,7 @@ async def batch_cvl_generation(
     # Multi-buffer authoring (opt-in): the agent partitions the spec into several named buffers,
     # Multi-buffer authoring is the only mode: the agent writes CVL through the buffer tools and
     # verifies each run-target buffer with the async submit_buffer / collect_results pair. Guidance-only
-    # CVL tools are bound (no put_cvl/edit_cvl/verify_spec).
+    # CVL tools are bound (no put_cvl/edit_cvl).
     buffer_authoring: list[BaseTool] = [
         put_buffer(SourceCVLGenerationState), get_buffer(SourceCVLGenerationState),
         edit_buffer(SourceCVLGenerationState), list_buffers(SourceCVLGenerationState),
@@ -1216,13 +1204,10 @@ async def batch_cvl_generation(
             # unformalizable" judgment — it's the budget talking. Keep the agent's account.
             return Curtailed(None, detail=res_state["result"])
         return GaveUp(reason=res_state["result"])
-    # In multi-buffer mode the artifact is the buffers combined into one document; else curr_spec.
+    # The published artifact is the buffers combined into one document (empty when every property
+    # was skipped, i.e. there are no buffers to combine).
     _buffers = res_state.get("buffers") or {}
-    if run_targets(_buffers):
-        d = combined_buffers_view(_buffers)
-    else:
-        d = res_state["curr_spec"]
-        assert d is not None
+    d = combined_buffers_view(_buffers)
     applied_edits: list[AppliedEdit] = []
     if editing is not None:
         for edit_id in res_state["version_history"]:

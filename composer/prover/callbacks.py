@@ -1,5 +1,5 @@
 """Stream-event prover callbacks shared by the codegen prover tool and the
-source-pipeline ``verify_spec`` tool.
+source-pipeline buffer prover jobs.
 
 ``ProverEventCallbacks`` translates the ``ProverCallbacks`` lifecycle into the
 custom stream events the UI renders, keyed by tool_call_id. Both prover entry

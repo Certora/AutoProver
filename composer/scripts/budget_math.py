@@ -347,7 +347,7 @@ def build_matrix(
         "groups/`prover_links` exclude curtailed",
         "- rendered HTML (`autoprove-report-render`) shows the budget appendix",
         "- thread trail (`ap-trail export` + this script): the `<system-alert>` wrap-up "
-        "appears in the author transcript; no `verify_spec`/`feedback_tool` calls after it",
+        "appears in the author transcript; no `submit_buffer`/`feedback_tool` calls after it",
         "- `components_to_prover_runs.json` lacks curtailed entries",
         "",
         "## Caveats",

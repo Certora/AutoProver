@@ -100,7 +100,7 @@ class ProverArtifactStore(ArtifactStore[SpecIdentity, GeneratedCVL]):
         self, spec: SpecIdentity, base_config: dict | None, spec_path: Path,
     ) -> None:
         """The prover conf for the run: the generation's final ``state["config"]`` plus
-        the fixed run overlay (shared with the live ``verify_spec`` run). No-op if no
+        the fixed run overlay (shared with the live prover run). No-op if no
         base config."""
         if base_config is None:
             _log.warning("no base config for %s; skipping conf dump", spec.stem)

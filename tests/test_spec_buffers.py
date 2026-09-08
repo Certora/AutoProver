@@ -189,7 +189,21 @@ def test_coverage_unknown_property():
     assert err is not None and "unknown" in err
 
 
+def test_coverage_all_properties_skipped_needs_no_run_target():
+    # Every property skipped: nothing must be assigned, so a buffer map with no run-target is valid.
+    b = {"shared": NamedBuffer(name="shared", cvl=SHARED, is_run_target=False)}
+    assert validate_coverage(b, all_properties={"P-easy", "P-hard"}, skipped={"P-easy", "P-hard"}) is None
+
+
 # --- per-buffer completion (validation stamps) -----------------------------
+
+
+def test_buffer_completion_vacuous_without_run_targets():
+    # No run-target buffers means no stamps to require; completion is vacuously satisfied.
+    b = {"shared": NamedBuffer(name="shared", cvl=SHARED, is_run_target=False)}
+    assert check_buffer_completion(
+        b, {}, ["feedback", "prover"], skipped=[], version_history=[]
+    ) is None
 
 
 def _stamp(buffers, name, key):

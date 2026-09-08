@@ -94,7 +94,7 @@ def merge_buffers(
 
 class SpecBuffersExtra(TypedDict):
     """Graph-state slice holding the agent's spec buffers, keyed by name. Empty until the agent
-    creates buffers; a single run-target buffer is the behavior-preserving single-spec case."""
+    creates buffers; a single run-target buffer is the simple one-spec case."""
 
     buffers: Annotated[dict[str, NamedBuffer], merge_buffers]
 
@@ -171,11 +171,11 @@ def check_buffer_completion(
     """None if every run-target buffer carries each required validation (e.g. ``feedback``, ``prover``)
     stamped at its current digest, else the first buffer/validation missing or stale. The buffers
     analogue of ``check_completion``: a per-buffer stamp is keyed ``"<validation>:<buffer>"`` and goes
-    stale when that buffer (or anything it imports, or the skips/edit history) changes."""
-    targets = run_targets(buffers)
-    if not targets:
-        return "Completion REJECTED: no run-target buffers."
-    for b in targets:
+    stale when that buffer (or anything it imports, or the skips/edit history) changes.
+
+    With no run-target buffers this is vacuously satisfied (there is nothing to stamp) — the
+    all-properties-skipped case, whose validity is decided by ``validate_coverage`` instead."""
+    for b in run_targets(buffers):
         d = buffer_state_digest(buffers, b.name, skipped=skipped, version_history=version_history)
         for key in required_validations:
             if validations.get(f"{key}:{b.name}") != d:

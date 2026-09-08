@@ -1,49 +1,58 @@
-"""
-Tests for the prover tool, rule skip machinery, and their interactions.
+"""Prover report handling and rule-skip machinery over the async multi-buffer path.
 
-Uses a monkeypatched prover (certora_prover fixture) to test report handling,
-validation stamping, and rule skip reducer behavior end-to-end.
+Each run-target buffer is verified whole as a background job (submit_buffer) whose outcome is
+drained and stamped by collect_results. These tests drive that flow with a monkeypatched prover
+(the certora_prover fixture) to cover: how a buffer's prover report (string error, summarized
+to-do list, raw rule statuses) is surfaced and stamped; how a skipped rule that fails is forgiven
+so its buffer still completes; and the rule-skip reducer itself.
 """
 import pytest
 
 from composer.spec.source.author import ExpectRuleFailure, ExpectRulePassage
-from composer.spec.source.prover import (
-    StateWithSkips, VALIDATION_KEY,
-)
-from composer.authoring.state import check_completion
+from composer.spec.source.prover import StateWithSkips, VALIDATION_KEY
 from composer.prover.core import ProverReport
 from composer.prover.ptypes import RulePath
-from composer.prover.results import StatusCodes
 
 from graphcore.testing import Scenario, tool_call_raw, ToolCallDict
-from graphcore.tools.results import result_tool_generator
+from composer.spec.source.spec_buffers import NamedBuffer, check_buffer_completion
 
-from .conftest import ProverMock, ProverToolResponse
+from .conftest import ProverMock
 
 pytestmark = pytest.mark.asyncio
 
 
-# ---------------------------------------------------------------------------
-# State type (StateWithSkips already has `result: NotRequired[str]`)
-# ---------------------------------------------------------------------------
-
-_PROVER = "verify_spec"
 _SKIP = "expect_rule_failure"
 _UNSKIP = "expect_rule_passage"
-_RESULT = "result"
 
 
 # ---------------------------------------------------------------------------
-# Tool call constructors
+# Buffer + tool-call constructors
 # ---------------------------------------------------------------------------
 
 
-def _verify(rules: list[str] | None = None) -> ToolCallDict:
-    return tool_call_raw(_PROVER, rules=rules)
+def _buf(name: str, *rules: str) -> NamedBuffer:
+    """A run-target buffer declaring exactly ``rules`` — the mocked ``declared_rules_list`` parses
+    these declarations back out, and the buffer owns them (property->rule mapping), so completion
+    requires each to verify against this buffer."""
+    cvl = "".join(f"rule {r} {{ assert true; }}\n" for r in rules)
+    return NamedBuffer(
+        name=name,
+        cvl=cvl,
+        property_rules={f"P-{name}": list(rules)} if rules else {},
+    )
 
 
-def _verify_rules(*rules: str) -> ToolCallDict:
-    return tool_call_raw(_PROVER, rules=list(rules))
+def _buffers(**named: NamedBuffer) -> dict[str, NamedBuffer]:
+    return dict(named)
+
+
+def _submit(name: str) -> ToolCallDict:
+    # `name` is also tool_call_raw's first positional, so build the ToolCallDict directly.
+    return {"name": "submit_buffer", "args": {"name": name}}
+
+
+def _collect(wait: bool = False) -> ToolCallDict:
+    return tool_call_raw("collect_results", wait=wait)
 
 
 def _skip(rule_name: str, reason: str) -> ToolCallDict:
@@ -54,99 +63,73 @@ def _unskip(rule_name: str) -> ToolCallDict:
     return tool_call_raw(_UNSKIP, rule_name=rule_name)
 
 
-def _result(commentary: str) -> ToolCallDict:
-    return tool_call_raw(_RESULT, value=commentary)
-
-
 # ---------------------------------------------------------------------------
 # Prover response constructors
 # ---------------------------------------------------------------------------
 
 
-def _spec_decls(*rules: str) -> str:
-    """A spec declaring exactly ``rules`` — the mocked ``declared_rules_list`` parses
-    these declarations back out, so a report's rules must be declared here for the
-    completion check to treat them as the spec's."""
-    return "\n".join(f"rule {r} {{ assert true; }}" for r in rules)
-
-
 def _raw_report(**rule_status: bool) -> ProverReport:
-    return ProverReport(result_str="Prover report output", link="local://test-run", raw_rule_status={
-            RulePath(rule=k): "VERIFIED" if v else "VIOLATED" for (k,v) in rule_status.items()
+    return ProverReport(
+        result_str="Prover report output", link="local://test-run",
+        raw_rule_status={
+            RulePath(rule=k): "VERIFIED" if v else "VIOLATED" for (k, v) in rule_status.items()
         },
-        certora_run_stdout="certoraRun output"
+        certora_run_stdout="certoraRun output",
     )
 
 
 def _summarized_report(todo: str, **rule_status: bool) -> ProverReport:
     return ProverReport(
-        result_str=todo, link="local://test-run", raw_rule_status={
-            RulePath(rule=k): "VERIFIED" if v else "VIOLATED" for (k,v) in rule_status.items()
+        result_str=todo, link="local://test-run",
+        raw_rule_status={
+            RulePath(rule=k): "VERIFIED" if v else "VIOLATED" for (k, v) in rule_status.items()
         },
-        certora_run_stdout="certoraRun output"
+        certora_run_stdout="certoraRun output",
     )
 
 
 # ---------------------------------------------------------------------------
-# Scenario builder
+# Scenario builder + extractors
 # ---------------------------------------------------------------------------
-
-
-result_tool = result_tool_generator(
-    "result",
-    (str, "Commentary"),
-    "Signal completion",
-    validator=(StateWithSkips, lambda st, *_: check_completion(st)),
-)
 
 
 def _scenario(
     certora_prover: ProverMock,
-    *responses: ProverToolResponse,
-    curr_spec: str | None = "rule foo { assert true; }",
+    buffers: dict[str, NamedBuffer],
+    *,
     rule_skips: dict[str, str] | None = None,
-    required: list[str] | None = None,
+    **responses: ProverReport | str,
 ):
-    prover_tool = certora_prover(responses)
+    """A scenario over the buffer prover tools (submit_buffer / collect_results) plus the skip
+    tools. ``responses`` maps a buffer name to the report (or error string) its job returns."""
     tools = [
-        prover_tool,
+        *certora_prover.buffers(dict(responses)),
         ExpectRuleFailure.as_tool(_SKIP),
         ExpectRulePassage.as_tool(_UNSKIP),
-        result_tool,
     ]
     return Scenario(StateWithSkips, *tools).init(
-        curr_spec=curr_spec,
+        curr_spec=None,
+        buffers=buffers,
         skipped=[],
         property_rules=[],
         validations={},
-        required_validations=required if required is not None else [VALIDATION_KEY],
+        required_validations=[VALIDATION_KEY],
         rule_skips=rule_skips or {},
         config={"files": ["src/Foo.sol"]},
         reminders_channel=[],
-        # verify_spec's stamp is bound to the applied-edit history; the source
-        # pipeline always seeds it, so the test state must too.
         version_history=[],
     )
 
 
-# ---------------------------------------------------------------------------
-# Extractors for map_run
-# ---------------------------------------------------------------------------
+def _prover_complete(st: StateWithSkips) -> str | None:
+    """None once every run-target buffer carries a prover stamp at its current digest."""
+    return check_buffer_completion(
+        st["buffers"], st["validations"], ["prover"], skipped=[], version_history=[]
+    )
 
 
 def _rule_skips(st: StateWithSkips) -> dict[str, str]:
     return st["rule_skips"]
-
-
-def _result_accepted(st: StateWithSkips) -> str:
-    assert "result" in st
-    return st["result"]
-
-
-def _is_result_rejection(st: StateWithSkips) -> bool:
-    return "result" not in st and Scenario.last_single_tool(
-        _RESULT, st
-    ).startswith("Completion REJECTED:")
 
 
 # =========================================================================
@@ -155,111 +138,104 @@ def _is_result_rejection(st: StateWithSkips) -> bool:
 
 
 class TestProverReportHandling:
-    async def test_no_spec_returns_error(self, certora_prover: ProverMock):
-        msg = await _scenario(
-            certora_prover, curr_spec=None,
-        ).turn(
-            _verify()
-        ).run_last_single_tool(_PROVER)
-        assert "not yet" in msg.lower()
+    async def test_no_run_targets_returns_error(self, certora_prover: ProverMock):
+        msg = await _scenario(certora_prover, _buffers()).turn(
+            _collect()
+        ).run_last_single_tool("collect_results")
+        assert "no run-target" in msg.lower()
 
     async def test_string_error_passthrough(self, certora_prover: ProverMock):
         msg = await _scenario(
-            certora_prover, "Internal prover error: out of memory",
-        ).turn(
-            _verify()
-        ).run_last_single_tool(_PROVER)
+            certora_prover, _buffers(b=_buf("b", "r")),
+            b="Internal prover error: out of memory",
+        ).turns(
+            _submit("b"), _collect(wait=True),
+        ).run_last_single_tool("collect_results")
         assert "out of memory" in msg
 
-    async def test_summarized_report_returns_todo(self, certora_prover: ProverMock):
+    async def test_summarized_report_surfaces_todo(self, certora_prover: ProverMock):
         msg = await _scenario(
-            certora_prover,
-            _summarized_report("1. Fix rule foo\n2. Fix rule bar", foo=False, bar=False),
-            curr_spec=_spec_decls("foo", "bar"),
-        ).turn(
-            _verify()
-        ).run_last_single_tool(_PROVER)
+            certora_prover, _buffers(b=_buf("b", "foo", "bar")),
+            b=_summarized_report("1. Fix rule foo\n2. Fix rule bar", foo=False, bar=False),
+        ).turns(
+            _submit("b"), _collect(wait=True),
+        ).run_last_single_tool("collect_results")
         assert "Fix rule foo" in msg
 
     async def test_raw_report_failures_no_stamp(self, certora_prover: ProverMock):
-        assert await _scenario(
-            certora_prover,
-            _raw_report(foo=True, bar=False),
-            curr_spec=_spec_decls("foo", "bar"),
+        st = await _scenario(
+            certora_prover, _buffers(b=_buf("b", "foo", "bar")),
+            b=_raw_report(foo=True, bar=False),
         ).turns(
-            _verify(),
-            _result("done"),
-        ).map_run(_is_result_rejection)
+            _submit("b"), _collect(wait=True),
+        ).run()
+        assert _prover_complete(st) is not None
 
     async def test_raw_report_all_verified_stamps(self, certora_prover: ProverMock):
-        assert await _scenario(
-            certora_prover,
-            _raw_report(foo=True, bar=True),
-            curr_spec=_spec_decls("foo", "bar"),
+        st = await _scenario(
+            certora_prover, _buffers(b=_buf("b", "foo", "bar")),
+            b=_raw_report(foo=True, bar=True),
         ).turns(
-            _verify(),
-            _result("done"),
-        ).map_run(_result_accepted) == "done"
+            _submit("b"), _collect(wait=True),
+        ).run()
+        assert _prover_complete(st) is None
 
     async def test_partial_coverage_doesnt_stamp(self, certora_prover: ProverMock):
-        # A rule-scoped run that verifies only part of the declared rules must not
-        # stamp — bar was never exercised against this spec.
-        assert await _scenario(
-            certora_prover,
-            _raw_report(foo=True),
-            curr_spec=_spec_decls("foo", "bar"),
+        # The buffer owns foo and bar, but its run reports only foo — bar was never exercised
+        # against this buffer, so the buffer stays uncovered and does not stamp.
+        st = await _scenario(
+            certora_prover, _buffers(b=_buf("b", "foo", "bar")),
+            b=_raw_report(foo=True),
         ).turns(
-            _verify_rules("foo"),
-            _result("done"),
-        ).map_run(_is_result_rejection)
+            _submit("b"), _collect(wait=True),
+        ).run()
+        assert _prover_complete(st) is not None
 
 
 # =========================================================================
-# Rule skip interactions with prover
+# Rule skip interactions with the prover
 # =========================================================================
 
 
 class TestRuleSkipProverInteraction:
     async def test_skipped_failure_counts_as_verified(self, certora_prover: ProverMock):
-        """ruleA fails but is skipped, ruleB passes → all verified."""
-        assert await _scenario(
-            certora_prover,
-            _raw_report(ruleA=False, ruleB=True),
-            curr_spec=_spec_decls("ruleA", "ruleB"),
+        """ruleA fails but is skipped, ruleB passes → the buffer completes."""
+        st = await _scenario(
+            certora_prover, _buffers(b=_buf("b", "ruleA", "ruleB")),
+            b=_raw_report(ruleA=False, ruleB=True),
         ).turn(
             _skip("ruleA", "known issue"),
         ).turns(
-            _verify(),
-            _result("done"),
-        ).map_run(_result_accepted) == "done"
+            _submit("b"), _collect(wait=True),
+        ).run()
+        assert _prover_complete(st) is None
 
     async def test_unskipped_failure_blocks_verification(self, certora_prover: ProverMock):
-        """Skip ruleA, then unskip it. Prover returns ruleA=fail → not verified."""
-        assert await _scenario(
-            certora_prover,
-            _raw_report(ruleA=False, ruleB=True),
-            curr_spec=_spec_decls("ruleA", "ruleB"),
+        """Skip ruleA, then unskip it. The prover returns ruleA=fail → the buffer does not complete."""
+        st = await _scenario(
+            certora_prover, _buffers(b=_buf("b", "ruleA", "ruleB")),
+            b=_raw_report(ruleA=False, ruleB=True),
         ).turn(
             _skip("ruleA", "temp"),
         ).turn(
             _unskip("ruleA"),
         ).turns(
-            _verify(),
-            _result("done"),
-        ).map_run(_is_result_rejection)
+            _submit("b"), _collect(wait=True),
+        ).run()
+        assert _prover_complete(st) is not None
 
     async def test_non_skipped_failure_blocks_despite_other_skips(self, certora_prover: ProverMock):
-        """ruleA is skipped and fails, ruleB is NOT skipped and also fails → not verified."""
-        assert await _scenario(
-            certora_prover,
-            _raw_report(ruleA=False, ruleB=False),
-            curr_spec=_spec_decls("ruleA", "ruleB"),
+        """ruleA is skipped and fails, ruleB is NOT skipped and also fails → the buffer does not
+        complete."""
+        st = await _scenario(
+            certora_prover, _buffers(b=_buf("b", "ruleA", "ruleB")),
+            b=_raw_report(ruleA=False, ruleB=False),
         ).turn(
             _skip("ruleA", "known"),
         ).turns(
-            _verify(),
-            _result("done"),
-        ).map_run(_is_result_rejection)
+            _submit("b"), _collect(wait=True),
+        ).run()
+        assert _prover_complete(st) is not None
 
 
 # =========================================================================
@@ -269,7 +245,7 @@ class TestRuleSkipProverInteraction:
 
 class TestRuleSkipReducer:
     async def test_multiple_skips_merge(self, certora_prover: ProverMock):
-        skips = await _scenario(certora_prover).turn(
+        skips = await _scenario(certora_prover, _buffers()).turn(
             _skip("ruleA", "reason A"),
         ).turn(
             _skip("ruleB", "reason B"),
@@ -278,15 +254,14 @@ class TestRuleSkipReducer:
 
     async def test_skip_preserves_existing(self, certora_prover: ProverMock):
         skips = await _scenario(
-            certora_prover,
-            rule_skips={"ruleA": "existing"},
+            certora_prover, _buffers(), rule_skips={"ruleA": "existing"},
         ).turn(
             _skip("ruleB", "new"),
         ).map_run(_rule_skips)
         assert skips == {"ruleA": "existing", "ruleB": "new"}
 
     async def test_skip_overwrites_reason(self, certora_prover: ProverMock):
-        skips = await _scenario(certora_prover).turn(
+        skips = await _scenario(certora_prover, _buffers()).turn(
             _skip("ruleA", "old"),
         ).turn(
             _skip("ruleA", "new"),
@@ -294,7 +269,7 @@ class TestRuleSkipReducer:
         assert skips["ruleA"] == "new"
 
     async def test_unskip_removes(self, certora_prover: ProverMock):
-        skips = await _scenario(certora_prover).turn(
+        skips = await _scenario(certora_prover, _buffers()).turn(
             _skip("ruleA", "temp"),
         ).turn(
             _unskip("ruleA"),

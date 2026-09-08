@@ -1,11 +1,11 @@
 """
-Spec-side prover tool: wraps composer/prover/core.py into a LangGraph tool.
+Spec-side prover tools: wrap composer/prover/core.py into LangGraph tools.
 
-Provides get_prover_tool() which creates a verify_spec tool that:
-- Reads curr_spec from injected state
-- Writes a temporary .spec file
-- Runs the Certora prover via run_prover()
-- Streams output/polling events via custom stream writer
+Provides get_prover_tool(), whose submit_buffer / collect_results tools:
+- Materialize each run-target buffer to a temporary .spec file
+- Run the Certora prover via run_prover() as background per-buffer jobs
+- Stream output/polling events via a custom stream writer
+- Report results as jobs finish, without blocking on a whole batch
 """
 
 import asyncio
@@ -66,7 +66,7 @@ _logger = logging.getLogger("composer.prover")
 OVERLAY_OWNED_KEYS: frozenset[str] = frozenset({
     # forced by prover_config_overlay
     "verify", "parametric_contracts", "optimistic_loop", "rule_sanity",
-    # set per-run by verify_spec
+    # set per prover run
     "rule", "msg",
 })
 """Config keys the run pipeline forces onto the base config after spreading it: a
@@ -78,7 +78,7 @@ from this set, or an "accepted" flag edit would never reach the prover."""
 def prover_config_overlay(base_config: dict, *, main_contract: str, verify_target: str) -> dict:
     """The fixed prover settings the source pipeline layers on top of the base config.
 
-    Shared by the live ``verify_spec`` run and the persisted ``certora/confs`` dump so the
+    Shared by the live prover run and the persisted ``certora/confs`` dump so the
     two can't drift. ``verify_target`` is the ``<contract>:<spec path>`` the run verifies.
     """
     return {
@@ -298,7 +298,7 @@ class ProverStateExtra(TypedDict):
     prover_history: Annotated[list[ProverHistoryItem], _merge_prover_history]
     reminders_channel: list[str]
 
-    # The author's working copy of the source under verification; verify_spec runs
+    # The author's working copy of the source under verification; the prover runs
     # against its materialization when non-empty (see ProjectDirectory). Absent/empty
     # outside the editing-enabled pipeline. No merge op intentionally: the vfs is
     # only ever replaced wholesale (commit_edit / revert_to_edit).
@@ -306,7 +306,7 @@ class ProverStateExtra(TypedDict):
 
 type ProverEvents = CEXAnalysisStart | CloudPollingEvent | ProverOutputEvent | RuleAnalysisResult | ProverRun | ProverLink | ProverResult
 
-# ``verify_spec`` only runs in the source pipeline, whose state always seeds
+# The source pipeline's state always seeds
 # ``version_history`` — permanently empty in phases without the edit tools
 # (structural invariants, never-edited authors), in which case it contributes
 # nothing to the digest. The prover's validation stamp is bound to it so a
@@ -404,32 +404,6 @@ class _SpecCallbacks(ProverEventCallbacks):
             except Exception:
                 _logger.exception("failed to capture cex analysis for %s", rule.name)
         await super().on_analysis_complete(rule, explanation)
-
-
-class VerifySpecSchema(BaseModel):
-    """
-    Run the Certora prover to verify the current spec against the source code.
-
-    Returns verification results:
-    - VERIFIED: Rule holds for all inputs
-    - VIOLATED: Counterexample found (with CEX analysis)
-    - TIMEOUT: Verification did not complete in time
-
-    Use these results to refine your spec.
-    """
-    tool_call_id: Annotated[str, InjectedToolCallId]
-
-    rules: list[str] | None = Field(
-        default=None,
-        description="Specific rules to verify. If None, verifies all rules. Mutually exclusive with the `exclude_rules` argument"
-    )
-
-    exclude_rules: list[str] | None = Field(
-        default=None,
-        description="Specific rules to SKIP verifying. If none validates all rules. Mutually exclusive with `rules` argument"
-    )
-
-    state: Annotated[StateWithSkips, InjectedState]
 
 
 @contextmanager
@@ -545,7 +519,7 @@ def stuck_rule_nag(
     }
     known_tc_ids = {
         l["id"] for msg in state["messages"] if isinstance(msg, AIMessage)
-        for l in msg.tool_calls if l["name"] == "verify_spec"
+        for l in msg.tool_calls if l["name"] == "collect_results"
     }
     to_warn, seen_post_compaction_history = stuck_rule_warnings(
         stuck_rules, state["prover_history"], known_tc_ids
@@ -646,12 +620,9 @@ sleeps until the next job finishes.
 
 @dataclass
 class ProverToolset:
-    """The prover-side agent tools. ``verify_spec`` is the single-``curr_spec`` tool; the
-    ``buffer_tools`` (``submit_buffer`` / ``collect_results``) are bound in its place when multi-buffer
-    authoring is enabled, so the agent submits per-buffer jobs asynchronously and consumes results as
-    they finish instead of blocking on a whole batch."""
+    """The prover-side agent tools: ``buffer_tools`` (``submit_buffer`` / ``collect_results``), which
+    submit per-buffer jobs asynchronously and consume results as they finish."""
 
-    verify_spec: BaseTool
     buffer_tools: list[BaseTool]
 
 
@@ -688,14 +659,6 @@ def get_prover_tool(
 ) -> ProverToolset:
     sem = _prover_sem(prover_opts.cloud)
     stamper = make_validation_stamper(VALIDATION_KEY)
-    # Serialize verify calls targeting the same spec name: the spec/conf are written
-    # under a deterministic name and unlinked on exit, so two overlapping same-stem
-    # calls (e.g. parallel verify_spec for one component) would race. Distinct stems
-    # stay concurrent (notably on cloud, where ``sem`` is a no-op).
-    # Not pruned: bounded by this run's stems (per-component + invariants) and dies with
-    # the per-run tool; popping a held lock would let a later same-stem call mint a fresh,
-    # non-excluding one.
-    spec_locks: dict[str, asyncio.Lock] = {}
 
     # Multi-buffer async job state, held in the closure (not graph state) so it spans agent turns:
     # submit_buffer launches a background task per buffer and returns immediately; collect_results
@@ -713,150 +676,10 @@ def get_prover_tool(
         contract, with the ``autospec_`` prefix stripped."""
         return (state.get("spec_stem") or main_contract).removeprefix("autospec_")
 
-    @tool_display("Running prover", None)
-    @tool(args_schema=VerifySpecSchema)
-    async def verify_spec(
-        tool_call_id: Annotated[str, InjectedToolCallId],
-        state: Annotated[StateWithSkips, InjectedState],
-        rules: list[str] | None = None,
-        exclude_rules: list[str] | None = None
-    ) -> str | Command:
-        last_msg = state["messages"][-1]
-        if isinstance(last_msg, AIMessage) and any(
-            i["id"] != tool_call_id for i in last_msg.tool_calls
-        ):
-            return "Cannot call the verify_spec tool in parallel with other tool calls. verify_spec must be the only tool you call in a turn"
-
-        if rules is not None and exclude_rules is not None:
-            return "Cannot invoke the prover with both `rules` and `exclude_rules` set to non-none"
-
-        spec = state["curr_spec"]
-        if spec is None:
-            return "Specification not yet put on VFS"
-
-        spec_hash = string_hash(spec)
-
-        if (last_run := last_prover_run(state["prover_history"])) is not None:
-            if any(i == "TIMEOUT" for (_,i) in last_run["prover_results"]) and last_run["spec_digest"] == spec_hash:
-                return "Refusing to re-run prover on identical spec with a known TIMEOUT result; timeouts are not transient " \
-                    "errors and will not go away by re-running the tool."
-
-        conf = state["config"]
-        # With a seeded stem, name the spec/conf after it (so on-disk names match the
-        # dump) under a lock; else fall back to unique uid names (no lock needed).
-        spec_stem = state.get("spec_stem")
-        summary = get_run_summary()
-        component = component_of(state)
-        iteration = len(state["prover_history"]) + 1
-
-        conf_dir = (CERTORA_DIR / "confs") if spec_stem is not None else CERTORA_DIR
-        lock = spec_locks.setdefault(spec_stem, asyncio.Lock()) if spec_stem is not None else nullcontext()
-        prover_msg = f"{component} iteration number {iteration}"
-
-
-        async def run_in(run_root: str) -> str | Command:
-            assert spec is not None  # single-spec path; buffers use submit_buffer / collect_results
-            with setup_prover_config_in(
-                working_dir=run_root,
-                main_contract=main_contract,
-                spec_stem=spec_stem,
-                spec_contents=spec,
-                conf_dir=conf_dir,
-                config=conf,
-                rule=None,
-                exclude_rule=None,
-                msg=""
-            ) as (config_path, _ignored):
-                try:
-                    all_rules = await declared_rules_list(
-                        folder=Path(run_root),
-                        args=[config_path]
-                    )
-                except SpecCompilationError as exc:
-                    return f"The spec failed to compile:\n{exc.output}"
-            with setup_prover_config_in(
-                working_dir=run_root,
-                main_contract=main_contract,
-                spec_stem=spec_stem,
-                spec_contents=spec,
-                conf_dir=conf_dir,
-                config=conf,
-                rule=rules,
-                exclude_rule=exclude_rules,
-                msg=prover_msg
-            ) as (config_path, config):
-                async with sem:
-                    result = await run_prover(
-                        Path(run_root),
-                        [config_path],
-                        tool_call_id,
-                        prover_opts,
-                        _SpecCallbacks(get_stream_writer(), tool_call_id, summary, config,
-                                        analysis_store=analysis_store),
-                        DefaultCexHandler(llm, state, summarization_threshold=10)
-                    )
-
-            if isinstance(result, str):
-                return result
-
-            curr_state_digest = spec_digest(
-                spec, state["skipped"], state["version_history"]
-            )
-
-            prover_results : list[tuple[RulePath, StatusCodes]] = [(k, v) for (k,v) in result.raw_rule_status.items()]
-
-            all_verified = _is_completion_history(
-                l=state["prover_history"],
-                curr_digest=curr_state_digest,
-                expected_to_fail=set(state["rule_skips"].keys()),
-                curr_status=prover_results,
-                all_rules=all_rules
-            )
-
-            prover_update : list[ProverHistoryItem] = [
-                ProverRunLog(
-                    tool_call_id=tool_call_id,
-                    prover_results=[(k, v) for (k,v) in result.raw_rule_status.items()],
-                    rules={"sort": "exclude", "selector": exclude_rules } if exclude_rules is not None else \
-                        {"sort": "include", "selector": rules} if rules is not None else None,
-                    spec_digest=spec_hash,
-                    sort="run",
-                    declared_rules=all_rules,
-                    state_digest=curr_state_digest
-                )
-            ]
-            nag_channel: dict = {}
-            if reminders := stuck_rule_nag(prover_results, prover_update, state):
-                nag_channel["reminders_channel"] = reminders
-            if all_verified:
-                nag_channel.setdefault("reminders_channel", []).append(
-                    "You have successfully verified over your prior prover run(s) that all rules verify. This task is completed."
-                )
-                # Completing the coverage stamps, however the completing run was scoped:
-                # every declared rule was verified against exactly this authoring state
-                # (the state_digest match), so a piecemeal completion is as good as a
-                # full-run one.
-                return tool_state_update(
-                    tool_call_id=tool_call_id, content=result.result_str,
-                    prover_link=result.link, validations=stamper(state, state["version_history"]),
-                    prover_history=prover_update, **nag_channel
-                )
-            return tool_state_update(
-                tool_call_id=tool_call_id, content=result.result_str, prover_link=result.link,
-                prover_history=prover_update, **nag_channel
-            )
-
-        # The author's working copy decides where this run executes (in-situ for
-        # an empty VFS, a temp materialization otherwise); the same-stem lock
-        # guards the deterministic spec/conf names within it.
-        async with lock, project_directory(state.get("vfs") or {}) as run_root:
-            return await run_in(run_root)
-
     # ---- Multi-buffer async submit / collect -------------------------------------------------
-    # verify_spec runs one whole curr_spec and blocks on it. The buffer flow instead lets the agent
-    # submit each run-target buffer as an independent background job and consume results as they finish,
-    # so a fast group is reviewed while a slow group is still proving. Correctness — a shared-buffer edit
-    # re-verifying every importer — rides the content digest, exactly as on the single-spec path.
+    # The agent submits each run-target buffer as an independent background job and consumes results
+    # as they finish, so a fast group is reviewed while a slow group is still proving. A shared-buffer
+    # edit re-verifying every importer rides the content digest.
 
     async def _run_buffer_job(
         *, name: str, digest: str, tag: str, label: str, buffers: Mapping[str, NamedBuffer],
@@ -1093,4 +916,4 @@ def get_prover_tool(
             validations=prover_stamps, prover_history=prover_update, **nag_channel,
         )
 
-    return ProverToolset(verify_spec=verify_spec, buffer_tools=[submit_buffer, collect_results])
+    return ProverToolset(buffer_tools=[submit_buffer, collect_results])

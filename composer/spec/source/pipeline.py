@@ -84,9 +84,7 @@ class _ProverPipelineDeps:
     editing: SourceEditing
 
     def to_prover_tool(self, tools: ProverToolset) -> ProverTool:
-        return ProverTool(
-            lg_tool=tools.verify_spec, buffer_tools=tools.buffer_tools, options=self.prover_options
-        )
+        return ProverTool(buffer_tools=tools.buffer_tools, options=self.prover_options)
 
 #: The invariant CVL's slot in the report: a real delivery (imported by every component spec)
 #: or the quarantined leftovers of a budget-curtailed generation (appendix only).
