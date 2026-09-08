@@ -333,7 +333,44 @@ allocating N instances and then collapsing them in the lookup is indistinguishab
 verdict, from having modelled one. Manifest's fall-through assert is the difference between a
 bounded model and a silent one, and it costs three lines.
 
-So the guidance the seventh kind should carry is: *one global is fine when one instance is all the
-handler can reach; past that, dispatch on the program's own discriminator and assert on the
-fall-through.* The check is in the stand-in, not in the munge record — which is consistent with the
-rest of the design, since the stand-ins are the author's and the munge is only the derive swap.
+### 11.1 It does not transfer to this kind, and that is structural
+
+Manifest mocks `get_helper_seat(data, index)` — **the discriminator is an argument**. The borsh trait
+methods are not like that:
+
+```rust
+fn serialize<W: std::io::Write>(&self, _writer: &mut W) -> std::io::Result<()>
+fn deserialize(buf: &mut &[u8]) -> borsh::io::Result<Self>
+```
+
+The read side has *something* — the slice's address, if comparing symbolic pointers is even wise in a
+model built to avoid touching them. The **write side has nothing**: `W` is a generic writer wrapping
+the account's data and there is no way to recover which account it belongs to. Every write lands in
+one global no matter what the read side did.
+
+So §11's table is a survey of two different techniques, not one with a best practice. Manifest's
+assert belongs to **accessor mocking**, which is the existing `mock_fn` kind and needs nothing new.
+`swap_derive` cannot borrow it, because a derived trait impl is reached without a discriminator.
+
+What is left for `swap_derive` is stake-pool's answer, and it is a **precondition rather than a
+check**: use it only where one instance of the type is all the unit's handlers can reach. That is
+satisfiable — most Solana handlers take one account per state type, and the account list makes it
+visible — but it is the kind of side condition that is quietly violated later, by a handler that
+merges or transfers between two of something.
+
+### 11.2 Which reorders §6
+
+With that settled, **§6.1 is the more dangerous item, not §6.2.** Aliasing needs a handler with two
+accounts of one type: uncommon, and visible in a signature. "Deserialization can no longer fail and
+does not read the buffer" applies to **every rule under the swap**, silently, and makes a whole
+property class — malformed input rejected, truncated account rejected, a field survives a round trip
+— pass while meaning nothing.
+
+`rule_not_vacuous_cvlr` does not catch this. §10's probe passed its sanity rule and was still only
+true of a program whose `StakePool` round trip is the identity on a havoc'd global.
+
+That points at a gate rather than a check, and it is the open question this design should be judged
+on: **a swap should require the author to state the property class it serves, and the judge should
+refuse a green verdict on any encoding-shaped property in a unit that carries one.** Neither exists
+today, and without them this kind is safe to use by hand and unsafe to hand to an agent that applies
+it wherever it sees `[3005]` — which is exactly what the guidance in `56b2b78e` would have led to.
