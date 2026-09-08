@@ -5,8 +5,12 @@
 > changes how a *type* is serialized, which is the only thing that reaches a class of Prover failure
 > the CVLR backend has now hit on every run against SPL stake-pool.
 >
-> **Status: design, not built.** §6 is the part to argue with — the kind is unsound in ways the
-> existing six are not, and the checks in §7 are what would have to carry that.
+> **Status: design, not built — but the technique is now measured.** §10 has the probe: the same
+> rule fails with the shipped derives and **verifies, non-vacuously, with them swapped**. That is
+> the first rule this backend has verified about stake-pool at all.
+>
+> §6 is still the part to argue with — the kind is unsound in ways the existing six are not, and
+> the checks in §7 are what would have to carry that.
 
 ---
 
@@ -148,6 +152,19 @@ pub struct StakePool { ... }
 A `cfg_attr` is sound here where it was not for an extraction: a derive list is a single attribute,
 so gating it cannot leave two definitions of one name.
 
+**The swap is transitive, and the record above does not yet say so.** `derive(Copy)` on a struct
+requires every field type to be `Copy`, so one request cascades: the probe in §10 could not compile
+until `AccountType` was swapped too, which is exactly why the normative verification carries a
+second `cfg_attr(feature = "certora", derive(Copy))` on that enum. `Fee` and `FutureEpoch` already
+derived `Copy` and needed nothing, so the closure is not the whole field graph — it is the non-`Copy`
+subset of it, which rustc computes for free and reports one type at a time.
+
+Two ways to carry that, and it is an open design question rather than a settled one: record a
+*set* of `(type, removed, added)` triples as one munge, so the cascade is one reviewable unit; or
+have the editor compute the closure and record each type separately, which reads better in a diff
+and loses the fact that they stand or fall together. The first is probably right, because reverting
+half a cascade leaves a program that does not build.
+
 ## 6. What it erases — the part to argue with
 
 The six existing kinds are all defensible in one line. This one is not, and the charter has to say so
@@ -210,10 +227,11 @@ prover crash**, not only on error codes, since the worst case reports the least.
 1. **Is the global actually necessary, or would a `nondet()` value per call do?** The global exists so
    a write is visible to a later read within one rule. A property that only reads might not need it,
    and a simpler kind would be easier to justify.
-2. **Does the swap alone clear the `ScalarDomain` crash?** Untested. §1's three symptoms are asserted
-   to share a cause on the strength of the code being three lines long; the crash has a different
-   signature from the other two, and this should be probed by hand — the way the `ProgramError`
-   directive was — before any of it is taught to the author.
+2. ~~**Does the swap alone clear the `ScalarDomain` crash?**~~ **Half answered — see §10.** The swap
+   clears the *dynamically-sized-memcpy* failure outright, measured. It is **not** shown to clear the
+   `ScalarDomain` crash: the minimal probe did not reproduce that crash to begin with, so the two
+   arms only bracket the memcpy failure. The crash appeared under the author's richer harnesses in
+   runs 7 and 8, and whether it shares this cause is still an assertion.
 3. **Does this generalize past borsh?** Anchor's `AccountDeserialize`, `bytemuck::Pod` and
    `Pack`/`Sealed` are the same shape. If the kind is worth having it should probably name a trait
    rather than assume borsh, which the record in §5 already allows.
@@ -221,3 +239,42 @@ prover crash**, not only on error codes, since the worst case reports the least.
    `BorshDeserialize` here because the normative verification is in front of it in the corpus. On an
    unfamiliar type it is a larger ask than a `mock_fn` stand-in, and it may be the thing that makes
    this kind not worth having.
+
+
+---
+
+## 10. The probe
+
+One rule, two arms, one variable — `StakePool`'s serialization. The rule drives the extracted
+`process_set_fee_inner` over unconstrained accounts and asserts the authorization implication:
+
+```rust
+let res = Processor::process_set_fee_inner(&program_id, &accounts[..3], nondet());
+cvlr_assert!(res.is_err() || accounts[1].is_signer);
+```
+
+| arm | `StakePool` | result |
+|---|---|---|
+| **A** | derived borsh, as shipped | failed — `Pointer domain: statically unknown length in r3 at call sol_memcpy_` |
+| **B** | derives swapped, impls over a havoc'd global | **`Verified`**, and `rule_not_vacuous_cvlr` verified |
+
+Arm A is worth quoting because the Prover diagnoses itself better than this document did:
+
+```
+from: program/src/state.rs:44
+note:  A memcpy with length that is not determined statically. Common root causes are:
+        (2) dynamically sized structure whose size depends on user input
+help: Resolve by identifying offending instruction and summarize the code to fix the size
+```
+
+`state.rs:44` is the `#[derive(..., BorshDeserialize, BorshSerialize, ...)]` line on `StakePool`.
+The tool points at the derive.
+
+Arm B is the whole technique end to end — swapped derives on `StakePool` **and** `AccountType`, a
+`static mut` global filled by `alloc_havoced::<StakePool>()`, four-method `BorshDeserialize` and
+one-method `BorshSerialize` reading and writing it, and `init_global_stake_pool()` at the top of the
+rule. The program's own `try_from_slice_unchecked` and `borsh::to_writer` calls were not touched.
+
+**What arm B does not establish.** That the rule is *true* of the deployed program: it is true of a
+program whose `StakePool` round trip is the identity on a havoc'd global, and §6 is the list of what
+that costs. The verified sanity rule rules out the cheapest way to be wrong, not the interesting one.
