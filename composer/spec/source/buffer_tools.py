@@ -20,7 +20,7 @@ from graphcore.graph import tool_state_update
 
 from composer.core.edit import EditErr, EditOk, replace_unique
 from composer.cvl.tools import cvl_syntax_error
-from composer.spec.source.spec_buffers import NamedBuffer, max_spec_buffers
+from composer.spec.source.spec_buffers import NamedBuffer, buffer_imports, max_spec_buffers
 from composer.ui.tool_display import ToolDisplay, suppress_ack, tool_display_of
 
 
@@ -169,7 +169,8 @@ def list_buffers[S: WithBuffers](ty: type[S]) -> BaseTool:
         for name in sorted(buffers):
             b = buffers[name]
             kind = "run-target" if b.is_run_target else "shared"
-            imp = f", imports {sorted(b.imports)}" if b.imports else ""
+            imps = buffer_imports(buffers, name)
+            imp = f", imports {sorted(imps)}" if imps else ""
             lines.append(f"- {name} ({kind}, {len(b.owned_rules)} rules{imp})")
         return "\n".join(lines)
     return list_buffers

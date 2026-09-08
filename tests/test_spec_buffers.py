@@ -4,6 +4,7 @@ from composer.spec.source.spec_buffers import (
     DEFAULT_MAX_SPEC_BUFFERS,
     NamedBuffer,
     buffer_digest,
+    buffer_imports,
     buffer_state_digest,
     check_buffer_completion,
     combined_buffers_view,
@@ -15,6 +16,26 @@ from composer.spec.source.spec_buffers import (
     validate_coverage,
     validate_disjoint_rules,
 )
+
+
+def test_buffer_path_is_fixed_to_specs_dir():
+    # The buffer's location is enforced (agent cannot choose it), overwriting any passed path.
+    assert NamedBuffer(name="foo", cvl="").path == "certora/specs/foo.spec"
+    assert NamedBuffer(name="foo", cvl="", path="elsewhere/foo.spec").path == "certora/specs/foo.spec"
+
+
+def test_buffer_imports_resolves_siblings_by_path_ignores_resources():
+    b = {
+        "shared": NamedBuffer(name="shared", cvl=SHARED, is_run_target=False),
+        "r": NamedBuffer(
+            name="r",
+            cvl='import "shared.spec";\nimport "summaries/oracle.spec";\nrule x { assert true; }\n',
+            property_rules={"P-r": ["x"]},
+        ),
+    }
+    # the sibling buffer resolves (certora/specs/shared.spec); the path'd autosetup resource
+    # (certora/specs/summaries/oracle.spec) is no buffer's path, so it is not a dependency.
+    assert buffer_imports(b, "r") == ("shared",)
 
 
 _COMMON = (

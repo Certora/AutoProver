@@ -18,15 +18,18 @@ while correctly invalidating its importers.
 """
 
 import os
+import posixpath
 import re
 from collections.abc import Callable, Mapping, Sequence
+from pathlib import PurePosixPath
 from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing_extensions import TypedDict
 
 from certora_autosetup.cache.content_cache import hash_content_parts, hash_text
 from certora_autosetup.parsers.spec_imports import imports_in_cvl
+from composer.spec.gen_types import SPECS_DIR
 
 
 MAX_SPEC_BUFFERS_ENV = "AUTOPROVER_MAX_SPEC_BUFFERS"
@@ -54,26 +57,35 @@ class NamedBuffer(BaseModel):
 
     model_config = {"frozen": True}
 
-    #: Stable identifier; also the on-disk stem when the buffer is materialized to a ``.spec`` file.
+    #: Stable identifier.
     name: str
     #: The buffer's own CVL text — its rules, its ``methods{}`` block, and its ``import`` statements.
     cvl: str
+    #: Project-relative path of the ``.spec`` this buffer occupies — its identity for import
+    #: resolution: an ``import "<target>"`` in another buffer that resolves to this path depends on
+    #: this buffer (see :func:`buffer_imports`). The agent never sets this — it is not a ``put_buffer``
+    #: argument — and for now it is derived from ``name`` as ``SPECS_DIR/<name>.spec`` (see the
+    #: validator). It is a field rather than a computed property only as the hook for later letting the
+    #: *system* place a buffer elsewhere — notably overlaying an existing autosetup ``.spec`` so the
+    #: agent can edit it — without reshaping the type; resolution already keys on it. Lifting that stays
+    #: system-driven: it does not expose ``path`` to the agent.
+    path: str = ""
     #: For a run-target buffer, its property -> rule mapping: each property title it verifies -> the
     #: rule/invariant names in ``cvl`` that verify it. Empty for a shared (imported-only) buffer.
     property_rules: dict[str, list[str]] = Field(default_factory=dict)
     #: False for a shared buffer that only supplies imports and runs no rules of its own.
     is_run_target: bool = True
 
-    @property
-    def imports(self) -> tuple[str, ...]:
-        """The sibling-buffer names this buffer imports, derived from the ``import`` statements in
-        its ``cvl`` — a path'd resource import (e.g. ``"summaries/x.spec"``) is not a sibling buffer.
-        The CVL text is the single source of truth, so the digest closure can never disagree with
-        what the prover actually imports."""
-        return tuple(
-            t[: -len(".spec")] for t in imports_in_cvl(self.cvl)
-            if "/" not in t and t.endswith(".spec")
-        )
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_path_from_name(cls, data):
+        # The agent never supplies a path (it is not a put_buffer argument), so for now every buffer's
+        # location is just derived from its name: SPECS_DIR/<name>.spec. To later let the SYSTEM place a
+        # buffer elsewhere (e.g. overlay an existing autosetup .spec), fill this only when a path is
+        # absent instead of deriving unconditionally — still not agent-controlled.
+        if isinstance(data, dict) and data.get("name"):
+            data = {**data, "path": (SPECS_DIR / f"{data['name']}.spec").as_posix()}
+        return data
 
     @property
     def properties(self) -> frozenset[str]:
@@ -108,13 +120,28 @@ class SpecBuffersExtra(TypedDict):
     buffers: Annotated[dict[str, NamedBuffer], merge_buffers]
 
 
+def buffer_imports(buffers: Mapping[str, NamedBuffer], name: str) -> tuple[str, ...]:
+    """The names of the sibling buffers ``name`` imports: each ``import "<target>"`` in its CVL,
+    resolved against where ``name`` is written (``buffers[name].path``), and looked up among the paths
+    the buffers occupy. A resolved path no buffer occupies — e.g. an autosetup summary under
+    ``specs/summaries/`` — is a resource, not a sibling, and is skipped. No string surgery: just path
+    resolution + a map lookup, mirroring how the prover resolves a spec's imports on disk."""
+    by_path = {posixpath.normpath(b.path): nm for nm, b in buffers.items()}
+    here = PurePosixPath(buffers[name].path).parent
+    out: list[str] = []
+    for target in imports_in_cvl(buffers[name].cvl):
+        if (nm := by_path.get(posixpath.normpath(str(here / target)))) is not None:
+            out.append(nm)
+    return tuple(out)
+
+
 def import_closure(buffers: Mapping[str, NamedBuffer], name: str) -> list[NamedBuffer]:
-    """Buffer ``name`` plus every buffer reachable through its ``imports``, transitively — deduped and
+    """Buffer ``name`` plus every buffer reachable through its imports, transitively — deduped and
     returned sorted by name. A run-target buffer imports a shared (``is_run_target=false``) buffer only
-    when it declares it, so a shared buffer belongs to the closure (and invalidation set) of exactly the
+    when it does, so a shared buffer belongs to the closure (and invalidation set) of exactly the
     run-targets that use it — that is what lets a subset of groups share a summary without invalidating
-    the others. An import naming no known buffer is skipped (a dangling import is a coverage concern, not
-    a hashing one), and cycles terminate safely."""
+    the others. An import resolving to no known buffer is skipped (a dangling/resource import is a
+    coverage concern, not a hashing one), and cycles terminate safely."""
     seen: set[str] = set()
     stack = [name]
     while stack:
@@ -122,7 +149,7 @@ def import_closure(buffers: Mapping[str, NamedBuffer], name: str) -> list[NamedB
         if n in seen or n not in buffers:
             continue
         seen.add(n)
-        stack.extend(buffers[n].imports)
+        stack.extend(buffer_imports(buffers, n))
     return [buffers[n] for n in sorted(seen)]
 
 
