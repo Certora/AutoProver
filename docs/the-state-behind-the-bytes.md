@@ -226,22 +226,72 @@ prover crash**, not only on error codes, since the worst case reports the least.
 
 ## 9. Open questions
 
-1. **Is the global actually necessary, or would a `nondet()` value per call do?** The global exists so
-   a write is visible to a later read within one rule. A property that only reads might not need it,
-   and a simpler kind would be easier to justify.
-2. ~~**Does the swap alone clear the `ScalarDomain` crash?**~~ **Half answered — see §10.** The swap
-   clears the *dynamically-sized-memcpy* failure outright, measured. It is **not** shown to clear the
-   `ScalarDomain` crash: the minimal probe did not reproduce that crash to begin with, so the two
-   arms only bracket the memcpy failure. The crash appeared under the author's richer harnesses in
-   runs 7 and 8, and whether it shares this cause is still an assertion.
-3. **Does this generalize past borsh?** Anchor's `AccountDeserialize`, `bytemuck::Pod` and
-   `Pack`/`Sealed` are the same shape. If the kind is worth having it should probably name a trait
-   rather than assume borsh, which the record in §5 already allows.
-4. **Who writes the impls on a target that is not stake-pool?** The author wrote a four-method
-   `BorshDeserialize` here because the normative verification is in front of it in the corpus. On an
-   unfamiliar type it is a larger ask than a `mock_fn` stand-in, and it may be the thing that makes
-   this kind not worth having.
+### 9.1 Is the global necessary, or would a fresh `nondet()` per call do? — *experiment specified*
 
+The global exists so a write is visible to a later read *within one rule*. So the answer should split
+by property class, and that is testable rather than arguable:
+
+| property | needs the global? |
+|---|---|
+| "if `set_fee` succeeded, the manager signed" | **no** — it never reads back what was written |
+| "after `set_fee`, the pool's fee equals the argument" | **yes** — without it the post-read is unrelated to the write |
+
+Two rules × two arms (global / fresh `alloc_havoced` per call), four submissions, ~10 minutes on the
+pinned path. If it comes out that way, the kind's charter should say the global is required for
+*transition* properties and optional for *authorization* ones — and a simpler variant without it is
+easier to justify for the second class.
+
+### 9.2 Does the swap clear the `ScalarDomain` crash? — *half answered, finishable*
+
+§10 shows the swap clears the dynamically-sized-memcpy failure. It does **not** show it clears the
+crash: the minimal probe never reproduced the crash to begin with. The crash appeared under the
+author's richer harnesses, and one of those is preserved (`run8-artifacts/`), so the finishing
+experiment is to replay that harness with and without the swap. Two submissions.
+
+### 9.3 Does this generalize past borsh? — *surveyed, and the answer narrows the kind*
+
+It does not generalize the way §9 originally guessed — "name a trait rather than assume borsh" — and
+the survey is worth more than the guess. Of six local checkouts with CVLR specs:
+
+| project | framework | the seam it replaces | how |
+|---|---|---|---|
+| **stake-pool** | native, borsh **derive** | the derived (de)serializer | **swap the derives**, hand-written impls over a global |
+| manifest | native, hypertree | accessor *functions* (`get_helper`) | replaced functions dispatching to globals |
+| restaking | Anchor | loader *functions* | `mock_fn` |
+| fluid | Anchor | `load`/`load_mut` *methods* | a `LoadMock` trait over a global DB |
+| smart-account | Anchor | — | `certora_make_pub`, nondet `Vec`; no state indirection |
+| klend / kvault | Anchor | — | no derive-level munge at all |
+
+**No Anchor project swaps a derive.** The seam is always "wherever the program turns bytes into a
+typed value", but its *form* differs — and in every case except stake-pool that form is **a function
+or method**, which `mock_fn` already reaches. restaking and manifest do exactly that.
+
+So the generalization argument runs the other way. `swap_derive` is not a special case of a broader
+kind waiting to be found; it is the residue left over when the code has **no function to name**
+because a `derive` generated it. That is a narrower justification than §5 claimed, and a better one:
+it says precisely when the seventh kind is the only option, and — for Anchor targets, which is most
+new Solana development — the answer is that it never is.
+
+Worth stating as a limit on this survey: I could not determine how fluid's `LoadMock` takes
+precedence over `BranchAccounts`'s *inherent* `load`, which Rust resolves first and which carries no
+`certora` gating in `branch.rs`. The mechanism is either something I missed or the specs call it
+explicitly; either way the row above describes what it replaces, not how it wins.
+
+### 9.4 Who writes the impls on an unfamiliar type? — *answered: nobody should*
+
+The impls are boilerplate. Four `BorshDeserialize` methods all returning `*get_global()`, one
+`BorshSerialize` method assigning `*self` to it — the only thing that varies is the type name. §10's
+arm B was ~30 lines of which one identifier was interesting.
+
+`cvlr` 0.6.1 has no macro for this (`impl_checked_fn`, `impl_rt_fn`, `nondet_impl` are the only ones
+it ships), so the answer is to generate it on our side: the scaffold already writes `log.rs`,
+`nondet.rs` and `mocks/` into the harness, and a `globals.rs` carrying
+`cvlr_global_state!(StakePool)` would reduce the author's share of this munge to one line plus the
+init call.
+
+That removes the objection this question was raised for. It does **not** remove §6 — a one-line macro
+makes the technique *easy to apply*, which is the opposite of what an unsound-by-default technique
+wants, and is exactly why the judge gate in §11.2 has to exist before the macro does.
 
 ---
 
