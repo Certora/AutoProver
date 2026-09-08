@@ -306,6 +306,19 @@ def _digest(munges: Sequence[Munge]) -> str:
     return hashlib.sha256(joined.encode()).hexdigest()
 
 
+def _latest_review(_current: str | None, update: str | None) -> str | None:
+    """Last write wins, which is the right answer in both directions.
+
+    Two edits in one step both write ``None`` and the fold gives ``None`` — no approval survives an
+    edit, which is the invariant ``submit`` depends on. An edit landing beside a review is
+    order-dependent and safe either way: the digest ``request_review`` computed was taken *before*
+    the sibling edit joined :attr:`proposed`, so if it wins it no longer matches what ``submit``
+    hashes and the submission is refused. The unsafe direction — a stale approval passing — is not
+    reachable.
+    """
+    return update
+
+
 class EditorStateExtra(MessagesState):
     #: The author's problem statement, carried through to the reviewer so it can judge whether the
     #: edits stayed on script rather than merely being defensible in the abstract.
@@ -322,7 +335,11 @@ class EditorStateExtra(MessagesState):
     proposed: Annotated[list[Munge], merge_munges]
     #: Hash of the record list the reviewer approved. ``submit`` fires only when it still matches, so
     #: any edit after approval silently voids it.
-    reviewed_digest: str | None
+    #:
+    #: Reduced rather than plain, because every edit tool writes it and the model can call two in
+    #: one step — which is legitimate, and which :attr:`proposed` already merges. Without a reducer
+    #: that step dies with ``InvalidUpdateError`` and takes the component with it.
+    reviewed_digest: Annotated[str | None, _latest_review]
     memory: str | None
 
 
