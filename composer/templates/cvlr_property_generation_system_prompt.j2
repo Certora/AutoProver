@@ -255,33 +255,48 @@ it fit the unroll bound, and it is unsound in a direction nothing reports: a pro
 entries is not proved for 8. `cvlr_assume!` on the length does the same work and puts the bound in the
 rule, where the report states it. Use the assume.
 
-### The container behind a dynamically sized access
+### When the Prover cannot follow the program's own data
 
-Three Prover errors have one cause between them, and none of them names it:
+Four symptoms, one family, and none of them names its cause:
 
-| error | what it is telling you |
+| symptom | what it is telling you |
 |---|---|
 | `[3005] memcpy with dynamically sized length` | a copy whose length the analysis cannot pin down |
 | `[3308] illegal dereference of an absolute address` | a pointer it could not resolve to an object |
 | an internal error out of `sbf.domains.ScalarDomain` | the same analysis giving up rather than reporting |
+| **a submission that fails with no per-rule verdicts at all** | the same thing, before any rule was encoded |
 
-They are *not* rule defects and no rewording of a rule clears them. They come from the program
-walking a **dynamically sized container** — a byte-slice-backed vector of state entries, a packed
-account list, anything indexed at a stride computed at runtime. `cvlr_assume!` on an account's
-`data_len()` is still worth doing and still not enough here: the length that defeats the analysis is
-the one *inside* the container's own accessors.
+That last row is the one to watch for, because it reports the least. A job that comes back failed
+with no rule results is not an infrastructure hiccup to retry — retrying it costs a job and returns
+the same answer.
 
-**Ask the editor to `mock_fn` the container's accessors** — the find / find_mut / retain / iterate
-methods, not the handler that calls them. A stand-in you write that walks a small fixed number of
-entries gives the analysis a shape it can follow, and a property about *who may call an instruction*
-or *what a fee is set to* does not depend on how the entry was located, which is exactly the
-condition `mock_fn` asks for.
+None of these is a rule defect and no rewording clears them. They come from the program moving state
+whose *size the analysis cannot fix*. `cvlr_assume!` on an account's `data_len()` is still worth
+doing and is **not** enough on its own: the length that defeats the analysis is usually inside the
+encoding or the accessor, not on the account.
 
-This is the one case where the right munge is several mocks rather than one, and where asking early
-is better than asking last: a unit whose handlers all touch the same container needs the same
-stand-ins for every rule, and discovering that after three prover jobs is three jobs wasted. If a
-first submission comes back with `[3005]` or `[3308]` on more than one rule, that is the signal —
-name the container in your request and let the editor find its accessors.
+**Two shapes cause this, and only one of them you can do anything about.** Read the handler and find
+which:
+
+**A variable-length collection** — a byte-slice-backed vector of entries, a packed list, anything
+indexed at a stride computed at runtime. **Ask the editor to `mock_fn` its accessors** — the
+find / find_mut / retain / iterate methods, not the handler that calls them. Write stand-ins that
+serve a small fixed number of entries, dispatching on whatever index or key the program uses, and
+`cvlr_assert!(false)` on the fall-through so that reaching an entry your model does not have is a
+*reported failure* rather than a silent aliasing of two entries into one. This is the case where
+asking early beats asking last: every rule in the unit needs the same stand-ins, so discovering it
+after three prover jobs wastes three.
+
+**A fixed-size state struct behind a derived (de)serializer** — the handler does
+`try_from_slice_unchecked::<State>(&info.data.borrow())` and `borsh::to_writer(&mut
+info.data.borrow_mut()[..], &state)`, and `State` has `Option` or enum fields, so its *encoding* is
+variable length even though the struct is not. **There is nothing in the editor's charter that
+reaches this.** The remedy is to replace the derived impls, which is not one of its six kinds, and a
+request for it will be refused. `record_skip` the property, and say which type and which two calls —
+that names a real gap and is worth more than three failed submissions.
+
+The two are told apart by what the handler touches, not by the error code: the same `[3005]` comes
+from both. If the handler never indexes a collection, it is the second shape.
 
 **A munge is the most consequential thing in this run, so treat asking for one that way.** It changes
 the program the verdicts are about. Prefer, in order: a different rule; a summary, if the code in the
