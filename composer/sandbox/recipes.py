@@ -115,6 +115,37 @@ def shared_cargo_ro_paths(cargo_home: str | Path) -> tuple[Path, ...]:
     return (bin_dir,) if bin_dir.is_dir() else ()
 
 
+def git_config_ro_paths(home: str | Path) -> tuple[Path, ...]:
+    """The global git config files, read-only — what a build with a **git dependency** needs.
+
+    Cargo resolves a ``[patch.crates-io]`` git source through libgit2, and libgit2 reads the global
+    config before it will open the cached repository at all. Denied that read it does not degrade to
+    "no user config": it reports the source as unopenable, which cargo surfaces as
+
+        Unable to update https://…: can't checkout from '…': you are in the offline mode (--offline)
+
+    — a message about the *network* for a cache that is fully warm, and one that no amount of
+    pre-fetching fixes. Every Anchor project hits this, since ``composer.spec.cvlr.munge.ANCHOR_FORK``
+    redirects ``anchor-lang`` and ``anchor-spl`` to a git repo.
+
+    Files, never ``$HOME`` and never ``~/.config`` — Landlock's PathBeneath is hierarchical, so a
+    directory grant here would hand an untrusted ``build.rs`` the rest of the home directory. The
+    residual exposure is the git config itself, which can name a credential helper and, in a badly
+    configured checkout, carry a token in a ``url.*.insteadOf``. That is a real if narrow leak, and
+    it is the price of building a git dependency at all; the alternative considered and rejected was
+    a private ``$HOME``, which silently relocates rustup's and ``cargo-build-sbf``'s toolchain
+    lookups and fails much later, mid-build, in a message about downloading Rust.
+    """
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    candidates = [
+        Path(home) / ".gitconfig",
+        Path(xdg) / "git" / "config" if xdg else Path(home) / ".config" / "git" / "config",
+    ]
+    if override := os.environ.get("GIT_CONFIG_GLOBAL"):
+        candidates.append(Path(override))
+    return tuple(p for p in candidates if p.exists())
+
+
 def rust_build_policy(
     workdir: str | Path,
     *,
@@ -131,8 +162,9 @@ def rust_build_policy(
 
     Grants: ``workdir`` + the device nodes (+ ``extra_rw``) read-write; the Rust
     toolchain (``RUSTUP_HOME``), the shared cargo **bin/** only (not the cargo-home
-    root — see :func:`shared_cargo_ro_paths`), Solana platform-tool directories, the
-    system dirs, and ``extra_ro`` read-only. Non-existent paths are dropped.
+    root — see :func:`shared_cargo_ro_paths`), the global git config files (see
+    :func:`git_config_ro_paths`), Solana platform-tool directories, the system dirs,
+    and ``extra_ro`` read-only. Non-existent paths are dropped.
 
     With ``offline`` (the default — the sandbox has no network, §5),
     ``CARGO_NET_OFFLINE=true`` is set in the child env. Spelled ``true`` because cargo parses
@@ -152,6 +184,8 @@ def rust_build_policy(
         rustup,
         # Shared cargo: bin/ only — never the home root (credentials.toml).
         *shared_cargo_ro_paths(cargo),
+        # The global git config, without which a git dependency cannot be opened at all.
+        *git_config_ro_paths(home),
         # cargo-build-sbf's downloaded sBPF platform-tools (layout varies by version).
         home / ".cache" / "solana",
         home / ".local" / "share" / "solana",

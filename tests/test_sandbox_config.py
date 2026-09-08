@@ -13,7 +13,11 @@ import pytest
 from composer.sandbox.config import SandboxConfig
 from composer.sandbox.launcher import LauncherProvider
 from composer.sandbox.policy import NoneProvider
-from composer.sandbox.recipes import rust_build_policy, shared_cargo_ro_paths
+from composer.sandbox.recipes import (
+    git_config_ro_paths,
+    rust_build_policy,
+    shared_cargo_ro_paths,
+)
 
 
 def test_config_default_is_none_and_disabled():
@@ -173,3 +177,72 @@ def test_shared_cargo_ro_paths_excludes_credentials(tmp_path):
     paths = shared_cargo_ro_paths(cargo)
     assert paths == (cargo / "bin",)
     assert cargo not in paths
+
+
+def test_git_config_ro_paths_grants_files_not_the_home(tmp_path, monkeypatch):
+    """A git dependency needs the global git config readable, and nothing around it.
+
+    ``git_config_ro_paths`` grants files because Landlock's PathBeneath is hierarchical: a grant of
+    ``~/.config`` would hand an untrusted ``build.rs`` every other application's configuration, and
+    a grant of ``$HOME`` would hand it everything.
+    """
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("GIT_CONFIG_GLOBAL", raising=False)
+    home = tmp_path / "home"
+    (home / ".config" / "git").mkdir(parents=True)
+    (home / ".gitconfig").write_text("[user]\n\tname = Someone\n")
+    (home / ".config" / "git" / "config").write_text("[core]\n")
+    (home / ".config" / "secrets.json").write_text('{"token": "secret"}\n')
+    (home / ".ssh").mkdir()
+
+    paths = git_config_ro_paths(home)
+
+    assert set(paths) == {home / ".gitconfig", home / ".config" / "git" / "config"}
+    assert home not in paths and (home / ".config") not in paths
+
+
+def test_git_config_ro_paths_follows_the_xdg_and_override_spellings(tmp_path, monkeypatch):
+    """Three spellings of the same file, and a host uses whichever one it uses."""
+    home = tmp_path / "home"
+    home.mkdir()
+    xdg = tmp_path / "xdg"
+    (xdg / "git").mkdir(parents=True)
+    (xdg / "git" / "config").write_text("[core]\n")
+    override = tmp_path / "elsewhere.gitconfig"
+    override.write_text("[core]\n")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(override))
+
+    assert set(git_config_ro_paths(home)) == {xdg / "git" / "config", override}
+
+
+def test_git_config_ro_paths_drops_what_is_not_there(tmp_path, monkeypatch):
+    """A host with no global git config is the ordinary case, not an error."""
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("GIT_CONFIG_GLOBAL", raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+
+    assert git_config_ro_paths(home) == ()
+
+
+def test_the_policy_grants_the_git_config(tmp_path, monkeypatch):
+    """The failure this prevents is not a permission error but a *network* error: libgit2 that
+    cannot read the global config reports the cached repository as unopenable, and cargo renders
+    that as "you are in the offline mode" against a fully warm cache. Every Anchor target hits it,
+    since the anchor fork is reached through a ``[patch.crates-io]`` git source.
+    """
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("GIT_CONFIG_GLOBAL", raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    gitconfig = home / ".gitconfig"
+    gitconfig.write_text("[user]\n\tname = Someone\n")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("CARGO_HOME", str(tmp_path / "cargo"))
+    monkeypatch.setenv("RUSTUP_HOME", str(tmp_path / "rustup"))
+
+    pol = rust_build_policy(tmp_path / "work")
+
+    assert gitconfig.resolve() in pol.ro_paths
+    assert home.resolve() not in pol.ro_paths
