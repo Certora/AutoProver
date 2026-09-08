@@ -38,8 +38,9 @@ Five of them are a single attribute attached to a function that already exists, 
 | `inline_never` | the function keeps a symbol of its own | something needs to name it — a summary, an inlining directive, a counterexample's stack |
 | `hook_on_entry` / `hook_on_exit` | an observing call at the function's first or last statement | a property is about a point *inside* an execution, where there is no function boundary to hang a rule on |
 
-The sixth, `extract_function`, is the one that restructures code, and it is a different sort of
-change, so it has its own section below.
+The last two restructure rather than annotate, and each has its own section below:
+`extract_function` splits a function so a rule can call part of it, and `swap_derive` moves a type's
+derived trait impls behind the feature so the harness can supply them instead.
 
 **Everything you apply is gated on the requesting unit's cargo feature.** You do not choose that and
 cannot: the tool sets it. What it means is that the deployed build is untouched, and so is every
@@ -86,6 +87,39 @@ not one. So:
 - **Never munge a dependency.** The tool refuses paths outside the project's own source, and the
   reason is worth knowing: a dependency's behaviour changes for every crate in the graph, including
   the ones the property is about.
+### `swap_derive`, the kind for code no function names
+
+Every other kind addresses a function: annotate it, replace it, split it. A `#[derive(..)]` generates
+an impl with no name to give it, so when the Prover cannot follow the program's own
+(de)serialization — `[3005] memcpy with dynamically sized length`, `[3308] illegal dereference of an
+absolute address`, or an internal failure out of `sbf.domains.ScalarDomain` — the derive itself is
+the only handle there is.
+
+What lands is two `cfg_attr` lines above the type. Derives the swap does not name stay on an ungated
+`derive`, so the deployed build sees exactly what it saw:
+
+```rust
+#[cfg_attr(not(feature = "<the unit that asked>"), derive(BorshDeserialize, BorshSerialize))]
+#[cfg_attr(feature = "<the unit that asked>", derive(Copy))]
+#[derive(Clone, Debug, Default, PartialEq, BorshSchema)]   // untouched
+pub struct StakePool { .. }
+```
+
+Three things make this the most consequential kind you have:
+
+- **It cascades.** `derive(Copy)` needs every field type to be `Copy`, so a struct drags its enums
+  along. Record them in one call: they do not compile apart, and half a cascade reverted is a broken
+  build. rustc names them one at a time — read its error and add the next.
+- **It changes what reads and writes *mean*.** With the deserializer gone, deserialization can no
+  longer fail and no longer looks at the account's bytes. Every property about encoding — a
+  malformed account rejected, a truncated one rejected, a field surviving a round trip — becomes
+  unprovable and will pass while meaning nothing. If that is the shape of what the author is
+  proving, refuse and say so.
+- **The author owes the impls, and you must say so.** You do not write them; they go in the author's
+  own module like a `mock_fn` stand-in. Say in `how_to_apply` which traits they now owe, and that a
+  rule reading state back after the handler writes it needs those impls to share one value rather
+  than mint a fresh one per call. Nothing else will catch either mistake.
+
 - **Never write a `mock_fn` stand-in yourself** — you cannot; the author writes it and names it to
   you. If the request needs a stand-in that does not exist yet, say so and refuse.
 - **A hook must observe only.** A call that changes the program's state is a rewrite wearing an
@@ -98,7 +132,8 @@ not one. So:
 1. **Read the code first.** Open the file the request names and look at the function. A verdict on a
    function you have not read is a verdict on prose, and the author's diagnosis can be about the
    wrong function.
-2. Apply what the problem needs with `munge_function`, or `extract_function` when what is missing
+2. Apply what the problem needs with `munge_function`, `swap_derive` when the code in the
+   way is a derived impl, or `extract_function` when what is missing
    is a boundary rather than a line. Several are fine when the problem needs several; `drop_munge`
    takes one back.
 3. Call `request_review` with a holistic account of the changes. The reviewer either approves or

@@ -40,7 +40,9 @@ from pathlib import Path, PurePosixPath
 from graphcore.tools.vfs import DictBackend, DirBackend, PersistentMaterializer
 
 from composer.spec.cvlr.munge import (
+    DeriveSwap,
     FunctionExtraction,
+    FunctionMunge,
     Munge,
     Munged,
     MungeAttempt,
@@ -141,6 +143,10 @@ def replay(source: str, munges: tuple[Munge, ...]) -> tuple[str, tuple[Drifted, 
     one function each insert a line immediately above its signature, and bytes that depended on
     which unit happened to stage first would make the crate's fingerprint depend on scheduling.
 
+    Derive swaps go on first and interact with nothing: they rewrite the attributes above a
+    ``struct`` or ``enum``, where the other two address functions. They are ordered anyway, because
+    "does not interact today" is not a property worth depending on for the crate's bytes.
+
     Attributes go on before extractions, and that is the interesting half of the order. An
     extraction replaces a function with a gated pair, so an attribute applied afterwards would find
     two definitions of one name and refuse; applied first, its ``cfg_attr`` line ends up above the
@@ -148,8 +154,17 @@ def replay(source: str, munges: tuple[Munge, ...]) -> tuple[str, tuple[Drifted, 
     recorded an attribute is a unit building with somebody else's extraction feature off, and the
     half it compiles is the original.
     """
+    def _replay_rank(m: Munge) -> int:
+        match m:
+            case DeriveSwap():
+                return 0
+            case FunctionMunge():
+                return 1
+            case FunctionExtraction():
+                return 2
+
     drifted: list[Drifted] = []
-    for munge in sorted(munges, key=lambda m: (isinstance(m, FunctionExtraction), m.edit_id)):
+    for munge in sorted(munges, key=lambda m: (_replay_rank(m), m.edit_id)):
         match apply_munge(source, munge):
             case Munged(source=updated):
                 source = updated
