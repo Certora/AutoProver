@@ -68,6 +68,9 @@ from composer.spec.context import (
 )
 from composer.spec.cvlr.munge import (
     AlreadyMunged,
+    DeriveAttributeUnreadable,
+    DeriveNotFound,
+    DeriveSwap,
     DropMunges,
     EarlyPanic,
     FunctionAmbiguous,
@@ -84,7 +87,9 @@ from composer.spec.cvlr.munge import (
     Munged,
     NoFunctionBody,
     NotProjectSource,
+    SwappedDerive,
     apply_attribute,
+    apply_derive_swap,
     apply_extraction,
     function_item,
     function_names,
@@ -697,6 +702,182 @@ class ExtractFunction(
         )
 
 
+@tool_display(lambda p: f"Swapping derives on `{p['swaps'][0]['type_name']}`", "Derives")
+class SwapDerive(
+    WithInjectedState[EditorStateExtra],
+    WithInjectedId,
+    WithAsyncDependencies[Command | str, HarnessTarget],
+):
+    """Move a type's derived trait impls behind this unit's feature, so the harness supplies them.
+
+    The kind for code no function names. `mock_fn` replaces a function; a `#[derive(..)]` generates
+    an impl with no name to give it, so when the Prover cannot follow a program's own
+    (de)serialization — `[3005] memcpy with dynamically sized length`, `[3308] illegal dereference`,
+    or an internal `sbf.domains.ScalarDomain` failure — the derive itself is the only handle.
+
+    What lands is two `cfg_attr` lines above the type; derives you do not name stay on an ungated
+    `derive`, so the deployed build sees exactly what it saw:
+
+    ```rust
+    #[cfg_attr(not(feature = "<the unit that asked>"), derive(BorshDeserialize, BorshSerialize))]
+    #[cfg_attr(feature = "<the unit that asked>", derive(Copy))]
+    #[derive(Clone, Debug, Default, PartialEq, BorshSchema)]   // untouched
+    pub struct StakePool { .. }
+    ```
+
+    **This is the most consequential kind in the charter and the author has to live with what it
+    costs.** Removing a deserializer means deserialization can no longer fail and no longer reads
+    the account's bytes, so every property about *encoding* — a malformed account rejected, a
+    truncated one rejected, a field surviving a round trip — becomes unprovable and will pass
+    while meaning nothing. If the author's property is of that shape, refuse and say so.
+
+    **`swaps` is a cascade, not one type.** `derive(Copy)` requires every field type to be `Copy`,
+    so a struct usually drags its enums with it. Record them together: they stand or fall as one,
+    and half a cascade does not compile. rustc names them one at a time, so read its error and add
+    the next.
+
+    Three things you do not do here. You do not write the impls — the author does, in their own
+    module, because their harness is where a stand-in belongs. You do not choose what the replacement
+    means. And you do not swap a type from a dependency: only this project's own source.
+    """
+
+    class Swap(BaseModel):
+        """One type's derives."""
+
+        type_name: str = Field(description="The type's name, as its `struct` or `enum` line spells it.")
+        original: str = Field(
+            description="The `#[derive(..)]` line through the type's declaration line, copied "
+            "verbatim from the file. Both halves are required: the derive is what changes, and the "
+            "declaration is what makes the capture unique."
+        )
+        removed: list[str] = Field(
+            default_factory=list,
+            description="Derives that move behind `cfg_attr(not(feature))` because the harness "
+            "supplies them. Empty when the type only needs to gain one.",
+        )
+        added: list[str] = Field(
+            default_factory=list,
+            description="Derives to add under the feature. `Copy` in practice.",
+        )
+
+    path: str = Field(
+        description="The file defining these types, relative to the workspace root. One call per "
+        "file: a cascade that crosses files is one call each, and rustc will tell you."
+    )
+    swaps: list[Swap] = Field(
+        description="Every type in this file the swap needs, including the ones dragged in by "
+        "`Copy`. Recorded as one edit because they do not compile apart."
+    )
+    why: str = Field(
+        description="What the author cannot prove without this, and which property class the "
+        "swap serves. It goes to the judge, which is what decides whether the rules still mean "
+        "anything afterwards."
+    )
+
+    @override
+    async def run(self) -> Command | str:
+        if not self.why.strip():
+            return (
+                "A non-empty `why` is required. This kind changes what the program's own state "
+                "reads and writes are, so an unexplained one leaves a verdict nobody can account "
+                "for."
+            )
+        if not self.swaps:
+            return "`swaps` is empty. Name at least the type whose derives are in the way."
+        with self.tool_deps() as target:
+            match target.pristine_source(self.path):
+                case NotInWorkdir():
+                    return (
+                        f"{self.path} resolves outside this project. Swap derives on the program's "
+                        f"own types, with a path relative to the workspace root."
+                    )
+                case NotProjectSource(directory=directory):
+                    return (
+                        f"{self.path} is under `{directory}`, which is not this project's source. "
+                        f"A type you cannot edit is a type whose derives you cannot swap — if the "
+                        f"code in the way is a dependency's, refuse and say so."
+                    )
+                case Path() as resolved:
+                    pass
+            if not resolved.is_file():
+                return f"{self.path} is not a file in this project."
+            source = resolved.read_text()
+            record = DeriveSwap(
+                path=self.path,
+                swaps=tuple(
+                    SwappedDerive(
+                        type_name=sw.type_name,
+                        original=sw.original,
+                        removed=tuple(sw.removed),
+                        added=tuple(sw.added),
+                    )
+                    for sw in self.swaps
+                ),
+                why=self.why,
+                feature=self.state["feature"],
+            )
+            for sw in record.swaps:
+                if not sw.removed and not sw.added:
+                    return (
+                        f"The swap for {sw.type_name} removes nothing and adds nothing, so it "
+                        f"would change no code. Say what it needs, or leave the type out."
+                    )
+            if any(m.edit_id == record.edit_id for m in _held(self.state)):
+                return "You have already recorded exactly that swap."
+            if (prior := _derive_swap_of(self.state, self.path)) is not None:
+                return (
+                    f"This unit already swaps derives in {self.path} ({prior.edit_id}). A cascade "
+                    f"has to be one record — `drop_munge` that one and record a single swap "
+                    f"covering every type."
+                )
+            match apply_derive_swap(source, record):
+                case Munged(line=line):
+                    pass
+                case DeriveNotFound(type_name=name, missing=missing, present=present):
+                    return (
+                        f"{name} does not derive {', '.join(missing)}. A swap that removes nothing "
+                        f"is a no-op the build will not report. It derives: "
+                        f"{', '.join(present)}."
+                    )
+                case DeriveAttributeUnreadable(type_name=name, why=why):
+                    return (
+                        f"The captured text for {name} cannot be rewritten: {why}. Copy the "
+                        f"`#[derive(..)]` line and the declaration line beneath it, exactly as the "
+                        f"file has them."
+                    )
+                case refusal:
+                    return (
+                        f"That swap cannot be applied to {self.path} as it stands ({refusal}). "
+                        f"Re-read the file — `original` must match it byte for byte."
+                    )
+        return Command(
+            update={
+                "proposed": [record],
+                "reviewed_digest": None,
+                "messages": [
+                    ToolMessage(
+                        tool_call_id=self.tool_call_id,
+                        content=(
+                            f"Swapped derives in {self.path}:{line} ({record.subject}), gated on "
+                            f"`{record.feature}`. The deployed build still derives everything it "
+                            f"did. Tell the author in `how_to_apply` which impls they now owe and "
+                            f"that a rule reading state back needs a shared value rather than a "
+                            f"fresh one per call — nothing else will catch either."
+                        ),
+                    )
+                ],
+            }
+        )
+
+
+def _derive_swap_of(state: EditorStateExtra, path: str) -> DeriveSwap | None:
+    """This unit's existing swap in ``path``, if it has one."""
+    for m in _held(state):
+        if isinstance(m, DeriveSwap) and m.path == path:
+            return m
+    return None
+
+
 @tool_display(lambda p: f"Dropping `{p['edit_id']}`", "Drop")
 class DropMunge(WithInjectedState[EditorStateExtra], WithInjectedId, WithImplementation[Command | str]):
     """Take back one munge you applied. Voids any review you have earned."""
@@ -1097,6 +1278,7 @@ def editor_tools(
                 editor_ctx.get_memory_tool(),
                 MungeFunction.bind(target).as_tool("munge_function"),
                 ExtractFunction.bind(target).as_tool("extract_function"),
+                SwapDerive.bind(target).as_tool("swap_derive"),
                 DropMunge.as_tool("drop_munge"),
                 RequestReview.bind(
                     ReviewDeps(pristine=pristine, review=reviewer)

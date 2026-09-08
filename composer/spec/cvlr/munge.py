@@ -565,6 +565,16 @@ class FunctionMunge:
         """
         return f"{self.feature}:{self.kind.attribute()}@{self.path}::{self.function}"
 
+    @property
+    def subject(self) -> str:
+        """The item this munge is about, for a report or a prompt.
+
+        Named rather than reached for as ``.function``, because the vocabulary no longer addresses
+        only functions: :class:`DeriveSwap` is about a type. Callers that render a munge want "what
+        was edited", which is what this is.
+        """
+        return self.function
+
     def describe(self) -> str:
         return self.kind.describe()
 
@@ -687,6 +697,33 @@ class NoFunctionBody:
     function: str
 
 
+@dataclasses.dataclass(frozen=True)
+class DeriveNotFound:
+    """A derive the swap names is not on the type, so the swap would be a silent no-op.
+
+    Refused rather than skipped: the whole point of removing ``BorshSerialize`` is that the harness
+    supplies it instead, and a swap that removed nothing leaves both impls absent or both present
+    depending on which half was wrong. ``present`` is what the type actually derives.
+    """
+
+    type_name: str
+    missing: tuple[str, ...]
+    present: tuple[str, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class DeriveAttributeUnreadable:
+    """The captured text has no single ``#[derive(..)]`` list to rewrite.
+
+    Two ``derive`` attributes on one item, or none, or one this module's reader cannot parse. All
+    three are refused for the same reason: the swap has to know exactly which derives survive, and
+    a guess here silently drops one.
+    """
+
+    type_name: str
+    why: str
+
+
 #: What applying an attribute can come to. ``FunctionNotFound`` is here and not in
 #: :data:`ExtractionAttempt` because an attribute is located by name, where an extraction is located
 #: by the text it captured — a name that has gone takes the text with it, so the extraction reports
@@ -696,7 +733,14 @@ type AttributeAttempt = Munged | FunctionNotFound | FunctionAmbiguous | AlreadyM
 #: What applying an extraction can come to.
 type ExtractionAttempt = Munged | FunctionAmbiguous | AlreadyMunged | SourceDrifted
 
-type MungeAttempt = AttributeAttempt | ExtractionAttempt
+#: What applying a derive swap can come to. It is located by captured text like an extraction,
+#: so it reports :class:`SourceDrifted`; the two extra refusals are about the derive list itself.
+type DeriveSwapAttempt = (
+    Munged | AlreadyMunged | SourceDrifted | FunctionAmbiguous | DeriveNotFound
+    | DeriveAttributeUnreadable
+)
+
+type MungeAttempt = AttributeAttempt | ExtractionAttempt | DeriveSwapAttempt
 
 
 def _signature_pattern(function: str) -> re.Pattern[str]:
@@ -970,14 +1014,148 @@ class FunctionExtraction:
         digest = hashlib.sha256(self.render().encode()).hexdigest()[:8]
         return f"{self.feature}:extract[{self.extracted_name}:{digest}]@{self.path}::{self.function}"
 
+    @property
+    def subject(self) -> str:
+        return self.function
+
     def describe(self) -> str:
         return f"split so `{self.extracted_name}` is a function a rule can drive"
+
+
+# ---------------------------------------------------------------------------------------------
+# the derive swap: the kind for code no function names
+#
+# ``docs/the-state-behind-the-bytes.md``. Everything above addresses a *function* — annotate it,
+# replace it, split it. A derived trait impl has no function to name: `#[derive(BorshSerialize)]`
+# generates the code, and the only handle on it is the derive itself. That is the whole of why this
+# kind exists, and §9.3 of that note is why it is narrow — on every framework except native-plus-
+# borsh the seam is a function or a method, which ``mock_fn`` already reaches.
+
+
+#: A ``derive`` list, captured from ``#[derive(A, B, C)]``. Nested generics do not occur in derive
+#: lists, so splitting on commas is exact rather than approximate.
+_DERIVE_LIST = re.compile(r"#\[derive\(\s*(?P<items>[^)]*?)\s*\)\]")
+
+
+@dataclasses.dataclass(frozen=True)
+class SwappedDerive:
+    """One type's derives, as they read before and as they should read under the feature."""
+
+    type_name: str
+    #: The ``#[derive(..)]`` line through the item's declaration line, verbatim. Both halves are
+    #: needed: the derive is what gets rewritten, and the declaration is what makes the capture
+    #: unique — a bare derive list recurs many times in a state module.
+    original: str
+    #: Derives that move behind ``cfg_attr(not(feature))``, because the harness supplies them.
+    removed: tuple[str, ...]
+    #: Derives added under the feature. ``Copy`` in practice, because an impl that assigns
+    #: ``*self`` to a global needs it.
+    added: tuple[str, ...] = ()
+
+    def _list(self) -> tuple[str, ...] | DeriveAttributeUnreadable:
+        found = _DERIVE_LIST.findall(self.original)
+        if len(found) != 1:
+            return DeriveAttributeUnreadable(
+                self.type_name,
+                f"expected exactly one #[derive(..)] in the captured text, found {len(found)}",
+            )
+        return tuple(d.strip() for d in found[0].split(",") if d.strip())
+
+    def render(self, feature: str) -> str | DeriveAttributeUnreadable | DeriveNotFound:
+        """The captured text with its derive line replaced by the gated trio.
+
+        Derives this swap does not name stay on an ungated ``derive``, so the deployed build sees
+        exactly what it saw before — the two ``cfg_attr`` lines are additions, not a rewrite of what
+        was there.
+        """
+        match self._list():
+            case DeriveAttributeUnreadable() as bad:
+                return bad
+            case derives:
+                pass
+        if missing := tuple(d for d in self.removed if d not in derives):
+            return DeriveNotFound(self.type_name, missing, derives)
+
+        kept = tuple(d for d in derives if d not in self.removed)
+        indent = self.original[: len(self.original) - len(self.original.lstrip(" \t"))]
+        lines: list[str] = []
+        if self.removed:
+            lines.append(
+                f'{indent}#[cfg_attr(not(feature = "{feature}"), '
+                f'derive({", ".join(self.removed)}))]'
+            )
+        if self.added:
+            lines.append(
+                f'{indent}#[cfg_attr(feature = "{feature}", derive({", ".join(self.added)}))]'
+            )
+        rest = _DERIVE_LIST.sub(
+            f'#[derive({", ".join(kept)})]' if kept else "", self.original, count=1
+        )
+        # Dropping every derive leaves a blank line where the attribute was; the item still needs
+        # to land immediately under the gates.
+        lines.append(rest if kept else "\n".join(l for l in rest.splitlines() if l.strip()))
+        return "\n".join(lines)
+
+    def describe(self) -> str:
+        parts = []
+        if self.removed:
+            parts.append(f"stops deriving {', '.join(self.removed)}")
+        if self.added:
+            parts.append(f"derives {', '.join(self.added)}")
+        return f"`{self.type_name}` " + " and ".join(parts or ["is unchanged"])
+
+
+@dataclasses.dataclass(frozen=True)
+class DeriveSwap:
+    """Derives moved behind the unit's feature so the harness can supply the impls instead.
+
+    One record covers **every type in one file** the swap needs, because it cascades and the pieces
+    stand or fall together: ``derive(Copy)`` on a struct requires every field type to be ``Copy``,
+    so swapping ``StakePool`` alone does not compile until ``AccountType`` is swapped too. Reverting
+    half of that leaves a program that does not build, which is why it is one reviewable unit rather
+    than several (``docs/the-state-behind-the-bytes.md`` §5).
+
+    A cascade that crosses files is *not* expressible in one record — :func:`replay` applies munges
+    per file — and is recorded as one swap per file. The refusal for a half-applied cross-file
+    cascade is the compiler's, which is loud and immediate, so this is a sharp edge rather than a
+    hazard.
+
+    Unlike :class:`FunctionExtraction` this does not gate an *item*, only its attributes, so the
+    ``cfg_attr`` form is safe here: a derive list is one attribute, and gating it cannot leave two
+    definitions of one name.
+    """
+
+    path: str
+    swaps: tuple[SwappedDerive, ...]
+    why: str
+    feature: str = DEFAULT_FEATURE
+
+    @property
+    def edit_id(self) -> str:
+        """Identity for deduplication, the report, and what a review approves.
+
+        Digests the rendered result like an extraction's does, because the compiler sees a derive
+        list this record computed rather than a name it spelled out.
+        """
+        material = "|".join(
+            f"{sw.type_name}:{','.join(sw.removed)}:{','.join(sw.added)}" for sw in self.swaps
+        )
+        digest = hashlib.sha256(material.encode()).hexdigest()[:8]
+        names = "+".join(sw.type_name for sw in self.swaps)
+        return f"{self.feature}:derives[{names}:{digest}]@{self.path}"
+
+    @property
+    def subject(self) -> str:
+        return ", ".join(sw.type_name for sw in self.swaps)
+
+    def describe(self) -> str:
+        return "; ".join(sw.describe() for sw in self.swaps)
 
 
 #: One edit to the program under verification: an attribute on a function, or a function split in
 #: two. Both are gated on the recording unit's cargo feature and both replay onto the pristine
 #: project, which is the whole of what the rest of the backend needs to know about the difference.
-type Munge = FunctionMunge | FunctionExtraction
+type Munge = FunctionMunge | FunctionExtraction | DeriveSwap
 
 
 def apply_munge(source: str, munge: Munge) -> MungeAttempt:
@@ -994,6 +1172,8 @@ def apply_munge(source: str, munge: Munge) -> MungeAttempt:
             return apply_attribute(source, munge)
         case FunctionExtraction():
             return apply_extraction(source, munge)
+        case DeriveSwap():
+            return apply_derive_swap(source, munge)
 
 
 def apply_attribute(source: str, munge: FunctionMunge) -> AttributeAttempt:
@@ -1056,6 +1236,75 @@ def apply_extraction(source: str, edit: FunctionExtraction) -> ExtractionAttempt
     updated = source[:at] + rendered + source[at + len(edit.original) :]
     # One line below the `#[cfg(not(..))]` the triple opens with.
     return Munged(updated, updated.count("\n", 0, at) + 2)
+
+
+def apply_derive_swap(source: str, edit: DeriveSwap) -> DeriveSwapAttempt:
+    """Rewrite each captured derive line into its gated trio.
+
+    All of the file's swaps land or none do: a cascade that applied halfway would leave a struct
+    deriving ``Copy`` over a field type that does not, and the compiler's message for that names the
+    field rather than the munge. So the refusals are checked against the *original* source first and
+    the writes happen afterwards.
+    """
+    rendered: list[tuple[str, str]] = []
+    for swap in edit.swaps:
+        if _already(source, swap, edit.feature):
+            continue
+        match swap.render(edit.feature):
+            case (DeriveNotFound() | DeriveAttributeUnreadable()) as refusal:
+                return refusal
+            case str(text):
+                rendered.append((swap.original, text))
+
+    if not rendered:
+        first = edit.swaps[0]
+        return AlreadyMunged(first.type_name, _line_of(source, first.type_name))
+
+    for original, _ in rendered:
+        match _occurrences(source, original):
+            case ():
+                return SourceDrifted(edit.swaps[0].type_name)
+            case (_,):
+                pass
+            case hits:
+                return FunctionAmbiguous(
+                    edit.swaps[0].type_name,
+                    tuple(source.count("\n", 0, h) + 1 for h in hits),
+                )
+
+    at = 0
+    for original, text in rendered:
+        at = source.find(original)
+        source = source[:at] + text + source[at + len(original) :]
+    return Munged(source, source.count("\n", 0, at) + 1)
+
+
+def _already(source: str, swap: SwappedDerive, feature: str) -> bool:
+    """Is this type's declaration already sitting under a gate naming this feature?
+
+    Asked of the file's shape rather than by looking for a rendered string, because a swap that has
+    landed can no longer render: its derives have moved behind the gate, so :meth:`SwappedDerive
+    .render` would report them missing. Which is the same reason this is consulted *before* a
+    refusal is believed.
+    """
+    decl = swap.original.splitlines()[-1]
+    at = source.find(decl)
+    if at < 0:
+        return False
+    above = source[:at].splitlines()
+    for line in reversed(above):
+        if not line.strip():
+            continue
+        if f'feature = "{feature}"' in line:
+            return True
+        if not line.lstrip().startswith("#["):
+            return False
+    return False
+
+
+def _line_of(source: str, needle: str) -> int:
+    at = source.find(needle)
+    return source.count("\n", 0, at) + 1 if at >= 0 else 1
 
 
 def munge_history(munges: tuple[Munge, ...]) -> tuple[str, ...]:

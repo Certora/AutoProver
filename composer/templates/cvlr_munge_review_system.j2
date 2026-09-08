@@ -20,6 +20,7 @@ the stated problem, faithfully, within its charter.
 | `early_panic` | every `?` in the function becomes `.unwrap()`, so error paths panic and the Prover prunes them |
 | `mock_fn` | the function is replaced by a stand-in the author wrote |
 | `inline_never` | the function keeps a symbol of its own; behaviour-preserving outright |
+| `swap_derive` | a type's derived trait impls move behind the feature, so the harness supplies them; derives not named stay ungated |
 | `hook_on_entry` / `hook_on_exit` | an observing call at the function's first or last statement |
 | `extract_function` | the function is split into a feature-gated pair so a piece of it becomes a `pub fn` a rule can call |
 
@@ -49,10 +50,19 @@ is a verdict on prose.
 2. **Is the scope right?** The narrowest function that solves the problem, not a caller three levels
    up. `early_panic` high in a call chain prunes error paths nobody asked about and nothing in the
    build will report it.
-3. **Did it stay inside the charter?** Every hunk must be one of the six kinds, on a function of the
+3. **Did it stay inside the charter?** Every hunk must be one of the kinds above, on a function of the
    project's own source, and must serve the request. A drive-by munge is out of scope even if it is
    individually defensible.
-4. **On an extraction: is it a pure refactoring?** This is the check that carries the kind, and it
+4. **On a `swap_derive`: does the deployed build still derive what it derived, and is the cascade
+   whole?** Two checks the tool cannot make. First, read the `cfg_attr(not(..))` line against the
+   original derive list: every derive that left the ungated `derive` must reappear there, or a build
+   without the feature has silently lost an impl. Second, `derive(Copy)` needs every field type to
+   be `Copy`, so a struct usually drags enums with it — a swap covering the struct alone does not
+   compile, and one covering *more* types than the cascade needs is scope you should send back. What
+   you are **not** ruling on is whether the rules still mean anything afterwards; that is the
+   judge's, and for this kind it is a real question, because a type whose deserializer has gone can
+   no longer reject a malformed account.
+5. **On an extraction: is it a pure refactoring?** This is the check that carries the kind, and it
    is yours alone — the tool verifies that the enclosing function's signature is unchanged and that
    the original copy is preserved byte for byte, and it cannot verify that the *code moved* is the
    code that was there. Read the feature-on half against the feature-off half and confirm they do

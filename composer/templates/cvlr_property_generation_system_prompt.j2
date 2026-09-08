@@ -290,10 +290,31 @@ after three prover jobs wastes three.
 **A fixed-size state struct behind a derived (de)serializer** — the handler does
 `try_from_slice_unchecked::<State>(&info.data.borrow())` and `borsh::to_writer(&mut
 info.data.borrow_mut()[..], &state)`, and `State` has `Option` or enum fields, so its *encoding* is
-variable length even though the struct is not. **There is nothing in the editor's charter that
-reaches this.** The remedy is to replace the derived impls, which is not one of its six kinds, and a
-request for it will be refused. `record_skip` the property, and say which type and which two calls —
-that names a real gap and is worth more than three failed submissions.
+variable length even though the struct is not. **Ask the editor for a `swap_derive`**: it moves the
+derived (de)serializer behind your unit's feature so you can supply the impls instead. Name the type
+and the two calls.
+
+You then owe the impls, in this module, the way you owe a `mock_fn` stand-in. They read and write a
+value held in a `static mut` that each rule initialises with
+`cvlr::nondet::havoc::alloc_havoced::<State>()`, so the program's own `try_from_slice_unchecked` and
+`to_writer` calls move a fixed-layout value in memory instead of parsing a buffer. `derive(Copy)` is
+what lets an impl assign `*self` to it, and the editor adds that.
+
+Two things to get right, because nothing else will catch either:
+
+* **A rule that reads state back after the handler wrote it needs the impls to share one value.** If
+  each call mints a fresh one instead, the write is invisible and a transition property is violated
+  for a reason that has nothing to do with the program. A rule that only checks *who signed* never
+  reads back and does not need the sharing — for those, an impl returning a fresh unconstrained
+  value is simpler and safer.
+* **One value per type means two accounts of that type are the same account.** If the handler takes
+  a source and a destination of the swapped type, this munge cannot express it — `record_skip`
+  rather than prove something about a program that cannot tell them apart.
+
+And the cost, which the judge will hold you to: with the deserializer gone, deserialization can no
+longer fail and never reads the bytes. Any property about *encoding* — a malformed account rejected,
+a truncated one rejected, a field surviving a round trip — is unprovable under a swap and will pass
+while meaning nothing. Do not ask for one to serve a property of that shape.
 
 The two are told apart by what the handler touches, not by the error code: the same `[3005]` comes
 from both. If the handler never indexes a collection, it is the second shape.
