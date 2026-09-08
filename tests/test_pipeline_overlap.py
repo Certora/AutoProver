@@ -14,17 +14,20 @@ Stubs throughout — no LLM, no DB, no backend wheel.
 """
 
 import asyncio
+from pathlib import Path
 
 import pytest
 
+from composer.pipeline.run_mode import RunMode
 import composer.pipeline.core as core
 from composer.pipeline.core import run_pipeline
 from composer.pipeline.ecosystem import EVM
+from composer.spec.util import fs_forbidden_read
 
 # The driver needs *an* ecosystem to reach the overlap under test, but never exercises this one:
 # the analysis and extraction it feeds are both monkeypatched below. EVM is the convenient real
 # value — ``supports_greenfield=True`` clears the driver's greenfield assert without a live
-# ``env``, and its ``analysis_extra_input`` reads only the two fields ``_Source`` supplies.
+# ``env``, and its ``analysis_extra_input`` reads only fields ``_Source`` supplies.
 ECOSYSTEM = EVM
 
 pytestmark = pytest.mark.asyncio
@@ -103,16 +106,20 @@ class _Ctx:
 
 
 class _Source:
-    """The two source fields the shared front half puts in the analysis prompt."""
+    """The source fields the shared front half reads: two that go into the analysis prompt, and
+    the surface the analysis validator resolves declared paths against."""
 
     contract_name = "Counter"
     relative_path = "src/Counter.sol"
+    project_root = "/nonexistent/project"
+    forbidden_read = staticmethod(fs_forbidden_read)
 
 
 class _Run:
     """Just enough ``PipelineRun`` for the driver: runners that await the job inline."""
 
     source = _Source()
+    run_mode = RunMode.COMPREHENSIVE
     env = None
     ctx = _Ctx()
 
@@ -133,8 +140,13 @@ async def _drive(
 ) -> dict:
     """Run the driver with stubbed analysis + extraction; report the outcome and the backend."""
     analysis = analysis or _Step(0, None, "analyzed")
+    backend = _Backend(_Prepared(prep), preflight)
+    seen: dict = {"backend": backend}
 
     async def fake_analysis(*_a, **_kw):
+        # The source surface the driver resolved for the analysis validator.
+        seen["project_root"] = _kw.get("project_root")
+        seen["forbidden_read"] = _kw.get("forbidden_read")
         return await analysis.run()
 
     async def fake_extract_all(*_a, **_kw):
@@ -143,8 +155,6 @@ async def _drive(
 
     monkeypatch.setattr(core, "run_component_analysis", fake_analysis)
     monkeypatch.setattr(core, "_extract_all", fake_extract_all)
-    backend = _Backend(_Prepared(prep), preflight)
-    seen: dict = {"backend": backend}
     try:
         await run_pipeline(backend, _Run(), max_bug_rounds=1, ecosystem=ECOSYSTEM)  # type: ignore[arg-type]
     except BaseException as exc:  # noqa: BLE001 — the outcome under test
@@ -276,5 +286,9 @@ async def test_both_succeeding_still_reaches_the_drivers_own_checks(monkeypatch)
 
     assert extract.finished and not extract.cancelled
     assert prep.finished
+    # The analysis validator resolves the model's declared source paths against this surface, so
+    # the driver has to hand it the source's own, not a default.
+    assert seen["project_root"] == Path(_Source.project_root)
+    assert seen["forbidden_read"] is fs_forbidden_read
     assert isinstance(seen["raised"], ValueError)
     assert "No properties extracted" in str(seen["raised"])

@@ -25,6 +25,7 @@ _StubTemplate = PartialTemplate[PathChoosingConf, StubGenCallParams]("stub_gener
 def build_mental_model(
     *,
     source_root: pathlib.Path | None,
+    forbidden_read: GlobalExcludeArg,
     config_init: dict | None,
 ) -> MentalModel:
     # In from-source (update) mode the agent picks file locations to fit the
@@ -50,6 +51,7 @@ def build_mental_model(
                 prompt=stub_prompt,
             ),
             source_root=source_root,
+            forbidden_read=forbidden_read,
             config_init=config_init,
         )
     return MentalModel(

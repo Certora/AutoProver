@@ -1,7 +1,7 @@
 from pathlib import Path
 import pytest
 
-from composer.prover.core import run_prover_inner
+from composer.prover.core import BUILD_TIMEOUT_S, run_prover_inner
 from composer.prover.cloud import cloud_results
 from composer.prover.results import read_and_format_run_result, RuleResult
 from composer.prover.ptypes import RulePath
@@ -32,7 +32,8 @@ async def _run_test_prover_job(
             *extra_args
         ],
         on_err=lambda _ret, _out, _err: None,
-        on_stdout=swallow
+        on_stdout=swallow,
+        timeout=BUILD_TIMEOUT_S,
     )
     assert not isinstance(prover_res, str) and prover_res is not None and prover_res["sort"] == "success", "Prover succeeded"
     assert not prover_res["is_local_link"] and prover_res["link"] is not None, "Not a cloud link?"
