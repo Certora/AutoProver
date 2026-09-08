@@ -28,15 +28,17 @@ from composer.diagnostics.timing import (
 )
 from composer.diagnostics.usage_callback import UsageCallback
 from composer.spec.source.autosetup import read_autosetup_usage
-from graphcore.utils import TokenUsageDict
+from graphcore.utils import NormalizedTokenUsage
 
 
-def _usage(model: str, i: int, o: int, cr: int, cw: int) -> TokenUsageDict:
+def _usage(model: str, i: int, o: int, cr: int, cw: int) -> NormalizedTokenUsage:
+    """Normalized usage for FRESH input ``i`` — total input includes the caches."""
     return {
-        "input_tokens": i,
-        "output_tokens": o,
-        "cache_read_input_tokens": cr,
-        "cache_creation_input_tokens": cw,
+        "total_input_tokens": i + cr + cw,
+        "total_output_tokens": o,
+        "cache_read_tokens": cr,
+        "cache_write_tokens": cw,
+        "thinking_tokens": 0,
         "model_name": model,
     }
 
@@ -130,16 +132,17 @@ async def test_token_usage_persisted_to_run_meta_tags():
 # --------------------------------------------------------------------------- #
 
 def _fake_model(callbacks):
+    # usage_metadata is the normalized field every transport fills in (a streamed
+    # response carries no raw response_metadata["usage"] dict at all). Normalized
+    # input_tokens is the total INCLUDING the cache buckets: 100 fresh + 5 + 2.
     resp = AIMessage(
         content="ok",
-        response_metadata={
-            "model_name": "claude-test",
-            "usage": {
-                "input_tokens": 100,
-                "output_tokens": 10,
-                "cache_read_input_tokens": 5,
-                "cache_creation_input_tokens": 2,
-            },
+        response_metadata={"model_name": "claude-test"},
+        usage_metadata={
+            "input_tokens": 107,
+            "output_tokens": 10,
+            "total_tokens": 117,
+            "input_token_details": {"cache_read": 5, "cache_creation": 2},
         },
     )
     return FakeMessagesListChatModel(responses=[resp, resp], callbacks=callbacks)
@@ -222,21 +225,24 @@ def _write_autosetup_usage(
         )
 
 
-def test_read_autosetup_usage_returns_token_usage_dicts(tmp_path):
+def test_read_autosetup_usage_returns_normalized_usage(tmp_path):
     _write_autosetup_usage(tmp_path, {
         "claude-sonnet-4-6": _autosetup_bucket(100, 10, 5, 2),
         "claude-opus-4": _autosetup_bucket(50, 5, 0, 1),
     })
     by_model = {u["model_name"]: u for u in read_autosetup_usage(tmp_path)}
 
+    # The disk bucket keeps the raw convention (input excludes caches); the
+    # normalized form totals them: 100 fresh + 5 read + 2 write.
     assert by_model["claude-sonnet-4-6"] == {
         "model_name": "claude-sonnet-4-6",
-        "input_tokens": 100,
-        "output_tokens": 10,
-        "cache_read_input_tokens": 5,
-        "cache_creation_input_tokens": 2,
+        "total_input_tokens": 107,
+        "total_output_tokens": 10,
+        "cache_read_tokens": 5,
+        "cache_write_tokens": 2,
+        "thinking_tokens": 0,
     }
-    assert by_model["claude-opus-4"]["input_tokens"] == 50
+    assert by_model["claude-opus-4"]["total_input_tokens"] == 51
     assert "calls" not in by_model["claude-sonnet-4-6"]  # AutoSetup-only field dropped
 
 
@@ -285,4 +291,4 @@ def test_autosetup_usage_fallback_newest_dir(tmp_path):
                            timestamp="20260102_000000", write_result=False)
     usage = read_autosetup_usage(tmp_path)
     assert [u["model_name"] for u in usage] == ["new"]
-    assert usage[0]["input_tokens"] == 9
+    assert usage[0]["total_input_tokens"] == 9

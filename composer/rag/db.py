@@ -3,6 +3,7 @@ from typing import AsyncIterator, cast, Any, LiteralString, override, TYPE_CHECK
 from dataclasses import dataclass
 import asyncio
 import logging
+import threading
 from abc import ABC, abstractmethod
 import os
 
@@ -20,6 +21,7 @@ from numpy import ndarray
 
 from composer.rag.types import ManualRef, BlockChunk, ManualSectionHit
 from composer.rag.text import code_ref_tag
+from composer.rag.models import ENCODE_LOCK
 
 import sqlite3
 
@@ -96,19 +98,29 @@ class ComposerRAGDB(ABC):
         ...
 
     
+    # Encodes race when concurrent (see ENCODE_LOCK in composer.rag.models — the lock
+    # is shared with the sync DefaultEmbedder so neither path can race the other).
+    def _encode_query_locked(self, query: str) -> ndarray:
+        with ENCODE_LOCK:
+            return cast(ndarray, self.tr.encode_query(query, show_progress_bar=False))
+
+    def _encode_docs_locked(self, docs: list[str]) -> list[ndarray]:
+        with ENCODE_LOCK:
+            return cast(list[ndarray], self.tr.encode_document(docs, show_progress_bar=False))
+
     async def embed_query(
         self, query: str
     ) -> ndarray:
-        return cast(ndarray, await asyncio.to_thread(
-            self.tr.encode_query, f"search_query: {query}", show_progress_bar=False
-        ))
+        return await asyncio.to_thread(
+            self._encode_query_locked, f"search_query: {query}"
+        )
 
     async def embed_docs(
         self, doc: list[BlockChunk]
     ) -> list[ndarray]:
-        return cast(list[ndarray], await asyncio.to_thread(
-                self.tr.encode_document, [f"search_document: {d.chunk}" for d in doc], show_progress_bar=False
-            ))
+        return await asyncio.to_thread(
+                self._encode_docs_locked, [f"search_document: {d.chunk}" for d in doc]
+            )
 
 type RagConnection = str | AsyncConnectionPool[AsyncConnection[TupleRow]]
 
