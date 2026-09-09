@@ -38,6 +38,7 @@ import dataclasses
 import difflib
 import hashlib
 import logging
+import posixpath
 import re
 import textwrap
 import tomllib
@@ -566,6 +567,11 @@ class FunctionMunge:
         return f"{self.feature}:{self.kind.attribute()}@{self.path}::{self.function}"
 
     @property
+    def created(self) -> dict[str, str]:
+        """No new files: this kind rewrites a file the developer already has."""
+        return {}
+
+    @property
     def subject(self) -> str:
         """The item this munge is about, for a report or a prompt.
 
@@ -724,6 +730,32 @@ class DeriveAttributeUnreadable:
     why: str
 
 
+@dataclasses.dataclass(frozen=True)
+class ModuleNotFound:
+    """No ``mod <name>;`` declaration in the file. ``nearby`` is what the file does declare.
+
+    A *declaration* specifically — ``mod name { .. }`` with a body is not redirectable, since
+    ``#[path]`` names the file a module is loaded from and an inline module is not loaded from one.
+    Such a module is reported here rather than half-matched, because the attribute would compile and
+    do nothing.
+    """
+
+    module: str
+    nearby: tuple[str, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class ModuleOutsideCrateSource:
+    """The declaring file is not under a crate's ``src/``, so the substitute has nowhere to go.
+
+    The substitute's location is derived rather than supplied (:func:`mirror_path`), and the
+    derivation needs the crate's source root to mirror *from*. A ``mod`` declared outside one —
+    a ``build.rs``, a path this module misread — is refused rather than given an invented home.
+    """
+
+    path: str
+
+
 #: What applying an attribute can come to. ``FunctionNotFound`` is here and not in
 #: :data:`ExtractionAttempt` because an attribute is located by name, where an extraction is located
 #: by the text it captured — a name that has gone takes the text with it, so the extraction reports
@@ -740,7 +772,16 @@ type DeriveSwapAttempt = (
     | DeriveAttributeUnreadable
 )
 
-type MungeAttempt = AttributeAttempt | ExtractionAttempt | DeriveSwapAttempt
+#: What applying a module redirect can come to. Located by declaration rather than by captured
+#: text, so it reports :class:`ModuleNotFound` the way an attribute does rather than
+#: :class:`SourceDrifted`; :class:`ModuleOutsideCrateSource` is about where the substitute would go.
+type ModuleRedirectAttempt = (
+    Munged | ModuleNotFound | FunctionAmbiguous | AlreadyMunged | ModuleOutsideCrateSource
+)
+
+type MungeAttempt = (
+    AttributeAttempt | ExtractionAttempt | DeriveSwapAttempt | ModuleRedirectAttempt
+)
 
 
 def _signature_pattern(function: str) -> re.Pattern[str]:
@@ -1015,6 +1056,11 @@ class FunctionExtraction:
         return f"{self.feature}:extract[{self.extracted_name}:{digest}]@{self.path}::{self.function}"
 
     @property
+    def created(self) -> dict[str, str]:
+        """No new files: this kind rewrites a file the developer already has."""
+        return {}
+
+    @property
     def subject(self) -> str:
         return self.function
 
@@ -1145,6 +1191,11 @@ class DeriveSwap:
         return f"{self.feature}:derives[{names}:{digest}]@{self.path}"
 
     @property
+    def created(self) -> dict[str, str]:
+        """No new files: this kind rewrites a file the developer already has."""
+        return {}
+
+    @property
     def subject(self) -> str:
         return ", ".join(sw.type_name for sw in self.swaps)
 
@@ -1152,10 +1203,119 @@ class DeriveSwap:
         return "; ".join(sw.describe() for sw in self.swaps)
 
 
-#: One edit to the program under verification: an attribute on a function, or a function split in
-#: two. Both are gated on the recording unit's cargo feature and both replay onto the pristine
-#: project, which is the whole of what the rest of the backend needs to know about the difference.
-type Munge = FunctionMunge | FunctionExtraction | DeriveSwap
+#: Where a redirected module's substitute file lives, relative to the crate's source root. Mirrors
+#: the original module hierarchy, which is the convention the scaffold's own ``certora/mocks/mod.rs``
+#: already states and which every corpus project follows.
+MOCKS_DIR = PurePosixPath("certora/mocks")
+
+
+def mirror_path(declaring_file: str, module: str) -> PurePosixPath | None:
+    """Where the substitute for ``module`` goes, given the file that declares it.
+
+    ``programs/lending/src/invokes/mod.rs`` + ``liquidity_layer`` becomes
+    ``programs/lending/src/certora/mocks/invokes/liquidity_layer.rs`` — the mocks tree mirrors the
+    source tree beneath it. Derived rather than supplied because a substitute in the wrong place is
+    a ``#[path]`` that resolves to nothing, and the compiler's message for that names the *module*,
+    not the mistake.
+
+    ``None`` when the declaring file is not under a crate's ``src/``, which the caller reports as
+    :class:`ModuleOutsideCrateSource`.
+    """
+    parts = PurePosixPath(declaring_file).parts
+    if "src" not in parts:
+        return None
+    cut = len(parts) - 1 - parts[::-1].index("src")
+    src_root = PurePosixPath(*parts[: cut + 1])
+    within = PurePosixPath(*parts[cut + 1 : -1])
+    return src_root / MOCKS_DIR / within / f"{module}.rs"
+
+
+def _path_attr_value(declaring_file: str, substitute: PurePosixPath) -> str:
+    """The ``#[path]`` string, which Rust resolves relative to the declaring file's directory.
+
+    Minimal rather than merely correct: climbing to the workspace root and back down resolves to the
+    same file, and would break the moment the crate moved within the workspace. Both trees share the
+    crate's ``src/``, so the common prefix is always at least that.
+    """
+    return posixpath.relpath(str(substitute), str(PurePosixPath(declaring_file).parent))
+
+
+@dataclasses.dataclass(frozen=True)
+class ModuleRedirect:
+    """A whole module compiled from a different file behind the unit's feature.
+
+    The kind the other seven cannot express, and the one the corpus reaches for most. ``mock_fn``
+    replaces an item with ``use <stand-in> as <name>;``, and a ``use`` inside an ``impl`` is not a
+    method — so **no attribute munge can reach an inherent or trait method**, which is where a large
+    share of Solana state logic lives. Every normative project answers that the same way, by
+    redirecting the file the methods are *in*:
+
+    .. code-block:: rust
+
+        #[cfg_attr(feature = "unit_x", path = "../certora/mocks/invokes/liquidity_layer.rs")]
+        pub mod liquidity_layer;
+
+    Nothing is aliased, so the resolution problem never arises: a different file is compiled in the
+    module's place, carrying its own types and ``impl`` blocks
+    (``docs/cvlr-backend-plan.md`` §7.12 item 3).
+
+    **The substitute is arbitrary code, and that makes this the most dangerous kind.** The other
+    seven are bounded — an attribute cannot change what a function computes, and an extraction and a
+    derive swap both reproduce the original text verbatim in the deployed half. A substitute module
+    is written from scratch, so a rule proved against one is a rule about *the substitute* unless
+    what it stands for is stated. :attr:`why` therefore carries a heavier burden here than elsewhere
+    and the judge is told so.
+
+    Where it goes is derived (:func:`mirror_path`), not supplied. The deployed build is untouched:
+    with the feature off the ``mod`` declaration is exactly what the developer wrote, and the
+    substitute file is never named by anything.
+    """
+
+    path: str
+    module: str
+    #: The substitute file's full contents.
+    substitute: str
+    why: str
+    feature: str = DEFAULT_FEATURE
+
+    @property
+    def substitute_path(self) -> PurePosixPath | None:
+        return mirror_path(self.path, self.module)
+
+    @property
+    def created(self) -> dict[str, str]:
+        """The files this munge adds to the tree, which no pristine source backs.
+
+        The only kind with any: the tree derives a munged file by replaying onto the developer's
+        copy, and there is no developer's copy of a substitute. :meth:`SharedTree.reconcile` puts
+        these straight into the overlay.
+        """
+        target = self.substitute_path
+        return {} if target is None else {str(target): self.substitute}
+
+    @property
+    def edit_id(self) -> str:
+        """Identity for deduplication, the report, and what a review approves.
+
+        Digests the substitute, because that is what the compiler sees and what a reviewer approved.
+        Re-authoring the stand-in is a different edit and must not inherit the old approval.
+        """
+        digest = hashlib.sha256(self.substitute.encode()).hexdigest()[:8]
+        return f"{self.feature}:module[{self.module}:{digest}]@{self.path}"
+
+    @property
+    def subject(self) -> str:
+        return self.module
+
+    def describe(self) -> str:
+        return f"`{self.module}` is compiled from a stand-in module"
+
+
+#: One edit to the program under verification: an attribute on a function, a function split in two,
+#: a type's derives moved, or a whole module compiled from elsewhere. All are gated on the recording
+#: unit's cargo feature and all replay onto the pristine project, which is the whole of what the
+#: rest of the backend needs to know about the difference.
+type Munge = FunctionMunge | FunctionExtraction | DeriveSwap | ModuleRedirect
 
 
 def apply_munge(source: str, munge: Munge) -> MungeAttempt:
@@ -1174,6 +1334,58 @@ def apply_munge(source: str, munge: Munge) -> MungeAttempt:
             return apply_extraction(source, munge)
         case DeriveSwap():
             return apply_derive_swap(source, munge)
+        case ModuleRedirect():
+            return apply_module_redirect(source, munge)
+
+
+#: A ``mod`` **declaration** — the form ``#[path]`` can redirect. ``mod name { .. }`` is excluded by
+#: requiring the semicolon: an inline module is not loaded from a file, so the attribute would be
+#: accepted by rustc and change nothing.
+def _module_declaration(module: str) -> re.Pattern[str]:
+    return re.compile(
+        rf"^[ \t]*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+{re.escape(module)}\s*;",
+        re.MULTILINE,
+    )
+
+
+_ANY_MODULE = re.compile(
+    r"^[ \t]*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;", re.MULTILINE
+)
+
+
+def apply_module_redirect(source: str, edit: ModuleRedirect) -> ModuleRedirectAttempt:
+    """Put the ``cfg_attr`` immediately above the module's declaration.
+
+    Located by declaration rather than by captured text, so a file that has grown or lost unrelated
+    modules replays cleanly — the same property an attribute munge has, and for the same reason: the
+    edit is an insertion above a line rather than a rewrite of a region.
+    """
+    target = edit.substitute_path
+    if target is None:
+        return ModuleOutsideCrateSource(path=edit.path)
+
+    found = list(_module_declaration(edit.module).finditer(source))
+    if not found:
+        return ModuleNotFound(
+            module=edit.module, nearby=tuple(m.group(1) for m in _ANY_MODULE.finditer(source))
+        )
+    if len(found) > 1:
+        return FunctionAmbiguous(
+            function=edit.module,
+            lines=tuple(source[: m.start()].count("\n") + 1 for m in found),
+        )
+
+    at = found[0]
+    line = source[: at.start()].count("\n") + 1
+    attribute = f'#[cfg_attr(feature = "{edit.feature}", path = "{_path_attr_value(edit.path, target)}")]'
+    before = source[: at.start()]
+    if before.rstrip("\n").endswith(attribute):
+        return AlreadyMunged(function=edit.module, line=line)
+
+    indent = at.group(0)[: len(at.group(0)) - len(at.group(0).lstrip())]
+    return Munged(
+        source=f"{before}{indent}{attribute}\n{source[at.start():]}", line=line + 1
+    )
 
 
 def apply_attribute(source: str, munge: FunctionMunge) -> AttributeAttempt:
