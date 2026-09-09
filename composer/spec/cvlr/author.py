@@ -67,6 +67,7 @@ from composer.diagnostics.budget import (
 )
 from composer.spec.context import CvlrGeneration, CvlrJudge, WorkflowContext
 from composer.spec.cvlr.editor import editor_tools
+from composer.spec.cvlr.example import WorkedExample, worked_example
 from composer.spec.cvlr.harness import GeneratedHarness
 from composer.spec.cvlr.rules import rule_names
 from composer.spec.cvlr.state import (
@@ -291,7 +292,14 @@ class CvlrMountParams(TypedDict):
 
 
 class CvlrAuthorSystemParams(CvlrMountParams):
+    """What the author's system prompt needs beyond the mounted-source facts.
+
+    ``example`` is the worked invocation example rendered against *this* program (see
+    :mod:`composer.spec.cvlr.example`). ``None`` leaves the prompt's stand-in program in place,
+    which is what a run with no analyzed component gets."""
+
     module: str
+    example: WorkedExample | None
 
 
 _JudgeTemplate = TypedTemplate[_CvlrJudgeParams]("cvlr_feedback_prompt.j2")
@@ -588,7 +596,11 @@ async def batch_cvlr_generation(
 
     sys_prompt: list[RawPromptInput | type[CacheMarker]] = [
         _PropertyGenSysTemplate.bind(
-            {"module": module, "cvlr_versions": cvlr_versions}
+            {
+                "module": module,
+                "cvlr_versions": cvlr_versions,
+                "example": worked_example(component, props) if component else None,
+            }
         ).render_to
     ]
 
