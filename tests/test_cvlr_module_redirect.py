@@ -257,3 +257,115 @@ def test_every_visibility_a_declaration_can_carry_is_matched(decl: str):
     result = apply_module_redirect(decl + "\n", _redirect(module="m"))
 
     assert isinstance(result, Munged), result
+
+
+# ---------------------------------------------------------------------------------------------
+# the cross-crate case
+
+
+PROGRAM_MANIFEST = """\
+[package]
+name = "lending"
+
+[features]
+default = []
+no-entrypoint = []
+certora = ["no-entrypoint", "dep:cvlr", "library/certora"]
+"""
+
+
+def test_a_forwarded_feature_is_recognised():
+    from composer.spec.cvlr.munge import forwards_feature
+
+    assert forwards_feature(PROGRAM_MANIFEST, "library", "certora")
+
+
+@pytest.mark.parametrize("dependency", ["liquidity", "lending_reward_rate_model"])
+def test_a_dependency_the_program_does_not_forward_to_is_reported(dependency: str):
+    """The precondition worth checking because its absence is *silent*: a `cfg_attr` naming a
+    feature the crate does not enable compiles perfectly and never activates, so the munge lands,
+    the build succeeds, and the Prover reports exactly what it reported before."""
+    from composer.spec.cvlr.munge import forwards_feature
+
+    assert not forwards_feature(PROGRAM_MANIFEST, dependency, "certora")
+
+
+def test_an_unparseable_manifest_is_treated_as_not_forwarding():
+    """Fail closed: guessing "probably fine" here buys a silent no-op."""
+    from composer.spec.cvlr.munge import forwards_feature
+
+    assert not forwards_feature("this is not toml [[[", "library", "certora")
+
+
+def test_a_feature_that_is_not_a_list_is_treated_as_not_forwarding():
+    from composer.spec.cvlr.munge import forwards_feature
+
+    assert not forwards_feature(
+        '[features]\ncertora = "yes"\n', "library", "certora"
+    )
+
+
+def test_the_run_global_munges_are_the_ones_no_unit_feature_gates():
+    """A redirect inside a dependency is gated on the shared `certora`, so it is compiled into
+    every unit's build whoever recorded it — and every unit's judge has to be shown it."""
+    from composer.spec.cvlr.conf import DEFAULT_FEATURE
+    from composer.spec.cvlr.tree import SharedTree, UnitEdits
+    from pathlib import Path
+
+    mine = _redirect(feature=FEATURE)
+    shared = _redirect(module="safe_math", path="crates/library/src/math/mod.rs",
+                       feature=DEFAULT_FEATURE)
+    tree = SharedTree(pristine=Path("/nonexistent"), root=Path("/nonexistent"))
+    tree._units["a"] = UnitEdits(module_path=Path("a.rs"), draft="", munges=(mine, shared))
+
+    assert tree.run_global_munges() == (shared,), "only the un-gateable one travels"
+
+
+def test_two_units_recording_the_same_run_global_munge_yield_one():
+    """Deduplicated by `edit_id`, so a judge does not read the same caveat twice."""
+    from composer.spec.cvlr.conf import DEFAULT_FEATURE
+    from composer.spec.cvlr.tree import SharedTree, UnitEdits
+    from pathlib import Path
+
+    shared = _redirect(module="safe_math", path="crates/library/src/math/mod.rs",
+                       feature=DEFAULT_FEATURE)
+    tree = SharedTree(pristine=Path("/nonexistent"), root=Path("/nonexistent"))
+    for unit in ("a", "b"):
+        tree._units[unit] = UnitEdits(module_path=Path(f"{unit}.rs"), draft="", munges=(shared,))
+
+    assert tree.run_global_munges() == (shared,)
+
+
+def test_the_briefing_marks_a_run_global_munge_as_everyones():
+    """A judge told only "the author edited the program" would read a dependency-wide swap as this
+    unit's own choice, and would not think to ask whether its rules touch it."""
+    from composer.spec.cvlr.conf import DEFAULT_FEATURE
+    from composer.spec.cvlr.state import HarnessAssumptions
+
+    shared = _redirect(module="safe_math", path="crates/library/src/math/mod.rs",
+                       feature=DEFAULT_FEATURE)
+    briefing = "\n".join(HarnessAssumptions(summaries=(), munges=(shared,)).briefing())
+
+    assert "IN FORCE FOR EVERY UNIT OF THIS RUN" in briefing
+
+
+def test_a_unit_scoped_munge_is_not_marked_that_way():
+    from composer.spec.cvlr.state import HarnessAssumptions
+
+    briefing = "\n".join(HarnessAssumptions(summaries=(), munges=(_redirect(),)).briefing())
+
+    assert "IN FORCE FOR EVERY UNIT" not in briefing
+
+
+def test_a_units_own_run_global_munge_is_not_shown_twice():
+    """The recording unit has it in its own state *and* sees it in the run-global set."""
+    from composer.spec.cvlr.conf import DEFAULT_FEATURE
+    from composer.spec.cvlr.state import harness_assumptions
+
+    shared = _redirect(module="safe_math", path="crates/library/src/math/mod.rs",
+                       feature=DEFAULT_FEATURE)
+    state = {"munges": [shared], "summaries": []}
+
+    got = harness_assumptions(state, None, (shared,))  # type: ignore[arg-type]
+
+    assert got.munges == (shared,)

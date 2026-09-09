@@ -370,6 +370,7 @@ def test_the_gate_and_the_submission_ask_for_the_same_two_features(tmp_path: Pat
         session=SimpleNamespace(workdir=tmp_path),  # type: ignore[arg-type]
         module_path=tmp_path / "m.rs",
         package="p",
+        package_root=tmp_path,
         tuning=SimpleNamespace(),  # type: ignore[arg-type]
         unit=unit,
         tree=SharedTree(pristine=tmp_path, root=tmp_path),
@@ -392,6 +393,7 @@ async def test_the_build_permit_serializes_staging_and_the_build(tmp_path: Path)
         session=SimpleNamespace(workdir=tmp_path),  # type: ignore[arg-type]
         module_path=tmp_path / "m.rs",
         package="p",
+        package_root=tmp_path,
         tuning=SimpleNamespace(),  # type: ignore[arg-type]
         unit=HarnessModule("d"),
         tree=SharedTree(pristine=tmp_path, root=tmp_path),

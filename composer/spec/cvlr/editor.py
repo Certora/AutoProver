@@ -39,6 +39,7 @@ import dataclasses
 import hashlib
 import logging
 import re
+import tomllib
 from pathlib import Path
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Literal, NotRequired, Sequence, override
@@ -66,6 +67,7 @@ from composer.spec.context import (
     EditorJudge,
     WorkflowContext,
 )
+from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.munge import (
     AlreadyMunged,
     DeriveAttributeUnreadable,
@@ -95,6 +97,7 @@ from composer.spec.cvlr.munge import (
     apply_derive_swap,
     apply_extraction,
     apply_module_redirect,
+    forwards_feature,
     function_item,
     function_names,
     merge_munges,
@@ -936,10 +939,15 @@ class RedirectModule(
       because that is the sentence standing between a green rule and a false one. The judge is told to
       weigh it.
 
-    Two things you do not do. You do not redirect a module outside the crate under verification — a
-    dependency's `mod` declaration cannot be gated on this unit's feature, and the attempt fails with
-    a feature that crate does not have. And you do not redirect a module when a narrower kind reaches
-    the code: if the obstruction is one free function, `munge_function` is the honest edit.
+    **A module in a local dependency is allowed and costs more.** Its `mod` declaration cannot be
+    gated on this unit's feature — that feature is declared on the program's manifest and means
+    nothing in another crate — so it is gated on the shared `certora` instead. The consequence is
+    that the redirect is in force for **every unit of the run**, not only the one that asked, and
+    every unit's judge is shown it. Reach for one only when the obstruction genuinely is in the
+    dependency, and write `why` for a reader who is verifying something else entirely.
+
+    One thing you do not do: redirect a module when a narrower kind reaches the code. If the
+    obstruction is one free function, `munge_function` is the honest edit.
     """
 
     path: str = Field(
@@ -989,12 +997,43 @@ class RedirectModule(
                     pass
             if not resolved.is_file():
                 return f"{self.path} is not a file in this project."
+            # A redirect inside a *dependency* cannot be gated on this unit's feature — that feature
+            # is declared on the program's manifest and means nothing in another crate — so it is
+            # gated on the shared `certora` instead, which the program forwards. The consequence is
+            # that it is in force for every unit of the run, not only the one that asked; the
+            # editor's report says so and every unit's judge is shown it.
+            # (docs/who-edits-the-program.md §11.3 for why the per-unit alternative was rejected.)
+            crate_local = resolved.resolve().is_relative_to(target.package_root.resolve())
+            dependency: str | None = None
+            if crate_local:
+                feature = self.state["feature"]
+            else:
+                feature = DEFAULT_FEATURE
+                dependency = _crate_of(resolved)
+                manifest = target.package_root / "Cargo.toml"
+                if dependency is None:
+                    return (
+                        f"{self.path} is outside {target.package} and this tool cannot tell which "
+                        f"crate owns it, so there is no feature to gate the redirect on."
+                    )
+                if not forwards_feature(manifest.read_text(), dependency, DEFAULT_FEATURE):
+                    return (
+                        f"{self.path} is in `{dependency}`, not in `{target.package}`, so the "
+                        f"redirect has to be gated on the shared `{DEFAULT_FEATURE}` feature — and "
+                        f"`{target.package}`'s `{DEFAULT_FEATURE}` does not enable "
+                        f"`{dependency}/{DEFAULT_FEATURE}`. Without that the attribute compiles and "
+                        f"never activates: the munge would land, the build would succeed, and the "
+                        f"Prover would report exactly what it reports now. This is a project setup "
+                        f"gap rather than something you can fix from here — `give_up` and say that "
+                        f"`{target.package}`'s `{DEFAULT_FEATURE}` feature needs "
+                        f"`\"{dependency}/{DEFAULT_FEATURE}\"` added to it."
+                    )
             record = ModuleRedirect(
                 path=self.path,
                 module=self.module,
                 substitute=self.substitute,
                 why=self.why,
-                feature=self.state["feature"],
+                feature=feature,
             )
             if any(m.edit_id == record.edit_id for m in _held(self.state)):
                 return "You have already recorded exactly that redirect."
@@ -1030,16 +1069,46 @@ class RedirectModule(
                         tool_call_id=self.tool_call_id,
                         content=(
                             f"`{self.module}` is redirected at {self.path}:{line}, gated on "
-                            f"`{record.feature}`; the stand-in lands at {target_path}. The deployed "
-                            f"build is unchanged. Tell the author in `how_to_apply` exactly which "
-                            f"behaviour the stand-in does not reproduce — every rule that reaches "
-                            f"this module is a rule about your file for that behaviour, and "
-                            f"nothing downstream can work that out on its own."
+                            f"`{record.feature}`; the stand-in lands at {target_path}."
+                            + (
+                                ""
+                                if crate_local
+                                else (
+                                    f" **This module is in `{dependency}`, not in "
+                                    f"`{target.package}`, so it is gated on the shared "
+                                    f"`{DEFAULT_FEATURE}` and is in force for every unit of this "
+                                    f"run — not just yours.**"
+                                )
+                            )
+                            + f" The deployed build is unchanged. Tell the author in "
+                            f"`how_to_apply` exactly which behaviour the stand-in does not "
+                            f"reproduce — every rule that reaches this module is a rule about your "
+                            f"file for that behaviour, and nothing downstream can work that out on "
+                            f"its own."
                         ),
                     )
                 ],
             }
         )
+
+
+def _crate_of(resolved: Path) -> str | None:
+    """The name of the workspace crate owning ``resolved``, read from the nearest ``Cargo.toml``.
+
+    Walks up rather than consulting the resolved graph: the question is which manifest declares the
+    feature a redirect would be gated on, and that is a fact about directories.
+    """
+    for directory in resolved.parents:
+        manifest = directory / "Cargo.toml"
+        if not manifest.is_file():
+            continue
+        try:
+            parsed = tomllib.loads(manifest.read_text())
+        except (OSError, tomllib.TOMLDecodeError):
+            return None
+        if (name := parsed.get("package", {}).get("name")) is not None:
+            return str(name)
+    return None
 
 
 def _redirect_of(state: EditorStateExtra, path: str, module: str) -> ModuleRedirect | None:
