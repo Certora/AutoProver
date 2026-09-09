@@ -196,6 +196,7 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
             session=session,
             module_path=package_root / SPECS_DIR / identity.artifact_file,
             package=self.deps.preflight.package,
+            package_root=package_root,
             tuning=tuning,
             unit=identity,
             tree=self.build.tree,

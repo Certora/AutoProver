@@ -48,6 +48,7 @@ from composer.authoring.state import (
     validate_check_mapping,
 )
 from composer.spec.context import CacheKey, CvlrGeneration, CvlrJudge
+from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.munge import Munge, merge_munges, munge_history
 from composer.spec.cvlr.rules import rule_names
 from composer.spec.cvlr.tree import munge_diff
@@ -262,8 +263,14 @@ class HarnessAssumptions:
                 "likewise absent from the harness:"
             )
             parts += [
-                f"  {m.subject} ({m.path}): {m.describe()}\n"
-                f"    Justification: {m.why}"
+                f"  {m.subject} ({m.path}): {m.describe()}"
+                + (
+                    "\n    IN FORCE FOR EVERY UNIT OF THIS RUN, not only this one: it is inside a "
+                    "dependency crate, which cannot be gated per unit."
+                    if m.feature == DEFAULT_FEATURE
+                    else ""
+                )
+                + f"\n    Justification: {m.why}"
                 for m in self.munges
             ]
             if self.diff:
@@ -276,7 +283,9 @@ class HarnessAssumptions:
 
 
 def harness_assumptions(
-    state: CvlrGenerationExtra, pristine: Path | None = None
+    state: CvlrGenerationExtra,
+    pristine: Path | None = None,
+    run_global: tuple[Munge, ...] = (),
 ) -> HarnessAssumptions:
     """The judge-facing read of the pair :func:`tuning_history` reads for the digest.
 
@@ -284,8 +293,15 @@ def harness_assumptions(
     descriptions into a diff. Optional because the diff is derived from the records — no working tree
     is involved — so a caller with no project on hand still gets a correct, weaker briefing rather
     than an error.
+
+    ``run_global`` is the run's munges that are *not* scoped to one unit
+    (:meth:`~composer.spec.cvlr.tree.SharedTree.run_global_munges`) — today only a module redirect
+    inside a local dependency, which has to be gated on the shared ``certora`` feature and is
+    therefore compiled into this unit's build whoever recorded it. Folded in by ``edit_id`` so a
+    unit that recorded one itself does not see it twice.
     """
-    munges = tuple(state["munges"])
+    own = {m.edit_id: m for m in state["munges"]}
+    munges = tuple(own.values()) + tuple(m for m in run_global if m.edit_id not in own)
     return HarnessAssumptions(
         summaries=tuple(state["summaries"]),
         munges=munges,

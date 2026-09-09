@@ -39,6 +39,7 @@ from pathlib import Path, PurePosixPath
 
 from graphcore.tools.vfs import DictBackend, DirBackend, PersistentMaterializer
 
+from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.munge import (
     DeriveSwap,
     FunctionExtraction,
@@ -323,6 +324,32 @@ class SharedTree:
                 return self.pristine / inside.relative_to(self.root.resolve())
             case refusal:
                 return refusal
+
+    def run_global_munges(self) -> tuple[Munge, ...]:
+        """Every munge in the tree that is **not** scoped to the unit that recorded it.
+
+        The per-unit cargo feature is what makes a sibling's munge dormant, and one kind cannot have
+        one: a :class:`~composer.spec.cvlr.munge.ModuleRedirect` of a module in a *local dependency*
+        is gated on the shared ``certora`` feature, because a dependency's manifest does not declare
+        this program's unit features (``docs/who-edits-the-program.md`` §11.3). Such a munge is
+        compiled into every unit's build whoever asked for it, so every unit's judge has to be shown
+        it — a judge reviewing only its own unit's munges would be reviewing a program the prover
+        did not analyze.
+
+        Ordered by ``edit_id`` rather than by unit, so what a judge reads does not depend on which
+        unit happened to stage first.
+        """
+        return tuple(
+            sorted(
+                {
+                    m.edit_id: m
+                    for staged in self._units.values()
+                    for m in staged.munges
+                    if m.feature == DEFAULT_FEATURE
+                }.values(),
+                key=lambda m: m.edit_id,
+            )
+        )
 
     async def reconcile(self, unit: str, edits: UnitEdits) -> Reconciled:
         """Make the tree agree with state, and say what it took.

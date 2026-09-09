@@ -598,6 +598,96 @@ def _plan_workspace_manifest(
     ], satisfied
 
 
+def local_dependencies(workspace: Workspace, package: CratePackage) -> tuple[CratePackage, ...]:
+    """The workspace crates ``package`` depends on by path, in manifest order.
+
+    Read off the manifest's own ``path =`` entries rather than off the resolved graph, because the
+    question is which crates *this project* owns and can therefore be scaffolded — a registry crate
+    resolved to a workspace member by a patch table is still somebody else's code.
+    """
+    declared = _read_toml(package.root / "Cargo.toml").get("dependencies", {})
+    named = [
+        name for name, spec in declared.items() if isinstance(spec, dict) and "path" in spec
+    ]
+    return tuple(
+        found for name in named if (found := workspace.member(name)) is not None
+    )
+
+
+def _plan_feature_forwarding(
+    workspace: Workspace, package: CratePackage, reference: ChainReference
+) -> tuple[list[Change], list[str]]:
+    """Give every local dependency a ``certora`` feature, so a munge can gate code inside one.
+
+    **Why the shared feature and not the per-unit one.** A cross-crate munge has to be gated on
+    something the dependency declares, and forwarding *per-unit* features
+    (``unit_x = ["library/unit_x"]``) would give every dependency a distinct feature set per unit —
+    reinstating the per-unit dependency build the shared tree exists to remove
+    (``docs/single-working-tree.md`` §2.1, and :func:`declare_unit_features` on why unit features are
+    empty). Forwarding the one shared ``certora`` feature keeps the dependencies at a single
+    resolved feature set for the whole run.
+
+    The cost is real and is paid elsewhere: a munge inside a dependency is in force for **every**
+    unit, not just the one that asked for it, so
+    :mod:`composer.spec.cvlr.editor` records it as run-global and every unit's judge is shown it.
+    That is a reporting obligation rather than a build one, and it is the trade
+    ``docs/who-edits-the-program.md`` §11.3 sets out.
+
+    Declared for every local dependency up front rather than when a munge first needs one: the
+    alternative edits a second crate's manifest mid-run, after the tree is built and the feature set
+    a build resolved is already fixed.
+    """
+    changes: list[Change] = []
+    satisfied: list[str] = []
+    forwards: list[str] = []
+    for dep in local_dependencies(workspace, package):
+        forwards.append(f"{dep.name}/{DEFAULT_FEATURE}")
+        rel = dep.root.resolve().relative_to(workspace.root.resolve())
+        parsed = _read_toml(dep.root / "Cargo.toml")
+        features = parsed.get("features", {})
+        if DEFAULT_FEATURE in features:
+            satisfied.append(f"{dep.name} already declares a `{DEFAULT_FEATURE}` feature")
+            continue
+        wanted = _scaffold_pins(workspace, dep, reference)
+        declared = parsed.get("dependencies", {})
+        missing = [c for c in wanted if c.name not in declared]
+        enables = [f"dep:{c.name}" for c in wanted]
+        if NO_ENTRYPOINT_FEATURE in dep.features:
+            enables.insert(0, NO_ENTRYPOINT_FEATURE)
+        entry = f"{DEFAULT_FEATURE} = {_toml_array(enables)}\n"
+        why = (
+            f"so a verification-only edit inside {dep.name} can be gated — the program's "
+            f"`{DEFAULT_FEATURE}` forwards to it"
+        )
+        if features:
+            changes.append(
+                InsertInTable(
+                    path=rel / "Cargo.toml", header="[features]", contents=entry, why=why
+                )
+            )
+        else:
+            changes.append(
+                AppendSection(
+                    path=rel / "Cargo.toml",
+                    contents=_section_banner() + f"[features]\n{entry}",
+                    why=why,
+                )
+            )
+        if missing:
+            changes.append(
+                AppendSection(
+                    path=rel / "Cargo.toml",
+                    contents=_section_banner()
+                    + "\n".join(
+                        _dependency_stanza(c.name, inherit=False, version=c.version)
+                        for c in missing
+                    ),
+                    why=f"the CVLR crates {dep.name}'s `{DEFAULT_FEATURE}` feature enables",
+                )
+            )
+    return changes, satisfied
+
+
 def _plan_package_manifest(
     workspace: Workspace,
     package: CratePackage,
@@ -662,6 +752,11 @@ def _plan_package_manifest(
         enables = [f"dep:{c.name}" for c in wanted]
         if NO_ENTRYPOINT_FEATURE in package.features:
             enables.insert(0, NO_ENTRYPOINT_FEATURE)
+        # Forwarded so a munge inside a local dependency has a feature to gate on; see
+        # :func:`_plan_feature_forwarding` for why this one and not the per-unit features.
+        enables += [
+            f"{dep.name}/{DEFAULT_FEATURE}" for dep in local_dependencies(workspace, package)
+        ]
         entry = f"{DEFAULT_FEATURE} = {_toml_array(enables)}\n"
         why = f"the feature that compiles the harness in ({', '.join(enables)})"
         if features:
@@ -848,6 +943,7 @@ def plan_scaffold(
         _plan_harness(package, relative),
         _plan_envs(package, relative, dialect),
         _plan_gitignore(workspace),
+        _plan_feature_forwarding(workspace, package, reference),
     ):
         changes += planned
         satisfied += notes

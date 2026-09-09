@@ -476,6 +476,7 @@ def _target(workdir: Path, pristine: Path | None = None):
         session=SimpleNamespace(workdir=workdir),  # type: ignore[arg-type]
         module_path=workdir / "src" / "spec.rs",
         package="p",
+        package_root=workdir,
         tuning=SimpleNamespace(),  # type: ignore[arg-type]
         unit=HarnessModule("vault"),
         tree=SharedTree(pristine=pristine or workdir, root=workdir),

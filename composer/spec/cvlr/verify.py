@@ -120,6 +120,11 @@ class HarnessTarget:
     session: CargoSession
     module_path: Path
     package: str
+    #: The package's directory inside the tree. Carried because a munge has to know whether a path
+    #: is inside the crate under verification: an edit outside it cannot be gated on this unit's
+    #: feature, since the feature is declared on this package's manifest
+    #: (``docs/who-edits-the-program.md`` §11.3).
+    package_root: Path
     #: The package's tuning files, which ``summarize_for_prover`` rewrites.
     tuning: TuningFiles
     #: This unit's identity — the module name the tree keys edits by, and the cargo feature that
