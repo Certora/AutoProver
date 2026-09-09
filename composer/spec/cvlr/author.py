@@ -66,6 +66,7 @@ from composer.diagnostics.budget import (
     raise_budget_exceeded,
 )
 from composer.spec.context import CvlrGeneration, CvlrJudge, WorkflowContext
+from composer.spec.cvlr.anchor_surface import read_surface
 from composer.spec.cvlr.editor import editor_tools
 from composer.spec.cvlr.example import WorkedExample, worked_example
 from composer.spec.cvlr.harness import GeneratedHarness
@@ -599,7 +600,11 @@ async def batch_cvlr_generation(
             {
                 "module": module,
                 "cvlr_versions": cvlr_versions,
-                "example": worked_example(component, props) if component else None,
+                "example": (
+                    worked_example(component, props, read_surface(target.package_root))
+                    if component
+                    else None
+                ),
             }
         ).render_to
     ]
