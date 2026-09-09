@@ -36,7 +36,7 @@ import stat
 import time
 from pathlib import Path
 
-from composer.cargo.session import CargoSession, CompileFailed
+from composer.cargo.session import CargoSession, CompileFailed, WarmFailed
 
 _log = logging.getLogger(__name__)
 
@@ -193,6 +193,51 @@ def platform_tools_installed(version: str, *, root: Path = PLATFORM_TOOLS_ROOT) 
     return (root / version).is_dir()
 
 
+def platform_tools_cargos(version: str, *, root: Path = PLATFORM_TOOLS_ROOT) -> tuple[Path, ...]:
+    """The ``cargo`` binaries shipped with a platform-tools version.
+
+    Not the same cargo as the one on ``PATH``, and that difference is load-bearing: **cargo hashes a
+    git source into a cache directory name, and the hash is not stable across cargo versions.** The
+    host's cargo 1.89 fetches ``Certora/anchor`` into ``git/db/anchor-8a7e45e4c93a95b5``; the cargo
+    1.79 inside platform-tools v1.43 looks for ``git/db/anchor-1f3eb14fb7b4e8f1``, finds nothing, and
+    — confined and therefore offline — reports it as
+
+        can't checkout from '...': you are in the offline mode (--offline)
+
+    So a warm run by the wrong cargo is not warm at all for a project with a git dependency, which
+    since ``ANCHOR_FORK`` is every Anchor project. A tuple rather than one path because a version can
+    ship both ``platform-tools`` and ``platform-tools-certora`` and which one ``cargo certora-sbf``
+    selects is its business, not ours; warming both is cheap (they share the registry cache) and
+    removes the need to guess.
+    """
+    return tuple(
+        cargo
+        for flavour in ("platform-tools-certora", "platform-tools")
+        if (cargo := root / version / flavour / "rust" / "bin" / "cargo").is_file()
+    )
+
+
+async def _warm_for_the_build_cargo(
+    session: CargoSession, tools_version: str, manifest_path: Path
+) -> None:
+    """Fetch the graph with the cargos the chain build itself will run, once per session.
+
+    Confined builds only: an unconfined one is not forced offline and can fetch what it lacks. A
+    failure here is logged rather than raised, exactly as :meth:`CargoSession.warm`'s own callers
+    treat it — a partially warm cache still compiles what it covers, and the build below names the
+    crate it could not find, which a fetch cannot.
+    """
+    for cargo in platform_tools_cargos(tools_version):
+        if session.already_warmed(cargo):
+            continue
+        outcome = await session.warm(manifest_dirs=(manifest_path.parent,), cargo=cargo)
+        if isinstance(outcome, WarmFailed):
+            _log.warning(
+                "cargo fetch with %s (platform-tools %s) did not complete: %s",
+                cargo, tools_version, outcome.diagnostics,
+            )
+
+
 async def sbf_build(
     session: CargoSession,
     *,
@@ -211,6 +256,8 @@ async def sbf_build(
     """
     if tools_version is not None and session.confined and not platform_tools_installed(tools_version):
         raise PlatformToolsMissing(tools_version, PLATFORM_TOOLS_ROOT)
+    if tools_version is not None and session.confined:
+        await _warm_for_the_build_cargo(session, tools_version, manifest_path)
     argv = sbf_argv(
         manifest_path=manifest_path, features=features, tools_version=tools_version, arch=arch
     )

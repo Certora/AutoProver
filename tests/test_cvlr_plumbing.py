@@ -19,10 +19,13 @@ import pytest
 from langgraph.store.memory import InMemoryStore
 
 from composer.cargo.metadata import parse_metadata
+from composer.cargo.session import CargoSession
+from composer.sandbox.config import SandboxConfig
 from composer.cargo.sbf import (
     MalformedBuildManifest,
     Built,
     parse_manifest,
+    platform_tools_cargos,
     sbf_argv,
     write_build_script,
 )
@@ -331,6 +334,52 @@ def test_the_build_honors_the_tools_version_the_conf_declares():
         base_conf={"cargo_tools_version": "v1.43"},
     )
     assert cvlr_conf.tools_version(submission.base_conf) == "v1.43"
+
+
+def test_the_build_warms_with_the_cargo_it_will_actually_run(tmp_path):
+    """A cache is only warm for the cargo that filled it.
+
+    Cargo hashes a git source into a directory name and the hash is not stable across versions: the
+    host's cargo 1.89 fetched ``Certora/anchor`` into ``git/db/anchor-8a7e45e4c93a95b5`` while the
+    cargo 1.79 inside platform-tools v1.43 looked for ``git/db/anchor-1f3eb14fb7b4e8f1``, found
+    nothing, and — confined and therefore offline — called it a network failure. Measured, not
+    inferred: both directories exist side by side after fetching with each.
+    """
+    for flavour in ("platform-tools-certora", "platform-tools"):
+        binary = tmp_path / "v1.43" / flavour / "rust" / "bin" / "cargo"
+        binary.parent.mkdir(parents=True)
+        binary.write_text("#!/bin/sh\n")
+
+    found = platform_tools_cargos("v1.43", root=tmp_path)
+
+    assert [p.parent.parent.parent.name for p in found] == [
+        "platform-tools-certora", "platform-tools"
+    ], "both flavours are warmed, since which one the build picks is the tool's business"
+
+
+def test_a_version_with_no_toolchain_yields_nothing_to_warm(tmp_path):
+    """Not an error: an unconfined build is not forced offline and fetches what it lacks, and a
+    confined one already fails at :class:`PlatformToolsMissing` with an operator action named."""
+    assert platform_tools_cargos("v1.43", root=tmp_path) == ()
+
+
+def test_a_directory_without_the_binary_is_not_offered(tmp_path):
+    """A half-extracted toolchain directory exists; warming with a path that is not there would
+    fail the fetch and report it as the project's problem."""
+    (tmp_path / "v1.43" / "platform-tools" / "rust" / "bin").mkdir(parents=True)
+
+    assert platform_tools_cargos("v1.43", root=tmp_path) == ()
+
+
+def test_warming_is_tracked_per_binary_not_per_session(tmp_path):
+    """Two cargos do not share a git cache, so one having warmed says nothing about the other."""
+    session = CargoSession(workdir=tmp_path, sandbox=SandboxConfig())
+
+    assert not session.already_warmed("/tools/v1.43/rust/bin/cargo")
+    session._warmed.add("/tools/v1.43/rust/bin/cargo")
+
+    assert session.already_warmed("/tools/v1.43/rust/bin/cargo")
+    assert not session.already_warmed("cargo"), "the host cargo is a separate cache"
 
 
 def test_the_certora_feature_is_the_default_only_when_nothing_else_says():
