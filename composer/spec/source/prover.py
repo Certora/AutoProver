@@ -446,19 +446,14 @@ def in_situ_project(project_root: str) -> ProjectDirectory:
     return provide
 
 
-def materializing_project(
-    project_root: str, accessor: VFSAccessor[VFSState]
-) -> ProjectDirectory:
-    """The editing strategy: an empty VFS runs in-situ; a non-empty VFS is
-    materialized over the project into a temporary directory that lives for
-    the duration of the run. The copy (and the teardown) run in a worker
-    thread — materializing a whole project is blocking IO that would
-    otherwise stall every concurrently-streaming batch."""
+def materializing_project(accessor: VFSAccessor[VFSState]) -> ProjectDirectory:
+    """Materialize the project — the author's VFS overlay unioned over the base source tree — into a
+    fresh temporary directory that lives for the duration of the run, so every run is the sole tenant
+    of its own folder and concurrent runs never share on-disk scratch. The copy (and the teardown) run
+    in a worker thread — materializing a whole project is blocking IO that would otherwise stall every
+    concurrently-streaming batch."""
     @asynccontextmanager
     async def provide(vfs: dict[str, str]) -> AsyncIterator[str]:
-        if not vfs:
-            yield project_root
-            return
         stack = ExitStack()
         tmp = await asyncio.to_thread(
             stack.enter_context, accessor.materialize({"vfs": vfs})
@@ -540,33 +535,17 @@ def stuck_rule_nag(
     return reminders
 
 
-def _retarget_buffer_imports(cvl: str, names: Iterable[str], tag: str) -> str:
-    """Rewrite each sibling-buffer import ``"<name>.spec"`` to its tagged filename ``"<name>__<tag>.spec"``
-    so a tagged materialization stays self-consistent. Resource imports (e.g. ``"summaries/foo.spec"``)
-    are different quoted strings and are left untouched, so they still resolve within the specs dir."""
-    out = cvl
-    for n in names:
-        out = out.replace(f'"{n}.spec"', f'"{n}__{tag}.spec"')
-    return out
-
-
 @contextmanager
 def materialize_buffers(
-    working_dir: str, buffers: Mapping[str, NamedBuffer], tag: str
+    working_dir: str, buffers: Mapping[str, NamedBuffer]
 ) -> Iterator[dict[str, str]]:
-    """Write every buffer as ``{name}__{tag}.spec`` into the specs dir (all at once, so any buffer's
-    ``import "<sibling>.spec"`` — retargeted to the tagged name — resolves), and yield ``name -> on-disk
-    spec path``; every file is removed on exit. The ``tag`` (unique per submission) isolates concurrent
-    jobs that share one run-root: on the in-situ path the run-root is the shared project directory, so
-    two jobs writing the deterministic ``{name}.spec`` would clobber each other and race on cleanup."""
-    names = list(buffers)
+    """Write every buffer as ``{name}.spec`` into the specs dir (all at once, so any buffer's
+    ``import "<sibling>.spec"`` resolves to its sibling), and yield ``name -> on-disk spec path``;
+    every file is removed on exit. The run owns its materialized project folder, so the deterministic
+    filenames never collide with a concurrent job's."""
     with ExitStack() as stack:
         yield {
-            name: stack.enter_context(tmp_spec(
-                root=working_dir,
-                content=_retarget_buffer_imports(buf.cvl, names, tag),
-                name=f"{name}__{tag}",
-            ))
+            name: stack.enter_context(tmp_spec(root=working_dir, content=buf.cvl, name=name))
             for name, buf in buffers.items()
         }
 
@@ -689,24 +668,23 @@ def get_prover_tool(
         reported_dupes: set[str] = set()
 
         async def _run_buffer_job(
-            *, name: str, digest: str, tag: str, label: str, buffers: Mapping[str, NamedBuffer],
+            *, name: str, digest: str, label: str, buffers: Mapping[str, NamedBuffer],
             vfs: dict[str, str], conf: dict, cex_state: StateWithSkips, tool_call_id: str,
             writer: Callable[[ProverEvents], None], summary: RunSummary,
         ) -> None:
             """Verify one buffer end-to-end against a frozen snapshot (taken at submit time) of the source
-            and all buffers, then push the outcome onto the completion queue. The per-submission ``tag``
-            isolates this job's spec/conf files, so editing + re-submitting a shared buffer (or a concurrent
+            and all buffers, then push the outcome onto the completion queue. The job runs in its own
+            materialized project folder, so editing + re-submitting a shared buffer (or a concurrent
             sibling job) can never mutate the files this job is reading. Cancellation (a supersede) propagates
             as CancelledError and pushes nothing — the superseded result is simply dropped."""
             conf_dir = CERTORA_DIR / "confs"
-            stem = f"{name}__{tag}"
             try:
                 async with sem, project_directory(vfs) as run_root:
-                    with materialize_buffers(run_root, buffers, tag) as paths:
+                    with materialize_buffers(run_root, buffers) as paths:
                         spec_path = paths[name]
                         with buffer_conf(
                             working_dir=run_root, config=conf, main_contract=main_contract,
-                            spec_path=spec_path, buffer_name=stem, conf_dir=conf_dir, msg="",
+                            spec_path=spec_path, buffer_name=name, conf_dir=conf_dir, msg="",
                         ) as (cpath, _cfg):
                             try:
                                 all_rules = await declared_rules_list(folder=Path(run_root), args=[cpath])
@@ -717,7 +695,7 @@ def get_prover_tool(
                                 return
                         with buffer_conf(
                             working_dir=run_root, config=conf, main_contract=main_contract,
-                            spec_path=spec_path, buffer_name=stem, conf_dir=conf_dir, msg=label,
+                            spec_path=spec_path, buffer_name=name, conf_dir=conf_dir, msg=label,
                         ) as (cpath, cfg):
                             res = await run_prover(
                                 Path(run_root), [cpath], tool_call_id, prover_opts,
@@ -781,7 +759,7 @@ def get_prover_tool(
             submit_counts[name] = n
             component = component_of(state)
             task = asyncio.create_task(_run_buffer_job(
-                name=name, digest=digest, tag=f"{digest[:8]}_{n}",
+                name=name, digest=digest,
                 label=f"{component}/{name} submission {n}",
                 buffers=dict(buffers), vfs=dict(state.get("vfs") or {}), conf=state["config"],
                 cex_state=state, tool_call_id=tool_call_id,

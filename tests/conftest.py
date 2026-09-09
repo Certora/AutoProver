@@ -415,9 +415,8 @@ def certora_prover(
     calls: list[ProverCall] = []
 
     def _buffer_of_conf(conf: dict) -> str | None:
-        # verify target "Dummy:certora/specs/<name>__<tag>.spec" -> buffer name (stem before "__").
-        stem = Path(conf["verify"].split(":", 1)[1]).stem
-        return stem.rsplit("__", 1)[0] if "__" in stem else None
+        # verify target "Dummy:certora/specs/<name>.spec" -> buffer name (the spec stem).
+        return Path(conf["verify"].split(":", 1)[1]).stem
 
     async def mock_declared_rules(folder: Path, args: list[str]) -> list[str]:
         return SPEC_DECL_RE.findall(spec_of_prover_conf(folder, conf_of_prover_call(folder, args)))

@@ -371,7 +371,7 @@ class ProverBackend:
         # VFS (invariants, or an author that never edited) runs in-situ; a
         # non-empty one runs in a temp materialization of the working copy.
         prover_tool = get_prover_tool(
-            run.env.llm_heavy(), run.source.contract_name, materializing_project(run.source.project_root, self.editing.live.mat),
+            run.env.llm_heavy(), run.source.contract_name, materializing_project(self.editing.live.mat),
             prover_opts=self._prover_opts, analysis_store=self.analysis_store,
         )
         return ProverPrepared(

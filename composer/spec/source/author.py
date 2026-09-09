@@ -990,7 +990,7 @@ async def batch_cvl_generation(
         # Run-root strategy (see ProjectDirectory): an empty working copy is read
         # in-situ, a non-empty one against a temporary materialization whose lifetime
         # is the contributed tool's invocation.
-        project_directory = materializing_project(source.project_root, kit.live.mat)
+        project_directory = materializing_project(kit.live.mat)
 
         @asynccontextmanager
         async def yield_state(
