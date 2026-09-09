@@ -84,6 +84,7 @@ from composer.spec.cvlr.state import (
     validate_property_rules,
     validate_rule_subjects,
 )
+from composer.spec.cvlr.tree import SharedTree
 from composer.spec.cvlr.verify import (
     ExpectRuleFailure,
     ExpectRulePassage,
@@ -209,6 +210,12 @@ class FeedbackDependencies:
     #: The developer's project, so the judge is shown the munge *diff* rather than a description of
     #: it (``docs/who-edits-the-program.md`` §4, move B).
     pristine: Path
+    #: The run's shared tree, which holds *every* unit's munges. Needed because one kind is not
+    #: scoped to the unit that recorded it: a redirect of a module in a local dependency is gated on
+    #: the shared ``certora`` feature, so it is in force for this unit's build whoever asked for it
+    #: (``docs/who-edits-the-program.md`` §11.3). A judge shown only its own unit's munges would be
+    #: reviewing a program that is not the one the prover analyzed.
+    tree: SharedTree
 
 
 @tool_display("Getting feedback", "Feedback")
@@ -245,7 +252,7 @@ class FeedbackTool(
         skipped = self.state["skipped"]
         with self.tool_deps() as deps:
             verdict = await deps.thunk(
-                harness_assumptions(self.state, deps.pristine),
+                harness_assumptions(self.state, deps.pristine, deps.tree.run_global_munges()),
                 draft,
                 skipped,
                 self.rebuttals,
@@ -576,6 +583,7 @@ async def batch_cvlr_generation(
         ),
         stamper=make_validation_stamper(FEEDBACK),
         pristine=pristine,
+        tree=target.tree,
     )
 
     sys_prompt: list[RawPromptInput | type[CacheMarker]] = [

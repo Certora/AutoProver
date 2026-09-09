@@ -69,6 +69,7 @@ def _target(tmp_path: Path):
         session=SimpleNamespace(workdir=root),  # type: ignore[arg-type]
         module_path=root / "programs/p/src/certora/specs/vault.rs",
         package="p",
+        package_root=root / "programs" / "p",
         tuning=SimpleNamespace(),  # type: ignore[arg-type]
         unit=HarnessModule("vault"),
         tree=SharedTree(pristine=root, root=root),

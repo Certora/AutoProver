@@ -651,108 +651,52 @@ Three places carry that, because no single one of them can:
   redirect was *for* rather than what it dropped means no rule reaching that module can be accounted
   for.
 
-### 11.3 What it does not do yet
+### 11.3 Cross-crate, and the trade it cost
 
-**Cross-crate redirects are refused, and the refusal is not the interesting part.** A dependency's
-`mod` declaration cannot be gated on this unit's cargo feature, because the feature is declared on
-the program's own manifest and a `cfg_attr` naming it inside another crate names a feature that
-crate does not have. The corpus forwards a workspace-wide `certora` feature instead
-(`certora = ["library/certora", …]`).
+A redirect inside a **local dependency** is allowed, and it is where the kind earns its keep — the
+five math modules fluid swaps live in `crates/library`, not in the program. It cannot be gated on
+the recording unit's feature, because that feature is declared on the program's manifest and means
+nothing in another crate, so it is gated on the shared `certora` and the program forwards it:
 
-That is a separate piece of work with a genuine tension behind it, recorded here so it is not
-rediscovered: `declare_unit_features` keeps every unit feature **empty** on purpose, because a
-feature that enabled a dependency's feature would give the dependencies per-unit fingerprints and
-reinstate the per-unit dependency build the shared tree exists to remove (`single-working-tree.md`
-§2.1 — 4 of 519 artifacts vary today). Forwarding a *per-unit* feature across crates trades that
-away. Forwarding a *shared* one keeps the build economics and makes the munge run-global, so one
-unit's stand-in silently underwrites every other unit's verdicts — which is a reporting problem, not
-a build one, and would need the munge to reach every unit's judge rather than only the recording
-unit's.
-
-Neither answer should be picked from one target's needs.
-
----
-
-## Appendix — for a reader who knows the EVM backend and not Solana
-
-Enough to read the rest of this note. The differences that matter are three, and the first one causes
-the other two.
-
-### A.1 There is no spec file, so there is nowhere else to put an approximation
-
-A CVL spec is a standalone `.spec` the prover is pointed at. **A CVLR "spec" is Rust: a module inside
-the crate under verification**, compiled with it, reached through the build rather than through a
-path. There is no second artifact.
-
-That matters because of what the spec side can do in each ecosystem. CVL summaries can *compute* — a
-ghost function, an internal function, `ALWAYS(x)`. The Solana Prover's equivalent is a **tuning
-file**: a list of regexes over demangled symbols, and the prover replaces a matched symbol with an
-unconstrained value. It can delete a function; it cannot replace one. `summarize_for_prover` writes
-into that file.
-
-So the EVM instinct — *"when 'pretend this function does not exist' is genuinely right, CVL has a
-deleting summary for it, declared in the spec"* ([munge_charter.j2](../composer/templates/munge_charter.j2))
-— works for the *deleting* case on Solana too, and has nowhere to go for the *computing* case. That
-is the whole reason the two backends' munge topologies diverged: property-relative approximation has
-to happen in the program's source, which puts it on the author's side of EVM's own dividing line.
-
-### A.2 A munge is a one-line attribute, and it is compile-time conditional
-
-EVM's editor rewrites Solidity — Exposure, Refactor, Standardize, under a behavioural-equivalence
-criterion (*"Representation may change; logical behavior may not"*). The Solana equivalent is
-narrower and stranger: five of the six kinds in the corpus are a **single attribute inserted above a
-function signature**, from a library:
-
-```rust
-#[cfg_attr(feature = "unit_deposits", cvlr::early_panic)]
-pub fn redeem_fees(reserve: &mut Reserve) -> Result<u64> { … }
+```toml
+# programs/lending/Cargo.toml — written by the scaffold
+certora = ["no-entrypoint", "dep:cvlr", "dep:cvlr-solana",
+           "library/certora", "liquidity/certora", "lending_reward_rate_model/certora"]
 ```
 
-Two things here have no Solidity analogue.
+`_plan_feature_forwarding` declares a `certora` feature in every local dependency and adds the
+forward, for the whole workspace, at scaffold time — not when a munge first needs one, which would
+edit a second crate's manifest mid-run after the feature set a build resolved is already fixed.
 
-**Verification builds are feature-gated.** A Solana verification project builds under a cargo feature
-(conventionally `certora`) that pulls in the harness and suppresses the on-chain entrypoint. So an
-edit can *ship in the file and be inert*: with the named feature off, `cfg_attr` contributes no
-attribute at all and the compiled function is the one the project deployed. There is no Solidity
-construct that is present in the source and absent from the artifact unless asked for.
+**The alternative was rejected on build economics.** Forwarding *per-unit* features
+(`unit_x = ["library/unit_x"]`) preserves isolation and gives every dependency a distinct feature
+set per unit, which reinstates the per-unit dependency build the shared tree exists to remove —
+`single-working-tree.md` §2.1, where 4 of 519 artifacts vary today. That is not a trade the shared
+tree survives.
 
-**That is what scopes a munge to one unit.** We gate each munge on the *requesting unit's own*
-feature, so one function can carry several munges — one per unit — each dormant in every other unit's
-build. EVM gets the same isolation for free and by a different route: each unit's edits live in that
-unit's VFS overlay in graph state, so there is no shared file to collide in. Ours is weaker (one
-physical file, N dormant lines) and cheaper (one crate, one `target/`, see
-[single-working-tree.md](single-working-tree.md)).
+**What it costs instead is a reporting obligation.** A redirect gated on `certora` is compiled into
+**every unit's** build, whoever asked for it. Three things carry that:
 
-The attributes themselves come from the `cvlr` crate: `early_panic` rewrites every `?` in a function
-to `.unwrap()`; `mock_fn(with = path)` replaces the function with a named stand-in.
+* `SharedTree.run_global_munges()` is the set of munges no unit feature gates, and
+  `harness_assumptions` folds them into every unit's judge briefing — deduplicated by `edit_id`, so
+  the recording unit does not see its own twice.
+* The briefing marks them: *IN FORCE FOR EVERY UNIT OF THIS RUN, not only this one*. A judge told
+  merely that "the author edited the program" would read a dependency-wide swap as this unit's own
+  choice and never think to ask whether its rules touch it.
+* The editor's tool says the same thing back when it records one, so `how_to_apply` is written for a
+  reader who is verifying something else entirely.
 
-### A.3 There are two reviewers on the EVM side and one on ours — and ours sees the properties
+### 11.4 The one thing a scaffold cannot fix
 
-This is the difference §2.1 turns on, and it inverts the usual expectation.
+Forwarding is written only when the scaffold creates the `certora` feature. A project that already
+had one keeps it untouched — "nothing is overwritten, ever" — so an already-scaffolded project can
+have the dependency-side feature and no forward to it. That combination is **silent**: a
+`#[cfg_attr(feature = "certora", ..)]` inside a dependency whose feature is never enabled compiles
+perfectly and does nothing, so the munge lands, the build succeeds, and the Prover reports exactly
+what it reported before — the same shape of failure that cost the run in §11's opening, arrived at
+from the other direction.
 
-| | EVM | CVLR |
-|---|---|---|
-| who edits the program | a dedicated editor agent, commissioned by the author with a natural-language *request* | the author, via a typed `munge_function(path, function, munge, why)` — the change this note proposes |
-| what the editor sees | not the spec, deliberately | — |
-| who reviews the edit | the munge reviewer: a seven-item **behavioural** checklist (lost writes, added constraints, interface drift, …), verdict scoped to *"not an endorsement that the edit was wise"* | the **contextual property judge** — the same one that reviews the harness — which holds the properties and already rules on both munge kinds by name |
-| where property-relative approximation goes | the spec, as a CVL summary | the program's source, because A.1 leaves nowhere else |
-| revert | `edit_store.py` content-hash VFS snapshots | none; the file is rebuilt from pristine and replayed from the munge list, so removal is a property of the representation |
-| what the report says | `SourceEditRecord` / `AppliedEditRecord` | the same types — this is the one piece shared verbatim |
-
-So if you come from EVM expecting "the editor must not see the spec, therefore it cannot judge a
-property-relative change", the CVLR answer is that **the editor still does not judge it — the judge
-does, and unlike EVM's munge reviewer, ours is already property-aware.** That is the entire argument
-of §2.1, and it is why a delegation EVM cannot make is available here.
-
-### A.4 Three things that will trip you up
-
-* **`cargo check` is whole-crate.** The compile gate compiles the package, not one spec file, so
-  "another unit's draft is broken" used to be a real failure mode. Cargo features fixed it; see
-  [single-working-tree.md](single-working-tree.md) §2.2.
-* **The working copy is a real directory, not a VFS.** Cargo's input is a source tree *plus* a
-  `CARGO_HOME` *plus* a `target/`, so materializing a snapshot per compile check would mean a cold
-  dependency fetch and a full rebuild. Edits are real writes — but derived from checkpointed state,
-  so the tree stays disposable.
-* **`mock_fn` straddles the author/agent boundary.** The attribute goes in the program; the stand-in
-  it names is Rust the author writes in the harness. §3 is about that seam. There is no EVM analogue
-  because a CVL summary's target lives in the spec, on one side of the line.
+So the tool checks. `forwards_feature` reads the program's manifest before recording a cross-crate
+redirect and refuses one that would not activate, naming the exact line somebody has to add. Failing
+closed on an unparseable manifest, because guessing "probably fine" here buys precisely the silent
+no-op the check exists to prevent.
