@@ -2309,11 +2309,7 @@ list because most of it is not in the phase that will fix it.
 5. **The rest of Phase 7** (§7.8): the Docker image's Rust + Solana platform-tools toolchain, the
    replay tape and the LLM-free smoke scenario it drives (§6 names this as a gate and it does not
    exist), and user-facing documentation.
-6. **A recursion exhaustion still discards finished work.** A budget stop returns `Curtailed` and
-   preserves the draft; a `GraphRecursionError` propagates and the draft is lost. It is caught
-   nowhere in the tree, so this is pre-existing shared behaviour and belongs to `run_to_completion`'s
-   callers as one change rather than to this backend (§7.5.5).
-7. **Cross-unit learning** — §7.11. ~~The deterministic half is the cheapest item on this list~~ —
+6. **Cross-unit learning** — §7.11. ~~The deterministic half is the cheapest item on this list~~ —
    **built**: the authoring prompt's worked example is now rendered against the analyzed program
    (`composer/spec/cvlr/example.py`), so a unit reads its own handler, its own accounts and their
    declared types, and the `crate::…` subject path the publish gate will check, instead of a
@@ -2323,7 +2319,7 @@ list because most of it is not in the phase that will fix it.
    in favour of the next candidate rather than rendering something that will not compile. What is
    still open is the measurement this was supposed to enable: whether units still spend turns
    reaching the program, and therefore whether the gated probe half is worth its serial submission.
-8. ~~**The author cannot see the target's macro-generated surface**~~ — **built, by reading rather
+7. ~~**The author cannot see the target's macro-generated surface**~~ — **built, by reading rather
    than expanding** ([anchor_surface.py](../composer/spec/cvlr/anchor_surface.py)). `cargo expand`
    was the proposal and is not what shipped: it wants a nightly toolchain and a vendored binary, and
    toolchain acquisition is this project's most reliable source of silent late failures. It is also
@@ -2360,7 +2356,7 @@ list because most of it is not in the phase that will fix it.
    a rule stated once in the charter covers every handler, where a tool covers the ones the author
    thinks to ask about. If measurement says authors still spend turns on this, the tool is the next
    step and the reader is already the thing it would call.
-9. ~~**Extraction is the munge kind the vocabulary lacks**~~ — **built**
+8. ~~**Extraction is the munge kind the vocabulary lacks**~~ — **built**
    ([who-edits-the-program.md](./who-edits-the-program.md) §10). `extract_function` is the editor's
    sixth tool and the only one that is not an attribute: a `FunctionExtraction` record captures the
    pristine item verbatim and renders §8.4's gated pair, so the deployed half is text nobody retyped
@@ -2375,15 +2371,15 @@ list because most of it is not in the phase that will fix it.
 **Checks and residue deferred to a real run** — [single-working-tree.md](./single-working-tree.md) §8
 for the first three, [the-tree-is-a-vfs.md](./the-tree-is-a-vfs.md) §6 for the fourth.
 
-10. **Multi-variant caching under `cargo certora-sbf`.** It passes on host cargo — the third build
+9. **Multi-variant caching under `cargo certora-sbf`.** It passes on host cargo — the third build
    across two unit features ran zero rustc invocations — and the SBF triple ought to behave
    identically, but §7.6.7's rule cuts both ways and this belongs in the expensive gate.
-11. **The disposability invariant end to end**: `rm -rf .cvlr_work` and resume, reaching the same
+10. **The disposability invariant end to end**: `rm -rf .cvlr_work` and resume, reaching the same
     submission. Covered by unit tests; never done against a live run. The mechanism under it has
     since changed — the tree's own derived-file note is gone, and the VFS materializer's manifest
     plus its restore-from-base rule answer for it — which makes the end-to-end form the only check
     that has not been re-run since.
-12. **The VFS migration's own residue** ([the-tree-is-a-vfs.md](./the-tree-is-a-vfs.md) §6). Four of
+11. **The VFS migration's own residue** ([the-tree-is-a-vfs.md](./the-tree-is-a-vfs.md) §6). Four of
     its five risks are untouched by having built it, and one is not a risk but a task: **the
     persistent materializer lives on a graphcore branch**, and `pyproject.toml` pins graphcore by
     commit, so it has to land upstream before this is anything but a private fork of a shared
@@ -2392,27 +2388,27 @@ for the first three, [the-tree-is-a-vfs.md](./the-tree-is-a-vfs.md) §6 for the 
     prover globs the real filesystem, so materialization must be complete before submission and a
     lazier materializer would break that silently; and `get` returns `str`, so anything non-UTF-8 in
     the tree is outside the model.
-13. **Latency under contention.** §3 there predicts one tree wins cold and loses warm, with the
+12. **Latency under contention.** §3 there predicts one tree wins cold and loses warm, with the
     build queue seconds deep rather than minutes. Neither half has been timed.
 
 **Open questions and later phases.**
 
-14. **Open question 5** (§8): whether prover cost actually favours parametric rules over per-handler
+13. **Open question 5** (§8): whether prover cost actually favours parametric rules over per-handler
     restatements. Both forms are offered and the prompt prefers parametric for a cross-handler
     property; the cost question needs runs.
-15. **Capture Phase B has not run** ([cvlr-capture-plan.md](./cvlr-capture-plan.md)). The question
+14. **Capture Phase B has not run** ([cvlr-capture-plan.md](./cvlr-capture-plan.md)). The question
     ledger exists and nobody has spent expert time on it. Three rule idioms reached the authoring
     prompt by hand (§7.6.2); the general form — the reference project's parametric-rule and
     account-construction helpers — is still unextracted.
-16. **Phase 8, Soroban** (§7.9), deliberately untouched until Solana is done. `project_toolchain`
+15. **Phase 8, Soroban** (§7.9), deliberately untouched until Solana is done. `project_toolchain`
     still has no Soroban entry.
 
 **Documentation debt.**
 
-17. [munge-and-working-copies.md](./munge-and-working-copies.md) §4 needs rewriting against the wider
+16. [munge-and-working-copies.md](./munge-and-working-copies.md) §4 needs rewriting against the wider
     corpus survey rather than annotating — its counts are one project's where the evidence is nine of
     eleven. Its §1–§3 CVLR half is already marked as superseded.
-18. A handful of shipped changes have no section here yet: the `--max-properties` cap, the
+17. A handful of shipped changes have no section here yet: the `--max-properties` cap, the
     `composer/layout.py` path consolidation that moved the sandbox's scratch under
     `.certora_internal` and extended `RUST_FORBIDDEN_READ`, `cvlr-spl-token` entering the reference
     set, and `preflight.select_package`. §7.8.1–§7.8.2 cover the entry points they arrived with.
