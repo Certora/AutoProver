@@ -459,7 +459,7 @@ def certora_prover(
     def bind_buffers(responses_by_name: dict[str, ProverToolResponse]) -> list[BaseTool]:
         buffer_responses.clear()
         buffer_responses.update(responses_by_name)
-        return toolset.buffer_tools
+        return toolset.make_buffer_tools()
 
     return ProverMock(bind_tool, calls, bind_buffers)
 

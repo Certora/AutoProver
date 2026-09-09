@@ -148,6 +148,30 @@ class TestBufferSubmitCollect:
         ).run()
         assert _prover_complete(st) is None
 
+    async def test_isolated_pairs_do_not_drain_each_others_jobs(self, certora_prover: ProverMock):
+        """Each ``make_buffer_tools()`` pair owns its job state: submitting on one pair must not let a
+        second pair's blocking collect drain that job. A second pair stands in for a concurrent
+        component author, which shares the prover semaphore but must never share the result queue."""
+        pair_a = certora_prover.buffers({"easy": _report(r_easy=True)})
+        pair_b = certora_prover.buffers({"easy": _report(r_easy=True)})
+
+        def scene(pair):
+            return Scenario(StateWithSkips, *pair).init(
+                curr_spec=None, buffers=_buffers(), skipped=[], property_rules=[], validations={},
+                required_validations=[VALIDATION_KEY], rule_skips={}, config={"files": ["src/Foo.sol"]},
+                reminders_channel=[], version_history=[],
+            )
+
+        # A submits easy (same tool pair reused across turns, so its background job persists).
+        await scene(pair_a).turns(_submit("easy")).run()
+        # B submitted nothing, so its blocking collect has no job of its own to await and drains nothing.
+        # A shared queue would let B drain A's result here.
+        st_b = await scene(pair_b).turns(_collect(wait=True)).run()
+        assert st_b["validations"].get("prover:easy") is None
+        # A still finds and stamps its own job.
+        st_a = await scene(pair_a).turns(_collect(wait=True)).run()
+        assert st_a["validations"].get("prover:easy") is not None
+
     async def test_collect_without_finished_jobs_does_not_block(self, certora_prover: ProverMock):
         """A non-blocking collect with nothing submitted returns a status board rather than hanging."""
         st = await _scenario(certora_prover, _buffers()).turns(
