@@ -8,11 +8,12 @@ its members' rules' verdicts. Groups are identified by the slug the LLM assigns 
 A single ``general`` fallback group (every property in one group) is used by `build` when the LLM
 call raises, validation rejects the grouping, or the grouping covers no properties.
 """
+import json
 from typing import Iterable
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from composer.templates.loader import load_jinja_template
 from composer.spec.source.report.schema import (
@@ -71,6 +72,30 @@ class GroupingResult(BaseModel):
         description="The high-level property groups; collectively they cover every input property "
         "exactly once."
     )
+
+    @field_validator("groups", mode="before")
+    @classmethod
+    def _unwrap_a_serialized_grouping(cls, v: object) -> object:
+        """Accept the answer the model sometimes gives: the whole object, JSON-encoded, in here.
+
+        Observed on a real run — ``groups`` arrived as the string ``'{"groups":[{"slug":...}]}'``,
+        so validation rejected it and the report fell back to one ``general`` group. That fallback
+        is silent in the artifact: the reader sees a plausible single-group report, not a defect. It
+        cost nothing on a one-property component and would flatten an eighty-nine-property one.
+
+        Narrow on purpose. A string that is not JSON, or JSON that is not the grouping shape, is
+        returned untouched for pydantic to reject as before — the fallback is the right answer for a
+        model that actually failed, and only *this* mis-encoding is worth rescuing.
+        """
+        if not isinstance(v, str):
+            return v
+        try:
+            parsed = json.loads(v)
+        except json.JSONDecodeError:
+            return v
+        if isinstance(parsed, dict) and isinstance(inner := parsed.get("groups"), list):
+            return inner
+        return parsed if isinstance(parsed, list) else v
 
 
 async def call_grouping_llm(

@@ -9,6 +9,7 @@ structured output is preset (so the real `call_grouping_llm` — templates + par
 still runs), and inputs are in-memory `GeneratedCVL` (or `None` for a give-up/crash,
 which is how a caller hands a gap to the report layer).
 """
+import json
 from types import SimpleNamespace
 from typing import Any, cast
 import pathlib
@@ -987,3 +988,51 @@ def test_the_fetcher_serves_any_reportable_result():
     so the annotation was the only thing backend-specific about it."""
     fetcher = make_prover_fetcher(_FakeAPI({}))
     assert callable(fetcher)
+
+
+# ---------------------------------------------------------------------------------------------
+# the grouping the model encodes twice
+
+
+def _draft_payload() -> str:
+    return json.dumps({"groups": [{
+        "slug": "admin-authorization",
+        "title": "Admin instructions are gated on the canonical admin record",
+        "description": "The privileged handlers bind to the factory PDA.",
+        "members": [["Market Admin & Governance", "lending_admin_must_be_canonical_pda"]],
+    }]})
+
+
+def test_a_grouping_returned_as_json_text_is_still_a_grouping():
+    """Seen on a real run: the model put the whole object, JSON-encoded, into ``groups``.
+
+    Validation rejected it and the report silently fell back to one ``general`` bucket — which
+    reads as a plausible report rather than as a defect, so nobody would look. It cost nothing on a
+    one-property component and would flatten an eighty-nine-property one.
+    """
+    result = GroupingResult.model_validate({"groups": _draft_payload()})
+
+    assert [g.slug for g in result.groups] == ["admin-authorization"]
+    assert result.groups[0].members == [("Market Admin & Governance",
+                                         "lending_admin_must_be_canonical_pda")]
+
+
+def test_a_bare_json_list_is_accepted_too():
+    """The same mis-encoding without the redundant wrapper."""
+    inner = json.loads(_draft_payload())["groups"]
+
+    assert len(GroupingResult.model_validate({"groups": json.dumps(inner)}).groups) == 1
+
+
+def test_a_normal_grouping_is_untouched():
+    result = GroupingResult.model_validate(json.loads(_draft_payload()))
+
+    assert [g.slug for g in result.groups] == ["admin-authorization"]
+
+
+@pytest.mark.parametrize("bad", ["not json at all", '"a bare string"', '{"other": []}', "17"])
+def test_a_model_that_really_failed_still_falls_back(bad: str):
+    """The rescue is for one specific mis-encoding. Anything else must still be rejected, because
+    the ``general`` fallback is the right answer for a grouping that did not happen."""
+    with pytest.raises(Exception):
+        GroupingResult.model_validate({"groups": bad})
