@@ -22,6 +22,7 @@ from langgraph.types import interrupt
 
 from composer.io.context import run_to_completion, with_handler
 from composer.io.event_handler import NullEventHandler
+from composer.io.context import successor_thread_id
 from composer.io.mailbox import (
     InboxMessage,
     MailboxInterrupts,
@@ -29,9 +30,9 @@ from composer.io.mailbox import (
     QuestionSort,
     WarmWait,
     chat_reply,
-    consumed_answers,
     default_prompt,
     reconcile_inbox,
+    thread_evidence,
 )
 from composer.io.protocol import GraphSuspended, HumanInteractionBridge, observed
 from graphcore.tools.human import QuestionId, ask
@@ -43,6 +44,7 @@ class FakeMailbox:
     def __init__(self, messages: dict[str, str] | None = None) -> None:
         self.messages: dict[str, str] = dict(messages or {})
         self.acked: list[str] = []
+        self.dismissed: list[str] = []
         self.questions: dict[str, str] = {}  # question id -> prompt
         self.threads: dict[str, str] = {}  # question id -> the thread recorded with it
         self.sorts: dict[str, QuestionSort] = {}  # question id -> the sort recorded with it
@@ -53,11 +55,14 @@ class FakeMailbox:
             InboxMessage(
                 id=QuestionId(k), kind="answer", payload=v, thread_id=self.threads.get(k), sort=self.sorts.get(k)
             )
-            for k, v in self.messages.items() if k not in self.acked
+            for k, v in self.messages.items() if k not in self.acked and k not in self.dismissed
         ]
 
     async def ack(self, message_ids: Sequence[QuestionId]) -> None:
         self.acked.extend(message_ids)
+
+    async def dismiss(self, message_ids: Sequence[QuestionId]) -> None:
+        self.dismissed.extend(message_ids)
 
     async def record_question(self, question: OpenQuestion) -> None:
         self.questions[question.id] = question.prompt
@@ -242,49 +247,97 @@ async def test_suspend_then_resume_in_a_new_process_consumes_and_acks() -> None:
     assert sorted(warm.acked) == ["call-a", "call-b"]
 
 
-async def test_startup_inventory_acks_what_a_predecessor_consumed() -> None:
-    """The graph consumed two answers, a tool call's as a ToolMessage and a chat turn's
-    as a tagged reply; the process died before acking either. The next process finds
-    both messages still in the inbox and acks them without re-applying, while messages
-    nobody consumed are left alone. The inventory reads only the thread each message's
-    question record names, and looks for the kind of evidence the record's sort says;
-    a message with no record has neither and is left alone too."""
+class MState(TypedDict):
+    messages: Annotated[list, operator.add]
 
-    class MState(TypedDict):
-        messages: Annotated[list, operator.add]
 
-    def turn(state: MState) -> dict:
-        return {
-            "messages": [
-                AIMessage(content="", tool_calls=[{"name": "ask", "args": {}, "id": "call-a", "type": "tool_call"}]),
-                ToolMessage(content="A", tool_call_id="call-a"),
-                AIMessage(content="shall I?", id="ai-1"),
-                chat_reply("go ahead", "ai-1"),
-                AIMessage(content="done. anything else?", id="ai-2"),
-            ]
-        }
+def _tool_call(call_id: str) -> dict:
+    return {"name": "ask", "args": {}, "id": call_id, "type": "tool_call"}
 
+
+async def _thread_with(saver: InMemorySaver, thread_id: str, messages: list) -> None:
+    """One checkpointed turn on ``thread_id`` appending ``messages``."""
     b = StateGraph(MState)
-    b.add_node("turn", turn)
+    b.add_node("turn", lambda state: {"messages": messages})
     b.add_edge(START, "turn")
     b.add_edge("turn", END)
+    await b.compile(checkpointer=saver).ainvoke({"messages": []}, {"configurable": {"thread_id": thread_id}})
+
+
+async def test_startup_inventory_acks_the_consumed_and_retires_the_obsolete() -> None:
+    """Judged from the checkpoints alone. On thread t: call-a was asked and answered as a
+    ToolMessage, ai-1 was asked and replied to, call-b and ai-2 were asked and never answered,
+    and nothing ever asked call-c or ai-9. The sub-agent thread at generation 0 asked call-g
+    and was then superseded by generation 1. A message whose question was never recorded
+    names no thread and is left alone."""
     saver = InMemorySaver()
-    graph = b.compile(checkpointer=saver)
-    await graph.ainvoke({"messages": []}, {"configurable": {"thread_id": "t"}})
+    await _thread_with(saver, "t", [
+        AIMessage(content="", tool_calls=[_tool_call("call-a"), _tool_call("call-b")]),
+        ToolMessage(content="A", tool_call_id="call-a"),
+        AIMessage(content="shall I?", id="ai-1"),
+        chat_reply("go ahead", "ai-1"),
+        AIMessage(content="done. anything else?", id="ai-2"),
+    ])
+    asks_g = [AIMessage(content="", tool_calls=[_tool_call("call-g")])]
+    await _thread_with(saver, "t/agent:tc/g0", asks_g)
+    await _thread_with(saver, "t/agent:tc/g1", asks_g)
 
-    assert await consumed_answers(saver, "t") == {("tool", "call-a"), ("chat", "ai-1")}
-    mailbox = FakeMailbox({"call-a": "A", "call-b": "B", "call-c": "C", "ai-1": "go ahead", "ai-2": "no"})
-    mailbox.threads = {"call-a": "t", "call-b": "no-such-thread", "ai-1": "t", "ai-2": "t"}  # call-c: never recorded
-    mailbox.sorts = {"call-a": "tool", "call-b": "tool", "ai-1": "chat", "ai-2": "chat"}
-    assert sorted(await reconcile_inbox(mailbox, saver)) == ["ai-1", "call-a"]
+    evidence = await thread_evidence(saver, "t")
+    assert evidence.consumed == {("tool", "call-a"), ("chat", "ai-1")}
+    assert {("tool", "call-a"), ("tool", "call-b"), ("chat", "ai-1"), ("chat", "ai-2")} <= evidence.prompted
+
+    mailbox = FakeMailbox({
+        "call-a": "A", "call-b": "B", "call-c": "C", "ai-1": "go ahead", "ai-2": "no", "ai-9": "?",
+        "call-g": "G", "unrecorded": "x",
+    })
+    mailbox.threads = {
+        "call-a": "t", "call-b": "t", "call-c": "t", "ai-1": "t", "ai-2": "t", "ai-9": "t", "call-g": "t/agent:tc/g0",
+    }
+    mailbox.sorts = {
+        "call-a": "tool", "call-b": "tool", "call-c": "tool", "ai-1": "chat", "ai-2": "chat", "ai-9": "chat",
+        "call-g": "tool",
+    }
+    inventory = await reconcile_inbox(mailbox, saver)
+    assert sorted(inventory.consumed) == ["ai-1", "call-a"]
+    assert sorted(inventory.obsolete) == ["ai-9", "call-c", "call-g"]
     assert sorted(mailbox.acked) == ["ai-1", "call-a"]
+    assert sorted(mailbox.dismissed) == ["ai-9", "call-c", "call-g"]
+    assert {m.id for m in await mailbox.inbox()} == {"call-b", "ai-2", "unrecorded"}, "pending stays; unrecorded untouched"
 
-    # The sort is what says which evidence counts: the same id recorded under the
-    # other sort has none.
+
+async def test_a_generation_still_at_the_frontier_keeps_its_question_pending() -> None:
+    saver = InMemorySaver()
+    await _thread_with(saver, "t/agent:tc/g0", [AIMessage(content="", tool_calls=[_tool_call("call-g")])])
+    mailbox = FakeMailbox({"call-g": "G"})
+    mailbox.threads, mailbox.sorts = {"call-g": "t/agent:tc/g0"}, {"call-g": "tool"}
+    inventory = await reconcile_inbox(mailbox, saver)
+    assert (inventory.consumed, inventory.obsolete) == ([], [])
+    assert mailbox.acked == [] and mailbox.dismissed == []
+
+
+async def test_the_sort_decides_which_evidence_counts() -> None:
+    # The same ids recorded under the other sort: no message of that kind asked them, so
+    # they are obsolete rather than consumed.
+    saver = InMemorySaver()
+    await _thread_with(saver, "t", [
+        AIMessage(content="", tool_calls=[_tool_call("call-a")]),
+        ToolMessage(content="A", tool_call_id="call-a"),
+        AIMessage(content="shall I?", id="ai-1"),
+        chat_reply("go ahead", "ai-1"),
+    ])
     crossed = FakeMailbox({"call-a": "A", "ai-1": "go ahead"})
     crossed.threads = {"call-a": "t", "ai-1": "t"}
     crossed.sorts = {"call-a": "chat", "ai-1": "tool"}
-    assert await reconcile_inbox(crossed, saver) == []
+    inventory = await reconcile_inbox(crossed, saver)
+    assert inventory.consumed == [] and sorted(inventory.obsolete) == ["ai-1", "call-a"]
+
+
+def test_successor_thread_id_is_the_inverse_of_the_generation_suffix() -> None:
+    assert successor_thread_id("autoprove_r/agent:call-1/g0") == "autoprove_r/agent:call-1/g1"
+    assert successor_thread_id("root/a:x/g3/child:y/g12") == "root/a:x/g3/child:y/g13"
+    assert successor_thread_id("autoprove_r") is None, "not a durable sub-agent thread"
+    assert successor_thread_id("autoprove_r-refinement") is None
+    assert successor_thread_id("root/a:x/gx") is None
 
 
 async def test_console_bridge_sees_the_payload_not_the_envelope() -> None:

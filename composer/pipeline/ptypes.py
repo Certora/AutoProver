@@ -168,8 +168,9 @@ class Delivered[FormT: BackendResult]:
 
 @dataclass(frozen=True)
 class AwaitingInput:
-    """The component's formalization is parked on questions this process could not
-    answer. Not a failure: a later execution of the run resumes it where it stopped."""
+    """The component is parked on questions this process could not answer, in its
+    refinement conversation or in its formalization. Not a failure: a later execution
+    of the run resumes it where it stopped."""
     suspended: GraphSuspended
 
     @property
@@ -177,9 +178,23 @@ class AwaitingInput:
         return len(self.suspended.interrupts)
 
 
+@dataclass(frozen=True)
+class Stalled:
+    """The component's properties are ready but its formalization has not started, and
+    not through any fault of its own: the backend authors one shared artifact from every
+    unit's properties, and a sibling is still awaiting input. Distinct from
+    :class:`AwaitingInput` because nobody is being asked anything about this component.
+    The run resumes when the sibling's answer arrives; this component's properties then
+    come from cache."""
+    #: The siblings it is waiting behind, by display name.
+    behind: tuple[str, ...]
+    #: Open questions among them.
+    n_questions: int
+
+
 @dataclass
 class ComponentOutcome[FormT: BackendResult, U: FeatureUnit](BackendJob[U]):
-    result: Delivered[FormT] | GaveUp | BaseException | Curtailed[Delivered[FormT]] | AwaitingInput
+    result: Delivered[FormT] | GaveUp | BaseException | Curtailed[Delivered[FormT]] | AwaitingInput | Stalled
     #: Verification artifacts the batch's plugin tools registered, already
     #: persisted by the artifact store. Independent of ``result``: a component
     #: that gave up may still have produced artifacts worth reporting.
@@ -196,6 +211,10 @@ class CorePipelineResult[FormT: BackendResult]:
     #: Components parked on questions for a person, one line each. They are neither
     #: delivered nor failed: the run is unfinished and a later execution picks them up.
     awaiting_input: list[str] = field(default_factory=list)
+    #: Components whose properties are ready but whose formalization waits on a sibling's
+    #: answer (a shared artifact needs every unit), one line each. Unfinished, like the above,
+    #: but nobody is asking anything about them.
+    stalled: list[str] = field(default_factory=list)
 
     @property
     def n_delivered(self) -> int:
@@ -206,8 +225,9 @@ class CorePipelineResult[FormT: BackendResult]:
 
     @property
     def unfinished(self) -> bool:
-        """At least one component is awaiting input: the run must be resumed, not judged."""
-        return bool(self.awaiting_input)
+        """At least one component is awaiting input or stalled behind one that is: the run
+        must be resumed, not judged."""
+        return bool(self.awaiting_input or self.stalled)
 
     @property
     def all_failed(self) -> bool:

@@ -135,7 +135,7 @@ class AutoProveLiveHandler(LiveDisplayHandler[None], NullEventHandler):
 
     @asynccontextmanager
     async def _start_conversation(
-        self, initial: RenderableType
+        self, initial: RenderableType, thread_id: str
     ) -> AsyncIterator[ConversationClient]:
         # Pause the Live region for the duration of the conversation so
         # ``prompt_toolkit`` owns the terminal; restore on exit. The

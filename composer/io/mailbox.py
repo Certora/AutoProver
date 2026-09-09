@@ -27,23 +27,27 @@ and that thread has then checkpointed; handing the answer to the graph proves
 nothing, and a checkpoint on another thread proves nothing about this one.
 :func:`reconcile_inbox` is the startup inventory: a predecessor may have
 consumed an answer and died before acking it, and the ack must never be lost or
-duplicated into a re-application. The inbox says which thread each message's
-question paused, so the inventory reads that thread's history and no other.
+duplicated into a re-application; an answer no execution will ever consume must
+be retired as obsolete, or the control plane restarts a finished run over it
+forever. The inbox says which thread each message's question paused, so the
+inventory reads that thread's history and no other.
 """
 
 import asyncio
 import io
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
-from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Interrupt
 from rich.console import Console, RenderableType
 
-from composer.io.conversation import HumanPrompt, ProgressPayload
+from composer.io.context import successor_thread_id
+from composer.io.conversation import ConversationClient, ConversationContextProvider, HumanPrompt, ProgressPayload
 from composer.io.protocol import GraphSuspended, InterruptId
 from graphcore.tools.human import Question, QuestionId
 
@@ -89,6 +93,12 @@ class Mailbox(Protocol):
 
     async def ack(self, message_ids: Sequence[QuestionId]) -> None:
         """Retire messages this execution has durably consumed. Idempotent."""
+        ...
+
+    async def dismiss(self, message_ids: Sequence[QuestionId]) -> None:
+        """Retire messages no execution will ever consume, recorded as obsolete
+        rather than applied, so a person can be told their answer went unused.
+        Idempotent."""
         ...
 
     async def record_question(self, question: OpenQuestion) -> None:
@@ -245,6 +255,18 @@ class MailboxConversation:
         await self._mailbox.ack([QuestionId(question_id)])
 
 
+def mailbox_conversations(mailbox: Mailbox, warm: WarmWait) -> ConversationContextProvider:
+    """The conversation provider for a run whose person is elsewhere: each refinement
+    conversation gets a :class:`MailboxConversation` recording against its own thread.
+    The opening render goes nowhere; every turn carries the current state instead."""
+
+    @asynccontextmanager
+    async def provider(initial: RenderableType, thread_id: str) -> AsyncIterator[ConversationClient]:
+        yield MailboxConversation(mailbox, thread_id, warm)
+
+    return provider
+
+
 #: The field on a chat reply naming the AI message it answers. An extra field on
 #: the message, the way graphcore's ``display_tag`` is: provider adapters do not
 #: forward it, and checkpoints keep it. Not ``additional_kwargs``, which some
@@ -291,38 +313,96 @@ def replies_in(update: Mapping[str, Any]) -> Iterable[QuestionId]:
     return _answers_in(update, "chat")
 
 
-async def consumed_answers(saver: BaseCheckpointSaver, thread_id: str) -> set[tuple[QuestionSort, QuestionId]]:
-    """Every question, by sort and id, whose answer some message in the thread's
-    checkpoint history consumed: a ``ToolMessage`` for a tool question, a reply
-    for a chat question. The history, not the tip: summarization can drop a
-    message from the tip without un-consuming the answer it recorded."""
-    seen: set[tuple[QuestionSort, QuestionId]] = set()
+def _asked_by(message: Any) -> Iterable[tuple[QuestionSort, QuestionId]]:
+    """The questions a message asked, if it is an AI message: a tool question per tool
+    call it carries, and the chat question a reply to it would answer."""
+    if not isinstance(message, AIMessage):
+        return
+    for call in message.tool_calls:
+        if call.get("id"):
+            yield ("tool", QuestionId(call["id"]))
+    if message.id is not None:
+        yield ("chat", QuestionId(message.id))
+
+
+@dataclass(frozen=True)
+class ThreadEvidence:
+    """What a thread's checkpoint history says about the questions on it, by sort and
+    id: the questions whose asking is in the history (the AI message carrying the tool
+    call, or the AI message a chat turn replies to), and the questions whose answer some
+    message consumed (a ``ToolMessage`` for the call, a reply naming the AI message).
+    The history, not the tip: summarization can drop a message from the tip without
+    unasking or un-consuming anything."""
+
+    prompted: frozenset[tuple[QuestionSort, QuestionId]]
+    consumed: frozenset[tuple[QuestionSort, QuestionId]]
+
+
+async def thread_evidence(saver: BaseCheckpointSaver, thread_id: str) -> ThreadEvidence:
+    prompted: set[tuple[QuestionSort, QuestionId]] = set()
+    consumed: set[tuple[QuestionSort, QuestionId]] = set()
     async for saved in saver.alist({"configurable": {"thread_id": thread_id}}):
         for message in saved.checkpoint.get("channel_values", {}).get("messages", None) or []:
+            prompted.update(_asked_by(message))
             if (answered := _answered_by(message)) is not None:
-                seen.add(answered)
-    return seen
+                consumed.add(answered)
+    return ThreadEvidence(frozenset(prompted), frozenset(consumed))
 
 
-async def reconcile_inbox(mailbox: Mailbox, saver: BaseCheckpointSaver) -> list[QuestionId]:
-    """Startup inventory. A predecessor that applied an answer and died before
-    acking leaves the message in the inbox; the answer is in a checkpoint, so it
-    must be acked and must not be re-applied. Every other message is left for
-    the graph to reach on its own. Returns the ids acked.
+async def _superseded(saver: BaseCheckpointSaver, thread_id: str) -> bool:
+    """A durable sub-agent thread whose next generation exists will never be resumed,
+    the generation walk skips it, so every question pending on it is dead."""
+    successor = successor_thread_id(thread_id)
+    if successor is None:
+        return False
+    return await saver.aget_tuple({"configurable": {"thread_id": successor}}) is not None
 
-    Each message names the thread its question paused and the question's sort,
-    so only those threads' histories are read, and a tool question's answer is
-    looked for as a ``ToolMessage``, a chat question's as a reply. A message
-    whose question was never recorded names neither and is left alone: nothing
-    could have consumed it."""
-    by_thread: dict[str, list[InboxMessage]] = {}
+
+@dataclass(frozen=True)
+class Inventory:
+    """What the startup inventory did: the answers acked as consumed by a predecessor,
+    and the answers retired as obsolete. Everything else stays pending."""
+
+    consumed: list[QuestionId]
+    obsolete: list[QuestionId]
+
+
+async def reconcile_inbox(mailbox: Mailbox, saver: BaseCheckpointSaver) -> Inventory:
+    """Startup inventory. Every un-acked message is judged from durable state alone, so
+    the pass is safe to repeat, and lands in one of three places:
+
+    * *consumed*: its thread's history holds the message that applied the answer, so a
+      predecessor consumed it and died before acking. Acked, never re-applied.
+    * *obsolete*: no execution will ever consume it, because the thread it names was
+      superseded by a later generation, or nothing in that thread's history ever asked
+      the question, the AI message carrying the tool call or the AI message the chat
+      turn replies to being absent. Dismissed, so a person can be told the answer
+      went unused. A thread this checkpointer has never seen falls here too: better
+      than an inbox entry that lives forever.
+    * *pending*: asked, not yet answered. Left for a live interrupt in this execution
+      to consume, which is exactly the set that will be.
+
+    After the pass only pending remains un-acked, which is what keeps the control plane
+    from restarting a finished run over an answer nobody wants. A message whose question
+    was never recorded names no thread and is left alone."""
+    by_thread: dict[str, list[tuple[QuestionSort, InboxMessage]]] = {}
     for message in await mailbox.inbox():
-        if message.thread_id is not None:
-            by_thread.setdefault(message.thread_id, []).append(message)
-    stale: list[QuestionId] = []
+        if message.thread_id is not None and message.sort is not None:
+            by_thread.setdefault(message.thread_id, []).append((message.sort, message))
+    consumed: list[QuestionId] = []
+    obsolete: list[QuestionId] = []
     for thread_id, messages in by_thread.items():
-        consumed = await consumed_answers(saver, thread_id)
-        stale.extend(m.id for m in messages if m.sort is not None and (m.sort, m.id) in consumed)
-    if stale:
-        await mailbox.ack(stale)
-    return stale
+        if await _superseded(saver, thread_id):
+            obsolete.extend(m.id for _, m in messages)
+            continue
+        evidence = await thread_evidence(saver, thread_id)
+        for sort, m in messages:
+            if (sort, m.id) in evidence.consumed:
+                consumed.append(m.id)
+            elif (sort, m.id) not in evidence.prompted:
+                obsolete.append(m.id)
+    if consumed:
+        await mailbox.ack(consumed)
+    if obsolete:
+        await mailbox.dismiss(obsolete)
+    return Inventory(consumed, obsolete)

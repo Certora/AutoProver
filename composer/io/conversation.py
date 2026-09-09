@@ -4,7 +4,10 @@ from rich.console import RenderableType
 
 from langchain_core.messages.tool import ToolCall
 
-type ConversationContextProvider = Callable[[RenderableType], AsyncContextManager[ConversationClient]]
+#: Opens a refinement conversation: given the opening render and the conversation's
+#: checkpoint thread id, yields the client the loop talks to. A UI ignores the thread
+#: id; a client relaying turns to a control plane records questions against it.
+type ConversationContextProvider = Callable[[RenderableType, str], AsyncContextManager[ConversationClient]]
 
 
 @dataclass

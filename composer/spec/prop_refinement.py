@@ -198,7 +198,7 @@ async def user_property_refinement(
         "the refinement conversation is durable and needs the run's checkpointer"
     )
 
-    async with refinement(render_properties_as_md(agent_attempt.items)) as client:
+    async with refinement(render_properties_as_md(agent_attempt.items), ctx.thread_id) as client:
         res = await refinement_loop(
             llm=env.llm_heavy(),
             client=client,

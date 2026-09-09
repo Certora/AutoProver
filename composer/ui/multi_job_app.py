@@ -404,7 +404,7 @@ class MultiJobTaskHandler[H](HumanInteractionBridge[H]):
 
     @asynccontextmanager
     async def start_conversation(
-        self, opening: RenderableType
+        self, opening: RenderableType, thread_id: str
     ) -> AsyncIterator[ConversationClient]:
         session = _ConversationSession(
             task_id=self._task_id,

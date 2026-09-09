@@ -41,6 +41,7 @@ from composer.llm.registry import get_provider_for
 from composer.rag.models import get_model
 from composer.diagnostics.ambient import AmbientStateSaver
 from composer.diagnostics.budget import time_budget, total_budget
+from composer.io.mailbox import Mailbox, reconcile_inbox
 from composer.io.thread_logging import RunDataLogger, ambient_state_ns, thread_logger, default_logging_ns
 from composer.rag.models import DefaultEmbedder
 from composer.ui.tool_display import async_tool_context
@@ -266,8 +267,12 @@ async def cli_pipeline[P: enum.Enum](
     task_handler: HandlerFactory[P],
     design_doc_phase: P,
     at_exit: AtExit | None = None,
+    mailbox: Mailbox | None = None,
     **metadata
 ) -> AsyncIterator[tuple[StagedPipeline, Continuation[P]]]:
+    """``mailbox`` is the run's, when its person is elsewhere: the inbox is reconciled
+    against the checkpoints at startup, and the execution posts awaiting-input when
+    the pipeline parks. Answering from it is the task handler's business."""
     project_root = pathlib.Path(args.project_root).resolve()
     main_contract_path, contract_name = args.main_contract.split(":", 1)
 
@@ -326,6 +331,20 @@ async def cli_pipeline[P: enum.Enum](
         ),
     ):
         try:
+            if mailbox is not None:
+                # Startup inventory, from the checkpoints: an answer a predecessor applied
+                # and died before acking is acked now; one nothing will ever consume is
+                # retired as obsolete, or the control plane would restart us over it forever.
+                inventory = await reconcile_inbox(mailbox, conns.checkpointer)
+                if inventory.consumed or inventory.obsolete:
+                    print(
+                        f"startup inventory: acked {len(inventory.consumed)} answer(s) a predecessor had applied, "
+                        f"retired {len(inventory.obsolete)} obsolete",
+                        file=sys.stderr,
+                    )
+                    await data_logger("startup_inventory", {
+                        "consumed": list(inventory.consumed), "obsolete": list(inventory.obsolete),
+                    })
             memory_ns = args.memory_ns
             if memory_ns:
                 memory_ns = get_uid() + "/" + memory_ns
@@ -451,8 +470,11 @@ async def cli_pipeline[P: enum.Enum](
                         )
                 if result.unfinished:
                     # The process exits cleanly, but the run is parked on questions:
-                    # say so in the execution record rather than "completed".
+                    # say so in the execution record rather than "completed", and
+                    # tell the control plane, which restarts the run when an answer lands.
                     data_logger.outcome("awaiting_input")
+                    if mailbox is not None:
+                        await mailbox.awaiting_input()
                 return result
 
             yield (StagedPipeline(

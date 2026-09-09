@@ -345,6 +345,18 @@ def durable_thread_id(parent_thread: str, prefix: str, tool_call_id: str, genera
     return f"{parent_thread}/{prefix}:{tool_call_id}/g{generation}"
 
 
+def successor_thread_id(thread_id: str) -> str | None:
+    """The next generation of a durable sub-agent thread, or None for a thread that is not
+    one. The inverse of :func:`durable_thread_id`'s generation suffix, kept beside it so the
+    format and its only parse never drift apart. Exists for the startup inventory, which
+    holds nothing but a recorded thread id and must know whether the thread can ever be
+    resumed: a generation with a successor cannot, the generation walk skips it."""
+    head, sep, generation = thread_id.rpartition("/g")
+    if not sep or not generation.isdigit():
+        return None
+    return f"{head}/g{int(generation) + 1}"
+
+
 _exhausted_threads: ContextVar[set[str] | None] = ContextVar("_exhausted_threads", default=None)
 """Thread ids whose run raised in this process. Created by the outermost
 ``run_graph`` (and reset by :func:`install_retry_policy`, the run's start), so

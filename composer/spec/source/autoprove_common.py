@@ -2,12 +2,15 @@
 
 import argparse
 import hashlib
+import importlib
 import logging
 import pathlib
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import cast, AsyncIterator, Protocol, Callable, Awaitable
 
 from composer.diagnostics.timing import RunSummary
+from composer.io.mailbox import Mailbox, WarmWait
 from composer.input.types import DEFAULT_RECURSION_LIMIT, ExtendedModelOptions, RAGDBOptions
 from composer.input.parsing import add_extra_context_args, add_protocol_args
 from composer.rag.db import PostgreSQLRAGDatabase
@@ -67,8 +70,40 @@ class AutoProveArgs(ExtendedModelOptions, RAGDBOptions, Protocol):
 
 type Executor = Callable[[HandlerFactory[AutoProvePhase]], Awaitable[CorePipelineResult[GeneratedCVL]]]
 
+
+@dataclass(frozen=True)
+class Headless:
+    """A run whose person is not at this terminal: its questions and refinement
+    turns go through ``mailbox``, waiting ``warm`` for an answer before the
+    execution suspends."""
+    mailbox: Mailbox
+    warm: WarmWait
+
+
+@dataclass(frozen=True)
+class Launch:
+    """What the entry point hands its UI: the pipeline to run under the UI's handler
+    factory, and, when the run is headless, the input to build that factory around."""
+    run: Executor
+    headless: Headless | None = None
+
+    async def __call__(self, handler: HandlerFactory[AutoProvePhase]) -> CorePipelineResult[GeneratedCVL]:
+        return await self.run(handler)
+
+
+def resolve_mailbox(spec: str, run_id: str, execution_id: str) -> Mailbox:
+    """``MODULE:FACTORY`` names a callable ``(run_id, execution_id) -> Mailbox``; the
+    transport is whichever control plane launched this process, which composer never
+    imports itself."""
+    module_name, sep, attr = spec.partition(":")
+    if not sep or not module_name or not attr:
+        raise ValueError(f"--mailbox expects MODULE:FACTORY, got {spec!r}")
+    factory = cast(Callable[[str, str], Mailbox], getattr(importlib.import_module(module_name), attr))
+    return factory(run_id, execution_id)
+
+
 @asynccontextmanager
-async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
+async def _entry_point(summary: RunSummary) -> AsyncIterator[Launch]:
     parser = argparse.ArgumentParser(
         description="Auto-prove multi-agent pipeline TUI"
     )
@@ -89,18 +124,39 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
     parser.add_argument("--max-bug-rounds", type=int, default=3, help="Maximum number of bug-extraction rounds run per component during property analysis (default: 3)")
     parser.add_argument("--budget", default=None, help="Path to a run-budget file (JSON or YAML): {total: USD, caps: {phase: USD, ...}}. Omit to run unbudgeted.")
     parser.add_argument("--time-budget", default=None, type=float, help="Total wall time to run the entire execution. Omit to run without in process limit")
+    parser.add_argument(
+        "--mailbox", default=None, metavar="MODULE:FACTORY",
+        help="Headless input: a factory `(run_id, execution_id) -> composer.io.mailbox.Mailbox` the run's "
+             "questions and refinement turns go through, e.g. `aws_mock.mailbox:mailbox_for`. For "
+             "console-autoprove; the TUIs answer at the terminal.",
+    )
+    parser.add_argument(
+        "--warm-seconds", default=60.0, type=float,
+        help="With --mailbox: how long to wait for an answer before the execution suspends (default: 60)",
+    )
 
-    args = cast(AutoProveArgs, parser.parse_args())
-    async with autoprove_executor(args, summary) as runner:
-        yield runner
+    namespace = parser.parse_args()
+    args = cast(AutoProveArgs, namespace)
+    headless = (
+        Headless(
+            resolve_mailbox(namespace.mailbox, summary.run_id, summary.execution_id),
+            WarmWait(seconds=namespace.warm_seconds),
+        )
+        if namespace.mailbox is not None else None
+    )
+    async with autoprove_executor(args, summary, headless=headless) as launch:
+        yield launch
 
 
 @asynccontextmanager
-async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncIterator[Executor]:
-    """Set up services from already-parsed args and yield the pipeline runner.
+async def autoprove_executor(
+    args: AutoProveArgs, summary: RunSummary, headless: Headless | None = None
+) -> AsyncIterator[Launch]:
+    """Set up services from already-parsed args and yield the pipeline launch.
 
     ``_entry_point`` parses argv into ``AutoProveArgs`` then delegates here; tests
-    construct ``AutoProveArgs`` directly.
+    construct ``AutoProveArgs`` directly. With ``headless``, the run's inbox is
+    reconciled at startup and the execution posts awaiting-input when it parks.
     """
 
     # The root of every thread id in the run, and so of every checkpoint, cache
@@ -139,6 +195,7 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
                 thread_id=thread_id,
                 task_handler=handler,
                 at_exit=exit_logger,
+                mailbox=headless.mailbox if headless is not None else None,
                 workflow="autoprove"
             ) as (staged, cont),
             PostgreSQLRAGDatabase.rag_context(staged.embed_model, args.rag_db) as rag_db
@@ -189,4 +246,4 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
                 CexAnalysisStore(store=staged.conns.store, namespace=("cex_analyses", thread_id)),
             )
             return await cont(source_env, backend, EVM)
-    yield callback
+    yield Launch(callback, headless)

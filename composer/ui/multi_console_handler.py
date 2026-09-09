@@ -19,7 +19,7 @@ path is all descriptions joined with `` / ``.
 """
 
 from collections.abc import Sequence
-from typing import Callable, Any, AsyncIterator
+from typing import Callable, Any, AsyncIterator, Self
 from abc import ABC, abstractmethod
 import sys
 import asyncio
@@ -27,9 +27,8 @@ from contextlib import asynccontextmanager
 
 from composer.io.multi_job import TaskHandle, TaskInfo, HasName
 from composer.io.protocol import InterruptHandler, RefuseInterrupts, StateObserver, observed
-from composer.io.conversation import (
-    ConversationClient
-)
+from composer.io.conversation import ConversationClient, ConversationContextProvider
+from composer.io.mailbox import Mailbox, MailboxInterrupts, WarmWait, mailbox_conversations
 from composer.ui.conversation_client import ConsoleConversationClient
 from rich.console import RenderableType
 
@@ -42,9 +41,9 @@ class MultiJobConsoleHandler[P: HasName](ABC):
     path descriptions accumulated by one phase are visible to all later phases.
 
     Output is this object; input is ``interrupts``, refusing by default since
-    the pipelines this drives ask nothing at the console. A headless run passes
-    its mailbox as ``interrupts`` and again in ``observers`` so it sees the
-    output events it acks on.
+    the pipelines this drives ask nothing at the console, and ``conversations``,
+    the console's own prompt by default. A run whose person is elsewhere builds
+    itself with :meth:`over_mailbox` instead.
     """
 
     def __init__(
@@ -52,12 +51,26 @@ class MultiJobConsoleHandler[P: HasName](ABC):
         *,
         interrupts: InterruptHandler | None = None,
         observers: Sequence[StateObserver] = (),
+        conversations: ConversationContextProvider | None = None,
     ) -> None:
         self._descriptions: dict[str, str] = {}
         self._conversation_lock = asyncio.Semaphore()
         self._suppress_output = False
         self._interrupts: InterruptHandler = interrupts if interrupts is not None else RefuseInterrupts()
         self._observers = tuple(observers)
+        self._conversations: ConversationContextProvider = (
+            conversations if conversations is not None else self._start_conversation
+        )
+
+    @classmethod
+    def over_mailbox(cls, mailbox: Mailbox, warm: WarmWait) -> Self:
+        """The handler for a run whose person is elsewhere: questions go to the
+        mailbox, the acks follow the output events, and refinement conversations
+        run over it too. Output still goes to the console, which is the job log."""
+        interrupts = MailboxInterrupts(mailbox, warm)
+        return cls(
+            interrupts=interrupts, observers=(interrupts,), conversations=mailbox_conversations(mailbox, warm)
+        )
 
     def _output(self, to_print: Any):
         if self._suppress_output:
@@ -106,7 +119,7 @@ class MultiJobConsoleHandler[P: HasName](ABC):
                 self._output(f"[{label}] at node: {node_name}")
 
     @asynccontextmanager
-    async def _start_conversation(self, initial: RenderableType) -> AsyncIterator[ConversationClient]:
+    async def _start_conversation(self, initial: RenderableType, thread_id: str) -> AsyncIterator[ConversationClient]:
         async with self._conversation_lock:
             prev = self._suppress_output
             self._suppress_output = True
@@ -152,5 +165,5 @@ class MultiJobConsoleHandler[P: HasName](ABC):
             ),
             on_done=lambda: print(f"[{info.label}] ✓ done"),
             on_error=_on_error,
-            conversation_provider=self._start_conversation
+            conversation_provider=self._conversations,
         )

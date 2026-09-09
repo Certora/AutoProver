@@ -7,6 +7,13 @@ and returns the single best existing design/specification file — or ``None`` w
 reason. The result is cached under a DOC-INDEPENDENT key (see
 :func:`discovery_cache_key`) so a repeat run on the same project skips the agent.
 
+The verdict is also the run's, durably: the finder runs on a thread derived from the
+run's root, so a later execution of the same run resumes a discovery that was cut off
+or gets the finished one's verdict back without running the agent again. That matters
+more here than for any other one-shot agent, because the chosen document feeds the
+root cache key that every later phase is keyed under; a restart that re-decided could
+orphan the whole run's work.
+
 The chosen path flows through the same ``uploader.get_document`` call the manual path
 uses, so PDF/text handling, the source artifact, and the byte-hash root cache key are
 all unchanged.
@@ -39,7 +46,6 @@ from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.service_host import ModelProvider
 from composer.spec.source.source_env import build_basic_source_tools
 from composer.spec.source.task_ids import DESIGN_DOC_DISCOVERY_TASK_ID
-from composer.spec.util import uniq_thread_id
 
 _logger = logging.getLogger(__name__)
 
@@ -163,18 +169,21 @@ async def find_design_doc(
     contract_name: str,
     relative_path: str,
     recursion_limit: int,
+    thread_id: str,
 ) -> DesignDocChoice:
     """Run the finder agent to completion and return its verdict.
 
-    Must be called within an active handler scope (i.e. inside ``run_task``); see
-    :func:`_discover`."""
+    ``thread_id`` is the run's name for this discovery, derived from its root: naming
+    it again in a later execution resumes the agent where it stopped, or returns a
+    finished verdict at once. Must be called within an active handler scope (i.e.
+    inside ``run_task``); see :func:`_discover`."""
     graph = build_finder_graph(builder, source_tools, contract_name, relative_path)
     st = await run_to_completion(
         graph=graph,
         context=None,
         input=FlowInput(input=[]),
         recursion_limit=recursion_limit,
-        thread_id=uniq_thread_id("design_doc_finder"),
+        thread_id=thread_id,
         description="Design Doc Discovery",
     )
     assert "result" in st, "finder graph completed without a result"
@@ -254,7 +263,13 @@ async def _discover[P: HasName](
     fresh and cached runs — and the handler scope it installs is what lets the
     completion event reach the UI. On a cache hit it returns instantly without the
     agent. Mirrors ``classifier_agent``'s cache pattern: ``cache_get`` first, the agent
-    only on a miss, ``cache_put`` after."""
+    only on a miss, ``cache_put`` after.
+
+    Two layers keep the verdict stable, for two different repeats. The cache, keyed on
+    the project, is the cross-run shortcut and is only on when the run has a cache
+    namespace. The agent's thread, the child context's, is the within-run one: a later
+    execution of this run reaches the same thread and gets the same verdict back, or
+    resumes a discovery that was cut off, cache namespace or not."""
     child = disc_ctx.child(DESIGN_DOC_DISCOVERY_KEY)
 
     forbidden_read = source.forbidden_read
@@ -276,6 +291,7 @@ async def _discover[P: HasName](
         contract_name=contract_name,
         relative_path=relative_path,
         recursion_limit=child.recursion_limit,
+        thread_id=child.thread_id,
     )
     await child.cache_put(choice)
     _emit_choice("discovered", choice)

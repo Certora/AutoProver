@@ -20,6 +20,13 @@ every unit's properties — is what produces the :class:`Formalizer`. Same rule 
 chain, so it needs no new rule: the artifact is a constructor argument to the only object that uses
 it, and no formalizer ever exists without it.
 
+Which of the two came back also decides how extraction feeds formalization. A plain ``Formalizer``
+lets every unit flow from its extraction straight into its formalization as it finishes; a unit
+whose refinement conversation is waiting on a person parks on its own, and its siblings are not
+held up. A ``StagedFormalizer`` cannot allow that: its artifact needs every unit's properties, so
+extraction is gathered first, and if any unit is parked the rest are *stalled* behind it, properties
+ready, formalization not started, and the execution ends there until the answer arrives.
+
 The driver owns the genuinely-shared steps: system analysis, per-component property extraction, the
 result-type-keyed cache, and (since the report is backend-agnostic) building + persisting the
 property-keyed report. Everything backend-specific — the harnessed lift, autosetup/summaries/
@@ -73,7 +80,7 @@ from composer.diagnostics.budget import named_budget_or_nop
 from .ptypes import (
     DEFAULT_MAX_CPU_TASKS,
     AwaitingInput, BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult,
-    Curtailed,  Delivered,
+    Curtailed,  Delivered, Stalled,
     FinalProperties, GaveUp, PersistedPluginArtifact, PipelineRun, PluginArtifact,
     RegisteredArtifacts, SystemAnalysisSpec
 )
@@ -229,7 +236,11 @@ class StagedFormalizer[FormT: BackendResult, U: FeatureUnit](ABC):
     between the two, where extraction is done and no unit has been formalized.
 
     Some backends need none of this and return a ``Formalizer`` directly; the prover's shared peer
-    (``invariants.spec``) is staged in ``prepare_formalization``."""
+    (``invariants.spec``) is staged in ``prepare_formalization``.
+
+    The price of the barrier: when any unit's extraction is parked on a person, ``begin`` is not
+    called, the units whose properties are ready are reported as :class:`Stalled` behind it, and
+    the run resumes once the answer arrives. A plain ``Formalizer`` pays no such price."""
 
     @abstractmethod
     async def begin(
@@ -303,6 +314,15 @@ class PipelineBackend[P: enum.Enum, FormT: BackendResult, A: ArtifactIdentifier,
 @dataclass
 class _Batch[U: FeatureUnit](BackendJob[U]):
     feat_ctx: WorkflowContext[ComponentGroup]
+
+
+@dataclass(frozen=True)
+class _Extraction[U: FeatureUnit]:
+    """One unit's property extraction, in flight. ``batch`` resolves to the unit's properties,
+    None when it yielded none, or raises ``GraphSuspended`` when the unit's refinement
+    conversation is waiting on a person."""
+    feat: U
+    batch: asyncio.Task[_Batch[U] | None]
 
 
 def extract_task_id(idx: int) -> str:
@@ -497,7 +517,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, A: ArtifactIden
             return await prepared.prepare_formalization(run)
     staged_task = asyncio.create_task(_prepare_formalization())
 
-    batches: list[_Batch[U]] = await _extract_all(
+    extractions = await _extract_all(
         backend.analysis_spec.properties_key,
         prepared.main,
         backend.backend_guidance,
@@ -512,20 +532,20 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, A: ArtifactIden
             phases.get("extraction_plugin") or phases["extraction"],
         )
     )
-    staged = await staged_task
-    if not batches:
-        raise ValueError("No properties extracted from any component.")
+    try:
+        staged = await staged_task
+    except asyncio.CancelledError:
+        for e in extractions:
+            e.batch.cancel()
+        raise
+    except BaseException:
+        # Only overlapped, not gated: extraction finishes (each unit's result is cached, so the
+        # spend is kept for the next run), then the setup failure is reported as itself.
+        await asyncio.gather(*(e.batch for e in extractions), return_exceptions=True)
+        raise
 
-    # 4. A backend whose units share an artifact handed back a ``StagedFormalizer`` instead of a
-    #    formalizer: the artifact is authored HERE — once, from every unit's properties — and the
-    #    formalizer it yields is the only one that exists (see :class:`StagedFormalizer`).
-    with named_budget_or_nop("formalization_preparation"):
-        formalizer = (
-            await staged.begin(batches, run) if isinstance(staged, StagedFormalizer) else staged
-        )
-
-    # 5. Per-component formalization. Caching is core-owned, keyed by the backend's result type.
-    async def _run(batch: _Batch[U]) -> ComponentOutcome[FormT, U]:
+    # 4. Per-component formalization. Caching is core-owned, keyed by the backend's result type.
+    async def _run(batch: _Batch[U], formalizer: Formalizer[FormT, U]) -> ComponentOutcome[FormT, U]:
         result_key = backend.to_artifact_id(batch.feat)
         backend.artifact_store.write_properties(result_key, batch.props)
 
@@ -633,10 +653,55 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, A: ArtifactIden
         ]
         return ComponentOutcome(batch.feat, batch.props, outcome, persisted)
 
-    settled = await asyncio.gather(*[_run(b) for b in batches], return_exceptions=True)
-    outcomes = [o if isinstance(o, ComponentOutcome)
-                else ComponentOutcome(b.feat, b.props, AwaitingInput(o) if isinstance(o, GraphSuspended) else o)
-                for b, o in zip(batches, settled)]
+    async def _formalize(batch: _Batch[U], formalizer: Formalizer[FormT, U]) -> ComponentOutcome[FormT, U]:
+        """One unit through formalization, every ending an outcome of its own: a suspension
+        parks the lane, a failure is the lane's."""
+        try:
+            return await _run(batch, formalizer)
+        except GraphSuspended as exc:
+            return ComponentOutcome(batch.feat, batch.props, AwaitingInput(exc))
+        except Exception as exc:  # noqa: BLE001 - the lane's failure is its outcome
+            return ComponentOutcome(batch.feat, batch.props, exc)
+
+    # 5. Extraction feeds formalization one of two ways, decided by what step 3 handed back.
+    outcomes: list[ComponentOutcome[FormT, U]]
+    formalizer: Formalizer[FormT, U]
+    if isinstance(staged, StagedFormalizer):
+        # A shared artifact is authored HERE, once, from EVERY unit's properties, and the formalizer
+        # it yields is the only one that exists (see :class:`StagedFormalizer`). So extraction is
+        # gathered first, and a unit parked on a person holds the rest: they are stalled behind it,
+        # properties ready, and this execution ends. No formalizer exists yet, so there is nothing
+        # to finalize or report; the next execution finds their properties in cache.
+        batches, parked = await _settle_extractions(extractions)
+        if parked:
+            behind = tuple(feat.display_name for feat, _ in parked)
+            n_questions = sum(len(exc.interrupts) for _, exc in parked)
+            return _tally([
+                *(ComponentOutcome(feat, [], AwaitingInput(exc)) for feat, exc in parked),
+                *(ComponentOutcome(b.feat, b.props, Stalled(behind, n_questions)) for b in batches),
+            ])
+        if not batches:
+            raise ValueError("No properties extracted from any component.")
+        with named_budget_or_nop("formalization_preparation"):
+            formalizer = await staged.begin(batches, run)
+        outcomes = list(await asyncio.gather(*[_formalize(b, formalizer) for b in batches]))
+    else:
+        # No shared artifact: each unit flows from extraction into formalization as it finishes,
+        # and a unit parked on a person parks alone.
+        formalizer = staged
+
+        async def _chain(e: _Extraction[U]) -> ComponentOutcome[FormT, U] | None:
+            try:
+                batch = await e.batch
+            except GraphSuspended as exc:
+                return ComponentOutcome(e.feat, [], AwaitingInput(exc))
+            return None if batch is None else await _formalize(batch, formalizer)
+
+        settled = await asyncio.gather(*[_chain(e) for e in extractions], return_exceptions=True)
+        _raise_first_failure(settled)
+        outcomes = [o for o in settled if isinstance(o, ComponentOutcome)]
+        if not outcomes:
+            raise ValueError("No properties extracted from any component.")
 
     await formalizer.finalize(outcomes, run)
 
@@ -697,7 +762,10 @@ async def _extract_all[P: enum.Enum, Main, U: FeatureUnit](
     # ``Main``/``U`` (matching the caller's), so there's nothing to tie it to.
     ecosystem: Ecosystem[Any, Main, U],
     plugins: PluginPhaseManager[P, U],
-) -> list[_Batch[U]]:
+) -> list[_Extraction[U]]:
+    """Start every unit's property extraction and hand the in-flight work back, one entry
+    per unit, so the caller decides how to consume it: gathered, or unit by unit as each
+    finishes. Nothing is awaited here."""
     prop_ctx = run.ctx.child(PROPERTIES_KEY(prop_key))
 
     async def _pre_plugin_inputs(feat: U) -> list[AnyPropertyGenerationInput]:
@@ -775,12 +843,40 @@ async def _extract_all[P: enum.Enum, Main, U: FeatureUnit](
         accum = await _post_plugin_props(feat, props)
         return _Batch(feat, accum, feat_ctx) if accum else None
 
-    async def budgeted_task(u: U) -> _Batch | None:
+    async def budgeted_task(u: U) -> _Batch[U] | None:
         with named_budget_or_nop("property_extraction"):
             return await _one(u)
 
-    got = await asyncio.gather(*[budgeted_task(u) for u in ecosystem.units(main)])
-    return [b for b in got if b is not None]
+    return [
+        _Extraction(u, asyncio.create_task(budgeted_task(u), name=f"extract:{u.display_name}"))
+        for u in ecosystem.units(main)
+    ]
+
+
+async def _settle_extractions[U: FeatureUnit](
+    extractions: Sequence[_Extraction[U]],
+) -> tuple[list[_Batch[U]], list[tuple[U, GraphSuspended]]]:
+    """Wait for every extraction: the units with properties, and the units parked on a
+    person with what parked them. A unit that yielded no properties is dropped."""
+    settled = await asyncio.gather(*(e.batch for e in extractions), return_exceptions=True)
+    _raise_first_failure(settled)
+    batches: list[_Batch[U]] = []
+    parked: list[tuple[U, GraphSuspended]] = []
+    for e, got in zip(extractions, settled):
+        if isinstance(got, GraphSuspended):
+            parked.append((e.feat, got))
+        elif isinstance(got, _Batch):
+            batches.append(got)
+    return batches, parked
+
+
+def _raise_first_failure(settled: Sequence[object]) -> None:
+    """A failure in one unit's extraction is the run's, as it always was. It is raised only
+    now, once every unit has settled, so no sibling is left running detached. A suspension
+    is not a failure and is left to the caller."""
+    for got in settled:
+        if isinstance(got, BaseException) and not isinstance(got, GraphSuspended):
+            raise got
 
 
 def _tally[FormT: BackendResult, U: FeatureUnit](
@@ -788,6 +884,7 @@ def _tally[FormT: BackendResult, U: FeatureUnit](
 ) -> CorePipelineResult[FormT]:
     failures: list[str] = []
     awaiting: list[str] = []
+    stalled: list[str] = []
     for o in outcomes:
         if isinstance(o.result, BaseException):
             failures.append(f"{o.feat.display_name}: {o.result}")
@@ -805,8 +902,13 @@ def _tally[FormT: BackendResult, U: FeatureUnit](
             awaiting.append(
                 f"{o.feat.display_name}: awaiting input on {o.result.n_questions} question(s)"
             )
+        elif isinstance(o.result, Stalled):
+            stalled.append(
+                f"{o.feat.display_name}: properties ready, stalled behind "
+                f"{', '.join(o.result.behind)} ({o.result.n_questions} open question(s))"
+            )
     # The rollup is unit-agnostic; widen the concrete-unit outcomes to the protocol for storage.
     return CorePipelineResult(
         len(outcomes), sum(len(o.props) for o in outcomes),
-        cast(list[ComponentOutcome[FormT, FeatureUnit]], outcomes), failures, awaiting,
+        cast(list[ComponentOutcome[FormT, FeatureUnit]], outcomes), failures, awaiting, stalled,
     )

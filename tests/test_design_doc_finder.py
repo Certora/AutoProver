@@ -394,3 +394,48 @@ async def test_discover_surfaces_choice_and_caches(tmp_path, capsys):
     assert choice2.selected_path == "design.md"
     out2 = capsys.readouterr().out
     assert "reusing cached design doc: design.md" in out2
+
+
+async def test_a_later_execution_of_the_run_gets_the_same_verdict_without_the_agent(tmp_path, capsys):
+    """Restart durability, cache namespace or not. The finder runs on a thread derived from
+    the run's root, so a second execution of the same run (same checkpointer, same root, no
+    cache namespace) reaches the finished thread and gets the verdict back without an LLM
+    call. That is what keeps the root cache key, which hashes the chosen document, stable
+    across executions."""
+    (tmp_path / "design.md").write_text("# Design\nThe counter must never decrease.\n")
+    store = InMemoryStore()
+    saver = InMemorySaver()  # the run's checkpointer, shared by both executions
+    handler = AutoProveConsoleHandler()
+    info = TaskInfo(
+        task_id=DESIGN_DOC_DISCOVERY_TASK_ID,
+        label="Design Doc Discovery",
+        phase=AutoProvePhase.DISCOVER_DESIGN_DOC,
+    )
+    common = dict(
+        source=_source(str(tmp_path), contract_name="Counter", relative_path="src/Counter.sol"),
+        uploader=cast(Any, _StubUploader()),
+    )
+
+    def execution(fake: _ToolBindingFakeLLM) -> ModelProvider:
+        return ModelProvider(FakeModelFactory(fake), FakeModelFactory(fake), checkpointer=saver)
+
+    first = await run_task(
+        factory=handler.make_handler,
+        info=info,
+        fn=lambda: _discover(
+            models=execution(_ToolBindingFakeLLM(responses=_finder_responses())), disc_ctx=_ctx(store, None), **common
+        ),
+    )
+    assert first.selected_path == "design.md"
+    assert "discovered design doc: design.md" in capsys.readouterr().out
+
+    # A new process: a fresh context over the same root and checkpointer, still no cache
+    # namespace, and a model with nothing scripted, which raises if the agent runs.
+    second = await run_task(
+        factory=handler.make_handler,
+        info=info,
+        fn=lambda: _discover(
+            models=execution(_ToolBindingFakeLLM(responses=[])), disc_ctx=_ctx(store, None), **common
+        ),
+    )
+    assert second == first

@@ -35,6 +35,10 @@ async def _main() -> int:
             print(f"  Awaiting input: {len(result.awaiting_input)}")
             for a in result.awaiting_input:
                 print(f"    - {a}")
+        if result.stalled:
+            print(f"  Stalled:       {len(result.stalled)}")
+            for s in result.stalled:
+                print(f"    - {s}")
         print(f"{'=' * 60}")
         if result.all_failed:
             print("  RUN FAILED: every component failed to generate or gave up.")
