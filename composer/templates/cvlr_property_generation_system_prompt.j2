@@ -475,13 +475,18 @@ crate::{{ example.program_module }}::{{ example.handler }}(ctx{% for arg in exam
 cvlr_assert!(/* the same state, through the same `ix` */);
 ```
 
-Those names are **this program's**, taken from the analysis rather than from an example — the
+{% if example.provenance == "source" %}Those names are **this program's**, read from its own declarations — the accounts struct is the one
+this handler's `Context` names, and every field and argument carries the type the source gives it.
+The one thing the shape above cannot show you is whether the account order matches the struct's
+field order; it does, because that is what `#[derive(Accounts)]` means, but the *indices* into
+`accounts` are yours to keep straight.
+{% else %}Those names are **this program's**, taken from the analysis rather than from an example — the
 handler, its arguments, and each account with the type the analysis read off the source. Two of them
 it could not know, so confirm both before you rely on them: the accounts struct is named by Anchor's
 convention, the handler's name in PascalCase, and a program is free to name it something else; and a
 field's declared type is the analysis's reading, not the compiler's. The source tools settle either
 in one call, which is much less work than deriving the whole construction.
-{% else %}The whole shape, on a deposit handler whose accounts struct is `Deposit`:
+{% endif %}{% else %}The whole shape, on a deposit handler whose accounts struct is `Deposit`:
 
 ```rust
 let accounts = Box::new(cvlr_deserialize_nondet_accounts());
@@ -504,10 +509,33 @@ cvlr_assert!(ix.vault.balance == before + amount);       // and after, through t
 The names in that example are the example's — the accounts struct, the program module and the handler
 all come from the program you are given.
 {% endif %}
-`Context::new(program_id, &mut accounts, remaining_accounts,
-bumps)`; `bumps` is the generated `<Name>Bumps` struct and `Default::default()` is almost always
-right. The context borrows the accounts
-struct, so the borrow ends with the call and the struct is yours to read afterwards.
+`Context::new(program_id, &mut accounts, remaining_accounts, bumps)`. The context borrows the
+accounts struct, so the borrow ends with the call and the struct is yours to read afterwards.
+
+### The names Anchor generates, and the one that looks right and is not
+
+`#[derive(Accounts)]` and `#[program]` emit items no file contains, so searching the source for them
+finds nothing and it is easy to conclude they are spelled some other way. They are not guessable and
+they are not negotiable — each is a fixed rule over a name you already have{% if example %}, shown
+here for `{{ example.accounts_struct }}`{% endif %}:
+
+| generated | rule{% if example %} | here{% endif %} |
+|---|---|{% if example %}---|{% endif %}
+| the bumps type | `<AccountsStruct>Bumps`, in **the struct's own module** | {% if example %}`{{ example.bumps_type }}`{% endif %} |
+| client-side accounts | `__client_accounts_<snake>` and `__cpi_client_accounts_<snake>` | {% if example %}`{{ example.client_accounts_module }}`{% endif %} |
+| the instruction discriminant | `instruction::<Handler in PascalCase>::DISCRIMINATOR` | {% if example %}`{{ example.discriminant_path }}`{% endif %} |
+
+Two consequences worth having in front of you before you write a `Context::new`.
+
+**The bumps type sits beside the struct, so whatever path reaches the struct reaches it** — append
+`Bumps` to that path and nothing else changes. The `__client_accounts_*` modules are the trap: they
+hold a struct with the *same field names* and `Pubkey` types, for Rust clients, and reaching for a
+bumps type inside one is the specific mistake this section exists to prevent. Nothing a rule builds
+lives in there.
+
+**You never construct a bumps value.** Anchor writes a `Default` impl covering every field of it, so
+`Default::default()` is not a convenience that usually works — it is always valid, and the fields it
+fills are the cached PDA bumps, which a rule driving a handler directly has no way to know anyway.
 
 A zero-copy `AccountLoader` field behaves differently and more conveniently: `load()` reads the
 account's bytes directly, so a handler's writes through its own loader are visible through yours with
