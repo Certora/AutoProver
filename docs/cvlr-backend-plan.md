@@ -2196,10 +2196,67 @@ list because most of it is not in the phase that will fix it.
    resolves inherent methods before trait methods, and fluid's own `BranchAccounts::load` is
    inherent and carries no `certora` gating in `branch.rs`. Either something in the arrangement was
    missed or the specs call it explicitly, and guessing would put a wrong idiom in the editor's
-   charter. **Revisit once we have run against an Anchor target of our own** — the answer decides
-   whether an eighth kind is needed for method replacement or whether the existing `mock_fn` plus a
-   prelude convention is enough. Evidence in [the-state-behind-the-bytes.md](./the-state-behind-the-bytes.md)
-   §9.2 and §9.3.
+   charter. Evidence in [the-state-behind-the-bytes.md](./the-state-behind-the-bytes.md) §9.2 and §9.3.
+
+   **The Anchor run has now happened, and it answers most of this — the corpus does not work around
+   the method at all, it replaces the file the method is in.** On fluid's lending program the whole
+   liquidity CPI layer is swapped by a `#[path]` redirect on the `mod` declaration:
+
+   ```rust
+   // programs/lending/src/invokes/mod.rs, on the spec branch
+   #[cfg_attr(feature = "certora", path = "../certora/mocks/invokes/liquidity_layer.rs")]
+   pub mod liquidity_layer;
+   ```
+
+   Nothing is aliased, so `mock_fn`'s `use`-in-an-`impl` problem never arises: a different file is
+   compiled in place of the original, carrying its own types and `impl` blocks. That is a **different
+   technique from the trait-through-prelude hypothesis above**, it is the one that covers inherent
+   methods, and the trait cases still need reconciling against it rather than being assumed to be the
+   same thing.
+
+   Confirmed the hard way in the same run. Asked for the expert's solvency inequality over
+   `withdraw`/`redeem`, the author reached the same `[3308]` the CPI always raises, correctly decided
+   the CPI had to leave the analyzed path, and applied `mock_fn` to `withdraw_from_liquidity` — a
+   *free function*, so the munge landed and built cleanly. It changed nothing: all twelve rules came
+   back with the identical trace through `programs/liquidity/src/lib.rs:19`, because the CPI is not in
+   that function but in `OperateCpiAccounts::operate_with_signer`
+   (`src/invokes/liquidity_layer.rs`), an inherent method one call deeper. A munge that lands, builds,
+   and abstracts nothing is the worst shape this failure can take — there is no error to read.
+
+   **So the eighth kind is a module redirect, not a method mock**, and it should be scoped as one:
+   `#[cfg_attr(feature = "unit_x", path = "...")]` on a `mod` item, with the substitute file authored
+   into the harness tree. Open questions it must answer: what the reviewer checks when a *whole
+   module* is replaced (the existing kinds all show a diff of one item), and how the judge weighs a
+   verdict obtained under one — the substitute is arbitrary code, so a rule proved against it is a
+   rule about the substitute unless the stand-in's contract is stated.
+
+   **It is not a one-off, and the kind alone is not enough.** Asked next for the expert's own
+   headline property — the cross-system solvency inequality over `withdraw`/`redeem` — the run died a
+   second time on the same wall, from the other direction: the Prover reported two rules 1% complete
+   after heavy splitting, blaming nonlinear arithmetic. The corpus's answer to *that* is the same
+   redirect, five more times, in `crates/library/src/math/mod.rs`:
+
+   ```rust
+   #[cfg_attr(feature = "certora", path = "../certora/mocks/safe_math.rs")] pub mod safe_math;
+   //  … and bn, casting, tick, u256
+   ```
+
+   `SafeMath` is a trait, so `mock_fn` cannot reach `safe_mul`/`safe_div` either — the same gap, a
+   second instance, which is what settles that the redirect is a kind rather than a special case.
+   **But those mocks live in `crates/library`, a different crate from the package under
+   verification.** Our munges are gated on a per-unit feature declared on the program's own
+   `Cargo.toml`, and a `#[cfg_attr(feature = "unit_x", …)]` written into a dependency names a feature
+   that crate does not have. The corpus forwards a workspace-wide one instead —
+   `certora = ["library/certora", "liquidity/certora", …]` — which the scaffold does not set up. So
+   **cross-crate munging needs feature forwarding as a separate piece of work**, and without it the
+   eighth kind still cannot reach the modules that matter most.
+
+   One more part of the recipe, easy to miss because it is not a munge: the property's *own*
+   arithmetic is nonlinear too (`f_token_supply * token_exchange_price` against
+   `position.amount * supply_exchange_price`, both symbolic). The corpus does not mock that away — it
+   hoists it into a standalone lemma, `rule_arithmetic` in `solvency.rs`, commented "model for
+   computation in `lending_solvency_deposit`". An author aiming at a solvency-shaped property needs
+   that decomposition in its charter, not just the mocks.
 4. **Confinement has never actually run.** §3 item 3 makes the launcher mandatory in production and
    §7.8.1 made it the CLI's default, but every run to date — both expensive gates included — has
    taken the `none` provider, so no CVLR build has been made under Landlock and the offline registry
