@@ -2135,15 +2135,27 @@ authoring budgets are spent. Both [3006] and P6 were rediscovered independently 
 reports its own starvation and each report looks like an independent defect. A shared probe turns N
 starvation reports into one finding.
 
-#### Do the deterministic half first
+#### Do the deterministic half first — done
 
-`begin` already holds the model, so it can render the authoring prompt's worked example against
-*this* program's real names — the handler path from `program_identifier`, the accounts struct's
-fields from `ins.accounts`, the args from `ins.args`. Today that example carries the caveat "the
-names in that example are the example's". Substitution is deterministic: no agent, no submission, no
-new phase, and nothing on the critical path. It plausibly closes most of the gap, and it is the
-measurement that says whether the gated probe earns its cost. **Order: substitute, run the gate, see
-whether units still spend turns reaching the program, then decide.**
+The authoring prompt's worked example is rendered against *this* program's real names: the handler
+and its arguments, each account with the type the analysis read off the source, and the `crate::…`
+subject path the publish gate checks. Deterministic — no agent, no submission, no new phase, nothing
+on the critical path — and it landed one seam earlier than described above. The batch call already
+holds the component *and* the batch's properties, so no plumbing through `begin` was needed;
+[example.py](../composer/spec/cvlr/example.py) picks the handler the batch's properties name most
+often and the system prompt renders it.
+
+Three things it does not claim, each visible in the prompt rather than hidden. The accounts struct's
+name is not in the model, so it is reconstructed from Anchor's convention and flagged as needing one
+source call to confirm. An account whose declared type the analysis recorded as prose — it is free
+to answer "a PDA of some seeds" — renders as that prose in a comment rather than as an invented
+wrapper. And a handler whose recorded arguments or account names cannot be written as Rust at all is
+skipped in favour of the next candidate, with the original stand-in example as the floor, so the
+substitution never degrades the prompt.
+
+**What is still owed is the measurement it exists to enable**: run the gate, see whether units still
+spend turns reaching the program, and only then decide whether the gated probe earns its serial
+submission.
 
 #### Three costs to hold onto if the second half is built
 
@@ -2257,12 +2269,35 @@ list because most of it is not in the phase that will fix it.
    hoists it into a standalone lemma, `rule_arithmetic` in `solvency.rs`, commented "model for
    computation in `lending_solvency_deposit`". An author aiming at a solvency-shaped property needs
    that decomposition in its charter, not just the mocks.
-4. **Confinement has never actually run.** §3 item 3 makes the launcher mandatory in production and
-   §7.8.1 made it the CLI's default, but every run to date — both expensive gates included — has
-   taken the `none` provider, so no CVLR build has been made under Landlock and the offline registry
-   and private `CARGO_HOME` are untested against a real Solana graph. Two smaller pieces of the same
-   item are also open: production and CI must *assert* a non-`none` provider rather than trusting the
-   default, and an unconfined run is currently marked on stderr but not in the report.
+
+   **All three pieces are now built.** The eighth kind is `redirect_module` (`1c13806e`,
+   [who-edits-the-program.md](./who-edits-the-program.md) §11), cross-crate forwarding rides the
+   workspace-wide `certora` feature the scaffold now declares and forwards
+   (`531794c8`, §11.3 there), and the charter now names the symptom the two dead runs shared.
+
+   That last piece corrected the reading above, which is worth recording because it was wrong in a
+   way that would have shipped. The math mocks do not *abstract* the arithmetic — they re-express it.
+   `safe_mul` becomes a `NativeInt` multiply rather than a `u128` `checked_mul`, which trades a
+   128-bit bitvector multiply and its overflow branch for an integer one, and `safe_div`'s partiality
+   becomes a `cvlr_assume!` rather than a pruned panic. Nothing is havocked, which is why the
+   technique costs almost no precision. And the decomposition has a better form than the corpus's
+   `rule_arithmetic`: CVLR ships `cvlr_lemma!` with a `CvlrLemma::apply` that **asserts** `requires`
+   and **assumes** `ensures`, so the algebra can be proved once in a rule of its own and consumed by
+   the heavy rule instead of merely being restated beside it. The corpus's freestanding lemma is that
+   mechanism used at half strength. The judge is told the difference, because `apply` ends by
+   assuming its own conclusion and reads exactly like the over-assumption a judge exists to reject —
+   the check it now makes is that some rule `verify()`s the lemma.
+4. ~~**Confinement has never actually run**~~ — **it has, and it earned its keep.** The Anchor runs
+   took the `launcher` provider against a real Solana graph, and Landlock found two defects nothing
+   else would have. Neither was in the sandbox: a confined build could not open its own git config,
+   so libgit2 declared the Anchor patch repository unopenable and cargo reported it as *"unable to
+   update … offline mode"* (`f785b211`); and the warm-fetch ran under the host cargo while the build
+   ran under platform-tools' own, which hash the git cache differently, so a cache warmed for one
+   was cold for the other (`fb58783a`). Both are the shape §3 predicted — a policy that is only
+   exercised in production is a policy nobody has tested — and both were silent about their real
+   cause. What remains of this item is the two smaller pieces: production and CI must *assert* a
+   non-`none` provider rather than trusting the default, and an unconfined run is marked on stderr
+   but not in the report.
 5. **The rest of Phase 7** (§7.8): the Docker image's Rust + Solana platform-tools toolchain, the
    replay tape and the LLM-free smoke scenario it drives (§6 names this as a gate and it does not
    exist), and user-facing documentation.
@@ -2270,13 +2305,21 @@ list because most of it is not in the phase that will fix it.
    preserves the draft; a `GraphRecursionError` propagates and the draft is lost. It is caught
    nowhere in the tree, so this is pre-existing shared behaviour and belongs to `run_to_completion`'s
    callers as one change rather than to this backend (§7.5.5).
-6. **Cross-unit learning** — §7.11, and the deterministic half of it is the cheapest item on this
-   list.
-7. **The author cannot see the target's macro-generated surface.** §5.5 mounts the CVLR crates and
+7. **Cross-unit learning** — §7.11. ~~The deterministic half is the cheapest item on this list~~ —
+   **built**: the authoring prompt's worked example is now rendered against the analyzed program
+   (`composer/spec/cvlr/example.py`), so a unit reads its own handler, its own accounts and their
+   declared types, and the `crate::…` subject path the publish gate will check, instead of a
+   stand-in program plus the caveat that the names were the example's. The struct name is the one
+   thing the model does not hold — it is reconstructed from Anchor's convention and the prompt says
+   so — and a handler whose recorded arguments or account names cannot be written as Rust is skipped
+   in favour of the next candidate rather than rendering something that will not compile. What is
+   still open is the measurement this was supposed to enable: whether units still spend turns
+   reaching the program, and therefore whether the gated probe half is worth its serial submission.
+8. **The author cannot see the target's macro-generated surface.** §5.5 mounts the CVLR crates and
    the source tools expose the program's own code, but a harness must also name what the target's
    *macros* generate — `Accounts` structs, `Bumps` types, discriminants. `cargo expand` output or the
    Anchor crate source would supply it; nothing does today (§7.5.5).
-8. ~~**Extraction is the munge kind the vocabulary lacks**~~ — **built**
+9. ~~**Extraction is the munge kind the vocabulary lacks**~~ — **built**
    ([who-edits-the-program.md](./who-edits-the-program.md) §10). `extract_function` is the editor's
    sixth tool and the only one that is not an attribute: a `FunctionExtraction` record captures the
    pristine item verbatim and renders §8.4's gated pair, so the deployed half is text nobody retyped
@@ -2291,15 +2334,15 @@ list because most of it is not in the phase that will fix it.
 **Checks and residue deferred to a real run** — [single-working-tree.md](./single-working-tree.md) §8
 for the first three, [the-tree-is-a-vfs.md](./the-tree-is-a-vfs.md) §6 for the fourth.
 
-9. **Multi-variant caching under `cargo certora-sbf`.** It passes on host cargo — the third build
+10. **Multi-variant caching under `cargo certora-sbf`.** It passes on host cargo — the third build
    across two unit features ran zero rustc invocations — and the SBF triple ought to behave
    identically, but §7.6.7's rule cuts both ways and this belongs in the expensive gate.
-10. **The disposability invariant end to end**: `rm -rf .cvlr_work` and resume, reaching the same
+11. **The disposability invariant end to end**: `rm -rf .cvlr_work` and resume, reaching the same
     submission. Covered by unit tests; never done against a live run. The mechanism under it has
     since changed — the tree's own derived-file note is gone, and the VFS materializer's manifest
     plus its restore-from-base rule answer for it — which makes the end-to-end form the only check
     that has not been re-run since.
-11. **The VFS migration's own residue** ([the-tree-is-a-vfs.md](./the-tree-is-a-vfs.md) §6). Four of
+12. **The VFS migration's own residue** ([the-tree-is-a-vfs.md](./the-tree-is-a-vfs.md) §6). Four of
     its five risks are untouched by having built it, and one is not a risk but a task: **the
     persistent materializer lives on a graphcore branch**, and `pyproject.toml` pins graphcore by
     commit, so it has to land upstream before this is anything but a private fork of a shared
@@ -2308,27 +2351,27 @@ for the first three, [the-tree-is-a-vfs.md](./the-tree-is-a-vfs.md) §6 for the 
     prover globs the real filesystem, so materialization must be complete before submission and a
     lazier materializer would break that silently; and `get` returns `str`, so anything non-UTF-8 in
     the tree is outside the model.
-12. **Latency under contention.** §3 there predicts one tree wins cold and loses warm, with the
+13. **Latency under contention.** §3 there predicts one tree wins cold and loses warm, with the
     build queue seconds deep rather than minutes. Neither half has been timed.
 
 **Open questions and later phases.**
 
-13. **Open question 5** (§8): whether prover cost actually favours parametric rules over per-handler
+14. **Open question 5** (§8): whether prover cost actually favours parametric rules over per-handler
     restatements. Both forms are offered and the prompt prefers parametric for a cross-handler
     property; the cost question needs runs.
-14. **Capture Phase B has not run** ([cvlr-capture-plan.md](./cvlr-capture-plan.md)). The question
+15. **Capture Phase B has not run** ([cvlr-capture-plan.md](./cvlr-capture-plan.md)). The question
     ledger exists and nobody has spent expert time on it. Three rule idioms reached the authoring
     prompt by hand (§7.6.2); the general form — the reference project's parametric-rule and
     account-construction helpers — is still unextracted.
-15. **Phase 8, Soroban** (§7.9), deliberately untouched until Solana is done. `project_toolchain`
+16. **Phase 8, Soroban** (§7.9), deliberately untouched until Solana is done. `project_toolchain`
     still has no Soroban entry.
 
 **Documentation debt.**
 
-16. [munge-and-working-copies.md](./munge-and-working-copies.md) §4 needs rewriting against the wider
+17. [munge-and-working-copies.md](./munge-and-working-copies.md) §4 needs rewriting against the wider
     corpus survey rather than annotating — its counts are one project's where the evidence is nine of
     eleven. Its §1–§3 CVLR half is already marked as superseded.
-17. A handful of shipped changes have no section here yet: the `--max-properties` cap, the
+18. A handful of shipped changes have no section here yet: the `--max-properties` cap, the
     `composer/layout.py` path consolidation that moved the sandbox's scratch under
     `.certora_internal` and extended `RUST_FORBIDDEN_READ`, `cvlr-spl-token` entering the reference
     set, and `preflight.select_package`. §7.8.1–§7.8.2 cover the entry points they arrived with.

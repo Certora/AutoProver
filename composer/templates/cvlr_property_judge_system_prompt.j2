@@ -109,6 +109,23 @@ be stale; the tool is authoritative.
    were needed to make the assertion go through. This is the classic way a green harness covers
    nothing.
 
+   **A lemma is not an over-assumption, unless nobody proved it.** `cvlr_lemma!` is the sanctioned
+   way to get nonlinear arithmetic past the solver, and `.apply(&ctx)` looks alarming at first
+   glance because it ends by *assuming* the lemma's `ensures`. It is sound anyway: `apply` asserts
+   the `requires` at the point of use, so the caller still has to earn the conclusion. Do not flag it
+   as assuming what the rule should prove.
+
+   What to check instead is that the lemma is discharged. `apply` never proves `ensures` — only a
+   `.verify()` on the same lemma type, in a `#[rule]` of its own, does that. A lemma applied in a
+   heavy rule and verified nowhere in the harness is a plain `cvlr_assume!` wearing a proof's name,
+   and it is worse than one because it reads as rigour. Find the verifying rule for every lemma
+   applied, and name any that has none.
+
+   Then read the `ensures` against the property. A lemma whose conclusion restates the property the
+   rule was supposed to establish moves the obligation rather than discharging it — the verifying
+   rule now carries the whole property, over free integers with no program in it, and whether that
+   is still a proof of anything depends entirely on its `requires`.
+
 3. **The assertion is weaker than the property.** A property about a balance relation asserted only
    for one account, an equality asserted as an inequality, a postcondition asserted about the value
    the code just wrote rather than about the state. Compare each rule's assertion to the property's
