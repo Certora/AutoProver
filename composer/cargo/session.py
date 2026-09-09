@@ -118,6 +118,10 @@ class CargoSession:
 
     workdir: Path
     sandbox: SandboxConfig
+    #: Which ``cargo`` binaries have already fetched into this session's home, so a warm that has
+    #: happened is not paid for again. Keyed by binary because two cargos do not share a git cache
+    #: (see :func:`~composer.cargo.sbf.platform_tools_cargos`).
+    _warmed: set[str] = dataclasses.field(default_factory=set, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not self.sandbox.enabled:
@@ -181,7 +185,11 @@ class CargoSession:
         )
 
     async def warm(
-        self, *, manifest_dirs: tuple[Path, ...] = (), timeout_s: int = WARM_TIMEOUT_S
+        self,
+        *,
+        manifest_dirs: tuple[Path, ...] = (),
+        cargo: Path | str = "cargo",
+        timeout_s: int = WARM_TIMEOUT_S,
     ) -> WarmOutcome:
         """Fetch this session's dependency graph, unconfined and online, once.
 
@@ -189,19 +197,29 @@ class CargoSession:
         the workdir; empty means the workdir itself. More than one is the normal case when the
         verification artifact is its own crate outside the program's workspace — each root resolves
         its own graph, and warming only one leaves the confined build unable to reach the other.
+
+        ``cargo`` is which binary does the fetching, and it matters for the same reason the cargo
+        home does: a cache is only warm for the cargo that filled it. The chain build runs the
+        cargo inside platform-tools, not the one on ``PATH``, and the two disagree about where a
+        git dependency lives — so :func:`~composer.cargo.sbf.sbf_build` warms with its own.
         """
         dirs = manifest_dirs or (Path("."),)
         for d in dirs:
             manifest = self.workdir / d / "Cargo.toml"
             fetched = await self.run_unconfined(
-                "cargo", ["fetch", "--manifest-path", str(manifest)], timeout_s=timeout_s
+                str(cargo), ["fetch", "--manifest-path", str(manifest)], timeout_s=timeout_s
             )
             if fetched.exit_code != 0:
                 _log.info("cargo fetch for %s failed (%s)", manifest, fetched.exit_code)
                 return WarmFailed(
                     diagnostics=fetched.stderr.strip(), exit_code=fetched.exit_code
                 )
+        self._warmed.add(str(cargo))
         return Warmed()
+
+    def already_warmed(self, cargo: Path | str) -> bool:
+        """Whether ``cargo`` has already fetched into this session's home."""
+        return str(cargo) in self._warmed
 
     async def check(
         self,
