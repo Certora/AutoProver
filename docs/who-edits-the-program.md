@@ -484,8 +484,9 @@ first bullet is the next thing to build. It did, and it was; §10.
 
 ## 10. Extraction, built
 
-§8.4's gated pair, and §9.4's first bullet. The vocabulary is six kinds now, five of which are one
-attribute above a signature and one of which is not.
+§8.4's gated pair, and §9.4's first bullet. The vocabulary was six kinds at this point, five of
+which are one attribute above a signature and one of which is not. It is seven now: the derive swap
+(`the-state-behind-the-bytes.md`) and §11's module redirect.
 
 ### 10.1 The shape, and the two things the tool refuses to delegate
 
@@ -583,6 +584,92 @@ it is only sound *across* units: two for one unit are refused (§10.1).
 **The metric is unchanged.** §9.5 still stands: the skip rate, and specifically skips naming a kind
 the vocabulary lacks. Extraction was the kind that kept coming back; what the next run says is
 whether anything replaces it.
+
+---
+
+---
+
+## 11. The module redirect, built
+
+The eighth kind, and the one that answers a question §9 left open: **how does a munge reach a
+method?** `mock_fn` replaces an item with `use <stand-in> as <name>;`, and a `use` inside an `impl`
+block is not a method — the attempt fails with `E0599`. So five of the seven kinds address a
+function they can name, and none of them reaches an inherent or trait method, which is where a large
+share of Solana state logic lives: cross-program-invocation wrappers, checked-arithmetic traits,
+zero-copy loaders.
+
+The corpus answer, found by reading a spec branch rather than the documentation, is not to reach the
+method at all. It is to redirect the file the method is *in*:
+
+```rust
+#[cfg_attr(feature = "unit_x", path = "../certora/mocks/invokes/liquidity_layer.rs")]
+pub mod liquidity_layer;
+```
+
+Nothing is aliased, so the resolution problem never arises: a different file is compiled in the
+module's place, carrying its own types and `impl` blocks. `docs/cvlr-backend-plan.md` §7.12 item 3
+has the evidence and the two instances it was read off.
+
+### 11.1 What the tool owns, and why
+
+The model supplies four things: the file holding the `mod` declaration, the module's name, the
+substitute's full contents, and a justification. **Where the substitute goes is derived, not
+supplied** (`mirror_path`): the mocks tree mirrors the source tree, so a module declared in
+`programs/lending/src/invokes/mod.rs` lands at
+`programs/lending/src/certora/mocks/invokes/liquidity_layer.rs`. That is the convention the
+scaffold's own `certora/mocks/mod.rs` already states and every corpus project follows, and deriving
+it removes a whole class of failure — a substitute in the wrong place is a `#[path]` resolving to
+nothing, and rustc's message for that names the *module*, not the mistake.
+
+The `#[path]` value itself is computed relative to the declaring file's directory, which is what
+Rust resolves it against. Minimal rather than merely correct: climbing to the workspace root and
+back down resolves to the same file and breaks the moment the crate moves.
+
+The substitute is reached **only** through the redirect. It is never declared as a module, which is
+why the corpus's `certora/mocks/invokes/mod.rs` is a zero-byte placeholder — the directory exists so
+git tracks it, and nothing in the module tree names what is inside.
+
+### 11.2 The one kind with no bound on what it changes
+
+Every other kind is constrained by the original. An attribute cannot change what a function
+computes. An extraction and a derive swap both keep the original text verbatim for the deployed
+build, by construction rather than by the model remembering to. A substitute module is code the
+editor invents, and nothing forces it to resemble what it replaces — so **a rule proved against one
+is a rule about the substitute** for everything that module was responsible for.
+
+Three places carry that, because no single one of them can:
+
+* The **editor** is told to reproduce the contract rather than the implementation — `nondet()` where
+  the real code returns something the caller cannot predict, and any write the program later reads
+  back must still happen — and to name the dropped behaviour in `why`.
+* The **reviewer** gets the check the tool cannot make: read the substitute against the module it
+  replaces, item by item. Is a whole module needed, or would `munge_function` reach it? Does the
+  stand-in still carry every item the crate uses? Is the contract reproduced, or just the shape? And
+  does `why` name behaviour rather than intent?
+* The **judge** is told it cannot reason from the kind at all — for the others it can, which is what
+  makes this different — so `why` is its only evidence, and a justification that says what the
+  redirect was *for* rather than what it dropped means no rule reaching that module can be accounted
+  for.
+
+### 11.3 What it does not do yet
+
+**Cross-crate redirects are refused, and the refusal is not the interesting part.** A dependency's
+`mod` declaration cannot be gated on this unit's cargo feature, because the feature is declared on
+the program's own manifest and a `cfg_attr` naming it inside another crate names a feature that
+crate does not have. The corpus forwards a workspace-wide `certora` feature instead
+(`certora = ["library/certora", …]`).
+
+That is a separate piece of work with a genuine tension behind it, recorded here so it is not
+rediscovered: `declare_unit_features` keeps every unit feature **empty** on purpose, because a
+feature that enabled a dependency's feature would give the dependencies per-unit fingerprints and
+reinstate the per-unit dependency build the shared tree exists to remove (`single-working-tree.md`
+§2.1 — 4 of 519 artifacts vary today). Forwarding a *per-unit* feature across crates trades that
+away. Forwarding a *shared* one keeps the build economics and makes the munge run-global, so one
+unit's stand-in silently underwrites every other unit's verdicts — which is a reporting problem, not
+a build one, and would need the munge to reach every unit's judge rather than only the recording
+unit's.
+
+Neither answer should be picked from one target's needs.
 
 ---
 
