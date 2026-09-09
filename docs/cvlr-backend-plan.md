@@ -428,6 +428,14 @@ Stated up front because it constrains the phase order.
 - **Replay tapes.** A Solana smoke scenario under [test_scenarios/](../test_scenarios/) with a
   recorded tape (`generate-tape` skill) gives LLM-free end-to-end CI coverage, as with the EVM
   and Foundry backends. **Not built** — see §7.8, where it is the largest remaining item.
+
+  **The tape fakes the LLM and only the LLM** — the build and the cloud job stay real, which is
+  why a taped test is still marked `expensive`. That is the right trade rather than a compromise:
+  we own the Prover, so a job costs wall-clock and almost no money, while the LLM calls a tape
+  removes are the dominant dollar cost of a run. Read `expensive` as "slow and infrastructural",
+  not "costly". The corollary is that a tape is a **plumbing** gate, not a prompt gate: lanes are
+  keyed by `run_task` task id rather than by prompt content, so editing a system prompt replays
+  the old responses against the new prompt and passes.
 - **Expensive gate.** One `expensive`-marked end-to-end test that submits a real cloud job,
   matching the existing convention (never run without `-m "not expensive"`).
 - **Routine gate unchanged**: `uv run --no-sync pytest tests/ -m "not expensive" -q` and
@@ -2315,10 +2323,43 @@ list because most of it is not in the phase that will fix it.
    in favour of the next candidate rather than rendering something that will not compile. What is
    still open is the measurement this was supposed to enable: whether units still spend turns
    reaching the program, and therefore whether the gated probe half is worth its serial submission.
-8. **The author cannot see the target's macro-generated surface.** §5.5 mounts the CVLR crates and
-   the source tools expose the program's own code, but a harness must also name what the target's
-   *macros* generate — `Accounts` structs, `Bumps` types, discriminants. `cargo expand` output or the
-   Anchor crate source would supply it; nothing does today (§7.5.5).
+8. ~~**The author cannot see the target's macro-generated surface**~~ — **built, by reading rather
+   than expanding** ([anchor_surface.py](../composer/spec/cvlr/anchor_surface.py)). `cargo expand`
+   was the proposal and is not what shipped: it wants a nightly toolchain and a vendored binary, and
+   toolchain acquisition is this project's most reliable source of silent late failures. It is also
+   not needed, because every name at issue is a fixed `format!` over an identifier that is plainly
+   in the source — `{Ident}Bumps` in the struct's own module (`anchor-syn` `codegen/accounts/
+   bumps.rs:10`), `__client_accounts_{snake}` and `__cpi_client_accounts_{snake}`
+   (`__client_accounts.rs:14`, `__cpi_client_accounts.rs:15`), and
+   `instruction::{Pascal}::DISCRIMINATOR` (`codegen/program/dispatch.rs:14`).
+
+   So the module reads the program's `#[derive(Accounts)]` structs and its `#[program]` handlers off
+   the source and applies those four rules. The Rust scanning that makes it safe — which braces and
+   commas are code rather than string, comment or char literal — was already in `munge.py` for
+   extraction and is now [rust_source.py](../composer/spec/cvlr/rust_source.py), shared rather than
+   written twice.
+
+   **What it corrected in the diagnosis.** The draft on record wrote
+   `crate::__client_accounts_withdraw::WithdrawBumps`, which reads as one wrong guess and is two:
+   that module exists, and holds a client-side struct with the same field names and `Pubkey` types,
+   which is exactly why the guess looked right. The prompt now names it to rule it out. A second
+   correction, to something this document had shipped a day earlier: the worked example said
+   `Default::default()` for the bumps argument was "almost always right". Anchor writes a `Default`
+   impl covering every field (`bumps.rs:74`), so it is a guarantee.
+
+   **Two guesses retired downstream.** The worked example (item 7) had to derive the accounts struct
+   from Anchor's convention and take field types from the analysis; where the surface resolves, both
+   are read from the declarations, and the prompt's caveat changes with them. The `#[program]` module
+   is the sharper case: the analysis records `program_identifier`, the *crate* name, while a
+   `crate::…::handler` path needs the module the attribute marks — and the repo's own scenario is a
+   crate named `vault` whose program module is `vault_program`.
+
+   Measured on real source rather than fixtures: 77 handlers across three programs of the Anchor
+   client project, every one resolving to a declared accounts struct, at 29 ms per package scan.
+   **A lookup tool was considered and deliberately not built.** The generated names follow rules, and
+   a rule stated once in the charter covers every handler, where a tool covers the ones the author
+   thinks to ask about. If measurement says authors still spend turns on this, the tool is the next
+   step and the reader is already the thing it would call.
 9. ~~**Extraction is the munge kind the vocabulary lacks**~~ — **built**
    ([who-edits-the-program.md](./who-edits-the-program.md) §10). `extract_function` is the editor's
    sixth tool and the only one that is not an attribute: a `FunctionExtraction` record captures the
