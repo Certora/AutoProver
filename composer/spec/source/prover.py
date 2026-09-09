@@ -26,15 +26,15 @@ from graphcore.tools.vfs import VFSAccessor, VFSState
 
 from composer.spec.source.live_explorer import VersionedHistory
 
-from langchain_core.tools import InjectedToolCallId, tool, BaseTool
+from langchain_core.tools import tool, BaseTool
 from langchain_core.messages import AIMessage
-from langgraph.prebuilt import InjectedState
-from pydantic import BaseModel, Field, Discriminator, create_model
+from pydantic import BaseModel, Field, Discriminator
 
 from langgraph.config import get_stream_writer
 from langgraph.types import Command
 from composer.prover.ptypes import RuleResult, RulePath
 from graphcore.graph import LLM
+from graphcore.tools.schemas import WithInjectedId, WithInjectedState
 
 from composer.prover.core import (
     ProverOptions, SpecCompilationError, declared_rules_list, run_prover,
@@ -578,23 +578,33 @@ def buffer_conf(
         yield (conf_path, cfg)
 
 
-_SUBMIT_BUFFER_DESCRIPTION = """
-Submit one run-target buffer for verification as an independent background prover job, and return
-immediately — the job proves while you keep working. Submit each buffer as soon as it is ready; buffers
-prove in parallel. Re-submitting a buffer relaunches it (superseding any in-flight job for it), which is
-how you re-verify a buffer after editing it, or after editing a shared buffer it imports. A buffer
-already verified at its current content, or already running, is not re-launched. Retrieve outcomes with
-collect_results.
-"""
+class _SubmitBufferArgs(WithInjectedState[StateWithSkips], WithInjectedId):
+    """
+    Submit one run-target buffer for verification as an independent background prover job, and return
+    immediately — the job proves while you keep working. Submit each buffer as soon as it is ready;
+    buffers prove in parallel. Re-submitting a buffer relaunches it (superseding any in-flight job for
+    it), which is how you re-verify a buffer after editing it, or after editing a shared buffer it
+    imports. A buffer already verified at its current content, or already running, is not re-launched.
+    Retrieve outcomes with collect_results.
+    """
+    name: str = Field(description="The run-target buffer to submit for verification.")
 
-_COLLECT_RESULTS_DESCRIPTION = """
-Retrieve the results of finished buffer jobs (submitted with submit_buffer). Returns each finished
-buffer's prover outcome plus a status board: which buffers are complete, still running, or need
-(re)submission. By default it does NOT block — it returns whatever has finished so far (possibly
-nothing), so you can go author or submit other buffers instead of waiting. Pass wait=true ONLY when you
-have no other work: every buffer submitted and running, with no finished result left to process; it then
-sleeps until the next job finishes.
-"""
+
+class _CollectResultsArgs(WithInjectedState[StateWithSkips], WithInjectedId):
+    """
+    Retrieve the results of finished buffer jobs (submitted with submit_buffer). Returns each finished
+    buffer's prover outcome plus a status board: which buffers are complete, still running, or need
+    (re)submission. By default it does NOT block — it returns whatever has finished so far (possibly
+    nothing), so you can go author or submit other buffers instead of waiting. Pass wait=true ONLY when
+    you have no other work: every buffer submitted and running, with no finished result left to process;
+    it then sleeps until the next job finishes.
+    """
+    wait: bool = Field(
+        default=False,
+        description="Block until the next job finishes. Set true ONLY when you have no other work: "
+        "every buffer is submitted and running and you have no finished result left to process. "
+        "Leave false to take whatever has finished so far without waiting.",
+    )
 
 
 @dataclass
@@ -725,15 +735,8 @@ def get_prover_tool(
                 all_rules=list(buffers[name].owned_rules),
             )
 
-        submit_schema = create_model(
-            "SubmitBuffer", __doc__=_SUBMIT_BUFFER_DESCRIPTION,
-            name=(str, Field(description="The run-target buffer to submit for verification.")),
-            state=(Annotated[StateWithSkips, InjectedState], ...),
-            tool_call_id=(Annotated[str, InjectedToolCallId], ...),
-        )
-
         @tool_display("Submitting buffer", None)
-        @tool(args_schema=submit_schema)
+        @tool(args_schema=_SubmitBufferArgs)
         async def submit_buffer(**args) -> str | Command:
             state: StateWithSkips = args["state"]
             name: str = args["name"]
@@ -775,20 +778,8 @@ def get_prover_tool(
                 f"Running: {running}. Call collect_results to retrieve results as jobs finish."
             )
 
-        collect_schema = create_model(
-            "CollectResults", __doc__=_COLLECT_RESULTS_DESCRIPTION,
-            wait=(bool, Field(
-                default=False,
-                description="Block until the next job finishes. Set true ONLY when you have no other work: "
-                "every buffer is submitted and running and you have no finished result left to process. "
-                "Leave false to take whatever has finished so far without waiting.",
-            )),
-            state=(Annotated[StateWithSkips, InjectedState], ...),
-            tool_call_id=(Annotated[str, InjectedToolCallId], ...),
-        )
-
         @tool_display("Collecting prover results", None)
-        @tool(args_schema=collect_schema)
+        @tool(args_schema=_CollectResultsArgs)
         async def collect_results(**args) -> str | Command:
             state: StateWithSkips = args["state"]
             tool_call_id: str = args["tool_call_id"]
