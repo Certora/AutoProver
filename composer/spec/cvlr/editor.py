@@ -82,6 +82,9 @@ from composer.spec.cvlr.munge import (
     HookOnExit,
     InlineNever,
     MockFn,
+    ModuleNotFound,
+    ModuleOutsideCrateSource,
+    ModuleRedirect,
     Munge,
     MungeKind,
     Munged,
@@ -91,6 +94,7 @@ from composer.spec.cvlr.munge import (
     apply_attribute,
     apply_derive_swap,
     apply_extraction,
+    apply_module_redirect,
     function_item,
     function_names,
     merge_munges,
@@ -895,6 +899,157 @@ def _derive_swap_of(state: EditorStateExtra, path: str) -> DeriveSwap | None:
     return None
 
 
+@tool_display(lambda p: f"Redirecting module `{p['module']}`", "Module")
+class RedirectModule(
+    WithInjectedState[EditorStateExtra],
+    WithInjectedId,
+    WithAsyncDependencies[Command | str, HarnessTarget],
+):
+    """Compile a whole module from a stand-in file behind this unit's feature.
+
+    **The kind for a method.** `munge_function` replaces an item by aliasing it, and an alias inside
+    an `impl` block is not a method — so no attribute reaches an inherent or trait method, and a
+    large share of Solana state logic lives in `impl` blocks. Cross-program invocation wrappers,
+    checked-arithmetic traits and zero-copy loaders are the usual cases. Redirect the file they are
+    *in*:
+
+    ```rust
+    #[cfg_attr(feature = "<the unit that asked>", path = "../certora/mocks/invokes/liquidity_layer.rs")]
+    pub mod liquidity_layer;   // unchanged for the deployed build
+    ```
+
+    You write the stand-in and pass it as `substitute`; where it goes is worked out for you, mirroring
+    the module's own place in the tree. With the feature off the declaration is exactly what the
+    developer wrote and your file is named by nothing.
+
+    **This is the least bounded kind in the charter.** Every other one is constrained by the original:
+    an attribute cannot change what a function computes, and an extraction and a derive swap both keep
+    the original text verbatim for the deployed build. A stand-in module is code you invent, so a rule
+    proved against it is a rule about *your file* — not about the program — for everything the module
+    was responsible for. Two consequences you own:
+
+    * **Reproduce the contract, not the implementation.** A stand-in for a CPI wrapper should return
+      `nondet()` where the real one returns a value the caller cannot predict, and should keep any
+      effect the caller's own correctness depends on. Returning a fixed value, or dropping a write the
+      program reads back, produces rules that verify and mean nothing.
+    * **Say what you dropped.** `why` has to name what the real module did that the stand-in does not,
+      because that is the sentence standing between a green rule and a false one. The judge is told to
+      weigh it.
+
+    Two things you do not do. You do not redirect a module outside the crate under verification — a
+    dependency's `mod` declaration cannot be gated on this unit's feature, and the attempt fails with
+    a feature that crate does not have. And you do not redirect a module when a narrower kind reaches
+    the code: if the obstruction is one free function, `munge_function` is the honest edit.
+    """
+
+    path: str = Field(
+        description="The file containing the `mod <name>;` declaration, relative to the workspace "
+        "root — usually the `mod.rs` beside the module, not the module's own file."
+    )
+    module: str = Field(
+        description="The module's name, exactly as its `mod` line spells it. It must be a "
+        "declaration (`mod foo;`); an inline `mod foo { .. }` is not loaded from a file and cannot "
+        "be redirected."
+    )
+    substitute: str = Field(
+        description="The stand-in module's complete contents. It replaces the original file whole, "
+        "so it must define everything the rest of the crate uses from that module — every type, "
+        "trait and method the compiler will look for."
+    )
+    why: str = Field(
+        description="What the real module did that the stand-in does not, and what the author "
+        "cannot prove without the swap. This is the one kind where the justification bounds what "
+        "the verdicts mean, so name the dropped behaviour rather than the goal."
+    )
+
+    @override
+    async def run(self) -> Command | str:
+        if not self.why.strip():
+            return (
+                "A non-empty `why` is required. A stand-in module is code you wrote, so a verdict "
+                "obtained under it means nothing until somebody knows what it stands for."
+            )
+        if not self.substitute.strip():
+            return (
+                "`substitute` is empty. The stand-in replaces the module's file whole, so an empty "
+                "one deletes every item the rest of the crate imports from it."
+            )
+        with self.tool_deps() as target:
+            match target.pristine_source(self.path):
+                case NotInWorkdir():
+                    return (
+                        f"{self.path} resolves outside this project. Redirect a module of the "
+                        f"program under verification, with a path relative to the workspace root."
+                    )
+                case NotProjectSource(directory=directory):
+                    return (
+                        f"{self.path} is under `{directory}`, which is not this project's source."
+                    )
+                case Path() as resolved:
+                    pass
+            if not resolved.is_file():
+                return f"{self.path} is not a file in this project."
+            record = ModuleRedirect(
+                path=self.path,
+                module=self.module,
+                substitute=self.substitute,
+                why=self.why,
+                feature=self.state["feature"],
+            )
+            if any(m.edit_id == record.edit_id for m in _held(self.state)):
+                return "You have already recorded exactly that redirect."
+            if (prior := _redirect_of(self.state, self.path, self.module)) is not None:
+                return (
+                    f"This unit already redirects `{self.module}` in {self.path} "
+                    f"({prior.edit_id}). `drop_munge` that one and record the stand-in you want."
+                )
+            match apply_module_redirect(resolved.read_text(), record):
+                case Munged(line=line):
+                    pass
+                case ModuleNotFound(nearby=nearby):
+                    listed = ", ".join(nearby) if nearby else "none"
+                    return (
+                        f"{self.path} declares no `mod {self.module};`. It declares: {listed}. An "
+                        f"inline `mod {self.module} {{ .. }}` is not redirectable — it is not "
+                        f"loaded from a file."
+                    )
+                case ModuleOutsideCrateSource():
+                    return (
+                        f"{self.path} is not under a crate's `src/`, so there is nowhere to put "
+                        f"the stand-in. Redirect a module of the program's own source tree."
+                    )
+                case refusal:
+                    return f"That redirect cannot be applied to {self.path} ({refusal})."
+        target_path = record.substitute_path
+        return Command(
+            update={
+                "proposed": [record],
+                "reviewed_digest": None,
+                "messages": [
+                    ToolMessage(
+                        tool_call_id=self.tool_call_id,
+                        content=(
+                            f"`{self.module}` is redirected at {self.path}:{line}, gated on "
+                            f"`{record.feature}`; the stand-in lands at {target_path}. The deployed "
+                            f"build is unchanged. Tell the author in `how_to_apply` exactly which "
+                            f"behaviour the stand-in does not reproduce — every rule that reaches "
+                            f"this module is a rule about your file for that behaviour, and "
+                            f"nothing downstream can work that out on its own."
+                        ),
+                    )
+                ],
+            }
+        )
+
+
+def _redirect_of(state: EditorStateExtra, path: str, module: str) -> ModuleRedirect | None:
+    """This unit's existing redirect of ``module`` in ``path``, if it has one."""
+    for m in _held(state):
+        if isinstance(m, ModuleRedirect) and m.path == path and m.module == module:
+            return m
+    return None
+
+
 @tool_display(lambda p: f"Dropping `{p['edit_id']}`", "Drop")
 class DropMunge(WithInjectedState[EditorStateExtra], WithInjectedId, WithImplementation[Command | str]):
     """Take back one munge you applied. Voids any review you have earned."""
@@ -1296,6 +1451,7 @@ def editor_tools(
                 MungeFunction.bind(target).as_tool("munge_function"),
                 ExtractFunction.bind(target).as_tool("extract_function"),
                 SwapDerive.bind(target).as_tool("swap_derive"),
+                RedirectModule.bind(target).as_tool("redirect_module"),
                 DropMunge.as_tool("drop_munge"),
                 RequestReview.bind(
                     ReviewDeps(pristine=pristine, review=reviewer)

@@ -43,6 +43,7 @@ from composer.spec.cvlr.munge import (
     DeriveSwap,
     FunctionExtraction,
     FunctionMunge,
+    ModuleRedirect,
     Munge,
     Munged,
     MungeAttempt,
@@ -143,9 +144,10 @@ def replay(source: str, munges: tuple[Munge, ...]) -> tuple[str, tuple[Drifted, 
     one function each insert a line immediately above its signature, and bytes that depended on
     which unit happened to stage first would make the crate's fingerprint depend on scheduling.
 
-    Derive swaps go on first and interact with nothing: they rewrite the attributes above a
-    ``struct`` or ``enum``, where the other two address functions. They are ordered anyway, because
-    "does not interact today" is not a property worth depending on for the crate's bytes.
+    Module redirects and derive swaps go on first and interact with nothing: one sits above a ``mod``
+    declaration and the other above a ``struct`` or ``enum``, where the remaining two address
+    functions. They are ordered anyway, because "does not interact today" is not a property worth
+    depending on for the crate's bytes.
 
     Attributes go on before extractions, and that is the interesting half of the order. An
     extraction replaces a function with a gated pair, so an attribute applied afterwards would find
@@ -156,12 +158,14 @@ def replay(source: str, munges: tuple[Munge, ...]) -> tuple[str, tuple[Drifted, 
     """
     def _replay_rank(m: Munge) -> int:
         match m:
-            case DeriveSwap():
+            case ModuleRedirect():
                 return 0
-            case FunctionMunge():
+            case DeriveSwap():
                 return 1
-            case FunctionExtraction():
+            case FunctionMunge():
                 return 2
+            case FunctionExtraction():
+                return 3
 
     drifted: list[Drifted] = []
     for munge in sorted(munges, key=lambda m: (_replay_rank(m), m.edit_id)):
@@ -346,6 +350,10 @@ class SharedTree:
         for staged in self._units.values():
             for munge in staged.munges:
                 by_path.setdefault(munge.path, []).append(munge)
+                # A substitute module has no pristine counterpart to replay onto, so it goes into
+                # the overlay whole. Written before the replay loop and never by it: the loop's
+                # entries are all derived *from* the base, and this one is the base.
+                derived.update(munge.created)
 
         for path, munges in sorted(by_path.items()):
             resolved = self.resolve(path)

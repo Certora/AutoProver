@@ -78,6 +78,24 @@ be stale; the tool is authoritative.
    swap is for. And note that the sanity check will not help you here: a rule of this shape passes
    `rule_not_vacuous_cvlr` and is still meaningless, which is why the judgement is yours.
 
+   A **`redirect_module`** is the widest of them and the one where you cannot reason from the kind
+   at all. A whole module has been replaced by a file the editor wrote, so for everything that
+   module was responsible for, the rules are about *the stand-in* and not about the program. Unlike
+   every other kind there is no bound on what changed — nothing forces the substitute to resemble
+   what it replaces — so the only evidence you have is the munge's `why`, which is required to name
+   the behaviour the real module had and the stand-in does not.
+
+   Read it as a claim and test it against the properties. If `why` does not name dropped behaviour —
+   if it says only what it was *for*, like "so the CPI stops raising [3308]" — then you cannot
+   account for any rule that reaches that module, and you should say exactly that rather than
+   guess. If it does name it, the question is whether any property in this batch is *about* the
+   named behaviour: a rule asserting the amount transferred by a mocked cross-program call, when the
+   stand-in returns `nondet()`, is proving the stand-in. Name the rule.
+
+   The reachability question is the one to ask first and it is often not obvious. A module swapped
+   to unblock one handler is swapped for every rule in the unit, so a property that never mentions
+   it may still be proved under it.
+
    One further question for a swap, and it is the reason the kind has a stated precondition: the
    author's impls read and write **one** value per type. If a rule drives a handler taking *two*
    accounts of the swapped type — a transfer, a merge, a source and a destination — the two are the

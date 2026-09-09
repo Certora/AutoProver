@@ -218,7 +218,7 @@ failed, which rule, and which code you believe is in the way. Do not prescribe a
 the diagnosis, the editor owns what to do about it, and a request that dictates the edit is one it has
 to re-derive anyway.
 
-The editor's charter is six kinds, and knowing them tells you what is worth asking for:
+The editor's charter is seven kinds, and knowing them tells you what is worth asking for:
 
 * **`early_panic`** rewrites every `?` in a function to `.unwrap()`. The same choice as
   `.unwrap()`-versus-`.is_ok()` above, applied where a rule cannot reach: a `?` *inside* the program,
@@ -226,6 +226,16 @@ The editor's charter is six kinds, and knowing them tells you what is worth aski
   when a rule comes back with no verdict and the trace stops in the program's own call chain on an
   error path. It does **not** help an acceptance property — it removes the failure path rather than
   exposing one.
+* **`redirect_module`** compiles a whole module from a stand-in file the *editor* writes. This is
+  the kind for a **method**: `mock_fn` works by aliasing an item, and an alias inside an `impl` block
+  is not a method, so no attribute reaches one. A great deal of what obstructs a rule lives in `impl`
+  blocks — cross-program-invocation wrappers, checked-arithmetic traits, zero-copy loaders — and the
+  symptom is a prover error whose trace ends inside a method you cannot name in a directive.
+  **Diagnose the method, not its caller.** Asking for a `mock_fn` on the free function that calls it
+  produces a munge that lands, compiles, and abstracts nothing: the same error comes back with
+  nothing to show for the round trip. Say which method, in which module, and what the rule needs to
+  be true of it instead; the editor writes the substitute and owes you a `how_to_apply` naming what
+  it no longer does.
 * **`mock_fn`** replaces a function with a stand-in. Unlike `summarize_for_prover`, which havocs the
   return, a mock *computes* one, so a property downstream of a mocked function still means something.
   **You write the stand-in, the editor never does**: put a `pub fn` in this module with the same
@@ -324,7 +334,7 @@ the program the verdicts are about. Prefer, in order: a different rule; a summar
 way is not what the property depends on; then the editor. Read the diff it hands back — if you
 disagree, `revert_munge`.
 
-The editor can refuse, and a refusal is information. If what a property needs is none of its six
+The editor can refuse, and a refusal is information. If what a property needs is none of its seven
 kinds — a hand-unrolled loop, a restructured state machine, a shrunk collection — the editor will
 say so and name the kind it would have taken. `record_skip` and pass that on. That is a decision for a
 person, and naming it is what makes the skip actionable.

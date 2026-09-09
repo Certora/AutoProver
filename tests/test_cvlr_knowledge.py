@@ -633,7 +633,7 @@ def test_the_author_knows_the_charter_without_holding_the_tool():
     prompt = _flat(_author_system_prompt())
     assert "code_editor(request)" in prompt
     assert "You do not make it" in prompt
-    assert "charter is six kinds" in prompt
+    assert "charter is seven kinds" in prompt
     assert "The editor can refuse, and a refusal is information" in prompt
     # early_panic must not be sold as the answer to the one thing it cannot do.
     assert "does **not** help an acceptance property" in prompt
@@ -644,11 +644,26 @@ def test_every_kind_the_editor_offers_is_named_to_the_author():
     the metric this backend watches — so a kind the author does not know about is a skip that never
     had to happen. Extraction is the newest and the one two of a gate run's eight skips wanted."""
     prompt = _flat(_author_system_prompt())
-    for kind in ("early_panic", "mock_fn", "inline_never", "hook_on_entry", "hook_on_exit"):
+    for kind in (
+        "early_panic", "mock_fn", "inline_never", "hook_on_entry", "hook_on_exit",
+        "redirect_module",
+    ):
         assert kind in prompt, kind
     assert "an extraction" in prompt
     # And the narrowing it buys, since the author is the one who declares what a rule drives.
     assert "proves nothing about the checks that stayed in the enclosing function" in prompt
+
+
+def test_the_author_is_warned_off_mocking_a_methods_caller():
+    """The mistake that costs a whole run, because it produces no error to read.
+
+    A `mock_fn` on the free function that *calls* an obstructing method lands, compiles, and
+    abstracts nothing — the same prover error returns with nothing to show for the round trip.
+    Observed on a real target: twelve rules, one munge, an identical [3308] each time.
+    """
+    prompt = _flat(_author_system_prompt())
+    assert "an alias inside an `impl` block" in prompt
+    assert "lands, compiles, and abstracts nothing" in prompt
 
 
 def test_the_author_is_told_where_a_mock_stand_in_can_actually_live():
