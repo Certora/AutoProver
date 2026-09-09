@@ -52,12 +52,12 @@ def max_spec_buffers() -> int:
 
 
 class NamedBuffer(BaseModel):
-    """One named CVL spec buffer the agent authors. Frozen and pydantic so it is both the substrate's
-    algorithm type and the shape stored (serializably) in graph state."""
+    """One named CVL spec buffer the agent authors. A frozen pydantic model, so the same type is both
+    what the buffer logic operates on and what is stored (serializably) in graph state."""
 
     model_config = {"frozen": True}
 
-    #: Stable identifier.
+    #: Stable identifier, and the key this buffer is stored under: ``buffers[nm].name == nm`` holds.
     name: str
     #: The buffer's own CVL text — its rules, its ``methods{}`` block, and its ``import`` statements.
     cvl: str
@@ -137,11 +137,11 @@ def buffer_imports(buffers: Mapping[str, NamedBuffer], name: str) -> tuple[str, 
 
 def import_closure(buffers: Mapping[str, NamedBuffer], name: str) -> list[NamedBuffer]:
     """Buffer ``name`` plus every buffer reachable through its imports, transitively — deduped and
-    returned sorted by name. A run-target buffer imports a shared (``is_run_target=false``) buffer only
-    when it does, so a shared buffer belongs to the closure (and invalidation set) of exactly the
-    run-targets that use it — that is what lets a subset of groups share a summary without invalidating
-    the others. An import resolving to no known buffer is skipped (a dangling/resource import is a
-    coverage concern, not a hashing one), and cycles terminate safely."""
+    returned sorted by name. A shared (``is_run_target=false``) buffer is in a run-target's closure only
+    if that run-target transitively imports it, so a shared buffer belongs to the closure (and
+    invalidation set) of exactly the run-targets that use it — that is what lets a subset of groups share
+    a summary without invalidating the others. An import resolving to no known buffer is skipped (a
+    dangling/resource import is a coverage concern, not a hashing one), and cycles terminate safely."""
     seen: set[str] = set()
     stack = [name]
     while stack:
@@ -312,7 +312,9 @@ def duplicated_declarations(buffers: Mapping[str, NamedBuffer]) -> dict[str, lis
     """Declarations (``methods{}`` entries / simple ghost decls) that appear verbatim in more than one
     run-target buffer — copy-paste that likely belongs in a shared buffer the duplicating buffers import.
     Returns ``{declaration: sorted buffer names}`` for each duplicated declaration (heuristic, text-based;
-    see :func:`_extract_decls`)."""
+    see :func:`_extract_decls`). Because it compares only the declaration text, it can false-positive:
+    two identical summary entries like ``function _.transfer() => cvlTransfer();`` are flagged even when
+    the CVL function ``cvlTransfer()`` they point at is defined differently in each buffer."""
     where: dict[str, list[str]] = {}
     for b in run_targets(buffers):
         for decl in _extract_decls(b.cvl):

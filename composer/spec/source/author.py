@@ -1,4 +1,4 @@
-from typing import AsyncIterator, NotRequired, override, Literal, Annotated, Sequence, Protocol, Callable, cast
+from typing import AsyncIterator, NotRequired, override, Literal, Annotated, Sequence, Protocol, Callable
 
 from typing_extensions import TypedDict
 from contextlib import asynccontextmanager
@@ -178,7 +178,7 @@ class PublishResultTool(
         if (err := validate_disjoint_rules(buffers)) is not None:
             return f"Completion REJECTED: {err}"
         pr = [
-            PropertyRuleMapping(property_title=cast(PropertyTitle, p), rules=cast(list[RuleName], rs))
+            PropertyRuleMapping(property_title=PropertyTitle(p), rules=[RuleName(rn) for rn in rs])
             for b in run_targets(buffers) for p, rs in b.property_rules.items()
         ]
         return tool_state_update(
