@@ -8,9 +8,9 @@ component.
 
 import pytest
 
+from composer.spec.cvlr.anchor_surface import Param, read_surface
 from composer.spec.cvlr.example import (
     ExampleAccount,
-    ExampleArg,
     WorkedExample,
     account_constructor,
     split_arg,
@@ -114,13 +114,13 @@ def test_prose_in_the_type_field_yields_no_constructor(declared: str) -> None:
 @pytest.mark.parametrize(
     "declared,expected",
     [
-        ("amount: u64", ExampleArg("amount", "u64")),
-        ("  shares : u128 ", ExampleArg("shares", "u128")),
-        ("`amount`: `u64`", ExampleArg("amount", "u64")),
-        ("seeds: Vec<u8>", ExampleArg("seeds", "Vec<u8>")),
+        ("amount: u64", Param("amount", "u64")),
+        ("  shares : u128 ", Param("shares", "u128")),
+        ("`amount`: `u64`", Param("amount", "u64")),
+        ("seeds: Vec<u8>", Param("seeds", "Vec<u8>")),
     ],
 )
-def test_an_argument_splits_into_name_and_type(declared: str, expected: ExampleArg) -> None:
+def test_an_argument_splits_into_name_and_type(declared: str, expected: Param) -> None:
     assert split_arg(declared) == expected
 
 
@@ -259,8 +259,10 @@ def test_the_substituted_branch_states_what_the_model_could_not_know() -> None:
 def test_both_branches_keep_the_shared_mechanics() -> None:
     for example in (worked_example(_component(DEPOSIT), []), None):
         rendered = _render(example)
-        assert "`bumps` is the generated `<Name>Bumps` struct" in rendered
+        assert "The context borrows the\naccounts struct" in rendered
         assert "A zero-copy `AccountLoader` field behaves differently" in rendered
+        # Anchor's naming rules belong to Anchor, not to whether we could read this program.
+        assert "`<AccountsStruct>Bumps`" in rendered
 
 
 # -- the arithmetic guidance ---------------------------------------------------------------------

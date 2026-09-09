@@ -21,8 +21,10 @@ than one about a different program entirely.
 
 import dataclasses
 import re
-from typing import Sequence
+from typing import Literal, Sequence
 
+from composer.spec.cvlr import anchor_surface
+from composer.spec.cvlr.anchor_surface import AnchorSurface, Param
 from composer.spec.solana.model import AccountConstraint, SolanaComponentInstance, SolanaInstruction
 from composer.spec.types import PropertyFormulation
 
@@ -54,22 +56,38 @@ class ExampleAccount:
 
 
 @dataclasses.dataclass(frozen=True)
-class ExampleArg:
-    """One non-account argument, split out of the model's ``"name: type"`` text."""
-
-    name: str
-    rust_type: str
-
-
-@dataclasses.dataclass(frozen=True)
 class WorkedExample:
-    """Everything the prompt's example needs about one handler of the program under verification."""
+    """Everything the prompt's example needs about one handler of the program under verification.
+
+    ``provenance`` is what the prompt's caveat turns on, and it is the difference between the two
+    readings of the same program. ``"source"`` means the names were read from the declarations
+    themselves, so the struct name and the field types are facts. ``"model"`` means they came from
+    the analysis, where the struct name is Anchor's convention applied to the handler and the types
+    are the analysis's reading — usable, and worth saying so.
+    """
 
     program_module: str
     handler: str
     accounts_struct: str
     accounts: tuple[ExampleAccount, ...]
-    args: tuple[ExampleArg, ...]
+    args: tuple[Param, ...]
+    provenance: Literal["source", "model"]
+
+    @property
+    def bumps_type(self) -> str:
+        return anchor_surface.bumps_type(self.accounts_struct)
+
+    @property
+    def client_accounts_module(self) -> str:
+        return anchor_surface.client_accounts_module(self.accounts_struct)
+
+    @property
+    def cpi_client_accounts_module(self) -> str:
+        return anchor_surface.cpi_client_accounts_module(self.accounts_struct)
+
+    @property
+    def discriminant_path(self) -> str:
+        return anchor_surface.discriminant_path(self.handler)
 
 
 def _pascal_case(snake: str) -> str:
@@ -94,7 +112,7 @@ def account_constructor(declared: str) -> str | None:
     return head if _TYPE_NAME.fullmatch(head) else None
 
 
-def split_arg(declared: str) -> ExampleArg | None:
+def split_arg(declared: str) -> Param | None:
     """Split the model's ``"amount: u64"`` into its halves.
 
     The field is documented as "name & type" but is free text, so anything that does not split
@@ -107,7 +125,7 @@ def split_arg(declared: str) -> ExampleArg | None:
     name, rust_type = name.strip().strip("`"), rust_type.strip().strip("`")
     if not _IDENT.fullmatch(name) or not _TYPE_EXPR.fullmatch(rust_type):
         return None
-    return ExampleArg(name=name, rust_type=rust_type)
+    return Param(name=name, rust_type=rust_type)
 
 
 def _account_field(account: AccountConstraint) -> ExampleAccount | None:
@@ -147,25 +165,65 @@ def _renderable(instruction: SolanaInstruction, program_module: str) -> WorkedEx
         accounts_struct=_pascal_case(instruction.name),
         accounts=tuple(a for a in accounts if a is not None),
         args=tuple(a for a in args if a is not None),
+        provenance="model",
+    )
+
+
+def _from_surface(handler: str, surface: AnchorSurface, fallback_module: str):
+    """The example for one handler read from the program's own declarations.
+
+    Preferred over the model whenever it resolves, because everything the model half has to hedge is
+    settled here: the accounts struct is the one the handler's ``Context`` actually names rather than
+    Anchor's convention applied to the handler, and the field and argument types are the compiler's
+    rather than the analysis's reading of them.
+    """
+    found = surface.handler(handler)
+    struct = surface.accounts_for(handler)
+    if found is None or struct is None or not struct.fields:
+        return None
+    return WorkedExample(
+        program_module=surface.program_module or fallback_module,
+        handler=found.name,
+        accounts_struct=struct.name,
+        accounts=tuple(
+            ExampleAccount(
+                name=field.name,
+                declared=field.rust_type,
+                constructor=account_constructor(field.rust_type),
+            )
+            for field in struct.fields
+        ),
+        args=found.args,
+        provenance="source",
     )
 
 
 def worked_example(
-    component: SolanaComponentInstance, properties: Sequence[PropertyFormulation]
+    component: SolanaComponentInstance,
+    properties: Sequence[PropertyFormulation],
+    surface: AnchorSurface | None = None,
 ) -> WorkedExample | None:
     """The example for the handler this batch is most about.
 
     Ranked by how many of the batch's properties name the handler, since the example's whole job is
     to be close to the first rule the author writes; ties and total misses fall back to the
-    component's declared order, which is still a real handler of this component. The first
-    *renderable* candidate wins — an unrenderable one is skipped rather than failing the whole
-    substitution, and ``None`` here simply leaves the prompt's generic example in place.
+    component's declared order, which is still a real handler of this component.
+
+    Each candidate is tried against the program's own declarations first and the analyzed model
+    second, and the first that yields anything wins — so a handler the scanner could not follow
+    falls back to the model for *that handler* rather than dropping to the next one, and only a
+    candidate neither reading can render is skipped. ``None`` leaves the prompt's stand-in example
+    in place.
     """
     module = component.program.program_identifier
     ranked = sorted(
         enumerate(component.instructions),
         key=lambda pair: (-sum(_mentions(p, pair[1].name) for p in properties), pair[0]),
     )
-    return next(
-        (example for _, ins in ranked if (example := _renderable(ins, module)) is not None), None
-    )
+    for _, instruction in ranked:
+        from_source = (
+            _from_surface(instruction.name, surface, module) if surface is not None else None
+        )
+        if (example := from_source or _renderable(instruction, module)) is not None:
+            return example
+    return None
