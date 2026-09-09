@@ -1240,6 +1240,24 @@ def _path_attr_value(declaring_file: str, substitute: PurePosixPath) -> str:
     return posixpath.relpath(str(substitute), str(PurePosixPath(declaring_file).parent))
 
 
+def forwards_feature(program_manifest: str, dependency: str, feature: str) -> bool:
+    """Whether the program's ``feature`` enables the same feature in ``dependency``.
+
+    The precondition for a cross-crate redirect, and worth checking rather than assuming, because
+    its absence is silent: ``#[cfg_attr(feature = "certora", ..)]`` inside a dependency compiles
+    perfectly and simply never activates, so the munge lands, the build succeeds, and the prover
+    reports exactly what it reported before. :func:`~composer.spec.cvlr.scaffold._plan_feature_forwarding`
+    writes the forward for a project it scaffolds from scratch, and cannot for one that already had
+    a ``certora`` feature — nothing here overwrites a feature somebody else defined.
+    """
+    try:
+        parsed = tomllib.loads(program_manifest)
+    except tomllib.TOMLDecodeError:
+        return False
+    enables = parsed.get("features", {}).get(feature)
+    return isinstance(enables, list) and f"{dependency}/{feature}" in enables
+
+
 @dataclasses.dataclass(frozen=True)
 class ModuleRedirect:
     """A whole module compiled from a different file behind the unit's feature.
