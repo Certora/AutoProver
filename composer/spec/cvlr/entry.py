@@ -1,12 +1,12 @@
-"""CLI entry-point wiring for the CVLR rule author (Solana, via the Certora Solana Prover).
+"""CLI entry-point wiring for the CVLR rule author (Solana and Soroban, via the Certora Prover).
 
 Mirrors ``composer/foundry/entry.py``'s shape — parse args → stage services through
 :func:`composer.pipeline.cli.cli_pipeline` → yield a closure a frontend drives with a handler
-factory — and differs from it in the four places a Rust/Solana run differs from an EVM one:
+factory — and differs from it in the four places a Rust run differs from an EVM one:
 
-* **The source surface is Cargo's, not Foundry's.** ``SOLANA.language.default_forbidden_read``
-  withholds ``target/``, which on a project that has been built once is larger than everything else
-  in the tree put together.
+* **The source surface is Cargo's, not Foundry's.** The Rust language facet's
+  ``default_forbidden_read`` withholds ``target/``, which on a project that has been built once is
+  larger than everything else in the tree put together.
 * **The package is resolved before the run starts** (:func:`select_package`), because the artifact
   store has to be pointed at the crate the harness lands in, and that is not known from the project
   root alone. Resolving it here also turns "which of these five programs?" into a usage error
@@ -18,6 +18,9 @@ factory — and differs from it in the four places a Rust/Solana run differs fro
   production one.
 * **The prover is cloud-only** (§3 item 1), so there is no ``--local`` to offer.
 
+**Which chain** is the frontend's choice, not a flag: each console/TUI script passes its
+:class:`~composer.spec.cvlr.chains.CvlrChain`.
+
 The corpora are wired here and were not in the expensive gate: ``corpus_tools`` degrades to no
 search when a database is not up, which is the documented behaviour for a search aid — so naming it
 costs a developer without one nothing, and a developer with one gets §9's other defense against
@@ -26,6 +29,7 @@ inventing CVLR helpers.
 
 import argparse
 import asyncio
+import dataclasses
 import logging
 import os
 import pathlib
@@ -46,18 +50,20 @@ from composer.io.multi_job import HandlerFactory
 from composer.io.thread_logging import RunDataLogger
 from composer.pipeline.cli import AtExit, cli_pipeline, user_ns
 from composer.pipeline.pinned import load_pinned_run
-from composer.pipeline.ecosystem import SOLANA
+from composer.pipeline.ecosystem import ChainTag
 from composer.pipeline.ptypes import DEFAULT_MAX_CPU_TASKS, CorePipelineResult
 from composer.pipeline.run_mode import RunMode
 from composer.prover.core import make_prover_options
 from composer.sandbox.config import SandboxConfig
 from composer.spec.context import SourceFields
+from composer.spec.cvlr.chains import CvlrChain
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness
 from composer.spec.cvlr.patch import write_patch
 from composer.spec.cvlr.editor import EditingServices
 from composer.spec.cvlr.pipeline import CvlrBackend, CvlrPhase, run_work_directory
 from composer.spec.cvlr.preflight import SelectedPackage, select_package
 from composer.spec.cvlr.reference import generations
+from composer.spec.system_model import BaseApplication, FeatureUnit
 from composer.spec.service_host import PureServiceHost
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.source_env import build_layered_source_tools, build_source_tools
@@ -109,9 +115,38 @@ class CvlrArgs(ExtendedModelOptions, Protocol):
     threat_model: str | None
 
 
-def build_parser() -> argparse.ArgumentParser:
+@dataclasses.dataclass(frozen=True)
+class _MainUnit:
+    """How the CLI words the thing a chain verifies."""
+
+    noun: str
+    prover: str
+    example: str
+    #: What the identifier names, for the help text.
+    identifier: str
+
+
+_MAIN_UNITS: dict[ChainTag, _MainUnit] = {
+    "solana": _MainUnit(
+        noun="program",
+        prover="Certora Solana Prover",
+        example="programs/vault/src/lib.rs:vault",
+        identifier="the program the analysis must name",
+    ),
+    "soroban": _MainUnit(
+        noun="contract",
+        prover="Certora Soroban Prover",
+        example="contracts/token/src/contract.rs:Token",
+        identifier="the contract type (the struct carrying #[contract]), which the analysis must "
+                   "name and the rules call",
+    ),
+}
+
+
+def build_parser(chain: ChainTag = "solana") -> argparse.ArgumentParser:
+    unit = _MAIN_UNITS[chain]
     parser = argparse.ArgumentParser(
-        description="CVLR rule author for the Certora Solana Prover",
+        description=f"CVLR rule author for the {unit.prover}",
     )
     add_protocol_args(parser, ExtendedModelOptions)
     parser.add_argument(
@@ -121,10 +156,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("project_root", help="Cargo workspace root (contains the root Cargo.toml).")
     parser.add_argument(
         "main_contract",
-        metavar="main_program",
-        help="Main program as path:identifier, e.g. programs/vault/src/lib.rs:vault. The "
-             "identifier is the program the analysis must name; the path decides which crate the "
-             "harness is written into unless --package overrides it.",
+        metavar=f"main_{unit.noun}",
+        help=f"Main {unit.noun} as path:identifier, e.g. {unit.example}. The identifier is "
+             f"{unit.identifier}; the path decides which crate the harness is written into unless "
+             f"--package overrides it.",
     )
     parser.add_argument(
         "system_doc", nargs="?", default=None,
@@ -133,8 +168,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--package", default=None,
-        help="Cargo package to verify. Defaults to the crate that owns the main program's source "
-             "file; name it when that is not the crate to build.",
+        help=f"Cargo package to verify. Defaults to the crate that owns the main {unit.noun}'s "
+             f"source file; name it when that is not the crate to build.",
     )
     parser.add_argument(
         "--withhold-crate", action="append", default=[], metavar="CRATE",
@@ -196,14 +231,14 @@ def build_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 
 
-#: What a Solana program can be named. Spelled out because of the specific mistake it catches: a
-#: *cargo package* name passed where a program identifier belongs. Cargo permits hyphens and Rust
-#: does not, so ``spl-stake-pool`` is a perfectly good package and an impossible program.
+#: What a program or contract can be named. Spelled out because of the specific mistake it catches:
+#: a *cargo package* name passed where an identifier belongs. Cargo permits hyphens and Rust does
+#: not, so ``spl-stake-pool`` is a perfectly good package and an impossible program.
 _RUST_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
 
-def parse_main_program(main_contract: str) -> tuple[str, str]:
-    """Split ``path:identifier``, refusing an identifier no Solana program could have.
+def parse_main_program(main_contract: str, chain: ChainTag = "solana") -> tuple[str, str]:
+    """Split ``path:identifier``, refusing an identifier no program or contract could have.
 
     The identifier is not a label this run picks for its own convenience. It is an *instruction*:
     ``_solana_analysis_extra_input`` orders the analysis to declare a program by exactly this name,
@@ -215,25 +250,35 @@ def parse_main_program(main_contract: str) -> tuple[str, str]:
     Measured once, which is why this exists: ``spl-stake-pool`` cost 38 minutes and roughly thirty
     heavy-tier calls, and read from the outside like a slow model on a large program. The check that
     would have turned it into an immediate usage error is this regex.
+
+    The suggested repair differs: a Solana program is named after its crate, so the underscored
+    package name is worth suggesting; a Soroban contract is named by its contract type.
     """
+    unit = _MAIN_UNITS[chain]
     path, colon, identifier = main_contract.partition(":")
     if not colon or not path:
         raise ValueError(
-            f"{main_contract!r} is not a main program: expected <path>:<identifier>, e.g. "
-            f"programs/vault/src/lib.rs:vault"
+            f"{main_contract!r} is not a main {unit.noun}: expected <path>:<identifier>, e.g. "
+            f"{unit.example}"
         )
     if _RUST_IDENTIFIER.match(identifier):
         return path, identifier
     corrected = identifier.replace("-", "_")
-    hint = (
-        f" Did you mean {path}:{corrected}? That is the crate name, which is what the program is "
-        f"called in Rust."
-        if _RUST_IDENTIFIER.match(corrected)
-        else ""
-    )
+    if not _RUST_IDENTIFIER.match(corrected):
+        hint = ""
+    elif chain == "solana":
+        hint = (
+            f" Did you mean {path}:{corrected}? That is the crate name, which is what the program "
+            f"is called in Rust."
+        )
+    else:
+        hint = (
+            f" If that is the package name, name the contract type instead — the struct carrying "
+            f"#[contract], e.g. {unit.example}."
+        )
     raise ValueError(
-        f"{identifier!r} cannot name a Solana program: it is not a Rust identifier, and the "
-        f"analysis is required to declare a program by exactly this name.{hint}"
+        f"{identifier!r} cannot name a {unit.noun}: it is not a Rust identifier, and the analysis "
+        f"is required to declare a {unit.noun} by exactly this name.{hint}"
     )
 
 
@@ -242,7 +287,7 @@ def parse_main_program(main_contract: str) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def build_confinement() -> SandboxConfig:
+def build_confinement(chain: ChainTag = "solana") -> SandboxConfig:
     """The command sandbox a cargo build runs under.
 
     Fail-closed by default (``docs/cvlr-backend-plan.md`` §3 item 3): the provider is ``launcher``
@@ -251,8 +296,8 @@ def build_confinement() -> SandboxConfig:
     :meth:`SandboxConfig.from_env`'s default, which is ``none`` — appropriate for a library seam
     with many callers, wrong for the one that compiles somebody else's ``build.rs``.
 
-    The platform-tools root is granted read-only because ``cargo build-sbf`` reads its toolchain
-    from there. :func:`composer.sandbox.recipes.rust_build_policy` already grants the two default
+    On Solana the platform-tools root is granted read-only because ``cargo build-sbf`` reads its
+    toolchain from there. :func:`composer.sandbox.recipes.rust_build_policy` already grants the two default
     locations; this adds whichever one ``$CERTORA_PLATFORM_TOOLS_ROOT`` names when it is set
     elsewhere, and is a no-op when it is not (a non-existent or duplicate grant is dropped).
     """
@@ -261,7 +306,7 @@ def build_confinement() -> SandboxConfig:
         # container orchestrator both produce by accident, and fail-closed means it must read as
         # "unset" rather than as an unknown provider — let alone as no confinement.
         provider=os.environ.get("COMPOSER_SANDBOX_PROVIDER") or "launcher",
-        extra_ro=(PLATFORM_TOOLS_ROOT,),
+        extra_ro=(PLATFORM_TOOLS_ROOT,) if chain == "solana" else (),
     )
 
 
@@ -315,14 +360,18 @@ def _usage_exit_logger(summary: RunSummary, selected: SelectedPackage) -> AtExit
 
 
 @asynccontextmanager
-async def _entry_point(summary: RunSummary) -> AsyncIterator[CvlrRunner]:
-    args = cast(CvlrArgs, build_parser().parse_args())
-    async with cvlr_executor(args, summary) as runner:
+async def _entry_point[App: BaseApplication, Main, U: FeatureUnit](
+    summary: RunSummary, chain: CvlrChain[App, Main, U]
+) -> AsyncIterator[CvlrRunner]:
+    args = cast(CvlrArgs, build_parser(chain.tag).parse_args())
+    async with cvlr_executor(args, summary, chain) as runner:
         yield runner
 
 
 @asynccontextmanager
-async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[CvlrRunner]:
+async def cvlr_executor[App: BaseApplication, Main, U: FeatureUnit](
+    args: CvlrArgs, summary: RunSummary, chain: CvlrChain[App, Main, U]
+) -> AsyncIterator[CvlrRunner]:
     """Set up from already-parsed args and yield the pipeline runner.
 
     Split from :func:`_entry_point` the way ``autoprove_executor`` is split from its parser: a
@@ -331,28 +380,29 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
     """
     thread_id = f"cvlr_{uuid.uuid4().hex[:12]}"
     project_root = pathlib.Path(args.project_root).resolve()
-    main_source, identifier = parse_main_program(args.main_contract)
+    main_source, identifier = parse_main_program(args.main_contract, chain.tag)
+    ecosystem = chain.ecosystem
 
     # Before any service starts: a workspace cargo cannot read, a package that is not a member, and
     # a multi-program workspace with nothing naming the one to verify are all usage errors, and
     # each of them is cheaper here by one analysis agent than inside preflight.
-    # The ecosystem's name is the chain key, so the reference sets are looked up rather than
-    # imported: this module's ``SOLANA`` is the ecosystem, not a reference set.
-    sandbox = build_confinement()
+    # The ecosystem's name is the chain key, so the reference sets are looked up by it.
+    sandbox = build_confinement(chain.tag)
     # Fetched into a throwaway home, not the run's: the run has no copy of the project yet, and a
     # confined install's shared CARGO_HOME is not the runtime user's to write.
     with tempfile.TemporaryDirectory(prefix="cvlr-select-") as select_home:
         selected = await select_package(
             project_root,
             args.package,
-            candidates=generations(SOLANA.name),
+            candidates=generations(chain.tag),
             main_source=(project_root / main_source).resolve(),
             cargo_home=pathlib.Path(select_home) if sandbox.enabled else None,
         )
-    if identifier != (crate := selected.name.replace("-", "_")):
+    if chain.tag == "solana" and identifier != (crate := selected.name.replace("-", "_")):
         # Legal, so not a refusal — the identifier only has to be a name the analysis can carry and
         # ``locate_main`` can match. But naming the program something other than its crate is
         # unusual enough to say out loud, since the near miss is what the refusal above catches.
+        # Solana only: a Soroban contract is named by its contract type, never the crate.
         _log.warning(
             "cvlr: the main program is named %r while the crate is %r — proceeding, but the "
             "analysis will be told to declare %r",
@@ -361,13 +411,14 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
     # Read before any service starts: a malformed pin file should cost nothing, and the shape
     # error is far easier to act on when it is the first thing printed.
     pinned = (
-        load_pinned_run(pathlib.Path(args.properties).resolve(), SOLANA.system_model)
+        load_pinned_run(pathlib.Path(args.properties).resolve(), ecosystem.system_model)
         if args.properties is not None else None
     )
 
     # After the workspace read, which already names a missing cargo, and before anything is staged:
     # the build subcommand is the one prerequisite nothing else touches until the first submission.
-    _log.info("cvlr: building with %s", await sbf_subcommand_version())
+    if chain.tag == "solana":
+        _log.info("cvlr: building with %s", await sbf_subcommand_version())
 
     announce_confinement(sandbox)
 
@@ -378,7 +429,7 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
             summary=summary,
             task_handler=fact,
             design_doc_phase=CvlrPhase.DISCOVER_DESIGN_DOC,
-            ecosystem=SOLANA,
+            ecosystem=ecosystem,
             at_exit=_usage_exit_logger(summary, selected),
             pinned=pinned,
             pin_to=pathlib.Path(args.pin_to).resolve() if args.pin_to else None,
@@ -405,7 +456,7 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
                 staged.conns.indexed_store,
                 source_cache_ns,
                 recursion_limit=args.recursion_limit,
-                ecosystem=SOLANA,
+                ecosystem=ecosystem,
             )
             # The staged embedding model, not a fresh one: ``get_model`` is not memoized, and a
             # second load is a second multi-hundred-megabyte transformer doing the same job.
@@ -431,15 +482,18 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
                     (*research_cache_ns(selected.reference.crates()), staged.root_key)
                 ),
             ) if searches else ()
-            rag_tools = tuple(kb_tools(CVLR_BUNDLE)) + researcher
+            # The recipe index is written for the Solana Prover; see ``CvlrPrompts.context``.
+            recipes = tuple(kb_tools(CVLR_BUNDLE)) if chain.tag == "solana" else ()
+            rag_tools = recipes + researcher
             env = PureServiceHost(
                 models=staged.llm_models, rag_tools=rag_tools, sort="existing"
             ).bind_source_tools(full)
             backend = CvlrBackend(
+                chain=chain,
                 artifact_store=CvlrArtifactStore(
                     staged.source.project_root, selected.package_dir
                 ),
-                prover_opts=make_prover_options(cloud=True, app="solana"),
+                prover_opts=make_prover_options(cloud=True, app=chain.tag),
                 sandbox=sandbox,
                 # Namespaced by thread: rule names repeat across runs, and a shared namespace would
                 # let one run's counterexamples be read as another's.

@@ -41,7 +41,7 @@ from graphcore.tools.schemas import (
 
 from composer.authoring.state import ValidationStamper
 from composer.cargo.features import CargoFeature
-from composer.cargo.sbf import Built, SbfRun
+from composer.cargo.sbf import Built
 from composer.cargo.session import CargoSession, CompileFailed, CompileRun, Compiled
 from composer.cargo.symbols import SymbolsUnavailable, nearest, prover_function_names, unmatched
 from composer.prover.cloud import results_api
@@ -63,11 +63,13 @@ from composer.prover.conf import SelectRules
 from composer.spec.cvlr.conf import (
     DEFAULT_FEATURE,
     CollectUnsatCore,
+    soroban_tunable_conf,
     tunable_conf,
 )
-from composer.spec.cvlr.manifest import ManifestCorrupt, ManifestMissing, rule_names_in_elf
+from composer.spec.cvlr.manifest import ManifestCorrupt, ManifestMissing, rule_names_in
 from composer.spec.cvlr.prover import (
     BuildRejected,
+    ChainRun,
     Checked,
     CvlrOutcome,
     Prepared,
@@ -190,7 +192,11 @@ class BuildPermit:
         """
         self.require_held()
         target = self._target
-        target.tuning.write(tuple(summaries))
+        if target.tuning is not None:
+            target.tuning.write(tuple(summaries))
+        elif summaries:
+            # Unreachable through the tools; dropping them would build other than the state says.
+            raise ValueError("summary directives recorded for a target whose prover reads none")
         await target.tree.reconcile(
             target.unit.module,
             UnitEdits(module_path=target.module_path, draft=draft, overlay=overlay),
@@ -221,11 +227,11 @@ class StagedUnit:
             manifest_dir=target.package_dir, features=target.features
         )
 
-    async def build_for_submission(self, submission: Submission) -> SbfRun:
+    async def build_for_submission(self, submission: Submission) -> ChainRun:
         self._permit.require_held()
         return await build_for_submission(self._target.session, submission)
 
-    async def prepare(self, build: SbfRun, submission: Submission, *, into: Path) -> Prepared:
+    async def prepare(self, build: ChainRun, submission: Submission, *, into: Path) -> Prepared:
         """Write the conf that verifies ``build``, bound to the session that built it."""
         self._permit.require_held()
         session = self._target.session
@@ -244,7 +250,9 @@ class HarnessTarget:
     session: CargoSession
     package: str
     package_root: Path
-    tuning: TuningFiles
+    #: The package's tuning files, which ``summarize_for_prover`` rewrites. ``None`` on a chain
+    #: whose prover reads none (Soroban), which also withholds ``summarize_for_prover``.
+    tuning: TuningFiles | None
     #: The module name the tree keys edits by, and the cargo feature that selects
     #: this unit.
     unit: HarnessModule
@@ -257,7 +265,8 @@ class HarnessTarget:
 
     def __post_init__(self) -> None:
         # The conf names this file, including when the unit has no summaries yet.
-        self.tuning.ensure_composite()
+        if self.tuning is not None:
+            self.tuning.ensure_composite()
 
     @property
     def module_path(self) -> Path:
@@ -533,10 +542,10 @@ class CargoCheck(
 
 
 def _unread(err: ManifestMissing | ManifestCorrupt) -> str:
-    """What the author is told when the built ``.so`` did not list its rules."""
+    """What the author is told when the built artifact did not list its rules."""
     if isinstance(err, ManifestMissing):
         return (
-            "The .so has no `.cvlr_rules` section, so the rules were not listed. "
+            "The build has no `.cvlr_rules` section, so the rules were not listed. "
             "Nothing was submitted."
         )
     if err.offset is None:
@@ -589,7 +598,7 @@ async def _stage_and_submit(
             return BuildRejected(build)
         artifact = build.verdict.manifest.artifact
         try:
-            names = rule_names_in_elf(artifact)
+            names = rule_names_in(artifact)
         except ManifestCorrupt as err:
             # The offset, not the section. A bad record's payload is not a log line.
             _log.warning("could not read .cvlr_rules in %s at offset %s", artifact, err.offset)
@@ -628,13 +637,13 @@ def _submission_for_listed(submission: Submission, names: set[str]) -> Submissio
     return replace(submission, rules=SelectRules(tuple(names)))
 
 
-@tool_display("Running the Solana Prover", "Prover")
+@tool_display("Running the Certora Prover", "Prover")
 class VerifyRules(
     WithInjectedState[CvlrGenerationState],
     WithInjectedId,
     WithAsyncDependencies[Command | str, VerifyDeps],
 ):
-    """Build the program with the harness and check its rules with the Certora Solana Prover.
+    """Build the program with the harness and check its rules with the Certora Prover.
 
     This takes minutes and spends prover time. Get ``cargo_check`` green first.
     On success it stamps the current draft, which ``result`` requires.
@@ -708,7 +717,7 @@ class VerifyRules(
                 ),
             )
 
-    async def _inert_summaries(self, build: SbfRun) -> str | None:
+    async def _inert_summaries(self, build: ChainRun) -> str | None:
         """A note when a summary matches nothing, or when the names cannot be read.
 
         A summary is a regex over demangled names. One that matches nothing
@@ -937,7 +946,9 @@ class ExplainVacuity(
                 finding=finding,
                 core=core,
                 harness=draft,
-                conf=tunable_conf(self.state["prover_settings"]),
+                conf=(
+                    soroban_tunable_conf if verify.submission.wasm is not None else tunable_conf
+                )(self.state["prover_settings"]),
                 vfs=self.state["vfs"],
                 within_tool=self.tool_call_id,
             )
@@ -954,10 +965,14 @@ def gate_tools(
     No tool here edits the program. The author gets ``code_editor`` and the
     edit-history tools, bound with the rest of its tools.
     """
-    return [
+    tools = [
         CargoCheck.bind(target).as_tool("cargo_check"),
         VerifyRules.bind(deps).as_tool("verify_rules"),
         ExplainVacuity.bind(VacuityDeps(deps, analyzer, results_api)).as_tool("explain_vacuity"),
-        SummarizeForProver.bind(target.tuning).as_tool("summarize_for_prover"),
         AdjustProverConfig.as_tool("adjust_prover_config"),
     ]
+    # Only where there are tuning files for it to write: a summary in a file no conf names would
+    # read as success and change nothing.
+    if target.tuning is not None:
+        tools.append(SummarizeForProver.bind(target.tuning).as_tool("summarize_for_prover"))
+    return tools

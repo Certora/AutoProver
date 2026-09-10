@@ -250,3 +250,53 @@ def delivered_conf(
     if summaries:
         conf["solana_summaries"] = [s.as_posix() for s in summaries]
     return rules.apply_to(conf)
+
+
+# ---------------------------------------------------------------------------------------------
+# Soroban
+#
+# ``SorobanProverAttributes`` shares ``build_script`` / ``cargo_features`` / ``msg`` and the
+# ``BackendAttributes`` set with Solana, and declares none of the Solana-only tuning keys. It reads
+# no tuning files at all, which is why the Soroban scaffold plans no ``envs/`` tree and a Soroban
+# unit binds no ``summarize_for_prover``.
+
+#: :data:`BASE_CONF`'s Soroban peer: the same timeout and vacuity check, and none of the
+#: ``-solana*`` prover flags. ``precise_bitwise_ops`` because every surveyed Soroban engagement conf
+#: sets it.
+SOROBAN_BASE_CONF: Conf = {
+    "smt_timeout": "6000",
+    "rule_sanity": "basic",
+    "precise_bitwise_ops": True,
+}
+
+
+def soroban_tunable_conf(tunable: TunableConf) -> Conf:
+    """:func:`tunable_conf` over :data:`SOROBAN_BASE_CONF`."""
+    return {
+        **SOROBAN_BASE_CONF,
+        "loop_iter": str(tunable.loop_iter),
+        "optimistic_loop": tunable.optimistic_loop is not None,
+    }
+
+
+def soroban_conf(tunable: TunableConf, run: RunOverlay) -> Conf:
+    """The conf for one ``certoraSorobanProver`` submission: :func:`solana_conf`'s layering over
+    the Soroban base, with ``summaries`` refused rather than dropped — dropping them would silently
+    weaken the run."""
+    if run.summaries:
+        raise ValueError(
+            "a Soroban submission carries no summaries: certoraSorobanProver has no "
+            "solana_summaries attribute, and dropping them silently would weaken the run"
+        )
+    conf: Conf = {
+        **soroban_tunable_conf(tunable),
+        "build_script": str(run.build_script),
+        "msg": safe_msg(run.msg),
+    }
+    match run.purpose:
+        case CheckVerdicts():
+            pass
+        case CollectUnsatCore():
+            conf["rule_sanity"] = "none"
+            conf["coverage_info"] = "basic"
+    return run.rules.apply_to(conf)

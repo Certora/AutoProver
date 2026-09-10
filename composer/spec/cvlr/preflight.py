@@ -22,7 +22,14 @@ from pathlib import Path
 from composer.cargo.features import CargoFeature
 from composer.cargo.metadata import CargoUnavailable, CratePackage, Workspace
 from composer.cargo.sbf import PlatformToolsMissing, sbf_check
-from composer.cargo.session import CargoSession, CompileFailed, Compiled, WarmFailed
+from composer.cargo.session import (
+    CargoSession,
+    CheckWith,
+    CompileFailed,
+    Compiled,
+    HostCheck,
+    WarmFailed,
+)
 from composer.sandbox.config import SandboxConfig
 from composer.sandbox.recipes import sandbox_cargo_home
 from composer.spec.cvlr.conf import DEFAULT_FEATURE, HOST_RUST_TOOLCHAIN, PLATFORM_TOOLS_VERSION
@@ -32,6 +39,7 @@ from composer.spec.cvlr.scaffold import (
     ScaffoldPlan,
     apply,
     plan_scaffold,
+    scaffold_for,
     select_generation,
 )
 from composer.spec.cvlr.reference import ChainReference
@@ -63,6 +71,10 @@ class CvlrPreflight:
     package_dir: Path
     #: The library target's file stem. The built ``.so`` is named after it.
     artifact_stem: str
+    #: Where cargo puts this workspace's builds, as cargo reported it. Soroban's build has to name
+    #: its artifact's path (``cargo certora-sbf`` reports Solana's itself), and a project that moves
+    #: its target directory in ``.cargo/config.toml`` is one a hardcoded ``target/`` would miss.
+    target_directory: Path
     scaffold: ScaffoldPlan
     #: The files this run wrote, relative to :attr:`workspace_root`, in the order they were
     #: written. Empty when the project was already set up.
@@ -199,6 +211,7 @@ async def prepare_workspace(
     reference: ChainReference,
     sandbox: SandboxConfig,
     package: str | None = None,
+    chain: str = "solana",
 ) -> CvlrPreflight:
     """Scaffold ``project_root`` and report what a run needs to know about it.
 
@@ -218,7 +231,7 @@ async def prepare_workspace(
     workspace = await _workspace_at(project_root, cargo_home=cargo_home)
     member = _pick_package(workspace, package)
 
-    plan = plan_scaffold(workspace, member, reference)
+    plan = plan_scaffold(workspace, member, reference, scaffold_for(chain))
     _log.info("%s", plan.describe())
     try:
         applied = apply(plan, workspace.root)
@@ -254,6 +267,7 @@ async def prepare_workspace(
         package=fresh.name,
         package_dir=fresh.root.resolve().relative_to(resolved_in.root.resolve()),
         artifact_stem=fresh.lib.artifact_stem,
+        target_directory=resolved_in.target_directory,
         scaffold=plan,
         applied=applied,
         sources=sources,
@@ -262,26 +276,42 @@ async def prepare_workspace(
     )
 
 
+def session_settings(chain: str) -> tuple[str | None, CheckWith]:
+    """The host toolchain and the ``cargo check`` every cargo session of a ``chain`` run uses.
+
+    Solana checks for the SBF target with the platform tools (:func:`~composer.cargo.sbf.sbf_check`)
+    and pins the host toolchain (:data:`~composer.spec.cvlr.conf.HOST_RUST_TOOLCHAIN`). Soroban's
+    build is an ordinary rustup target, so it checks on the host and follows the project's own
+    ``rust-toolchain.toml``.
+
+    Raises :class:`~composer.cargo.sbf.PlatformToolsMissing` when Solana's tools are absent.
+    """
+    if chain == "soroban":
+        return None, HostCheck()
+    return HOST_RUST_TOOLCHAIN, sbf_check(PLATFORM_TOOLS_VERSION)
+
+
 async def gate_workspace(
     pre: CvlrPreflight,
     *,
     sandbox: SandboxConfig,
     features: tuple[CargoFeature, ...] = (DEFAULT_FEATURE,),
+    chain: str = "solana",
 ) -> None:
     """Check that the scaffolded project compiles with the harness in, or fail the run.
 
-    ``cargo check`` for the SBF target (:func:`~composer.cargo.sbf.sbf_check`), not the build.
-    What this has to catch is a scaffold that does not compile. The build is a later gate, and
-    running it here would cost more than the failure it would be catching.
+    ``cargo check`` as the chain checks (:func:`session_settings`), not the build. What this has
+    to catch is a scaffold that does not compile. The build is a later gate, and running it here
+    would cost more than the failure it would be catching.
     """
     try:
-        check_with = sbf_check(PLATFORM_TOOLS_VERSION)
+        toolchain, check_with = session_settings(chain)
     except PlatformToolsMissing as exc:
         raise PreflightFailed(str(exc)) from exc
     session = CargoSession(
         workdir=pre.workspace_root,
         sandbox=sandbox,
-        toolchain=HOST_RUST_TOOLCHAIN,
+        toolchain=toolchain,
         check_with=check_with,
     )
     warmed = await session.warm()

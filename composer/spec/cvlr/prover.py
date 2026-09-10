@@ -1,26 +1,28 @@
-"""Submit a CVLR artifact to the Certora Solana Prover.
+"""Submit a CVLR artifact to the Certora Solana or Soroban Prover.
 
-``certoraSolanaProver`` writes the same treeView reports as ``certoraRun``.
-Cloud polling (:mod:`composer.prover.cloud`), the treeView parse
-(:mod:`composer.prover.results`), and the rule roll-up
+``certoraSolanaProver`` and ``certoraSorobanProver`` write the same treeView
+reports as ``certoraRun``. Cloud polling (:mod:`composer.prover.cloud`), the
+treeView parse (:mod:`composer.prover.results`), and the rule roll-up
 (:func:`composer.prover.core.run_prover`) are shared. This module builds the
-program, writes the Solana conf, and submits it through that runner.
+program, writes the chain's conf, and submits it through that runner.
 
 A submission has three steps:
 
-1. Build, confined (:mod:`composer.cargo.sbf`). A failure here is a compiler
-   error. The same failure during submission is a ``CertoraUserInputError``
-   after the upload.
+1. Build, confined: sBPF for Solana (:mod:`composer.cargo.sbf`), wasm for
+   Soroban (:mod:`composer.cargo.wasm`). A failure here is a compiler error.
+   The same failure during submission is a ``CertoraUserInputError`` after the
+   upload.
 2. Write the build script and the conf, outside the tree the build can write.
    The prover reruns that build.
 3. Submit. The caller passes :class:`~composer.prover.core.ProverOptions`
-   with the Solana CLI selected.
+   with the chain's CLI selected.
 """
 
 from dataclasses import dataclass, field
 import logging
 from pathlib import Path
 
+from composer.cargo import wasm
 from composer.cargo.sbf import (
     Built,
     SbfBuild,
@@ -28,6 +30,7 @@ from composer.cargo.sbf import (
     sbf_build,
     write_build_script,
 )
+from composer.cargo.wasm import WasmBuild, WasmIdentity, WasmRun
 from composer.cargo.session import CargoSession
 from composer.prover.core import (
     CexHandler,
@@ -45,15 +48,20 @@ from composer.spec.cvlr.conf import (
     TunableConf,
     RunOverlay,
     solana_conf,
+    soroban_conf,
 )
 
 _log = logging.getLogger(__name__)
+
+#: One slow-tier chain build, whichever chain ran it.
+type ChainRun = SbfRun | WasmRun
+
 
 @dataclass(frozen=True)
 class BuildRejected:
     """The pre-submission build failed, so nothing was submitted."""
 
-    build: SbfRun
+    build: ChainRun
 
 
 @dataclass(frozen=True)
@@ -65,7 +73,7 @@ class SubmissionFailed:
     treeView. The runner reports all of those as one string.
     """
 
-    build: SbfRun
+    build: ChainRun
     reason: str
 
 
@@ -73,7 +81,7 @@ class SubmissionFailed:
 class Checked:
     """The prover ran and returned per-rule outcomes. Rules inside may still have failed."""
 
-    build: SbfRun
+    build: ChainRun
     report: ProverReport
 
     @property
@@ -89,8 +97,7 @@ class Submission:
     """One submission, apart from the session it runs in.
 
     ``manifest_path`` is the program's ``Cargo.toml``, under the session's workdir, which is the
-    only tree the build may write. ``cargo certora-sbf`` builds one package's library, not the
-    workspace.
+    only tree the build may write. Either build compiles one package's library, not the workspace.
     """
 
     manifest_path: Path
@@ -104,23 +111,35 @@ class Submission:
     #: share a crate select different rules by naming different features.
     features: tuple[str, ...] = (DEFAULT_FEATURE,)
     #: Points-to summary files this submission reads, workdir-relative. One per
-    #: unit. See :class:`~composer.spec.cvlr.conf.RunOverlay`.
+    #: unit. See :class:`~composer.spec.cvlr.conf.RunOverlay`. Solana-only:
+    #: :func:`~composer.spec.cvlr.conf.soroban_conf` refuses one.
     summaries: tuple[Path, ...] = ()
     purpose: ConfPurpose = CheckVerdicts()
+    #: Set for a Soroban submission, which builds wasm; ``None`` builds sBPF for Solana.
+    wasm: WasmIdentity | None = None
 
 
-def _sbf_build(session: CargoSession, submission: Submission) -> SbfBuild:
-    """The ``SbfBuild`` used for the pre-submission build and the prover's rerun."""
+def _chain_build(session: CargoSession, submission: Submission) -> SbfBuild | WasmBuild:
+    """The build used for the pre-submission build and the prover's rerun."""
+    manifest_path = session.workdir / submission.manifest_path
+    if submission.wasm is not None:
+        return WasmBuild(
+            manifest_path=manifest_path, identity=submission.wasm, features=submission.features
+        )
     return SbfBuild(
-        manifest_path=session.workdir / submission.manifest_path,
+        manifest_path=manifest_path,
         features=submission.features,
         tools_version=PLATFORM_TOOLS_VERSION,
     )
 
 
-async def build_for_submission(session: CargoSession, submission: Submission) -> SbfRun:
-    """Run this submission's ``cargo certora-sbf`` build."""
-    return await sbf_build(session, _sbf_build(session, submission))
+async def build_for_submission(session: CargoSession, submission: Submission) -> ChainRun:
+    """Run this submission's chain build."""
+    match _chain_build(session, submission):
+        case WasmBuild() as build:
+            return await wasm.wasm_build(session, build)
+        case SbfBuild() as build:
+            return await sbf_build(session, build)
 
 
 async def write_submission(session: CargoSession, submission: Submission, *, into: Path) -> Path:
@@ -131,10 +150,14 @@ async def write_submission(session: CargoSession, submission: Submission, *, int
     (:func:`~composer.cargo.sbf.write_build_script`). The caller creates and
     removes it.
     """
-    script = await write_build_script(
-        session, _sbf_build(session, submission), into=into, name=submission.stem
-    )
-    conf = solana_conf(
+    match _chain_build(session, submission):
+        case WasmBuild() as build:
+            script = await wasm.write_build_script(session, build, into=into, name=submission.stem)
+            make_conf = soroban_conf
+        case SbfBuild() as build:
+            script = await write_build_script(session, build, into=into, name=submission.stem)
+            make_conf = solana_conf
+    conf = make_conf(
         submission.settings,
         RunOverlay(
             build_script=script,
@@ -151,14 +174,14 @@ async def write_submission(session: CargoSession, submission: Submission, *, int
 
 @dataclass(frozen=True)
 class Prepared:
-    """A built ``.so`` and the conf that will verify it. Nothing has been sent to the cloud.
+    """A built artifact and the conf that will verify it. Nothing has been sent to the cloud.
 
-    ``session`` is the one that built the ``.so`` and wrote the conf. The
+    ``session`` is the one that built the artifact and wrote the conf. The
     prover reruns the build in it.
     """
 
     session: CargoSession
-    build: SbfRun
+    build: ChainRun
     conf_path: Path
 
 
@@ -194,8 +217,8 @@ async def run_submission(
 ) -> CvlrOutcome:
     """Hand the conf to the prover and return the outcome.
 
-    ``prover_opts.app`` must name the Solana CLI. Another app fails at the first
-    conf key it does not recognize.
+    ``prover_opts.app`` must name the submission's chain CLI. Another app fails at
+    the first conf key it does not recognize.
     """
     result = await run_prover(
         prepared.session.workdir,

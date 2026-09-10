@@ -19,7 +19,7 @@ The module is held in a buffer reached through `get_harness` / `put_harness`. A 
 
 ### Source exploration
 
-{% include "source_tools_system_prompt.j2" %}
+{% with source_language = "Rust" %}{% include "source_tools_system_prompt.j2" %}{% endwith %}
 
 ### CVLR itself
 

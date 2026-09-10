@@ -64,6 +64,7 @@ from composer.layout import INTERNAL_DIR
 from composer.spec.cvlr.entry import (
     CvlrArgs, CvlrPipelineResult, build_parser, cvlr_executor,
 )
+from composer.spec.cvlr.chains import SOLANA_CVLR
 from composer.spec.cvlr.pipeline import CvlrPhase
 from composer.spec.cvlr.scaffold import HARNESS_DIR
 from composer.spec.cvlr_research import CVLR_CORPORA
@@ -215,5 +216,5 @@ async def run_scenario(
     confinement default and the artifact store's placement — everything the expensive gate builds
     for itself and therefore cannot check.
     """
-    async with cvlr_executor(tape_args(project, cache_ns), summary) as run:
+    async with cvlr_executor(tape_args(project, cache_ns), summary, SOLANA_CVLR) as run:
         return await run(handler)

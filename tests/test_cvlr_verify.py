@@ -151,7 +151,7 @@ def gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Gate:
 
     monkeypatch.setattr(BuildPermit, "stage", stage)
     monkeypatch.setattr(verify_mod, "build_for_submission", build)
-    monkeypatch.setattr(verify_mod, "rule_names_in_elf", names)
+    monkeypatch.setattr(verify_mod, "rule_names_in", names)
     monkeypatch.setattr(verify_mod, "write_submission", write)
     monkeypatch.setattr(verify_mod, "run_submission", run_submission)
     return g

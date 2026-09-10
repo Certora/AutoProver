@@ -88,7 +88,7 @@ def _built(monkeypatch):
         return Path("/w/unit.conf")
 
     monkeypatch.setattr(verify_mod, "build_for_submission", build)
-    monkeypatch.setattr(verify_mod, "rule_names_in_elf", names)
+    monkeypatch.setattr(verify_mod, "rule_names_in", names)
     monkeypatch.setattr(verify_mod, "write_submission", write)
 
 
@@ -169,7 +169,7 @@ async def test_a_missing_manifest_frees_the_permit_without_writing_the_conf(tmp_
     async def run_submission(*_args, **_kwargs):
         pytest.fail("a missing section must not be submitted")
 
-    monkeypatch.setattr(verify_mod, "rule_names_in_elf", names)
+    monkeypatch.setattr(verify_mod, "rule_names_in", names)
     monkeypatch.setattr(verify_mod, "write_submission", write)
     monkeypatch.setattr(verify_mod, "run_submission", run_submission)
 
@@ -187,7 +187,7 @@ async def test_a_corrupt_manifest_frees_the_permit_without_writing_the_conf(tmp_
     async def write(*_args, **_kwargs):
         pytest.fail("a corrupt section must not write a conf")
 
-    monkeypatch.setattr(verify_mod, "rule_names_in_elf", names)
+    monkeypatch.setattr(verify_mod, "rule_names_in", names)
     monkeypatch.setattr(verify_mod, "write_submission", write)
 
     answer = await _submit(_deps(tmp_path, sem))

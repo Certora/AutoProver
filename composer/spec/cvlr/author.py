@@ -29,7 +29,7 @@ Four things are CVLR's own:
 import asyncio
 import dataclasses
 from pathlib import Path
-from typing import Any, Literal, Sequence, TypedDict, override
+from typing import Any, Callable, Literal, Protocol, Sequence, TypedDict, override
 
 from langchain_core.tools import BaseTool
 import logging
@@ -38,7 +38,13 @@ from langgraph.graph.state import CompiledStateGraph
 
 from pydantic import BaseModel, Field
 
-from graphcore.graph import CacheMarker, RawPromptInput, SummaryConfig, tool_state_update
+from graphcore.graph import (
+    CacheMarker,
+    PromptInput,
+    RawPromptInput,
+    SummaryConfig,
+    tool_state_update,
+)
 from graphcore.tools.schemas import (
     Command,
     WithAsyncDependencies,
@@ -70,7 +76,6 @@ from composer.diagnostics.budget import (
 from composer.llm.types import CacheLevel
 from composer.spec.context import CacheKey, CvlrGeneration, CvlrJudge, WorkflowContext
 from composer.spec.cvlr.anchor_surface import read_surface
-from composer.spec.cvlr.conf import tunable_conf
 from composer.spec.cvlr.editor import EditingJudgeHost, ProgramEditing, editor_tools
 from composer.spec.cvlr.example import WorkedExample, worked_example
 from composer.spec.cvlr.harness import GeneratedHarness
@@ -94,7 +99,7 @@ from composer.spec.cvlr.author_tools import ExpectRuleFailure, ExpectRulePassage
 from composer.spec.guidance import CvlrInvariantGuidance
 from composer.spec.cvlr.verify import HarnessTarget, VerifyDeps, gate_tools
 from composer.kb.kb_context import with_cvlr_context
-from composer.spec.gen_types import TypedTemplate
+from composer.spec.gen_types import TemplateInstantiation, TypedTemplate
 from composer.spec.graph_builder import run_to_completion
 from composer.spec.feedback import VfsJudgeInput, VfsJudgeState
 from composer.spec.service_host import ServiceHost
@@ -103,6 +108,7 @@ from composer.spec.source.munge.tool_names import EDIT_HISTORY_LOG
 from composer.spec.source.munge.vfs_diff import diff_against_baseline
 from graphcore.graph import Builder
 from composer.spec.solana.model import SolanaComponentInstance
+from composer.spec.soroban.model import SorobanComponentInstance
 from composer.spec.system_model import component_context
 from composer.spec.types import Curtailed, PropertyFormulation, PropertyTitle, RuleName
 from composer.pipeline.ptypes import GaveUp
@@ -381,11 +387,7 @@ def with_assumptions(base: JudgeInput, ctx: JudgeContext) -> VfsJudgeInput:
 def build_feedback_thunk(
     judge_ctx: WorkflowContext[CvlrJudge],
     env: ServiceHost,
-    props: list[PropertyFormulation],
-    component: SolanaComponentInstance | None,
-    program: str,
-    cvlr_versions: str,
-    caveats: Sequence[str],
+    prompts: "CvlrPrompts",
     editing: ProgramEditing,
 ) -> ContextualFeedbackThunk[Rebuttal, JudgeContext]:
     """The CVLR feedback judge.
@@ -406,16 +408,7 @@ def build_feedback_thunk(
         _skipped: Sequence[SkippedProperty],
         _rebuttals: Sequence[Rebuttal],
     ) -> Builder[VfsJudgeState, None, VfsJudgeInput]:
-        return builder.with_initial_prompt(with_cvlr_context(
-            _JudgeTemplate.bind(
-                {
-                    "properties": props,
-                    "context": component,
-                    "sort": "existing",
-                    "program": program,
-                }
-            ).render_to
-        ))
+        return builder.with_initial_prompt(prompts.context(prompts.judge_task.render_to))
 
     def input_parts(
         draft: str, skipped: Sequence[SkippedProperty], rebuttals: Sequence[Rebuttal]
@@ -447,9 +440,7 @@ def build_feedback_thunk(
         inp=VfsJudgeInput,
         ctx=judge_ctx,
         host=EditingJudgeHost(env, editing),
-        apply_system=lambda b: _JudgeSystemTemplate.bind(
-            {"cvlr_versions": cvlr_versions, "caveats": list(caveats)}
-        ).render_to(b.with_sys_prompt_template),
+        apply_system=lambda b: prompts.judge_system.render_to(b.with_sys_prompt_template),
         apply_prompt=apply_prompt,
         input_parts=input_parts,
         readback=get_harness_tool(VfsJudgeState),
@@ -590,6 +581,179 @@ class CvlrPropertyGenParams(TypedDict):
 
 _PropertyGenTemplate = TypedTemplate[CvlrPropertyGenParams]("cvlr_property_generation_prompt.j2")
 
+
+# ---------------------------------------------------------------------------
+# Per-chain prompts
+# ---------------------------------------------------------------------------
+#
+# The loop is chain-neutral; what each agent is told, and the unit type its component context
+# renders from, are not. Each chain binds the same four prompts from its own templates (Solana's at
+# the top level, Soroban's under ``soroban/``).
+
+
+@component_context
+class _SorobanCvlrJudgeParams(TypedDict):
+    """:class:`_CvlrJudgeParams` over a Soroban unit."""
+
+    properties: list[PropertyFormulation]
+    context: SorobanComponentInstance | None
+    sort: Literal["existing"]
+    program: str
+
+
+@component_context
+class SorobanCvlrPropertyGenParams(TypedDict):
+    """:class:`CvlrPropertyGenParams` over a Soroban unit."""
+
+    context: SorobanComponentInstance | None
+    properties: list[PropertyFormulation]
+    program: str
+    module: str
+    cvlr_versions: str
+    sort: Literal["existing"]
+
+
+class SorobanCvlrAuthorSystemParams(CvlrVersionParams):
+    """The Soroban author's system prompt. No ``example``: the worked example is rendered from an
+    Anchor surface, and there is no ``#[contractimpl]`` surface reader yet."""
+
+    module: str
+    conf: dict
+
+
+_SorobanJudgeTemplate = TypedTemplate[_SorobanCvlrJudgeParams]("soroban/cvlr_feedback_prompt.j2")
+_SorobanJudgeSystemTemplate = TypedTemplate[CvlrVersionParams](
+    "soroban/cvlr_property_judge_system_prompt.j2"
+)
+_SorobanPropertyGenSysTemplate = TypedTemplate[SorobanCvlrAuthorSystemParams](
+    "soroban/cvlr_property_generation_system_prompt.j2"
+)
+_SorobanPropertyGenTemplate = TypedTemplate[SorobanCvlrPropertyGenParams](
+    "soroban/cvlr_property_generation_prompt.j2"
+)
+
+
+def _no_context(prompt: PromptInput) -> PromptInput:
+    return prompt
+
+
+@dataclasses.dataclass(frozen=True)
+class CvlrPrompts:
+    """The four prompts one batch renders, bound for one chain."""
+
+    author_system: TemplateInstantiation
+    author_task: TemplateInstantiation
+    judge_system: TemplateInstantiation
+    judge_task: TemplateInstantiation
+    #: Wraps both initial prompts in the chain's knowledge bundle. Solana's is
+    #: :data:`~composer.kb.kb_context.CVLR_BUNDLE`, which is written for the Solana Prover, so a
+    #: chain without its own bundle gets none rather than Solana's.
+    context: Callable[[PromptInput], PromptInput] = _no_context
+
+
+class CvlrPromptBuilder[U](Protocol):
+    """Binds a chain's four prompts for one batch. ``package_root`` is the crate inside the working
+    tree, for rendering a worked example from the program's own declarations; ``conf`` is the
+    prover configuration the unit's submissions start from."""
+
+    def __call__(
+        self,
+        component: U | None,
+        props: list[PropertyFormulation],
+        *,
+        program: str,
+        module: str,
+        cvlr_versions: str,
+        caveats: Sequence[str],
+        conf: dict,
+        package_root: Path,
+    ) -> CvlrPrompts: ...
+
+
+def solana_prompts(
+    component: SolanaComponentInstance | None,
+    props: list[PropertyFormulation],
+    *,
+    program: str,
+    module: str,
+    cvlr_versions: str,
+    caveats: Sequence[str],
+    conf: dict,
+    package_root: Path,
+) -> CvlrPrompts:
+    return CvlrPrompts(
+        author_system=_PropertyGenSysTemplate.bind(
+            {
+                "module": module,
+                "cvlr_versions": cvlr_versions,
+                "caveats": list(caveats),
+                "example": (
+                    worked_example(component, props, read_surface(package_root))
+                    if component
+                    else None
+                ),
+                "conf": conf,
+            }
+        ),
+        author_task=_PropertyGenTemplate.bind(
+            {
+                "context": component,
+                "properties": props,
+                "program": program,
+                "module": module,
+                "cvlr_versions": cvlr_versions,
+                "sort": "existing",
+            }
+        ),
+        judge_system=_JudgeSystemTemplate.bind(
+            {"cvlr_versions": cvlr_versions, "caveats": list(caveats)}
+        ),
+        judge_task=_JudgeTemplate.bind(
+            {"properties": props, "context": component, "sort": "existing", "program": program}
+        ),
+        context=with_cvlr_context,
+    )
+
+
+def soroban_prompts(
+    component: SorobanComponentInstance | None,
+    props: list[PropertyFormulation],
+    *,
+    program: str,
+    module: str,
+    cvlr_versions: str,
+    caveats: Sequence[str],
+    conf: dict,
+    package_root: Path,
+) -> CvlrPrompts:
+    return CvlrPrompts(
+        author_system=_SorobanPropertyGenSysTemplate.bind(
+            {
+                "module": module,
+                "cvlr_versions": cvlr_versions,
+                "caveats": list(caveats),
+                "conf": conf,
+            }
+        ),
+        author_task=_SorobanPropertyGenTemplate.bind(
+            {
+                "context": component,
+                "properties": props,
+                "program": program,
+                "module": module,
+                "cvlr_versions": cvlr_versions,
+                "sort": "existing",
+            }
+        ),
+        judge_system=_SorobanJudgeSystemTemplate.bind(
+            {"cvlr_versions": cvlr_versions, "caveats": list(caveats)}
+        ),
+        judge_task=_SorobanJudgeTemplate.bind(
+            {"properties": props, "context": component, "sort": "existing", "program": program}
+        ),
+    )
+
+
 _log = logging.getLogger(__name__)
 
 class LastCvlrAttempt(BaseModel):
@@ -671,16 +835,13 @@ async def batch_cvlr_generation(
     ctx: WorkflowContext[CvlrGeneration],
     *,
     props: list[PropertyFormulation],
-    component: SolanaComponentInstance | None,
+    prompts: CvlrPrompts,
     env: ServiceHost,
     description: str,
-    program: str,
-    module: str,
-    cvlr_versions: str,
-    caveats: Sequence[str],
     target: HarnessTarget,
     verify: VerifyDeps,
     editing: ProgramEditing,
+    program_editing: bool,
 ) -> BatchHarnessResult:
     """Author one harness module covering ``props``.
 
@@ -693,29 +854,18 @@ async def batch_cvlr_generation(
     (``docs/who-edits-the-program.md`` §14).
 
     ``editing`` is the run's program-editing kit, whose source tools every agent of this unit reads
-    the program through, so that each reads this unit's edits and no sibling's.
+    the program through, so that each reads this unit's edits and no sibling's. ``program_editing``
+    decides whether the author also gets the tools that make edits; see
+    :attr:`~composer.spec.cvlr.chains.CvlrChain.program_editing`.
 
     CVLR itself is not mounted here. The author and the judge both reach it through
     ``cvlr_research`` in ``env.rag_tools`` (``docs/cvlr-api-docs-plan.md`` §5), which is the one
     place the ordering between the generated API reference and the hand-written manual is applied.
     """
-    bound_template = _PropertyGenTemplate.bind(
-        {
-            "context": component,
-            "properties": props,
-            "program": program,
-            "module": module,
-            "cvlr_versions": cvlr_versions,
-            "sort": "existing",
-        }
-    )
-
     titles = [p.title for p in props]
     judge_ctx = ctx.child(CVLR_JUDGE_KEY)
     feedback_deps = FeedbackDependencies(
-        thunk=build_feedback_thunk(
-            judge_ctx, env, props, component, program, cvlr_versions, caveats, editing
-        ),
+        thunk=build_feedback_thunk(judge_ctx, env, prompts, editing),
         stamper=make_validation_stamper(FEEDBACK),
         editing=editing,
         project=target.tree.pristine,
@@ -723,21 +873,8 @@ async def batch_cvlr_generation(
     live = editing.live
     source_tools = (*live.read_tools, live.explorer, live.doc_tool)
 
-    sys_prompt: list[RawPromptInput | type[CacheMarker]] = [
-        _PropertyGenSysTemplate.bind(
-            {
-                "module": module,
-                "cvlr_versions": cvlr_versions,
-                "caveats": list(caveats),
-                "example": (
-                    worked_example(component, props, read_surface(target.package_root))
-                    if component
-                    else None
-                ),
-                "conf": tunable_conf(verify.submission.settings),
-            }
-        ).render_to
-    ]
+    sys_prompt: list[RawPromptInput | type[CacheMarker]] = [prompts.author_system.render_to]
+    editing_tools = editor_tools(ctx, env, target=target, editing=editing) if program_editing else []
 
     builder = (
         # "long" cache: a prover run can take many minutes, and the author's context should still be
@@ -769,7 +906,7 @@ async def batch_cvlr_generation(
                         recursion_limit=ctx.recursion_limit,
                     ),
                 ),
-                *editor_tools(ctx, env, target=target, editing=editing),
+                *editing_tools,
                 FeedbackTool.bind(feedback_deps).as_tool("feedback_tool"),
                 PublishResultTool.bind(titles).as_tool("result"),
                 give_up_tool(
@@ -782,7 +919,7 @@ async def batch_cvlr_generation(
             ]
         )
         .with_sys_prompt(sys_prompt)
-        .inject(lambda b: b.with_initial_prompt(with_cvlr_context(bound_template.render_to)))
+        .inject(lambda b: b.with_initial_prompt(prompts.context(prompts.author_task.render_to)))
         .with_summary_config(CvlrGenerationSummaryConfig())
         .with_monitor(
             budget_monitor(

@@ -56,6 +56,7 @@ from composer.spec.agent_index import AgentIndex, AgentIndexConfig
 from composer.spec.cvlr.conf import PLATFORM_TOOLS_VERSION
 from composer.spec.cvlr.editor import EditingServices
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness
+from composer.spec.cvlr.chains import SOLANA_CVLR
 from composer.spec.cvlr.pipeline import CvlrBackend
 from composer.pipeline.ptypes import Curtailed, Delivered
 from composer.spec.service_host import ModelProvider, PureServiceHost
@@ -245,6 +246,7 @@ async def test_the_backend_authors_cvlr_rules_for_the_vault(
             memory_namespace=None,
         )
         backend = CvlrBackend(
+            chain=SOLANA_CVLR,
             artifact_store=CvlrArtifactStore(str(project), Path("programs") / _PACKAGE),
             prover_opts=make_prover_options(cloud=True, app="solana"),
             sandbox=cvlr_confinement,

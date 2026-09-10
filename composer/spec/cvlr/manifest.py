@@ -1,8 +1,9 @@
 """Rule names from a built program's ``.cvlr_rules`` section.
 
-``#[rule]`` writes one record per rule into that section of the SBF ``.so``.
-The Solana prover does not read the section, so a submission still names its
-rules in the conf.
+``#[rule]`` writes one record per rule into that section: an ELF section of the
+SBF ``.so`` on Solana, and a custom section of the ``.wasm`` on Soroban, which
+is what ``link_section`` produces on a wasm target. Neither prover reads the
+section, so a submission still names its rules in the conf.
 
 A record is a tag byte, a little-endian ``u32`` length, and that many payload
 bytes. Tag 0 is the anchor and its payload is ``CV1``. Tag 1 is one rule
@@ -42,6 +43,14 @@ class ManifestCorrupt(Exception):
         self.offset = offset
 
 
+def rule_names_in(artifact: Path) -> set[str]:
+    """The rule names in a built artifact, whichever chain built it: wasm by its suffix, ELF
+    otherwise. Raises as :func:`rule_names_in_elf` does."""
+    if artifact.suffix == ".wasm":
+        return rule_names_in_wasm(artifact)
+    return rule_names_in_elf(artifact)
+
+
 def rule_names_in_elf(so: Path) -> set[str]:
     """The rule names in ``so``'s ``.cvlr_rules`` section.
 
@@ -64,6 +73,63 @@ def _section(so: Path) -> bytes:
     if data is None:
         raise ManifestMissing(f"{so} has no {_SECTION} section")
     return data
+
+
+_WASM_MAGIC = b"\0asm"
+_WASM_CUSTOM = 0
+
+
+def _leb128(data: bytes, offset: int) -> tuple[int, int]:
+    """An unsigned LEB128 at ``offset``: its value, and the offset after it."""
+    value = shift = 0
+    while True:
+        if offset >= len(data) or shift > 35:
+            raise ValueError("malformed LEB128")
+        byte = data[offset]
+        offset += 1
+        value |= (byte & 0x7F) << shift
+        shift += 7
+        if not byte & 0x80:
+            return value, offset
+
+
+def rule_names_in_wasm(wasm: Path) -> set[str]:
+    """The rule names in ``wasm``'s ``.cvlr_rules`` custom section.
+
+    :raises ManifestMissing: the section is absent.
+    :raises ManifestCorrupt: the file or the section cannot be read.
+    """
+    return _names(_wasm_section(wasm))
+
+
+def _wasm_section(wasm: Path) -> bytes:
+    try:
+        data = wasm.read_bytes()
+    except OSError as exc:
+        raise ManifestCorrupt(f"{wasm} could not be read") from exc
+    if data[:4] != _WASM_MAGIC or len(data) < 8:
+        raise ManifestCorrupt(f"{wasm} is not a wasm module")
+    found: list[bytes] = []
+    offset = 8
+    try:
+        while offset < len(data):
+            section_id = data[offset]
+            size, body = _leb128(data, offset + 1)
+            end = body + size
+            if end > len(data):
+                raise ValueError("section runs past the end of the module")
+            if section_id == _WASM_CUSTOM:
+                name_len, name_at = _leb128(data, body)
+                if data[name_at : name_at + name_len] == _SECTION.encode():
+                    found.append(data[name_at + name_len : end])
+            offset = end
+    except ValueError as exc:
+        raise ManifestCorrupt(f"{wasm} could not be read as a wasm module") from exc
+    if len(found) > 1:
+        raise ManifestCorrupt(f"{wasm} has more than one {_SECTION} section")
+    if not found:
+        raise ManifestMissing(f"{wasm} has no {_SECTION} section")
+    return found[0]
 
 
 def _names(data: bytes) -> set[str]:

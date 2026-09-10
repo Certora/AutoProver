@@ -79,12 +79,21 @@ def test_the_guidance_scopes_verification_below_the_dispatcher():
     assert "process_instruction" in SOLANA_CVLR_GUIDANCE
 
 
-def test_no_soroban_guidance_has_been_guessed():
-    """§4.4 ship order. A second constant written before Solana verifies a real property would be a
-    guess dressed as a deliverable — and the place it would be imported from is here."""
-    import composer.spec.cvlr.guidance as guidance
+def test_the_soroban_guidance_speaks_soroban_not_solana():
+    """State is contract storage and authorization is ``require_auth``, so no Solana vocabulary
+    should carry over."""
+    import re
 
-    assert not [name for name in vars(guidance) if "SOROBAN" in name]
+    from composer.spec.cvlr.guidance import SOROBAN_CVLR_GUIDANCE
+
+    text = " ".join(SOROBAN_CVLR_GUIDANCE.split())
+    assert "Certora Soroban Prover" in text
+    assert "storage" in text and "require_auth" in text
+    words = set(re.findall(r"[A-Za-z_!]+", text))
+    for solana_only in ("Anchor", "account", "accounts", "handler", "CPI"):
+        assert solana_only not in words, solana_only
+    # Panic freedom has no rule on either chain, and for the same reason: the host rolls back.
+    assert "Panic freedom" in text and "rolls back" in text
 
 
 # --------------------------------------------------------------------------------------------

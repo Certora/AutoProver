@@ -67,7 +67,12 @@ from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.env_paths import PathDialect, dialect_for
 from composer.spec.cvlr import forks
 from composer.spec.cvlr.tuning import ENV_FAMILIES, INLINING, SUMMARIES, compose_env
-from composer.spec.cvlr.reference import ChainReference, CrateRequirement, commit_patches
+from composer.spec.cvlr.reference import (
+    ChainReference,
+    CrateRelease,
+    CrateRequirement,
+    commit_patches,
+)
 
 #: Where the harness module goes in the target package.
 HARNESS_DIR = Path("src") / "certora"
@@ -216,6 +221,39 @@ class ScaffoldBlocked(RuntimeError):
 _ADDED = "added by AutoProver"
 
 
+@dataclass(frozen=True)
+class ChainScaffold:
+    """The facts on which the scaffold's steps diverge per chain. Everything else — the harness
+    module tree, the feature gate, the gitignore, the cdylib requirement, the forks and commit
+    patches the reference set names — is shared."""
+
+    chain: str
+    #: Whether the chain's prover reads tuning files. Without them the scaffold plans no ``envs/``
+    #: files and no ``[package.metadata.certora]``, which is how ``cargo certora-sbf`` learns the
+    #: sources and tuning files; the wasm build composes its manifest itself.
+    tuning_files: bool
+    #: Whether contracts are ``#![no_std]``. ``soroban-sdk`` defines ``panic_impl``, so core ``cvlr``
+    #: (default feature ``cvlr-nondet/std``) must be ``default-features = false`` or the wasm build
+    #: dies on a duplicate lang item. A host ``cargo check`` passes either way.
+    no_std: bool
+
+
+SOLANA_SCAFFOLD = ChainScaffold(chain="solana", tuning_files=True, no_std=False)
+SOROBAN_SCAFFOLD = ChainScaffold(chain="soroban", tuning_files=False, no_std=True)
+
+_SCAFFOLDS = {s.chain: s for s in (SOLANA_SCAFFOLD, SOROBAN_SCAFFOLD)}
+
+
+def scaffold_for(chain: str) -> ChainScaffold:
+    """The scaffold policy for ``chain``, same key set as ``reference.REFERENCE_SET``."""
+    try:
+        return _SCAFFOLDS[chain]
+    except KeyError:
+        raise KeyError(
+            f"no scaffold policy for chain {chain!r} (have: {', '.join(sorted(_SCAFFOLDS))})"
+        ) from None
+
+
 def _harness_source(relative: Path) -> str:
     """What the scaffold writes at ``relative`` under :data:`HARNESS_DIR`.
 
@@ -226,7 +264,7 @@ def _harness_source(relative: Path) -> str:
     return files(__package__).joinpath("harness_files", *template.parts).read_text()
 
 
-def _harness_files(dialect: PathDialect) -> tuple[Write, ...]:
+def _harness_files(dialect: PathDialect, *, tuning_files: bool = True) -> tuple[Write, ...]:
     """AutoProver's files, with paths relative to the package root.
 
     ``mod.rs`` declares ``specs`` as ``pub``. ``cvlr::mock_fn(with = crate::certora::specs::…)``
@@ -254,7 +292,7 @@ def _harness_files(dialect: PathDialect) -> tuple[Write, ...]:
                 contents=compose_env(family, dialect=dialect),
                 why=f"the {family.kind.lower()} the build reports to the prover",
             )
-            for family in ENV_FAMILIES
+            for family in (ENV_FAMILIES if tuning_files else ())
         ),
     )
 
@@ -303,11 +341,22 @@ class ScaffoldOutsideProject(RuntimeError):
     """A path in the plan is outside the project root."""
 
 
-def _dependency(*, inherit: bool, version: str) -> Mapping[str, str | bool]:
+def _dependency(
+    *, inherit: bool, version: str, default_features: bool = True
+) -> Mapping[str, str | bool]:
     """A CVLR dependency entry. ``optional`` is what makes ``dep:`` usable in the feature, and
     what keeps CVLR out of a release build."""
     pin: dict[str, str | bool] = {"workspace": True} if inherit else {"version": f"={version}"}
+    if not default_features:
+        pin["default-features"] = False
     return {**pin, "optional": True}
+
+
+def _default_features(
+    crate: CrateRelease, reference: ChainReference, chain: ChainScaffold
+) -> bool:
+    """False only for the core crate on a ``no_std`` chain (:attr:`ChainScaffold.no_std`)."""
+    return not (chain.no_std and crate.name == reference.core.name)
 
 
 class _PlanBuilder:
@@ -565,7 +614,9 @@ def _check_pins(
                 pass
 
 
-def _plan_workspace_manifest(reference: ChainReference, plan: _PlanBuilder) -> None:
+def _plan_workspace_manifest(
+    reference: ChainReference, chain: ChainScaffold, plan: _PlanBuilder
+) -> None:
     """Pins in ``[workspace.dependencies]``, when the root manifest has a ``[workspace]``."""
     path = Path("Cargo.toml")
     root = plan.read(path)
@@ -581,7 +632,11 @@ def _plan_workspace_manifest(reference: ChainReference, plan: _PlanBuilder) -> N
                 f"release is checked on its own"
             )
             continue
-        pins.append((crate.name, {"version": f"={crate.version}"}))
+        pin: dict[str, str | bool] = {"version": f"={crate.version}"}
+        # A member's `default-features = false` is ignored unless the workspace entry says it too.
+        if not _default_features(crate, reference, chain):
+            pin["default-features"] = False
+        pins.append((crate.name, pin))
     if pins:
         plan.add_manifest_edit(
             path,
@@ -635,7 +690,11 @@ def _certora_feature(package: CratePackage, reference: ChainReference) -> list[s
 
 
 def _plan_feature_forwarding(
-    workspace: Workspace, package: CratePackage, reference: ChainReference, plan: _PlanBuilder
+    workspace: Workspace,
+    package: CratePackage,
+    reference: ChainReference,
+    chain: ChainScaffold,
+    plan: _PlanBuilder,
 ) -> None:
     """Give each library crate the program depends on its own ``certora`` feature.
 
@@ -679,7 +738,17 @@ def _plan_feature_forwarding(
                 path,
                 AddEntries(
                     ("dependencies",),
-                    tuple((c.name, _dependency(inherit=False, version=c.version)) for c in missing),
+                    tuple(
+                        (
+                            c.name,
+                            _dependency(
+                                inherit=False,
+                                version=c.version,
+                                default_features=_default_features(c, reference, chain),
+                            ),
+                        )
+                        for c in missing
+                    ),
                 ),
                 f"the CVLR crates {dep.name}'s `{DEFAULT_FEATURE}` feature enables",
             )
@@ -690,6 +759,7 @@ def _plan_package_manifest(
     package: CratePackage,
     relative: Path,
     reference: ChainReference,
+    chain: ChainScaffold,
     plan: _PlanBuilder,
     *,
     inherit: bool,
@@ -778,12 +848,24 @@ def _plan_package_manifest(
             manifest_rel,
             AddEntries(
                 ("dependencies",),
-                tuple((c.name, _dependency(inherit=inherit, version=c.version)) for c in missing),
+                tuple(
+                    (
+                        c.name,
+                        _dependency(
+                            inherit=inherit,
+                            version=c.version,
+                            default_features=_default_features(c, reference, chain),
+                        ),
+                    )
+                    for c in missing
+                ),
             ),
             "the CVLR dependencies a verification build compiles",
         )
 
-    if manifest.certora_metadata is not None:
+    if not chain.tuning_files:
+        pass
+    elif manifest.certora_metadata is not None:
         plan.add_satisfied("[package.metadata.certora] already declares sources and tuning files")
     else:
         plan.add_manifest_edit(
@@ -800,9 +882,13 @@ def _plan_package_manifest(
 
 
 def _plan_harness(
-    package: CratePackage, relative: Path, dialect: PathDialect, plan: _PlanBuilder
+    package: CratePackage,
+    relative: Path,
+    dialect: PathDialect,
+    chain: ChainScaffold,
+    plan: _PlanBuilder,
 ) -> None:
-    for file in _harness_files(dialect):
+    for file in _harness_files(dialect, tuning_files=chain.tuning_files):
         on_disk = package.root / file.path
         if on_disk.is_file() and on_disk.read_text() == file.contents:
             plan.add_satisfied(f"{relative / file.path} is current")
@@ -950,7 +1036,10 @@ def _plan_gitignore(workspace: Workspace, plan: _PlanBuilder) -> None:
 
 
 def plan_scaffold(
-    workspace: Workspace, package: CratePackage, reference: ChainReference
+    workspace: Workspace,
+    package: CratePackage,
+    reference: ChainReference,
+    chain: ChainScaffold = SOLANA_SCAFFOLD,
 ) -> ScaffoldPlan:
     """What scaffolding ``package`` would change, without changing anything.
 
@@ -961,13 +1050,13 @@ def plan_scaffold(
     inherit = plan.read(Path("Cargo.toml")).workspace is not None
     dialect = dialect_for(workspace, reference)
 
-    _plan_workspace_manifest(reference, plan)
-    _plan_harness(package, relative, dialect, plan)
+    _plan_workspace_manifest(reference, chain, plan)
+    _plan_harness(package, relative, dialect, chain, plan)
     _plan_gitignore(workspace, plan)
-    _plan_feature_forwarding(workspace, package, reference, plan)
+    _plan_feature_forwarding(workspace, package, reference, chain, plan)
     _plan_forks(workspace, reference, plan)
     _plan_unpublished(workspace, reference, plan)
-    _plan_package_manifest(workspace, package, relative, reference, plan, inherit=inherit)
+    _plan_package_manifest(workspace, package, relative, reference, chain, plan, inherit=inherit)
     # Unconditional, both of them: the scaffold always writes the reference-set pin now, so the
     # reference set's platform generation always describes what will be built.
     _check_pins(workspace, package, reference, plan)

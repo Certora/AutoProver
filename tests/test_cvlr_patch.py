@@ -121,9 +121,11 @@ def _formalizer(root: Path):
     """A formalizer whose ``deps`` hold only what :meth:`finalize` reads. The package is the root."""
     from composer.spec.cvlr.env_paths import PathDialect
     from composer.spec.cvlr.harness import CvlrArtifactStore
+    from composer.spec.cvlr.chains import SOLANA_CVLR
     from composer.spec.cvlr.pipeline import CvlrFormalizer
 
     deps = SimpleNamespace(
+        chain=SOLANA_CVLR,
         store=CvlrArtifactStore(root, Path(".")),
         package_dir=Path("."),
         preflight=SimpleNamespace(package="p", scaffold=SimpleNamespace(dialect=PathDialect())),

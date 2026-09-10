@@ -18,6 +18,7 @@ from composer.cargo.metadata import CratePackage, LibTarget, RegistrySource, Wor
 from composer.spec.cvlr.reference import SOLANA_V2, generations
 from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ, SOLANA
 from composer.spec.cvlr import entry, preflight
+from composer.spec.cvlr.chains import SOLANA_CVLR
 from composer.spec.cvlr.pipeline import CvlrPhase
 
 
@@ -359,7 +360,7 @@ async def _run(argv: list[str], monkeypatch, wiring: _Wiring) -> _Wiring:
     """Drive the executor from parsed args — the seam ``autoprove_executor`` exists for, so a test
     reaches the run without going through ``sys.argv``."""
     args = entry.build_parser().parse_args(argv)
-    async with entry.cvlr_executor(args, SimpleNamespace()) as runner:  # type: ignore[arg-type]
+    async with entry.cvlr_executor(args, SimpleNamespace(), SOLANA_CVLR) as runner:  # type: ignore[arg-type]
         await runner(object())  # type: ignore[arg-type]
     return wiring
 
@@ -531,7 +532,7 @@ async def test_a_bad_package_fails_before_any_service_starts(project, monkeypatc
     )
 
     with pytest.raises(preflight.PreflightFailed):
-        async with entry.cvlr_executor(args, SimpleNamespace()):  # type: ignore[arg-type]
+        async with entry.cvlr_executor(args, SimpleNamespace(), SOLANA_CVLR):  # type: ignore[arg-type]
             pass
 
     assert wiring.kwargs == {}
