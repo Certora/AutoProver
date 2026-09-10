@@ -2298,6 +2298,38 @@ list because most of it is not in the phase that will fix it.
    mechanism used at half strength. The judge is told the difference, because `apply` ends by
    assuming its own conclusion and reads exactly like the over-assumption a judge exists to reject —
    the check it now makes is that some rule `verify()`s the lemma.
+
+   **The component that died twice was then re-run to completion, and this item can close.** 4h 17m,
+   nine prover calls, eighteen rules all `VERIFIED`, judge-accepted on the third pass; the 122-minute
+   timeout that killed the previous attempt is gone. The author reached for the full sequence
+   unprompted — `NativeInt`, bound the operands, lift the algebra into a lemma — and the correlation
+   is the strongest evidence the technique works: the property family that got a lemma converged, and
+   the family that did not (five symbolic products in one assertion) is the one that stalled until it
+   got one too. Cross-crate forwarding was exercised for the first time on a real workspace and the
+   preflight built; the reviewer declined a `redirect_module` on the grounds that neither target was
+   a method, which is the charter's own distinction coming back correctly.
+
+   Three corrections the run forced, all now applied:
+
+   * **Bounding the operands is a soundness measure, not a performance one**, and the charter had it
+     as the latter. `NativeInt::from` widens without clipping, so an unbounded operand let the
+     Prover return a counterexample with a stored supply of ~2.7 x 10^62 — a state no execution can
+     reach, indistinguishable from a real defect without reading the cex by hand. The prompt now
+     leads with that, and pairs widening with re-stating the bound as *one* move: the author had
+     applied `NativeInt` and skipped the bound, which is the actively misleading half of the pair.
+   * **The lemma discipline is a shape, not an API.** The author implemented it by hand — hypotheses
+     `cvlr_assert!`ed at the use site, conclusion `cvlr_assume!`d, a standalone rule doing the
+     reverse — and never wrote `cvlr_lemma!` or `.apply()`. Any check keyed on the macro name reports
+     "no lemma used" and is wrong; the judge is now told to recognise the pairing.
+   * **P7 is a direct contributor, not a side note.** Unable to *execute* the blocked ceiling, the
+     author had to axiomatise it — two more symbolic products injected into the query that was
+     already the hardest in the batch. The prover defect and the nonlinearity are the same problem
+     seen twice.
+
+   What the run cost in claim strength is recorded honestly and is the thing to fix next: the
+   headline solvency property is verified **conditionally** on a hand transcription of the blocked
+   function, which an auditor must check by eye. The judge caught an earlier draft that assumed its
+   own conclusion outright, so the new lemma check earned its place on its first live outing.
 4. ~~**Confinement has never actually run**~~ — **it has, and it earned its keep.** The Anchor runs
    took the `launcher` provider against a real Solana graph, and Landlock found two defects nothing
    else would have. Neither was in the sandbox: a confined build could not open its own git config,

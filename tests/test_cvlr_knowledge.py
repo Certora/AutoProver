@@ -633,7 +633,7 @@ def test_the_author_knows_the_charter_without_holding_the_tool():
     prompt = _flat(_author_system_prompt())
     assert "code_editor(request)" in prompt
     assert "You do not make it" in prompt
-    assert "charter is seven kinds" in prompt
+    assert "charter is eight kinds" in prompt
     assert "The editor can refuse, and a refusal is information" in prompt
     # early_panic must not be sold as the answer to the one thing it cannot do.
     assert "does **not** help an acceptance property" in prompt
