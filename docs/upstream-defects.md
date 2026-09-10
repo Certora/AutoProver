@@ -1,16 +1,19 @@
 # Upstream defects found while building the CVLR backend
 
 Everything here was found by pointing the CVLR backend (`docs/cvlr-backend-plan.md`) at real Anchor
-programs, and every entry is reproducible. Nothing here is filed anywhere yet — this document exists
-so that routing is a decision somebody makes rather than one I guess at, since the two groups below
-belong in different places and one of them cannot be public.
+programs, and every entry is reproducible. **One is filed** — P7 is CERT-10103, with a fix in flight
+at [EVMVerifier#8673](https://github.com/Certora/EVMVerifier/pull/8673). The rest are not, and this
+document exists so that routing is a decision somebody makes rather than one I guess at, since the
+groups below belong in different places and one of them cannot be public.
 
 **Group P — the Solana Prover.** Closed source, so these can only be reported. Two of them have been
 downgraded after the fact and one has replaced them, which is worth stating plainly because this file
 was wrong twice in the same direction. P1 does not block: production depends on `Certora/anchor`, a
 maintained fork whose `Error` is unboxed. P4 does not block either, and the cause turned out to be
 our own author prompt rather than the prover — see its correction. **P6 does block**, for any handler
-that performs a CPI and then updates its own state, which is most of them; it is the live one.
+that performs a CPI and then updates its own state, which is most of them; it is the live one. **P7
+also blocks**, for any function that multiplies in `i128` — narrower, and already filed as CERT-10103
+with a fix in flight, which makes it the only entry in this group with a known landing.
 
 **Group U — `prover_output_utility`.** The library the report stack reads verdicts through. One
 entry, and unlike the others it was corrupting our own output rather than merely obstructing us;
@@ -33,6 +36,7 @@ the write-up gives the line number rather than the name.
 | [P4](#p4) | `-solanaAggressiveGlobalDetection` does not fix the [3308] it is recommended for, and neither does any summary | minor — **not** blocking; see the correction |
 | [P5](#p5) | A [3308] in the generated vacuity check is reported as a clean `VERIFIED` when `rule_sanity` is off | **critical** |
 | [P6](#p6) | A summarized CPI havocs the caller's *deserialized* `Account<T>`, not just the account buffer | **blocking** for any handler with a CPI |
+| [P7](#p7) | A checked `i128` multiply is rejected outright — `__muloti4` is not modelled | **major** — fix in flight (CERT-10103) |
 | [U1](#u1) | `extract_job_id_from_url` cannot parse a Solana Prover job link | **major**, worked around |
 | [T1](#t1) | Tuning files are spelled for pre-2.2 `solana-program` paths | major |
 | [T2](#t2) | A canonical tuning file names one specific on-chain program | hygiene |
@@ -475,6 +479,69 @@ be reasoned about rather than havocked. Two limits: the Anchor fork's `anchor-sp
 upstream and still calls `solana_program::program::invoke_signed`, so nothing wires the models in
 automatically; and there is **no model for a native-SOL system-program transfer** at all, which is
 what the reproducer here uses.
+
+---
+
+## P7
+
+### A checked `i128` multiply is rejected outright: `[7000] __muloti4 is not currently supported`
+
+**Filed as CERT-10103; a fix is in flight — [Certora/EVMVerifier#8673](https://github.com/Certora/EVMVerifier/pull/8673).**
+It is recorded here anyway, because the entry is what documents the *cost* of it, and because the
+second half — what an author does when a function cannot be executed at all — outlives the fix.
+
+Rust lowers an overflow-aware 128-bit signed multiplication to the compiler-rt intrinsic
+`__muloti4` (the pair of a product and an overflow flag). The Solana Prover has no model for that
+symbol, and rather than summarizing or havocking it, it stops:
+
+```text
+[7000] __muloti4 is not currently supported
+source: .../core/src/num/int_macros.rs:2370
+  from: <the workspace's shared checked-arithmetic helper>
+  from: <the accounting function under test>
+```
+
+Minimal shape, in a shared `safe_math` helper of the sort every project of any size has:
+
+```rust
+impl SafeMath for i128 {
+    fn safe_mul(self, v: Self) -> Result<Self> {
+        self.checked_mul(v).ok_or(ErrorCode::MathOverflow.into())   // -> __muloti4
+    }
+}
+```
+
+**What it costs is not the multiply.** The failure is total for the *whole call chain*: no rule that
+reaches such a function gets a verdict at all — not a timeout, not a counterexample, an error. In the
+run that found it, the blocked function was a cross-program position update computing
+`raw = ceil(amount * 1e12 / exchange_price)` in `i128`, which is the single most load-bearing
+computation in the property being proved. Nothing about it is exotic; fixed-point scaling in `i128`
+is the ordinary way to carry a signed delta at 12 decimal places.
+
+Two escapes were tried and both are worse than the defect:
+
+* **Summarize `__muloti4`.** A points-to or havoc summary of the intrinsic havocs the product — which
+  is the very quantity the property is about. The rule then proves nothing.
+* **`redirect_module` the helper crate.** Substituting `NativeInt` arithmetic for the helper is the
+  sanctioned move for *nonlinearity* (see the author charter) and it does clear this error too. But
+  the helper lives in a dependency, so the redirect is run-global, and the substituted arithmetic is
+  code the editor wrote — which moves the very transcription being questioned inside the trusted
+  boundary rather than discharging it.
+
+**What the run actually did**, and it is the honest answer rather than a good one: hand-transcribe the
+blocked function's post-condition into the rule as two inequalities pinning an unconstrained value,
+and say so in the report. That downgrades the headline property from *verified* to *verified
+conditionally on a transcription an auditor must check by eye* — the largest single reduction in
+claim strength anywhere in the run.
+
+**And it compounds with P-class nonlinearity.** The transcription of a ceiling is two more symbolic
+products (`raw * price >= amount * prec` and `< amount * prec + price`), injected into the one query
+that was already the hardest in the batch. So this defect did not merely block a function; it is a
+direct contributor to the two-hour solve that had to be broken up with a lemma. A prover that could
+execute the `i128` multiply would have removed both problems at once.
+
+We have not seen the *unsigned* 128-bit checked multiply rejected — that one is analyzed, expensively,
+as a bitvector multiply with an overflow branch. The gap is specific to the signed intrinsic.
 
 ---
 
