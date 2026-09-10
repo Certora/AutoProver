@@ -218,7 +218,7 @@ failed, which rule, and which code you believe is in the way. Do not prescribe a
 the diagnosis, the editor owns what to do about it, and a request that dictates the edit is one it has
 to re-derive anyway.
 
-The editor's charter is seven kinds, and knowing them tells you what is worth asking for:
+The editor's charter is eight kinds, and knowing them tells you what is worth asking for:
 
 * **`early_panic`** rewrites every `?` in a function to `.unwrap()`. The same choice as
   `.unwrap()`-versus-`.is_ok()` above, applied where a rule cannot reach: a `?` *inside* the program,
@@ -258,8 +258,11 @@ The editor's charter is seven kinds, and knowing them tells you what is worth as
   it the one to ask for last. It also narrows what a green rule means: a rule that drives the
   extracted piece proves nothing about the checks that stayed in the enclosing function, so declare
   it in `rule_subjects` for what it is.
+* **`swap_derive`** moves a type's derived (de)serializer behind your unit's feature so you can
+  supply the impls yourself. It has its own section below, under the symptom that calls for it —
+  it is the widest-reaching kind and the one with the most for you to get right afterwards.
 
-A seventh thing exists and you should prefer the honest version of it. Shrinking a bounded collection —
+One more thing people reach for, and you should prefer the honest version of it. Shrinking a bounded collection —
 the array in the state struct going from 8 entries to 2 under the `certora` feature — makes loops over
 it fit the unroll bound, and it is unsound in a direction nothing reports: a property proved for 2
 entries is not proved for 8. `cvlr_assume!` on the length does the same work and puts the bound in the
@@ -551,8 +554,12 @@ over the program's own recorded state, which is the part it is responsible for.
 
 Arithmetic correctness is a real property class here, and a stronger one than on EVM: rules reason
 over exact integers, so "the fee is exactly one percent" or "supply is conserved" is stated directly.
-Use `NativeInt` (`cvlr::mathint`) when you need a value without the bit-width in the way, and convert
-back once you have bounded it.
+Use `NativeInt` (`cvlr::mathint`) when you need a value without the bit-width in the way — but treat
+widening and bounding as **one move, not two**. `NativeInt::from(x)` removes the bit width and does
+not put anything back: a quantity the program can only hold as a `u64` becomes, in your rule, a value
+with no upper limit at all. Widen it and re-state its bound in the same breath (`cvlr_assume!(x.is_u64())`),
+and convert back the same way. The section on nonlinear arithmetic below says what the missing half
+costs; it is not a performance note.
 
 **"This handler cannot be made to panic" is not something you can check, and you should not try.**
 Two independent reasons, and the first is the one that matters:
@@ -637,9 +644,15 @@ of symbolic quantities — `supply * price` against `position * other_price` —
 in the statement you were asked to prove. There is nothing to abstract, because the multiplication
 *is* the property. Two moves, in this order.
 
-**Bound the operands.** An unbounded symbolic product is far harder than a bounded one, and the
-program's own guarantees usually bound it: a price is at least its precision constant, a stored
-amount fits in `u64`, an updated value is at most double its predecessor.
+**Bound the operands — this is a soundness step, not a speed one.** Widening to `NativeInt` throws
+the program's own limits away, and the Prover will then explore states the program cannot reach. What
+comes back is not "slow": it is a **counterexample you have no way to distinguish from a real
+defect**. A run that skipped this got a violation whose witness had a stored supply of ~2.7 x 10^62 —
+a number that cannot exist in a `u64` field — and cost a submission and a round of analysis to
+identify as an artefact of the rule rather than a bug in the program. Being faster is a side effect.
+
+The program's own guarantees are what you re-state: a price is at least its precision constant, a
+stored amount fits in `u64`, an updated value is at most double its predecessor.
 
 ```rust
 cvlr_assume!(price >= EXCHANGE_PRICE_PRECISION);

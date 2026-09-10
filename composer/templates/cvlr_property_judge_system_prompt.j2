@@ -126,6 +126,16 @@ be stale; the tool is authoritative.
    rule now carries the whole property, over free integers with no program in it, and whether that
    is still a proof of anything depends entirely on its `requires`.
 
+   **Judge the shape, not the macro.** `cvlr_lemma!` is one spelling of this discipline and not the
+   only one; an author can hand-roll it, and one already has. The shape to recognise is a pair:
+   somewhere a `#[rule]` that assumes the hypotheses and *asserts* the conclusion over free values
+   with no program in it, and at each use site the same hypotheses `cvlr_assert!`ed before the
+   conclusion is `cvlr_assume!`d. That is a discharged lemma whatever it is called, and it earns the
+   same treatment as the macro. Its absence is what you are looking for: a `cvlr_assume!` of a
+   non-trivial arithmetic fact with no verifying rule anywhere and no assertion of its hypotheses at
+   the point of use is the over-assumption this check exists to catch — and it will not be spelled
+   `cvlr_lemma!` either.
+
 3. **The assertion is weaker than the property.** A property about a balance relation asserted only
    for one account, an equality asserted as an inequality, a postcondition asserted about the value
    the code just wrote rather than about the state. Compare each rule's assertion to the property's
