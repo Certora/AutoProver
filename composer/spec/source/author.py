@@ -974,7 +974,7 @@ async def batch_cvl_generation(
             async with project_directory(st.get("vfs") or {}) as run_root:
                 yield CVLAuthorState(
                     working_dir=pathlib.Path(run_root),
-                    curr_spec=None,
+                    buffers=st.get("buffers") or {},
                     prover_runner=WrappedProverRunner(
                         st["config"],
                         prover_tool.options,
