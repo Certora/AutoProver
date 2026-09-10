@@ -8,6 +8,7 @@ No LLM, no network, no cargo except in the one test that reads a dep-info fixtur
 """
 
 import asyncio
+import dataclasses
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,6 +20,7 @@ from composer.sandbox.recipes import SANDBOX_CARGO_DIR
 from composer.cargo.depinfo import compiled_sources
 from composer.spec.cvlr import editor as editor_mod
 from composer.spec.cvlr.editor import (
+    AmendMunge,
     ApplyEarlyPanic,
     ApplyHookOnEntry,
     ApplyHookOnExit,
@@ -42,6 +44,7 @@ from composer.spec.cvlr.munge import (
     InlineNever,
     MockFn,
     merge_munges,
+    munge_history,
 )
 from composer.spec.cvlr.tree import SharedTree
 
@@ -274,11 +277,120 @@ async def test_dropping_a_munge_voids_a_standing_approval():
     assert result.update["proposed"] == DropMunges(frozenset({_munge().edit_id}))
 
 
+# ---------------------------------------------------------------------------------------------
+# amending a record
+#
+# `why` is written once, as a side effect of applying, and it is the only account anybody downstream
+# gets. A run found the gap the hard way: a justification that was accurate when recorded described
+# the harness as it no longer was, the editor had no move that rewrites prose while leaving the edit
+# in place, and it gave up rather than mis-report. These are that move.
+
+
+@pytest.mark.asyncio
+async def test_amending_rewrites_the_prose_and_leaves_the_edit_alone():
+    one = _munge()
+    result = await _run(
+        AmendMunge,
+        None,
+        _editor_state(proposed=[one]),
+        edit_id=one.edit_id,
+        why="superseded: the stand-in drops the whole cross-program effect",
+    )
+    (amendment,) = result.update["proposed"]
+    assert amendment.edit_id == one.edit_id
+    assert amendment.why == "superseded: the stand-in drops the whole cross-program effect"
+    assert amendment.kind == one.kind and amendment.path == one.path
+
+
+@pytest.mark.asyncio
+async def test_a_munge_committed_in_an_earlier_session_can_still_be_amended():
+    """The case that produced the gap: the record was landed by a previous editor session, so
+    `drop_munge` — which only reaches this session's proposals — could not have reached it either."""
+    one = _munge()
+    result = await _run(
+        AmendMunge,
+        None,
+        _editor_state(committed=[one], proposed=[]),
+        edit_id=one.edit_id,
+        why="corrected",
+    )
+    (amendment,) = result.update["proposed"]
+    assert amendment.why == "corrected"
+
+
+@pytest.mark.asyncio
+async def test_an_amendment_voids_a_standing_approval():
+    """The reviewer weighs the justification, so an amendment slipped in after approval would ship
+    prose nobody reviewed — even though the compiler sees nothing new."""
+    one = _munge()
+    result = await _run(
+        AmendMunge,
+        None,
+        _editor_state(proposed=[one], reviewed_digest="whatever"),
+        edit_id=one.edit_id,
+        why="corrected",
+    )
+    assert result.update["reviewed_digest"] is None
+
+
+@pytest.mark.asyncio
+async def test_amending_costs_no_submission():
+    """The point of keeping `why` out of `edit_id`: the program is byte-identical, so the prover
+    stamp and the approval key both survive."""
+    one = _munge()
+    result = await _run(
+        AmendMunge, None, _editor_state(proposed=[one]), edit_id=one.edit_id, why="corrected"
+    )
+    (amendment,) = result.update["proposed"]
+    assert munge_history((amendment,)) == munge_history((one,))
+    assert editor_mod._digest([amendment]) == editor_mod._digest([one])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "over,expect",
+    [
+        ({"edit_id": "unit_vault:cvlr::early_panic@nowhere.rs::gone"}, "No munge of yours"),
+        ({"why": "   "}, "non-empty"),
+        ({"why": "w"}, "already says"),
+    ],
+)
+async def test_an_amendment_that_would_change_nothing_is_refused(over, expect):
+    one = _munge()
+    fields = {"edit_id": one.edit_id, "why": "corrected", **over}
+    answer = await _run(AmendMunge, None, _editor_state(proposed=[one]), **fields)
+    assert isinstance(answer, str) and expect in answer
+
+
+@pytest.mark.asyncio
+async def test_re_recording_an_identical_munge_points_at_the_move_that_exists(tmp_path: Path):
+    """The refusal the run actually hit. It was correct to refuse and gave no way forward."""
+    answer = await _run(
+        MungeFunction,
+        _target(tmp_path),
+        _editor_state(committed=[_munge()]),
+        path=_RESERVE,
+        function="calculate_fees",
+        munge=ApplyEarlyPanic(),
+        why="a second, better wording",
+    )
+    assert isinstance(answer, str) and "`amend_munge`" in answer
+
+
+def test_an_amended_record_replaces_the_one_it_corrects():
+    """Through the state reducer, since that is where the correction would otherwise be dropped:
+    the ids match, so the old behaviour discarded the amendment as a duplicate."""
+    one = _munge()
+    corrected = dataclasses.replace(one, why="corrected")
+    assert merge_munges([one], [corrected]) == [corrected]
+    # And it does not move: a re-worded justification is not a re-ordering of the edits.
+    other = _munge("redeem_fees")
+    assert merge_munges([one, other], [corrected]) == [corrected, other]
+
+
 def test_the_digest_ignores_prose_and_not_substance():
     """Keyed on `edit_id` for the reason `munge_history` is: re-wording a justification must not cost
     a review, and changing what the compiler sees must."""
-    import dataclasses
-
     one = _munge()
     reworded = dataclasses.replace(one, why="a clearer second wording")
     other = _munge("redeem_fees")
