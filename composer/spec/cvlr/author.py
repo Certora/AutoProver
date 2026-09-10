@@ -297,10 +297,17 @@ class CvlrAuthorSystemParams(CvlrMountParams):
 
     ``example`` is the worked invocation example rendered against *this* program (see
     :mod:`composer.spec.cvlr.example`). ``None`` leaves the prompt's stand-in program in place,
-    which is what a run with no analyzed component gets."""
+    which is what a run with no analyzed component gets.
+
+    ``conf`` is the prover configuration this unit's submissions run under, shown rather than
+    described. The prompt used to paraphrase three of its settings in hand-written prose, which was
+    both incomplete — nothing said what the loop bound *is*, while the same section asked the author
+    to report when the bound was too low — and free to drift from the dict it described.
+    """
 
     module: str
     example: WorkedExample | None
+    conf: dict
 
 
 _JudgeTemplate = TypedTemplate[_CvlrJudgeParams]("cvlr_feedback_prompt.j2")
@@ -605,6 +612,7 @@ async def batch_cvlr_generation(
                     if component
                     else None
                 ),
+                "conf": verify.submission.base_conf,
             }
         ).render_to
     ]
@@ -670,6 +678,7 @@ async def batch_cvlr_generation(
         rule_subjects=[],
         summaries=[],
         munges=[],
+        conf=verify.submission.base_conf,
         validations={},
         expected_failures={},
         failed=None,

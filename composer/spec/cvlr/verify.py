@@ -488,7 +488,12 @@ class VerifyRules(
                         # unit's module and the artifact declares every unit's rules, so this unit
                         # would be graded on its siblings' drafts.
                         dataclasses.replace(
-                            deps.submission, rules=SelectRules(tuple(declared))
+                            deps.submission,
+                            rules=SelectRules(tuple(declared)),
+                            # From state, not from `deps`: the conf is the author's to change, and
+                            # a submission built from the run's starting copy would send the old
+                            # settings while `version_history` recorded the new ones.
+                            base_conf=self.state["conf"],
                         ),
                     )
                 if isinstance(prepared, BuildRejected):
