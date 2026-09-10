@@ -2197,7 +2197,7 @@ list because most of it is not in the phase that will fix it.
    teach descending to the program's own accounting core with `nondet()` domain structs, which puts
    account validation, the CPI's effects and Anchor's dispatch outside the rule and is only available
    to programs that *have* such a core.
-2. **Almost nothing in [upstream-defects.md](./upstream-defects.md) is filed anywhere.** Fifteen
+2. **Almost nothing in [upstream-defects.md](./upstream-defects.md) is filed anywhere.** Sixteen
    entries, every one reproducible, and routing is a decision somebody has to make rather than one
    this document should guess at. One is now routed: **P7** — a checked `i128` multiply is rejected
    outright with `[7000] __muloti4 is not currently supported` — is CERT-10103, with a fix in flight
