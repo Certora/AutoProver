@@ -2197,12 +2197,15 @@ list because most of it is not in the phase that will fix it.
    teach descending to the program's own accounting core with `nondet()` domain structs, which puts
    account validation, the CPI's effects and Anchor's dispatch outside the rule and is only available
    to programs that *have* such a core.
-2. **Nothing in [upstream-defects.md](./upstream-defects.md) is filed anywhere.** Fourteen entries,
-   every one reproducible, and routing is a decision somebody has to make rather than one this
-   document should guess at. Two are worth pulling out: **P5 is critical** — a [3308] raised in the
-   generated vacuity check is reported as a clean `VERIFIED` when `rule_sanity` is off, so any
-   project that turns it off is exposed — and **P4 carries a four-line fix to `Certora/anchor`** that
-   would restore failure-path reasoning, byte-identical across its release branches.
+2. **Almost nothing in [upstream-defects.md](./upstream-defects.md) is filed anywhere.** Fifteen
+   entries, every one reproducible, and routing is a decision somebody has to make rather than one
+   this document should guess at. One is now routed: **P7** — a checked `i128` multiply is rejected
+   outright with `[7000] __muloti4 is not currently supported` — is CERT-10103, with a fix in flight
+   at [EVMVerifier#8673](https://github.com/Certora/EVMVerifier/pull/8673). Two of the rest are worth
+   pulling out: **P5 is critical** — a [3308] raised in the generated vacuity check is reported as a
+   clean `VERIFIED` when `rule_sanity` is off, so any project that turns it off is exposed — and
+   **P4 carries a four-line fix to `Certora/anchor`** that would restore failure-path reasoning,
+   byte-identical across its release branches.
 
 **Ours, and unstarted.**
 
