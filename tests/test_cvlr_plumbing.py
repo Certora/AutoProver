@@ -234,6 +234,92 @@ def test_the_recommended_starting_point_is_the_base_when_a_project_has_no_conf()
     assert base["loop_iter"] == "2"
 
 
+# ---------------------------------------------------------------------------------------------
+# Whose conf a run submits under
+#
+# The layering this module describes — project conf as the base, the run owning a small set of keys
+# — was built and then never wired: the one production call site passed `load_base(None)`, so every
+# run used the recommended starting point's settings and a project that had tuned its own prover
+# flags was verified without them. The reference project keeps a `run.conf` carrying a twelve-seed
+# solver portfolio and LIA/NIA hints aimed squarely at nonlinear arithmetic; a run against it used
+# none of that and never said so.
+
+
+def test_a_project_that_keeps_a_base_conf_is_verified_under_it(tmp_path):
+    confs = tmp_path / "src" / "certora" / "confs"
+    confs.mkdir(parents=True)
+    (confs / "base.conf").write_text('{"loop_iter": "3", "prover_args": ["-smt_useNIA true"]}')
+
+    base = cvlr_conf.load_base(cvlr_conf.project_conf(confs))
+
+    assert base["loop_iter"] == "3"
+    assert base["prover_args"] == ["-smt_useNIA true"]
+
+
+def test_base_conf_wins_over_run_conf():
+    """Both names appear in the corpus and three projects carry both. `base.conf` is named for the
+    job — its siblings reach it through `override_base_config` — so it is the one that means "the
+    project's settings", where `run.conf` may be one particular run's."""
+    assert cvlr_conf.PROJECT_CONF_NAMES.index("base.conf") < cvlr_conf.PROJECT_CONF_NAMES.index(
+        "run.conf"
+    )
+
+
+def test_a_per_rule_set_conf_is_not_adopted_as_the_base(tmp_path):
+    """The reason discovery is a closed list rather than "any conf in the directory". Every other
+    file there carries a `rule` list, and `InheritRules` would adopt it — grading this run on
+    somebody else's rule selection, silently."""
+    confs = tmp_path / "src" / "certora" / "confs"
+    confs.mkdir(parents=True)
+    (confs / "accounting_solvency_p2.conf").write_text('{"rule": ["their_rule"], "loop_iter": "9"}')
+
+    assert cvlr_conf.project_conf(confs) is None
+    assert "rule" not in cvlr_conf.load_base(None)
+
+
+def test_a_project_conf_that_never_mentions_rule_sanity_still_gets_vacuity_checking():
+    """The hazard reading the project's conf introduces, and the reason it is closed here rather
+    than hoped about. The recommended starting point and two of the five corpus base confs omit the
+    key entirely, so adopting one wholesale would turn vacuity checking off — silently, while the
+    author's prompt goes on saying it is on."""
+    conf = cvlr_conf.solana_conf({"loop_iter": "3"}, cvlr_conf.RunOverlay(build_script="/w/o.py"))
+    assert conf["rule_sanity"] == "basic"
+
+
+def test_a_project_asking_for_more_vacuity_checking_keeps_it():
+    """A floor, not an owned key: `advanced` is stronger and the project asking for it knows
+    something this code does not."""
+    base = {"rule_sanity": "advanced"}
+    conf = cvlr_conf.solana_conf(base, cvlr_conf.RunOverlay(build_script="/w/o.py"))
+    assert conf["rule_sanity"] == "advanced"
+
+
+def test_turning_vacuity_checking_off_is_not_a_setting_a_run_honors():
+    """`"none"` is the documented way to disable it and is exactly the configuration
+    `docs/upstream-defects.md` P5 shows to be unsafe: with the check off, a [3308] raised inside
+    the generated vacuity rule is reported as a clean VERIFIED."""
+    base = {"rule_sanity": "none"}
+    conf = cvlr_conf.solana_conf(base, cvlr_conf.RunOverlay(build_script="/w/o.py"))
+    assert conf["rule_sanity"] == "basic"
+
+
+def test_the_run_decides_which_server_whatever_the_base_says():
+    """Corpus confs that name a server all say "production", and the run passes `--server` from the
+    deployment environment. Two answers that agree until they do not."""
+    base = {**cvlr_conf.parse_conf(_REAL_CONF), "server": "production"}
+    assert "server" not in cvlr_conf.solana_conf(base, cvlr_conf.RunOverlay(build_script="/w/o.py"))
+
+
+def test_a_conf_change_invalidates_a_stamp_earned_before_it():
+    """A verdict earned under one loop bound, one `rule_sanity` or one solver portfolio is not a
+    verdict under another, so the conf belongs in `version_history` beside the summaries and the
+    munges."""
+    one = cvlr_conf.conf_history(dict(cvlr_conf.TEMPLATE_BASE))
+    two = cvlr_conf.conf_history({**cvlr_conf.TEMPLATE_BASE, "loop_iter": "3"})
+    assert one != two
+    assert cvlr_conf.conf_history(dict(cvlr_conf.TEMPLATE_BASE)) == one
+
+
 def test_loops_are_bounded_soundly_and_the_bound_is_raised_instead():
     """A soundness-relevant pair of defaults, so it gets its own test rather than a line in another.
 

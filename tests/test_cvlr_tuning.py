@@ -187,6 +187,7 @@ def test_a_summary_invalidates_a_stamp_earned_before_it():
         "skipped": [],
         "summaries": [],
         "munges": [],
+        "conf": {},
         "validations": {},
         "required_validations": [PROVER_VALIDATION_KEY],
     }
@@ -202,18 +203,24 @@ def test_rewording_a_justification_does_not_cost_a_submission():
     six-minute run for it would teach the author to leave justifications alone."""
     one = (SummaryDirective(pattern=_DISPLAY, why="first wording"),)
     two = (dataclasses.replace(one[0], why="a clearer second wording"),)
-    assert tuning_history({"summaries": list(one), "munges": []}) == tuning_history({"summaries": list(two), "munges": []})  # type: ignore[arg-type]
+    assert tuning_history({"summaries": list(one), "munges": [], "conf": {}}) == tuning_history({"summaries": list(two), "munges": [], "conf": {}})  # type: ignore[arg-type]
 
 
 def test_changing_the_return_shape_does_cost_one():
     one = (SummaryDirective(pattern="^f$", why="w"),)
     two = (SummaryDirective(pattern="^f$", why="w", returns="(*i32)(r1+0):num"),)
-    assert tuning_history({"summaries": list(one), "munges": []}) != tuning_history({"summaries": list(two), "munges": []})  # type: ignore[arg-type]
+    assert tuning_history({"summaries": list(one), "munges": [], "conf": {}}) != tuning_history({"summaries": list(two), "munges": [], "conf": {}})  # type: ignore[arg-type]
 
 
-def test_the_history_is_empty_when_nothing_was_summarized():
-    """So a run that never touches a tuning file hashes exactly as it did before this existed."""
-    assert tuning_history({"summaries": [], "munges": []}) == ()  # type: ignore[arg-type]
+def test_the_conf_is_always_in_the_history_and_the_tuning_files_only_when_used():
+    """A run that never touches a tuning file contributes nothing from one — but it always
+    contributes its conf, because there is no such thing as submitting without one and a verdict
+    earned under a different loop bound or a different `rule_sanity` is not this run's verdict."""
+    empty = tuning_history({"summaries": [], "munges": [], "conf": {}})  # type: ignore[arg-type]
+    assert len(empty) == 1 and empty[0].startswith("conf:")
+
+    changed = tuning_history({"summaries": [], "munges": [], "conf": {"loop_iter": "3"}})  # type: ignore[arg-type]
+    assert changed != empty
 
 
 def test_a_skip_still_moves_the_digest():

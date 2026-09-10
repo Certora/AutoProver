@@ -9,6 +9,7 @@ component.
 import pytest
 
 from composer.spec.cvlr.anchor_surface import Param, read_surface
+from composer.spec.cvlr.conf import TEMPLATE_BASE
 from composer.spec.cvlr.example import (
     ExampleAccount,
     WorkedExample,
@@ -193,9 +194,12 @@ def test_the_struct_name_follows_anchors_convention() -> None:
 # -- rendering ----------------------------------------------------------------------------------
 
 
-def _render(example: WorkedExample | None) -> str:
+def _render(example: WorkedExample | None, conf: dict | None = None) -> str:
     return env.get_template(TEMPLATE).render(
-        module="exchange_rate", cvlr_versions="cvlr 0.6.1", example=example
+        module="exchange_rate",
+        cvlr_versions="cvlr 0.6.1",
+        example=example,
+        conf=dict(TEMPLATE_BASE) if conf is None else conf,
     )
 
 
@@ -308,6 +312,30 @@ def test_the_judge_is_told_to_recognise_the_lemma_shape_not_the_macro() -> None:
 
     assert "Judge the shape, not the macro" in rendered
     assert "cvlr_assert!" in rendered and "cvlr_assume!" in rendered
+
+
+# -- the conf the author works under --------------------------------------------------------------
+
+
+def test_the_author_is_shown_the_conf_rather_than_told_about_it() -> None:
+    """Three of its settings used to be paraphrased in hand-written prose, which could drift from
+    the dict and did not say what the loop bound *is* — while the same section asked the author to
+    report when the bound was too low."""
+    rendered = _render(None, {"loop_iter": "7", "prover_args": ["-solanaTACMathInt true"]})
+
+    assert '"loop_iter": "7"' in rendered
+    assert "-solanaTACMathInt true" in rendered
+    # And the old paraphrase, which asserted a bound the conf may not carry, is gone.
+    assert "unrolls loops a fixed number of times" not in rendered
+
+
+def test_a_conf_without_rule_sanity_is_not_described_as_having_it() -> None:
+    """The paraphrase said "keep `rule_sanity` on (the conf does)" unconditionally. A project conf
+    that omits it gets no vacuity report, and an author told otherwise trusts a green rule."""
+    rendered = _render(None, {"loop_iter": "2"})
+
+    assert "(the conf does)" not in rendered
+    assert "check yours below" in rendered
 
 
 def test_the_judge_is_told_a_verified_lemma_is_not_an_over_assumption() -> None:

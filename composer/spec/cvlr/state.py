@@ -48,7 +48,7 @@ from composer.authoring.state import (
     validate_check_mapping,
 )
 from composer.spec.context import CacheKey, CvlrGeneration, CvlrJudge
-from composer.spec.cvlr.conf import DEFAULT_FEATURE
+from composer.spec.cvlr.conf import DEFAULT_FEATURE, conf_history
 from composer.spec.cvlr.munge import Munge, merge_munges, munge_history
 from composer.spec.cvlr.rules import rule_names
 from composer.spec.cvlr.tree import munge_diff
@@ -184,6 +184,11 @@ class CvlrGenerationExtra(AuthoringExtra):
     #: Verification-only edits the editor made to the program's own source on this unit's behalf,
     #: in the order applied. Reduced for the same reason ``summaries`` is.
     munges: Annotated[list[Munge], merge_munges]
+    #: The prover conf this unit submits under — the project's own where it keeps one, else the
+    #: recommended starting point's (:func:`~composer.spec.cvlr.conf.load_base`). Per-unit rather
+    #: than per-run because it is state the author can be given a tool to change, and a change one
+    #: unit makes to answer its own timeout has no business reaching a sibling's verdicts.
+    conf: dict
     expected_failures: Annotated[dict[CheckName, str], merge_expected_failures]
     #: The job link from the most recent prover run that produced results, whether or not it was
     #: all green — a link to a failing run is still the most useful thing a report can offer.
@@ -209,10 +214,16 @@ def tuning_history(state: CvlrGenerationExtra) -> tuple[str, ...]:
     The generic digest already takes a history so that "a stamp earned before a source edit goes
     stale with it". A summary is such an edit, and the sharpest kind — it changes what the prover
     analyzed without changing a character of the draft. A munge is the literal kind: it changes the
-    program. Every stamp site passes this, so adding either after a green run costs the run rather
-    than silently keeping its verdicts.
+    program. The conf is the third: it decides the loop bound, the solver flags and whether vacuity
+    is checked, so a verdict earned under one conf is not a verdict under another. Every stamp site
+    passes this, so changing any of the three after a green run costs the run rather than silently
+    keeping its verdicts.
     """
-    return summary_history(tuple(state["summaries"])) + munge_history(tuple(state["munges"]))
+    return (
+        summary_history(tuple(state["summaries"]))
+        + munge_history(tuple(state["munges"]))
+        + conf_history(state["conf"])
+    )
 
 
 @dataclasses.dataclass(frozen=True)

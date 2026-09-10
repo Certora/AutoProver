@@ -301,8 +301,14 @@ def _author_system_prompt() -> str:
         CvlrAuthorSystemParams,
         _PropertyGenSysTemplate,
     )
+    from composer.spec.cvlr.conf import TEMPLATE_BASE
 
-    params: CvlrAuthorSystemParams = {"cvlr_versions": "cvlr 0.6.1", "module": "spec"}
+    params: CvlrAuthorSystemParams = {
+        "cvlr_versions": "cvlr 0.6.1",
+        "module": "spec",
+        "example": None,
+        "conf": dict(TEMPLATE_BASE),
+    }
     return _PropertyGenSysTemplate.bind(params).render_to(load_jinja_template)
 
 

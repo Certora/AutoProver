@@ -10,10 +10,17 @@ round-trip from silently rewriting a project's file.
 The layering follows the CVL backend's :func:`~composer.spec.source.prover.prover_config_overlay`:
 the project's conf is the base, the run owns a small set of keys, and
 :data:`OVERLAY_OWNED_KEYS` says which ones so nothing downstream has to guess whether a base entry
-survived. The Solana-specific part of that set is ``build_script`` and ``files``, and they are owned
-for a reason spelled out in :mod:`composer.cargo.sbf`: the backend builds inside the sandbox and
-hands the prover a script that reruns that same build, so a base conf naming its own build script —
-which 15 of 16 surveyed projects do — must not win.
+survived. The Solana-specific part of that set is ``build_script``, ``files`` and ``server``. The
+first two are owned for a reason spelled out in :mod:`composer.cargo.sbf`: the backend builds inside
+the sandbox and hands the prover a script that reruns that same build, so a base conf naming its own
+build script — which 15 of 16 surveyed projects do — must not win.
+
+*Which* project conf is the base is :func:`project_conf`, and everything else about the project's
+settings is honored rather than second-guessed — its loop bound, its solver flags, its
+``prover_version``. The one exception is a floor rather than an override: :func:`with_sanity_floor`
+guarantees vacuity checking is on, because the recommended starting point and two of the five corpus
+base confs never mention ``rule_sanity`` and adopting one wholesale would turn off the only check
+that catches a blocked author assuming the conclusion.
 
 What the run *does not* own is as deliberate. ``solana_inlining`` is left unset, because
 ``cargo certora-sbf`` reads it out of the package's own ``[package.metadata.certora]`` and reports it
@@ -33,6 +40,7 @@ project that names its own file knows something this code does not.
 """
 
 import dataclasses
+import hashlib
 import io
 import json
 import logging
@@ -51,7 +59,12 @@ _log = logging.getLogger(__name__)
 #:
 #: ``rule`` is deliberately **not** here — see :data:`RuleSelection`, where inheriting the base's
 #: selection is one of three distinct intents rather than the absence of one.
-OVERLAY_OWNED_KEYS: frozenset[str] = frozenset({"build_script", "files", "msg"})
+#:
+#: ``server`` is owned for a related reason: which cloud a run reaches is decided by the deployment
+#: environment and passed on the CLI (``composer.prover.core.make_prover_options``), and the corpus
+#: confs that name one all say ``"production"``. Dropping it keeps one answer to "which server"
+#: rather than two that agree until they do not.
+OVERLAY_OWNED_KEYS: frozenset[str] = frozenset({"build_script", "files", "msg", "server"})
 
 #: The default base, from `Certora/solana-spec-template <https://github.com/Certora/solana-spec-template>`_
 #: — the repository Certora recommends cloning to start a new Solana spec, and therefore the only
@@ -135,14 +148,59 @@ def read_conf(path: Path) -> dict:
     return parse_conf(path.read_text())
 
 
+#: The conf a project means as its *base*, in the order a run should prefer them, inside the
+#: harness's ``confs/`` directory.
+#:
+#: Read off the corpus rather than chosen. ``base.conf`` is first because it is named for the job:
+#: in every project that has one the siblings reach it through ``override_base_config``, so it is
+#: the file that carries the project's settings and nothing else. ``run.conf`` is the recommended
+#: starting point's single conf, and the name three engagements kept when they never grew a second.
+#:
+#: Deliberately a closed list rather than "any conf in the directory". The other files there are
+#: per-rule-set confs, and every one of them carries a ``rule`` list — which
+#: :class:`InheritRules` would then adopt, silently grading this run on somebody else's rule
+#: selection. A project whose base is named something else gets :data:`TEMPLATE_BASE` and a log
+#: line, which is wrong in a way somebody can see.
+PROJECT_CONF_NAMES: tuple[str, ...] = ("base.conf", "run.conf")
+
+
+def project_conf(confs_dir: Path) -> Path | None:
+    """The project's own base conf, or ``None`` if it does not keep one where they are kept."""
+    return next(
+        (c for name in PROJECT_CONF_NAMES if (c := confs_dir / name).is_file()),
+        None,
+    )
+
+
+def conf_history(conf: dict) -> tuple[str, ...]:
+    """The conf as a ``version_history`` token, so a stamp predating a change goes stale with it.
+
+    The same trade as :func:`~composer.spec.cvlr.tuning.summary_history` and
+    :func:`~composer.spec.cvlr.munge.munge_history`, and the reason is sharper here: a conf decides
+    the loop bound, the solver flags and whether vacuity is checked, so a verdict earned under one
+    conf says nothing about another. Keyed on the whole conf rather than on a field list, because
+    the set of editable keys is not this function's business and a key it had not heard of is
+    exactly the one that would slip through.
+    """
+    digest = hashlib.sha256(dump_conf(conf).encode()).hexdigest()[:16]
+    return (f"conf:{digest}",)
+
+
 def load_base(path: Path | None) -> dict:
     """The base conf for a run: the project's, or the recommended starting point's.
 
     The fallback is stated rather than empty because an empty conf is not a neutral one — it is a
     conf with no loop bound, no SMT timeout and no prover flags, which verifies differently. When
     the project has no opinion, the recommendation is the honest stand-in for one.
+
+    Logged either way. A project that tuned its prover settings and is being verified under ours is
+    the case this whole path exists to stop, and it used to be silent.
     """
-    return dict(TEMPLATE_BASE) if path is None else read_conf(path)
+    if path is None:
+        _log.info("cvlr: no project conf found; using the recommended starting point's settings")
+        return dict(TEMPLATE_BASE)
+    _log.info("cvlr: prover conf from %s", path)
+    return read_conf(path)
 
 
 def _flag(arg: str) -> str:
@@ -277,6 +335,33 @@ def safe_msg(msg: str) -> str:
     return re.sub(r"\s+", " ", "".join(c if c in _MSG_SAFE else " " for c in msg)).strip()
 
 
+#: The vacuity-check settings that count as one. ``"none"`` is the documented way to turn the check
+#: off and is treated here as absence, because that is what it is.
+_SANITY_ON = frozenset({"basic", "advanced"})
+
+
+def with_sanity_floor(conf: dict) -> dict:
+    """``conf`` with vacuity checking guaranteed on, at ``basic`` unless it already asks for more.
+
+    A **floor**, not an owned key, and the difference is the point. A project asking for
+    ``advanced`` knows something this code does not and keeps it; a project that never mentioned
+    ``rule_sanity`` — the recommended starting point and two of the five corpus base confs — gets
+    ``basic`` rather than nothing.
+
+    This is what makes reading the project's conf safe. Vacuity is the only thing that catches the
+    rule a *blocked* author writes: when the properties in a batch turn out to be unprovable, the
+    way forward that always works is to assume the conclusion, and such a rule VERIFIES, maps
+    cleanly to its property and passes both halves of the publish gate. It is also what the author's
+    prompt tells the author is happening. Adopting a base conf that omits the key would have made
+    both silently false, and ``docs/upstream-defects.md`` P5 is the same hazard from the other side:
+    with the check off, a [3308] raised inside the generated vacuity rule is reported as a clean
+    ``VERIFIED``.
+    """
+    if str(conf.get("rule_sanity", "")) in _SANITY_ON:
+        return conf
+    return {**conf, "rule_sanity": "basic"}
+
+
 def solana_conf(base: dict, overlay: RunOverlay) -> dict:
     """The conf for one ``certoraSolanaProver`` submission.
 
@@ -307,7 +392,7 @@ def solana_conf(base: dict, overlay: RunOverlay) -> dict:
             conf[key] = merge_prover_args(_str_list(base.get("prover_args")), _str_list(value))
         else:
             conf[key] = value
-    return conf
+    return with_sanity_floor(conf)
 
 
 def dump_conf(conf: dict) -> str:
