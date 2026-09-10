@@ -717,13 +717,13 @@ class EditorAwareFeedbackTool(
 
 
 @tool_display("Getting feedback", "Feedback")
+# Buffer-aware feedback for the non-editing author (structural invariants, immutable source): reviews
+# each buffer via the property judge (no source snapshot) and stamps ``feedback:<buffer>``. The
+# agent-facing description is the shared FeedbackToolBase one.
 class BufferPropertyFeedbackTool(
     _BufferReviewFeedback,
     WithAsyncDependencies[Command, FeedbackServices],
 ):
-    """Buffer-aware feedback for the non-editing author (structural invariants, immutable source):
-    reviews each buffer via the property judge (no source snapshot) and stamps ``feedback:<buffer>``."""
-
     __doc__ = FeedbackToolBase.__doc__
 
     @override
@@ -745,111 +745,6 @@ class PropertyGenSystemParams(TypedDict):
 
 _PropertyGenSysTemplate = TypedTemplate[PropertyGenSystemParams]("property_generation_system_prompt.j2")
 
-#: Appended to the CVL-generation system prompt: how to author and verify the spec as buffers.
-_SPEC_BUFFERS_GUIDANCE = """
-## Splitting the spec into verification buffers
-
-Instead of one spec, you author several named CVL **buffers**, each a self-contained spec verified and
-reviewed on its own. Use `put_buffer` / `edit_buffer` / `get_buffer` / `list_buffers` / `delete_buffer`
-to author them, and `submit_buffer` / `collect_results` to verify them.
-
-**Strongly prefer splitting, and add over-approximating performance summaries preemptively.** A
-single spec has ONE global `methods{}` block, so every rule is verified under the *intersection* of
-what all rules need precise — one property that needs an expensive function (nonlinear math, hashing,
-a heavy external) kept exact forces EVERY rule to pay that cost, which is the usual source of a
-timeout. Splitting breaks that coupling: each buffer keeps precise only what ITS properties need and
-over-approximates the rest, so a function one buffer must keep exact can be summarized in another.
-So decide the partition up front from the properties and **default to several buffers grouped by
-precision need** — do not start with one monolithic buffer and wait for a timeout to force the split.
-
-When to split:
-- Properties have **conflicting precision needs** — one buffer can summarize a function that another
-  keeps exact (each buffer has its own `methods{}`), with no global-methods-block conflict. This is
-  the primary axis: group the properties by the set of functions they genuinely need exact.
-- Separate **`assert`-only** properties (which can share aggressive over-approximations) from
-  **`satisfy`** properties (which need those functions exact) — see the soundness rule below.
-- To **isolate the hard/slow properties**: put the many easy properties in one buffer that verifies and
-  is approved once and never re-touched, while you iterate on a small hard buffer in isolation — its
-  re-verification and re-review cost only that buffer.
-
-Structuring buffers:
-- Put infrastructure shared by two or more run-target buffers (ghosts, common invariants, helper CVL
-  functions, token/oracle models, and summaries several groups need) in a buffer with
-  `is_run_target=false`, and `import "<shared>.spec"` it from **each run-target that uses it** (and list
-  it in that buffer's `imports`). A shared buffer is pulled in only by the buffers that import it, so
-  editing it re-verifies only those — you can make one shared buffer for a subset of groups and another
-  for a different subset. **Import the shared buffer where you need it; never restate its contents in a
-  run-target** (a duplicate `methods{}` entry or ghost is a compile error).
-- Each **run-target** buffer declares its `property_rules` (the properties it verifies + their rule
-  names). Across all run-target buffers, every non-skipped property must appear in **exactly one**
-  buffer, and each rule lives in exactly one buffer.
-
-Summaries — over-approximate up front (this is your main lever for tractability):
-- For each run-target buffer, look at the functions its properties exercise, and **summarize now**, in
-  that buffer's `methods{}`, every function the buffer's properties do not need exact — an
-  over-approximation (e.g. a `NONDET`/havoc return, or a weaker constraint than the real body).
-  **Do this preemptively, before the first `submit_buffer`** — do not wait for a timeout to force it.
-  Aggressive preemptive summarization is how the hard properties become tractable; a nonlinear-math,
-  hashing, or heavy-external function a property only reads through is the prime candidate.
-- **Soundness rule: an over-approximating summary is sound for `assert` rules but UNSOUND for `satisfy`
-  rules.** An over-approximation *adds* behaviors: an `assert` that holds over the larger behavior set
-  still holds over the real one (sound), whereas a `satisfy` may be witnessed only by an added, non-real
-  behavior (unsound — its witness need not correspond to a real execution). So over-approximate freely
-  in a buffer whose rules are **all `assert`**; in a buffer that contains any `satisfy` rule (or a
-  reachability check), keep the functions it exercises **exact**. This is a first-class reason to
-  partition: group `assert`-only properties (which share aggressive over-approximations) apart from
-  `satisfy` properties (which need those functions exact).
-- **Put each summary where it is USED.** A summary several run-target buffers need goes in a shared
-  buffer they each `import`; a summary only one buffer needs goes in *that* buffer's own `methods{}` (a
-  run-target buffer has its own `methods{}` too). A single-buffer summary parked in a shared buffer that
-  others import makes every later edit re-verify all of them — wasted work on buffers that never use it.
-  For example, if only the approvals buffer reasons about `setApprovalForAll`, summarize it there:
-
-      // buffer "approvals" (run-target)
-      methods {
-          function _.setApprovalForAll(address o, bool a) internal with (env e)
-              => recordErc1155Approval(e.msg.sender, o, a) expect void;
-      }
-      rule approvals_are_recorded { ... }
-
-  so editing this summary never invalidates the other buffers.
-- **Refine on a spurious counterexample.** A too-coarse over-approximation produces a *spurious* cex —
-  one reachable only because the summary admits behavior the real function cannot. When a buffer returns
-  VIOLATED, analyze the cex: if it hinges on behavior your summary allows but the real function forbids,
-  it is spurious → tighten that summary (add the missing constraint) or drop the over-approximation for
-  that function with `edit_buffer`, then re-`submit_buffer`. If the cex reproduces against the exact
-  function, it is a real bug. Start from the simplest sound over-approximation and tighten only as
-  spurious cexes force you to.
-
-Verifying — submit / collect (buffers prove in parallel; never wait on a slow buffer to work on a fast
-one):
-- **Settle the shared base before submitting anything that imports it.** Submit a run-target buffer only
-  once BOTH (i) that buffer is finished AND (ii) every shared buffer it imports is finished — you do not
-  expect to edit them again. Editing a shared buffer after submitting invalidates every buffer that
-  imports it (submitted or already verified): those prover jobs are wasted and must be re-run. So author
-  and stabilize the shared infrastructure first, then submit the run-target buffers that depend on it.
-- `submit_buffer(name)` starts a buffer's prover job in the **background** and returns immediately.
-  Submit each run-target buffer as soon as it and its shared imports are ready — they prove concurrently.
-- `collect_results()` returns the outcomes of jobs that have **finished so far** (without blocking) plus
-  a status board: which buffers are `complete`, `running`, or `needs (re)submission`. Process a finished
-  buffer immediately — fix its counterexample and `submit_buffer` it again — while the others keep
-  proving.
-- Work this priority order, and only ever block at the last step:
-  1. A finished result not yet processed → handle it. If the fix is in a **shared** buffer (e.g. an
-     under-approximation), edit the shared buffer; that invalidates every buffer importing it — the
-     board lists them under `needs (re)submission` (including ones already verified) — so re-submit
-     each of them.
-  2. Else a buffer still to author/submit → author it and `submit_buffer` it.
-  3. Else everything is submitted and running with nothing finished to process → call
-     `collect_results(wait=true)` to sleep until the next job finishes.
-- Editing a buffer (or a shared buffer it imports) makes its prior verification stale; re-submit it. A
-  buffer already verified at its current content is not re-run.
-
-A single run-target buffer is exactly the one-spec case; it is the exception, appropriate only when
-the properties genuinely share one precision profile and prove quickly together. When in doubt,
-split by precision need and summarize preemptively — a well-partitioned set of buffers is far more
-likely to prove than one monolith, and costs you little when the properties turn out to be easy.
-"""
 
 #: The prover's tool extension: contributions come from plugins deriving
 #: ``CertoraProverTools``, dispatched via their ``certora_prover_tools`` hook.
@@ -978,7 +873,6 @@ async def batch_cvl_generation(
 
     sys_prompt : list[RawPromptInput | type[CacheMarker]] = [
         _PropertyGenSysTemplate.bind({"source_editing": editing is not None}).render_to,
-        _SPEC_BUFFERS_GUIDANCE,
         f"\nCreate at most {max_spec_buffers()} run-target buffers; fold further properties into "
         f"existing ones. A single run-target buffer is the one-spec case.",
     ]
