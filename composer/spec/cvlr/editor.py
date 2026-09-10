@@ -93,6 +93,7 @@ from composer.spec.cvlr.munge import (
     NoFunctionBody,
     NotProjectSource,
     SwappedDerive,
+    amended,
     apply_attribute,
     apply_derive_swap,
     apply_extraction,
@@ -100,6 +101,7 @@ from composer.spec.cvlr.munge import (
     forwards_feature,
     function_item,
     function_names,
+    latest,
     merge_munges,
 )
 
@@ -375,8 +377,11 @@ def _held(state: EditorStateExtra) -> list[Munge]:
     One list rather than two because the checks below are about the *file*, and the file does not
     know which of them the author has already accepted. Only this unit's: a sibling's edits are
     dormant in this build and cannot collide with these.
+
+    Reduced by :func:`~composer.spec.cvlr.munge.latest`, so an ``amend_munge`` of something already
+    committed shadows the record it corrects instead of appearing beside it.
     """
-    return [*state["committed"], *state["proposed"]]
+    return latest([*state["committed"], *state["proposed"]])
 
 
 def _extraction_of(state: EditorStateExtra, path: str, function: str) -> FunctionExtraction | None:
@@ -402,7 +407,8 @@ class MungeFunction(
     other unit compiles the function as written. You do not choose the feature and cannot: it comes
     from the unit that asked.
 
-    Apply as many as the request needs, then `request_review`. A munge you regret is `drop_munge`.
+    Apply as many as the request needs, then `request_review`. A munge you regret is `drop_munge`;
+    a munge whose *justification* is wrong is `amend_munge`.
 
     * **`early_panic`** — every `?` in the function becomes `.unwrap()`, so its error paths panic and
       the prover prunes them. The remedy when a `?` *inside* the program, below the handler a rule
@@ -474,7 +480,10 @@ class MungeFunction(
                 feature=self.state["feature"],
             )
             if any(m.edit_id == record.edit_id for m in _held(self.state)):
-                return f"{self.function} in {self.path} already carries that attribute."
+                return (
+                    f"{self.function} in {self.path} already carries that attribute. If what you "
+                    f"want is to correct what the record *says*, that is `amend_munge`."
+                )
             if (split := _extraction_of(self.state, self.path, self.function)) is not None:
                 return (
                     f"You are already splitting {self.function} ({split.edit_id}), and an attribute "
@@ -677,7 +686,10 @@ class ExtractFunction(
                 feature=self.state["feature"],
             )
             if any(m.edit_id == record.edit_id for m in _held(self.state)):
-                return f"You have already recorded exactly that split of {self.function}."
+                return (
+                    f"You have already recorded exactly that split of {self.function}. To correct "
+                    f"what the record says, `amend_munge`."
+                )
             if (split := _extraction_of(self.state, self.path, self.function)) is not None:
                 return (
                     f"You are already splitting {self.function} ({split.edit_id}). Two splits of "
@@ -847,7 +859,10 @@ class SwapDerive(
                         f"would change no code. Say what it needs, or leave the type out."
                     )
             if any(m.edit_id == record.edit_id for m in _held(self.state)):
-                return "You have already recorded exactly that swap."
+                return (
+                    "You have already recorded exactly that swap. To correct what the record "
+                    "says, `amend_munge`."
+                )
             if (prior := _derive_swap_of(self.state, self.path)) is not None:
                 return (
                     f"This unit already swaps derives in {self.path} ({prior.edit_id}). A cascade "
@@ -1036,7 +1051,10 @@ class RedirectModule(
                 feature=feature,
             )
             if any(m.edit_id == record.edit_id for m in _held(self.state)):
-                return "You have already recorded exactly that redirect."
+                return (
+                    "You have already recorded exactly that redirect. To correct what the record "
+                    "says, `amend_munge`."
+                )
             if (prior := _redirect_of(self.state, self.path, self.module)) is not None:
                 return (
                     f"This unit already redirects `{self.module}` in {self.path} "
@@ -1120,6 +1138,60 @@ def _redirect_of(state: EditorStateExtra, path: str, module: str) -> ModuleRedir
 
 
 @tool_display(lambda p: f"Dropping `{p['edit_id']}`", "Drop")
+@tool_display(lambda p: f"Amending `{p['edit_id']}`", "Amend")
+class AmendMunge(
+    WithInjectedState[EditorStateExtra], WithInjectedId, WithImplementation[Command | str]
+):
+    """Correct what a munge's record *says*, leaving what it does alone.
+
+    `why` is the only account anybody downstream gets of why the program was modified: the author
+    reads it, the reviewer weighs it, the property judge tests it against the rules, and it is what
+    reaches the published report. It is also written once, as a side effect of applying the munge —
+    so a justification that was accurate when recorded and is wrong now, because the harness moved
+    on around it, had no way to be fixed. That is what this is for, and it is not one of the kinds:
+    it changes no code.
+
+    Reaches a munge you applied in this session and one already committed from an earlier one. The
+    file is untouched, so no build and no prover run is invalidated; the review is, because the
+    prose is exactly what the reviewer was reading.
+
+    This is not the tool for changing your mind about the edit. If the *change* is wrong, that is
+    `drop_munge` and a new record.
+    """
+
+    edit_id: str = Field(description="The `edit_id` reported when the munge was applied.")
+    why: str = Field(
+        description="The corrected justification, replacing the recorded one in full. Write it to "
+        "stand alone — nobody downstream sees what it replaced."
+    )
+
+    @override
+    def run(self) -> Command | str:
+        if not self.why.strip():
+            return "A non-empty `why` is required; an amendment to nothing is a deletion."
+        held = {m.edit_id: m for m in _held(self.state)}
+        if (munge := held.get(self.edit_id)) is None:
+            listed = ", ".join(held) or "none"
+            return f"No munge of yours has that id. You hold: {listed}."
+        if munge.why.strip() == self.why.strip():
+            return "That is what the record already says. Nothing to amend."
+        return Command(
+            update={
+                "proposed": [amended(munge, self.why)],
+                "reviewed_digest": None,
+                "messages": [
+                    ToolMessage(
+                        tool_call_id=self.tool_call_id,
+                        content=(
+                            f"Amended the justification for {self.edit_id}. The program is "
+                            f"unchanged; re-run `request_review`."
+                        ),
+                    )
+                ],
+            }
+        )
+
+
 class DropMunge(WithInjectedState[EditorStateExtra], WithInjectedId, WithImplementation[Command | str]):
     """Take back one munge you applied. Voids any review you have earned."""
 
@@ -1302,7 +1374,10 @@ class SubmitEdits(
                 target,
                 draft=self.state["draft"],
                 summaries=self.state["summaries"],
-                candidate=[*self.state["committed"], *proposed],
+                # `latest`, not concatenation: an `amend_munge` of a committed record is a
+                # second copy of the same edit, and replaying both would report the second as
+                # drift against source the first already changed.
+                candidate=latest([*self.state["committed"], *proposed]),
                 proposed=proposed,
             )
             match outcome:
@@ -1522,6 +1597,7 @@ def editor_tools(
                 SwapDerive.bind(target).as_tool("swap_derive"),
                 RedirectModule.bind(target).as_tool("redirect_module"),
                 DropMunge.as_tool("drop_munge"),
+                AmendMunge.as_tool("amend_munge"),
                 RequestReview.bind(
                     ReviewDeps(pristine=pristine, review=reviewer)
                 ).as_tool("request_review"),

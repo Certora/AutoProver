@@ -700,3 +700,82 @@ So the tool checks. `forwards_feature` reads the program's manifest before recor
 redirect and refuses one that would not activate, naming the exact line somebody has to add. Failing
 closed on an unparseable manifest, because guessing "probably fine" here buys precisely the silent
 no-op the check exists to prevent.
+
+---
+
+## 12. Amending a record, and how the gap was found
+
+The eight kinds are what the editor may *do*. This section is about the one thing it could not
+**say**, which turned out to matter as much.
+
+### 12.1 The report
+
+An end-to-end run against a real lending program hit the following. A `mock_fn` had been recorded in
+an earlier editor session, standing in for a function whose whole body is a cross-program
+invocation, and its `why` said the rules would "re-apply the callee's own position update". By the
+time the harness converged they did not: executing that function turned out to be blocked outright
+by the Prover (`docs/upstream-defects.md` P7), and the author had replaced the call with two
+hand-transcribed inequalities. The munge was still correct — the *edit* was exactly right — and its
+recorded justification now described a harness that no longer existed.
+
+The author asked the editor to fix the sentence. The editor read the request, read the code, and
+called `give_up` with a diagnosis worth quoting for its precision:
+
+> `why` is set only as a side effect of *applying*, and the apply is a no-op-and-refusal once the
+> attribute is in the file, so there is no move in the seven kinds that rewrites the recorded prose
+> while leaving the edit in place. The kind it would have taken is an amend/re-record operation.
+
+That is the charter working exactly as §8 intended — a change outside the closed list is a refusal
+naming what was missing, not an improvisation — and it is the first time the vocabulary-gap report
+has named a *real* gap rather than a request that deserved refusing. The property judge then
+required the published commentary to carry the correction inline, which is the right fallback and a
+bad place for it: the commentary is per-batch prose, and the munge record outlives it.
+
+### 12.2 Why nothing else reached it
+
+Three separate mechanisms each stopped one step short, and they did so consistently rather than by
+oversight:
+
+* **The tools guard on identity.** Every munge tool refuses a record whose `edit_id` a unit already
+  holds. `edit_id` deliberately excludes `why` — the same choice `munge_history` and `_digest` make,
+  so that re-wording costs neither a prover submission nor a review — with the consequence that
+  "the same munge with a better sentence" and "the same munge again" are the same call.
+* **The reducer discarded it anyway.** `merge_munges` appended, deduplicating by `edit_id`. Even had
+  a tool emitted the corrected record, state would have kept the first one.
+* **`drop_munge` cannot reach a committed record**, by design: it is for taking back something
+  applied *this session*, and dropping a landed munge to re-record it would rebuild the tree and
+  invalidate the stamp — an expensive way to fix a sentence, and one that briefly leaves the program
+  un-munged.
+
+So the gap was not that anybody forbade the operation. It was that the operation had no name, and
+three independent safeguards all read it as its dangerous neighbour.
+
+### 12.3 What was built
+
+`amend_munge`, which is an operation on a record rather than a ninth kind — it changes no code, and
+the charter's count is unaffected:
+
+* It reaches both the session's proposals and the committed records inherited from earlier ones,
+  which is the case that produced the report.
+* It writes the amended record into `proposed`; `merge_munges` now **replaces** a same-`edit_id`
+  record rather than dropping it, so the correction survives back to the author's state. That change
+  stands on its own: last-write-wins is the only reading of two records that differ solely in prose.
+* `_held` and the submit candidate reduce through `munge.latest`, so an amendment of a committed
+  record shadows what it corrects instead of replaying twice and reporting the second as drift.
+* It voids a standing review. The file is byte-identical and the prover stamp survives — that is the
+  whole point of keeping `why` out of `edit_id` — but the reviewer's subject *is* the prose, so an
+  amendment slipped in after approval would ship an unreviewed justification.
+* It refuses an empty `why`, an unknown id, and a "correction" identical to what is recorded. The
+  four "you have already recorded exactly that" refusals now name it, which is the path the run
+  needed and did not have.
+
+### 12.4 What the episode says about the closed list
+
+The vocabulary-gap report is cheap to add and easy to dismiss as ceremony, and this is the argument
+for keeping it. The editor did not know what an amend operation was; it derived that one must exist
+from the shape of what it could not do, and named it accurately enough to implement from. A charter
+without that escape hatch would have produced either an improvised edit or a silent mis-report, and
+neither leaves evidence.
+
+The list stays closed. What this adds is that a refusal naming a missing *operation* — as distinct
+from a missing *edit* — is a design signal and should be read as one.
