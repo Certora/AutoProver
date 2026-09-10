@@ -116,7 +116,17 @@ type ViolationKind = PropertyViolation | IncompleteCheck
 #: The list is a filter that fails safe. An assertion it does not recognize is treated as the rule's
 #: own, so a stale entry costs a spuriously reported finding — the state of things before this
 #: existed — and can never suppress a real one.
-_GENERATED_ASSERTIONS = ("Unwinding condition in a loop",)
+#:
+#: ``Cannot overflow`` is the Solana Prover's sound-signed-math pass. Under
+#: ``-solanaTACSoundSignedMath`` it annotates pointer arithmetic it believes cannot exceed 64 bits
+#: and then *asserts* that belief (``sbf/tac/TACModSimplifier.kt``, ``removeNoOverflow``); the
+#: assertion fails where a pointer is computed from a value the analysis could not pin down —
+#: an account's ``data_len`` that no rule bounded, typically. That is the prover reporting the limit
+#: of its own pointer analysis, so it belongs here for the same reason the loop bound does: an
+#: author can act on it, by pinning the length or by falling back to
+#: ``-solanaTACOptimisticOverflowOptimization``, and a findings synthesizer handed it would write up
+#: the prover's limitation as a defect in the program under verification.
+_GENERATED_ASSERTIONS = ("Unwinding condition in a loop", "Cannot overflow")
 
 
 def classify_violation(cex: Counterexample | None) -> ViolationKind:

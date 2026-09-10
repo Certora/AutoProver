@@ -164,6 +164,28 @@ def test_a_loop_bound_the_prover_could_not_discharge_is_not_a_property_violation
     assert classify_violation(real) == PropertyViolation()
 
 
+def test_the_sound_math_pass_reporting_its_own_limit_is_not_a_property_violation():
+    """`-solanaTACSoundSignedMath` annotates pointer arithmetic it believes cannot exceed 64 bits
+    and then asserts that belief. The assertion fails where a pointer is computed from a value the
+    analysis could not pin down — an unbounded `data_len`, typically — which is the prover
+    reporting the limit of its own pointer analysis, not a defect in the program.
+
+    Without this the failure classifies as the rule's own, becomes evidence, and the findings
+    synthesizer writes the prover's limitation up as a bug in the code under verification."""
+    cex = counterexample(
+        {
+            "assertMessage": "Cannot overflow: inferred pointer",
+            "callTrace": {"message": {"text": "r()", "arguments": []}, "childrenList": []},
+        },
+        SOLANA_TRACE,
+    )
+    match classify_violation(cex):
+        case IncompleteCheck(assertion=assertion):
+            assert assertion.startswith("Cannot overflow")
+        case other:
+            raise AssertionError(f"sound-math assertion classified as {other}")
+
+
 def test_an_unrecognized_assertion_is_treated_as_the_rule_s_own():
     """The classification is a filter that fails safe: drift in the list of prover-generated
     assertions costs a spuriously reported finding, never a suppressed real one."""
