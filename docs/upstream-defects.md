@@ -13,7 +13,9 @@ maintained fork whose `Error` is unboxed. P4 does not block either, and the caus
 our own author prompt rather than the prover — see its correction. **P6 does block**, for any handler
 that performs a CPI and then updates its own state, which is most of them; it is the live one. **P7
 also blocks**, for any function that multiplies in `i128` — narrower, and already filed as CERT-10103
-with a fix in flight, which makes it the only entry in this group with a known landing.
+with a fix in flight, which makes it the only entry in this group with a known landing. **P8 blocks
+nothing today and blocks a change we wanted**: two shipped flags that defeat each other, measured
+rather than argued, and named by a TODO in the prover's own source.
 
 **Group U — `prover_output_utility`.** The library the report stack reads verdicts through. One
 entry, and unlike the others it was corrupting our own output rather than merely obstructing us;
@@ -37,6 +39,7 @@ the write-up gives the line number rather than the name.
 | [P5](#p5) | A [3308] in the generated vacuity check is reported as a clean `VERIFIED` when `rule_sanity` is off | **critical** |
 | [P6](#p6) | A summarized CPI havocs the caller's *deserialized* `Account<T>`, not just the account buffer | **blocking** for any handler with a CPI |
 | [P7](#p7) | A checked `i128` multiply is rejected outright — `__muloti4` is not modelled | **major** — fix in flight (CERT-10103) |
+| [P8](#p8) | `-solanaTACSoundSignedMath` disables most of `-solanaTACMathInt`; together they turn a 7-minute green run into a 2-hour timeout | **major** — blocks adopting the flag (CERT-10061) |
 | [U1](#u1) | `extract_job_id_from_url` cannot parse a Solana Prover job link | **major**, worked around |
 | [T1](#t1) | Tuning files are spelled for pre-2.2 `solana-program` paths | major |
 | [T2](#t2) | A canonical tuning file names one specific on-chain program | hygiene |
@@ -542,6 +545,89 @@ execute the `i128` multiply would have removed both problems at once.
 
 We have not seen the *unsigned* 128-bit checked multiply rejected — that one is analyzed, expensively,
 as a bitvector multiply with an overflow branch. The gap is specific to the signed intrinsic.
+
+---
+
+## P8
+
+### `-solanaTACSoundSignedMath` and `-solanaTACMathInt` defeat each other, and the prover says so in a TODO
+
+Two shipped flags whose combination is un-reconciled upstream. Turning the first on silently disables
+most of what the second does, and on a real harness that converts a seven-minute green run into a
+two-hour run in which most rules return no verdict at all.
+
+**The measurement.** One build, one harness, eighteen rules, resubmitted with a single prover argument
+changed. Nothing else differs — same `.so`, same tuning files, same rule selection, same
+`loop_iter`. The control was checked against the original job that shipped this harness and
+reproduces it within 9%, so the delta is the flag and not prover drift or queueing (`runtime` below
+is the job's post-dequeue execution window, which excludes queue wait).
+
+| prover args | runtime | verdicts |
+|---|---|---|
+| baseline (includes `-solanaTACMathInt true`) | **6.7 min** | 18 VERIFIED |
+| baseline **+ `-solanaTACSoundSignedMath true`** | **120.1 min** (global timeout) | **5 VERIFIED, 13 TIMEOUT** |
+| baseline + sound math + `-solanaTACOptimisticOverflowOptimization true` | **120.2 min** (global timeout) | **4 VERIFIED, 14 TIMEOUT** |
+
+**The mechanism, in the prover's own source.** `TACIntegerU128CompilerRtSummarizer.kt`:
+
+```kotlin
+// TODO CERT-10061 revisit the TACSoundSignedMath and UseTACMathInt logic
+if (SolanaConfig.TACSoundSignedMath.get()) {
+    return super.summarizeMulti3(args)
+}
+```
+
+`SummarizeIntegerU128CompilerRtWithMathInt` is the specialization that summarizes 128-bit compiler-rt
+intrinsics over mathematical integers. With sound signed math on, `summarizeMulti3` defers to the
+base implementation, so `__multi3` — what a `u128` multiply lowers to — goes back to a bitvector
+multiply with an overflow branch hanging off it. Two sibling guards do the same thing elsewhere:
+`SbfCFGToTAC.kt` skips the MathInt promotion for `SAFE_MATH`-annotated add/sub under the same
+condition (also marked `TODO CERT-10061`), and switches the TAC builder from lazy to eager masking.
+
+Note what is *not* guarded: `summarizeUDivti3` keeps its MathInt path. So the interaction is
+specifically with multiplication, which is also the operation a solver finds hardest.
+
+**Which rules died is the confirmation.** The five survivors are not an arbitrary five:
+
+* the two rules that are pure algebra over free `NativeInt`s with no program in them — a `cvlr_lemma!`
+  in spirit, hypotheses assumed and conclusion asserted — survive untouched, because no 128-bit
+  intrinsic is reached;
+* three of the four rules that *consume* those lemmas — asserting the hypotheses at the use site and
+  assuming the conclusion — survive, because the lemma is what spares them from re-deriving the
+  products.
+
+Every rule that timed out is one that performs live `u128` multiplication inside an executing
+handler. The decomposition that makes a nonlinear property tractable is exactly the thing that
+protects a rule from this defect, which is a strong secondary argument for teaching it.
+
+**The `Cannot overflow` assertions never fired — zero, across all eighteen rules.** That is worth
+recording because it is the opposite of what the flag's documented caveat predicts. Sound signed math
+annotates pointer arithmetic it believes cannot exceed 64 bits and then asserts the belief
+(`TACModSimplifier.removeNoOverflow`), and the assertion is expected to fail where a pointer is
+computed from a value the analysis cannot pin down. The CVLR account builder derives every field
+pointer from one allocated base at constant offsets, with one exception — the data slice, whose
+offset runs through a nondeterministic `data_len` — and a harness that pins each account's
+`data_len` closes that. This one did, for unrelated reasons. So the concreteness precondition is
+satisfiable in practice, and `-solanaTACOptimisticOverflowOptimization` is answering a question that
+did not arise: it converts those asserts to assumes and leaves the multiplication path alone. The
+third arm measures that rather than assuming it — it recovers nothing, running to the same wall a
+tenth of a per cent apart, with the same surviving rules less one. The fallback is not a mitigation
+here, which is worth stating because it is the obvious thing to reach for.
+
+**Scope, stated carefully.** This is not an argument that sound signed math is broken. One project in
+the surveyed corpus enables it across a whole rule set and is evidently content. It is an argument
+that the *pair* is not usable, and any project whose arithmetic strategy leans on `-solanaTACMathInt`
+— which is the strategy the Solana Prover's own guidance recommends for 128-bit work — is in that
+pair by default.
+
+**What would resolve it**: CERT-10061, which the source already names. Failing that, a diagnostic
+would be most of the value: a job that silently discards a requested optimization because another
+flag turned it off should say so, rather than presenting the result as a timeout. That is the same
+complaint as P2 from a third direction — the prover declining to do something, with no line of output
+saying it declined.
+
+Not blocking, because the flag is off by default and we do not set it. It blocks *adopting* it, which
+is what this entry exists to record.
 
 ---
 
