@@ -289,6 +289,27 @@ def test_the_prompt_does_not_claim_native_int_removes_nonlinearity() -> None:
     assert "`NativeInt` does not make a product linear" in rendered
 
 
+def test_bounding_is_taught_as_soundness_rather_than_speed() -> None:
+    """An author who reads it as a performance tip skips it under time pressure, and the run that
+    did got a counterexample at ~2.7e62 that it could not tell from a real defect."""
+    rendered = _render(None)
+
+    assert "soundness step, not a speed one" in rendered
+    # And the trap is named where the widening is introduced, not only where it bites.
+    assert "one move, not two" in rendered
+
+
+def test_the_judge_is_told_to_recognise_the_lemma_shape_not_the_macro() -> None:
+    """The author who first used the discipline hand-rolled it — assert the hypotheses, assume the
+    conclusion — and never wrote `cvlr_lemma!`. A judge keyed on the macro sees no lemma at all."""
+    rendered = env.get_template("cvlr_property_judge_system_prompt.j2").render(
+        cvlr_versions="cvlr 0.6.1"
+    )
+
+    assert "Judge the shape, not the macro" in rendered
+    assert "cvlr_assert!" in rendered and "cvlr_assume!" in rendered
+
+
 def test_the_judge_is_told_a_verified_lemma_is_not_an_over_assumption() -> None:
     """`.apply()` ends by assuming its conclusion, which reads like the thing the judge exists to
     reject; unflagged, the mechanism is unusable."""
