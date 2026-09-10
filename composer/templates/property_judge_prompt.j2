@@ -183,11 +183,10 @@ NOTE: portions of the input state may be unconstrained/underconstrained if they 
 
 ### Criteria 4: Overconstrained Inputs
 
-You may also consider the inverse; over-constraining the input space may cause the prover to miss real bugs. In particular, any constraint that fixes the
-*shape of the prestate* — a relationship among the contract's own state fields that the contract maintains — and is *not* a `requireInvariant` statement
-(i.e., a *proven* assumption) should be subject to intense scrutiny, wherever it appears: in a `preserved` block or in the body of a rule. Such a
-relationship is exactly what an invariant is for, and a bare `require` asserts it where an invariant would prove it.
-A `require` that merely bounds a rule's own free inputs is not this; that is Criteria 3's business.
+You may also consider the inverse; over-constraining the input space may cause the prover to miss real bugs. In particular, any constraint on the
+*shape of the prestate* — a relationship among the contract's own state fields — that is not a `requireInvariant` (i.e., a *proven* assumption)
+should be subject to intense scrutiny, wherever it appears: a `preserved` block or a rule body. That is what an invariant is for; a bare `require`
+assumes the relationship instead of establishing it. A constraint that merely bounds a rule's own free inputs is Criteria 3's business, not this one.
 Justification for such requirements like "X is impossible in a realistic situation/deployment/etc" should not be taken at face value;
 do not check that justifications a simply provided, critically evaluate the argument underpinning the justifications.
 
@@ -298,10 +297,12 @@ against a *contract* output is the cure, not the defect.
 
 Verify that the specification covers all {{ properties | length }} listed properties. For each property:
 - If the spec contains rules/invariants addressing it: evaluate those rules under criteria 1-7.
-- A supporting invariant listed alongside a rule is evidence about that rule's proof, not coverage of
-  the property in its own right; judge coverage by the rules that assert the property.
 - If the spec neither addresses the property NOR carries an author skip: reject the spec and flag the missing property.
 - If the author declared a skip: evaluate it by the rules below.
+
+A property's `property_rules` entry may also name a supporting invariant that its rules cite with
+`requireInvariant`. That invariant is part of how the property is proven, not a second rule covering
+it; judge coverage by the rule that checks the property itself.
 
 #### Coverage-defeating exclusions
 

@@ -1,9 +1,8 @@
 <background>
-A counterexample that starts from a state the contract could never actually reach is telling you that the
-prover does not know something you do: the contract's fields stand in some relationship that the code
-maintains, and nothing in your spec says so. For example, the prover may hand you a starting state where a
-user's balance of a token is significantly greater than that token's total supply — clearly infeasible for a
-well-behaved token, but perfectly admissible to a tool that was never told otherwise.
+A counterexample that starts from a state the contract could never reach means the spec is missing a
+constraint that the code maintains: the contract's fields stand in some relationship, and nothing in the
+spec says so. The prover explores every state the spec admits, so unless a constraint rules it out it may
+start from a state where a user's token balance exceeds total supply.
 
 The fix is to state that relationship as an invariant and prove it. This document is about *choosing* what
 to state. The mechanics — the induction shape, strengthening, lemma invariants, `preserved` blocks,
@@ -63,7 +62,7 @@ Check your candidate against these before you spend a prover run on it.
 The bars are not symmetric. Drop a candidate on any real doubt about its inductiveness or its
 formalizability. Do *not* drop one merely because it looks mathematical.
 
-## The postcondition tell
+## Naming a function is the usual mistake
 
 An inductive invariant holds regardless of which function was called, or in what order. If you find
 yourself naming a specific function in the statement, you are describing a postcondition, not an invariant.
