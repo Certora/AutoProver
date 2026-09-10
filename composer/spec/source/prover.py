@@ -766,9 +766,17 @@ def get_prover_tool(
                 return f"Buffer {name!r} is already verified at its current content; nothing to submit."
 
             existing = buffer_jobs.get(name)
+            if existing is not None and existing.digest == digest:
+                # A job for this exact content is already in flight, or has just finished with its result
+                # not yet collected. Either way, do not launch a duplicate — the answer is (coming) on the
+                # queue; the agent should collect it, not re-run identical work.
+                proving = "is still proving" if not existing.task.done() else "has already finished"
+                return (
+                    f"Buffer {name!r} was already submitted at its current content and {proving}; do not "
+                    f"re-submit it. Call collect_results to take its result — if this is your only "
+                    f"remaining buffer/task and you are just waiting on it, use collect_results(wait=true)."
+                )
             if existing is not None and not existing.task.done():
-                if existing.digest == digest:
-                    return f"Buffer {name!r} is already running. Use collect_results to retrieve its result."
                 existing.task.cancel()  # buffer (or a shared import) changed: supersede the stale job
 
             n = submit_counts.get(name, 0) + 1

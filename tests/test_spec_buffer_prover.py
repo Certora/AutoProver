@@ -123,6 +123,22 @@ class TestBufferSubmitCollect:
         assert st["validations"].get("prover:hard") == digest("hard")
         assert _prover_complete(st) is None
 
+    async def test_resubmit_same_content_does_not_duplicate(self, certora_prover: ProverMock):
+        """Re-submitting a buffer at unchanged content (its job still in flight or finished but not yet
+        collected) must not launch a second prover job — the guard tells the agent to collect instead."""
+        st = await _scenario(
+            certora_prover, _buffers(), easy=_report(r_easy=True),
+        ).turns(
+            _submit("easy"),
+            _submit("easy"),      # identical content, not collected → must NOT re-run
+            _collect(wait=True),
+        ).run()
+        easy_runs = [c for c in certora_prover.calls if "easy" in str(c.conf.get("verify", ""))]
+        assert len(easy_runs) == 1, f"expected one prover run for easy, got {len(easy_runs)}"
+        assert st["validations"].get("prover:easy") == buffer_state_digest(
+            st["buffers"], "easy", skipped=[], version_history=[]
+        )
+
     async def test_shared_edit_makes_verified_buffers_stale(self, certora_prover: ProverMock):
         """After both buffers verify, editing the shared buffer they import changes their digests, so
         their prover stamps no longer match — the refine case that must force a re-run."""
