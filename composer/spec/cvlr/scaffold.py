@@ -62,6 +62,11 @@ PROVENANCE_FILE = "PROVENANCE"
 HARNESS_DIR = Path("src") / "certora"
 SPECS_DIR = HARNESS_DIR / "specs"
 ENVS_DIR = HARNESS_DIR / "envs"
+#: Where a project keeps its own prover confs. Not written by the scaffold — the run emits its conf
+#: under ``certora/confs`` at the workspace root (``composer.spec.cvlr.prover.CONF_DIR``) — but read
+#: from, because a project that tuned its prover settings did it here
+#: (:func:`composer.spec.cvlr.conf.project_conf`).
+CONFS_DIR = HARNESS_DIR / "confs"
 
 #: Build output the prover leaves in the project, plus this backend's own per-unit workspaces
 #: (``composer.spec.cvlr.pipeline.WORK_DIR``). The first three are from the template's

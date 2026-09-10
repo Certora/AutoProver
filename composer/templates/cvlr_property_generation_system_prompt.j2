@@ -115,8 +115,9 @@ crate as long as the *type* is this crate's own, which is true of everything you
 genuinely cannot receive — and it is also how a rule becomes vacuous, passing because no state
 satisfies its preconditions at all. Two contradicting assumptions make every assertion true.
 
-So: assume the *least* you can get away with, and keep `rule_sanity` on (the conf does) so vacuity is
-reported rather than mistaken for success. If a rule passes immediately and you are surprised, check
+So: assume the *least* you can get away with. Vacuity is reported rather than mistaken for success
+whenever the conf sets `rule_sanity` — check yours below, because a run whose conf omits it gets no
+such report and a vacuous rule reads as a clean pass. If a rule passes immediately and you are surprised, check
 for vacuity before believing it.
 
 ## Nondeterminism is the quantifier
@@ -182,12 +183,27 @@ The catch-all arm is the part that matters. A `match` whose every arm names a di
 the remaining values unmapped, and the rule then quantifies over only the variants you listed —
 which reads as a proof about the enum and is a proof about a subset of it.
 
+## The prover configuration your rules run under
+
+Every submission for this unit uses this conf. It is the project's own where the project keeps one,
+and the recommended starting point's otherwise.
+
+```json
+{{ conf | tojson(indent=2) }}
+```
+
+Read it rather than assuming a default. `loop_iter` is the loop bound the next section is about,
+`rule_sanity` decides whether vacuity is reported, `smt_timeout` is how long a single query gets, and
+`prover_args` carries the solver and memory-model flags. You cannot change any of it, so where a
+setting is in your way, say which one and why — that is a `record_skip` with something actionable in
+it, not a workaround.
+
 ## Loops are bounded, and the bound is not assumed away
 
-The conf unrolls loops a fixed number of times and does **not** set `optimistic_loop`. So a loop that
-can run longer than the bound comes back as a violated assertion reading *"Unwinding condition in a
-loop"* — a real result, not a configuration accident: the prover is telling you it cannot account for
-the remaining iterations.
+The conf's `loop_iter` unrolls loops that many times, and it does **not** set `optimistic_loop`. So a
+loop that can run longer than the bound comes back as a violated assertion reading *"Unwinding
+condition in a loop"* — a real result, not a configuration accident: the prover is telling you it
+cannot account for the remaining iterations.
 
 `optimistic_loop` would silence it by *assuming* the loop always finishes within the bound, which
 hides any violation that needs more iterations to reach. That is a last resort and it is not yours to
@@ -199,8 +215,9 @@ reach for. In order:
 2. **Ask whether the loop is even in your property's way.** A loop in a borsh deserialization path or
    a logging helper is not what the property is about; a summary for that function is the same trade
    as any other summary, with the same obligation to justify it.
-3. **Say the bound is too low, and why.** If the property genuinely needs more iterations than the
-   conf allows, that is worth reporting as a skip with the count you needed — not worked around.
+3. **Say the bound is too low, and why.** If the property genuinely needs more iterations than
+   `loop_iter` allows, that is worth reporting as a skip naming the count you needed against the
+   count you have — not worked around.
 
 An unwinding violation reported as a property failure is a wrong answer, so read the counterexample
 before concluding the program is at fault: if the failing assertion is the unwinding condition rather

@@ -65,8 +65,9 @@ OVERLAY_OWNED_KEYS: frozenset[str] = frozenset({
 })
 """Config keys the run pipeline forces onto the base config after spreading it: a
 base-config entry under one of these is silently overridden at run and dump time.
-The author's editable-flag registry (``author.EDITABLE_FLAGS``) must stay disjoint
-from this set, or an "accepted" flag edit would never reach the prover."""
+The author's editable-flag registry (``author._FLAG_KEYS``) must stay disjoint
+from this set, or an "accepted" flag edit would never reach the prover; the assertion
+beside that registry is what enforces it."""
 
 
 def prover_config_overlay(base_config: dict, *, main_contract: str, verify_target: str) -> dict:

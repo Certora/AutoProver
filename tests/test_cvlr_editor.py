@@ -91,6 +91,7 @@ def _author_state(**over):
         "rule_subjects": [],
         "summaries": [],
         "munges": [],
+        "conf": {},
         "expected_failures": {},
         "prover_link": None,
         "failed": None,
