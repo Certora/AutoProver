@@ -59,12 +59,18 @@ from composer.prover.core import ProverOptions
 from composer.sandbox.config import SandboxConfig
 from composer.spec.context import CvlrGeneration, WorkflowContext
 from composer.spec.cvlr.author import batch_cvlr_generation
-from composer.spec.cvlr.conf import DEFAULT_FEATURE, load_base
+from composer.spec.cvlr.conf import DEFAULT_FEATURE, load_base, project_conf
 from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness, HarnessModule
 from composer.spec.cvlr.preflight import CvlrPreflight, gate_workspace, prepare_workspace
 from composer.spec.cvlr.prover import Submission
-from composer.spec.cvlr.scaffold import ENVS_DIR, SPECS_DIR, SUMMARIES, declare_unit_features
+from composer.spec.cvlr.scaffold import (
+    CONFS_DIR,
+    ENVS_DIR,
+    SPECS_DIR,
+    SUMMARIES,
+    declare_unit_features,
+)
 from composer.spec.cvlr.tree import SharedTree, munge_diff
 from composer.spec.cvlr.tuning import TuningFiles
 from composer.spec.cvlr.source_tools import cvlr_source_tools, mount
@@ -188,6 +194,7 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
             dialect=self.deps.preflight.scaffold.dialect,
             unit=identity.module,
         )
+        base_conf = load_base(project_conf(package_root / CONFS_DIR))
         # The composite this unit's conf names has to exist before the first submission names it,
         # and the loop may summarize nothing at all. Composing it empty now costs one file and
         # removes a case where the prover refuses a conf for a path that was never written.
@@ -206,7 +213,10 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
             target=target,
             submission=Submission(
                 manifest_path=package_root / "Cargo.toml",
-                base_conf=load_base(None),
+                # The project's own conf where it keeps one. Every unit starts from the same
+                # file and holds its own copy in state, so a conf edit answers one unit's
+                # problem without moving a sibling's verdicts.
+                base_conf=base_conf,
                 msg=f"{self.deps.preflight.package}: {label}",
                 stem=identity.stem,
                 # The harness feature and this unit's own: what compiles exactly one unit's rules

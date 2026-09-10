@@ -19,6 +19,7 @@ from composer.spec.cvlr.anchor_surface import (
     signature_params,
     source_files,
 )
+from composer.spec.cvlr.conf import TEMPLATE_BASE
 from composer.spec.cvlr.example import worked_example
 from composer.spec.solana.model import (
     AccountConstraint,
@@ -248,7 +249,10 @@ def _model_withdraw() -> SolanaInstruction:
 
 def _render(example) -> str:
     return env.get_template("cvlr_property_generation_system_prompt.j2").render(
-        module="withdrawals", cvlr_versions="cvlr 0.6.1", example=example
+        module="withdrawals",
+        cvlr_versions="cvlr 0.6.1",
+        example=example,
+        conf=dict(TEMPLATE_BASE),
     )
 
 

@@ -37,6 +37,7 @@ from composer.spec.cvlr.state import (
     DrivesHarnessMirror,
     DrivesProgramFunction,
     PropertyRuleMapping,
+    tuning_history,
     validate_property_rules,
     validate_rule_subjects,
 )
@@ -179,7 +180,7 @@ def test_an_all_skipped_unit_can_satisfy_the_prover_gate():
         verify_mod.VerifyRules._dep_ctx.reset(token)
     assert not isinstance(stamped, str), stamped
     assert stamped.update["validations"][PROVER_VALIDATION_KEY] == spec_digest(
-        _DRAFT_NO_RULES, state["skipped"], ()
+        _DRAFT_NO_RULES, state["skipped"], tuning_history(state)
     )
 
 
@@ -354,6 +355,7 @@ def _verify_state(draft: str) -> dict:
         "rule_subjects": [],
         "summaries": [],
         "munges": [],
+        "conf": {},
         "required_validations": [],
         "validations": {},
         "failed": None,
@@ -388,6 +390,7 @@ async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeyp
 
     async def fake_prepare(session, submission, **kwargs):
         captured["rules"] = submission.rules
+        captured["conf"] = submission.base_conf
         raise _StopProbe
 
     monkeypatch.setattr(verify_mod, "prepare_submission", fake_prepare)
@@ -399,6 +402,8 @@ async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeyp
             stage=_stubbed_stage,
             build_slot=contextlib.nullcontext,
         ),
+        # What the run started from. The state below carries a different conf, which is what a
+        # conf edit would have produced and what the submission must actually use.
         submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), base_conf={}),
         prover_opts=None,
         analysis=None,
@@ -406,7 +411,8 @@ async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeyp
     )
     token = verify_mod.VerifyRules._dep_ctx.set(deps)
     try:
-        tool = verify_mod.VerifyRules(state=_verify_state(_DRAFT_TWO_RULES), tool_call_id="tc")
+        state = {**_verify_state(_DRAFT_TWO_RULES), "conf": {"loop_iter": "5"}}
+        tool = verify_mod.VerifyRules(state=state, tool_call_id="tc")
         with pytest.raises(_StopProbe):
             await tool.run()
     finally:
@@ -415,6 +421,10 @@ async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeyp
     assert captured["rules"] == SelectRules(
         ("rule_balance_conserved", "rule_only_authority_withdraws")
     )
+    # The conf comes from state, not from the deps the run was constructed with: it is the author's
+    # to change, and a submission built from the starting copy would send the old settings while
+    # `version_history` had already recorded the new ones.
+    assert captured["conf"] == {"loop_iter": "5"}
     # And the selection actually reaches the conf as a `rule` entry.
     conf = solana_conf({}, RunOverlay(build_script="/w/b.py", rules=captured["rules"]))
     assert conf["rule"] == ["rule_balance_conserved", "rule_only_authority_withdraws"]
