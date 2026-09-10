@@ -228,8 +228,39 @@ def test_buffer_completion_vacuous_without_run_targets():
 
 
 def _stamp(buffers, name, key):
-    d = buffer_state_digest(buffers, name, skipped=[], version_history=[])
+    # The feedback stamp also tracks the buffer's claimed properties (include_claim); the prover stamp
+    # does not — mirrors check_buffer_completion.
+    d = buffer_state_digest(
+        buffers, name, skipped=[], version_history=[], include_claim=(key == "feedback")
+    )
     return {f"{key}:{name}": d}
+
+
+def test_feedback_digest_tracks_claim_but_prover_digest_does_not():
+    # Re-assigning a buffer's claimed properties (property_rules) with unchanged CVL must invalidate the
+    # feedback stamp (the judge reviews against the claim) but NOT the prover stamp (the same rules were
+    # verified).
+    b = _buffers()
+    reclaimed = {**b, "easy": b["easy"].model_copy(update={"property_rules": {"P-moved": ["r_easy"]}})}
+    kw = dict(skipped=[], version_history=[])
+    assert buffer_state_digest(b, "easy", include_claim=True, **kw) != \
+        buffer_state_digest(reclaimed, "easy", include_claim=True, **kw)   # feedback: stale
+    assert buffer_state_digest(b, "easy", **kw) == \
+        buffer_state_digest(reclaimed, "easy", **kw)                       # prover: unchanged
+
+
+def test_buffer_completion_rejects_stale_feedback_after_claim_change():
+    # A feedback stamp taken before a claim change is stale for completion; the prover stamp is not.
+    b = _buffers()
+    validations = {}
+    for name in ("easy", "hard"):
+        validations.update(_stamp(b, name, "feedback"))
+        validations.update(_stamp(b, name, "prover"))
+    reclaimed = {**b, "easy": b["easy"].model_copy(update={"property_rules": {"P-moved": ["r_easy"]}})}
+    err = check_buffer_completion(
+        reclaimed, validations, ["feedback", "prover"], skipped=[], version_history=[]
+    )
+    assert err is not None and "easy" in err and "feedback" in err
 
 
 def test_buffer_completion_ok_when_all_stamped_at_digest():

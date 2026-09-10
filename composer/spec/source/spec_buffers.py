@@ -29,6 +29,7 @@ from typing_extensions import TypedDict
 
 from certora_autosetup.cache.content_cache import hash_content_parts, hash_text
 from certora_autosetup.parsers.spec_imports import imports_in_cvl
+from composer.spec.cvl_generation import FEEDBACK_VALIDATION_KEY
 from composer.spec.gen_types import SPECS_DIR
 
 
@@ -182,18 +183,27 @@ def buffer_state_digest(
     *,
     skipped: Sequence[tuple[str, str]],
     version_history: Sequence[str],
+    include_claim: bool = False,
 ) -> str:
     """The per-buffer analogue of ``spec_digest``: a buffer's content + import closure bound to the
     current authoring state (skip declarations as ``(title, reason)`` pairs, and the applied-edit
     history). Every per-buffer stamp — feedback and prover — and the completion check key off this, so
-    editing the buffer, anything it imports, a skip, or the source invalidates that buffer's stamps."""
-    return buffer_digest(
-        buffers, name,
-        extra_parts=[
-            *(f"skip:{t}:{r}" for (t, r) in sorted(skipped)),
-            *(f"edit:{e}" for e in version_history),
-        ],
-    )
+    editing the buffer, anything it imports, a skip, or the source invalidates that buffer's stamps.
+
+    With ``include_claim`` the buffer's declared ``property_rules`` also key the digest, so re-assigning
+    a claim re-triggers review. The feedback stamp sets it (the judge reviews a buffer against the
+    properties it claims); the prover stamp leaves it False (a claim change does not affect what was
+    verified)."""
+    extra = [
+        *(f"skip:{t}:{r}" for (t, r) in sorted(skipped)),
+        *(f"edit:{e}" for e in version_history),
+    ]
+    if include_claim:
+        claim = ";".join(
+            f"{t}={','.join(rs)}" for t, rs in sorted(buffers[name].property_rules.items())
+        )
+        extra.append(f"claim:{claim}")
+    return buffer_digest(buffers, name, extra_parts=extra)
 
 
 def check_buffer_completion(
@@ -212,8 +222,13 @@ def check_buffer_completion(
     With no run-target buffers this is vacuously satisfied (there is nothing to stamp) — the
     all-properties-skipped case, whose validity is decided by ``validate_coverage`` instead."""
     for b in run_targets(buffers):
-        d = buffer_state_digest(buffers, b.name, skipped=skipped, version_history=version_history)
         for key in required_validations:
+            # The feedback stamp tracks a buffer's claimed properties (the judge reviews against them);
+            # the prover stamp does not.
+            d = buffer_state_digest(
+                buffers, b.name, skipped=skipped, version_history=version_history,
+                include_claim=(key == FEEDBACK_VALIDATION_KEY),
+            )
             if validations.get(f"{key}:{b.name}") != d:
                 return f"Completion REJECTED: buffer {b.name!r} {key} validation not satisfied or stale."
     return None

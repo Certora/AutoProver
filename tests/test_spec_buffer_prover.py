@@ -184,7 +184,7 @@ class TestBufferSubmitCollect:
         buffer and stamp feedback:<buffer> — the path that previously read empty curr_spec and returned
         'No spec put yet', deadlocking publish."""
         from dataclasses import dataclass
-        from composer.spec.source.author import BufferPropertyFeedbackTool
+        from composer.spec.source.author import BufferPropertyFeedbackTool, _PerBufferJudge
         from composer.spec.cvl_generation import FeedbackServices
         from composer.spec.types import PropertyTitle
 
@@ -197,7 +197,12 @@ class TestBufferSubmitCollect:
             return _V(good=True, feedback="")
 
         tool = BufferPropertyFeedbackTool.bind(
-            FeedbackServices(feedback_thunk=judge, titles=[PropertyTitle("P-easy")])
+            _PerBufferJudge(
+                build=lambda name, claimed: FeedbackServices(
+                    feedback_thunk=judge, titles=[PropertyTitle("P-easy")]
+                ),
+                properties=[],
+            )
         ).as_tool("feedback_tool")
         buffers = {
             "shared": NamedBuffer(name="shared", cvl=SHARED, is_run_target=False),
@@ -216,5 +221,5 @@ class TestBufferSubmitCollect:
         )
         val = res.update.get("validations", {}) if hasattr(res, "update") else {}
         assert val.get("feedback:easy") == buffer_state_digest(
-            buffers, "easy", skipped=[], version_history=[]
+            buffers, "easy", skipped=[], version_history=[], include_claim=True
         )
