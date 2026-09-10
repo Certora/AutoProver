@@ -1,9 +1,7 @@
 """Reading ``.certora_build.json``, certoraRun's record of what it actually compiled.
 
 The file is keyed by compilation unit; each unit holds a ``contracts`` list, and a
-contract reached through several units appears once per unit. Five places used to walk
-that structure with their own nesting checks and their own idea of where the file
-lives, which is one place to get it wrong per caller.
+contract reached through several units appears once per unit.
 """
 
 import json

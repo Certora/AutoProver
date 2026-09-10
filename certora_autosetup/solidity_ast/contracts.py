@@ -1,13 +1,10 @@
-"""One answer to "what contracts does this source declare, and of what kind".
+"""Contract declarations and their kind, from either shape of solc AST.
 
-Two callers ask that question from opposite ends of a run. After a build there is the
-``.asts.json`` dump, streamed unit by unit and mostly typed. Before a build there is a
-single file parsed by ``solc --standard-json`` with ``stopAfter: "parsing"``, whose
-nodes carry no analysis-phase fields at all: no ``scope``, no ``linearizedBaseContracts``,
-no ``fullyImplemented``, so ``SourceUnit.model_validate`` rejects them (16 errors on a
-two-declaration file) and the typed traversal is not available there. Both ends produce
-the same :class:`ContractDeclView`, so what a caller does with a declaration is written
-once even where how it was obtained differs.
+:class:`ContractDeclView` is the uniform view. :func:`iter_contract_declarations` reads it
+from the typed models over an ``AstDump`` stream. :func:`parse_only_declarations` reads it
+from the raw nodes of a ``stopAfter: "parsing"`` AST, which the typed models reject: solc
+emits no analysis-phase fields (``scope``, ``linearizedBaseContracts``,
+``fullyImplemented``) at that stage.
 """
 
 from dataclasses import dataclass

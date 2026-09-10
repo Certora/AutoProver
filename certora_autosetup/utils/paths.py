@@ -146,30 +146,17 @@ def resolve_autosetup_prover_usage_file(project_root: Path) -> Path | None:
     return _resolve_autosetup_reports_file(project_root, FILE_PROVER_USAGE)
 
 
-def strip_sources_anchor(path: str) -> tuple[str, ...]:
-    """Path components after a ``.certora_sources`` component, if there is one.
-
-    certoraRun copies the project into an instrumented tree under ``.certora_sources``,
-    so the same file is reported with and without that prefix depending on which side
-    of the copy reported it.
-    """
-    parts = Path(path).parts
-    if ".certora_sources" in parts:
-        i = len(parts) - 1 - parts[::-1].index(".certora_sources")
-        return parts[i + 1:]
-    return parts
-
-
 def same_source_file(candidate: str, wanted: str) -> bool:
     """Whether two build-reported paths name the same source file.
 
-    The build mixes project-relative and absolute paths for the same file depending on
-    how it was reached, so equality is decided on the longest common suffix of path
-    components, after dropping any instrumented-tree prefix.
+    The build reports the same file as a project-relative path, as an absolute one, or
+    under the instrumented ``.certora_sources`` copy, depending on how it was reached, so
+    equality is decided on the longest common suffix of path components. Only the trailing
+    components are compared, which is what makes every one of those prefixes harmless.
     """
     if not candidate or not wanted:
         return False
-    cand_parts = strip_sources_anchor(candidate)
-    want_parts = strip_sources_anchor(wanted)
+    cand_parts = Path(candidate).parts
+    want_parts = Path(wanted).parts
     depth = min(len(cand_parts), len(want_parts))
     return cand_parts[-depth:] == want_parts[-depth:]

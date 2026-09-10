@@ -10,12 +10,11 @@ a failure as a hard compile error.
 
 import json
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from graphcore.tools.vfs import VFSState, VFSAccessor
 from certora_autosetup.utils.build_json import build_json_path
-from certora_autosetup.utils.paths import strip_sources_anchor
 from composer.prover.core import BUILD_TIMEOUT_S, run_prover_inner
 
 
@@ -62,15 +61,27 @@ def _scrape_touched(build_json: Path) -> set[str]:
     return touched
 
 
+def _strip_anchor(p: PurePosixPath) -> PurePosixPath:
+    """Drop everything up to and including a ``.certora_sources`` component, so a
+    ``.certora_sources``-relative build path can be compared to a project-relative
+    VFS key."""
+    parts = p.parts
+    if ".certora_sources" in parts:
+        i = len(parts) - 1 - parts[::-1].index(".certora_sources")
+        return PurePosixPath(*parts[i + 1:])
+    return p
+
+
 def _is_touched(vfs_key: str, touched: set[str]) -> bool:
     """A VFS key counts as compiled if its path is a trailing sub-path of some
     touched file. Suffix matching absorbs the prefix rewriting certora applies
-    when it copies sources into the instrumented tree. Deliberately one-directional,
-    unlike ``same_source_file``: a touched path shorter than the key does not answer
-    the question of whether the key was compiled."""
-    key_parts = strip_sources_anchor(vfs_key)
+    when it copies sources into the instrumented tree."""
+    key_parts = _strip_anchor(PurePosixPath(vfs_key)).parts
     n = len(key_parts)
-    return any(strip_sources_anchor(t)[-n:] == key_parts for t in touched)
+    return any(
+        _strip_anchor(PurePosixPath(t)).parts[-n:] == key_parts
+        for t in touched
+    )
 
 
 def _noop_err(code: int | None, stdout: str, stderr: str) -> None:
