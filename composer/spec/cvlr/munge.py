@@ -42,7 +42,7 @@ import posixpath
 import re
 import textwrap
 import tomllib
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import PurePosixPath
 
 from composer.cargo.metadata import Workspace
@@ -1468,19 +1468,44 @@ class DropMunges:
 type MungeWrite = list[Munge] | DropMunges
 
 
+def amended(munge: Munge, why: str) -> Munge:
+    """The same edit with a different account of itself.
+
+    :attr:`edit_id` deliberately excludes ``why`` — it keys on what the compiler and the prover see —
+    so the result is the *same* munge by every identity this module defines. That is what makes a
+    correction free: no file changes, :func:`munge_history` yields the same token, and no submission
+    is invalidated. It is also what made the correction impossible before this existed, since
+    re-recording the munge with better prose was indistinguishable from re-recording it unchanged.
+    """
+    return dataclasses.replace(munge, why=why)
+
+
+def latest(munges: Iterable[Munge]) -> list[Munge]:
+    """One record per :attr:`edit_id`, last write winning, in the order the ids first appeared.
+
+    Two records sharing an id are the same edit described twice, so the later description is the
+    live one. Position comes from the first appearance rather than the last: a re-worded
+    justification is not a re-ordering of the edits, and a report that shuffled on a typo fix would
+    read as though something moved.
+    """
+    by_id: dict[str, Munge] = {}
+    for munge in munges:
+        by_id[munge.edit_id] = munge
+    return list(by_id.values())
+
+
 def merge_munges(left: list[Munge], right: MungeWrite) -> list[Munge]:
-    """State reducer for the munge list: append deduplicating by :attr:`edit_id`, or remove.
+    """State reducer for the munge list: append or replace by :attr:`edit_id`, or remove.
 
     A reducer for the reason ``merge_summaries`` is one — several tool calls can land in one graph
     step, and LangGraph refuses two writes to an unreduced key.
+
+    A record whose id is already held **replaces** it rather than being dropped. Since the id covers
+    everything the build sees, the two can differ only in ``why``, and the later prose is a
+    correction of the earlier — see :func:`amended`. Dropping it, which is what this did before, was
+    the reason a landed munge's justification could not be fixed: the editor could re-record it, the
+    reducer would discard the record, and the stale sentence would go on to the report.
     """
     if isinstance(right, DropMunges):
         return [m for m in left if m.edit_id not in right.edit_ids]
-    merged = list(left)
-    seen = {m.edit_id for m in merged}
-    for munge in right:
-        if munge.edit_id in seen:
-            continue
-        merged.append(munge)
-        seen.add(munge.edit_id)
-    return merged
+    return latest([*left, *right])

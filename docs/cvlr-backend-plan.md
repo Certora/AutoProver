@@ -2403,6 +2403,16 @@ list because most of it is not in the phase that will fix it.
    topology helped or hurt (§9.5 there, and §7.10 here), and extraction was the kind that kept
    coming back.
 
+   **The metric has now fired on something real, and it was not a kind.** In the solvency re-run the
+   editor refused a request and named what it would have taken: not a new edit, but an *operation* —
+   a way to amend a landed munge's `why`, which is written once as a side effect of applying and had
+   no path to correction afterwards. The diagnosis was precise enough to implement from, three
+   independent safeguards turned out to be reading the amendment as its dangerous neighbour, and
+   `amend_munge` is built ([who-edits-the-program.md](./who-edits-the-program.md) §12). The lesson
+   for the metric is that a gap report naming a missing *operation* is as much a design signal as one
+   naming a missing kind, and the charter's phrasing ("a change that would need a ninth kind") does
+   not invite it — which is why the prompt now asks for the vocabulary of the gap explicitly.
+
 **Checks and residue deferred to a real run** — [single-working-tree.md](./single-working-tree.md) §8
 for the first three, [the-tree-is-a-vfs.md](./the-tree-is-a-vfs.md) §6 for the fourth.
 

@@ -38,8 +38,10 @@ from composer.spec.cvlr.munge import (
     NoFunctionBody,
     SourceDrifted,
     already_patched,
+    amended,
     apply_munge,
     function_item,
+    latest,
     manifest_additions,
     merge_munges,
     munge_history,
@@ -452,6 +454,26 @@ def test_the_same_munge_recorded_twice_lands_once():
     # Same function, different file: two munges, not one.
     other_file = _munge("redeem_fees", path="programs/p/src/other.rs")
     assert len(merge_munges([one], [other_file])) == 2
+
+
+def test_a_re_record_of_a_held_munge_is_a_correction_of_its_prose():
+    """The ids match, so the two differ only in `why` — and the later one is the amendment. Dropping
+    it, which is what the reducer used to do, is why a landed justification could not be fixed."""
+    one = _munge("redeem_fees")
+    corrected = amended(one, "superseded by the harness as it now stands")
+
+    assert merge_munges([one], [corrected]) == [corrected]
+    assert munge_history((corrected,)) == munge_history((one,))
+    # First appearance keeps the position: a typo fix must not reshuffle the report.
+    other = _munge("calculate_fees")
+    assert merge_munges([one, other], [corrected]) == [corrected, other]
+
+
+def test_latest_reduces_a_concatenation_the_same_way():
+    """`_held` in the editor is `committed + proposed`, and an amendment of a committed record lands
+    in `proposed` — so the two lists genuinely do carry the same id twice."""
+    one = _munge("redeem_fees")
+    assert latest([one, amended(one, "second")]) == [amended(one, "second")]
 
 
 # ---------------------------------------------------------------------------------------------
