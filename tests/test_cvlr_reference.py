@@ -86,7 +86,9 @@ def test_an_unknown_chain_raises_and_names_the_ones_that_exist():
     assert "'solana'" in str(e.value) and "'soroban'" in str(e.value)
 
 
-def test_both_chains_share_one_core_release():
-    # The core line is chain-independent; two chains drifting apart on it would mean one of them
-    # is being compiled against a cvlr nobody chose.
-    assert ref.SOLANA.core == ref.SOROBAN.core
+def test_soroban_pins_the_core_line_its_chain_crate_shipped_with():
+    # Deliberately not Solana's core: no cvlr 0.6.x release builds a Soroban contract (cvlr-spec is
+    # not no_std). The two converge again once a release carries main's fix — and this test is
+    # where that bump gets decided, rather than the chains drifting apart unnoticed.
+    assert ref.SOROBAN.core.name == ref.SOLANA.core.name == "cvlr"
+    assert ref.SOROBAN.core.version.split(".")[:2] == ["0", "4"]

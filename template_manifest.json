@@ -137,6 +137,30 @@
     "template_name": "cvlr_property_generation_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
+  "composer.spec.cvlr.author:_SorobanJudgeTemplate": {
+    "module": "composer.spec.cvlr.author",
+    "qualname": "_SorobanJudgeTemplate",
+    "template_name": "soroban/cvlr_feedback_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.cvlr.author:_SorobanJudgeSystemTemplate": {
+    "module": "composer.spec.cvlr.author",
+    "qualname": "_SorobanJudgeSystemTemplate",
+    "template_name": "soroban/cvlr_property_judge_system_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.cvlr.author:_SorobanPropertyGenSysTemplate": {
+    "module": "composer.spec.cvlr.author",
+    "qualname": "_SorobanPropertyGenSysTemplate",
+    "template_name": "soroban/cvlr_property_generation_system_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.cvlr.author:_SorobanPropertyGenTemplate": {
+    "module": "composer.spec.cvlr.author",
+    "qualname": "_SorobanPropertyGenTemplate",
+    "template_name": "soroban/cvlr_property_generation_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
   "composer.spec.feedback:FeedbackTemplate": {
     "module": "composer.spec.feedback",
     "qualname": "FeedbackTemplate",

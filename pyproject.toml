@@ -189,6 +189,8 @@ console-foundry = "composer.cli.console_foundry:main"
 tui-foundry = "composer.cli.tui_foundry:main"
 console-solana = "composer.cli.console_solana:main"
 tui-solana = "composer.cli.tui_solana:main"
+console-soroban = "composer.cli.console_soroban:main"
+tui-soroban = "composer.cli.tui_soroban:main"
 # console-crucible / tui-crucible land in PR3, together with the `composer.crucible_launch`
 # module they name — an entry point pointing at a module that doesn't exist installs happily
 # and only fails, as an ImportError, when someone runs it.

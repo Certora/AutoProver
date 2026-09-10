@@ -313,3 +313,37 @@ def solana_conf(base: dict, overlay: RunOverlay) -> dict:
 def dump_conf(conf: dict) -> str:
     """Serialize a conf for writing. Plain JSON: JSON5 is what we *accept*, not what we emit."""
     return json.dumps(conf, indent=4) + "\n"
+
+
+# ---------------------------------------------------------------------------------------------
+# Soroban
+#
+# ``SorobanProverAttributes`` shares ``build_script`` / ``cargo_features`` / ``msg`` and the
+# ``BackendAttributes`` set with Solana, and declares none of the Solana-only tuning keys. It reads
+# no tuning files at all, which is why the Soroban scaffold plans no ``envs/`` tree and a Soroban
+# unit binds no ``summarize_for_prover``.
+
+
+#: The shape every surveyed Soroban engagement conf shares. ``precise_bitwise_ops`` because every
+#: one sets it; ``rule_sanity: basic`` for the same reason Solana's base carries it.
+SOROBAN_TEMPLATE_BASE: dict[str, object] = {
+    "msg": "Certora Verification Rules",
+    "precise_bitwise_ops": True,
+    "rule_sanity": "basic",
+}
+
+
+def load_soroban_base(path: Path | None) -> dict:
+    """The base conf for a Soroban run: the project's, or the stated default."""
+    return dict(SOROBAN_TEMPLATE_BASE) if path is None else read_conf(path)
+
+
+def soroban_conf(base: dict, overlay: RunOverlay) -> dict:
+    """The conf for one ``certoraSorobanProver`` submission: :func:`solana_conf`'s layering, with
+    ``summaries`` refused rather than dropped — dropping them would silently weaken the run."""
+    if overlay.summaries:
+        raise ValueError(
+            "a Soroban submission carries no summaries: certoraSorobanProver has no "
+            "solana_summaries attribute, and dropping them silently would weaken the run"
+        )
+    return solana_conf(base, overlay)

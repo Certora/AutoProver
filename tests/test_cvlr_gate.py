@@ -52,6 +52,7 @@ from composer.sandbox.config import SandboxConfig
 from composer.spec.context import SourceCode, WorkflowContext
 from composer.spec.cvlr.conf import TEMPLATE_BASE, tools_version
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness
+from composer.spec.cvlr.chains import SOLANA_CVLR
 from composer.spec.cvlr.pipeline import CvlrBackend
 from composer.pipeline.ptypes import Curtailed, Delivered
 from composer.spec.cvlr.rules import rule_names
@@ -258,6 +259,7 @@ async def test_the_backend_authors_cvlr_rules_for_the_vault(langgraph_db, projec
             memory_namespace=None,
         )
         backend = CvlrBackend(
+            chain=SOLANA_CVLR,
             artifact_store=CvlrArtifactStore(str(project), Path("programs") / _PACKAGE),
             prover_opts=make_prover_options(cloud=True, app="solana"),
             sandbox=SandboxConfig.from_env(),

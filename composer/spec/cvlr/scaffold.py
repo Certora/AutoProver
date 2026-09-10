@@ -133,6 +133,59 @@ CANONICAL_ENVS = tuple(name for f in ENV_FAMILIES for name in (f.core, f.anchor)
 
 
 @dataclasses.dataclass(frozen=True)
+class ChainScaffold:
+    """The facts on which the scaffold's steps diverge per chain. Everything else — the harness
+    module tree, the feature gate, the gitignore, the cdylib requirement — is shared."""
+
+    chain: str
+    #: The tuning-file families the chain's prover reads; empty plans no ``envs/`` tree.
+    env_families: tuple[EnvFamily, ...]
+    #: Whether the ``certora`` feature must enable ``no-entrypoint`` (Solana's entrypoint macro
+    #: collides with a second linkable).
+    no_entrypoint: bool
+    #: Whether contracts are ``#![no_std]``. ``soroban-sdk`` defines ``panic_impl``, so core ``cvlr``
+    #: (default feature ``cvlr-nondet/std``) must be ``default-features = false`` or the wasm build
+    #: dies on a duplicate lang item. A host ``cargo check`` passes either way.
+    no_std: bool
+    #: Whether to write ``[package.metadata.certora]``, which is how ``cargo certora-sbf`` learns
+    #: the sources and tuning files. The wasm build composes its manifest itself.
+    metadata_section: bool
+    #: Whether :func:`_plan_munge`'s dependency-fork redirects (Solana's forks) apply.
+    fork_overrides: bool
+
+
+SOLANA_SCAFFOLD = ChainScaffold(
+    chain="solana",
+    env_families=ENV_FAMILIES,
+    no_entrypoint=True,
+    no_std=False,
+    metadata_section=True,
+    fork_overrides=True,
+)
+
+SOROBAN_SCAFFOLD = ChainScaffold(
+    chain="soroban",
+    env_families=(),
+    no_entrypoint=False,
+    no_std=True,
+    metadata_section=False,
+    fork_overrides=False,
+)
+
+_SCAFFOLDS = {s.chain: s for s in (SOLANA_SCAFFOLD, SOROBAN_SCAFFOLD)}
+
+
+def scaffold_for(chain: str) -> ChainScaffold:
+    """The scaffold policy for ``chain``, same key set as ``cvlr_reference.REFERENCE_SET``."""
+    try:
+        return _SCAFFOLDS[chain]
+    except KeyError:
+        raise KeyError(
+            f"no scaffold policy for chain {chain!r} (have: {', '.join(sorted(_SCAFFOLDS))})"
+        ) from None
+
+
+@dataclasses.dataclass(frozen=True)
 class Deviation:
     """One canonical line this backend deliberately does not ship as upstream wrote it.
 
@@ -506,7 +559,9 @@ def _toml_array(values: list[str]) -> str:
     return json.dumps(values)
 
 
-def _dependency_stanza(crate: str, *, inherit: bool, version: str) -> str:
+def _dependency_stanza(
+    crate: str, *, inherit: bool, version: str, default_features: bool = True
+) -> str:
     """A ``[dependencies.<crate>]`` sub-table.
 
     A sub-table rather than an inline entry because it can be *appended* to a manifest that already
@@ -514,7 +569,15 @@ def _dependency_stanza(crate: str, *, inherit: bool, version: str) -> str:
     ``optional`` is what makes ``dep:`` usable in the feature, and what keeps CVLR out of a release
     build entirely."""
     pin = "workspace = true" if inherit else f'version = "={version}"'
-    return f"[dependencies.{crate}]\n{pin}\noptional = true\n"
+    features = "" if default_features else "default-features = false\n"
+    return f"[dependencies.{crate}]\n{pin}\n{features}optional = true\n"
+
+
+def _default_features(
+    crate: CrateRelease, reference: ChainReference, chain: ChainScaffold
+) -> bool:
+    """False only for the core crate on a ``no_std`` chain (:attr:`ChainScaffold.no_std`)."""
+    return not (chain.no_std and crate.name == reference.core.name)
 
 
 def _generation(version: str) -> str:
@@ -569,7 +632,7 @@ def _check_platform(workspace: Workspace, reference: ChainReference) -> list[Blo
 
 
 def _plan_workspace_manifest(
-    workspace: Workspace, package: CratePackage, reference: ChainReference
+    workspace: Workspace, package: CratePackage, reference: ChainReference, chain: ChainScaffold
 ) -> tuple[list[Change], list[str]]:
     """Pins in ``[workspace.dependencies]``, when the root manifest has a ``[workspace]``."""
     parsed = _read_toml(workspace.root / "Cargo.toml")
@@ -586,7 +649,11 @@ def _plan_workspace_manifest(
                 f"overridden here"
             )
             continue
-        stanzas.append(f'[workspace.dependencies.{crate.name}]\nversion = "={crate.version}"\n')
+        # A member's `default-features = false` is ignored unless the workspace entry says it too.
+        pin = f'version = "={crate.version}"\n'
+        if not _default_features(crate, reference, chain):
+            pin += "default-features = false\n"
+        stanzas.append(f"[workspace.dependencies.{crate.name}]\n{pin}")
     if not stanzas:
         return [], satisfied
     return [
@@ -615,7 +682,7 @@ def local_dependencies(workspace: Workspace, package: CratePackage) -> tuple[Cra
 
 
 def _plan_feature_forwarding(
-    workspace: Workspace, package: CratePackage, reference: ChainReference
+    workspace: Workspace, package: CratePackage, reference: ChainReference, chain: ChainScaffold
 ) -> tuple[list[Change], list[str]]:
     """Give every local dependency a ``certora`` feature, so a munge can gate code inside one.
 
@@ -652,7 +719,7 @@ def _plan_feature_forwarding(
         declared = parsed.get("dependencies", {})
         missing = [c for c in wanted if c.name not in declared]
         enables = [f"dep:{c.name}" for c in wanted]
-        if NO_ENTRYPOINT_FEATURE in dep.features:
+        if chain.no_entrypoint and NO_ENTRYPOINT_FEATURE in dep.features:
             enables.insert(0, NO_ENTRYPOINT_FEATURE)
         entry = f"{DEFAULT_FEATURE} = {_toml_array(enables)}\n"
         why = (
@@ -679,7 +746,12 @@ def _plan_feature_forwarding(
                     path=rel / "Cargo.toml",
                     contents=_section_banner()
                     + "\n".join(
-                        _dependency_stanza(c.name, inherit=False, version=c.version)
+                        _dependency_stanza(
+                            c.name,
+                            inherit=False,
+                            version=c.version,
+                            default_features=_default_features(c, reference, chain),
+                        )
                         for c in missing
                     ),
                     why=f"the CVLR crates {dep.name}'s `{DEFAULT_FEATURE}` feature enables",
@@ -693,6 +765,7 @@ def _plan_package_manifest(
     package: CratePackage,
     relative: Path,
     reference: ChainReference,
+    chain: ChainScaffold,
     *,
     inherit: bool,
 ) -> tuple[list[Change], list[str], list[Blocked]]:
@@ -750,7 +823,7 @@ def _plan_package_manifest(
             )
     else:
         enables = [f"dep:{c.name}" for c in wanted]
-        if NO_ENTRYPOINT_FEATURE in package.features:
+        if chain.no_entrypoint and NO_ENTRYPOINT_FEATURE in package.features:
             enables.insert(0, NO_ENTRYPOINT_FEATURE)
         # Forwarded so a munge inside a local dependency has a feature to gate on; see
         # :func:`_plan_feature_forwarding` for why this one and not the per-unit features.
@@ -767,10 +840,18 @@ def _plan_package_manifest(
             appended.append(f"[features]\n{entry}")
 
     appended += [
-        _dependency_stanza(c.name, inherit=inherit, version=c.version) for c in missing
+        _dependency_stanza(
+            c.name,
+            inherit=inherit,
+            version=c.version,
+            default_features=_default_features(c, reference, chain),
+        )
+        for c in missing
     ]
 
-    if "certora" in parsed.get("package", {}).get("metadata", {}):
+    if not chain.metadata_section:
+        pass
+    elif "certora" in parsed.get("package", {}).get("metadata", {}):
         satisfied.append("[package.metadata.certora] already declares sources and tuning files")
     else:
         appended.append(_metadata_section({f.stem: str(ENVS_DIR / f.composite) for f in ENV_FAMILIES}))
@@ -813,11 +894,14 @@ def _plan_harness(package: CratePackage, relative: Path) -> tuple[list[Change], 
 
 
 def _plan_envs(
-    package: CratePackage, relative: Path, dialect: PathDialect
+    package: CratePackage,
+    relative: Path,
+    dialect: PathDialect,
+    families: tuple[EnvFamily, ...] = ENV_FAMILIES,
 ) -> tuple[list[Change], list[str]]:
     changes: list[Change] = []
     satisfied: list[str] = []
-    for family in ENV_FAMILIES:
+    for family in families:
         kind = "Inlining directives" if family is INLINING else "Points-to summaries"
         layer_path = package.root / ENVS_DIR / family.package
         package_layer = (
@@ -924,7 +1008,10 @@ def _plan_gitignore(workspace: Workspace) -> tuple[list[Change], list[str]]:
 
 
 def plan_scaffold(
-    workspace: Workspace, package: CratePackage, reference: ChainReference
+    workspace: Workspace,
+    package: CratePackage,
+    reference: ChainReference,
+    chain: ChainScaffold = SOLANA_SCAFFOLD,
 ) -> ScaffoldPlan:
     """What scaffolding ``package`` would change, without changing anything.
 
@@ -939,21 +1026,23 @@ def plan_scaffold(
     changes: list[Change] = []
     satisfied: list[str] = []
     for planned, notes in (
-        _plan_workspace_manifest(workspace, package, reference),
+        _plan_workspace_manifest(workspace, package, reference, chain),
         _plan_harness(package, relative),
-        _plan_envs(package, relative, dialect),
+        _plan_envs(package, relative, dialect, chain.env_families),
         _plan_gitignore(workspace),
-        _plan_feature_forwarding(workspace, package, reference),
+        _plan_feature_forwarding(workspace, package, reference, chain),
     ):
         changes += planned
         satisfied += notes
 
-    munge_changes, munge_notes, munge_blocked = _plan_munge(workspace)
+    munge_changes, munge_notes, munge_blocked = (
+        _plan_munge(workspace) if chain.fork_overrides else ([], [], [])
+    )
     changes += munge_changes
     satisfied += munge_notes
 
     manifest_changes, manifest_notes, blocked = _plan_package_manifest(
-        workspace, package, relative, reference, inherit=inherit
+        workspace, package, relative, reference, chain, inherit=inherit
     )
     # Only when the scaffold would write a *reference-set* pin. A project that already pins CVLR
     # has made its own pairing decision — the scaffold inherits that pin, so the reference set's

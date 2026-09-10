@@ -36,6 +36,7 @@ from composer.spec.cvlr.scaffold import (
     ScaffoldPlan,
     apply,
     plan_scaffold,
+    scaffold_for,
 )
 from composer.spec.cvlr_reference import reference_for
 
@@ -68,6 +69,10 @@ class CvlrPreflight:
     package_dir: Path
     #: The library target's file stem, which is what the built ``.so`` is named after.
     artifact_stem: str
+    #: Where cargo puts this workspace's builds, as cargo reported it. Soroban's build has to name
+    #: its artifact's path (``cargo certora-sbf`` reports Solana's itself), and a project that moves
+    #: its target directory in ``.cargo/config.toml`` is one a hardcoded ``target/`` would miss.
+    target_directory: Path
     scaffold: ScaffoldPlan
     applied: tuple[Path, ...]
     #: The CVLR crates the *scaffolded* graph resolves — read after applying, because before it the
@@ -179,7 +184,7 @@ async def prepare_workspace(
     workspace = await _workspace_at(project_root)
     member = _pick_package(workspace, package)
 
-    plan = plan_scaffold(workspace, member, reference)
+    plan = plan_scaffold(workspace, member, reference, scaffold_for(chain))
     _log.info("%s", plan.describe())
     try:
         applied = apply(plan, workspace.root)
@@ -202,6 +207,7 @@ async def prepare_workspace(
         package=fresh.name,
         package_dir=fresh.root.resolve().relative_to(resolved_in.root.resolve()),
         artifact_stem=fresh.lib.artifact_stem,
+        target_directory=resolved_in.target_directory,
         scaffold=plan,
         applied=applied,
         sources=sources,

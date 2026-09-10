@@ -1,11 +1,10 @@
-"""Solana's entry in the project-toolchain registry.
+"""The Cargo chains' entries in the project-toolchain registry: Solana and Soroban.
 
-:mod:`composer.rustapp.toolchain` declares the seam and, until now, had no entries — its docstring
-says so, and says why the two methods behave differently when nothing is registered. This is the
-first registrant, and ``docs/cvlr-backend-plan.md`` §4.3 is the argument for putting it here rather
-than inside the CVLR backend: the natural sharing axis of "read a Cargo manifest and build a Solana
-program" is the *chain*, across products, and one of those products is not CVLR at all. Crucible's
-fuzz harness wants the same two answers.
+:mod:`composer.rustapp.toolchain` declares the seam, and ``docs/cvlr-backend-plan.md`` §4.3 is the
+argument for putting the entries here rather than inside the CVLR backend: the natural sharing axis
+of "read a Cargo manifest and build a program" is the *chain*, across products, and one of those
+products is not CVLR at all. Crucible's fuzz harness wants the same two answers. The two entries
+differ only in the build ``prepare`` runs (sBPF vs. wasm) and the requests they accept.
 
 The dependency runs one way, and the wheel's wire types are therefore imported for typing only: Cargo
 knowledge does not know what a wheel is, and ``composer.rustapp``'s package ``__init__`` imports the
@@ -32,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 from composer.cargo.metadata import read_workspace, read_workspace_sync
 from composer.cargo.sbf import Built, sbf_build
 from composer.cargo.session import CargoSession, WarmFailed
+from composer.cargo.wasm import WasmIdentity, wasm_build
 from composer.sandbox.config import SandboxConfig
 from composer.spec.context import SourceFields
 
@@ -54,38 +54,42 @@ class ToolchainRequestUnsupported(ValueError):
     chain: every alternative defers the failure to a place where it reads as the agent's fault."""
 
 
+def _cargo_source_unit(source: SourceFields) -> dict[str, Any]:
+    """The crate owning ``source``'s main file: ``{dir, package, lib}``.
+
+    ``dir`` is relative to the project root, because that is the vocabulary every path crossing
+    this seam uses. Never raises, and returns ``{}`` for anything it cannot read — a project that
+    is not a Cargo workspace, a main file outside every member, a crate with no library target.
+    Each of those is a real state the wheel already handles by applying its own convention, and
+    none of them is improved by an exception.
+    """
+    root = Path(source.project_root)
+    workspace = read_workspace_sync(root)
+    if workspace is None:
+        return {}
+    owner = workspace.owning(root / source.relative_path)
+    if owner is None or owner.lib is None:
+        return {}
+    try:
+        relative = owner.root.resolve().relative_to(root.resolve())
+    except ValueError:
+        # The owning crate lives outside the project root — a path dependency reached from a
+        # workspace above it. Its directory has no project-relative spelling, so there is nothing
+        # honest to report.
+        return {}
+    return {
+        "dir": str(relative),
+        "package": owner.name,
+        "lib": owner.lib.name,
+    }
+
+
 @dataclasses.dataclass(frozen=True)
 class SolanaToolchain:
     """Cargo, for a project whose verification artifact is an sBPF program."""
 
     def source_unit(self, source: SourceFields) -> dict[str, Any]:
-        """The crate owning ``source``'s main file: ``{dir, package, lib}``.
-
-        ``dir`` is relative to the project root, because that is the vocabulary every path crossing
-        this seam uses. Never raises, and returns ``{}`` for anything it cannot read — a project that
-        is not a Cargo workspace, a main file outside every member, a crate with no library target.
-        Each of those is a real state the wheel already handles by applying its own convention, and
-        none of them is improved by an exception.
-        """
-        root = Path(source.project_root)
-        workspace = read_workspace_sync(root)
-        if workspace is None:
-            return {}
-        owner = workspace.owning(root / source.relative_path)
-        if owner is None or owner.lib is None:
-            return {}
-        try:
-            relative = owner.root.resolve().relative_to(root.resolve())
-        except ValueError:
-            # The owning crate lives outside the project root — a path dependency reached from a
-            # workspace above it. Its directory has no project-relative spelling, so there is nothing
-            # honest to report.
-            return {}
-        return {
-            "dir": str(relative),
-            "package": owner.name,
-            "lib": owner.lib.name,
-        }
+        return _cargo_source_unit(source)
 
     async def prepare(
         self,
@@ -140,6 +144,76 @@ class SolanaToolchain:
             )
         built = await sbf_build(
             session, manifest_path=package.manifest_path, timeout_s=timeout_s
+        )
+        if not isinstance(built.verdict, Built):
+            raise ToolchainRequestUnsupported(
+                f"building {program} failed:\n{built.verdict.diagnostics}"
+            )
+        return {"executable": str(built.verdict.manifest.executables)}
+
+
+@dataclasses.dataclass(frozen=True)
+class SorobanToolchain:
+    """Cargo, for a project whose verification artifact is a wasm contract.
+
+    Solana's request vocabulary minus ``idl_dest``: an IDL is an Anchor artifact, so a plan asking
+    for one here is wrong about the chain.
+    """
+
+    def source_unit(self, source: SourceFields) -> dict[str, Any]:
+        return _cargo_source_unit(source)
+
+    async def prepare(
+        self,
+        plan: "WorkspacePrep",
+        input: "AuthorInput",
+        *,
+        source: SourceFields,
+        sandbox: SandboxConfig | None,
+        timeout_s: int,
+    ) -> dict[str, Any]:
+        """Warm the dependency graph, then build the contract, per ``plan.toolchain_request``.
+
+        The same trust split as :meth:`SolanaToolchain.prepare`.
+        """
+        request = dict(plan.toolchain_request)
+        if unknown := sorted(set(request) - {"warm_dirs", "build_program"}):
+            raise ToolchainRequestUnsupported(
+                f"the Soroban toolchain does not understand {', '.join(unknown)} "
+                f"(it handles build_program, warm_dirs)"
+            )
+
+        workdir = Path(source.project_root)
+        session = CargoSession(
+            workdir=workdir, sandbox=sandbox if sandbox is not None else SandboxConfig()
+        )
+        warm_dirs = tuple(Path(d) for d in request.get("warm_dirs") or ())
+        warmed = await session.warm(manifest_dirs=warm_dirs, timeout_s=timeout_s)
+        if isinstance(warmed, WarmFailed):
+            _log.warning("cargo fetch did not complete: %s", warmed.diagnostics)
+
+        program = request.get("build_program")
+        if not program:
+            return {}
+        workspace = await read_workspace(workdir, offline=True)
+        package = workspace.member(str(program)) if workspace is not None else None
+        if package is None or workspace is None:
+            raise ToolchainRequestUnsupported(
+                f"the plan asks to build {program!r}, which is not a member of the Cargo workspace "
+                f"at {workdir}"
+            )
+        if package.lib is None:
+            raise ToolchainRequestUnsupported(
+                f"{package.name} has no library target, so there is no wasm to build"
+            )
+        identity = WasmIdentity(
+            workspace_root=workspace.root,
+            package_dir=package.root.resolve().relative_to(workspace.root.resolve()),
+            target_directory=workspace.target_directory,
+            artifact_stem=package.lib.artifact_stem,
+        )
+        built = await wasm_build(
+            session, identity, manifest_path=package.manifest_path, timeout_s=timeout_s
         )
         if not isinstance(built.verdict, Built):
             raise ToolchainRequestUnsupported(

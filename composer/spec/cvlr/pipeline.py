@@ -1,11 +1,14 @@
-"""The CVLR backend: the pipeline's Solana-with-the-Prover entry point.
+"""The CVLR backend: the pipeline's entry point for Rust verified with the Certora Prover.
 
 ``docs/cvlr-backend-plan.md`` §7.5. Structurally this is ``NullSolanaBackend`` with a real formalizer:
-the front half — the Solana model, the analysis and property prompts, ``locate_main`` — is the
+the front half — the chain's model, the analysis and property prompts, ``locate_main`` — is the
 ecosystem's and is reused verbatim, which is the whole reason §2 could say the front half was already
 built. What this module adds is the four things that differ: a preflight that scaffolds and gates
 the workspace, a staged formalizer that declares the harness modules, the per-unit authoring loop,
 and verdicts read back from the prover.
+
+**Which chain** is a value, :class:`~composer.spec.cvlr.chains.CvlrChain`, and everything here is
+generic over the unit type it fixes.
 
 **Why the formalizer is staged.** ``specs/mod.rs`` needs a ``mod`` line per unit and the package
 manifest needs a feature per unit, and no single unit knows what the others are — so both have to be
@@ -39,11 +42,12 @@ import dataclasses
 import enum
 import logging
 from pathlib import Path
-from typing import Sequence, override
+from typing import Any, Sequence, override
 
 from langchain_core.tools import BaseTool
 
 from composer.cargo.session import CargoSession, WarmFailed
+from composer.cargo.wasm import WasmIdentity
 from composer.pipeline.core import (
     ComponentOutcome,
     CorePhases,
@@ -59,12 +63,18 @@ from composer.prover.core import ProverOptions
 from composer.sandbox.config import SandboxConfig
 from composer.spec.context import CvlrGeneration, WorkflowContext
 from composer.spec.cvlr.author import batch_cvlr_generation
-from composer.spec.cvlr.conf import DEFAULT_FEATURE, load_base
-from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE
+from composer.spec.cvlr.chains import CvlrChain
+from composer.spec.cvlr.conf import DEFAULT_FEATURE, load_base, load_soroban_base
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness, HarnessModule
 from composer.spec.cvlr.preflight import CvlrPreflight, gate_workspace, prepare_workspace
 from composer.spec.cvlr.prover import Submission
-from composer.spec.cvlr.scaffold import ENVS_DIR, SPECS_DIR, SUMMARIES, declare_unit_features
+from composer.spec.cvlr.scaffold import (
+    ENVS_DIR,
+    SPECS_DIR,
+    SUMMARIES,
+    declare_unit_features,
+    scaffold_for,
+)
 from composer.spec.cvlr.tree import SharedTree, munge_diff
 from composer.spec.cvlr.tuning import TuningFiles
 from composer.spec.cvlr.source_tools import cvlr_source_tools, mount
@@ -75,11 +85,7 @@ from composer.spec.cvlr.verify import (
     VerifyDeps,
     prover_stamper,
 )
-from composer.spec.solana.model import (
-    SolanaApplication,
-    SolanaComponentInstance,
-    SolanaProgramInstance,
-)
+from composer.spec.system_model import BaseApplication, FeatureUnit
 from composer.io.multi_job import TaskInfo
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.report.collect import (
@@ -122,9 +128,10 @@ class CvlrPhase(enum.Enum):
 
 
 @dataclasses.dataclass(frozen=True)
-class CvlrDeps:
+class CvlrDeps[U: FeatureUnit]:
     """What every unit's authoring session needs, decided once for the run."""
 
+    chain: CvlrChain[Any, Any, U]
     store: CvlrArtifactStore
     prover_opts: ProverOptions
     sandbox: SandboxConfig
@@ -160,20 +167,63 @@ class SharedBuild:
     warm_failure: str | None = None
 
 
+def _tree_target_directory(pre: CvlrPreflight, tree_root: Path) -> Path:
+    """Where cargo puts a build of the working tree: the project's target directory, moved with the
+    tree when it is inside the project, left where it is when the project points it outside."""
+    try:
+        return tree_root / pre.target_directory.relative_to(pre.workspace_root)
+    except ValueError:
+        return pre.target_directory
+
+
+def _submission(
+    deps: CvlrDeps[Any], session: CargoSession, identity: HarnessModule, label: str
+) -> Submission:
+    """One unit's submission. The harness feature and the unit's own compile exactly one unit's
+    rules out of the shared crate (``docs/single-working-tree.md`` §2.1)."""
+    package_root = session.workdir / deps.package_dir
+    manifest_path = package_root / "Cargo.toml"
+    msg = f"{deps.preflight.package}: {label}"
+    features = (DEFAULT_FEATURE, identity.feature)
+    if deps.chain.tag == "soroban":
+        return Submission(
+            manifest_path=manifest_path,
+            base_conf=load_soroban_base(None),
+            msg=msg,
+            stem=identity.stem,
+            features=features,
+            wasm_identity=WasmIdentity(
+                workspace_root=session.workdir,
+                package_dir=deps.package_dir,
+                target_directory=_tree_target_directory(deps.preflight, session.workdir),
+                artifact_stem=deps.preflight.artifact_stem,
+            ),
+        )
+    return Submission(
+        manifest_path=manifest_path,
+        base_conf=load_base(None),
+        msg=msg,
+        stem=identity.stem,
+        features=features,
+        # Workdir-relative, which is how certoraSolanaProver reads a conf path.
+        summaries=(str(deps.package_dir / ENVS_DIR / SUMMARIES.unit_composite(identity.module)),),
+    )
+
+
 @dataclasses.dataclass
-class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
-    deps: CvlrDeps
+class CvlrFormalizer[U: FeatureUnit](Formalizer[GeneratedHarness, U]):
+    deps: CvlrDeps[U]
     build: SharedBuild
 
     @override
     async def formalize(
         self,
         label: str,
-        feat: SolanaComponentInstance,
+        feat: U,
         props: list[PropertyFormulation],
         ctx: WorkflowContext[GeneratedHarness],
         run: PipelineRun,
-        extra_tools: ToolBinder[SolanaComponentInstance],
+        extra_tools: ToolBinder[U],
     ) -> GeneratedHarness | Curtailed[GeneratedHarness] | GaveUp:
         identity = HarnessModule(feat.slug)
         if self.build.warm_failure is not None:
@@ -183,15 +233,20 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
 
         session = self.build.session
         package_root = session.workdir / self.deps.package_dir
-        tuning = TuningFiles(
-            envs_dir=package_root / ENVS_DIR,
-            dialect=self.deps.preflight.scaffold.dialect,
-            unit=identity.module,
+        tuning = (
+            TuningFiles(
+                envs_dir=package_root / ENVS_DIR,
+                dialect=self.deps.preflight.scaffold.dialect,
+                unit=identity.module,
+            )
+            if scaffold_for(self.deps.chain.tag).env_families
+            else None
         )
-        # The composite this unit's conf names has to exist before the first submission names it,
-        # and the loop may summarize nothing at all. Composing it empty now costs one file and
-        # removes a case where the prover refuses a conf for a path that was never written.
-        await asyncio.to_thread(tuning.write, ())
+        if tuning is not None:
+            # The composite this unit's conf names has to exist before the first submission names
+            # it, and the loop may summarize nothing at all. Composing it empty now costs one file
+            # and removes a case where the prover refuses a conf for a path that was never written.
+            await asyncio.to_thread(tuning.write, ())
         target = HarnessTarget(
             session=session,
             module_path=package_root / SPECS_DIR / identity.artifact_file,
@@ -204,23 +259,7 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
         )
         verify = VerifyDeps(
             target=target,
-            submission=Submission(
-                manifest_path=package_root / "Cargo.toml",
-                base_conf=load_base(None),
-                msg=f"{self.deps.preflight.package}: {label}",
-                stem=identity.stem,
-                # The harness feature and this unit's own: what compiles exactly one unit's rules
-                # out of the shared crate (docs/single-working-tree.md §2.1).
-                features=(DEFAULT_FEATURE, identity.feature),
-                # Workdir-relative, which is how certoraSolanaProver reads a conf path.
-                summaries=(
-                    str(
-                        self.deps.package_dir
-                        / ENVS_DIR
-                        / SUMMARIES.unit_composite(identity.module)
-                    ),
-                ),
-            ),
+            submission=_submission(self.deps, session, identity, label),
             prover_opts=self.deps.prover_opts,
             stamper=prover_stamper(),
             # The heavy tier: reading a counterexample back to a property is the reasoning this
@@ -231,15 +270,20 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
         return await batch_cvlr_generation(
             ctx.abstract(CvlrGeneration),
             props=props,
-            component=feat,
+            prompts=self.deps.chain.prompts(
+                feat,
+                props,
+                program=self.deps.preflight.package,
+                module=identity.module,
+                cvlr_versions=self.deps.versions,
+                package_root=package_root,
+            ),
             env=run.env,
             description=label,
-            program=self.deps.preflight.package,
-            module=identity.module,
-            cvlr_versions=self.deps.versions,
             target=target,
             verify=verify,
             pristine=self.build.tree.pristine,
+            program_editing=self.deps.chain.program_editing,
             crate_tools=self.deps.crate_tools,
         )
 
@@ -261,7 +305,7 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
     @override
     async def source_edits(
         self,
-        outcomes: list[ComponentOutcome[GeneratedHarness, SolanaComponentInstance]],
+        outcomes: list[ComponentOutcome[GeneratedHarness, U]],
         run: PipelineRun,
     ) -> list[SourceEditRecord]:
         """The munges each delivered unit's verdicts were earned against.
@@ -332,15 +376,15 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
 
 
 @dataclasses.dataclass
-class CvlrStagedFormalizer(StagedFormalizer[GeneratedHarness, SolanaComponentInstance]):
+class CvlrStagedFormalizer[U: FeatureUnit](StagedFormalizer[GeneratedHarness, U]):
     """Declares every unit's harness module before any unit authors one."""
 
-    deps: CvlrDeps
+    deps: CvlrDeps[U]
 
     @override
     async def begin(
-        self, jobs: Sequence[BackendJob[SolanaComponentInstance]], run: PipelineRun
-    ) -> Formalizer[GeneratedHarness, SolanaComponentInstance]:
+        self, jobs: Sequence[BackendJob[U]], run: PipelineRun
+    ) -> Formalizer[GeneratedHarness, U]:
         """Declare every unit, then make the one tree they share.
 
         The order is the whole of it. Both declarations — the ``cfg``-gated ``mod`` lines and the
@@ -392,24 +436,22 @@ class CvlrStagedFormalizer(StagedFormalizer[GeneratedHarness, SolanaComponentIns
 
 
 @dataclasses.dataclass
-class CvlrPrepared(
-    PreparedSystem[GeneratedHarness, SolanaComponentInstance, SolanaProgramInstance]
-):
-    deps: CvlrDeps
+class CvlrPrepared[U: FeatureUnit, Main](PreparedSystem[GeneratedHarness, U, Main]):
+    deps: CvlrDeps[U]
 
     @override
     async def prepare_formalization(
         self, run: PipelineRun
-    ) -> StagedFormalizer[GeneratedHarness, SolanaComponentInstance]:
+    ) -> StagedFormalizer[GeneratedHarness, U]:
         return CvlrStagedFormalizer(self.deps)
 
 
 @dataclasses.dataclass
-class CvlrBackend:
-    """``PipelineBackend[CvlrPhase, GeneratedHarness, None, HarnessModule, SolanaComponentInstance,
-    SolanaProgramInstance, SolanaApplication, CvlrPreflight]`` (P, FormT, H, A, Unit, Main, App, Pre)
-    — structural."""
+class CvlrBackend[App: BaseApplication, Main, U: FeatureUnit]:
+    """``PipelineBackend[CvlrPhase, GeneratedHarness, None, HarnessModule, U, Main, App,
+    CvlrPreflight]`` (P, FormT, H, A, Unit, Main, App, Pre) — structural."""
 
+    chain: CvlrChain[App, Main, U]
     artifact_store: CvlrArtifactStore
     prover_opts: ProverOptions
     sandbox: SandboxConfig
@@ -421,8 +463,6 @@ class CvlrBackend:
     #: workspace with several is refused rather than guessed at.
     package: str | None = None
 
-    backend_guidance = SOLANA_CVLR_GUIDANCE
-    analysis_spec = SystemAnalysisSpec("solana-analysis", "solana-properties")
     core_phases = CorePhases(
         {
             "analysis": CvlrPhase.ANALYSIS,
@@ -432,6 +472,15 @@ class CvlrBackend:
         }
     )
 
+    @property
+    def backend_guidance(self) -> str:
+        return self.chain.guidance
+
+    @property
+    def analysis_spec(self) -> SystemAnalysisSpec:
+        # Per chain: a key shared between the two analyses would replay one as the other.
+        return SystemAnalysisSpec(f"{self.chain.tag}-analysis", f"{self.chain.tag}-properties")
+
     async def preflight(self, run: PipelineRun[CvlrPhase, None]) -> CvlrPreflight:
         """Scaffold the project, then prove it compiles with a harness in.
 
@@ -439,7 +488,9 @@ class CvlrBackend:
         stops the run having spent at most one partial analysis agent instead of surfacing as
         unfixable compiler errors after the whole extraction phase. The gate is a build, so it goes
         on the run's CPU budget rather than its agent budget."""
-        pre = await prepare_workspace(Path(run.source.project_root), package=self.package)
+        pre = await prepare_workspace(
+            Path(run.source.project_root), package=self.package, chain=self.chain.tag
+        )
 
         async def gate() -> None:
             await gate_workspace(pre, sandbox=self.sandbox)
@@ -454,15 +505,10 @@ class CvlrBackend:
 
     async def prepare_system(
         self,
-        analyzed: SolanaApplication,
+        analyzed: App,
         run: PipelineRun[CvlrPhase, None],
         preflight: CvlrPreflight,
-    ) -> PreparedSystem[GeneratedHarness, SolanaComponentInstance, SolanaProgramInstance]:
-        # Imported lazily: the ecosystem registry imports the model layer, and importing it at module
-        # scope would put a cycle between the backend and the ecosystem that names it.
-        from composer.pipeline.ecosystem import SOLANA
-
-        project = Path(run.source.project_root)
+    ) -> PreparedSystem[GeneratedHarness, U, Main]:
         crates = mount(preflight.sources)
         crate_tools = tuple(cvlr_source_tools(crates)) if crates is not None else ()
         if crates is None:
@@ -478,6 +524,7 @@ class CvlrBackend:
             _log.info("cvlr: %s", gap.describe())
 
         deps = CvlrDeps(
+            chain=self.chain,
             store=self.artifact_store,
             prover_opts=self.prover_opts,
             sandbox=self.sandbox,
@@ -487,7 +534,7 @@ class CvlrBackend:
             crate_tools=crate_tools,
             cex_analysis=self.cex_analysis,
         )
-        return CvlrPrepared(SOLANA.locate_main(analyzed, run.source), deps)
+        return CvlrPrepared(self.chain.ecosystem.locate_main(analyzed, run.source), deps)
 
-    def to_artifact_id(self, c: SolanaComponentInstance) -> HarnessModule:
+    def to_artifact_id(self, c: U) -> HarnessModule:
         return HarnessModule(c.slug)

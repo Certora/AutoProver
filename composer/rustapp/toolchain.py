@@ -19,9 +19,10 @@ follows from the wheel's declared ``ecosystem``, not from inspecting keys.
 That is what makes a new ecosystem a registration rather than an edit to
 :mod:`composer.rustapp.wire`.
 
-**Solana is registered** (:class:`composer.cargo.toolchain.SolanaToolchain`); the other chains are
-not. The two methods are therefore reached in deliberately different ways, which still matters for
-every unregistered chain and for the half of Solana's entry that is deliberately incomplete:
+**Solana and Soroban are registered** (:class:`composer.cargo.toolchain.SolanaToolchain`,
+:class:`composer.cargo.toolchain.SorobanToolchain`); other chains are not. The two methods are
+therefore reached in deliberately different ways, which still matters for every unregistered chain
+and for the half of Solana's entry that is deliberately incomplete:
 
 * :func:`source_unit` **degrades**. An empty answer is already a documented state — it is what a
   language with no such unit yields, and what an unreadable layout yields — and the wheel fills the
@@ -39,7 +40,7 @@ request its chain's toolchain understands) — so the network posture stays Pyth
 
 from typing import Any, Protocol
 
-from composer.cargo.toolchain import SolanaToolchain
+from composer.cargo.toolchain import SolanaToolchain, SorobanToolchain
 from composer.pipeline.ecosystem import ChainTag
 from composer.rustapp.wire import AuthorInput, WorkspacePrep
 from composer.sandbox.config import SandboxConfig
@@ -117,7 +118,10 @@ class ProjectToolchain(Protocol):
 #: entry is added together with the module it binds — a tag whose implementation doesn't exist would
 #: pass every check here and then fail at the first plan that needs it. Empty is a working state: see
 #: the module docstring for what each method does then.
-PROJECT_TOOLCHAINS: dict[ChainTag, ProjectToolchain] = {"solana": SolanaToolchain()}
+PROJECT_TOOLCHAINS: dict[ChainTag, ProjectToolchain] = {
+    "solana": SolanaToolchain(),
+    "soroban": SorobanToolchain(),
+}
 
 
 def source_unit(chain: ChainTag, source: SourceFields) -> dict[str, Any]:

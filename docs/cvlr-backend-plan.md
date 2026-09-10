@@ -2018,6 +2018,35 @@ whether any of these pieces deserve to be bundled after all.**
 boundary between the two munge implementations turned out to be *agent topology*, not Solidity
 versus Rust, which predicts Soroban inherits the Solana shape essentially whole.
 
+#### 7.9.1 What Phase 8 did need from the core — the record
+
+Wiring the backend and CLI for Soroban touched the "chain-neutral" core in these places, each
+because the core had Solana in it rather than because the chains differ in machinery:
+
+- **Types, not logic.** `CvlrBackend`, the two formalizers and `CvlrPrepared` were typed on
+  Solana's unit/program/application; they are now generic over them. The pairing lives in one value,
+  [`CvlrChain`](../composer/spec/cvlr/chains.py) — ecosystem, extraction guidance, prompt binder,
+  whether program editing is offered. This is a bundle, and it is the one §4.1 allowed for: the
+  ecosystem fixes the unit type and the prompts render their component context from that same type,
+  so the two demonstrably co-vary. Everything else still varies piecemeal by tag.
+- **Prompts.** The author/judge prompts were Solana's, with the unit type in their param dicts. They
+  are now bound per chain ([`CvlrPrompts`](../composer/spec/cvlr/author.py)), with Soroban's four
+  under [templates/soroban/](../composer/templates/soroban/). The chain-neutral procedure is
+  duplicated rather than factored, on purpose, until the Soroban text has met a prover.
+- **The submission's shape** is the one place the backend reads the tag: tuning files (from the
+  scaffold's `env_families`) and the wasm build's identity. `summarize_for_prover` is bound only
+  where there are tuning files; `CvlrPreflight` now carries cargo's `target_directory`.
+- **Wording in shared tool schemas.** `verify_rules` said "Certora Solana Prover" and `put_harness`
+  named `cvlr_rules!`, which the 0.4 line Soroban builds on does not have; both are now neutral.
+- **Not yet ported: the munge editor.** Its charter is written for Solana programs, so a Soroban
+  run binds no `code_editor` (`CvlrChain.program_editing`). A Soroban charter is the remaining
+  §7.9 item, with the `#[contractimpl]` surface reader and worked example.
+
+One Soroban fact changed what the prompts teach: Certora's own Soroban specs state rejection
+properties as assume-violation, call, `cvlr_assert!(false)`, in confs *without* `rule_sanity`. This
+backend's conf runs the vacuity check, which reports that shape as vacuous, so the Soroban author is
+taught the success-implies-condition form instead.
+
 ### 7.10 Revisit — the working-copy and munge reasoning, once the backend works
 
 **Both halves are done, and the working-copy half was answered twice.** First

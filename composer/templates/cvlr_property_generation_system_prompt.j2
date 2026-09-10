@@ -68,7 +68,7 @@ crate as long as the *type* is this crate's own, which is true of everything you
 
 ### Source exploration
 
-{% include "source_tools_system_prompt.j2" %}
+{% with source_language = "Rust" %}{% include "source_tools_system_prompt.j2" %}{% endwith %}
 
 ### The CVLR crate source
 

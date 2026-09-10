@@ -79,6 +79,7 @@ from composer.spec.cvlr.munge import (
 )
 from composer.spec.cvlr.prover import (
     BuildRejected,
+    ChainRun,
     Checked,
     CvlrOutcome,
     Submission,
@@ -125,8 +126,9 @@ class HarnessTarget:
     #: feature, since the feature is declared on this package's manifest
     #: (``docs/who-edits-the-program.md`` §11.3).
     package_root: Path
-    #: The package's tuning files, which ``summarize_for_prover`` rewrites.
-    tuning: TuningFiles
+    #: The package's tuning files, which ``summarize_for_prover`` rewrites. ``None`` on a chain
+    #: whose prover reads none (Soroban), which also withholds ``summarize_for_prover``.
+    tuning: TuningFiles | None
     #: This unit's identity — the module name the tree keys edits by, and the cargo feature that
     #: selects it.
     unit: HarnessModule
@@ -192,7 +194,11 @@ class HarnessTarget:
         Call it while holding :meth:`build_slot`. It is the tree's only writer, and the permit is
         what keeps two units out of it at once.
         """
-        self.tuning.write(tuple(summaries))
+        if self.tuning is not None:
+            self.tuning.write(tuple(summaries))
+        elif summaries:
+            # Unreachable through the tools; dropping them would build other than the state says.
+            raise ValueError("summary directives recorded for a target whose prover reads none")
         return await self.tree.reconcile(
             self.unit.module,
             UnitEdits(
@@ -439,13 +445,13 @@ class CargoCheck(
                 )
 
 
-@tool_display("Running the Solana Prover", "Prover")
+@tool_display("Running the Certora Prover", "Prover")
 class VerifyRules(
     WithInjectedState[CvlrGenerationState],
     WithInjectedId,
     WithAsyncDependencies[Command | str, VerifyDeps],
 ):
-    """Build the program with your harness and check its rules with the Certora Solana Prover.
+    """Build the program with your harness and check its rules with the Certora Prover.
 
     Minutes, and it costs real prover time — get ``cargo_check`` green first. On success this stamps
     your current draft, which is one of the two things ``result`` requires.
@@ -539,7 +545,7 @@ class VerifyRules(
                 validations=deps.stamper(self.state, tuning_history(self.state)),
             )
 
-    def _inert_summaries(self, build: SbfRun, submission: Submission) -> str | None:
+    def _inert_summaries(self, build: ChainRun, submission: Submission) -> str | None:
         """A note naming the summary directives this build's symbols do not match.
 
         The failure it reports is total silence. A summary is a regex over demangled symbol names, so
@@ -551,7 +557,10 @@ class VerifyRules(
 
         Best-effort, and silent when the symbols cannot be read: an unreadable artifact must not
         become "your directives matched nothing", which is a different problem with a different fix.
+        Solana-only: the symbol reader is platform-tools' ``llvm-readelf``.
         """
+        if not isinstance(build, SbfRun):
+            return None
         directives = tuple(d.pattern for d in self.state["summaries"])
         if not directives or not isinstance(build.verdict, Built):
             return None
@@ -666,12 +675,15 @@ def gate_tools(target: HarnessTarget, deps: VerifyDeps) -> list[BaseTool]:
     ``munge_function`` is deliberately absent. Editing the program under verification belongs to one
     entity and it is not the author (:mod:`composer.spec.cvlr.editor`,
     ``docs/who-edits-the-program.md`` §4); what the author gets instead is ``code_editor`` and
-    ``revert_munge``, bound where the rest of its tools are."""
-    return [
+    ``revert_munge``, bound where the rest of its tools are. ``summarize_for_prover`` only where
+    there are tuning files for it to write."""
+    tools = [
         CargoCheck.bind(target).as_tool("cargo_check"),
         VerifyRules.bind(deps).as_tool("verify_rules"),
-        SummarizeForProver.bind(target.tuning).as_tool("summarize_for_prover"),
     ]
+    if target.tuning is not None:
+        tools.append(SummarizeForProver.bind(target.tuning).as_tool("summarize_for_prover"))
+    return tools
 
 
 def prover_stamper() -> ValidationStamper:

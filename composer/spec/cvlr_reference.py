@@ -203,9 +203,10 @@ class ChainReference:
         return "\n".join(lines)
 
 
-#: The core line, shared by every chain. ``cvlr-spec`` (the ``cvlr_spec!`` / ``cvlr_rules!`` /
+#: The core line Solana is pinned to. ``cvlr-spec`` (the ``cvlr_spec!`` / ``cvlr_rules!`` /
 #: ``cvlr_lemma!`` machinery) is a dependency of ``cvlr`` rather than a separate declaration, so a
-#: target names one crate and gets the parametric-rule layer with it.
+#: target names one crate and gets the parametric-rule layer with it. Soroban pins its own — see
+#: :data:`SOROBAN`.
 _CORE = CrateRelease("cvlr", "0.6.1")
 
 SOLANA = ChainReference(
@@ -274,7 +275,11 @@ SOLANA = ChainReference(
 )
 
 SOROBAN = ChainReference(
-    core=_CORE,
+    # The 0.4 line, not Solana's 0.6.1: no 0.6.x release builds a Soroban contract, because
+    # ``cvlr-spec`` is not ``#![no_std]`` and its ``std`` ``panic_impl`` collides with
+    # ``soroban-sdk``'s in the wasm build (a host ``cargo check`` passes). 0.4.2 is what
+    # stellar-contracts resolves. ``cvlr``'s unreleased main fixes it; the cores converge then.
+    core=CrateRelease("cvlr", "0.4.2"),
     chain=CrateRelease("cvlr-soroban", "0.4.0"),
     # The derive crate is a companion rather than a specialization, but it is declared the same
     # way: a target reaches for it only when it writes the attribute macros.

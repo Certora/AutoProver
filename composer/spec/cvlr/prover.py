@@ -26,8 +26,10 @@ import dataclasses
 import logging
 from pathlib import Path
 
+from composer.cargo import wasm
 from composer.cargo.sbf import BUILD_TIMEOUT_S, Built, SbfRun, sbf_build, write_build_script
 from composer.cargo.session import CargoSession
+from composer.cargo.wasm import WasmIdentity, WasmRun
 from composer.prover.core import (
     CexHandler,
     ProverCallbacks,
@@ -45,6 +47,7 @@ from composer.spec.cvlr.conf import (
     dump_conf,
     sbf_arch,
     solana_conf,
+    soroban_conf,
     tools_version,
 )
 
@@ -57,11 +60,15 @@ CONF_DIR = Path("certora") / "confs"
 
 
 
+#: One slow-tier chain build, whichever chain ran it.
+type ChainRun = SbfRun | WasmRun
+
+
 @dataclasses.dataclass(frozen=True)
 class BuildRejected:
     """The pre-submission build failed, so nothing was submitted."""
 
-    build: SbfRun
+    build: ChainRun
 
 
 @dataclasses.dataclass(frozen=True)
@@ -72,7 +79,7 @@ class SubmissionFailed:
     ended in a non-success status, an unparseable treeView. Kept as prose because every one of those
     is a different failure and none of them is actionable by type."""
 
-    build: SbfRun
+    build: ChainRun
     reason: str
 
 
@@ -80,7 +87,7 @@ class SubmissionFailed:
 class Checked:
     """The prover ran and returned per-rule outcomes. Rules inside may still have failed."""
 
-    build: SbfRun
+    build: ChainRun
     report: ProverReport
 
     @property
@@ -114,8 +121,10 @@ class Submission:
     #: crate (``docs/single-working-tree.md`` §2.1).
     features: tuple[str, ...] = ()
     #: Points-to summary files this submission reads, workdir-relative. One per unit; see
-    #: :class:`~composer.spec.cvlr.conf.RunOverlay`.
+    #: :class:`~composer.spec.cvlr.conf.RunOverlay`. Solana-only: :func:`soroban_conf` refuses one.
     summaries: tuple[str, ...] = ()
+    #: Set for a Soroban submission, which builds wasm; ``None`` builds sBPF for Solana.
+    wasm_identity: WasmIdentity | None = None
 
     def resolved_features(self) -> tuple[str, ...]:
         return self.features or cargo_features(self.base_conf) or (DEFAULT_FEATURE,)
@@ -123,13 +132,21 @@ class Submission:
 
 async def build_for_submission(
     session: CargoSession, submission: Submission, *, timeout_s: int = BUILD_TIMEOUT_S
-) -> SbfRun:
+) -> ChainRun:
     """The slow tier, configured from the conf.
 
     The conf's ``cargo_tools_version`` and ``solana_sbf_arch`` reach the build from here rather than
     from the prover. On the CLI's own from-sources path they are its build's settings; since this
     backend owns the build, honoring them here is what keeps a project's declaration meaningful
-    instead of silently inert."""
+    instead of silently inert. Soroban has neither knob."""
+    if submission.wasm_identity is not None:
+        return await wasm.wasm_build(
+            session,
+            submission.wasm_identity,
+            manifest_path=submission.manifest_path,
+            features=submission.resolved_features(),
+            timeout_s=timeout_s,
+        )
     return await sbf_build(
         session,
         manifest_path=submission.manifest_path,
@@ -148,15 +165,26 @@ async def write_submission(
     Split out from :func:`submit` because it is the whole deliverable of a dry run: the pair of
     files is what a developer reruns by hand, and what the artifact store persists alongside the
     generated Rust."""
-    script = await write_build_script(
-        session,
-        manifest_path=submission.manifest_path,
-        features=submission.resolved_features(),
-        tools_version=tools_version(submission.base_conf),
-        arch=sbf_arch(submission.base_conf),
-        timeout_s=timeout_s,
-    )
-    conf = solana_conf(
+    if submission.wasm_identity is not None:
+        script = await wasm.write_build_script(
+            session,
+            submission.wasm_identity,
+            manifest_path=submission.manifest_path,
+            features=submission.resolved_features(),
+            timeout_s=timeout_s,
+        )
+        make_conf = soroban_conf
+    else:
+        script = await write_build_script(
+            session,
+            manifest_path=submission.manifest_path,
+            features=submission.resolved_features(),
+            tools_version=tools_version(submission.base_conf),
+            arch=sbf_arch(submission.base_conf),
+            timeout_s=timeout_s,
+        )
+        make_conf = solana_conf
+    conf = make_conf(
         submission.base_conf,
         RunOverlay(
             build_script=str(script),
@@ -173,9 +201,9 @@ async def write_submission(
 
 @dataclasses.dataclass(frozen=True)
 class Prepared:
-    """A built ``.so`` and the conf that will verify it — everything before the cloud is involved."""
+    """A built artifact and the conf that will verify it: everything before the cloud is involved."""
 
-    build: SbfRun
+    build: ChainRun
     conf_path: Path
 
 
