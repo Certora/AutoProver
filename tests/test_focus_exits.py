@@ -65,14 +65,15 @@ PROTECT_SOLVENCY = [PropertyTitle("solvency")]
 
 
 def _direct(protected):
-    """The editing branch builds the pair with ``skip_tools`` (spec/source/author.py)."""
+    """The CVL author builds the pair with ``skip_tools`` (spec/source/author.py)."""
     return skip_tools(TITLES, skip_description="d", skip_reason="r", protected=protected)
 
 
 def _via_property_tools(protected):
-    """The non-editing branch reaches the same pair through ``property_tools``
-    (spec/cvl_generation.py). Both must honour the protection, or the ban depends on which
-    branch happened to build the suite."""
+    """The natspec author reaches the same pair through ``property_tools``
+    (spec/cvl_generation.py). It passes no ``protected`` today — a focus is a prover-run
+    concept — but the two routes must not diverge on whether they honour one, or a
+    protection wired into a single route is silently bypassable from the other."""
     from composer.spec.cvl_generation import property_tools
 
     class _Services:

@@ -21,8 +21,9 @@ from composer.spec.types import (
 
 type RuleRef = tuple[str, RuleName]
 """A rule's identity: ``(spec_file, name)``. A name is only unique within a spec, so the defining
-spec file disambiguates a rule re-stated under the same name in another spec (and collapses a single
-definition — e.g. an imported structural invariant — seen through several component runs)."""
+spec file disambiguates a rule re-stated under the same name in another spec — two components that
+each author a supporting invariant of the same name stay distinct — while collapsing a single
+definition seen through several runs."""
 
 class Outcome(str, Enum):
     """Backend-agnostic per-unit (rule / test) result. Each backend's native analysis status maps
@@ -332,7 +333,7 @@ class AutoProverReport(BaseModel):
     deprioritized: list[DeprioritizedProperty] = Field(default_factory=list)
     contract_name: str
     run_timestamp_utc: str | None = None
-    #: component name (or "Structural Invariants") -> prover run link/path
+    #: component name -> prover run link/path
     prover_links: dict[ComponentName, str] = Field(default_factory=dict)
     properties: list[FormalizedProperty]
     rules: list[RuleVerdict]

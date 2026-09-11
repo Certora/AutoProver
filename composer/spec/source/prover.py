@@ -47,6 +47,7 @@ from composer.diagnostics.stream import (
 )
 from composer.authoring.state import make_validation_stamper, spec_digest
 from composer.spec.cvl_generation import CVLGenerationState
+from composer.diagnostics.budget import exhausted_constraint, raise_budget_exceeded
 from composer.diagnostics.timing import RunSummary, get_run_summary
 from graphcore.graph import tool_state_update
 from composer.spec.util import temp_certora_file
@@ -130,6 +131,21 @@ def _executed_rules(
     else:
         to_filt = set(r["rules"]["selector"])
         return [ r_id for r_id in r["declared_rules"] if r_id not in to_filt ]
+
+def declared_rules_at(
+    history: Sequence[ProverHistoryItem], state_digest: str
+) -> set[str] | None:
+    """The rule/invariant names the typechecker found in the spec that ``state_digest`` identifies,
+    or None if no run covered that state.
+
+    Every ``verify_spec`` records what the prover declared, so this is ground truth about the
+    published spec rather than the author's account of it. None is the honest answer under a lifted
+    publish gate: a budget wrap-up publishes without ever having run the prover."""
+    for item in reversed(history):
+        if item["sort"] == "run" and item["state_digest"] == state_digest:
+            return set(item["declared_rules"])
+    return None
+
 
 #: How many consecutive runs must end in the identical failure before the author is nagged
 #: about a rule. Counts the run being processed, so 3 means "this run plus the two before it".
@@ -272,9 +288,8 @@ class ProverStateExtra(TypedDict):
 type ProverEvents = CEXAnalysisStart | CloudPollingEvent | ProverOutputEvent | RuleAnalysisResult | ProverRun | ProverLink | ProverResult
 
 # ``verify_spec`` only runs in the source pipeline, whose state always seeds
-# ``version_history`` — permanently empty in phases without the edit tools
-# (structural invariants, never-edited authors), in which case it contributes
-# nothing to the digest. The prover's validation stamp is bound to it so a
+# ``version_history`` — permanently empty for an author that never edited, in
+# which case it contributes nothing to the digest. The prover's validation stamp is bound to it so a
 # post-run edit invalidates the stamp.
 class StateWithSkips(CVLGenerationState, ProverStateExtra, VersionedHistory):
     pass
@@ -303,6 +318,18 @@ class _SpecCallbacks(ProverEventCallbacks):
             f"cloud poll tool_call={self._tool_call_id} status={status} "
             f"elapsed={elapsed:.1f}s msg={message}"
         )
+        # A cloud prover job is the longest single wait in the run, and waiting for one
+        # is a tool call: the author's monitor gets no turn to sample the budget while it
+        # blocks, so a run can sit here hours past its deadline. Poll the budget on each
+        # status tick instead. The author catches BudgetExceeded and curtails, the same
+        # way it does when its monitor trips; the job itself is left to finish in the
+        # cloud, since its link is already recorded.
+        if (sort := exhausted_constraint()) is not None:
+            _logger.info(
+                f"budget exhausted while polling tool_call={self._tool_call_id} "
+                f"sort={sort} elapsed={elapsed:.1f}s"
+            )
+            raise_budget_exceeded(sort)
         await super().on_cloud_poll(
             status, message
         )
