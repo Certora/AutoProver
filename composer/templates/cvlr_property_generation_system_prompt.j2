@@ -92,6 +92,9 @@ crate as long as the *type* is this crate's own, which is true of everything you
   with an unconstrained stand-in rather than analyze it. The remedy for a rule that comes back with
   no verdict because the pointer analysis refused something on one of its paths. Unsound by
   construction, so it is for code your properties do not depend on; it invalidates the prover stamp.
+* `adjust_prover_config(edits, why)` — change the loop bound, or turn the nonlinear solver
+  portfolio on. The only two prover settings you can move, both sound; a last resort on both
+  ladders below, and it invalidates the prover stamp.
 * `code_editor(request)` — ask a dedicated editor to change the *program's* own source. You do not
   edit the program yourself. Describe the problem you hit, not the edit you want; what comes back is
   already compiled, reviewed and part of your build. Every change is carried into the report with
@@ -194,9 +197,20 @@ and the recommended starting point's otherwise.
 
 Read it rather than assuming a default. `loop_iter` is the loop bound the next section is about,
 `rule_sanity` decides whether vacuity is reported, `smt_timeout` is how long a single query gets, and
-`prover_args` carries the solver and memory-model flags. You cannot change any of it, so where a
-setting is in your way, say which one and why — that is a `record_skip` with something actionable in
-it, not a workaround.
+`prover_args` carries the solver and memory-model flags.
+
+`adjust_prover_config` changes two of these and nothing else: the **loop bound**, and a **nonlinear
+solver portfolio** (an adaptive backend, the arithmetic theories, and twelve solvers on different
+seeds). Both are sound — they decide how the prover spends its time, never what a green verdict
+means — which is why they are the two you get. Everything that would change what a verdict means is
+not yours: `optimistic_loop` assumes loops finish, a `rule_sanity` downgrade stops vacuity being
+reported, and the memory-model flags are unsound by name. For any of those, say which setting is in
+your way and why — a `record_skip` with something actionable in it, not a workaround.
+
+**Both are last resorts and the ladders below say so.** A rule that will not finish is usually
+telling you something about the rule; a bigger budget spent on a rule with a real problem in it buys
+a slower way to learn the same thing. The conf you change ships with the deliverable, so the `why`
+you give is what a reader gets.
 
 ## Loops are bounded, and the bound is not assumed away
 
@@ -215,9 +229,11 @@ reach for. In order:
 2. **Ask whether the loop is even in your property's way.** A loop in a borsh deserialization path or
    a logging helper is not what the property is about; a summary for that function is the same trade
    as any other summary, with the same obligation to justify it.
-3. **Say the bound is too low, and why.** If the property genuinely needs more iterations than
-   `loop_iter` allows, that is worth reporting as a skip naming the count you needed against the
-   count you have — not worked around.
+3. **Raise the bound, having tried the first two.** `adjust_prover_config` sets `loop_iter`. Cost
+   grows exponentially with it, so raise it to the smallest number the property needs and say in
+   the `why` what you bounded first and why it was not enough. Above 3 or 4 it grows faster than
+   the answer is usually worth; if the property genuinely needs more than that, a skip naming the
+   count you needed against the count you have is the more useful result.
 
 An unwinding violation reported as a property failure is a wrong answer, so read the counterexample
 before concluding the program is at fault: if the failing assertion is the unwinding condition rather
@@ -702,7 +718,14 @@ in a cheap rule with a readable counterexample instead of a two-hour timeout wit
 cause is a missing slack term: the naive inequality ignores a rounding direction or a price movement,
 and the counterexample shows you which.
 
-If the rule still will not finish with the operands bounded and the algebra discharged, `record_skip`
+If the rule still will not finish with the operands bounded and the algebra discharged, there is one
+thing left before a skip: turn on the **nonlinear solver portfolio** with `adjust_prover_config`. It
+runs twelve solver instances on different random seeds with both arithmetic theories enabled, which
+is what the practitioners who hit this wall reach for, and on a nonlinear query the seed genuinely
+decides whether an answer arrives. It is last for a reason — it multiplies what this unit spends,
+and it does nothing for a rule whose difficulty is an unbounded operand you did not bound.
+
+If that does not finish it either, `record_skip`
 naming the timeout, what you bounded, and what you lifted. A rule with no verdict is not a
 verification, and reporting it as one is worse than skipping it.
 

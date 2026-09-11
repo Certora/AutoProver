@@ -363,6 +363,110 @@ def _verify_state(draft: str) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------------------------
+# The two prover settings the author may move
+#
+# The closed list is the point. Every setting here decides how the prover spends its time and none
+# decides what a green verdict means, which is why `optimistic_loop` and a `rule_sanity` downgrade
+# are not in it — and why the flag list is a named recipe rather than free text (P8).
+
+
+def _adjust(state: dict, edits: list, why: str = "tried bounding the operands first"):
+    tool = verify_mod.AdjustProverConfig(state=state, tool_call_id="tc", edits=edits, why=why)
+    return tool.run()
+
+
+def test_raising_the_loop_bound_writes_it_as_a_conf_spells_an_integer():
+    from composer.spec.cvlr.verify import SetLoopIter
+
+    state = {**_verify_state(DRAFT), "conf": {"loop_iter": "2"}}
+    out = _adjust(state, [SetLoopIter(type="loop_iter", iterations=4)])
+    assert not isinstance(out, str), out
+    assert out.update["conf"]["loop_iter"] == "4"
+
+
+def test_the_loop_bound_is_not_capped_following_the_cvl_backends_precedent():
+    """`composer/tools/prover.py` exposes `loop_iter` as a plain int and steers with prose — "set
+    this number as low as possible", "above 3 … exponentially worse". Guidance, not a ceiling, and
+    a bound the author cannot exceed would turn a cost trade into a refusal."""
+    from composer.spec.cvlr.verify import SetLoopIter
+
+    out = _adjust({**_verify_state(DRAFT), "conf": {}}, [SetLoopIter(type="loop_iter", iterations=9)])
+    assert not isinstance(out, str), out
+    assert out.update["conf"]["loop_iter"] == "9"
+
+
+def test_a_loop_bound_below_one_is_refused():
+    from composer.spec.cvlr.verify import SetLoopIter
+
+    out = _adjust({**_verify_state(DRAFT), "conf": {}}, [SetLoopIter(type="loop_iter", iterations=0)])
+    assert isinstance(out, str) and "not a bound" in out
+
+
+def test_the_solver_portfolio_goes_on_and_reports_the_whole_conf_back():
+    from composer.spec.cvlr.verify import SetNonlinearSolverPortfolio
+
+    state = {**_verify_state(DRAFT), "conf": {"prover_args": ["-solanaTACMathInt true"]}}
+    out = _adjust(state, [SetNonlinearSolverPortfolio(type="nonlinear_solver_portfolio", enabled=True)])
+    assert not isinstance(out, str), out
+    args = out.update["conf"]["prover_args"]
+    assert "-smt_useNIA true" in args and "-solanaTACMathInt true" in args
+    # The author is shown what it now is, not told that something changed.
+    assert "smt_useNIA" in out.update["messages"][0].content
+
+
+def test_a_setting_that_is_already_what_you_asked_for_is_refused():
+    from composer.spec.cvlr.verify import SetLoopIter
+
+    out = _adjust({**_verify_state(DRAFT), "conf": {"loop_iter": "2"}},
+                  [SetLoopIter(type="loop_iter", iterations=2)])
+    assert isinstance(out, str) and "already 2" in out
+
+
+def test_an_unexplained_config_change_is_refused():
+    """The conf ships with the deliverable, so a setting nobody explained is one a reader cannot
+    weigh — the same trade `summarize_for_prover` and every munge make."""
+    from composer.spec.cvlr.verify import SetLoopIter
+
+    out = _adjust({**_verify_state(DRAFT), "conf": {}},
+                  [SetLoopIter(type="loop_iter", iterations=3)], why="  ")
+    assert isinstance(out, str) and "non-empty `why`" in out
+
+
+def test_edits_apply_together_or_not_at_all():
+    """The second edit is a no-op refusal, and the first must not have landed."""
+    from composer.spec.cvlr.verify import SetLoopIter, SetNonlinearSolverPortfolio
+
+    state = {**_verify_state(DRAFT), "conf": {"loop_iter": "2", "prover_args": []}}
+    out = _adjust(state, [
+        SetLoopIter(type="loop_iter", iterations=4),
+        SetNonlinearSolverPortfolio(type="nonlinear_solver_portfolio", enabled=False),
+    ])
+    assert isinstance(out, str) and "already off" in out
+    assert state["conf"]["loop_iter"] == "2"
+
+
+def test_the_editable_keys_cannot_be_shadowed_by_the_run_overlay():
+    """An accepted edit to an overlay-owned key would be reported as applied and then dropped before
+    submission. The module-level assertion is the guard; this states what it guards."""
+    from composer.spec.cvlr.conf import OVERLAY_OWNED_KEYS
+    from composer.spec.cvlr.verify import _CONF_EDIT_KEYS
+
+    assert not (_CONF_EDIT_KEYS & OVERLAY_OWNED_KEYS)
+
+
+def test_a_config_change_invalidates_the_prover_stamp():
+    """A verdict earned under one loop bound or one solver portfolio is not a verdict under
+    another, which is what `tuning_history` carrying the conf buys."""
+    from composer.spec.cvlr.verify import SetLoopIter
+
+    before = {**_verify_state(DRAFT), "conf": {"loop_iter": "2"}}
+    out = _adjust(before, [SetLoopIter(type="loop_iter", iterations=4)])
+    assert not isinstance(out, str), out
+    after = {**before, "conf": out.update["conf"]}
+    assert tuning_history(before) != tuning_history(after)
+
+
 @pytest.mark.asyncio
 async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeypatch):
     """The conf must carry a ``rule`` entry, and it must be this draft's rules.

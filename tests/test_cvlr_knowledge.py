@@ -312,6 +312,31 @@ def _author_system_prompt() -> str:
     return _PropertyGenSysTemplate.bind(params).render_to(load_jinja_template)
 
 
+def test_the_author_is_told_which_prover_settings_are_its_own_and_which_are_not():
+    """The tool exists for two settings and the prompt has to draw the line, because the ones it
+    withholds are exactly the ones that look like the obvious remedy: `optimistic_loop` for a loop
+    that will not close, a `rule_sanity` downgrade for a rule that keeps coming back vacuous."""
+    prompt = _flat(_author_system_prompt())
+
+    assert "adjust_prover_config" in prompt
+    assert "optimistic_loop" in prompt and "rule_sanity" in prompt
+    # And what it may change is named as sound rather than merely permitted.
+    assert "never what a green verdict means" in prompt
+
+
+def test_both_new_settings_are_placed_last_on_their_ladders():
+    """A bigger budget spent on a rule with a real problem in it buys a slower way to learn the same
+    thing, so the prompt must not offer either as a first move."""
+    prompt = _flat(_author_system_prompt())
+
+    loop_rung = prompt.index("Raise the bound, having tried the first two")
+    assert prompt.index("Constrain what determines the trip count") < loop_rung
+
+    portfolio = prompt.index("nonlinear solver portfolio** with `adjust_prover_config`")
+    assert prompt.index("Bound the operands") < portfolio
+    assert prompt.index("Then lift the algebra into a lemma") < portfolio
+
+
 def test_the_author_is_told_to_call_the_handler_not_anchors_dispatch():
     """A rule starting at ``entry`` pays for Anchor's whole dispatch — discriminator matching,
     account validation, serialization — to reach a handler it could have called directly, and no

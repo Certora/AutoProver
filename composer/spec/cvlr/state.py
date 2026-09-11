@@ -174,6 +174,11 @@ def validate_rule_subjects(subjects: list[RuleSubject], draft: str) -> str | Non
     return "\n".join(errors) if errors else None
 
 
+def _latest_conf(_current: dict, update: dict) -> dict:
+    """Last write wins. The conf edit tool is whole-document, so there is nothing to merge."""
+    return update
+
+
 class CvlrGenerationExtra(AuthoringExtra):
     property_rules: list[PropertyRuleMapping]
     #: One entry per declared rule, naming what it drives. See :data:`RuleSubject`.
@@ -186,9 +191,13 @@ class CvlrGenerationExtra(AuthoringExtra):
     munges: Annotated[list[Munge], merge_munges]
     #: The prover conf this unit submits under — the project's own where it keeps one, else the
     #: recommended starting point's (:func:`~composer.spec.cvlr.conf.load_base`). Per-unit rather
-    #: than per-run because it is state the author can be given a tool to change, and a change one
-    #: unit makes to answer its own timeout has no business reaching a sibling's verdicts.
-    conf: dict
+    #: than per-run because the author can change it, and a change one unit makes to answer its own
+    #: timeout has no business reaching a sibling's verdicts.
+    #:
+    #: Reduced last-wins rather than plain: ``adjust_prover_config`` applies every edit in one call
+    #: and writes the whole conf, so two writes in one graph step are two complete confs and the
+    #: later is the live one. Without a reducer that step dies with ``InvalidUpdateError``.
+    conf: Annotated[dict, _latest_conf]
     expected_failures: Annotated[dict[CheckName, str], merge_expected_failures]
     #: The job link from the most recent prover run that produced results, whether or not it was
     #: all green — a link to a failing run is still the most useful thing a report can offer.

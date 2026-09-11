@@ -340,6 +340,65 @@ def safe_msg(msg: str) -> str:
 _SANITY_ON = frozenset({"basic", "advanced"})
 
 
+#: The solver settings a nonlinear-arithmetic query needs, as one named recipe.
+#:
+#: Not invented here. This is what the reference project's own conf carries, with its own comment
+#: explaining the seeds ("more random seeds help NL solver"), and it is aimed at the failure this
+#: backend measures more than any other: a rule that splits heavily, sits at a low completion
+#: percentage and HALTs on the global timeout. ``-smt_useLIA`` earns its place on the same conf's
+#: note that linear arithmetic gives a perf boost inside checked-arithmetic helpers.
+#:
+#: **One named recipe rather than an editable flag list**, and ``docs/upstream-defects.md`` P8 is the
+#: argument. A prover flag can look harmless, be recommended, and still be catastrophic in
+#: combination with another: enabling ``-solanaTACSoundSignedMath`` alongside the
+#: ``-solanaTACMathInt`` this backend already sets turned a seven-minute, eighteen-rule green run
+#: into a two-hour timeout with thirteen rules unverified. An author composing prover args from
+#: recall has no way to know that. A recipe has one expansion, which can be measured once and
+#: changed in one place.
+#:
+#: Every entry here is **sound**: solver strategy, theory selection and random seeds change how long
+#: an answer takes and not what a green verdict means. That is the line this list may not cross.
+NONLINEAR_SOLVER_PORTFOLIO: tuple[str, ...] = (
+    "-backendStrategy adaptive",
+    "-smt_useLIA true",
+    "-smt_useNIA true",
+    "-solvers [z3:def{randomSeed=21},z3:def{randomSeed=22},z3:def{randomSeed=23}]",
+    "-solvers [z3:def{randomSeed=24},z3:def{randomSeed=25},z3:def{randomSeed=26}]",
+    "-solvers [z3:def{randomSeed=27},z3:def{randomSeed=28},z3:def{randomSeed=29}]",
+    "-solvers [z3:def{randomSeed=30},z3:def{randomSeed=31},z3:def{randomSeed=32}]",
+)
+
+
+def has_solver_portfolio(conf: dict) -> bool:
+    """Whether ``conf`` already carries the portfolio, by the flags it sets rather than by a marker.
+
+    Read off the conf itself so a project that wrote these settings by hand — the reference project
+    does — is recognized as already having them, and the author is told there is nothing to turn on
+    rather than being allowed to append a duplicate set.
+    """
+    present = {_flag(a) for a in _str_list(conf.get("prover_args"))}
+    return all(_flag(a) in present for a in NONLINEAR_SOLVER_PORTFOLIO)
+
+
+def with_solver_portfolio(conf: dict, enabled: bool) -> dict:
+    """``conf`` with the nonlinear portfolio added or removed.
+
+    Added through :func:`merge_prover_args`, so a project that already sets ``-backendStrategy`` or
+    its own ``-solvers`` line has those *replaced* rather than duplicated — the prover would
+    otherwise see one flag twice and pick, which is a conf with two intentions in it.
+    """
+    args = _str_list(conf.get("prover_args"))
+    if enabled:
+        return {**conf, "prover_args": merge_prover_args(args, list(NONLINEAR_SOLVER_PORTFOLIO))}
+    drop = {_flag(a) for a in NONLINEAR_SOLVER_PORTFOLIO}
+    return {**conf, "prover_args": [a for a in args if _flag(a) not in drop]}
+
+
+def with_loop_iter(conf: dict, iterations: int) -> dict:
+    """``conf`` with a new loop bound. Stringified, because that is how a conf spells an integer."""
+    return {**conf, "loop_iter": str(iterations)}
+
+
 def with_sanity_floor(conf: dict) -> dict:
     """``conf`` with vacuity checking guaranteed on, at ``basic`` unless it already asks for more.
 
