@@ -380,18 +380,31 @@ def has_solver_portfolio(conf: dict) -> bool:
     return all(_flag(a) in present for a in NONLINEAR_SOLVER_PORTFOLIO)
 
 
+#: The one prover flag in the portfolio that is **repeatable**: each ``-solvers`` entry adds a
+#: parallel solver configuration rather than replacing the last. That makes it the exception to
+#: :func:`merge_prover_args`, which dedupes on the flag so that ``-solanaTACOptimize 2`` overrides
+#: ``-solanaTACOptimize 0``. Merging the portfolio's four ``-solvers`` lines the ordinary way
+#: collapses twelve solver instances into three, which is most of the recipe thrown away, silently.
+_REPEATABLE_FLAG = "-solvers"
+
+
 def with_solver_portfolio(conf: dict, enabled: bool) -> dict:
     """``conf`` with the nonlinear portfolio added or removed.
 
-    Added through :func:`merge_prover_args`, so a project that already sets ``-backendStrategy`` or
-    its own ``-solvers`` line has those *replaced* rather than duplicated — the prover would
-    otherwise see one flag twice and pick, which is a conf with two intentions in it.
+    The non-repeatable flags go through :func:`merge_prover_args`, so a project that already sets
+    ``-backendStrategy`` has it *replaced* rather than named twice — a conf with one flag at two
+    values has two intentions in it and the prover picks. ``-solvers`` is handled separately for the
+    reason above: the project's own lines are dropped and the portfolio's four replace them as a
+    set, because a solver portfolio is one decision rather than a flag whose last value wins.
     """
     args = _str_list(conf.get("prover_args"))
-    if enabled:
-        return {**conf, "prover_args": merge_prover_args(args, list(NONLINEAR_SOLVER_PORTFOLIO))}
-    drop = {_flag(a) for a in NONLINEAR_SOLVER_PORTFOLIO}
-    return {**conf, "prover_args": [a for a in args if _flag(a) not in drop]}
+    if not enabled:
+        drop = {_flag(a) for a in NONLINEAR_SOLVER_PORTFOLIO}
+        return {**conf, "prover_args": [a for a in args if _flag(a) not in drop]}
+    solvers = [a for a in NONLINEAR_SOLVER_PORTFOLIO if _flag(a) == _REPEATABLE_FLAG]
+    rest = [a for a in NONLINEAR_SOLVER_PORTFOLIO if _flag(a) != _REPEATABLE_FLAG]
+    kept = [a for a in args if _flag(a) != _REPEATABLE_FLAG]
+    return {**conf, "prover_args": merge_prover_args(kept, rest) + solvers}
 
 
 def with_loop_iter(conf: dict, iterations: int) -> dict:

@@ -308,6 +308,25 @@ def test_turning_the_portfolio_on_replaces_a_projects_own_solver_settings():
     assert "-solanaTACMathInt true" in on["prover_args"]
 
 
+def test_all_twelve_solver_instances_survive_being_applied():
+    """`-solvers` is repeatable — each entry adds a parallel solver configuration — so it is the
+    exception to `merge_prover_args`, which dedupes on the flag so `-solanaTACOptimize 2` overrides
+    `-solanaTACOptimize 0`. Merging the portfolio the ordinary way collapses four `-solvers` lines
+    into one and throws away nine of the twelve instances, silently, which is most of the recipe.
+    Caught by building a real conf through this function rather than by hand."""
+    out = cvlr_conf.with_solver_portfolio({"prover_args": ["-solanaTACMathInt true"]}, True)
+    assert sum(a.startswith("-solvers ") for a in out["prover_args"]) == 4
+
+
+def test_a_projects_own_solver_lines_are_replaced_as_a_set_not_appended_to():
+    """A portfolio is one decision. Keeping the project's lines beside ours would run a mixture
+    neither side chose."""
+    base = {"prover_args": ["-solvers [z3:def{randomSeed=1}]", "-solvers [z3:def{randomSeed=2}]"]}
+    out = cvlr_conf.with_solver_portfolio(base, True)
+    assert sum(a.startswith("-solvers ") for a in out["prover_args"]) == 4
+    assert "randomSeed=1" not in " ".join(out["prover_args"])
+
+
 def test_turning_it_off_leaves_everything_that_was_not_the_portfolio():
     base = {"prover_args": ["-solanaTACMathInt true"]}
     roundtrip = cvlr_conf.with_solver_portfolio(cvlr_conf.with_solver_portfolio(base, True), False)
