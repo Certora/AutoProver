@@ -40,7 +40,6 @@ class AutoProvePhase(enum.Enum):
     DISCOVER_DESIGN_DOC = "discover_design_doc"
     HARNESS = "harness"
     AUTOSETUP = "autosetup"
-    INVARIANTS = "invariants"
     SUMMARIES = "summaries"
     COMPONENT_ANALYSIS = "component_analysis"
     BUG_ANALYSIS = "bug_analysis"
@@ -52,7 +51,6 @@ AUTOPROVE_PHASE_LABELS: dict[AutoProvePhase, str] = {
     AutoProvePhase.DISCOVER_DESIGN_DOC: "Design Doc Discovery",
     AutoProvePhase.HARNESS: "Harness Creation",
     AutoProvePhase.AUTOSETUP: "AutoSetup",
-    AutoProvePhase.INVARIANTS: "Structural Invariants",
     AutoProvePhase.SUMMARIES: "Summaries",
     AutoProvePhase.COMPONENT_ANALYSIS: "Component Analysis",
     AutoProvePhase.BUG_ANALYSIS: "Property Extraction",
@@ -64,7 +62,6 @@ AUTOPROVE_SECTION_ORDER: list[str] = [
     "Design Doc Discovery",
     "Harness Creation",
     "AutoSetup",
-    "Structural Invariants",
     "Summaries",
     "Component Analysis",
     "Property Extraction",

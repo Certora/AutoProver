@@ -20,7 +20,7 @@ from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 
-from graphcore.utils import get_token_usage
+from graphcore.utils import get_normalized_token_usage
 from composer.diagnostics.timing import get_run_summary
 
 
@@ -43,6 +43,9 @@ class UsageCallback(BaseCallbackHandler):
             return
         msg = generation.message
         if isinstance(msg, AIMessage):
-            # get_run_summary() returns an inert throwaway outside a run, so this is
-            # a no-op when no autoprove run is active (e.g. ad-hoc model use).
-            get_run_summary().record_token_usage(get_token_usage(msg))
+            # The normalized usage_metadata is the one source every transport and
+            # provider fills in — the raw response_metadata["usage"] dict exists only
+            # on non-streamed Anthropic responses. get_run_summary() returns an inert
+            # throwaway outside a run, so this is a no-op when no autoprove run is
+            # active (e.g. ad-hoc model use).
+            get_run_summary().record_token_usage(get_normalized_token_usage(msg))

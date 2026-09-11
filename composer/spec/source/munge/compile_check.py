@@ -14,7 +14,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from graphcore.tools.vfs import VFSState, VFSAccessor
-from composer.prover.core import run_prover_inner
+from certora_autosetup.utils.build_json import build_json_path
+from composer.prover.core import BUILD_TIMEOUT_S, run_prover_inner
 
 
 @dataclass(frozen=True)
@@ -46,16 +47,6 @@ def _config_paths(config: dict[str, Any]) -> set[str]:
     """The file paths under ``config['files']``, stripped of any
     ``:ContractName`` suffix certora allows on a file entry."""
     return {str(entry).split(":", 1)[0] for entry in config.get("files", [])}
-
-
-def _find_build_json(folder: Path) -> Path | None:
-    latest = folder / ".certora_internal" / "latest" / ".certora_build.json"
-    if latest.exists():
-        return latest
-    # `latest` is normally a symlink to the timestamped run dir; fall back to the
-    # newest run dir by name (they sort chronologically) if it's absent.
-    candidates = sorted(folder.glob(".certora_internal/*/.certora_build.json"))
-    return candidates[-1] if candidates else None
 
 
 def _scrape_touched(build_json: Path) -> set[str]:
@@ -131,6 +122,7 @@ async def check_edits_compile(
             [_CONF_NAME, "--build_only"],
             _noop_err,
             _noop_stdout,
+            BUILD_TIMEOUT_S,
         )
 
         # run_prover_inner surfaces a hard subprocess failure as a str; the
@@ -141,7 +133,7 @@ async def check_edits_compile(
         if isinstance(result, dict) and result.get("sort") == "failure":
             return BuildFailed(reason=f"{result.get('exc_str', '')}\n{stdout}".strip())
 
-        build_json = _find_build_json(folder)
+        build_json = build_json_path(folder)
         if build_json is None:
             return BuildFailed(reason=f"build produced no .certora_build.json\n{stdout}".strip())
 

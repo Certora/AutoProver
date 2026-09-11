@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 from packaging.version import InvalidVersion, Version
 
 from certora_autosetup.build_systems.base import BuildSystemConfig
+from certora_autosetup.build_systems.config_files import TRUFFLE_CONFIG_FILENAMES
 from certora_autosetup.build_systems.manager import BuildSystemManager
 from certora_autosetup.utils.remappings import build_packages_from_remapping_sources
 
@@ -88,7 +89,7 @@ class TruffleManager(BuildSystemManager):
 
     def get_config_filenames(self) -> List[str]:
         """Return list of config filenames to search for."""
-        return ["truffle-config.js", "truffle.js"]
+        return list(TRUFFLE_CONFIG_FILENAMES)
 
     def get_default_artifact_dir(self) -> str:
         """Return default artifact directory name."""
@@ -102,6 +103,13 @@ class TruffleManager(BuildSystemManager):
     def holds_artifacts(artifacts_dir: Path) -> bool:
         """Truffle writes one flat `<ContractName>.json` per contract into its build dir."""
         return artifacts_dir.is_dir() and any(artifacts_dir.glob("*.json"))
+
+    @staticmethod
+    def recorded_source(artifact: dict) -> Optional[str]:
+        """Truffle records `sourcePath`, and unlike the others it is the absolute path the
+        source had on the machine that compiled it."""
+        source_path = artifact.get("sourcePath")
+        return source_path if isinstance(source_path, str) else None
 
     def filter_artifacts(self, artifacts_dir: Path) -> List[Path]:
         """Return Truffle's artifact JSONs — one flat `<ContractName>.json` per contract."""

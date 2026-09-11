@@ -13,6 +13,7 @@ from pathlib import Path
 from dataclasses import dataclass
 
 from certora_autosetup.build_systems.base import BuildSystemConfig
+from certora_autosetup.build_systems.config_files import HARDHAT_CONFIG_FILENAMES
 from certora_autosetup.build_systems.manager import BuildSystemManager
 
 
@@ -91,7 +92,7 @@ class HardhatManager(BuildSystemManager):
 
     def get_config_filenames(self) -> List[str]:
         """Return list of config filenames to search for."""
-        return ["hardhat.config.js", "hardhat.config.ts"]
+        return list(HARDHAT_CONFIG_FILENAMES)
 
     def parse_config(self, config_file: Path, profile: str | None = None) -> HardhatConfig:
         """
@@ -393,6 +394,16 @@ class HardhatManager(BuildSystemManager):
             return False
         return (any((artifacts_dir / "contracts").rglob("*.json"))
                 or any((artifacts_dir / "build-info").glob("*.json")))
+
+    @staticmethod
+    def recorded_source(artifact: dict) -> Optional[str]:
+        """Hardhat records it as a project-relative `sourceName`. The `_format` stamp is what
+        separates a real artifact from the `.dbg.json` sidecars and the solc standard-json
+        under `build-info/`, which sit in the same tree and carry no source of their own."""
+        if artifact.get("_format") != "hh-sol-artifact-1":
+            return None
+        source_name = artifact.get("sourceName")
+        return source_name if isinstance(source_name, str) else None
 
     def filter_artifacts(self, artifacts_dir: Path) -> List[Path]:
         """

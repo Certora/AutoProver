@@ -2,12 +2,14 @@
 ``ModelProvider`` implementation that mints ``ChatAnthropic`` instances."""
 
 from typing import Literal, TypeGuard, Any, TYPE_CHECKING, override, cast
+from collections.abc import Mapping
 from io import BytesIO
 from dataclasses import dataclass, field
 import asyncio
 from functools import cache
 
 import anthropic
+import httpx
 
 from composer.input.files import UploaderBase, ContentRenderer
 from composer.input.types import ModelConfiguration
@@ -206,6 +208,30 @@ class AnthropicFileUploader(UploaderBase):
 
 # --- ModelProvider ---------------------------------------------------------
 
+
+RETRYABLE_ERROR_TYPES = frozenset({
+    "overloaded_error",  # 529
+    "api_error",         # 500
+    "rate_limit_error",  # 429
+    "timeout_error",     # 408
+})
+"""The ``error.type`` values of the statuses ``should_retry`` accepts, for payloads whose
+status code cannot speak for them."""
+
+
+def _payload_error_type(body: object) -> str | None:
+    """The ``error.type`` discriminator of an Anthropic error payload, or ``None``
+    for a body of any other shape (the SDK leaves it as the raw text when the
+    payload does not parse)."""
+    if not isinstance(body, Mapping):
+        return None
+    error = body.get("error")
+    if not isinstance(error, Mapping):
+        return None
+    error_type = error.get("type")
+    return error_type if isinstance(error_type, str) else None
+
+
 class AnthropicService(ProviderServiceBase):
     def __init__(self):
         from graphcore.tools.memory import anthropic_async_memory_tool
@@ -233,13 +259,26 @@ class AnthropicService(ProviderServiceBase):
     def should_retry(self, exc: Exception) -> bool:
         """Mirrors the SDK's own ``_should_retry`` status roster (408/409/429
         and every 5xx, which covers 529 overloaded) plus connection-level
-        failures (``APITimeoutError`` subclasses ``APIConnectionError``).
-        400-class request errors are deterministic — an over-long prompt fails
-        identically on every attempt — and are deliberately excluded."""
+        failures (``APITimeoutError`` subclasses ``APIConnectionError``), a
+        connection dropped mid-stream, and an error the server reports inside a
+        stream. 400-class request errors are deterministic — an over-long prompt
+        fails identically on every attempt — and are deliberately excluded."""
         if isinstance(exc, anthropic.APIConnectionError):
             return True
+        # A connection that drops mid-stream surfaces as a raw httpx.RemoteProtocolError
+        # ("peer closed connection without sending complete message body") — the SDK does not
+        # wrap streamed-body failures as APIConnectionError, so match it directly. It is a
+        # transient transport failure, retryable like any connection-level error.
+        if isinstance(exc, httpx.RemoteProtocolError):
+            return True
         if isinstance(exc, anthropic.APIStatusError):
-            return exc.status_code in (408, 409, 429) or exc.status_code >= 500
+            if exc.status_code in (408, 409, 429) or exc.status_code >= 500:
+                return True
+            # An error the server reports part-way through a stream rides the already-open
+            # 200 response, and the SDK builds the exception from that response — so the
+            # status code carries none of the meaning and the class stays the base
+            # APIStatusError. The transient/deterministic split lives in the payload.
+            return _payload_error_type(exc.body) in RETRYABLE_ERROR_TYPES
         return False
 
 @dataclass
@@ -301,7 +340,16 @@ class AnthropicModelProvider:
         return ChatAnthropic(
             model_name=self.model_name,
             max_tokens_to_sample=opts.tokens,
-            timeout=None,
+            # An explicit None DISABLES the SDK's timeouts (None != not-given), so a
+            # socket that dies silently mid-stream hangs the session forever. A float
+            # is a per-phase httpx timeout — for a streamed response, the max silence
+            # between chunks, not a cap on the whole turn.
+            timeout=300.0,
+            # Stream every request: a long authoring turn (Opus + thinking on a large
+            # prompt) can exceed the SDK's 600s non-streaming ceiling, and a silent
+            # 10-minute wait is long enough for NAT/idle killers to drop the socket
+            # (surfaces as APIConnectionError mid-run). Streaming keeps bytes flowing.
+            streaming=True,
             max_retries=8,
             stop=None,
             betas=betas,

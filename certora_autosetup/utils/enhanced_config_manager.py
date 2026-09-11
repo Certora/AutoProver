@@ -13,14 +13,14 @@ import json
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Generic, List, Optional, TypeVar
+from typing import Any, Dict, Generic, List, Optional, Set, Tuple, TypeVar
 
 from packaging.version import Version
 
 from certora_autosetup.parsers.spec_imports import parse_imports_from_spec
 from certora_autosetup.utils.config_manager import certora_format_to_raw_version
 from certora_autosetup.utils.constants import DEFAULT_SOLC_VERSION, SolcConvention
-from certora_autosetup.utils.contract_utils import parse_contract_files
+from certora_autosetup.utils.contract_utils import parse_contract_files, split_contract_spec
 from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.solc_version_resolver import (
     parse_pragma_constraint,
@@ -238,7 +238,19 @@ class ConfigManager:
 
         # Add contract files (use normalized paths) TODO: what about the additional files? we expect them to come already normalized now
         normalized = self.normalize_paths(contract_handles)
-        conf_template["files"] = [c.to_config_str() for c in normalized] + additional_files
+        # The two sources legitimately overlap — a contract can be both in the scene and named
+        # as an additional contract — and certoraRun rejects a `files` list with a repeat.
+        # Deduped on the (file, contract) pair rather than the string, since to_config_str
+        # drops the name when it matches the file stem and gives one contract two spellings.
+        seen: Set[Tuple[str, str]] = set()
+        files: List[str] = []
+        for entry in [c.to_config_str() for c in normalized] + additional_files:
+            key = split_contract_spec(entry)
+            if key in seen:
+                continue
+            seen.add(key)
+            files.append(entry)
+        conf_template["files"] = files
 
         # Set verification target (use relative path for spec file)
         normalized_spec = self._normalize_path(spec_file, context="Spec file")

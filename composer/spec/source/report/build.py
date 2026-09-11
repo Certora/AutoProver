@@ -22,7 +22,8 @@ from composer.spec.source.report.grouping import (
     build_fallback_grouping, build_groups, call_grouping_llm, PropertyGroup
 )
 from composer.spec.source.report.schema import (
-    AutoProverReport, Finding, Outcome, PropertyKey, ReportBackend, RuleRef, SourceEditRecord,
+    AutoProverReport, DeprioritizedProperty, Finding, Outcome, PropertyKey, ReportBackend,
+    RuleRef, SourceEditRecord,
     VerificationArtifactRecord,
 )
 
@@ -49,6 +50,8 @@ async def build_report[R: ReportableResult](
     verification_artifacts: list[VerificationArtifactRecord] | None = None,
     findings_llm: BaseChatModel | None = None,
     fetch_evidence: EvidenceFetcher | None = None,
+    run_mode: str | None = None,
+    deprioritized: list[DeprioritizedProperty] | None = None,
 ) -> AutoProverReport:
     """Build and return the in-memory `AutoProverReport`. Persistence is the caller's job.
 
@@ -74,6 +77,7 @@ async def build_report[R: ReportableResult](
         coverage = validate(
             properties=properties, rules=rules, groups=groups, skipped=skipped,
             gave_up=gave_up, curtailed=curtailed, dropped_orphan_rules=dropped,
+            deprioritized_count=len(deprioritized or []),
         )
     else:
         try:
@@ -84,6 +88,7 @@ async def build_report[R: ReportableResult](
             coverage = validate(
                 properties=properties, rules=rules, groups=groups, skipped=skipped,
                 gave_up=gave_up, curtailed=curtailed, dropped_orphan_rules=dropped,
+                deprioritized_count=len(deprioritized or []),
             )
             grouped: set[PropertyKey] = {k for g in groups for k in g.members}
             if not grouped:
@@ -102,6 +107,7 @@ async def build_report[R: ReportableResult](
             coverage = validate(
                 properties=properties, rules=rules, groups=groups, skipped=skipped,
                 gave_up=gave_up, curtailed=curtailed, dropped_orphan_rules=dropped,
+                deprioritized_count=len(deprioritized or []),
             )
             coverage.warnings = ["FALLBACK GROUPING APPLIED"] + coverage.warnings
 
@@ -130,6 +136,8 @@ async def build_report[R: ReportableResult](
 
     report = AutoProverReport(
         backend=backend,
+        run_mode=run_mode,
+        deprioritized=deprioritized or [],
         contract_name=contract_name,
         run_timestamp_utc=datetime.now(timezone.utc).isoformat(),
         prover_links=prover_links,

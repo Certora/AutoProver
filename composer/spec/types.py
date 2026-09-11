@@ -19,8 +19,7 @@ from typing import TYPE_CHECKING, Protocol, Literal
 # ``CheckName``: the backend's name for one check — a CVL rule, a foundry
 # test, a fuzz harness function. ``FormalResult.property_checks()`` maps each
 # property title onto the checks that verify it.
-# ``ComponentName``: human name of an AIComposer component (e.g. "Increment"),
-# or "Structural Invariants".
+# ``ComponentName``: human name of an AIComposer component (e.g. "Increment").
 # ``PropertyTitle``: a property's unique snake_case title — the key in a
 # component's ``property_rules`` mapping.
 #
@@ -102,6 +101,12 @@ class UntitledPropertyFormulation(BaseModel):
                 return "Invariant"
             case "safety_property":
                 return "Safety Property"
+
+type PropertyKey = tuple[ComponentName, PropertyTitle]
+"""A property's identity across a run: ``(component, title)``. Titles are unique within a
+component, so the pair is unique run-wide — it is what the report's groups cross-reference and
+what the prioritizer names when it points at one of many components' candidates."""
+
 
 class PropertyFormulation(UntitledPropertyFormulation):
     """

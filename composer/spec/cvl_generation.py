@@ -128,10 +128,14 @@ class CVLGenerationExtra(AuthoringExtra):
     property_rules: list[PropertyRuleMapping]
 
 
-#: How the CVL author words its publish-time mapping. The prover reports no rule-name ground truth
-#: (unlike forge), so ``validate_property_rules`` passes no ``ran`` set and the mapping is checked
-#: for coverage only.
-_CVL_MAPPING = MappingVocab(check_noun="rule", field_name="property_rules")
+#: How the CVL author words its publish-time mapping. The source author supplies a ``ran`` set
+#: from the typechecker's declaration list (see ``declared_rules_at``), so its mapping is checked
+#: in both directions; a caller with no prover run behind it passes none and gets the
+#: coverage-only check.
+_CVL_MAPPING = MappingVocab(
+    check_noun="rule", field_name="property_rules",
+    ran_source="the prover's typecheck of your spec",
+)
 
 
 def validate_property_rules(
@@ -142,10 +146,13 @@ def validate_property_rules(
 ) -> str | None:
     """Validate the property->rules mapping declared at completion time. ``titles`` is the batch's
     full set of property titles; returns None if valid, else one message enumerating all problems."""
+    # ``None`` means the caller has no ground truth (no prover run covered this state); an
+    # EMPTY set means the prover typechecked the spec and found nothing declared. Those are
+    # different answers, and collapsing them would let a publish claiming a nonexistent rule
+    # through on the second one.
     return validate_check_mapping(
-        [(m.property_title, m.rules) for m in property_rules], skipped, titles, _CVL_MAPPING, ran=[
-            CheckName(it) for it in known_rules
-        ] if known_rules else None
+        [(m.property_title, m.rules) for m in property_rules], skipped, titles, _CVL_MAPPING,
+        ran=None if known_rules is None else [CheckName(it) for it in known_rules],
     )
 
 
@@ -292,23 +299,37 @@ _SKIP_DESCRIPTION = """
 _SKIP_REASON = "Justification for why this property cannot be formalized"
 
 
-def skip_tools(titles: list[PropertyTitle]) -> list[BaseTool]:
-    """The skip-management pair, bound to the batch's property titles."""
+def skip_tools(
+    titles: list[PropertyTitle],
+    *,
+    protected: Sequence[PropertyTitle] = (),
+) -> list[BaseTool]:
+    """The skip-management pair, bound to the batch's property titles. ``protected`` names the
+    titles ``record_skip`` must refuse."""
     return _skip_pair(
         titles,
         skip_description=_SKIP_DESCRIPTION,
         skip_reason=_SKIP_REASON,
+        protected=protected,
     )
 
 
-def property_tools(services: FeedbackServices) -> list[BaseTool]:
+def property_tools(
+    services: FeedbackServices,
+    *,
+    protected: Sequence[PropertyTitle] = (),
+) -> list[BaseTool]:
     """The full property-management suite with the vanilla feedback tool.
     Callers with a custom feedback tool (e.g. the editor-aware source author)
     bind their own :class:`FeedbackToolBase` subclass and use
-    :func:`skip_tools` directly."""
+    :func:`skip_tools` directly.
+
+    ``protected`` is forwarded to the skip pair — a caller reaching its skip tools through
+    here must be able to protect a focus just as one calling :func:`skip_tools` directly can,
+    or the ban silently depends on which branch built the suite."""
     return [
         VanillaFeedbackTool.bind(services).as_tool("feedback_tool"),
-        *skip_tools(services.titles),
+        *skip_tools(services.titles, protected=protected),
     ]
 
 

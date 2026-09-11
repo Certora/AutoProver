@@ -9,6 +9,9 @@ owns a contract — the remappings, pinned solc and artifact layout all come fro
 monorepos vendor a per-package ``foundry.toml`` under ``modules/`` or ``lib/`` while the
 root config is what actually builds the tree, so the nearest config is often not the one
 that ran. See ``find_build_config_dir``.
+
+Reading the artifacts is the build systems' own business, so this module locates the
+directory and asks the matching ``BuildSystemManager`` whether what is in it is theirs.
 """
 
 import os
@@ -16,16 +19,10 @@ import tomllib
 from pathlib import Path
 from typing import Optional
 
-# Build config filenames that mark a directory as a project root, in no particular order —
-# presence of any one of them is enough to anchor there. Truffle has two: `truffle.js` is
-# the v4 spelling, `truffle-config.js` everything since.
-BUILD_CONFIG_FILENAMES = (
-    "foundry.toml",
-    "hardhat.config.js",
-    "hardhat.config.ts",
-    "truffle-config.js",
-    "truffle.js",
-)
+from certora_autosetup.build_systems.foundry import FoundryManager
+from certora_autosetup.build_systems.hardhat import HardhatManager
+from certora_autosetup.build_systems.manager import BuildSystemManager
+from certora_autosetup.build_systems.truffle import TruffleManager
 
 # Hardhat writes artifacts here unless the config sets `paths.artifacts`, and Truffle
 # unless it sets `contracts_build_directory`. Reading either override means running node
@@ -65,31 +62,42 @@ def hardhat_artifact_dir(config_dir: Path) -> Optional[Path]:
 
 
 def truffle_artifact_dir(config_dir: Path) -> Optional[Path]:
-    """Where a Truffle project at *config_dir* writes artifacts, or None if it has no config."""
+    """Where a Truffle project at *config_dir* writes artifacts, or None if it has no config.
+
+    Truffle answers to two config names: ``truffle.js`` is the v4 spelling, ``truffle-config.js``
+    everything since.
+    """
     if (config_dir / "truffle-config.js").exists() or (config_dir / "truffle.js").exists():
         return config_dir / TRUFFLE_DEFAULT_BUILD_DIR
     return None
 
 
-def _artifact_dir_of(config_dir: Path) -> Optional[Path]:
-    """Where *config_dir*'s build system would put artifacts, or None if it holds no config.
+def _artifact_dir_of(config_dir: Path) -> Optional[tuple[type[BuildSystemManager], Path]]:
+    """*config_dir*'s build system and where it would put artifacts, or None if it holds no
+    config.
 
     A directory holding several configs answers for the first of them, in the same order
     ``BuildSystemDetector`` ranks them: any of the three is enough to recognise the
-    directory as a project that got built, which is all the caller asks.
+    directory as a project that got built, which is all the caller asks. The manager comes
+    back with the path because the manager is what knows how to read what it writes.
     """
-    return (
-        foundry_artifact_dir(config_dir)
-        or hardhat_artifact_dir(config_dir)
-        or truffle_artifact_dir(config_dir)
-    )
+    for manager, artifact_dir_of in (
+        (FoundryManager, foundry_artifact_dir),
+        (HardhatManager, hardhat_artifact_dir),
+        (TruffleManager, truffle_artifact_dir),
+    ):
+        artifacts = artifact_dir_of(config_dir)
+        if artifacts is not None:
+            return manager, artifacts
+    return None
 
 
 def find_build_config_dir(contract_path: Path, root: Path) -> Path:
     """Return the directory whose build system actually produced *contract_path*'s artifacts.
 
-    Walks up from the contract's own directory to *root*, and returns the nearest ancestor
-    that both holds a build config **and** has its artifact directory on disk. Falling back
+    Walks up from the contract's own directory to *root*, and returns the nearest ancestor that
+    holds a build config, has its artifact directory on disk, and whose build system recognises
+    those artifacts as its own project's (``BuildSystemManager.artifacts_belong_to``). Falling back
     to *root* when nothing qualifies is deliberate: a build config alone does not mean that
     project is the one that got built. Monorepos routinely vendor per-package ``foundry.toml``
     files under ``modules/`` or ``lib/`` while the root config builds the whole tree into a
@@ -120,9 +128,11 @@ def find_build_config_dir(contract_path: Path, root: Path) -> Path:
 
     current = absolute_contract.resolve().parent
     while True:
-        artifacts = _artifact_dir_of(current)
-        if artifacts is not None and artifacts.is_dir():
-            return current
+        found = _artifact_dir_of(current)
+        if found is not None:
+            manager, artifacts = found
+            if artifacts.is_dir() and manager.artifacts_belong_to(current, artifacts):
+                return current
         if current == root:
             return root
         current = current.parent

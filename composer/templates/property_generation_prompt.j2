@@ -69,13 +69,23 @@ feedback as soon as possible.
 ### Verification Failure Remediation Strategies
 
 * If the failure is due to an *impossible starting state*:
-  + Consider whether the impossible starting state can be rule out using an *invariant*. If so, author that invariant,
-    and add a `requireInvariant` to the rule/invariant preserved block.
-  + If the impossible starting state cannot be ruled out using an invariant, attempt to write a "justification rule",
-    i.e., a rule which proves that the assumption is *valid*. You may then use a bare `require` statement in the rule
-    or invariant, but reference your written justification rule
-  + If the above two approaches fail, you may still consider adding `require` statements, but add comments
-    that either document the trust assumption you are making and/or arguing for its Validity
+  + The state is impossible because the contract's fields stand in a relationship the counterexample broke.
+    State that relationship as an *invariant* in this spec, prove it here alongside your rules, and cite it with
+    `requireInvariant` in the failing rule, or in the failing invariant's `preserved` block. This is the default
+    move, not the last one: an invariant is proven against the code, where a `require` is assumed without proof.
+    The first time you reach for one, call the `structural_invariant_guidance` tool — it describes what
+    makes a state relationship worth stating as an invariant, and the four ways a candidate goes wrong.
+  + A supporting invariant is an ordinary declaration in your spec. `verify_spec` checks it like everything else,
+    it must reach VERIFIED before you can deliver, and you list it in `property_rules` under the property it
+    supports, so a reader can see what that property's proof rests on. Never mark a supporting invariant with
+    `expect_rule_failure`: a `requireInvariant` citing an unproven invariant assumes exactly what you failed to prove.
+  + If the relationship cannot be stated as an invariant — no single method preserves it, or it quantifies over
+    something CVL cannot reach — write a "justification rule", i.e., a rule which proves that the assumption is
+    *valid*. You may then use a bare `require` statement in the failing rule, naming your justification rule in a
+    comment beside it.
+  + A bare `require` with neither an invariant nor a justification rule behind it is the last rung, and it leaves
+    the property proven only under an assumption nothing checks. If you take it, state in a comment what you
+    assumed, why the contract cannot reach a state that violates it, and what the property therefore no longer covers.
 * If the failure is due to a HAVOC from an unresolved call: follow the triage ladder described in section B3 of the
   "CVL Summarization — Knowledge Base" context document
 * If the counterexample appears to point to a potential issue in the code that should be reviewed by a security expert,
@@ -121,7 +131,11 @@ the positive feedback result, and will necessitate "restamping".
 
 The `result` tool *also* requires a `property_rules` mapping: for every property you did NOT skip (referenced by
 its unique snake_case title from the batch listing above), list the name(s) of the rule(s)/invariant(s) in your
-spec that verify it. Every non-skipped property must appear in this mapping with at least one rule; skipped
+spec that verify it, including anything they rest on — a supporting invariant cited with `requireInvariant`,
+a justification rule behind a `require`. Every rule and invariant your spec declares must be named by some
+property: one that no property names is dropped from the report, so the reader would see the property's
+verdict without seeing what it rests on. Every non-skipped property must appear in this mapping with at
+least one rule; skipped
 properties must NOT appear. The result tool will be rejected if this mapping is incomplete or references a
 skipped or unknown property title.
 
@@ -131,6 +145,34 @@ VERIFIED *or* that rule must be explicitly marked as "expected to fail" using th
 IMPORTANT: Do not try to reason yourself about whether any property is true or possible — focus solely on authoring CVL which will *demonstrate* the desired properties.
 
 <skipping>
+{% if focused %}
+This run is being spent on the properties above and nothing else. They were chosen out of everything
+inferred for this contract because they are the ones worth verifying, so there is no other work to fall
+back on: whatever you establish here is the entire result.
+
+You therefore may not retire them. `record_skip` will refuse them, and the `give_up` tool rejects a
+`sort='exhausted'` stop until you have actually put a spec in front of the prover several times and can
+enumerate what you tried. When you are stuck, the move is to make the problem smaller, not to put it down:
+
+  - State the missing fact. If the prover keeps starting the property from states the contract cannot
+    reach, what is missing is a fact about the state, not a smaller property. State that fact as an
+    invariant, prove it here, and cite it.
+  - Decompose it. Prove a smaller statement that the property is built out of as its own rule, and work
+    up from there.
+  - Weaken it honestly. If the full property will not go through, formalize the strongest version of it
+    that does, and say plainly in your commentary what you proved and what you did not.
+
+Weakening is not licence to reach a passing rule by any means. A rule that passes because it assumes
+away the states where the property is interesting proves nothing, and neither does one weakened until
+it no longer says anything. Either is a worse outcome than an honest account of what would not go
+through — the point of this run is a real result about the property, not a green check.
+
+If you encounter an environment issue that prevents this task from making any progress — for example, the
+`certoraRun` executable is not installed/available, the required `solc` version is missing, or some other
+required toolchain component is absent — call `give_up` with `sort='environment'` and a clear, specific
+explanation of the missing component so the user can fix the environment and re-run. That stop is not
+gated: do it as soon as the environment issue is identified, and do not keep retrying.
+{% else %}
 If you genuinely cannot formalize a property after thorough effort, use the `record_skip` tool to declare
 which property (by its title) you are skipping and why. The feedback judge will evaluate whether
 your justification is valid — do not skip properties lightly.
@@ -146,6 +188,7 @@ is identified; do not keep retrying.
 Outside of environment issues, only use `give_up` as a LAST RESORT after repeated attempts — for example,
 when the feedback judge keeps rejecting every attempted formulation, or the source code is fundamentally
 unspecifiable as written.
+{% endif %}
 </skipping>
 
 {% if resources %}
@@ -159,7 +202,7 @@ You may also make use of the following CVL resources, available as CVL files.
       {% if res.required %}
       You MUST ensure your final specification imports this file.
       {% else %}
-      You may use this import at your discretion (e.g., it defines an invariant necessary to prove your rule/invariant).
+      You may use this import at your discretion (e.g., it defines a summary you need for a call your rule makes).
       {% endif %}
    </resource>
 {% endfor %}
@@ -172,11 +215,9 @@ your current approach. Be sure to update your memory *before* calling the result
 </state>
 </task>
 
-{% if context %}
 <context>
   {% include "application_context_new.j2" %}
 </context>
-{% endif %}
 
 <guidance>
 {% include "cvl_additions.j2" %}

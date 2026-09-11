@@ -299,21 +299,27 @@ async def test_collect_falls_back_to_input_spec_when_verdict_has_no_source():
 
 
 @pytest.mark.asyncio
-async def test_collect_shared_rule_dedupes_and_is_referenced_by_both():
-    """An invariant imported into a component spec reports the same source file from
-    both runs, so it collapses to one rule that both components' properties reference."""
-    comp = _input("Increment", "autospec_Increment.spec", [_prop("c", "component view", sort="invariant")],
-                  _gen({"c": ["countEqualsSum"]}, link="Lc"))
-    inv = _input("Structural Invariants", "invariants.spec", [_prop("i", "structural", sort="invariant")],
-                 _gen({"i": ["countEqualsSum"]}, link="Li"))
-    fetch = _fetcher({
-        "Lc": [_fake_check("countEqualsSum", NodeStatus.VERIFIED, file="invariants.spec")],
-        "Li": [_fake_check("countEqualsSum", NodeStatus.VERIFIED, file="invariants.spec")],
-    })
-    properties, rules, *_ = await collect([comp, inv], fetch_verdicts=fetch)
-    ces = [r for r in rules if r.name == "countEqualsSum"]
-    assert len(ces) == 1 and ces[0].spec_file == "invariants.spec"
-    assert all(p.rule_refs == [("invariants.spec", "countEqualsSum")] for p in properties)
+async def test_collect_keeps_a_supporting_invariant_the_property_names():
+    """An author that needs an invariant proves it in its own component spec and names it in
+    ``property_rules`` alongside the rule it supports. Both must survive collection: ``collect``
+    keeps only rules some property references and counts the rest as orphans, so an unnamed
+    invariant would be proved and then silently dropped from the report."""
+    comp = _input(
+        "Increment", "autospec_Increment.spec", [_prop("c", "count tracks the tally")],
+        _gen({"c": ["increment_increases_count", "countEqualsSum"]}, link="Lc"),
+    )
+    fetch = _fetcher({"Lc": [
+        _fake_check("increment_increases_count", NodeStatus.VERIFIED),
+        _fake_check("countEqualsSum", NodeStatus.VERIFIED),
+    ]})
+    properties, rules, *rest = await collect([comp], fetch_verdicts=fetch)
+    dropped_orphans = rest[-1]
+    assert {r.name for r in rules} == {"increment_increases_count", "countEqualsSum"}
+    assert properties[0].rule_refs == [
+        ("autospec_Increment.spec", "increment_increases_count"),
+        ("autospec_Increment.spec", "countEqualsSum"),
+    ]
+    assert dropped_orphans == 0
 
 
 @pytest.mark.asyncio

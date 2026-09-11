@@ -20,6 +20,7 @@ else:
     import tomli as tomllib
 
 from certora_autosetup.build_systems.base import BuildSystemConfig
+from certora_autosetup.build_systems.config_files import FOUNDRY_CONFIG_FILENAMES
 from certora_autosetup.build_systems.manager import BuildSystemManager
 from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.remappings import build_packages_from_remapping_sources
@@ -137,7 +138,7 @@ class FoundryManager(BuildSystemManager):
 
     def get_config_filenames(self) -> List[str]:
         """Return list of config filenames to search for."""
-        return ["foundry.toml"]
+        return list(FOUNDRY_CONFIG_FILENAMES)
 
     def parse_config(self, config_file: Path, profile: str | None = None) -> FoundryConfig:
         """
@@ -402,6 +403,23 @@ class FoundryManager(BuildSystemManager):
         return any(
             child.is_dir() and child.name.endswith(".sol") for child in artifacts_dir.iterdir()
         )
+
+    @staticmethod
+    def recorded_source(artifact: dict) -> Optional[str]:
+        """Foundry records it under `metadata.settings.compilationTarget`, as the single key
+        of a one-entry `{source: ContractName}` map, relative to the project. More than one
+        entry means the artifact covers several sources and names none of them, so it says
+        nothing about which project wrote it."""
+        metadata = artifact.get("metadata")
+        if not isinstance(metadata, dict):
+            return None
+        settings = metadata.get("settings")
+        if not isinstance(settings, dict):
+            return None
+        target = settings.get("compilationTarget")
+        if not isinstance(target, dict) or len(target) != 1:
+            return None
+        return str(next(iter(target)))
 
     def filter_artifacts(self, artifacts_dir: Path) -> List[Path]:
         """
