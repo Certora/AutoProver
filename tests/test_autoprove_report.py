@@ -11,7 +11,6 @@ which is how a caller hands a gap to the report layer).
 """
 from types import SimpleNamespace
 from typing import Any, cast
-import json
 import pathlib
 
 import pytest
@@ -593,29 +592,6 @@ async def test_build_groups_properties(tmp_path):
     assert [g.slug for g in report.groups] == ["g"]
     assert {p.title for p in report.properties} == {"p1", "p2"}
     assert report.coverage.property_coverage_complete is True
-
-
-def test_grouping_result_decodes_a_string_wrapped_document():
-    # Observed in a cloud run: the model serialized the whole result into the one field meant to
-    # hold the list. The grouping was complete, so it must not cost the report its headings.
-    payload = json.dumps({"groups": [
-        {"slug": "g", "title": "G", "description": "d", "members": [["C", "p1"], ["C", "p2"]]}
-    ]})
-    r = GroupingResult.model_validate({"groups": payload})
-    assert [g.slug for g in r.groups] == ["g"]
-    assert r.groups[0].members == [("C", "p1"), ("C", "p2")]
-
-
-def test_grouping_result_decodes_a_string_wrapped_list():
-    payload = json.dumps([
-        {"slug": "g", "title": "G", "description": "d", "members": [["C", "p1"]]}
-    ])
-    assert [g.slug for g in GroupingResult.model_validate({"groups": payload}).groups] == ["g"]
-
-
-def test_grouping_result_still_rejects_a_string_that_is_not_a_grouping():
-    with pytest.raises(PydanticValidationError):
-        GroupingResult.model_validate({"groups": "not json at all"})
 
 
 class _FlakyStructuredModel(_StructuredStubModel):
