@@ -40,7 +40,7 @@ from composer.tools.relaxation import requirements_relaxation
 from composer.tools.search import cvl_manual_tools
 from composer.templates.loader import load_jinja_template
 from composer.io.protocol import CodeGenIOHandler, WorkflowPurpose
-from composer.io.context import with_handler, run_to_completion
+from composer.io.context import with_handler, run_to_completion, latest_checkpoint_of
 from composer.diagnostics.timing import set_current_task_id
 from composer.ui.codegen_events import CodeGenEventHandler
 from composer.core.state import AIComposerInput, AIComposerExtra
@@ -289,10 +289,18 @@ async def _run_codegen(
 
     thread_id = workflow_options.thread_id
 
+    # An explicitly named thread may already hold a checkpoint (an earlier run
+    # of this same command that crashed, or one the caller stopped). Continue
+    # from it unless the caller named a checkpoint of their own.
+    resume_from = workflow_options.checkpoint_id
     if thread_id is None:
         thread_id = "crypto_session_" + str(uuid.uuid1())
         await handler.log_workflow_thread(WorkflowPurpose.CODEGEN, thread_id)
         logger.info(f"Selected thread id: {thread_id}")
+    elif resume_from is None:
+        resume_from = await latest_checkpoint_of(checkpointer, thread_id)
+        if resume_from is not None:
+            logger.info(f"Resuming thread {thread_id} from checkpoint {resume_from}")
 
     mem_root = memory_namespace or thread_id
 
@@ -481,7 +489,7 @@ async def _run_codegen(
                     flow_input,
                     thread_id=thread_id,
                     context=work_context,
-                    checkpoint_id=workflow_options.checkpoint_id,
+                    checkpoint_id=resume_from,
                     recursion_limit=workflow_options.recursion_limit,
                     description="Code generation",
                 )
