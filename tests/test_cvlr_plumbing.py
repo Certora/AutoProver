@@ -42,7 +42,7 @@ from composer.sandbox.config import SandboxConfig
 from composer.spec.context import SourceFields
 from composer.spec.cvlr import conf as cvlr_conf
 from composer.spec.cvlr.crates import resolve
-from composer.spec.cvlr.prover import Submission
+from composer.spec.cvlr.prover import Submission, write_submission
 from composer.spec.cvlr.verify import _CaptureCallbacks, _RunAccounting
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.cvlr_reference import SOLANA
@@ -634,6 +634,102 @@ async def test_the_build_script_is_executable(tmp_path):
     session = CargoSession(workdir=tmp_path, sandbox=SandboxConfig(provider="none"))
     script = await write_build_script(session, manifest_path=tmp_path / "Cargo.toml")
     assert script.stat().st_mode & stat.S_IXUSR
+
+
+# --------------------------------------------------------------------------------------------
+# the conf on disk
+#
+# Everything above pins what the layering *computes*. These pin what `write_submission` *writes*,
+# which is the only artifact the prover ever sees. The two came apart once already: the solver
+# portfolio was merged the ordinary way, four `-solvers` lines became one, nine of twelve solver
+# instances were dropped, and nothing failed — because every test on that path stopped at a dict.
+# --------------------------------------------------------------------------------------------
+
+
+def _unconfined(tmp_path: Path) -> CargoSession:
+    """No cargo and no network: `provider="none"` makes the build script a passthrough, so the
+    conf-writing half is reachable without a toolchain."""
+    return CargoSession(workdir=tmp_path, sandbox=SandboxConfig(provider="none"))
+
+
+@pytest.mark.asyncio
+async def test_an_authors_conf_edits_reach_the_file_the_prover_is_handed(tmp_path):
+    """What `adjust_prover_config` is for, checked at the far end of the wire.
+
+    Both edits go through the functions the tool applies them with, and the result is read back with
+    the reader that reads a project's own conf — so an emission `read_conf` could not parse fails
+    here rather than inside `certoraRun`.
+    """
+    edited = cvlr_conf.with_solver_portfolio(
+        cvlr_conf.with_loop_iter(dict(cvlr_conf.TEMPLATE_BASE), 4), True
+    )
+    conf_path = await write_submission(
+        _unconfined(tmp_path),
+        Submission(manifest_path=tmp_path / "Cargo.toml", base_conf=edited, stem="unit"),
+    )
+
+    written = cvlr_conf.read_conf(conf_path)
+    assert written["loop_iter"] == "4"
+    assert sum(a.startswith("-solvers ") for a in written["prover_args"]) == 4
+
+
+@pytest.mark.asyncio
+async def test_the_written_conf_names_the_build_script_written_beside_it(tmp_path):
+    """`write_submission` writes two files and the conf points at the other one. Nothing else
+    checks that they agree, and a conf naming a script that is not there is rejected inside
+    `certoraRun`'s own validation — after the upload, in its vocabulary rather than ours."""
+    conf_path = await write_submission(
+        _unconfined(tmp_path), Submission(manifest_path=tmp_path / "Cargo.toml", base_conf={})
+    )
+
+    script = Path(cvlr_conf.read_conf(conf_path)["build_script"])
+    assert script.is_file()
+    assert script.stat().st_mode & stat.S_IXUSR, "certoraRun execs it directly"
+
+
+@pytest.mark.asyncio
+async def test_a_run_owned_key_a_project_set_does_not_survive_onto_the_file(tmp_path):
+    """The ownership rule at the only layer where being wrong costs anything.
+
+    A base conf naming its own `build_script` is not hypothetical — it is what every conf in the
+    corpus does — and honoring it would verify some other artifact than the one the gate build
+    just produced.
+    """
+    base = {"server": "staging", "build_script": "/somewhere/else/build.py"}
+    conf_path = await write_submission(
+        _unconfined(tmp_path), Submission(manifest_path=tmp_path / "Cargo.toml", base_conf=base)
+    )
+
+    written = cvlr_conf.read_conf(conf_path)
+    assert "server" not in written
+    assert written["build_script"] != base["build_script"]
+    assert Path(written["build_script"]).is_file()
+
+
+@pytest.mark.asyncio
+async def test_two_units_sharing_a_tree_write_separate_confs(tmp_path):
+    """One working tree per run, one conf per unit (`docs/single-working-tree.md` §2.1). Units are
+    prepared under a shared build permit and submitted concurrently, so a shared stem would have the
+    second unit's conf replace the first's while the first is still in flight — and the loop bound
+    one author raised would arrive on another's rules."""
+    session = _unconfined(tmp_path)
+    manifest = tmp_path / "Cargo.toml"
+    solvency = await write_submission(
+        session,
+        Submission(
+            manifest_path=manifest, base_conf=cvlr_conf.with_loop_iter({}, 3), stem="solvency"
+        ),
+    )
+    access = await write_submission(
+        session,
+        Submission(
+            manifest_path=manifest, base_conf=cvlr_conf.with_loop_iter({}, 7), stem="access"
+        ),
+    )
+
+    assert solvency != access
+    assert cvlr_conf.read_conf(solvency)["loop_iter"] == "3"
+    assert cvlr_conf.read_conf(access)["loop_iter"] == "7"
 
 
 # --------------------------------------------------------------------------------------------
