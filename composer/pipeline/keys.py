@@ -23,8 +23,8 @@ traverses below the run root, in tree order::
 The extraction-layer families (bug analysis, agent rounds) are declared
 in ``composer.spec.prop_inference`` beside their cache models and
 re-exported here. The prover backend's sub-chain (config / harness /
-autosetup / summaries / invariants / CVL generation) has its own
-registry: ``composer.spec.source.keys``.
+autosetup / summaries / CVL generation) has its own registry:
+``composer.spec.source.keys``.
 """
 
 from typing import Any

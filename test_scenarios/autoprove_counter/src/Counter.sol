@@ -15,9 +15,8 @@ contract Counter {
     /// global ``count`` and the per-address tally for the *target* address.
     ///
     /// BUG: the implementation credits ``msg.sender`` instead of ``other``.
-    /// The structural invariant ``count == sum(increments)`` still holds
-    /// (both sides grow by exactly 1) and ``increments[address(0)]`` is
-    /// never written, so the structural-invariant phase still verifies.
+    /// The relationship ``count == sum(increments)`` still holds (both sides
+    /// grow by exactly 1) and ``increments[address(0)]`` is never written.
     /// The per-method correctness rule for ``incrementOther`` is what
     /// surfaces this bug.
     function incrementOther(address other) external {
