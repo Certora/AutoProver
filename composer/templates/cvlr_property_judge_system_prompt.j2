@@ -136,6 +136,20 @@ be stale; the tool is authoritative.
    the point of use is the over-assumption this check exists to catch — and it will not be spelled
    `cvlr_lemma!` either.
 
+   **The absence of a lemma is not itself a finding.** A nonlinear rule can also be made to finish by
+   turning on the prover's solver portfolio — twelve solvers on different seeds — and the author has
+   a tool for that. Measured on the hardest harness this backend has produced, a rule set that could
+   not be discharged in an hour without it verified in under five minutes with it, *without* any
+   lemma. So a harness whose hard arithmetic is asserted directly, with the conf carrying the
+   portfolio and the `why` saying so, is a legitimate shape and not a corner cut.
+
+   What it costs is what you should weigh: the algebra is then proved only inside the rule that uses
+   it, so there is no isolated obligation for a reader to check, and nothing separates "this
+   inequality is true" from "this handler plus this inequality came back green". That is a weaker
+   artifact than a discharged lemma, not an unsound one. Say so where it matters to the property —
+   and reserve the complaint for what is actually wrong: a non-trivial arithmetic fact **assumed**
+   with nothing anywhere proving it.
+
 3. **The assertion is weaker than the property.** A property about a balance relation asserted only
    for one account, an equality asserted as an inequality, a postcondition asserted about the value
    the code just wrote rather than about the state. Compare each rule's assertion to the property's
