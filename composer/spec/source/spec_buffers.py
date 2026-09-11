@@ -1,20 +1,18 @@
 """Multi-buffer CVL specs: the agent authors several independent spec buffers that share
 infrastructure through CVL ``import``.
 
-Policy-neutral substrate for generalizing the single ``curr_spec`` buffer
-(:mod:`composer.authoring.buffer`) into a named *set* of buffers. A *run-target* buffer is a
-self-contained spec — its own rules, its ``methods{}`` block, and ``import`` statements pulling in
-shared buffers — verified and reviewed on its own. A *shared* buffer holds common ghosts, invariants,
-and models that run-target buffers import; it runs no rules itself. Every non-skipped property is
-owned by exactly one run-target buffer, and every rule lives in exactly one buffer.
+A named *set* of buffers. A *run-target* buffer is a self-contained spec — its own rules, its
+``methods{}`` block, and ``import`` statements pulling in shared buffers — verified and reviewed on
+its own. A *shared* buffer holds common ghosts, invariants, and models that run-target buffers
+import; it runs no rules itself. Every non-skipped property is owned by exactly one run-target
+buffer, and every rule lives in exactly one buffer.
 
-Each buffer has a content *digest* over its own text plus its transitive import closure (reusing the
-autosetup content-cache hashing). Editing a shared buffer therefore changes the digest of every buffer
-that imports it, which is what lets the pipeline skip re-verifying / re-reviewing an unchanged buffer
-while correctly invalidating its importers.
+Each buffer has a content *digest* over its own text plus its transitive import closure. Editing a
+shared buffer therefore changes the digest of every buffer that imports it, which is what lets the
+pipeline skip re-verifying / re-reviewing an unchanged buffer while correctly invalidating its
+importers.
 
-(``NamedBuffer`` is the value object — one buffer's text plus metadata — distinct from
-:class:`composer.authoring.buffer.SpecBuffer`, which is the single-buffer *state* shape.)
+``NamedBuffer`` is the value object: one buffer's text plus its metadata.
 """
 
 import os
@@ -215,12 +213,13 @@ def check_buffer_completion(
     version_history: Sequence[str],
 ) -> str | None:
     """None if every run-target buffer carries each required validation (e.g. ``feedback``, ``prover``)
-    stamped at its current digest, else the first buffer/validation missing or stale. The buffers
-    analogue of ``check_completion``: a per-buffer stamp is keyed ``"<validation>:<buffer>"`` and goes
-    stale when that buffer (or anything it imports, or the skips/edit history) changes.
+    stamped at its current digest, else a message naming every buffer/validation missing or stale. The
+    buffers analogue of ``check_completion``: a per-buffer stamp is keyed ``"<validation>:<buffer>"`` and
+    goes stale when that buffer (or anything it imports, or the skips/edit history) changes.
 
     With no run-target buffers this is vacuously satisfied (there is nothing to stamp) — the
     all-properties-skipped case, whose validity is decided by ``validate_coverage`` instead."""
+    stale: list[str] = []
     for b in run_targets(buffers):
         for key in required_validations:
             # The feedback stamp tracks a buffer's claimed properties (the judge reviews against them);
@@ -230,7 +229,12 @@ def check_buffer_completion(
                 include_claim=(key == FEEDBACK_VALIDATION_KEY),
             )
             if validations.get(f"{key}:{b.name}") != d:
-                return f"Completion REJECTED: buffer {b.name!r} {key} validation not satisfied or stale."
+                stale.append(f"{b.name!r} {key}")
+    if stale:
+        return (
+            "Completion REJECTED: re-verify/re-review each of these buffer validations before "
+            f"publishing: {', '.join(stale)}."
+        )
     return None
 
 

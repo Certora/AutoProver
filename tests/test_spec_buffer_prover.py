@@ -151,6 +151,20 @@ class TestBufferSubmitCollect:
         ).run()
         assert _prover_complete(st) is not None
 
+    async def test_shared_edit_reports_all_stale_importers_at_once(self, certora_prover: ProverMock):
+        """A shared-buffer edit invalidates every importer, and check_buffer_completion names them all
+        in one message — not just the first."""
+        st = await _scenario(
+            certora_prover, _buffers(),
+            easy=_report(r_easy=True), hard=_report(r_hard=True),
+        ).turns(
+            _submit("easy"), _submit("hard"), _collect(wait=True), _collect(wait=True),
+            _put_shared(SHARED + "ghost h(uint) returns uint;\n"),
+        ).run()
+        msg = _prover_complete(st)
+        assert msg is not None
+        assert "'easy'" in msg and "'hard'" in msg
+
     async def test_resubmit_after_shared_edit_recompletes(self, certora_prover: ProverMock):
         """Re-submitting the invalidated buffers at the new shared content re-verifies and re-completes
         them — the stamp lands at the new digest."""
