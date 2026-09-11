@@ -634,8 +634,11 @@ now offer authors for nonlinear arithmetic is the solver portfolio the reference
 carries — an adaptive backend, both arithmetic theories, and twelve solver instances on different
 random seeds. It was untested by us when it shipped, so it was tested the same way this entry was:
 the harness above with its lemma decomposition removed, so that four solvency rules had to find the
-whole ring rearrangement inline with a live Anchor handler in the query. Without the portfolio the
-job had not returned after an hour. With it, all ten rules verified in **4.6 minutes**.
+whole ring rearrangement inline with a live Anchor handler in the query. Without the portfolio:
+**109.3 minutes**, nine rules verified and the hardest one — the solvency rule over `redeem` —
+TIMEOUT with no verdict. With it: **4.6 minutes**, all ten verified. So the portfolio is worth
+roughly 24x on the rules that do finish, and it is the difference between a verdict and none on the
+rule that does not.
 
 Recorded here rather than in a defect of its own because it is the control the entry above needs:
 this prover is not simply slow on nonlinear arithmetic, and the two-hour collapse P8 describes is
