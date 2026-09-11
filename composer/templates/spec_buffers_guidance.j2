@@ -86,6 +86,12 @@ one):
   run-target buffers that depend on it.
 - `submit_buffer(name)` starts a buffer's prover job in the **background** and returns immediately.
   Submit each run-target buffer as soon as it and its shared imports are ready — they prove concurrently.
+- If one expensive rule in a multi-rule buffer holds up the cheap ones, stripe it off *without* splitting
+  the buffer: `submit_buffer(name, rule=[...])` runs just that subset and
+  `submit_buffer(name, exclude_rules=[...])` runs the rest — same compiled spec, proving in parallel,
+  their results combining (the buffer is done once every rule has been covered by some run). Split rules
+  into separate buffers when they differ in **precision** (summary needs); stripe by rule when they
+  differ only in **cost**.
 - `collect_results()` returns the outcomes of jobs that have **finished so far** (without blocking) plus
   a status board: which buffers are `complete`, `running`, or `needs (re)submission`. Process a finished
   buffer immediately — fix its issue if it has any (CEXs, timeouts, errors, ...) and `submit_buffer` it

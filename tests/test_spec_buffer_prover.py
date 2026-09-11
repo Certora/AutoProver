@@ -38,6 +38,22 @@ def _buffers() -> dict[str, NamedBuffer]:
     }
 
 
+def _buf2(name: str, r1: str, r2: str) -> NamedBuffer:
+    return NamedBuffer(
+        name=name,
+        cvl=f'import "shared.spec";\nrule {r1} {{ assert true; }}\nrule {r2} {{ assert true; }}\n',
+        property_rules={f"P-{r1}": [r1], f"P-{r2}": [r2]},
+    )
+
+
+def _buffers2() -> dict[str, NamedBuffer]:
+    """One shared buffer plus a two-rule run target, for rule-striping within a single buffer."""
+    return {
+        "shared": NamedBuffer(name="shared", cvl=SHARED, is_run_target=False),
+        "both": _buf2("both", "r_a", "r_b"),
+    }
+
+
 def _report(**rule_status: bool) -> ProverReport:
     return ProverReport(
         result_str="Prover report output",
@@ -71,6 +87,15 @@ def _scenario(certora_prover: ProverMock, buffers: dict[str, NamedBuffer], **res
 def _submit(name: str):
     # `name` is also tool_call_raw's first positional, so build the ToolCallDict directly.
     return {"name": "submit_buffer", "args": {"name": name}}
+
+
+def _submit_sel(name: str, *, rule=None, exclude_rules=None):
+    args: dict = {"name": name}
+    if rule is not None:
+        args["rule"] = rule
+    if exclude_rules is not None:
+        args["exclude_rules"] = exclude_rules
+    return {"name": "submit_buffer", "args": args}
 
 
 def _collect(wait: bool = False):
@@ -138,6 +163,58 @@ class TestBufferSubmitCollect:
         assert st["validations"].get("prover:easy") == buffer_state_digest(
             st["buffers"], "easy", skipped=[], version_history=[]
         )
+
+    async def test_rule_stripe_unions_to_completion(self, certora_prover: ProverMock):
+        """Two rule subsets of one buffer, submitted separately, each verify their own rule; the runs
+        union at the same digest so the buffer completes without ever running both rules together."""
+        st = await _scenario(
+            certora_prover, _buffers2(), both=_report(r_a=True, r_b=True),
+        ).turns(
+            _submit_sel("both", rule=["r_a"]),
+            _submit_sel("both", rule=["r_b"]),
+            _collect(wait=True),
+            _collect(wait=True),
+        ).run()
+        assert _prover_complete(st) is None
+        runs = [it for it in st["prover_history"] if it["sort"] == "run" and it.get("buffer") == "both"]
+        assert len(runs) == 2
+        assert {tuple(r["rules"]["selector"]) for r in runs} == {("r_a",), ("r_b",)}
+        assert all(len(r["prover_results"]) == 1 for r in runs)  # each run reported only its own rule
+
+    async def test_striped_subsets_launch_as_separate_jobs(self, certora_prover: ProverMock):
+        """Different subsets of one buffer at the same content are distinct jobs — both launch, unlike a
+        re-submit of the identical subset."""
+        await _scenario(
+            certora_prover, _buffers2(), both=_report(r_a=True, r_b=True),
+        ).turns(
+            _submit_sel("both", rule=["r_a"]),
+            _submit_sel("both", rule=["r_b"]),
+            _collect(wait=True), _collect(wait=True),
+        ).run()
+        both_runs = [c for c in certora_prover.calls if "both" in str(c.conf.get("verify", ""))]
+        assert len(both_runs) == 2
+
+    async def test_resubmit_same_subset_does_not_duplicate(self, certora_prover: ProverMock):
+        """Re-submitting the identical subset at unchanged content does not launch a second job."""
+        await _scenario(
+            certora_prover, _buffers2(), both=_report(r_a=True, r_b=True),
+        ).turns(
+            _submit_sel("both", rule=["r_a"]),
+            _submit_sel("both", rule=["r_a"]),  # identical subset → deduped
+            _collect(wait=True),
+        ).run()
+        both_runs = [c for c in certora_prover.calls if "both" in str(c.conf.get("verify", ""))]
+        assert len(both_runs) == 1
+
+    async def test_submit_rejects_bad_selection(self, certora_prover: ProverMock):
+        """An unknown rule, or `rule` and `exclude_rules` together, is rejected without launching a job."""
+        await _scenario(
+            certora_prover, _buffers2(), both=_report(r_a=True, r_b=True),
+        ).turns(
+            _submit_sel("both", rule=["r_nonexistent"]),
+            _submit_sel("both", rule=["r_a"], exclude_rules=["r_b"]),
+        ).run()
+        assert certora_prover.calls == []
 
     async def test_shared_edit_makes_verified_buffers_stale(self, certora_prover: ProverMock):
         """After both buffers verify, editing the shared buffer they import changes their digests, so

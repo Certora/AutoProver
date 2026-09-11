@@ -111,6 +111,28 @@ class RuleSelection(TypedDict):
     sort: Literal["exclude", "include"]
     selector: list[str]
 
+def _selection_of(rule: list[str] | None, exclude_rules: list[str] | None) -> RuleSelection | None:
+    """The ``RuleSelection`` a submit_buffer call asks for, or None to run the whole buffer."""
+    if rule is not None:
+        return RuleSelection(sort="include", selector=rule)
+    if exclude_rules is not None:
+        return RuleSelection(sort="exclude", selector=exclude_rules)
+    return None
+
+def _selection_key(sel: RuleSelection | None) -> str:
+    """A stable key distinguishing one buffer's rule selections, so striped runs (different subsets of
+    the same buffer at the same content) coexist as separate jobs instead of deduping each other. The
+    whole-buffer run keys to the empty string."""
+    if sel is None:
+        return ""
+    return f"{sel['sort']}:{','.join(sorted(sel['selector']))}"
+
+def _apply_selection(config: dict, selection: RuleSelection | None) -> None:
+    """Write a rule subset onto a prover conf: ``rule`` for an include selection, ``exclude_rule`` for
+    an exclude one; a None selection leaves the conf running every rule."""
+    if selection is not None:
+        config["rule" if selection["sort"] == "include" else "exclude_rule"] = list(selection["selector"])
+
 class ProverRunLog(TypedDict):
     tool_call_id: str
     prover_results: list[tuple[RulePath, StatusCodes]]
@@ -499,10 +521,7 @@ def setup_prover_config_in(
             config, main_contract=main_contract, verify_target=f"{main_contract}:{generated_path}"
         )
         config.update(config_extra)
-        if rule is not None:
-            config["rule"] = rule
-        if exclude_rule is not None:
-            config["exclude_rule"] = exclude_rule
+        _apply_selection(config, _selection_of(rule, exclude_rule))
         with temp_certora_file(
             root=working_dir,
             content=json.dumps(config, indent=2),
@@ -573,13 +592,16 @@ def buffer_conf(
     buffer_name: str,
     conf_dir: Path,
     msg: str,
+    selection: RuleSelection | None = None,
 ) -> Iterator[tuple[str, dict]]:
     """Build a conf verifying an already-materialized buffer spec at ``spec_path`` (its imports resolve
-    to the sibling ``.spec`` files written by :func:`materialize_buffers`). Yields (conf_path, config)."""
+    to the sibling ``.spec`` files written by :func:`materialize_buffers`). ``selection`` restricts the
+    run to a subset of the buffer's rules. Yields (conf_path, config)."""
     cfg = prover_config_overlay(
         config, main_contract=main_contract, verify_target=f"{main_contract}:{spec_path}"
     )
     cfg["msg"] = msg
+    _apply_selection(cfg, selection)
     with temp_certora_file(
         root=working_dir,
         content=json.dumps(cfg, indent=2),
@@ -599,8 +621,24 @@ class _SubmitBufferArgs(WithInjectedState[StateWithSkips], WithInjectedId):
     it), which is how you re-verify a buffer after editing it, or after editing a shared buffer it
     imports. A buffer already verified at its current content, or already running, is not re-launched.
     Retrieve outcomes with collect_results.
+
+    By default the job runs every rule of the buffer. To keep one expensive rule from holding up the
+    cheap ones, submit a subset with `rule` (or run the rest with `exclude_rules`): the subsets share
+    the buffer's one compiled spec, prove as separate parallel jobs, and their results combine — the
+    buffer is verified once every rule has been covered by some run at the current content. Use this to
+    isolate a rule by *cost*; use separate buffers to isolate rules by *precision* (differing summary
+    needs).
     """
     name: str = Field(description="The run-target buffer to submit for verification.")
+    rule: list[str] | None = Field(
+        default=None,
+        description="Run only these rules of the buffer (a subset of its own rules). Mutually exclusive "
+        "with `exclude_rules`; omit both to run the whole buffer.",
+    )
+    exclude_rules: list[str] | None = Field(
+        default=None,
+        description="Run every rule of the buffer except these. Mutually exclusive with `rule`.",
+    )
 
 
 class _CollectResultsArgs(WithInjectedState[StateWithSkips], WithInjectedId):
@@ -641,6 +679,9 @@ class _BufJob:
     #: so a job whose digest is now stale (its buffer or a shared import changed) can't mark it done.
     digest: str
     task: "asyncio.Task[None]"
+    #: The rule subset this job runs, or None for the whole buffer. Jobs of one buffer are keyed by
+    #: ``(name, _selection_key(selection))``, so striped runs at the same content coexist.
+    selection: RuleSelection | None = None
 
 
 @dataclass
@@ -652,6 +693,8 @@ class _BufDone:
     #: The prover report, or a compile/toolchain error message (str) that aborts only this buffer.
     result: ProverReport | str
     all_rules: list[str]
+    #: The rule subset this run covered, recorded onto the run's ``ProverRunLog.rules``.
+    selection: RuleSelection | None = None
 
 
 def get_prover_tool(
@@ -683,7 +726,9 @@ def get_prover_tool(
         # submit_buffer launches a background task per buffer and returns immediately; collect_results
         # drains finished jobs off the queue. At most one live job per buffer name — a re-submit supersedes
         # a stale predecessor. See submit_buffer / collect_results below.
-        buffer_jobs: dict[str, _BufJob] = {}
+        # Keyed by (buffer name, selection key): one buffer can have several concurrent jobs, one per
+        # rule subset it was striped into. A content edit supersedes every one of them (digest changes).
+        buffer_jobs: dict[tuple[str, str], _BufJob] = {}
         done_queue: asyncio.Queue[_BufDone] = asyncio.Queue()
         submit_counts: dict[str, int] = {}
         # Declarations already flagged as duplicated-across-buffers, so collect_results nags about each at
@@ -694,6 +739,7 @@ def get_prover_tool(
             *, name: str, digest: str, label: str, buffers: Mapping[str, NamedBuffer],
             vfs: dict[str, str], conf: dict, cex_state: StateWithSkips, tool_call_id: str,
             writer: Callable[[ProverEvents], None], summary: RunSummary,
+            selection: RuleSelection | None = None,
         ) -> None:
             """Verify one buffer end-to-end against a frozen snapshot (taken at submit time) of the source
             and all buffers, then push the outcome onto the completion queue. The job runs in its own
@@ -719,18 +765,19 @@ def get_prover_tool(
                         with buffer_conf(
                             working_dir=run_root, config=conf, main_contract=main_contract,
                             spec_path=spec_path, buffer_name=name, conf_dir=conf_dir, msg=label,
+                            selection=selection,
                         ) as (cpath, cfg):
                             res = await run_prover(
                                 Path(run_root), [cpath], tool_call_id, prover_opts,
                                 _SpecCallbacks(writer, tool_call_id, summary, cfg, analysis_store=analysis_store),
                                 DefaultCexHandler(llm, cex_state, summarization_threshold=10),
                             )
-                await done_queue.put(_BufDone(name, digest, res, all_rules))
+                await done_queue.put(_BufDone(name, digest, res, all_rules, selection))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # a job crash must not sink silently — surface it on the queue
                 _logger.exception("buffer job %s crashed", name)
-                await done_queue.put(_BufDone(name, digest, f"[buffer {name}] job error: {exc}", []))
+                await done_queue.put(_BufDone(name, digest, f"[buffer {name}] job error: {exc}", [], selection))
 
         def _cur_digest(state: StateWithSkips, buffers: Mapping[str, NamedBuffer], name: str) -> str:
             skipped_pairs = [(str(s.property_title), str(s.reason)) for s in state["skipped"]]
@@ -761,29 +808,49 @@ def get_prover_tool(
             if not b.is_run_target:
                 return f"Buffer {name!r} is a shared (imports-only) buffer; it runs no rules of its own."
 
+            rule: list[str] | None = args.get("rule")
+            exclude_rules: list[str] | None = args.get("exclude_rules")
+            if rule is not None and exclude_rules is not None:
+                return "Pass at most one of `rule` / `exclude_rules`; omit both to run the whole buffer."
+            selection = _selection_of(rule, exclude_rules)
+            if selection is not None:
+                owned = b.owned_rules
+                unknown = [r for r in selection["selector"] if r not in owned]
+                if unknown:
+                    return f"Buffer {name!r} declares no rule(s) {unknown}; its rules are {sorted(owned)}."
+                would_run = selection["selector"] if selection["sort"] == "include" \
+                    else [r for r in owned if r not in set(selection["selector"])]
+                if not would_run:
+                    return f"That selection would run no rule of buffer {name!r}; its rules are {sorted(owned)}."
+
             digest = _cur_digest(state, buffers, name)
             if _buffer_complete_at(state, buffers, name, digest):
                 return f"Buffer {name!r} is already verified at its current content; nothing to submit."
 
-            existing = buffer_jobs.get(name)
+            sel_key = _selection_key(selection)
+            existing = buffer_jobs.get((name, sel_key))
             if existing is not None and existing.digest == digest:
-                # A job for this exact content is already in flight, or has just finished with its result
-                # not yet collected. Either way, do not launch a duplicate — the answer is (coming) on the
-                # queue; the agent should collect it, not re-run identical work.
+                # This exact subset at this exact content is already in flight, or has just finished with
+                # its result not yet collected. Either way, do not launch a duplicate — the answer is
+                # (coming) on the queue; the agent should collect it, not re-run identical work.
                 proving = "is still proving" if not existing.task.done() else "has already finished"
                 return (
                     f"Buffer {name!r} was already submitted at its current content and {proving}; do not "
                     f"re-submit it. Call collect_results to take its result — if this is your only "
                     f"remaining buffer/task and you are just waiting on it, use collect_results(wait=true)."
                 )
-            if existing is not None and not existing.task.done():
-                existing.task.cancel()  # buffer (or a shared import) changed: supersede the stale job
+            # A content edit supersedes every subset job of this buffer (all now at a stale digest); the
+            # sibling subsets at the *current* digest are the parallel stripes and stay running.
+            for (nm, sk), j in list(buffer_jobs.items()):
+                if nm == name and j.digest != digest and not j.task.done():
+                    j.task.cancel()
+                    buffer_jobs.pop((nm, sk), None)
 
             n = submit_counts.get(name, 0) + 1
             submit_counts[name] = n
             component = component_of(state)
             task = asyncio.create_task(_run_buffer_job(
-                name=name, digest=digest,
+                name=name, digest=digest, selection=selection,
                 label=f"{component}/{name} submission {n}",
                 buffers=dict(buffers), vfs=dict(state.get("vfs") or {}), conf=state["config"],
                 cex_state=state, tool_call_id=tool_call_id,
@@ -792,11 +859,14 @@ def get_prover_tool(
                 # progress can render loosely in the UI (functional results are unaffected).
                 writer=get_stream_writer(), summary=get_run_summary(),
             ))
-            buffer_jobs[name] = _BufJob(name=name, digest=digest, task=task)
-            running = sorted(nm for nm, j in buffer_jobs.items() if not j.task.done())
+            buffer_jobs[(name, sel_key)] = _BufJob(name=name, digest=digest, task=task, selection=selection)
+            running = sorted({nm for (nm, _sk), j in buffer_jobs.items() if not j.task.done()})
+            sel_desc = "" if selection is None else (
+                f" (rules {selection['selector']})" if selection["sort"] == "include"
+                else f" (excluding {selection['selector']})")
             return (
-                f"Submitted buffer {name!r} (submission {n}); it is now proving in the background. "
-                f"Running: {running}. Call collect_results to retrieve results as jobs finish."
+                f"Submitted buffer {name!r}{sel_desc} (submission {n}); it is now proving in the "
+                f"background. Running: {running}. Call collect_results to retrieve results as jobs finish."
             )
 
         @tool_display("Collecting prover results", None)
@@ -832,15 +902,15 @@ def get_prover_tool(
             # Cancel jobs left running against a now-stale digest: a shared buffer they import was edited, so
             # their result would be discarded anyway — and on local runs a doomed job needlessly holds the
             # single prover slot. The agent re-submits them (they show under needs-(re)submission below).
-            for nm, j in list(buffer_jobs.items()):
-                if not j.task.done() and nm in buffers and j.digest != cur_digest(nm):
+            for key, j in list(buffer_jobs.items()):
+                if not j.task.done() and j.name in buffers and j.digest != cur_digest(j.name):
                     j.task.cancel()
-                    buffer_jobs.pop(nm, None)
+                    buffer_jobs.pop(key, None)
 
             # Retire finished jobs from the registry. A result that lands between the drain and here stays on
             # the queue, so its buffer is picked up on the next collect even though its job is already gone.
-            for nm in [nm for nm, j in buffer_jobs.items() if j.task.done()]:
-                buffer_jobs.pop(nm, None)
+            for key in [key for key, j in buffer_jobs.items() if j.task.done()]:
+                buffer_jobs.pop(key, None)
 
             prover_update: list[ProverHistoryItem] = []
             fresh: dict[str, list[tuple[RulePath, StatusCodes]]] = {}
@@ -851,14 +921,14 @@ def get_prover_tool(
                     parts.append(f"=== buffer {d.name} ===\n{d.result}")
                     continue
                 results: list[tuple[RulePath, StatusCodes]] = list(d.result.raw_rule_status.items())
-                fresh[d.name] = results
+                fresh.setdefault(d.name, []).extend(results)  # striped subsets of one buffer accumulate
                 link = d.result.link or link
                 stale = d.name in buffers and d.digest != cur_digest(d.name)
                 note = (" (NOTE: the spec changed since this was submitted — this result is STALE; re-submit "
                         "this buffer.)") if stale else ""
                 parts.append(f"=== buffer {d.name} ==={note}\n{d.result.result_str}")
                 prover_update.append(ProverRunLog(
-                    tool_call_id=tool_call_id, prover_results=results, rules=None,
+                    tool_call_id=tool_call_id, prover_results=results, rules=d.selection,
                     spec_digest=string_hash(buffers[d.name].cvl) if d.name in buffers else "",
                     sort="run", declared_rules=d.all_rules, state_digest=d.digest, buffer=d.name,
                 ))
@@ -877,8 +947,8 @@ def get_prover_tool(
             # under needs-(re)submission until the agent relaunches it.
             complete = {b.name for b in targets if f"prover:{b.name}" in prover_stamps}
             running = {
-                nm for nm, j in buffer_jobs.items()
-                if not j.task.done() and nm in buffers and j.digest == cur_digest(nm)
+                j.name for j in buffer_jobs.values()
+                if not j.task.done() and j.name in buffers and j.digest == cur_digest(j.name)
             }
             needs_submit = [b.name for b in targets if b.name not in complete and b.name not in running]
             board = [

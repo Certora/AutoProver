@@ -16,6 +16,7 @@ from pathlib import Path
 os.environ.setdefault("ANTHROPIC_API_KEY", "dummy-key-for-tests")
 from typing import Any, AsyncIterator, Iterator, Callable, Iterable, TYPE_CHECKING, Sequence
 from contextlib import asynccontextmanager
+import dataclasses
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
@@ -418,6 +419,17 @@ def certora_prover(
         # verify target "Dummy:certora/specs/<name>.spec" -> buffer name (the spec stem).
         return Path(conf["verify"].split(":", 1)[1]).stem
 
+    def _select_rules(resp: ProverToolResponse, conf: dict) -> ProverToolResponse:
+        # Mirror the prover's rule selection: keep only the rules the conf's rule/exclude_rule ask for.
+        if isinstance(resp, str) or ("rule" not in conf and "exclude_rule" not in conf):
+            return resp
+        if "rule" in conf:
+            keep = lambda rp: rp.rule in set(conf["rule"])
+        else:
+            keep = lambda rp: rp.rule not in set(conf["exclude_rule"])
+        selected = {rp: st for rp, st in resp.raw_rule_status.items() if keep(rp)}
+        return dataclasses.replace(resp, raw_rule_status=selected)
+
     async def mock_declared_rules(folder: Path, args: list[str]) -> list[str]:
         return SPEC_DECL_RE.findall(spec_of_prover_conf(folder, conf_of_prover_call(folder, args)))
 
@@ -429,7 +441,9 @@ def certora_prover(
         if buffer_responses:
             name = _buffer_of_conf(conf)
             assert name in buffer_responses, f"no buffer response for {name!r}"
-            return buffer_responses[name]
+            # Honour the conf's rule selection, as the real prover does: a rule-striped run reports only
+            # its selected rules, so completion has to union several runs.
+            return _select_rules(buffer_responses[name], conf)
         assert response_script is not None
         nonlocal response_ptr
         assert response_ptr < len(response_script)
