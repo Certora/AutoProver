@@ -325,16 +325,22 @@ def test_the_author_is_told_which_prover_settings_are_its_own_and_which_are_not(
 
 
 def test_both_new_settings_are_placed_last_on_their_ladders():
-    """A bigger budget spent on a rule with a real problem in it buys a slower way to learn the same
-    thing, so the prompt must not offer either as a first move."""
+    """Ordering, and the *reason* for it. The portfolio was measured and it is not slow — a
+    pre-lemma harness the plain conf could not finish in an hour verified with it in 4.6 minutes —
+    so "expensive" is not the argument and the prompt must not make it. What the lemma leaves
+    behind that a solver seed does not is a proof a reviewer can check, and that is the argument."""
     prompt = _flat(_author_system_prompt())
 
     loop_rung = prompt.index("Raise the bound, having tried the first two")
     assert prompt.index("Constrain what determines the trip count") < loop_rung
 
-    portfolio = prompt.index("nonlinear solver portfolio** with `adjust_prover_config`")
+    portfolio = prompt.index("the solver portfolio is")
     assert prompt.index("Bound the operands") < portfolio
     assert prompt.index("Then lift the algebra into a lemma") < portfolio
+
+    # The ordering is justified by what a lemma leaves behind, not by cost.
+    assert "the reason is not cost" in prompt
+    assert "a reviewer can read and check" in prompt
 
 
 def test_the_author_is_told_to_call_the_handler_not_anchors_dispatch():
