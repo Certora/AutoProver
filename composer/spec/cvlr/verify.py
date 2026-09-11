@@ -35,13 +35,14 @@ from typing import (
 )
 
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Discriminator, Field
 
 from graphcore.graph import LLM, tool_return, tool_state_update
 from graphcore.tools.schemas import (
     Command,
     WithAsyncDependencies,
     WithAsyncImplementation,
+    WithImplementation,
     WithInjectedId,
     WithInjectedState,
 )
@@ -64,7 +65,16 @@ from composer.prover.ptypes import (
     RuleResult,
     classify_violation,
 )
-from composer.spec.cvlr.conf import DEFAULT_FEATURE, SelectRules, tools_version
+from composer.spec.cvlr.conf import (
+    DEFAULT_FEATURE,
+    OVERLAY_OWNED_KEYS,
+    SelectRules,
+    dump_conf,
+    has_solver_portfolio,
+    tools_version,
+    with_loop_iter,
+    with_solver_portfolio,
+)
 from composer.spec.cvlr.munge import (
     AlreadyMunged,
     EarlyPanic,
@@ -676,6 +686,7 @@ def gate_tools(target: HarnessTarget, deps: VerifyDeps) -> list[BaseTool]:
         CargoCheck.bind(target).as_tool("cargo_check"),
         VerifyRules.bind(deps).as_tool("verify_rules"),
         SummarizeForProver.bind(target.tuning).as_tool("summarize_for_prover"),
+        AdjustProverConfig.as_tool("adjust_prover_config"),
     ]
 
 
@@ -754,6 +765,112 @@ class SummarizeForProver(
             f"Recorded a summary for {directive.pattern}. It takes effect on the next build, and it "
             "invalidated the prover stamp — re-run verify_rules.",
             summaries=[directive],
+        )
+
+
+class SetLoopIter(BaseModel):
+    """Raise or lower how many times the prover unrolls a statically unbounded loop."""
+
+    type: Literal["loop_iter"]
+    iterations: int = Field(
+        description="The new bound. The Prover unrolls an unbounded loop this many times and then "
+        "*asserts* the loop has finished — `optimistic_loop` is off, so a rule that verifies at "
+        "this bound is verified, and one that cannot comes back VIOLATED on \"Unwinding condition "
+        "in a loop\" rather than passing quietly. Set it as low as the property allows: cost grows "
+        "exponentially, and above 3 or 4 it grows faster than the answer is usually worth. Raising "
+        "it is the last of the three remedies, after bounding whatever determines the trip count "
+        "and after asking whether the loop is in your property's way at all."
+    )
+
+
+class SetNonlinearSolverPortfolio(BaseModel):
+    """Turn the nonlinear-arithmetic solver portfolio on or off."""
+
+    type: Literal["nonlinear_solver_portfolio"]
+    enabled: bool = Field(
+        description="True to add the portfolio, false to remove it. It sets an adaptive backend "
+        "strategy, enables the linear and nonlinear arithmetic theories, and runs twelve solver "
+        "instances on different random seeds. This is for the symptom the charter describes — a "
+        "rule at a low completion percentage after heavy splitting, HALTing on the global timeout "
+        "— and it is a *last* resort, after `NativeInt`, after bounding the operands, and after "
+        "lifting the algebra into a lemma. It changes how long an answer takes and never what a "
+        "green verdict means, but it multiplies what the run spends to get one."
+    )
+
+
+type CvlrConfigEdit = Annotated[
+    SetLoopIter | SetNonlinearSolverPortfolio, Discriminator("type")
+]
+
+#: Conf keys the edits above write. The run overlay forces its own keys onto the base conf
+#: (:data:`~composer.spec.cvlr.conf.OVERLAY_OWNED_KEYS`), so an "accepted" edit to one of them would
+#: be reported as applied and then silently dropped before submission — the two sets must stay
+#: disjoint. Same assertion, for the same reason, as the CVL backend's ``author._FLAG_KEYS``.
+_CONF_EDIT_KEYS = frozenset({"loop_iter", "prover_args"})
+assert not (_shadowed := _CONF_EDIT_KEYS & OVERLAY_OWNED_KEYS), \
+    f"conf edits shadowed by the run overlay: {', '.join(sorted(_shadowed))}"
+
+
+@tool_display(lambda p: f"Adjusting the prover config ({len(p['edits'])} edit(s))", "Config")
+class AdjustProverConfig(
+    WithInjectedState[CvlrGenerationState], WithInjectedId, WithImplementation[Command | str]
+):
+    """Change a prover setting for this unit's submissions.
+
+    The conf is in your system prompt; this changes it. Every setting here is **sound** — it decides
+    how the prover spends its time, never what a green verdict means — which is why the list is
+    short and closed. Everything that *would* change what a verdict means stays out of your hands:
+    `optimistic_loop` assumes loops finish, a `rule_sanity` downgrade stops vacuity being reported,
+    and the memory-model flags are unsound by name.
+
+    **Reach for this after your own remedies, not before them.** A timeout is usually telling you
+    something about the rule — an unbounded operand, an algebraic step that belongs in a lemma, a
+    loop whose trip count nothing constrains — and a bigger solver budget spent on a rule with a
+    real problem in it buys a slower way to learn the same thing.
+
+    Edits apply together or not at all, and the result is the full conf. Changing it invalidates the
+    prover stamp, because the previous run's verdicts were obtained under different settings: re-run
+    `verify_rules` afterwards.
+    """
+
+    edits: list[CvlrConfigEdit] = Field(description="The changes to apply, as one atomic batch.")
+    why: str = Field(
+        description="What you tried first and why this setting is the remedy. The conf is written "
+        "into the deliverable, so this is the account a reader gets of why it differs from the "
+        "project's own."
+    )
+
+    @override
+    def run(self) -> Command | str:
+        if not self.why.strip():
+            return (
+                "A non-empty `why` is required. The conf ships with the deliverable, and a setting "
+                "nobody explained is one a reader cannot weigh."
+            )
+        if not self.edits:
+            return "No edits given."
+        conf = dict(self.state["conf"])
+        for edit in self.edits:
+            match edit:
+                case SetLoopIter(iterations=n):
+                    if n < 1:
+                        return f"A loop bound of {n} is not a bound; it has to be at least 1."
+                    if str(conf.get("loop_iter", "")) == str(n):
+                        return f"`loop_iter` is already {n}."
+                    conf = with_loop_iter(conf, n)
+                case SetNonlinearSolverPortfolio(enabled=on):
+                    if has_solver_portfolio(conf) == on:
+                        return (
+                            "The solver portfolio is already "
+                            + ("on" if on else "off")
+                            + " in this conf."
+                        )
+                    conf = with_solver_portfolio(conf, on)
+        return tool_state_update(
+            self.tool_call_id,
+            "Prover config updated; the prover stamp is invalidated, so re-run `verify_rules`.\n\n"
+            f"```json\n{dump_conf(conf)}```",
+            conf=conf,
         )
 
 
