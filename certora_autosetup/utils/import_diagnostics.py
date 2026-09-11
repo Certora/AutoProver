@@ -147,6 +147,24 @@ def _split_package(entry: str) -> Optional[Tuple[str, str, str]]:
     return context, prefix, target
 
 
+def package_prefixes(packages: List[str]) -> List[str]:
+    """The import-path prefixes the conf's packages entries remap.
+
+    A context-scoped entry (``context:prefix=target``) contributes its prefix like any other:
+    whether the context applies depends on the importing file's source unit name, so a caller
+    asking "could a remapping have resolved this import" has to count it either way.
+    """
+    prefixes: List[str] = []
+    for entry in packages:
+        split = _split_package(entry)
+        if split is None:
+            continue
+        _, prefix, _ = split
+        if prefix:
+            prefixes.append(prefix)
+    return prefixes
+
+
 def _is_under(child: str, parent: str) -> bool:
     """True when ``child`` is ``parent`` itself or lives inside it (textual, both absolute)."""
     parent = parent.rstrip("/")

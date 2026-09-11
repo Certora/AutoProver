@@ -167,9 +167,9 @@ class AutoProveLiveHandler(LiveDisplayHandler[None], NullEventHandler):
         self, info: TaskInfo[AutoProvePhase]
     ) -> TaskHandle[None]:
         # ``run_task`` fires ``on_start`` / ``on_done`` per-task, not
-        # per-phase — a single phase like CVL_GEN spawns one
-        # "Invariant CVL" task plus one per-component batch, all
-        # sharing the same ``AutoProvePhase``. Use ``_phases_seen`` to
+        # per-phase — a single phase like CVL_GEN spawns one task per
+        # component batch, all sharing the same ``AutoProvePhase``.
+        # Use ``_phases_seen`` to
         # collapse the per-task callback into a single phase header
         # emitted the first time any task of that phase actually starts
         # work. Subsequent tasks in the same phase don't repeat it.

@@ -23,7 +23,6 @@ outcome and the observables checklist:
 
     t1_control.json                  ample everything: must behave like an unbudgeted run
     t2_formalization_curtail.json    trips the component author mid-batch
-    t3_preparation_curtail.json      trips the invariant author; run degrades gracefully
     t4_pool_pressure.json            trips the shared pool partway through the run
     (T5, the caching interplay test, reuses t2 across two runs — see the manifest)
 
@@ -216,8 +215,7 @@ def build_matrix(
     phase_spend = {p: sum(r.cost() for r in roots if r.phase == p) for p in (*PHASES, UNATTRIBUTED)}
 
     # The author proxy: the priciest formalization root, falling back to the priciest
-    # root overall (e.g. a cache-warm source run where only invariant work ran live —
-    # same agent shape, stated as a proxy in the manifest).
+    # root overall (e.g. a fully cache-warm source run), stated as a proxy in the manifest.
     formalization_roots = [r for r in roots if r.phase == "formalization"]
     author = max(formalization_roots or roots, key=lambda r: r.cost())
     author_is_proxy = not formalization_roots
@@ -231,8 +229,6 @@ def build_matrix(
     ample_caps = {p: ample for p in PHASES}
 
     t2_cap = _cap(cap_fraction * author_cost)
-    prep_spend = phase_spend["formalization_preparation"]
-    t3_cap = _cap(theta * prep_spend) if prep_spend > 0 else None
     t4_total = _cap(theta * run_total)
 
     files: dict[str, dict] = {
@@ -241,10 +237,6 @@ def build_matrix(
             "total": ample, "caps": {**ample_caps, "formalization": t2_cap},
         },
     }
-    if t3_cap is not None:
-        files["t3_preparation_curtail.json"] = {
-            "total": ample, "caps": {**ample_caps, "formalization_preparation": t3_cap},
-        }
     files["t4_pool_pressure.json"] = {"total": t4_total, "caps": dict(ample_caps)}
 
     def headroom_note(cap: float) -> str:
@@ -278,8 +270,8 @@ def build_matrix(
         "",
         f"Author baseline: `{author.description}` — ${author_cost:.4f} over "
         f"{len(author.calls)} calls (max ${max_call:.4f}, late-turn mean ${late_mean:.4f})."
-        + (" **Proxy**: no formalization-phase thread ran live in the source run (cache-warm);"
-           " the invariant author is the same agent shape." if author_is_proxy else ""),
+        + (" **Proxy**: no formalization-phase thread ran live in the source run (cache-warm)."
+           if author_is_proxy else ""),
     ]
     if unobserved:
         lines += [
@@ -315,16 +307,6 @@ def build_matrix(
         f"report appendix, exit code reflects `all_failed` for single-component scenarios. "
         f"{headroom_note(t2_cap)}.",
     ]
-    if t3_cap is not None:
-        lines += [
-            "",
-            f"### T3 — invariant curtailment (`t3_preparation_curtail.json`: "
-            f"formalization_preparation cap ${t3_cap})",
-            f"Warn fires at ≥ ${theta * t3_cap:.2f} into preparation spend (observed "
-            f"${prep_spend:.2f}). Expected: `invariants.spec.unverified`, NO invariant import "
-            "in component specs, 'Structural Invariants' appendix entry — and the run "
-            f"*continues* into component formalization. {headroom_note(t3_cap)}.",
-        ]
     lines += [
         "",
         f"### T4 — pool pressure (`t4_pool_pressure.json`: total ${t4_total}, caps ample)",
@@ -356,8 +338,9 @@ def build_matrix(
         "line above against `composer/llm/pricing.py` before running.",
         "- Calibration uses the 1h cache-write bound (authors run the long cache); the 5m "
         "bound runs ~20% cheaper.",
-        "- AutoSetup's subprocess LLM calls never pass through `CostAccumulator`: "
-        "`formalization_preparation` meters only in-process work (invariants, summaries).",
+        "- AutoSetup's subprocess LLM calls never pass through `CostAccumulator`, and the "
+        "custom-summaries agent installs no budget monitor, so `formalization_preparation` "
+        "is attribution-only: it accrues into the pool but can neither warn nor stop.",
         "",
         f"Regenerate: `uv run scripts/budget_math.py {run.run_id} --emit-matrix <dir>`",
         "",
