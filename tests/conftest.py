@@ -382,12 +382,19 @@ class ProverMock:
         self,
         bind: Callable[[Iterable[ProverToolResponse]], BaseTool],
         calls: list[ProverCall],
+        bind_buffers: Callable[[dict[str, ProverToolResponse]], list[BaseTool]],
     ) -> None:
         self._bind = bind
         self.calls = calls
+        self._bind_buffers = bind_buffers
 
     def __call__(self, l: Iterable[ProverToolResponse]) -> BaseTool:
         return self._bind(l)
+
+    def buffers(self, responses_by_name: dict[str, ProverToolResponse]) -> list[BaseTool]:
+        """The multi-buffer submit_buffer / collect_results tools, wired to return ``responses_by_name``
+        keyed by buffer name (jobs run concurrently, so responses can't be order-scripted)."""
+        return self._bind_buffers(responses_by_name)
 
 
 @pytest.fixture
@@ -402,7 +409,14 @@ def certora_prover(
 ) -> ProverMock:
     response_script : list[ProverToolResponse] | None = None
     response_ptr = 0
+    # Per-buffer responses, keyed by buffer name (the multi-buffer submit/collect path). Keyed rather
+    # than ordered because buffer jobs run concurrently, so call order is nondeterministic.
+    buffer_responses: dict[str, ProverToolResponse] = {}
     calls: list[ProverCall] = []
+
+    def _buffer_of_conf(conf: dict) -> str | None:
+        # verify target "Dummy:certora/specs/<name>.spec" -> buffer name (the spec stem).
+        return Path(conf["verify"].split(":", 1)[1]).stem
 
     async def mock_declared_rules(folder: Path, args: list[str]) -> list[str]:
         return SPEC_DECL_RE.findall(spec_of_prover_conf(folder, conf_of_prover_call(folder, args)))
@@ -410,10 +424,15 @@ def certora_prover(
     async def mock_prover(
         folder: Path, args: list[str], *rest, **kwargs
     ) -> ProverToolResponse:
+        conf = conf_of_prover_call(folder, args)
+        calls.append(ProverCall(folder=folder, args=list(args), conf=conf))
+        if buffer_responses:
+            name = _buffer_of_conf(conf)
+            assert name in buffer_responses, f"no buffer response for {name!r}"
+            return buffer_responses[name]
         assert response_script is not None
         nonlocal response_ptr
         assert response_ptr < len(response_script)
-        calls.append(ProverCall(folder=folder, args=list(args), conf=conf_of_prover_call(folder, args)))
         to_ret = response_script[response_ptr]
         response_ptr += 1
         return to_ret
@@ -424,7 +443,7 @@ def certora_prover(
         lambda _: None
     ))
 
-    the_tool = get_prover_tool(
+    toolset = get_prover_tool(
         prover_opts=ProverOptions(),
         llm=fake_llm,
         main_contract="Dummy",
@@ -434,9 +453,14 @@ def certora_prover(
     def bind_tool(l: Iterable[ProverToolResponse]) -> BaseTool:
         nonlocal response_script
         response_script = list(l)
-        return the_tool
+        return toolset.verify_spec
 
-    return ProverMock(bind_tool, calls)
+    def bind_buffers(responses_by_name: dict[str, ProverToolResponse]) -> list[BaseTool]:
+        buffer_responses.clear()
+        buffer_responses.update(responses_by_name)
+        return toolset.make_buffer_tools()
+
+    return ProverMock(bind_tool, calls, bind_buffers)
 
 
 # ---------------------------------------------------------------------------

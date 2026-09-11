@@ -11,7 +11,7 @@ the driver's binder as a ``ToolExtension`` (``composer.pipeline.core``).
 import pathlib
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import AsyncContextManager, Callable, Sequence, Protocol
+from typing import AsyncContextManager, Callable, Mapping, Sequence, Protocol
 
 from composer.pipeline.plugin_api import (
     FormalizationTool, PipelinePlugin, PluginToolContext, ProvidedTools,
@@ -20,6 +20,7 @@ from composer.spec.system_model import FeatureUnit
 from composer.spec.types import PropertyFormulation
 from composer.prover.core import ProverReport, ProverCallbacks, CexHandler
 from composer.io.task_host import TaskHost
+from composer.spec.source.spec_buffers import NamedBuffer, buffer_review_text
 
 class ProverRunner(Protocol):
     """One ad-hoc prover run: stages the spec/conf into ``working_dir`` for the
@@ -63,12 +64,21 @@ class CVLAuthorState:
     # The run root the prover would execute in: the project itself, or a temporary
     # materialization of the author's working copy (lifetime = the read).
     working_dir: pathlib.Path
-    curr_spec: str | None
+    # The spec under authoring, as its named buffers — each a self-contained CVL unit (its own rules,
+    # methods{}, and imports). Every rule lives in exactly one buffer; ``spec_for_rule`` returns the CVL
+    # for a given rule.
+    buffers: Mapping[str, NamedBuffer]
     prover_runner: ProverRunner
     host: TaskHost
     # Propose source edits for the author to apply; records carry the
     # proposing plugin's attribution.
     edit_store: EditProposer
+
+    def spec_for_rule(self, rule: str) -> str | None:
+        """The CVL the author has written for ``rule``: the buffer that declares it, together with its
+        transitive import closure, as one document — or None if no buffer declares ``rule``."""
+        name = next((nm for nm, b in self.buffers.items() if rule in b.owned_rules), None)
+        return buffer_review_text(self.buffers, name) if name is not None else None
 
 type ProverStateReader[T] = Callable[[T], AsyncContextManager[CVLAuthorState]]
 

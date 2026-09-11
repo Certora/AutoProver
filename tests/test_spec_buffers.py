@@ -1,0 +1,341 @@
+"""Unit tests for the multi-spec-buffer substrate."""
+
+from composer.spec.source.spec_buffers import (
+    DEFAULT_MAX_SPEC_BUFFERS,
+    NamedBuffer,
+    buffer_digest,
+    buffer_imports,
+    buffer_state_digest,
+    check_buffer_completion,
+    combined_buffers_view,
+    duplicated_declarations,
+    import_closure,
+    max_spec_buffers,
+    merge_buffers,
+    run_targets,
+    validate_coverage,
+    validate_disjoint_rules,
+)
+
+
+def test_buffer_path_is_fixed_to_specs_dir():
+    # The buffer's location is enforced (agent cannot choose it), overwriting any passed path.
+    assert NamedBuffer(name="foo", cvl="").path == "certora/specs/foo.spec"
+    assert NamedBuffer(name="foo", cvl="", path="elsewhere/foo.spec").path == "certora/specs/foo.spec"
+
+
+def test_buffer_imports_resolves_siblings_by_path_ignores_resources():
+    b = {
+        "shared": NamedBuffer(name="shared", cvl=SHARED, is_run_target=False),
+        "r": NamedBuffer(
+            name="r",
+            cvl='import "shared.spec";\nimport "summaries/oracle.spec";\nrule x { assert true; }\n',
+            property_rules={"P-r": ["x"]},
+        ),
+    }
+    # the sibling buffer resolves (certora/specs/shared.spec); the path'd autosetup resource
+    # (certora/specs/summaries/oracle.spec) is no buffer's path, so it is not a dependency.
+    assert buffer_imports(b, "r") == ("shared",)
+
+
+_COMMON = (
+    "ghost mapping(uint => uint) gm;\n"
+    "methods {\n"
+    "    function _.foo() external => NONDET;\n"
+    "    function _.bar(address) external => NONDET;\n"
+    "}\n"
+)
+
+
+def test_duplicated_declarations_flags_copypaste_across_run_targets():
+    b = {
+        "shared": NamedBuffer(name="shared", cvl=SHARED, is_run_target=False),
+        "a": NamedBuffer(name="a", cvl=_COMMON + "rule ra { assert true; }\n",
+                         property_rules={"P-a": ["ra"]}),
+        "b": NamedBuffer(name="b", cvl=_COMMON + "rule rb { assert true; }\n",
+                         property_rules={"P-b": ["rb"]}),
+    }
+    dups = duplicated_declarations(b)
+    assert dups["ghost mapping(uint => uint) gm;"] == ["a", "b"]
+    assert dups["function _.foo() external => NONDET;"] == ["a", "b"]
+    assert dups["function _.bar(address) external => NONDET;"] == ["a", "b"]
+
+
+def test_duplicated_declarations_ignores_single_buffer_and_shared():
+    b = {
+        # a shared buffer carrying the entry is the CORRECT structure, not a duplication
+        "shared": NamedBuffer(name="shared", cvl="methods {\n function _.z() external => NONDET;\n}\n",
+                              is_run_target=False),
+        "a": NamedBuffer(name="a", cvl="methods {\n function _.foo() external => NONDET;\n}\n"
+                         "rule ra { assert true; }\n", property_rules={"P-a": ["ra"]}),
+        "b": NamedBuffer(name="b", cvl="rule rb { assert true; }\n", property_rules={"P-b": ["rb"]}),
+    }
+    assert duplicated_declarations(b) == {}  # foo only in a; z only in the shared buffer
+
+
+def test_max_spec_buffers_default_override_and_fallback(monkeypatch):
+    monkeypatch.delenv("AUTOPROVER_MAX_SPEC_BUFFERS", raising=False)
+    assert max_spec_buffers() == DEFAULT_MAX_SPEC_BUFFERS == 6
+    monkeypatch.setenv("AUTOPROVER_MAX_SPEC_BUFFERS", "3")
+    assert max_spec_buffers() == 3
+    monkeypatch.setenv("AUTOPROVER_MAX_SPEC_BUFFERS", "0")  # <1 -> default
+    assert max_spec_buffers() == 6
+    monkeypatch.setenv("AUTOPROVER_MAX_SPEC_BUFFERS", "nope")  # non-int -> default
+    assert max_spec_buffers() == 6
+
+SHARED = "ghost g(uint) returns uint;\n"
+EASY = 'import "shared.spec";\nrule r_easy { assert true; }\n'
+HARD = 'import "shared.spec";\nrule r_hard { assert g(0) >= 0; }\n'
+
+
+def _buffers(**overrides):
+    b = {
+        "shared": NamedBuffer(name="shared", cvl=SHARED, is_run_target=False),
+        "easy": NamedBuffer(
+            name="easy", cvl=EASY, property_rules={"P-easy": ["r_easy"]}
+        ),
+        "hard": NamedBuffer(
+            name="hard", cvl=HARD, property_rules={"P-hard": ["r_hard"]}
+        ),
+    }
+    b.update(overrides)
+    return b
+
+
+# --- model -----------------------------------------------------------------
+
+
+def test_owned_rules_and_properties_derive_from_mapping():
+    b = NamedBuffer(name="g", cvl="", property_rules={"P1": ["a", "b"], "P2": ["c"]})
+    assert b.properties == {"P1", "P2"}
+    assert b.owned_rules == {"a", "b", "c"}
+
+
+def test_shared_buffer_owns_nothing():
+    b = _buffers()["shared"]
+    assert b.owned_rules == frozenset()
+    assert b.is_run_target is False
+
+
+# --- import closure --------------------------------------------------------
+
+
+def test_import_closure_includes_transitive_imports():
+    b = _buffers()
+    b["mid"] = NamedBuffer(name="mid", cvl='import "shared.spec";\n', is_run_target=False)
+    b["top"] = NamedBuffer(name="top", cvl='import "mid.spec";\n', property_rules={"P-top": ["r_top"]})
+    names = {x.name for x in import_closure(b, "top")}
+    assert names == {"top", "mid", "shared"}
+
+
+def test_import_closure_tolerates_cycles_and_dangling():
+    b = {
+        "a": NamedBuffer(name="a", cvl='import "b.spec"; import "missing.spec";'),
+        "b": NamedBuffer(name="b", cvl='import "a.spec";'),
+    }
+    names = {x.name for x in import_closure(b, "a")}
+    assert names == {"a", "b"}  # cycle terminates; unknown "missing" skipped
+
+
+# --- digest ----------------------------------------------------------------
+
+
+def test_digest_changes_when_shared_import_changes():
+    b = _buffers()
+    before = buffer_digest(b, "easy")
+    b["shared"] = NamedBuffer(name="shared", cvl=SHARED + "ghost h(uint) returns uint;\n", is_run_target=False)
+    after = buffer_digest(b, "easy")
+    assert before != after  # editing an imported buffer invalidates the importer
+
+
+def test_digest_stable_and_independent_across_buffers():
+    b = _buffers()
+    assert buffer_digest(b, "easy") == buffer_digest(b, "easy")  # deterministic
+    b["hard"] = NamedBuffer(name="hard", cvl=HARD + "// tweak\n", property_rules={"P-hard": ["r_hard"]})
+    assert buffer_digest(_buffers(), "easy") == buffer_digest(b, "easy")  # editing hard doesn't touch easy
+
+
+def test_digest_folds_in_extra_parts():
+    b = _buffers()
+    assert buffer_digest(b, "easy", extra_parts=["skipped:P-x"]) != buffer_digest(b, "easy")
+
+
+# --- run targets -----------------------------------------------------------
+
+
+def test_run_targets_excludes_shared():
+    assert [b.name for b in run_targets(_buffers())] == ["easy", "hard"]
+
+
+def test_combined_buffers_view_includes_all_with_headers():
+    out = combined_buffers_view(_buffers())
+    assert "buffer easy (run-target)" in out
+    assert "buffer shared (shared)" in out
+    assert "r_easy" in out and "ghost g" in out
+
+
+# --- coverage --------------------------------------------------------------
+
+
+def test_coverage_ok():
+    assert validate_coverage(_buffers(), all_properties={"P-easy", "P-hard"}, skipped=set()) is None
+
+
+def test_coverage_missing_property():
+    err = validate_coverage(_buffers(), all_properties={"P-easy", "P-hard", "P-extra"}, skipped=set())
+    assert err is not None and "no buffer" in err
+
+
+def test_coverage_duplicate_property():
+    b = _buffers()
+    b["hard"] = NamedBuffer(name="hard", cvl=HARD, property_rules={"P-easy": ["r_hard"]})
+    err = validate_coverage(b, all_properties={"P-easy", "P-hard"}, skipped=set())
+    assert err is not None and "more than one buffer" in err
+
+
+def test_coverage_skipped_not_required_nor_assignable():
+    ok = {
+        "shared": NamedBuffer(name="shared", cvl=SHARED, is_run_target=False),
+        "easy": NamedBuffer(name="easy", cvl=EASY, property_rules={"P-easy": ["r_easy"]}),
+    }
+    assert validate_coverage(ok, all_properties={"P-easy", "P-hard"}, skipped={"P-hard"}) is None
+    err = validate_coverage(_buffers(), all_properties={"P-easy", "P-hard"}, skipped={"P-hard"})
+    assert err is not None and "skipped" in err
+
+
+def test_coverage_unknown_property():
+    b = _buffers()
+    b["hard"] = NamedBuffer(name="hard", cvl=HARD, property_rules={"P-ghost": ["r_hard"]})
+    err = validate_coverage(b, all_properties={"P-easy", "P-hard"}, skipped=set())
+    assert err is not None and "unknown" in err
+
+
+def test_coverage_all_properties_skipped_needs_no_run_target():
+    # Every property skipped: nothing must be assigned, so a buffer map with no run-target is valid.
+    b = {"shared": NamedBuffer(name="shared", cvl=SHARED, is_run_target=False)}
+    assert validate_coverage(b, all_properties={"P-easy", "P-hard"}, skipped={"P-easy", "P-hard"}) is None
+
+
+# --- per-buffer completion (validation stamps) -----------------------------
+
+
+def test_buffer_completion_vacuous_without_run_targets():
+    # No run-target buffers means no stamps to require; completion is vacuously satisfied.
+    b = {"shared": NamedBuffer(name="shared", cvl=SHARED, is_run_target=False)}
+    assert check_buffer_completion(
+        b, {}, ["feedback", "prover"], skipped=[], version_history=[]
+    ) is None
+
+
+def _stamp(buffers, name, key):
+    # The feedback stamp also tracks the buffer's claimed properties (include_claim); the prover stamp
+    # does not — mirrors check_buffer_completion.
+    d = buffer_state_digest(
+        buffers, name, skipped=[], version_history=[], include_claim=(key == "feedback")
+    )
+    return {f"{key}:{name}": d}
+
+
+def test_feedback_digest_tracks_claim_but_prover_digest_does_not():
+    # Re-assigning a buffer's claimed properties (property_rules) with unchanged CVL must invalidate the
+    # feedback stamp (the judge reviews against the claim) but NOT the prover stamp (the same rules were
+    # verified).
+    b = _buffers()
+    reclaimed = {**b, "easy": b["easy"].model_copy(update={"property_rules": {"P-moved": ["r_easy"]}})}
+    kw = dict(skipped=[], version_history=[])
+    assert buffer_state_digest(b, "easy", include_claim=True, **kw) != \
+        buffer_state_digest(reclaimed, "easy", include_claim=True, **kw)   # feedback: stale
+    assert buffer_state_digest(b, "easy", **kw) == \
+        buffer_state_digest(reclaimed, "easy", **kw)                       # prover: unchanged
+
+
+def test_buffer_completion_rejects_stale_feedback_after_claim_change():
+    # A feedback stamp taken before a claim change is stale for completion; the prover stamp is not.
+    b = _buffers()
+    validations = {}
+    for name in ("easy", "hard"):
+        validations.update(_stamp(b, name, "feedback"))
+        validations.update(_stamp(b, name, "prover"))
+    reclaimed = {**b, "easy": b["easy"].model_copy(update={"property_rules": {"P-moved": ["r_easy"]}})}
+    err = check_buffer_completion(
+        reclaimed, validations, ["feedback", "prover"], skipped=[], version_history=[]
+    )
+    assert err is not None and "easy" in err and "feedback" in err
+
+
+def test_buffer_completion_ok_when_all_stamped_at_digest():
+    b = _buffers()
+    validations = {}
+    for name in ("easy", "hard"):
+        validations.update(_stamp(b, name, "feedback"))
+        validations.update(_stamp(b, name, "prover"))
+    assert check_buffer_completion(
+        b, validations, ["feedback", "prover"], skipped=[], version_history=[]
+    ) is None
+
+
+def test_buffer_completion_rejects_missing_stamp():
+    b = _buffers()
+    validations = _stamp(b, "easy", "feedback")  # hard + prover missing
+    err = check_buffer_completion(b, validations, ["feedback", "prover"], skipped=[], version_history=[])
+    assert err is not None and ("hard" in err or "prover" in err)
+
+
+def test_buffer_completion_stamp_goes_stale_on_edit():
+    b = _buffers()
+    validations = {}
+    for name in ("easy", "hard"):
+        validations.update(_stamp(b, name, "feedback"))
+        validations.update(_stamp(b, name, "prover"))
+    # Edit `easy`: its digest changes, so its stamps go stale.
+    b["easy"] = NamedBuffer(name="easy", cvl=EASY + "// edit\n", property_rules={"P-easy": ["r_easy"]})
+    err = check_buffer_completion(b, validations, ["feedback", "prover"], skipped=[], version_history=[])
+    assert err is not None and "easy" in err
+
+
+def test_buffer_completion_stamp_goes_stale_on_shared_import_edit():
+    b = _buffers()
+    validations = {}
+    for name in ("easy", "hard"):
+        validations.update(_stamp(b, name, "feedback"))
+        validations.update(_stamp(b, name, "prover"))
+    # Editing the shared buffer invalidates BOTH importers' stamps.
+    b["shared"] = NamedBuffer(name="shared", cvl=SHARED + "// edit\n", is_run_target=False)
+    err = check_buffer_completion(b, validations, ["feedback", "prover"], skipped=[], version_history=[])
+    assert err is not None
+
+
+# --- buffers-map reducer ---------------------------------------------------
+
+
+def test_merge_buffers_right_wins_and_adds():
+    left = {"a": NamedBuffer(name="a", cvl="A")}
+    right = {"a": NamedBuffer(name="a", cvl="A2"), "b": NamedBuffer(name="b", cvl="B")}
+    out = merge_buffers(left, right)
+    assert out["a"].cvl == "A2" and out["b"].cvl == "B"
+
+
+def test_merge_buffers_none_deletes():
+    left = {"a": NamedBuffer(name="a", cvl="A"), "b": NamedBuffer(name="b", cvl="B")}
+    out = merge_buffers(left, {"b": None})
+    assert set(out) == {"a"}
+
+
+def test_merge_buffers_does_not_mutate_left():
+    left = {"a": NamedBuffer(name="a", cvl="A")}
+    merge_buffers(left, {"a": None, "b": NamedBuffer(name="b", cvl="B")})
+    assert set(left) == {"a"}
+
+
+# --- disjoint rules --------------------------------------------------------
+
+
+def test_disjoint_rules_ok():
+    assert validate_disjoint_rules(_buffers()) is None
+
+
+def test_disjoint_rules_detects_shared_rule_name():
+    b = _buffers()
+    b["hard"] = NamedBuffer(name="hard", cvl=HARD, property_rules={"P-hard": ["r_easy"]})
+    err = validate_disjoint_rules(b)
+    assert err is not None and "r_easy" in err

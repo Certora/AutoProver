@@ -1,0 +1,104 @@
+## Splitting the spec into verification buffers
+
+Instead of one spec, you author several named CVL **buffers**, each a self-contained spec verified and
+reviewed on its own. Use `put_buffer` / `edit_buffer` / `get_buffer` / `list_buffers` / `delete_buffer`
+to author them, and `submit_buffer` / `collect_results` to verify them.
+
+**Strongly prefer splitting, and add over-approximating performance summaries preemptively.** A
+single spec has ONE global `methods{}` block, so every rule is verified under the *intersection* of
+what all rules need precise — one property that needs an expensive function kept exact forces EVERY
+rule to pay that cost, which is the usual source of a timeout. Splitting breaks that coupling: each
+buffer keeps precise only the expensive functions ITS properties need, and over-approximates the rest.
+
+Partition by **prover hotspots**, not by every function — most functions are cheap and should stay
+exact. The functions worth summarizing away (where a property does not need them) are the ones *toxic*
+to the prover's performance or precision:
+- heavy **nonlinear** arithmetic (variable `*` / `/` / exponentiation — not scaling by a constant);
+- non-trivial **bitwise** reasoning;
+- non-trivial **hashing** — ABI `encode`/`decode`, `keccak`;
+- non-trivial inline **assembly**;
+- **complex data structures**;
+- **external calls** the property does not need modeled;
+- **complex loops**, or heavy **branching** (path-count explosion).
+
+The method: (1) find these hotspots in the code the properties reach; (2) work out which properties
+genuinely need which hotspots *exact*; (3) group the properties into buffers on that basis, and in each
+buffer summarize the hotspots its own properties do not need exact. Do this partition up front — do not
+start with one monolithic buffer and wait for a timeout to force the split.
+
+When to split:
+- Properties have **conflicting precision needs** — one buffer can summarize a hotspot that another
+  keeps exact (each buffer has its own `methods{}`), with no global-methods-block conflict. This is
+  the primary axis: group the properties by the set of hotspots they genuinely need exact.
+- Separate **`assert`-only** properties (which can share aggressive over-approximations) from
+  **`satisfy`** properties (which need those functions exact) — see the soundness rule below.
+- To **isolate the hard/slow properties**: put the many easy properties in one buffer that verifies and
+  is approved once and never re-touched, while you iterate on a small hard buffer in isolation. Buffers
+  are verified, reviewed, and stamped independently, so once a buffer passes it is settled for the rest
+  of the run — you can ignore it and only the buffer you actually edit pays re-verification and re-review.
+
+Structuring buffers:
+- Put infrastructure shared by two or more run-target buffers (ghosts, common invariants, helper CVL
+  functions, token/oracle models, and summaries several groups need) in a buffer with
+  `is_run_target=false`, and `import "<shared>.spec"` it from **each run-target that uses it**. A shared
+  buffer is pulled in only by the buffers that import it, so
+  editing it re-verifies only those — you can make one shared buffer for a subset of groups and another
+  for a different subset. **Import the shared buffer where you need it; never restate its contents in a
+  run-target** (a duplicate `methods{}` entry or ghost is a compile error).
+- Each **run-target** buffer declares its `property_rules` (the properties it verifies + their rule
+  names). Across all run-target buffers, every non-skipped property must appear in **exactly one**
+  buffer, and each rule lives in exactly one buffer.
+
+Summaries — your main lever for tractability:
+- For each run-target buffer, **summarize now**, in its `methods{}`, the hotspot functions its
+  properties do not need exact (leave the cheap functions alone) — an over-approximation that *weakens*
+  the real body (a looser constraint on the return, or dropping an effect the buffer's properties never
+  read), written before the first `submit_buffer`. Keep every summary **sound**: a trivializing
+  `NONDET`/havoc that erases a
+  function's side effects is sound only for callees whose effects the buffer's properties never observe
+  (in practice `view`/`pure`). Before summarizing a state-mutating function, consult the
+  **CVL Summarization and Linking Guide** in your context for which summary constructs are sound for a
+  given function and how to write them.
+- **Soundness rule: an over-approximating summary is sound for `assert` rules but UNSOUND for `satisfy`
+  rules.** An over-approximation *adds* behaviors: an `assert` that holds over the larger behavior set
+  still holds over the real one (sound), whereas a `satisfy` may be witnessed only by an added, non-real
+  behavior (unsound — its witness need not correspond to a real execution). So over-approximate freely
+  in a buffer whose rules are **all `assert`**; in a buffer that contains any `satisfy` rule (or a
+  reachability check), keep the functions it exercises **exact**.
+- **Put each summary where it is USED.** A summary several run-target buffers need goes in a shared
+  buffer they each `import`; a summary only one buffer needs goes in *that* buffer's own `methods{}`. A
+  single-buffer summary parked in a shared buffer that others import makes every later edit re-verify all
+  of them — wasted work on buffers that never use it.
+- **Refine on a spurious counterexample.** A too-coarse over-approximation produces a *spurious* cex —
+  one reachable only because the summary admits behavior the real function cannot. When a buffer returns
+  VIOLATED, analyze the cex: if it hinges on behavior your summary allows but the real function forbids,
+  it is spurious → tighten that summary (add the missing constraint) or drop the over-approximation for
+  that function with `edit_buffer`, then re-`submit_buffer`. Start from the
+  simplest sound over-approximation and tighten only as spurious cexes force you to.
+
+Verifying — submit / collect (buffers prove in parallel; never wait on a slow buffer to work on a fast
+one):
+- **Settle the shared base before submitting anything that imports it.** Submit a run-target buffer only
+  once BOTH (i) you are done authoring that buffer AND (ii) every shared buffer it imports is likewise
+  done — the CVL is complete and you do not expect to edit it again. Editing a shared buffer after
+  submitting invalidates every buffer that imports it (submitted or already verified): those prover jobs
+  are wasted and must be re-run. So author and stabilize the shared infrastructure first, then submit the
+  run-target buffers that depend on it.
+- `submit_buffer(name)` starts a buffer's prover job in the **background** and returns immediately.
+  Submit each run-target buffer as soon as it and its shared imports are ready — they prove concurrently.
+- `collect_results()` returns the outcomes of jobs that have **finished so far** (without blocking) plus
+  a status board: which buffers are `complete`, `running`, or `needs (re)submission`. Process a finished
+  buffer immediately — fix its issue if it has any (CEXs, timeouts, errors, ...) and `submit_buffer` it
+  again — while the others keep proving.
+- Work this priority order, and only ever block at the last step:
+  1. A finished result not yet processed (a counterexample, but also a timeout, sanity failure, or
+     error) → handle it. Diagnose whether the fix belongs in this buffer or in a **shared** buffer it
+     imports (e.g. an under-approximation in shared infra). Once you edit a shared buffer, every buffer
+     importing it goes stale, so the board then lists them (including ones already verified) under `needs
+     (re)submission` — re-submit each. The board reflects that staleness only after your edit; it does
+     not infer that a result needs a shared fix.
+  2. Else a buffer still to author/submit → author it and `submit_buffer` it.
+  3. Else everything is submitted and running with nothing finished to process → call
+     `collect_results(wait=true)` to sleep until the next job finishes.
+- Editing a buffer (or a shared buffer it imports) makes its prior verification stale; re-submit it. A
+  buffer already verified at its current content is not re-run.

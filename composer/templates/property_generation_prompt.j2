@@ -119,11 +119,10 @@ Similarly, you *must* have received positive feedback from the feedback judge on
 Like the prover tool, any changes to your state (include the spec, skip declarations, etc.) will invalidate
 the positive feedback result, and will necessitate "restamping".
 
-The `result` tool *also* requires a `property_rules` mapping: for every property you did NOT skip (referenced by
-its unique snake_case title from the batch listing above), list the name(s) of the rule(s)/invariant(s) in your
-spec that verify it. Every non-skipped property must appear in this mapping with at least one rule; skipped
-properties must NOT appear. The result tool will be rejected if this mapping is incomplete or references a
-skipped or unknown property title.
+Each run-target buffer declares its own property->rules mapping on `put_buffer`, so the `result` tool derives
+the published mapping from your buffers — you do not restate it. `result` is rejected unless every non-skipped
+property is owned by exactly one run-target buffer (and no skipped or unknown property is), so keep each
+buffer's `property_rules` complete and disjoint.
 
 To clarify: for your result to be accepted, all verification results from the prover must either be
 VERIFIED *or* that rule must be explicitly marked as "expected to fail" using the `expect_rule_failure` tool.
