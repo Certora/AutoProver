@@ -47,6 +47,56 @@ def test_list_buffers_empty():
     assert "No spec buffers" in list_buffers(WithBuffers).invoke({"state": {"buffers": {}}})
 
 
+def _invoke_msg(tool, tool_name, state, **args) -> str:
+    res = tool.invoke({"name": tool_name, "args": {"state": state, **args}, "id": "t", "type": "tool_call"})
+    if hasattr(res, "content"):
+        return str(res.content)
+    msgs = res.update.get("messages", []) if hasattr(res, "update") else []
+    return str(msgs[0].content) if msgs else ""
+
+
+def test_put_buffer_warns_on_cross_buffer_duplicate_of_this_buffer(monkeypatch):
+    """Writing a run-target buffer whose declaration already lives in another run-target is flagged at
+    authoring time (before proving), naming only the current buffer's duplicates."""
+    monkeypatch.setattr("composer.spec.source.buffer_tools.cvl_syntax_error", lambda *a, **k: None)
+    state = {"buffers": {
+        "easy": NamedBuffer(
+            name="easy", cvl="ghost dup(uint) returns uint;\nrule r_easy { assert true; }\n",
+            property_rules={"P-easy": ["r_easy"]},
+        ),
+    }}
+    msg = _invoke_msg(put_buffer(WithBuffers), "put_buffer", state,
+                      name="hard", cvl="ghost dup(uint) returns uint;\nrule r_hard { assert true; }\n",
+                      is_run_target=True, imports=[], property_rules={"P-hard": ["r_hard"]})
+    assert "NOTE" in msg and "ghost dup(uint) returns uint;" in msg and "easy" in msg
+
+
+def test_put_buffer_no_warning_without_duplicate(monkeypatch):
+    """A buffer that duplicates nothing is accepted with no note."""
+    monkeypatch.setattr("composer.spec.source.buffer_tools.cvl_syntax_error", lambda *a, **k: None)
+    msg = _invoke_msg(put_buffer(WithBuffers), "put_buffer", _state(),
+                      name="hard", cvl="rule r_hard { assert true; }\n",
+                      is_run_target=True, imports=[], property_rules={"P-hard": ["r_hard"]})
+    assert msg == "Accepted"
+
+
+def test_edit_buffer_warns_when_edit_introduces_duplicate(monkeypatch):
+    """Editing a buffer to add a declaration another run-target already has is flagged at edit time."""
+    monkeypatch.setattr("composer.spec.source.buffer_tools.cvl_syntax_error", lambda *a, **k: None)
+    state = {"buffers": {
+        "easy": NamedBuffer(
+            name="easy", cvl="ghost dup(uint) returns uint;\nrule r_easy { assert true; }\n",
+            property_rules={"P-easy": ["r_easy"]},
+        ),
+        "hard": NamedBuffer(
+            name="hard", cvl="rule r_hard { assert true; }\n", property_rules={"P-hard": ["r_hard"]},
+        ),
+    }}
+    msg = _invoke_msg(edit_buffer(WithBuffers), "edit_buffer", state, name="hard",
+                      old_string="rule r_hard", new_string="ghost dup(uint) returns uint;\nrule r_hard")
+    assert "NOTE" in msg and "easy" in msg
+
+
 def test_put_buffer_enforces_run_target_cap(monkeypatch):
     # put_buffer validates via the CVL typechecker jar (absent in CI) before the cap check; bypass it.
     monkeypatch.setattr("composer.spec.source.buffer_tools.cvl_syntax_error", lambda *a, **k: None)

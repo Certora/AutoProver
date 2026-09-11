@@ -18,12 +18,27 @@ from graphcore.tools.schemas import WithImplementation, WithInjectedId, WithInje
 
 from composer.core.edit import EditErr, EditOk, replace_unique
 from composer.cvl.tools import cvl_syntax_error
-from composer.spec.source.spec_buffers import NamedBuffer, buffer_imports, max_spec_buffers
+from composer.spec.source.spec_buffers import (
+    NamedBuffer, buffer_imports, duplicated_declarations, max_spec_buffers,
+)
 from composer.ui.tool_display import ToolDisplay, suppress_ack, tool_display_of
 
 
 class WithBuffers(TypedDict):
     buffers: dict[str, NamedBuffer]
+
+
+def _dup_note(buffers: dict[str, NamedBuffer], name: str) -> str:
+    """A warning listing declarations in buffer ``name`` that also appear verbatim in another run-target
+    buffer, or "" if there are none. Restricted to ``name``: dups among other buffers were flagged when
+    those buffers were written."""
+    dups = {d: [n for n in ns if n != name]
+            for d, ns in duplicated_declarations(buffers).items() if name in ns}
+    if not dups:
+        return ""
+    lines = "\n".join(f"  {d}  (also in {ns})" for d, ns in dups.items())
+    return ("\n\nNOTE: these declarations are duplicated in other run-target buffers — consider moving "
+            "each to a shared buffer the duplicating buffers import, before proving:\n" + lines)
 
 
 _put_display = ToolDisplay("Writing spec buffer", suppress_ack("Buffer write result"))
@@ -78,7 +93,9 @@ class PutBuffer[S: WithBuffers](WithImplementation[str | Command], WithInjectedS
             is_run_target=self.is_run_target, property_rules=prop_rules,
         )
         return tool_state_update(
-            tool_call_id=self.tool_call_id, content="Accepted", buffers={self.name: buf}
+            tool_call_id=self.tool_call_id,
+            content="Accepted" + _dup_note({**buffers_now, self.name: buf}, self.name),
+            buffers={self.name: buf},
         )
 
 
@@ -107,8 +124,11 @@ class EditBuffer[S: WithBuffers](WithImplementation[str | Command], WithInjected
                 if (err := cvl_syntax_error(new_text)) is not None:
                     return err
                 buf = existing.model_copy(update={"cvl": new_text})
+                buffers_now = self.state.get("buffers") or {}
                 return tool_state_update(
-                    tool_call_id=self.tool_call_id, content="Accepted", buffers={self.name: buf},
+                    tool_call_id=self.tool_call_id,
+                    content="Accepted" + _dup_note({**buffers_now, self.name: buf}, self.name),
+                    buffers={self.name: buf},
                 )
 
 
