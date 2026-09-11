@@ -1547,8 +1547,48 @@ The middle row is the result this phase exists for. The counterexample's call tr
 `vault::vault_program::deposit(...)` — **the program's own handler** — to `assert FAIL`. That is the
 first time this backend produced evidence about a target's real code, and rewriting the rule to
 observe through the retained handle turned it into a verified post-state property.
-consistent. The prover names its own remedies this time (`-solanaAggressiveGlobalDetection true`, or a
-summary), which makes it the next thing to try rather than the next thing to investigate.
+
+**A second later correction, to the loop claim rather than the [3308] one.** The paragraph above
+reporting the bound says **any** loop in a handler violates before the rule's own property is
+reached. That is too broad, and the narrower statement is what makes the ordering of the three
+remedies right. `tests/test_cvlr_loop_bound.py` submits one artifact under two confs differing in
+`loop_iter` alone, and the bound governs only *some* loops. The CLI's own help for the option says
+which: it sets "a single iteration for variable iterations loops, **all iterations for fixed
+iterations loops**". A trip count the prover can determine is unrolled completely and never reaches
+the bound at all.
+
+Measured, each row a rule in that fixture:
+
+| loop | `loop_iter` 2 | `loop_iter` 8 |
+|---|---|---|
+| exits within the bound | VERIFIED | VERIFIED |
+| five divisions of a value assumed `< 100` | VIOLATED — *unwinding* | **VERIFIED** |
+| no bound at all | VIOLATED — *unwinding* | VIOLATED — *unwinding* |
+
+A fourth shape is absent from that table because it produced no verdict worth recording: a loop
+whose trip count is `cvlr_assume!`d outright — `limit <= 4`, then `while n < limit` — verified under
+a bound of **two**. That is the fixed-iterations case, and it is the measured reason constraining
+the trip count outranks raising the bound. Doing so is not merely the honest answer of the three;
+where the prover can then determine the count, it removes the need for the bound entirely. The borsh
+path that produced the violation above is the opposite case — the count comes from an account's data
+length, which nothing had constrained.
+
+The fixture cost three drafts that measured nothing while appearing to measure the bound: a counter
+compared against its own bound is close-formed and the property folded, a fixed-size array gives
+LLVM a compile-time ceiling and it fully unrolls whatever the bound inside says, and the assumed
+trip count above. All three verify under every setting, so the test disassembles the built artifact
+and refuses to submit a program with no backward branch in it.
+
+**An orphaned sentence, restored while editing beside it.** A rewrite of the paragraph about the
+dispatch tier left its closing clause attached to nothing; it read "consistent. The prover names its
+own remedies this time". What it said, from `fbc3c129`: that tier's [3308] is reached from the
+vault's own `#[error_code]` enum through `format!` → `String` → `Vec::extend`, and
+`cvlr_summaries_core.txt:104` summarizes `alloc::fmt::format::format_inner`, which §7.5.6's symbol
+check found matches nothing in this binary — so the `format!` path is unsummarized, consistently
+with the error. The prover names its own remedies there (`-solanaAggressiveGlobalDetection true`, or
+a summary), which makes it a thing to try rather than a thing to investigate. The *cause* of that
+[3308] is the correction above — the `.is_ok()` form was ours — so this survives only as an
+observation about the summary directive, not as an explanation.
 
 
 #### 7.6.3 The charter, read off a real munge
