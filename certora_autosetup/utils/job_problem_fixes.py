@@ -140,6 +140,11 @@ def on_job_problem(
     """
     if result.success:
         return False
+    if result.is_preprocessing_timeout:
+        # The prover never finished preprocessing — a prover-side scalability stall,
+        # not a conf problem; re-running an identical job would just burn another
+        # watchdog budget.
+        return False
     for workaround in _WORKAROUNDS:
         try:
             if workaround(result, config_manager, prover_api):
