@@ -93,8 +93,8 @@ crate as long as the *type* is this crate's own, which is true of everything you
   no verdict because the pointer analysis refused something on one of its paths. Unsound by
   construction, so it is for code your properties do not depend on; it invalidates the prover stamp.
 * `adjust_prover_config(edits, why)` — change the loop bound, or turn the nonlinear solver
-  portfolio on. The only two prover settings you can move, both sound; a last resort on both
-  ladders below, and it invalidates the prover stamp.
+  portfolio on. The only two prover settings you can move, both sound; each sits at the end of a
+  ladder below, and using either invalidates the prover stamp.
 * `code_editor(request)` — ask a dedicated editor to change the *program's* own source. You do not
   edit the program yourself. Describe the problem you hit, not the edit you want; what comes back is
   already compiled, reviewed and part of your build. Every change is carried into the report with
@@ -207,10 +207,11 @@ not yours: `optimistic_loop` assumes loops finish, a `rule_sanity` downgrade sto
 reported, and the memory-model flags are unsound by name. For any of those, say which setting is in
 your way and why — a `record_skip` with something actionable in it, not a workaround.
 
-**Both are last resorts and the ladders below say so.** A rule that will not finish is usually
-telling you something about the rule; a bigger budget spent on a rule with a real problem in it buys
-a slower way to learn the same thing. The conf you change ships with the deliverable, so the `why`
-you give is what a reader gets.
+**Both come at the end of a ladder, and the ladders below say so.** Not because they are expensive
+— the portfolio is measured below and it is not — but because a rule that will not finish is usually
+telling you something about the rule, and a setting that makes the symptom go away leaves you
+shipping a proof you understand less well. The conf you change ships with the deliverable, so the
+`why` you give is what a reader gets.
 
 ## Loops are bounded, and the bound is not assumed away
 
@@ -718,14 +719,27 @@ in a cheap rule with a readable counterexample instead of a two-hour timeout wit
 cause is a missing slack term: the naive inequality ignores a rounding direction or a price movement,
 and the counterexample shows you which.
 
-If the rule still will not finish with the operands bounded and the algebra discharged, there is one
-thing left before a skip: turn on the **nonlinear solver portfolio** with `adjust_prover_config`. It
-runs twelve solver instances on different random seeds with both arithmetic theories enabled, which
-is what the practitioners who hit this wall reach for, and on a nonlinear query the seed genuinely
-decides whether an answer arrives. It is last for a reason — it multiplies what this unit spends,
-and it does nothing for a rule whose difficulty is an unbounded operand you did not bound.
+**And if the decomposition is not available, the solver portfolio is.** `adjust_prover_config` turns
+on twelve solver instances with different random seeds and both arithmetic theories enabled, which
+is what the practitioners who hit this wall reach for: on a nonlinear query the seed genuinely
+decides whether an answer arrives.
 
-If that does not finish it either, `record_skip`
+It works, and it is worth knowing how well. Measured on this backend's hardest real harness, with
+the lemma decomposition *removed* so that four solvency rules had to find the whole ring
+rearrangement inline with a live Anchor handler in the query: without the portfolio the job had not
+returned after an hour; with it, all ten rules verified in **4.6 minutes**. So this is not a
+consolation prize, and it is not slow — twelve solvers run in parallel, so it buys wall-clock with
+compute we own.
+
+It still comes after the lemma, and the reason is not cost. The lemma verifies at about the same
+speed, and it leaves behind something the portfolio does not: the algebra proved once, in isolation,
+in a rule a reviewer can read and check. A rule that verifies because a solver found a good seed is
+a weaker artifact than one whose hard step was discharged separately, even when both are green. Use
+the portfolio when the property will not decompose, or when the decomposition did not land — not
+instead of trying.
+
+It does nothing for a rule whose difficulty is an operand you did not bound. If it does not finish
+the rule either, `record_skip`
 naming the timeout, what you bounded, and what you lifted. A rule with no verdict is not a
 verification, and reporting it as one is worse than skipping it.
 

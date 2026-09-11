@@ -629,6 +629,20 @@ saying it declined.
 Not blocking, because the flag is off by default and we do not set it. It blocks *adopting* it, which
 is what this entry exists to record.
 
+**A postscript, measured on the same rig and pointing the other way.** The remedy this backend *does*
+now offer authors for nonlinear arithmetic is the solver portfolio the reference project's conf
+carries — an adaptive backend, both arithmetic theories, and twelve solver instances on different
+random seeds. It was untested by us when it shipped, so it was tested the same way this entry was:
+the harness above with its lemma decomposition removed, so that four solvency rules had to find the
+whole ring rearrangement inline with a live Anchor handler in the query. Without the portfolio the
+job had not returned after an hour. With it, all ten rules verified in **4.6 minutes**.
+
+Recorded here rather than in a defect of its own because it is the control the entry above needs:
+this prover is not simply slow on nonlinear arithmetic, and the two-hour collapse P8 describes is
+specific to the flag combination rather than a property of the queries. It is also the reason the
+author's charter ranks the portfolio after the lemma on grounds of what each leaves behind for a
+reviewer, and not — as it first did — on cost.
+
 ---
 
 ## U1

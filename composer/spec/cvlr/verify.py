@@ -791,10 +791,13 @@ class SetNonlinearSolverPortfolio(BaseModel):
         description="True to add the portfolio, false to remove it. It sets an adaptive backend "
         "strategy, enables the linear and nonlinear arithmetic theories, and runs twelve solver "
         "instances on different random seeds. This is for the symptom the charter describes — a "
-        "rule at a low completion percentage after heavy splitting, HALTing on the global timeout "
-        "— and it is a *last* resort, after `NativeInt`, after bounding the operands, and after "
-        "lifting the algebra into a lemma. It changes how long an answer takes and never what a "
-        "green verdict means, but it multiplies what the run spends to get one."
+        "rule at a low completion percentage after heavy splitting, HALTing on the global timeout. "
+        "It works: on this backend's hardest harness with the lemma decomposition removed, the job "
+        "had not returned after an hour without it and verified every rule in 4.6 minutes with it. "
+        "The solvers run in parallel, so it buys wall-clock with compute rather than costing it. "
+        "Reach for it after `NativeInt`, after bounding the operands, and after trying to lift the "
+        "algebra into a lemma — not because it is expensive, but because a lemma leaves behind a "
+        "proof a reviewer can check and a lucky seed does not."
     )
 
 
@@ -823,10 +826,11 @@ class AdjustProverConfig(
     `optimistic_loop` assumes loops finish, a `rule_sanity` downgrade stops vacuity being reported,
     and the memory-model flags are unsound by name.
 
-    **Reach for this after your own remedies, not before them.** A timeout is usually telling you
-    something about the rule — an unbounded operand, an algebraic step that belongs in a lemma, a
-    loop whose trip count nothing constrains — and a bigger solver budget spent on a rule with a
-    real problem in it buys a slower way to learn the same thing.
+    **Reach for this after your own remedies, not before them** — and not because it is expensive,
+    which the solver portfolio measurably is not. A timeout is usually telling you something about
+    the rule: an unbounded operand, an algebraic step that belongs in a lemma, a loop whose trip
+    count nothing constrains. A setting that makes the symptom go away without answering that
+    leaves a proof nobody understands as well, which is a worse thing to ship than a slow one.
 
     Edits apply together or not at all, and the result is the full conf. Changing it invalidates the
     prover stamp, because the previous run's verdicts were obtained under different settings: re-run
