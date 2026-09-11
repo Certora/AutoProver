@@ -277,6 +277,57 @@ def test_a_per_rule_set_conf_is_not_adopted_as_the_base(tmp_path):
     assert "rule" not in cvlr_conf.load_base(None)
 
 
+# ---------------------------------------------------------------------------------------------
+# The two settings the author may move
+#
+# Both are sound — they decide how the prover spends its time, never what a green verdict means —
+# which is the line the editable set may not cross. The portfolio is one named recipe rather than an
+# editable flag list because `docs/upstream-defects.md` P8 measured what a plausible-looking flag
+# does in the wrong combination: an eighteen-rule harness went from 6.7 minutes green to a two-hour
+# timeout with thirteen rules unverified, on one argument.
+
+
+def test_the_portfolio_is_the_recipe_the_corpus_uses_and_only_sound_flags():
+    flags = cvlr_conf.NONLINEAR_SOLVER_PORTFOLIO
+    assert any(f.startswith("-backendStrategy") for f in flags)
+    assert "-smt_useNIA true" in flags and "-smt_useLIA true" in flags
+    assert sum(f.startswith("-solvers ") for f in flags) >= 3
+    # Nothing that changes what a verdict means may be smuggled in here.
+    banned = ("optimistic_loop", "-solanaOptimistic", "rule_sanity", "-solanaTACSoundSignedMath")
+    assert not [f for f in flags for b in banned if b in f]
+
+
+def test_turning_the_portfolio_on_replaces_a_projects_own_solver_settings():
+    """Through `merge_prover_args`: a project that already sets `-backendStrategy` or its own
+    `-solvers` line gets those replaced, not duplicated. A conf naming one flag twice has two
+    intentions in it and the prover picks."""
+    base = {"prover_args": ["-solanaTACMathInt true", "-backendStrategy singleRace"]}
+    on = cvlr_conf.with_solver_portfolio(base, True)
+    assert on["prover_args"].count("-backendStrategy singleRace") == 0
+    assert "-backendStrategy adaptive" in on["prover_args"]
+    assert "-solanaTACMathInt true" in on["prover_args"]
+
+
+def test_turning_it_off_leaves_everything_that_was_not_the_portfolio():
+    base = {"prover_args": ["-solanaTACMathInt true"]}
+    roundtrip = cvlr_conf.with_solver_portfolio(cvlr_conf.with_solver_portfolio(base, True), False)
+    assert roundtrip["prover_args"] == ["-solanaTACMathInt true"]
+
+
+def test_a_project_that_already_wrote_the_portfolio_by_hand_is_recognized():
+    """The reference project's own conf carries these settings. Recognizing them by flag rather
+    than by a marker is what stops the author being told to turn on what is already on."""
+    assert not cvlr_conf.has_solver_portfolio({"prover_args": ["-solanaTACMathInt true"]})
+    assert cvlr_conf.has_solver_portfolio(
+        cvlr_conf.with_solver_portfolio({"prover_args": []}, True)
+    )
+
+
+def test_the_loop_bound_is_written_the_way_a_conf_spells_an_integer():
+    """Confs in the wild say `"loop_iter": "1"`, which is `read_conf`'s own `parse_int=str`."""
+    assert cvlr_conf.with_loop_iter({}, 4)["loop_iter"] == "4"
+
+
 def test_a_project_conf_that_never_mentions_rule_sanity_still_gets_vacuity_checking():
     """The hazard reading the project's conf introduces, and the reason it is closed here rather
     than hoped about. The recommended starting point and two of the five corpus base confs omit the
