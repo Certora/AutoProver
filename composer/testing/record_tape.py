@@ -19,8 +19,8 @@ those entries cannot be recovered from the persisted LangGraph checkpoints:
   its ``AIMessage`` is never checkpointed to any thread. It is invisible to
   post-hoc reconstruction, but it flows through the *same* llm object, so
   recording captures it for free — in the correct lane and position.
-* **Subagent interleaving** — code_explorer / feedback / cvl_research /
-  invariant_feedback subagents run inside the parent phase's task scope, so
+* **Subagent interleaving** — code_explorer / feedback / cvl_research
+  subagents run inside the parent phase's task scope, so
   ``get_current_task_id()`` returns the parent task_id for their calls. Recording
   therefore lands them in the parent lane in exact call order, with no
   thread-stitching heuristics.

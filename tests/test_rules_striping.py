@@ -606,3 +606,12 @@ class TestValidatePropertyRules:
         assert validate_property_rules(
             [_mapping("p1", "anything_goes")], [], [PropertyTitle("p1")],
         ) is None
+
+    def test_without_known_rules_names_arent_cross_checked_but_empty_is_not_unknown(self):
+        # None means "no ground truth available"; an empty set means "the prover typechecked
+        # the spec and found nothing declared". Conflating them lets a claim on a nonexistent
+        # rule through.
+        assert validate_property_rules(
+            [_mapping("p1", "declared_nowhere")], [], [PropertyTitle("p1")],
+            known_rules=set(),
+        ) is not None
