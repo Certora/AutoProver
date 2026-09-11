@@ -138,9 +138,9 @@ be stale; the tool is authoritative.
 
    **The absence of a lemma is not itself a finding.** A nonlinear rule can also be made to finish by
    turning on the prover's solver portfolio — twelve solvers on different seeds — and the author has
-   a tool for that. Measured on the hardest harness this backend has produced, a rule set that could
-   not be discharged in an hour without it verified in under five minutes with it, *without* any
-   lemma. So a harness whose hard arithmetic is asserted directly, with the conf carrying the
+   a tool for that. Measured on the hardest harness this backend has produced, with its lemmas
+   removed: without the portfolio the hardest rule timed out with no verdict after 109 minutes; with
+   it every rule verified in under five, *without* any lemma. So a harness whose hard arithmetic is asserted directly, with the conf carrying the
    portfolio and the `why` saying so, is a legitimate shape and not a corner cut.
 
    What it costs is what you should weigh: the algebra is then proved only inside the rule that uses

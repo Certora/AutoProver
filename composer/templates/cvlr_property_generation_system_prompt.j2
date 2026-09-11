@@ -726,10 +726,10 @@ decides whether an answer arrives.
 
 It works, and it is worth knowing how well. Measured on this backend's hardest real harness, with
 the lemma decomposition *removed* so that four solvency rules had to find the whole ring
-rearrangement inline with a live Anchor handler in the query: without the portfolio the job had not
-returned after an hour; with it, all ten rules verified in **4.6 minutes**. So this is not a
-consolation prize, and it is not slow — twelve solvers run in parallel, so it buys wall-clock with
-compute we own.
+rearrangement inline with a live Anchor handler in the query. Without the portfolio: **109 minutes**,
+nine rules verified and one — the hardest — timed out with no verdict at all. With it: **4.6
+minutes**, all ten verified. So it is worth reaching for on both counts, and it is not slow —
+twelve solvers run in parallel, so it buys wall-clock with compute we own.
 
 It still comes after the lemma, and the reason is not cost. The lemma verifies at about the same
 speed, and it leaves behind something the portfolio does not: the algebra proved once, in isolation,
