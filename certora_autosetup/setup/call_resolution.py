@@ -41,6 +41,7 @@ from certora_autosetup.utils.contract_dispatcher import (
     DispatchingResult,
 )
 from certora_autosetup.utils.contract_linker import ContractLinker, LinkStatus
+from certora_autosetup.utils.contract_utils import parse_contract_files
 from certora_autosetup.utils.enhanced_config_manager import (
     ConfigManager,
     FileContent,
@@ -214,10 +215,11 @@ class CallResolutionPhase:
     ) -> None:
         """Hook called after contracts join the scene during call resolution.
 
-        Records provenance, adds the library files the new contracts use to the config, then
+        Records provenance, adds the library files the new contracts use to the config,
         summarizes the batch via ``summary_setup.on_contracts_entered_scene`` (curated matching,
-        LLM analysis, aggregator update, prune). Each step is best-effort: a failure is logged
-        and doesn't block the others.
+        LLM analysis, aggregator update, prune), then adds the companion contracts those
+        summaries reroute through. Each step is best-effort: a failure is logged and doesn't
+        block the others.
 
         ``source`` labels the provenance of the primary handles for the report
         (LINK, DISPATCH, PROXY_IMPL); harness wrappers are detected by
@@ -272,6 +274,23 @@ class CallResolutionPhase:
             await self.summary_setup.on_contracts_entered_scene(names, self.contract_name)
         except Exception as e:
             logger.warning(f"Summarizing {names} failed; continuing without their summaries: {e}")
+
+        # 3. The companion contracts those summaries reroute through. A curated summary can
+        # send a library's calls to a companion of its own, which CVL can only name if the conf
+        # lists it — and this conf was written before the contracts in this batch were known.
+        # add_files_to_config dedupes and fills the compiler maps, so re-adding is cheap.
+        try:
+            # No project_root: the entries are already relative to it, and resolving them
+            # would put this machine's absolute paths in a conf that travels with the run.
+            companions = parse_contract_files(
+                self.summary_setup.curated_scene_contracts(), strict=False
+            )
+            if companions:
+                self.config_manager.add_files_to_config(
+                    self.config_file, new_contract_files=companions
+                )
+        except Exception as e:
+            logger.warning(f"Failed to add curated companion contracts for {names}: {e}")
 
     async def execute(
         self,

@@ -36,11 +36,13 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import AbstractSet, Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from certora_cli.Shared.certoraUtils import find_jar
 
 from certora_autosetup.parsers.method_parser import MethodParser
+from certora_autosetup.setup.solidity_utils import extract_definitions_from_solidity
+from certora_autosetup.utils.constants import SUMMARIES_SUBDIR
 
 # A logger callable matching SummarySetup.log(message, level).
 LogFn = Callable[[str, str], None]
@@ -287,7 +289,9 @@ class MethodIndex:
         return self._overloads.get((receiver, name), [])
 
 
-def entry_resolves(index: MethodIndex, entry: MethodEntry) -> bool:
+def entry_resolves(
+    index: MethodIndex, entry: MethodEntry, exempt_receivers: AbstractSet[str] = frozenset()
+) -> bool:
     """Decide whether a summary entry resolves in the scene (drop-only policy).
 
     The decision is based on ``(receiver, name, arity)`` only — DROP iff the method
@@ -300,6 +304,12 @@ def entry_resolves(index: MethodIndex, entry: MethodEntry) -> bool:
     name / wrong arity) and is robust across both sources. A same-arity-but-different-
     type phantom overload, if it ever occurs, is left to the TypecheckerLoop backstop.
     """
+    # A companion contract joins the conf after the project was built, so it cannot appear in
+    # an index derived from that build. Pruning its entries would leave the reroute pointing
+    # at an unsummarized companion whose bodies revert, which reads as a passing run.
+    if entry.receiver in exempt_receivers:
+        return True
+
     # KEEP iff some overload of this name at this receiver has the entry's arity.
     # An empty overload list means the name is absent at the receiver (e.g. solady
     # ``mulDiv`` on solmate ``FixedPointMathLib``) → DROP.
@@ -337,6 +347,7 @@ def resolve_spec_file(
     spec_path: Path,
     index: MethodIndex,
     owned_keys: Optional[Set[Tuple[str, str, Tuple[str, ...]]]] = None,
+    exempt_receivers: AbstractSet[str] = frozenset(),
     log: Optional[LogFn] = None,
 ) -> List[Tuple[str, str, Tuple[str, ...]]]:
     """Prune unresolvable internal-method entries in a single summary spec, in place.
@@ -347,6 +358,8 @@ def resolve_spec_file(
         owned_keys: ``(receiver, name, param_types)`` keys already claimed by a
             higher-precedence spec. Entries matching one of these are dropped as
             duplicates (the dedup safeguard); ``None`` disables dedup.
+        exempt_receivers: Receivers the index cannot know about — companion contracts
+            added to the conf after the build the index came from.
         log: Optional ``(message, level)`` logger.
 
     Returns:
@@ -364,7 +377,7 @@ def resolve_spec_file(
     # Disable entries from the bottom up so earlier entries' positions stay valid after
     # later ones are edited.
     for entry in sorted(entries, key=lambda e: (e.start_line, e.start_col), reverse=True):
-        if not entry_resolves(index, entry):
+        if not entry_resolves(index, entry, exempt_receivers):
             _disable_entry(lines, entry, f"not in scene at {entry.receiver}")
             dropped_missing += 1
         elif owned_keys is not None and entry.key in owned_keys:
@@ -387,6 +400,7 @@ def resolve_spec_file(
 def resolve_summary_specs(
     ordered_spec_files: Sequence[Path],
     all_methods_path: Path,
+    exempt_receivers: AbstractSet[str] = frozenset(),
     log: Optional[LogFn] = None,
 ) -> None:
     """Run the prune-pass over a precedence-ordered list of emitted summary specs.
@@ -394,12 +408,60 @@ def resolve_summary_specs(
     Files earlier in ``ordered_spec_files`` win duplicate ownership: a
     ``(receiver, name, param_types)`` kept by an earlier file is dropped from later files.
     Non-existent / wrong-receiver entries are dropped from every file regardless of
-    order.
+    order, except at ``exempt_receivers`` — contracts the index cannot know about.
     """
     index = MethodIndex.from_file(all_methods_path)
     owned: Set[Tuple[str, str, Tuple[str, ...]]] = set()
     for spec_path in ordered_spec_files:
         if not spec_path.exists():
             continue
-        kept = resolve_spec_file(spec_path, index, owned_keys=owned, log=log)
+        kept = resolve_spec_file(
+            spec_path, index, owned_keys=owned, exempt_receivers=exempt_receivers, log=log
+        )
         owned.update(kept)
+
+
+def curated_scene_contracts(
+    matched_function_keys: Iterable[str],
+    function_summaries: Dict[str, Any],
+    user_summaries_dir: Path,
+    log: Callable[[str, str], None],
+) -> List[str]:
+    """Conf entries for the contracts matched curated summaries reroute through.
+
+    A curated spec may summarize a library by rerouting its calls to a companion of its
+    own: ``OZ_BitMaps.spec`` sends ``BitMaps.get`` to ``OZ_BitMaps.get``. CVL can only
+    name a contract that is in the scene, and the scene is the files the conf lists, so
+    copying the companion beside the spec does not put it there.
+
+    Emits ``path:Name`` for every top-level definition in each matched entry's
+    ``additional_contracts``, which is also what keeps them nameable when one file holds
+    more than one.
+    """
+    entries: List[str] = []
+    for key in sorted(matched_function_keys):
+        info = function_summaries.get(key)
+        if not info:
+            continue
+        for ac in info.get("additional_contracts", []):
+            # A companion shipped as a template is emitted under its untemplated name, since
+            # what reaches the conf is the filled-in file, not the template.
+            rel = Path(ac).relative_to(SUMMARIES_SUBDIR)
+            if ".template." in rel.name:
+                rel = rel.with_name(rel.name.replace(".template.", ".", 1))
+            path = user_summaries_dir / rel
+            if not path.is_file():
+                log(f"Curated companion contract not copied: {path}", "WARNING")
+                continue
+            # Relative to the project root, like every other entry in a conf: an absolute
+            # path here would bake the build machine's layout into a conf that travels with
+            # the run.
+            try:
+                conf_path = path.resolve().relative_to(Path.cwd().resolve())
+            except ValueError:
+                conf_path = path
+            entries.extend(
+                f"{conf_path.as_posix()}:{name}"
+                for name in extract_definitions_from_solidity(str(path))
+            )
+    return entries

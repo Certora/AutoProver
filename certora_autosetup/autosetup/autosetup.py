@@ -30,7 +30,6 @@ from certora_autosetup.setup.sanity import SanityFailureResult
 from certora_autosetup.setup.setup_prover import CompilationAnalysisError, SummarySetupError
 from certora_autosetup.setup.signature_manager import SignatureManager
 from certora_autosetup.setup.solidity_utils import (
-    build_library_name_index,
     find_all_library_files_and_names,
     find_libraries_used_by,
 )
@@ -154,23 +153,13 @@ class Autosetup:
     def _library_files(self) -> Dict[str, List[str]]:
         """Map of library source-file paths to the library names defined inside them.
 
-        Stable for the lifetime of this Autosetup run; used by scene reduction
-        and call resolution to add only the libraries actually called from each
-        compilation unit, instead of every library file in the project.
+        Stable for the lifetime of this Autosetup run. Read only for the set of names
+        behind ``is_library``, which has to answer for contracts the build never
+        compiled, so it cannot come from the compilation metadata.
         """
         return find_all_library_files_and_names(
             include_test_files=False, include_dependencies=True, log_func=self.log
         )
-
-    @functools.cached_property
-    def _library_name_to_file(self) -> Dict[str, str]:
-        """Inverted ``library_name → defining_file`` map, deduped first-definition-wins.
-
-        Computed once per run (which means the "library defined in multiple files"
-        warnings are emitted exactly once per duplicate name, not once per contract
-        × per library-resolution call). Consumed by ``find_libraries_used_by``.
-        """
-        return build_library_name_index(self._library_files)
 
     @functools.cached_property
     def _all_methods(self) -> List[Dict[str, Any]]:
@@ -206,7 +195,7 @@ class Autosetup:
         seen: set[ContractHandle] = set()
         result: List[ContractHandle] = []
         for name in contract_names:
-            for handle in find_libraries_used_by(name, self._library_name_to_file, self._all_methods):
+            for handle in find_libraries_used_by(name, self._all_methods):
                 if handle.contract_name not in summarized:
                     continue
                 if handle in seen:
@@ -648,6 +637,19 @@ class Autosetup:
             trivial_spec, warmup_spec, sanity_spec
         )
 
+    @property
+    def _curated_scene_contracts(self) -> List[str]:
+        """Companion contracts the matched curated summaries reroute through.
+
+        A curated spec can summarize a library by sending its calls to a companion of its
+        own, and CVL can only name what the conf puts in the scene. Empty before
+        setup_prover has run, and on every project whose summaries need no companion.
+        """
+        setup = self.setup_prover.summary_setup
+        if setup is None:
+            return []
+        return setup.curated_scene_contracts()
+
     def create_base_config(
         self, main_contract: str, spec_path: Path
     ) -> FileContent:
@@ -682,7 +684,7 @@ class Autosetup:
         final_config = self.config_manager.create_config(
             main_contract,
             self.contract_handles,
-            self.config.additional_contracts,
+            self.config.additional_contracts + self._curated_scene_contracts,
             spec_path,
             conf_path=conf_path,
             additional_args=base_prover_args,
@@ -723,7 +725,11 @@ class Autosetup:
         final_config = self.config_manager.create_config(
             main_contract,
             self.contract_handles,
-            [],  # TODO: should we include also self.config.additional_contracts?
+            # The curated companions specifically: this config exists to typecheck the
+            # summaries that were just set up, and a summary rerouting through a companion
+            # cannot typecheck against a scene the companion is missing from. Whether the
+            # run's own --additional-contracts belong here too is still open.
+            self._curated_scene_contracts,
             sanity_spec_path,
             conf_path=test_config_path,
             properties=compilation_properties,
@@ -821,6 +827,10 @@ class Autosetup:
                     files_to_include = (
                         [contract_handle.to_config_str()]
                         + autosetup.config.additional_contracts
+                        # This rewrite is the third place a conf's scene is decided, and a
+                        # summary that reroutes through a companion cannot typecheck against a
+                        # scene the companion was stripped out of.
+                        + autosetup._curated_scene_contracts
                     )
                     props = {"files": files_to_include}
                     autosetup.log(
