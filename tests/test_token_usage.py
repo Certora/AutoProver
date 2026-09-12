@@ -15,10 +15,12 @@ Covers the three layers of the feature:
 
 import json
 from typing import cast
+from uuid import uuid4
 
 import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+from langchain_core.outputs import ChatGeneration, LLMResult
 
 from composer.diagnostics.timing import (
     RunSummary,
@@ -292,3 +294,94 @@ def test_autosetup_usage_fallback_newest_dir(tmp_path):
     usage = read_autosetup_usage(tmp_path)
     assert [u["model_name"] for u in usage] == ["new"]
     assert usage[0]["total_input_tokens"] == 9
+
+
+# ---------------------------------------------------------------------------
+# Call origin: which calls a transcript can account for, and which it cannot
+# ---------------------------------------------------------------------------
+
+def _ai(out: int, cr: int, cw: int, model: str = "claude-opus-5") -> AIMessage:
+    return AIMessage(
+        content="x",
+        response_metadata={"model_name": model},
+        usage_metadata={
+            "input_tokens": 2 + cr + cw,
+            "output_tokens": out,
+            "total_tokens": 2 + cr + cw + out,
+            "input_token_details": {"cache_read": cr, "cache_creation": cw},
+        },
+    )
+
+
+def _result(msg: AIMessage) -> LLMResult:
+    return LLMResult(generations=[[ChatGeneration(message=msg)]])
+
+
+def test_origin_separates_in_graph_from_out_of_graph_calls() -> None:
+    """A call LangGraph drove carries its thread; one made outside any graph does
+    not — and that is the distinction that makes billed totals reconcilable against
+    an ``ap-trail`` export."""
+    summary = RunSummary()
+    install_run_summary(summary)
+    cb = UsageCallback()
+
+    with set_current_task_id("formalize-0"):
+        graphed = uuid4()
+        cb.on_chat_model_start(
+            {}, [], run_id=graphed,
+            metadata={"thread_id": "autoprove_abc-cvl", "langgraph_node": "tools"},
+        )
+        cb.on_llm_end(_result(_ai(100, 5_000, 200)), run_id=graphed)
+
+        bare = uuid4()
+        cb.on_chat_model_start({}, [], run_id=bare, metadata={})
+        cb.on_llm_end(_result(_ai(50, 10, 90_000)), run_id=bare)
+
+    by_origin = cast(list[dict], summary.token_usage_summary()["by_origin"])
+    in_graph = [o for o in by_origin if o["thread_id"] == "autoprove_abc-cvl"]
+    out_of_graph = [o for o in by_origin if o["thread_id"] is None]
+
+    assert len(in_graph) == 1 and in_graph[0]["node"] == "tools"
+    assert in_graph[0]["cache_write"] == 200
+    assert len(out_of_graph) == 1
+    assert out_of_graph[0]["cache_write"] == 90_000
+    # Both are billed to the same task, so by_phase alone cannot tell them apart.
+    assert {o["task_id"] for o in by_origin} == {"formalize-0"}
+
+
+def test_by_origin_sums_to_totals() -> None:
+    """Every billed call lands in exactly one origin bucket — including calls whose
+    start event was never seen, which must not go missing from the accounting."""
+    summary = RunSummary()
+    install_run_summary(summary)
+    cb = UsageCallback()
+
+    started = uuid4()
+    cb.on_chat_model_start({}, [], run_id=started, metadata={"thread_id": "t1"})
+    cb.on_llm_end(_result(_ai(10, 20, 30)), run_id=started)
+    cb.on_llm_end(_result(_ai(7, 1, 2)), run_id=uuid4())        # no matching start
+    cb.on_llm_end(_result(_ai(5, 3, 4)))                        # no run_id at all
+
+    summ = summary.token_usage_summary()
+    totals = cast(dict, summ["totals"])
+    by_origin = cast(list[dict], summ["by_origin"])
+    for bucket in ("input", "output", "cache_read", "cache_write"):
+        assert sum(o[bucket] for o in by_origin) == totals[bucket]
+    assert sum(o["calls"] for o in by_origin) == 3
+
+
+def test_failed_call_releases_its_origin() -> None:
+    """An errored call records nothing, and must not leave its origin behind to be
+    mis-joined onto whichever call reuses the slot."""
+    summary = RunSummary()
+    install_run_summary(summary)
+    cb = UsageCallback()
+
+    run_id = uuid4()
+    cb.on_chat_model_start({}, [], run_id=run_id, metadata={"thread_id": "t1"})
+    cb.on_llm_error(RuntimeError("overloaded"), run_id=run_id)
+    assert summary.token_usage_summary()["by_origin"] == []
+
+    cb.on_llm_end(_result(_ai(1, 2, 3)), run_id=run_id)
+    by_origin = cast(list[dict], summary.token_usage_summary()["by_origin"])
+    assert [o["thread_id"] for o in by_origin] == [None]
