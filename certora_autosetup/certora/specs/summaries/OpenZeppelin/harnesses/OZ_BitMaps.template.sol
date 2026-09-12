@@ -9,7 +9,7 @@ $PRAGMA$
 // "<file resolved under .certora_sources>|<qualified name>" — so BitMaps.BitMap has to come
 // from the very BitMaps.sol the project compiles. A copy of the struct is a different type,
 // however identical it looks. That path differs per project, which is why this is a template.
-import {BitMaps} from "$BITMAPS_IMPORT$";
+import {BitMaps} from "$LIBRARY_IMPORT$";
 
 library OZ_BitMaps {
     // Reroute targets, and external for a reason: the Prover keeps a candidate only when its

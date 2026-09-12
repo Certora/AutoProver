@@ -30,7 +30,6 @@ from certora_autosetup.setup.sanity import SanityFailureResult
 from certora_autosetup.setup.setup_prover import CompilationAnalysisError, SummarySetupError
 from certora_autosetup.setup.signature_manager import SignatureManager
 from certora_autosetup.setup.solidity_utils import (
-    build_library_name_index,
     find_all_library_files_and_names,
     find_libraries_used_by,
 )
@@ -154,23 +153,13 @@ class Autosetup:
     def _library_files(self) -> Dict[str, List[str]]:
         """Map of library source-file paths to the library names defined inside them.
 
-        Stable for the lifetime of this Autosetup run; used by scene reduction
-        and call resolution to add only the libraries actually called from each
-        compilation unit, instead of every library file in the project.
+        Stable for the lifetime of this Autosetup run. Read only for the set of names
+        behind ``is_library``, which has to answer for contracts the build never
+        compiled, so it cannot come from the compilation metadata.
         """
         return find_all_library_files_and_names(
             include_test_files=False, include_dependencies=True, log_func=self.log
         )
-
-    @functools.cached_property
-    def _library_name_to_file(self) -> Dict[str, str]:
-        """Inverted ``library_name → defining_file`` map, deduped first-definition-wins.
-
-        Computed once per run (which means the "library defined in multiple files"
-        warnings are emitted exactly once per duplicate name, not once per contract
-        × per library-resolution call). Consumed by ``find_libraries_used_by``.
-        """
-        return build_library_name_index(self._library_files)
 
     @functools.cached_property
     def _all_methods(self) -> List[Dict[str, Any]]:
@@ -206,7 +195,7 @@ class Autosetup:
         seen: set[ContractHandle] = set()
         result: List[ContractHandle] = []
         for name in contract_names:
-            for handle in find_libraries_used_by(name, self._library_name_to_file, self._all_methods):
+            for handle in find_libraries_used_by(name, self._all_methods):
                 if handle.contract_name not in summarized:
                     continue
                 if handle in seen:
