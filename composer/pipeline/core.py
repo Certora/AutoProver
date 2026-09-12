@@ -73,7 +73,9 @@ from .keys import (
     POST_PROPERTY_KEY, PRE_PROPERTY_KEY, PRIORITIZATION_KEY, PROPERTIES_KEY,
     SYSTEM_ANALYSIS_KEY, PLUGIN_FORMALIZATION_KEY, candidates_digest
 )
-from composer.diagnostics.budget import total_budget, named_budget_or_nop, time_budget
+from composer.diagnostics.budget import (
+    BudgetExceeded, BudgetPressureAbort, total_budget, named_budget_or_nop, time_budget,
+)
 
 from .run_mode import RunMode, run_mode_name
 from .ptypes import (
@@ -532,7 +534,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
             return await prepared.prepare_formalization(run)
     staged_task = asyncio.create_task(_prepare_formalization())
 
-    batches: list[_Batch[U]] = await _extract_all(
+    batches, extraction_failures = await _extract_all(
         backend.analysis_spec.properties_key,
         prepared.main,
         backend.backend_guidance,
@@ -572,6 +574,9 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
 
     staged = await staged_task
     if not batches:
+        if extraction_failures:
+            detail = "; ".join(f"{u.display_name}: {e}" for u, e in extraction_failures)
+            raise ValueError(f"Every component failed property extraction: {detail}")
         raise ValueError("No properties extracted from any component.")
 
     # 4. A backend whose units share an artifact handed back a ``StagedFormalizer`` instead of a
@@ -716,6 +721,11 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
 
     await formalizer.finalize(outcomes, run)
 
+    # A component lost at extraction never reached the formalizer, so it is not in ``outcomes``
+    # and the formalizer is not handed one it never saw. It still belongs in the report and the
+    # verdict: a component that silently vanishes is the failure this reports on.
+    lost_at_extraction = [ComponentOutcome(u, [], e) for u, e in extraction_failures]
+
     # 6. Report (shared, backend-agnostic). The driver assembles the per-component inputs.
     # Best-effort: a failure here never fails the run.
     inputs = [
@@ -724,7 +734,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
             props=o.props,
             formalized=o.result if isinstance(o.result, (Delivered, Curtailed)) else None,
         )
-        for o in outcomes
+        for o in outcomes + lost_at_extraction
     ]
     artifact_records = [
         VerificationArtifactRecord(
@@ -762,7 +772,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
             raise
         _log.warning("report phase failed (continuing)", exc_info=True)
 
-    return _tally(outcomes, run.run_mode, len(deprioritized))
+    return _tally(outcomes + lost_at_extraction, run.run_mode, len(deprioritized))
 
 
 #: The driver-owned task id for the ranking step. Backend-agnostic, like the per-unit
@@ -871,7 +881,7 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
     # ``Main``/``U`` (matching the caller's), so there's nothing to tie it to.
     ecosystem: Ecosystem[Any, Main, U],
     plugins: PluginPhaseManager[P, U],
-) -> list[_Batch[U]]:
+) -> tuple[list[_Batch[U]], list[tuple[U, BaseException]]]:
     prop_ctx = run.ctx.child(PROPERTIES_KEY(prop_key))
 
     async def _pre_plugin_inputs(feat: U) -> list[AnyPropertyGenerationInput]:
@@ -953,8 +963,41 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
         with named_budget_or_nop("property_extraction"):
             return await _one(u)
 
-    got = await asyncio.gather(*[budgeted_task(u) for u in ecosystem.units(main)])
-    return [b for b in got if b is not None]
+    units = list(ecosystem.units(main))
+    got = await asyncio.gather(
+        *[budgeted_task(u) for u in units], return_exceptions=True
+    )
+    return _settle_extraction(units, got)
+
+
+def _settle_extraction[U: FeatureUnit](
+    units: list[U], settled: list[_Batch[U] | None | BaseException]
+) -> tuple[list[_Batch[U]], list[tuple[U, BaseException]]]:
+    """Split a finished extraction fan-out into the batches it produced and the components
+    that failed.
+
+    One component's extraction failing is that component's loss, not the run's: the units are
+    independent — inference never sees more than the unit it was given — so a component that
+    raises is reported and the rest carry on, the way formalization settles its own fan-out.
+
+    Cancellation and the budget stops are the exception. They end the whole run, and recording
+    one against a single component would turn a deliberate halt into a quiet partial result.
+    """
+    batches: list[_Batch[U]] = []
+    failed: list[tuple[U, BaseException]] = []
+    for unit, outcome in zip(units, settled):
+        if isinstance(outcome, BaseException):
+            if isinstance(
+                outcome, (asyncio.CancelledError, BudgetExceeded, BudgetPressureAbort)
+            ):
+                raise outcome
+            _log.warning(
+                "property extraction failed for %s", unit.display_name, exc_info=outcome
+            )
+            failed.append((unit, outcome))
+        elif outcome is not None:
+            batches.append(outcome)
+    return batches, failed
 
 
 def _tally[FormT: BackendResult, U: FeatureUnit](

@@ -22,8 +22,8 @@ import openai
 from composer.input.files import UploaderBase, ContentRenderer
 from composer.input.types import ModelConfiguration
 from .provider import (
-    ProviderServiceBase, ProviderSpec, compaction_threshold, reasoning_effort,
-    standard_callbacks
+    ProviderServiceBase, ProviderSpec, compaction_threshold, payload_error_type,
+    reasoning_effort, standard_callbacks
 )
 from .pricing import PriceProvider, price_provider_for
 from .types import CacheLevel
@@ -149,12 +149,26 @@ class OpenAIService(ProviderServiceBase):
         """Same shape as the Anthropic mapping — the OpenAI SDK shares the
         Stainless exception taxonomy: connection-level failures and
         408/409/429/5xx statuses are transient; 400-class request errors are
-        deterministic and excluded."""
+        deterministic and excluded. When the status cannot speak for the error,
+        because the server reported it inside an already-open stream, the
+        payload's ``error.type`` decides instead."""
         if isinstance(exc, openai.APIConnectionError):
             return True
         if isinstance(exc, openai.APIStatusError):
-            return exc.status_code in (408, 409, 429) or exc.status_code >= 500
+            if exc.status_code in (408, 409, 429) or exc.status_code >= 500:
+                return True
+            return payload_error_type(exc.body) in RETRYABLE_ERROR_TYPES
         return False
+
+RETRYABLE_ERROR_TYPES = frozenset({
+    "server_error",         # 5xx
+    "rate_limit_exceeded",  # 429
+})
+"""The ``error.type`` values ``should_retry`` accepts from a payload whose status code
+cannot speak for it. Deliberately narrower than the Anthropic roster: ``insufficient_quota``
+and the ``invalid_request_error`` family are deterministic, and a type this set does not
+name is treated as deterministic rather than guessed at."""
+
 
 @dataclass
 class OpenAIRenderer:
