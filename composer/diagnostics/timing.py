@@ -66,6 +66,37 @@ class TokenTotals:
         }
 
 
+@dataclass(frozen=True)
+class CallOrigin:
+    """Where one LLM call came from, independent of which task was billed for it.
+
+    ``thread_id`` / ``node`` are the LangGraph run's, read off the call's metadata;
+    they are ``None`` for a call made outside any graph (a bare
+    ``with_structured_output(...).ainvoke(...)``, a summarizer, a retried attempt
+    that never reached a checkpoint). That distinction is the whole point of the
+    type: a run's *billed* totals and the message history reachable through
+    ``ap-trail`` can only be reconciled if each call says whether it belongs to a
+    recorded thread. Calls with no ``thread_id`` are exactly the ones no
+    transcript will ever account for.
+    """
+    thread_id: str | None = None
+    node: str | None = None
+
+    @property
+    def in_graph(self) -> bool:
+        return self.thread_id is not None
+
+    def as_dict(self) -> dict[str, str | None]:
+        return {"thread_id": self.thread_id, "node": self.node}
+
+
+#: Cap on distinct origins tracked per run. Origins are (thread_id, node) pairs,
+#: so a normal run has a few hundred; the cap only stops a pathological run from
+#: growing the summary without bound. Overflow folds into ``_ORIGIN_OVERFLOW``.
+_MAX_ORIGINS = 2000
+_ORIGIN_OVERFLOW = CallOrigin(thread_id="(origin-overflow)", node=None)
+
+
 @dataclass
 class PhaseRecord:
     task_id: str
@@ -98,6 +129,8 @@ class RunSummary:
     _latest_link_by_task: dict[str, str] = field(default_factory=dict, repr=False)  # Maps task_id -> link for the most recent prover run.
     token_usage_by_model: dict[str, TokenTotals] = field(default_factory=dict)  # Maps model_name -> accumulated raw token counts across the whole run.
     _active_tokens_by_task: dict[str, dict[str, TokenTotals]] = field(default_factory=dict, repr=False)  # Maps task_id -> {model_name -> token counts} accumulated while the task is in flight.
+    token_usage_by_origin: dict[tuple[CallOrigin, str | None], TokenTotals] = field(default_factory=dict)  # Maps (call origin, task_id) -> token counts, run-wide.
+    calls_by_origin: dict[tuple[CallOrigin, str | None], int] = field(default_factory=dict)  # Call count for the same keys.
 
     def record_phase(
         self,
@@ -149,16 +182,33 @@ class RunSummary:
                 self._active_prover_reported_by_task.get(task_id, 0) + ms
             )
 
-    def record_token_usage(self, usage: NormalizedTokenUsage, *, task_id: str | None = None) -> None:
+    def record_token_usage(
+        self,
+        usage: NormalizedTokenUsage,
+        *,
+        task_id: str | None = None,
+        origin: CallOrigin | None = None,
+    ) -> None:
         """Accumulate one LLM call's token counts into the run-wide per-model totals
         and (if a task is active) into that task's in-flight bucket, later folded into
-        its ``PhaseRecord`` by ``record_phase``. Defaults attribution to the active task."""
+        its ``PhaseRecord`` by ``record_phase``. Defaults attribution to the active task.
+
+        ``origin`` additionally records *where the call came from* — see
+        :class:`CallOrigin`. It is kept on a separate axis from the task rather than
+        folded into ``PhaseRecord``, because the question it answers ("is this call in
+        a thread the trail recorded?") cuts across phases and outlives them."""
         model = usage.get("model_name") or "unknown"
         update = TokenTotals.from_normalized(usage)
         self.token_usage_by_model[model] = self.token_usage_by_model.get(model, TokenTotals()) + update
-        if (task_id := task_id or get_current_task_id()) is not None:
+        task_id = task_id or get_current_task_id()
+        if task_id is not None:
             bucket = self._active_tokens_by_task.setdefault(task_id, {})
             bucket[model] = bucket.get(model, TokenTotals()) + update
+        key = (origin or CallOrigin(), task_id)
+        if key not in self.token_usage_by_origin and len(self.token_usage_by_origin) >= _MAX_ORIGINS:
+            key = (_ORIGIN_OVERFLOW, task_id)
+        self.token_usage_by_origin[key] = self.token_usage_by_origin.get(key, TokenTotals()) + update
+        self.calls_by_origin[key] = self.calls_by_origin.get(key, 0) + 1
 
     def total_tokens(self) -> TokenTotals:
         """Run-wide token counts summed across all models."""
@@ -179,6 +229,22 @@ class RunSummary:
                 }
                 for p in self.phases
                 if p.token_usage_by_model
+            ],
+            # Same tokens, sliced by where the call came from rather than which task
+            # paid. Sorted heaviest-first so a truncated read still shows what matters,
+            # and out-of-graph calls (thread_id None) sort in among the rest rather
+            # than being hidden in a footnote — they are the ones worth explaining.
+            "by_origin": [
+                {
+                    **origin.as_dict(),
+                    "task_id": task_id,
+                    "calls": self.calls_by_origin.get((origin, task_id), 0),
+                    **totals.as_dict(),
+                }
+                for (origin, task_id), totals in sorted(
+                    self.token_usage_by_origin.items(),
+                    key=lambda kv: -(kv[1].cache_write + kv[1].cache_read + kv[1].output),
+                )
             ],
         }
 
