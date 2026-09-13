@@ -277,7 +277,13 @@ class ConfigManager:
         # build-system properties above; the additional ones are added here and have none, so
         # they get the same per-contract resolution add_files_to_config gives them.
         if any(key.endswith("_map") for key in conf_template):
-            for handle in parse_contract_files(additional_files):
+            # Against the project root, not the process CWD, so the pragma behind each map
+            # entry is read from the file the conf names. strict=False: most projects name no
+            # additional contract at all, and a strict parse treats an empty list as a caller
+            # error.
+            for handle in parse_contract_files(
+                additional_files, project_root=self.project_root, strict=False
+            ):
                 self.update_compiler_map_for_contract(conf_template, handle, self.reference_compiler_maps or None)
                 self.update_via_ir_map_for_contract(conf_template, handle, self.reference_compiler_maps or None)
                 self.update_optimize_map_for_contract(conf_template, handle, self.reference_compiler_maps or None)
