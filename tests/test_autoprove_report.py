@@ -83,16 +83,19 @@ def _prop(title, desc, *, sort: PropertyType = "safety_property") -> PropertyFor
 
 def _gen(mapping: dict[str, list[str]] | None = None,
          skipped: dict[str, str] | None = None,
-         link: str | None = "L1") -> GeneratedCVL:
+         link: str | None = "L1",
+         run_links: list[str] | None = None) -> GeneratedCVL:
     """A successful generation result: ``mapping`` is property_title -> [rule names];
-    ``skipped`` is property_title -> reason."""
+    ``skipped`` is property_title -> reason. ``run_links`` are the composing run links the
+    report fetches verdicts from; defaults to ``[link]`` (the single-run case production leaves)."""
     return GeneratedCVL(
         commentary="", cvl="",
         property_rules=[PropertyRuleMapping(property_title=t, rules=rs)
                         for t, rs in (mapping or {}).items()],
         skipped=[SkippedProperty(property_title=t, reason=r)
                  for t, r in (skipped or {}).items()],
-        final_link=link
+        final_link=link,
+        run_links=run_links if run_links is not None else ([link] if link else []),
     )
 
 
@@ -177,6 +180,25 @@ async def test_collect_joins_properties_to_rules_and_verdicts():
     assert r.prover_link == "L1"
     assert by_ref[("autospec_Increment.spec", "countEqualsSum")].outcome == Outcome.BAD
     assert skipped == [] and gave_up == [] and curtailed == [] and dropped == 0
+
+
+@pytest.mark.asyncio
+async def test_collect_stamps_each_rule_with_the_run_that_proved_it():
+    """With rule-striping a component's rules are proven across several runs; each rule's
+    ``prover_link`` is the run that produced its verdict, not the last (``final_link``) one."""
+    props = [_prop("p_a", "rule a"), _prop("p_b", "rule b")]
+    gen = _gen({"p_a": ["rule_a"], "p_b": ["rule_b"]}, link="LB", run_links=["LA", "LB"])
+    fetch = _fetcher({
+        "LA": [_fake_check("rule_a", NodeStatus.VERIFIED, file="autospec_C.spec")],
+        "LB": [_fake_check("rule_b", NodeStatus.VIOLATED, file="autospec_C.spec")],
+    })
+
+    _properties, rules, *_ = await collect(
+        [_input("C", "autospec_C.spec", props, gen)], fetch_verdicts=fetch)
+
+    by_ref = {r.ref: r for r in rules}
+    assert by_ref[("autospec_C.spec", "rule_a")].prover_link == "LA"  # not the final link LB
+    assert by_ref[("autospec_C.spec", "rule_b")].prover_link == "LB"
 
 
 @pytest.mark.asyncio
