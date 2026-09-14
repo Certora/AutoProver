@@ -51,14 +51,21 @@ def _fetch(api: ProverOutputAPI, link: str) -> dict[RuleName, Verdict]:
 
 
 def make_prover_fetcher(api: ProverOutputAPI | None = None) -> VerdictFetcher[GeneratedCVL]:
-    """A `VerdictFetcher` that pulls per-rule verdicts from ProverOutputUtility, keyed by each
-    component's run link. POU calls run off the event loop (one blocking call per run). Only ever
-    invoked for delivered results (collect skips gave-up / curtailed inputs)."""
+    """A `VerdictFetcher` that pulls per-rule verdicts from ProverOutputUtility and unions them across
+    every prover run that composes the result (``GeneratedCVL.run_links``). With buffers + rule-striping
+    one component's rules are run across several jobs, so a fetch keyed on a single link would report
+    every rule whose verdict came from another run as UNKNOWN. POU calls run off the event loop (one per
+    run). Only ever invoked for delivered results (collect skips gave-up / curtailed inputs)."""
     api = api or ProverOutputAPI()
 
     async def fetch(formalized: Formalized[GeneratedCVL]) -> dict[RuleName, Verdict]:
-        if formalized.run_link is None:
+        links = formalized.result.run_links
+        if not links:
             return {}
-        return await asyncio.to_thread(_fetch, api, formalized.run_link)
+        merged: dict[RuleName, Verdict] = {}
+        for per_link in await asyncio.gather(*(asyncio.to_thread(_fetch, api, l) for l in links)):
+            for name, v in per_link.items():
+                merged[name] = v.merge(merged.get(name))
+        return merged
 
     return fetch

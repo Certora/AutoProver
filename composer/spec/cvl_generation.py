@@ -96,6 +96,10 @@ class GeneratedCVL(BaseModel):
     # The last prover-run link (URL or local results dir), persisted for the report and so a
     # cache hit retains it. None when the prover never produced a link.
     final_link: str | None = Field(default=None)
+    # Every prover-run link whose results compose the buffers at their final digests, deduped (empty
+    # when no run-target buffer has a completed run at its final digest). With rule-striping a buffer's
+    # rules are run across several jobs, so this holds all of them, not just the last ``final_link``.
+    run_links: list[str] = Field(default_factory=list)
     # The author's working copy at completion: the edited source files the proof
     # actually ran against (empty when no edits were applied — always the case
     # outside the editing-enabled source pipeline), and the provenance of each

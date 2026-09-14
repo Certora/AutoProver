@@ -144,6 +144,10 @@ class ProverRunLog(TypedDict):
     # The spec buffer this run belongs to; absent for a single-curr_spec run. Each buffer has its own
     # spec/digest, so completion is evaluated per buffer over its own runs (see _history_for_buffer).
     buffer: NotRequired[str]
+    # The prover-run link (job URL / local dir) this run's results came from. With rule-striping a
+    # buffer's rules are run across several jobs, so its verdicts are spread over several links
+    # (collected by completing_run_links), not carried by the last one alone.
+    link: NotRequired[str]
 
 class NagMarker(TypedDict):
     nagged_rules: list[RulePath]
@@ -302,6 +306,35 @@ def buffer_is_complete(
         curr_status=curr_status,
         all_rules=all_rules,
     )
+
+
+def completing_run_links(
+    prover_history: list[ProverHistoryItem],
+    buffers: Mapping[str, NamedBuffer],
+    *,
+    skipped: Sequence[tuple[str, str]],
+    version_history: Sequence[str],
+) -> list[str]:
+    """The prover-run links whose completed results compose the run-target buffers at their current
+    digests — the same runs :func:`buffer_is_complete` considers. Rule-striping runs one buffer's rules
+    across several jobs, so its verdicts are spread over all of these links rather than carried by the
+    last one alone."""
+    links: list[str] = []
+    seen: set[str] = set()
+    for b in run_targets(buffers):
+        digest = buffer_state_digest(
+            buffers, b.name, skipped=skipped, version_history=version_history,
+        )
+        for elem in reversed(_history_for_buffer(prover_history, b.name)):
+            if elem["sort"] != "run":
+                continue
+            if elem["state_digest"] != digest:
+                break  # older runs sit at a superseded digest — the same cutoff as _iterate_history
+            link = elem.get("link")
+            if link and link not in seen:
+                seen.add(link)
+                links.append(link)
+    return links
 
 
 def _merge_prover_history(left: list[ProverHistoryItem], right: list[ProverHistoryItem]) -> list[ProverHistoryItem]:
@@ -929,6 +962,7 @@ def get_prover_tool(
                     tool_call_id=tool_call_id, prover_results=results, rules=d.selection,
                     spec_digest=string_hash(buffers[d.name].cvl) if d.name in buffers else "",
                     sort="run", declared_rules=d.all_rules, state_digest=d.digest, buffer=d.name,
+                    link=d.result.link,
                 ))
 
             # Per-buffer completion is re-evaluated over history + this drain against the CURRENT digest, so

@@ -45,7 +45,7 @@ from composer.spec.source.plugin import CertoraProverTools, CVLAuthorState
 from composer.spec.system_model import ContractComponentInstance, SolidityIdentifier, component_context
 from composer.spec.source.prover import (
     OVERLAY_OWNED_KEYS, ProverStateExtra, DELETE_SKIP, VALIDATION_KEY as PROVER_VALIDATION_KEY,
-    materializing_project,
+    materializing_project, completing_run_links,
 )
 from langgraph.graph import MessagesState
 from pathlib import Path
@@ -1191,6 +1191,13 @@ async def batch_cvl_generation(
     # hit (which skips the prover) can still reconstruct certora/confs and retain the link.
 
     assert "vfs" in res_state
+    # Every run link that composes the buffers at their final digests, so verdicts spread across
+    # striped/per-buffer runs are all reachable from the result.
+    skipped_pairs = [(str(s.property_title), str(s.reason)) for s in res_state["skipped"]]
+    run_links = completing_run_links(
+        res_state["prover_history"], res_state.get("buffers") or {},
+        skipped=skipped_pairs, version_history=res_state["version_history"],
+    )
     generated = GeneratedCVL(
         commentary=res_state["result"],
         cvl=d,
@@ -1198,6 +1205,7 @@ async def batch_cvl_generation(
         property_rules=res_state["property_rules"],
         config=res_state["config"],
         final_link=res_state.get("prover_link"),
+        run_links=run_links,
         vfs=res_state["vfs"],
         applied_edits=applied_edits,
     )

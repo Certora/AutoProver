@@ -11,7 +11,10 @@ from graphcore.testing import Scenario, tool_call_raw
 from composer.prover.core import ProverReport
 from composer.prover.ptypes import RulePath
 from composer.spec.source.buffer_tools import put_buffer
-from composer.spec.source.prover import StateWithSkips, VALIDATION_KEY
+from composer.spec.source.prover import (
+    StateWithSkips, VALIDATION_KEY, ProverRunLog, completing_run_links,
+)
+from composer.prover.ptypes import RulePath
 from composer.spec.source.spec_buffers import (
     NamedBuffer, buffer_state_digest, check_buffer_completion,
 )
@@ -20,6 +23,31 @@ from .conftest import ProverMock
 
 
 SHARED = "ghost g(uint) returns uint;\n"
+
+
+def _runlog(tc, digest, link, rule, selector):
+    return ProverRunLog(
+        tool_call_id=tc, prover_results=[(RulePath(rule=rule), "VERIFIED")],
+        rules={"sort": "include", "selector": selector}, spec_digest="", sort="run",
+        declared_rules=["r_a", "r_b"], state_digest=digest, buffer="both", link=link,
+    )
+
+
+def test_completing_run_links_unions_stripes_and_drops_stale():
+    """A buffer's rules proven across striped runs at its current digest yield every run's link (deduped);
+    a run at a superseded digest is excluded — the report unions over exactly these."""
+    bufs = _buffers2()  # run-target "both" (r_a, r_b) + shared
+    dig = buffer_state_digest(bufs, "both", skipped=[], version_history=[])
+    history = [
+        _runlog("t0", "STALE_DIGEST", "old-link", "r_a", ["r_a"]),      # superseded content -> excluded
+        _runlog("t1", dig, "link-a", "r_a", ["r_a"]),                   # stripe rule=[r_a]
+        _runlog("t2", dig, "link-b", "r_b", ["r_b"]),                   # stripe rule=[r_b]
+        _runlog("t3", dig, "link-a", "r_a", ["r_a"]),                   # same link again -> deduped
+    ]
+    links = completing_run_links(history, bufs, skipped=[], version_history=[])
+    assert set(links) == {"link-a", "link-b"}
+    assert "old-link" not in links
+    assert len(links) == 2  # deduped
 
 
 def _buf(name: str, rule: str) -> NamedBuffer:
