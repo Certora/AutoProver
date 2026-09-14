@@ -2,17 +2,19 @@
 ``ModelProvider`` implementation that mints ``ChatAnthropic`` instances."""
 
 from typing import Literal, TypeGuard, Any, TYPE_CHECKING, override, cast
+from collections.abc import Mapping
 from io import BytesIO
 from dataclasses import dataclass, field
 import asyncio
 from functools import cache
 
 import anthropic
+import httpx
 
 from composer.input.files import UploaderBase, ContentRenderer
 from composer.input.types import ModelConfiguration
 from composer.llm.provider import (
-    ProviderServiceBase, ProviderSpec, compaction_threshold
+    ProviderServiceBase, ProviderSpec, compaction_threshold, standard_callbacks
 )
 from composer.llm.pricing import PriceProvider, price_provider_for
 from .types import CacheLevel
@@ -137,7 +139,9 @@ class AnthropicRenderer:
             }
         return to_ret
 
-    def file_block(self, file_id: str, *, cache_level: CacheLevel = CacheLevel.NONE) -> dict:
+    def file_block(
+        self, file_id: str, *, cache_level: CacheLevel = CacheLevel.NONE
+    ) -> dict:
         to_ret : dict[str, Any] = {
             "type": "document",
             "source": {
@@ -151,6 +155,14 @@ class AnthropicRenderer:
                 "ttl": ttl
             }
         return to_ret
+
+    def inline_file_block(
+        self, basename: str, contents: bytes, mime: str,
+        *, cache_level: CacheLevel = CacheLevel.NONE
+    ) -> dict:
+        raise NotImplementedError(
+            "Anthropic content is uploaded to the Files API, not inlined."
+        )
 
 @cache
 def _get_service():
@@ -196,6 +208,30 @@ class AnthropicFileUploader(UploaderBase):
 
 # --- ModelProvider ---------------------------------------------------------
 
+
+RETRYABLE_ERROR_TYPES = frozenset({
+    "overloaded_error",  # 529
+    "api_error",         # 500
+    "rate_limit_error",  # 429
+    "timeout_error",     # 408
+})
+"""The ``error.type`` values of the statuses ``should_retry`` accepts, for payloads whose
+status code cannot speak for them."""
+
+
+def _payload_error_type(body: object) -> str | None:
+    """The ``error.type`` discriminator of an Anthropic error payload, or ``None``
+    for a body of any other shape (the SDK leaves it as the raw text when the
+    payload does not parse)."""
+    if not isinstance(body, Mapping):
+        return None
+    error = body.get("error")
+    if not isinstance(error, Mapping):
+        return None
+    error_type = error.get("type")
+    return error_type if isinstance(error_type, str) else None
+
+
 class AnthropicService(ProviderServiceBase):
     def __init__(self):
         from graphcore.tools.memory import anthropic_async_memory_tool
@@ -223,13 +259,26 @@ class AnthropicService(ProviderServiceBase):
     def should_retry(self, exc: Exception) -> bool:
         """Mirrors the SDK's own ``_should_retry`` status roster (408/409/429
         and every 5xx, which covers 529 overloaded) plus connection-level
-        failures (``APITimeoutError`` subclasses ``APIConnectionError``).
-        400-class request errors are deterministic — an over-long prompt fails
-        identically on every attempt — and are deliberately excluded."""
+        failures (``APITimeoutError`` subclasses ``APIConnectionError``), a
+        connection dropped mid-stream, and an error the server reports inside a
+        stream. 400-class request errors are deterministic — an over-long prompt
+        fails identically on every attempt — and are deliberately excluded."""
         if isinstance(exc, anthropic.APIConnectionError):
             return True
+        # A connection that drops mid-stream surfaces as a raw httpx.RemoteProtocolError
+        # ("peer closed connection without sending complete message body") — the SDK does not
+        # wrap streamed-body failures as APIConnectionError, so match it directly. It is a
+        # transient transport failure, retryable like any connection-level error.
+        if isinstance(exc, httpx.RemoteProtocolError):
+            return True
         if isinstance(exc, anthropic.APIStatusError):
-            return exc.status_code in (408, 409, 429) or exc.status_code >= 500
+            if exc.status_code in (408, 409, 429) or exc.status_code >= 500:
+                return True
+            # An error the server reports part-way through a stream rides the already-open
+            # 200 response, and the SDK builds the exception from that response — so the
+            # status code carries none of the meaning and the class stays the base
+            # APIStatusError. The transient/deterministic split lives in the payload.
+            return _payload_error_type(exc.body) in RETRYABLE_ERROR_TYPES
         return False
 
 @dataclass
@@ -263,8 +312,6 @@ class AnthropicModelProvider:
         self, *, cache_level: CacheLevel = CacheLevel.NONE, disable_thinking: bool = False
     ) -> "BaseChatModel":
         from langchain_anthropic import ChatAnthropic
-        from composer.diagnostics.usage_callback import UsageCallback
-        from composer.diagnostics.cost_callback import CostAccumulator
 
         opts = self.options
         thinking: dict[str, Any] | None
@@ -308,12 +355,9 @@ class AnthropicModelProvider:
             betas=betas,
             thinking=thinking,
             model_kwargs=model_kwargs,
-            callbacks=[
-                UsageCallback(),
-                CostAccumulator(
-                    self.price_provider, long_cache=cache_level == CacheLevel.LONG
-                ),
-            ],
+            callbacks=standard_callbacks(
+                self.price_provider, long_cache=cache_level == CacheLevel.LONG
+            ),
         )
 
 ANTHROPIC_SPEC = ProviderSpec(

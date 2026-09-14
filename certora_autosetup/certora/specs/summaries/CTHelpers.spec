@@ -31,6 +31,32 @@ persistent ghost ghostCollectionId(bytes32, bytes32, uint256) returns bytes32 {
           ghostCollectionIdInv3(ghostCollectionId(p1, c1, i1)) == i1;
 }
 
+// CTHelpers.getPositionId derives a position id as a keccak256 hash of its two arguments (a token
+// address and a collection id). The function is a deterministic function of its inputs, so a deterministic
+// ghost summary is a valid over-approximation.
+//
+// Injectivity note: under the prover's hashing abstraction the hash is not injective, so distinct
+// (token, collection id) pairs can collapse onto one id. Making the ghost injective restores
+// the collision-resistance the real keccak256 has, which distinct positions rely on: a caller that
+// derives a YES/NO position pair from one collection id and moves both in a single batch transfer needs
+// the two ids to differ, or a modelled ledger moves the same balance twice and the second move reverts
+// for insufficient balance — a revert with no real counterpart.
+//
+// As with getCollectionId, injectivity is encoded via left-inverse ghosts rather than a pairwise forall:
+// each input component is recoverable from the id (equal ids force equal inputs through the inverses),
+// which quantifies only 2 variables and applies ghostPositionId once, so the solver instantiates it
+// linearly instead of over every pair of ids.
+
+persistent ghost ghostPositionIdInvToken(uint256) returns address;
+persistent ghost ghostPositionIdInvColl(uint256) returns bytes32;
+
+persistent ghost ghostPositionId(address, bytes32) returns uint256 {
+    axiom forall address t1. forall bytes32 c1.
+          ghostPositionIdInvToken(ghostPositionId(t1, c1)) == t1 &&
+          ghostPositionIdInvColl(ghostPositionId(t1, c1)) == c1;
+}
+
 methods {
     function CTHelpers.getCollectionId(bytes32 p, bytes32 c, uint256 i) internal returns (bytes32) => ghostCollectionId(p, c, i);
+    function CTHelpers.getPositionId(address t, bytes32 c) internal returns (uint256) => ghostPositionId(t, c);
 }
