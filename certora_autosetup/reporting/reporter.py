@@ -602,7 +602,36 @@ class Reporter:
             except Exception as e:
                 self.log(f"Failed to read config for {contract_name}: {e}", "WARNING")
 
-            jr = self._prover_api.get_job_report(result.job_url)
+            if result.is_preprocessing_timeout:
+                # The job was cancelled by the watchdog before producing any results —
+                # there is no job report to fetch; emit a dedicated row instead.
+                rows.append(_SanityRow(
+                    contract_name=contract_name,
+                    job_url=result.job_url,
+                    sanity_status=(
+                        "PREPROCESSING TIMEOUT — prover never finished preprocessing; "
+                        "job cancelled by autosetup watchdog"
+                    ),
+                    method_failures={},
+                    unresolved_count=0,
+                    storage_extension=config.get("storage_extension_annotation", False),
+                    global_warnings=0,
+                    runtime="N/A",
+                    optimistic_loop=config.get("optimistic_loop", False),
+                    loop_iter=config.get("loop_iter", "N/A"),
+                    optimistic_hashing=config.get("optimistic_hashing", False),
+                    hashing_bounds=config.get("hashing_length_bound", "N/A"),
+                ))
+                continue
+
+            try:
+                jr = self._prover_api.get_job_report(result.job_url)
+            except Exception as e:
+                # A cancelled/failed job may have no report — skip the row rather than
+                # losing the whole summary.
+                self.log(f"Failed to fetch job report for {contract_name} "
+                         f"({result.job_url}): {e}", "WARNING")
+                continue
             job_report_path = self.reports_dir / f"job_report_{contract_name}.json"
             with open(job_report_path, "w") as f:
                 json.dump(jr.to_dict(), f, indent=2)
