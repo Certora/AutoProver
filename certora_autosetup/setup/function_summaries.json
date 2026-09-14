@@ -126,15 +126,15 @@
   },
   "safeTransfer": {
     "names": ["safeTransfer"],
-    "library_names": ["SafeERC20"],
+    "library_names": ["SafeERC20", "SafeTransferLib"],
     "summary_file": "specs/summaries/OpenZeppelin/OZ_SafeERC20.spec",
-    "description": "OpenZeppelin SafeERC20.safeTransfer"
+    "description": "OpenZeppelin SafeERC20 / Solady SafeTransferLib.safeTransfer"
   },
   "safeTransferFrom": {
     "names": ["safeTransferFrom"],
-    "library_names": ["SafeERC20"],
+    "library_names": ["SafeERC20", "SafeTransferLib"],
     "summary_file": "specs/summaries/OpenZeppelin/OZ_SafeERC20.spec",
-    "description": "OpenZeppelin SafeERC20.safeTransferFrom"
+    "description": "OpenZeppelin SafeERC20 / Solady SafeTransferLib.safeTransferFrom"
   },
   "safeApprove": {
     "names": ["safeApprove"],
@@ -177,5 +177,11 @@
     "library_names": ["MathUtils"],
     "summary_file": "specs/summaries/Aave/Aave_Math.spec",
     "description": "Aave MathUtils generic 256-bit mulDiv / divUp and uncheckedExp (10**decimals)"
+  },
+  "canCallWithDelay": {
+    "names": ["canCallWithDelay"],
+    "library_names": ["AuthorityUtils"],
+    "summary_file": "specs/summaries/OpenZeppelin/OZ_AuthorityUtils.spec",
+    "description": "OpenZeppelin AuthorityUtils.canCallWithDelay"
   }
 }
