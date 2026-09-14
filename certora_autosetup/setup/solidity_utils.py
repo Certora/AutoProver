@@ -6,7 +6,7 @@ Shared utilities for working with Solidity files.
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import AbstractSet, Any, Dict, Iterable, List, Optional
 
 from certora_autosetup.utils.logger import logger as _logger
 from certora_autosetup.utils.types import ContractHandle
@@ -339,72 +339,74 @@ def find_all_library_files_and_names(
     return library_files
 
 
-def build_library_name_index(library_files: Dict[str, List[str]]) -> Dict[str, str]:
-    """Invert ``library_files`` (file→names) into a ``name→file`` map, deduping by
-    first-definition-wins.
+def compiled_library_file(
+    library_name: str,
+    methods: Iterable[Dict[str, Any]],
+    units: AbstractSet[str],
+) -> Optional[str]:
+    """The file the build compiled ``library <library_name>`` from, as seen from ``units``.
 
-    Duplicate names typically come from hand-vendored libraries pulled into multiple
-    dependency trees (different OZ versions, etc.) — large projects can easily produce
-    hundreds of these. To keep the log readable, all duplicates are summarised into a
-    single ``WARNING`` line listing affected library names; the full per-name keep/ignore
-    breakdown goes to ``DEBUG``. Pass ``--verbose`` (or equivalent) to see the detail.
+    ``originalFile`` on an all_methods.json entry is the path the compiler actually read, so
+    it tells two vendored copies of the same library apart — which a search by name cannot,
+    and a project carrying several OpenZeppelin trees has plenty of those.
+
+    Args:
+        library_name: The library to locate.
+        methods: All known methods (typically ``MethodParser.get_all_methods()``).
+        units: Compilation units to look from; the library counts only where one of these
+            inlines it.
+
+    Returns:
+        The compiled path, or None when no unit in ``units`` uses the library, or when the
+        units disagree on the file. An ambiguity has no answer to give: the summary and the
+        conf can each name the library only once.
     """
-    library_name_to_file: Dict[str, str] = {}
-    duplicates: Dict[str, List[str]] = {}  # name → list of ignored file paths
-    for file_path, names in library_files.items():
-        for name in names:
-            existing = library_name_to_file.setdefault(name, file_path)
-            if existing != file_path:
-                duplicates.setdefault(name, []).append(file_path)
-                _logger.log(
-                    f"Library '{name}' defined in multiple files: keeping '{existing}', "
-                    f"ignoring '{file_path}'.",
-                    "DEBUG",
-                )
-
-    if duplicates:
-        names = sorted(duplicates)
-        _logger.log(
-            f"Found {len(duplicates)} library name(s) defined in multiple files "
-            f"(first-definition-wins applied; run with --verbose for per-file detail): "
-            f"{', '.join(names)}",
-            "WARNING",
-        )
-    return library_name_to_file
+    files = {
+        method["originalFile"]
+        for method in methods
+        if method.get("isLibrary")
+        and method.get("contractName") == library_name
+        and method.get("originalFile")
+        and not units.isdisjoint(method.get("originatingContracts") or ())
+    }
+    return files.pop() if len(files) == 1 else None
 
 
 def find_libraries_used_by(
     contract_name: str,
-    library_name_to_file: Dict[str, str],
     methods: Iterable[Dict[str, Any]],
 ) -> List[ContractHandle]:
     """Return ContractHandles for libraries whose methods appear in ``contract_name``'s compilation unit.
 
-    A library counts as "used by" ``contract_name`` if at least one method in
-    ``methods`` has ``contract_name`` among its ``originatingContracts`` and ``contractName ==
-    {library_name}``. Use this to add only the libraries the contract actually
-    calls to the prover scene, instead of dumping every library file in the project.
+    A library counts as "used by" ``contract_name`` if at least one method in ``methods`` has
+    ``contract_name`` among its ``originatingContracts`` and is a library method. Use this to
+    add only the libraries the contract actually calls to the prover scene, instead of dumping
+    every library file in the project.
 
     Args:
         contract_name: Compilation unit to scan (the deployable that owns the artifact).
-        library_name_to_file: Library-name → defining-file map, as produced by
-            ``build_library_name_index``. Build once per run and reuse — this function
-            does not warn on duplicates.
         methods: All known methods (typically ``MethodParser.get_all_methods()``).
 
     Returns:
-        Sorted list of ContractHandles, one per used library. Empty if no library
-        methods appear in ``contract_name``'s compilation unit.
+        Sorted list of ContractHandles, one per used library, each naming the file the build
+        compiled it from. A library the unit is ambiguous about is left out.
     """
-    used: set[str] = set()
-    for method in methods:
-        if contract_name not in method["originatingContracts"]:
-            continue
-        ref = method.get("contractName")
-        if ref in library_name_to_file:
-            used.add(ref)
+    methods = list(methods)
+    used = {
+        method["contractName"]
+        for method in methods
+        if method.get("isLibrary") and contract_name in (method.get("originatingContracts") or ())
+    }
 
-    return [
-        ContractHandle(contract_name=name, source_file=library_name_to_file[name])
-        for name in sorted(used)
-    ]
+    handles = []
+    for name in sorted(used):
+        source_file = compiled_library_file(name, methods, {contract_name})
+        if source_file is None:
+            _logger.log(
+                f"Library '{name}' used by {contract_name} has no single compiled source file; "
+                f"leaving it out of the scene",
+                "WARNING",
+            )
+            continue
+        handles.append(ContractHandle(contract_name=name, source_file=source_file))
+    return handles
