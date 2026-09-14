@@ -304,9 +304,8 @@ def entry_resolves(
     name / wrong arity) and is robust across both sources. A same-arity-but-different-
     type phantom overload, if it ever occurs, is left to the TypecheckerLoop backstop.
     """
-    # A companion contract joins the conf after the project was built, so it cannot appear in
-    # an index derived from that build. Pruning its entries would leave the reroute pointing
-    # at an unsummarized companion whose bodies revert, which reads as a passing run.
+    # The index only knows what the project's build produced. A receiver that joins the conf
+    # after that build is absent from it, so pruning on its absence would drop valid entries.
     if entry.receiver in exempt_receivers:
         return True
 
@@ -358,8 +357,8 @@ def resolve_spec_file(
         owned_keys: ``(receiver, name, param_types)`` keys already claimed by a
             higher-precedence spec. Entries matching one of these are dropped as
             duplicates (the dedup safeguard); ``None`` disables dedup.
-        exempt_receivers: Receivers the index cannot know about — companion contracts
-            added to the conf after the build the index came from.
+        exempt_receivers: Receivers to keep regardless of the index — contracts that
+            join the conf after the build the index was derived from.
         log: Optional ``(message, level)`` logger.
 
     Returns:

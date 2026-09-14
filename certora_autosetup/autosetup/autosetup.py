@@ -725,10 +725,6 @@ class Autosetup:
         final_config = self.config_manager.create_config(
             main_contract,
             self.contract_handles,
-            # The curated companions specifically: this config exists to typecheck the
-            # summaries that were just set up, and a summary rerouting through a companion
-            # cannot typecheck against a scene the companion is missing from. Whether the
-            # run's own --additional-contracts belong here too is still open.
             self._curated_scene_contracts,
             sanity_spec_path,
             conf_path=test_config_path,
@@ -827,9 +823,6 @@ class Autosetup:
                     files_to_include = (
                         [contract_handle.to_config_str()]
                         + autosetup.config.additional_contracts
-                        # This rewrite is the third place a conf's scene is decided, and a
-                        # summary that reroutes through a companion cannot typecheck against a
-                        # scene the companion was stripped out of.
                         + autosetup._curated_scene_contracts
                     )
                     props = {"files": files_to_include}

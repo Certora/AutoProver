@@ -31,18 +31,11 @@ library OZ_BitMaps {
         setTo(slotOf(bitmap), index, value);
     }
 
-    // The summarized functions. CVL replaces each body with a ghost read or write, so what is
-    // written here only runs if a summary failed to attach.
-    //
-    // These were `require(false)` tripwires, meant to make that failure loud. They made it
-    // certain instead: a body that unconditionally reverts leaves nothing for the summary to
-    // attach to, so every call reverted and every rule over it passed vacuously. The tripwire
-    // caused the failure it was meant to announce.
-    //
-    // Neutral bodies invert that. An unattached summary now means `set` stores nothing and
-    // `get` reads false, so a rule that sets a bit and reads it back fails outright. A
-    // violated rule is a far better failure than a green vacuous one, and `rule_sanity`
-    // catches what is left.
+    // The summarized functions. CVL replaces each body with a ghost read or write, so these
+    // bodies only run if a summary failed to attach. They are neutral, never reverting: an
+    // unattached summary then means `set` stores nothing and `get` reads false, so a rule that
+    // sets a bit and reads it back is violated. A reverting body would instead make every call
+    // through it revert, and every rule over it pass vacuously.
     function get(uint256 bitmap, uint256 index) internal view returns (bool) {
         return false;
     }
