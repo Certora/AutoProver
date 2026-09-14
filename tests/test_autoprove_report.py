@@ -28,7 +28,7 @@ from composer.pipeline.core import Curtailed, Delivered
 
 from composer.spec.source.artifacts import ProverArtifactStore
 from composer.spec.source.report import build
-from composer.spec.source.report.collect import ReportComponentInput, collect
+from composer.spec.source.report.collect import ReportComponentInput, Verdict, collect
 from composer.spec.source.report.coverage import ValidationError, validate
 from composer.spec.source.report.grouping import (
     FALLBACK_SLUG, GroupingResult, PropertyGroupDraft, aggregate_status,
@@ -40,7 +40,7 @@ from composer.spec.source.report.schema import (
     GaveUpComponent, GroupStatus, ImpactLevel, IssueContent, LikelihoodLevel, Outcome,
     PropertyGroup, RuleVerdict, SeverityTier, SkippedClaim,
 )
-from composer.spec.source.report_prover import make_prover_fetcher
+from composer.spec.source.report_prover import _fetch, make_prover_fetcher
 from composer.spec.source.report.collect import RuleEvidence
 from composer.spec.source.report.findings import FindingDraft, build_findings
 from composer.spec.source.cex_capture import CexAnalysisStore
@@ -149,6 +149,92 @@ class _StructuredStubModel(BaseChatModel):
     @property
     def _llm_type(self) -> str:
         return "structured-stub"
+
+
+# ---------------------------------------------------------------------------
+# prover adapter: cloud link vs local run directory
+# ---------------------------------------------------------------------------
+#
+# `run_prover` runs either against the cloud or locally, and records the link
+# accordingly — a job URL or a report directory. ProverOutputUtility only speaks the
+# former and rejects a filesystem path outright, so before the local branch existed a
+# local run reported every rule UNKNOWN while its verdicts sat on disk.
+
+class _StubAPI:
+    """Records what reached POU, so the local path can be shown to bypass it."""
+
+    def __init__(self, raises: Exception | None = None) -> None:
+        self.calls: list[str] = []
+        self._raises = raises
+
+    def get_all_checks(self, link):
+        self.calls.append(link)
+        if self._raises is not None:
+            raise self._raises
+        return []
+
+
+def _local_run(tmp_path: pathlib.Path, monkeypatch, results):
+    """A directory that looks like a prover report dir, with the run's own parser
+    stubbed to return ``results`` (a str stands for a parse failure)."""
+    monkeypatch.setattr(
+        "composer.spec.source.report_prover.read_and_format_run_result",
+        lambda path: results,
+    )
+    run_dir = tmp_path / "emv-1-certora"
+    run_dir.mkdir()
+    return run_dir
+
+
+def _result(rule: str, status: str):
+    return SimpleNamespace(path=SimpleNamespace(rule=rule), status=status)
+
+
+@pytest.mark.parametrize(("status", "expected"), [
+    # Only the two mappings a reader can't infer from the name. VERIFIED/VIOLATED
+    # are covered by the roll-up test below; the rest map onto themselves.
+    ("SANITY_FAILED", Outcome.BAD),   # a rule whose own sanity check failed is not a pass
+    ("SKIPPED", Outcome.UNKNOWN),     # ran nothing, so concluded nothing
+])
+def test_local_statuses_that_are_not_self_evident(tmp_path, monkeypatch, status, expected):
+    run_dir = _local_run(tmp_path, monkeypatch, {"r": _result("r", status)})
+    api = _StubAPI()
+    assert _fetch(cast(ProverOutputAPI, api), str(run_dir)) == {"r": Verdict(expected)}
+    assert api.calls == []  # POU never consulted for a local run
+
+
+def test_local_verdicts_roll_up_the_most_terminal_outcome(tmp_path, monkeypatch):
+    """Parametric instantiations and invariant induction steps arrive as separate
+    results under one rule name."""
+    run_dir = _local_run(tmp_path, monkeypatch, {
+        "a": _result("shared", "VERIFIED"),
+        "b": _result("shared", "VIOLATED"),
+        "c": _result("shared", "VERIFIED"),
+    })
+    verdicts = _fetch(cast(ProverOutputAPI, _StubAPI()), str(run_dir))
+    assert verdicts["shared"].outcome is Outcome.BAD
+
+
+def test_an_unreadable_local_run_yields_no_verdicts(tmp_path, monkeypatch):
+    run_dir = _local_run(tmp_path, monkeypatch, "malformed tree view data")
+    assert _fetch(cast(ProverOutputAPI, _StubAPI()), str(run_dir)) == {}
+
+
+def test_a_pou_failure_yields_no_verdicts():
+    """Every POU exception derives from ProverAPIError — auth, job-not-found, parse —
+    so the whole documented surface degrades to UNKNOWN rather than failing the run."""
+    from prover_output_utility.exceptions import AuthenticationError
+
+    api = _StubAPI(raises=AuthenticationError("credentials expired"))
+    assert _fetch(cast(ProverOutputAPI, api), "https://prover.certora.com/output/1/a") == {}
+
+
+def test_a_non_pou_exception_is_not_swallowed():
+    """The catch is narrowed deliberately: a bug in our own code must not present as
+    a report full of inconclusive rules."""
+    api = _StubAPI(raises=RuntimeError("bug in the adapter"))
+    with pytest.raises(RuntimeError):
+        _fetch(cast(ProverOutputAPI, api), "https://prover.certora.com/output/1/a")
 
 
 # ---------------------------------------------------------------------------
