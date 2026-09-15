@@ -39,7 +39,7 @@ from .run_tags import AutoProveCacheTags, CACHE_ROOT_RECORD
 from composer.io.multi_job import HandlerFactory, run_task, TaskInfo
 from composer.diagnostics.timing import RunSummary, install_run_summary
 from composer.io.context import DefaultRetryPolicy, install_retry_policy
-from composer.llm.registry import get_provider_for
+import composer.llm.registry as llm_registry
 from composer.rag.models import get_model
 from composer.io.thread_logging import RunDataLogger, thread_logger, default_logging_ns
 from composer.rag.models import DefaultEmbedder
@@ -324,8 +324,14 @@ async def cli_pipeline[P: enum.Enum, H](
         project_root, relative_path, contract_name
     )
 
-    # Set up services
-    tiered = get_provider_for(tiered=args)
+    # Set up services.
+    #
+    # Reached through the module rather than a ``from … import get_provider_for``, and that is
+    # load-bearing rather than style: both the fake-LLM tape and the tape *recorder* install
+    # themselves by replacing ``composer.llm.registry.get_provider_for``, and a name bound here at
+    # import time keeps pointing at the original. The replay symptom is a real (paid) model in a
+    # test that believes it is taped; the recording symptom is "no LLM responses captured".
+    tiered = llm_registry.get_provider_for(tiered=args)
 
     semaphore = asyncio.Semaphore(args.max_concurrent)
     cpu_semaphore = asyncio.Semaphore(args.max_cpu_tasks)

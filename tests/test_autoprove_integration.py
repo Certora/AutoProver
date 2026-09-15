@@ -125,12 +125,6 @@ def _install_mocks(
     integration tests pass their variant installers through it."""
     # Mock only the LLM (the selected tape) + disable the agent-index cache.
     tape_installer()
-    # pipeline.cli imported `get_provider_for` by name, so install_harness_tape's
-    # patch of registry.get_provider_for doesn't reach that binding — rebind it here.
-    import composer.llm.registry as registry
-    monkeypatch.setattr(
-        "composer.pipeline.cli.get_provider_for", registry.get_provider_for
-    )
     # Swap the real sentence-transformer for the deterministic mock: no model
     # download, and nothing in this run depends on real embeddings (index cache
     # disabled by the tape, RAG DB empty).
