@@ -111,7 +111,17 @@ and needs a click within 300s:
 fi
 
 echo "record_cvlr_tape: prerequisites ok; recording tape '$TAPE_NAME'" >&2
-echo "record_cvlr_tape: this is a real, paid run and takes as long as the scenario takes" >&2
+uv run --no-sync python - <<'PY'
+from composer.pipeline.cli import parse_budget_file
+from composer.testing.cvlr_tape import BUDGET
+import sys
+budget = parse_budget_file(BUDGET)
+print(
+    f"record_cvlr_tape: this is a real, paid run, bounded at ${budget.total:.0f} "
+    f"({BUDGET.name}). The first one cost $166 and had to be interrupted.",
+    file=sys.stderr,
+)
+PY
 
 # Thinking is left ON, against the skill's suggestion. It is the configuration the expensive gate
 # completes under, and the recorder already drops the content-less turns that disabling it is meant
