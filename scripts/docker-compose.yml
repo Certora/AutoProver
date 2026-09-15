@@ -15,6 +15,12 @@
 #   # The design-doc path is optional; omit it to auto-discover one from the project:
 #   docker compose -f scripts/docker-compose.yml --profile autoprove run --rm autoprove \
 #       console-autoprove --cloud /work/<proj> /work/<proj>/src/X.sol:X
+#
+# Solana (the CVLR backend) needs the sandbox overlay as well, because its builds are confined by
+# default and this image ships no launcher (docs/cvlr-backend-plan.md §3 item 3):
+#   docker compose -f scripts/docker-compose.yml -f scripts/docker-compose.sandbox.yml \
+#       --profile autoprove --profile sandbox run --rm autoprove \
+#       console-solana /work/<proj> programs/<pkg>/src/lib.rs:<program>
 name: composer_db
 
 services:
@@ -71,6 +77,10 @@ services:
         # certora-cli | certora-cli-beta | certora-cli-beta-mirror. Build-time
         # only; defaults to stable certora-cli.
         CERTORA_CLI_PACKAGE: ${CERTORA_CLI_PACKAGE:-certora-cli}
+        # Rust + Solana platform tools for console-solana / tui-solana, ~3 GB of image.
+        # Build with SOLANA_TOOLCHAIN=0 for an EVM-only image; console-solana then refuses to
+        # start rather than failing partway into a run.
+        SOLANA_TOOLCHAIN: ${SOLANA_TOOLCHAIN:-1}
     depends_on:
       postgres:
         condition: service_healthy
@@ -91,6 +101,12 @@ services:
       CERTORA_LOGIN_NO_BROWSER: "true"
       CERTORA_AI_COMPOSER_PGHOST: postgres
       CERTORA_AI_COMPOSER_PGPORT: "5432"
+      # The command sandbox, passed through only when the shell sets it — written without a value
+      # on purpose, since `${VAR:-}` would set it to the empty string and an empty value is not the
+      # same as an unset one to the code that reads it. console-solana defaults to `launcher` and
+      # needs the sandbox overlay; `none` is the development opt-out, and marks the run's results
+      # as non-production.
+      COMPOSER_SANDBOX_PROVIDER:
     volumes:
       # Host directory holding your Solidity project(s) + design docs -> /work.
       # Defaults to $PWD when compose was invoked.

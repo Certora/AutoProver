@@ -22,8 +22,8 @@ from composer.spec.source.report.grouping import (
     build_fallback_grouping, build_groups, call_grouping_llm, PropertyGroup
 )
 from composer.spec.source.report.schema import (
-    AutoProverReport, DeprioritizedProperty, Finding, Outcome, PropertyKey, ReportBackend,
-    RuleRef, SourceEditRecord,
+    AutoProverReport, BuildEnvironment, DeprioritizedProperty, Finding, Outcome, PropertyKey,
+    ReportBackend, RuleRef, SourceEditRecord,
     VerificationArtifactRecord,
 )
 
@@ -52,6 +52,7 @@ async def build_report[R: ReportableResult](
     fetch_evidence: EvidenceFetcher | None = None,
     run_mode: str | None = None,
     deprioritized: list[DeprioritizedProperty] | None = None,
+    build_environment: BuildEnvironment | None = None,
 ) -> AutoProverReport:
     """Build and return the in-memory `AutoProverReport`. Persistence is the caller's job.
 
@@ -147,6 +148,7 @@ async def build_report[R: ReportableResult](
         gave_up_components=gave_up,
         curtailed_components=curtailed,
         source_edits=source_edits or [],
+        build_environment=build_environment,
         verification_artifacts=verification_artifacts or [],
         coverage=coverage,
         findings=findings,

@@ -26,6 +26,7 @@ from composer.cargo.sbf import (
     Built,
     parse_manifest,
     platform_tools_cargos,
+    PLATFORM_TOOLS_ROOT,
     sbf_argv,
     write_build_script,
 )
@@ -559,6 +560,16 @@ def test_the_build_never_touches_rustup():
     ``RUSTUP_HOME`` — read-only under confinement. Dropping ``--no-rustup`` fails the build for a
     reason that names neither rustup nor the sandbox."""
     assert "--no-rustup" in sbf_argv(manifest_path=Path("/w/Cargo.toml"))
+
+
+def test_the_build_is_told_where_the_platform_tools_are():
+    """The tool reads ``$CERTORA_PLATFORM_TOOLS_ROOT`` too, and the confined child never sees it:
+    the launcher scrubs the environment down to a chain-neutral passthrough list that does not carry
+    it. A deployment whose toolchains are not in the tool's default location — the container, whose
+    default location is under a world-writable ``$HOME`` — would otherwise grant one root read-only
+    and build against another."""
+    argv = sbf_argv(manifest_path=Path("/w/Cargo.toml"))
+    assert argv[argv.index("--platform-tools-root") + 1] == str(PLATFORM_TOOLS_ROOT)
 
 
 def test_features_reach_the_build_as_one_space_separated_value():

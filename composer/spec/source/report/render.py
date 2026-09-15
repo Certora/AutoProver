@@ -29,7 +29,8 @@ from collections.abc import Sequence
 from composer.spec.gen_types import TypedTemplate
 from composer.templates.loader import load_jinja_template
 from composer.spec.source.report.schema import (
-    AutoProverReport, ComponentName, CoverageReport, CurtailedComponent, Finding,
+    AutoProverReport, BuildEnvironment, ComponentName, CoverageReport, CurtailedComponent,
+    Finding,
     FormalizedProperty, GaveUpComponent, GroupStatus, Outcome, PropertyGroup, PropertyKey,
     ReportBackend, RuleRef, RuleVerdict, SkippedClaim, SourceEditRecord,
 )
@@ -222,6 +223,10 @@ class ReportTemplateParams(TypedDict):
     gave_up: list[GaveUpComponent]
     curtailed: list[CurtailedView]
     source_edits: list[SourceEditRecord]
+    #: ``None`` both for a backend that compiles nothing and for a report written before the field
+    #: existed, so the template states only what it has rather than inferring confinement from
+    #: silence.
+    build_environment: BuildEnvironment | None
 
 
 _REPORT_TEMPLATE = TypedTemplate[ReportTemplateParams]("autoprove_report.html.j2")
@@ -429,6 +434,7 @@ def _build_context(report: AutoProverReport) -> ReportTemplateParams:
         "gave_up": report.gave_up_components,
         "curtailed": [_curtailed_view(c) for c in report.curtailed_components],
         "source_edits": report.source_edits,
+        "build_environment": report.build_environment,
     }
 
 

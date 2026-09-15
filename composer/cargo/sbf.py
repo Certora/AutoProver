@@ -28,6 +28,7 @@ directly inside its process, unconfined, which §3 item 2 does not allow. Owning
 what lets the build stay inside the sandbox while the prover still sees a from-sources run.
 """
 
+import asyncio
 import dataclasses
 import json
 import logging
@@ -80,6 +81,44 @@ class PlatformToolsMissing(RuntimeError):
             f"unconfined, with `cargo certora-sbf --tools-version {version}` in any Solana crate, "
             f"or point CERTORA_PLATFORM_TOOLS_ROOT at a root that has them."
         )
+
+
+class SbfSubcommandMissing(RuntimeError):
+    """``cargo certora-sbf`` is not installed, so this run has no way to build for verification.
+
+    Raised at startup rather than left to the first submission. The fast tier is a plain
+    ``cargo check`` and passes without it, so a run missing only this subcommand behaves normally
+    through preflight, analysis, extraction and a full authoring iteration, and then fails at the
+    slow tier with cargo's own ``no such subcommand`` — after the phases that cost the money.
+    """
+
+    def __init__(self, detail: str):
+        super().__init__(
+            f"`cargo certora-sbf` is not available: {detail}. It is the command the pre-submission "
+            f"build runs and the one the prover's build script reruns, so nothing can be verified "
+            f"without it. Install it with `cargo install cargo-certora-sbf` (needs Rust 1.81 or "
+            f"newer), or rebuild the container image with SOLANA_TOOLCHAIN=1."
+        )
+
+
+async def sbf_subcommand_version() -> str:
+    """What ``cargo certora-sbf --version`` reports, or raise :class:`SbfSubcommandMissing`.
+
+    The subcommand is run rather than looked up on ``PATH``: cargo resolves ``cargo X`` through
+    ``$CARGO_HOME/bin`` and the active toolchain's libexec as well, so a ``which`` that came up
+    empty would refuse installations that work.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "cargo", SBF_SUBCOMMAND, "--version",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+    except OSError as exc:
+        raise SbfSubcommandMissing(f"cargo could not be run ({exc})") from exc
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise SbfSubcommandMissing(stderr.decode().strip() or f"exit {proc.returncode}")
+    return stdout.decode().strip()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -172,11 +211,23 @@ def sbf_argv(
     ``--no-rustup`` is not optional. The tool registers a ``certora-solana`` rustup toolchain around
     each build and removes it afterwards, which writes to ``RUSTUP_HOME`` — read-only under
     confinement. The flag skips that entirely and the build resolves the platform toolchain by path.
+
+    ``--platform-tools-root`` is passed rather than left to ``$CERTORA_PLATFORM_TOOLS_ROOT``, which
+    the tool also reads, because the confined child never sees that variable: the launcher scrubs
+    the environment down to :data:`~composer.sandbox.recipes.DEFAULT_ENV_PASSTHROUGH`, which is a
+    chain-neutral list and does not carry it. So a deployment that installs the toolchains anywhere
+    but the tool's default — the container does, since the default lives under a ``$HOME`` the image
+    makes world-writable — would have the *path* granted read-only by
+    :func:`composer.spec.cvlr.entry.build_confinement` and the build still looking somewhere else,
+    finding nothing, and trying to download offline. Naming it on the argv makes the three agree by
+    construction, and puts it in the recorded command the prover reruns.
     """
     args = [
         SBF_SUBCOMMAND,
         "--json",
         "--no-rustup",
+        "--platform-tools-root",
+        str(PLATFORM_TOOLS_ROOT),
         "--manifest-path",
         str(manifest_path),
     ]

@@ -39,9 +39,9 @@ from composer.spec.source.report.grouping import (
 )
 from composer.spec.source.report.render import render_html
 from composer.spec.source.report.schema import (
-    AutoProverReport, CoverageReport, CurtailedComponent, CurtailedSkip, DraftedProperty, Finding, FindingProvenance, FormalizedProperty,
+    AutoProverReport, ConfinedBuilds, CoverageReport, CurtailedComponent, CurtailedSkip, DraftedProperty, Finding, FindingProvenance, FormalizedProperty,
     GaveUpComponent, GroupStatus, ImpactLevel, IssueContent, LikelihoodLevel, Outcome,
-    PropertyGroup, RuleVerdict, SeverityTier, SkippedClaim,
+    PropertyGroup, RuleVerdict, SeverityTier, SkippedClaim, UnconfinedBuilds,
 )
 from composer.spec.source.report_prover import job_input, make_prover_fetcher
 from composer.spec.source.report.collect import Abandoned, RuleEvidence
@@ -477,6 +477,31 @@ def _mini_report() -> AutoProverReport:
                             prover_links={"C": "https://prover.example/run/abc"},
                             properties=[p1, p2], rules=rules, groups=groups,
                             skipped=skipped, coverage=cov)
+
+
+def test_render_html_says_nothing_about_builds_it_was_not_told_about():
+    """A report with no ``build_environment`` is either an EVM backend's — nothing of the project
+    was compiled — or one written before the field existed. Neither is evidence of confinement, so
+    the render states nothing rather than implying the reassuring half."""
+    h = render_html(_mini_report())
+    assert "unconfined" not in h.lower()
+    assert "<dt>Builds</dt>" not in h
+
+
+def test_render_html_marks_an_unconfined_run():
+    """The whole point of the field: a result produced without confinement must not be mistaken for
+    a production one, and stderr on a machine nobody kept is not a record (§7.12 item 4)."""
+    h = render_html(_mini_report().model_copy(update={"build_environment": UnconfinedBuilds()}))
+    assert "<dt>Builds</dt>" in h
+    assert "Unconfined builds:" in h
+
+
+def test_render_html_names_the_mechanism_that_confined_a_run():
+    h = render_html(
+        _mini_report().model_copy(update={"build_environment": ConfinedBuilds(provider="launcher")})
+    )
+    assert "confined (launcher)" in h
+    assert "Unconfined builds:" not in h
 
 
 def test_render_html_shows_finding_message():

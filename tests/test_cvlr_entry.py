@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from composer.cargo import sbf as entry_sbf
 from composer.cargo.metadata import CratePackage, LibTarget, Workspace
 from composer.pipeline.ecosystem import SOLANA
 from composer.spec.cvlr import entry, preflight
@@ -178,6 +179,25 @@ def test_opting_out_is_explicit(monkeypatch):
     assert not entry.build_confinement().enabled
 
 
+@pytest.mark.asyncio
+async def test_the_build_subcommand_is_probed_before_anything_is_staged(
+    project, monkeypatch, wiring
+):
+    """``cargo certora-sbf`` is the only prerequisite nothing else touches until the first
+    submission: the fast tier is a plain ``cargo check`` and passes without it, so a run missing it
+    behaves normally through preflight, analysis, extraction and a full authoring iteration before
+    failing at the phase that already cost the money."""
+    async def refuse() -> str:
+        raise entry_sbf.SbfSubcommandMissing("no such subcommand")
+
+    monkeypatch.setattr(entry, "sbf_subcommand_version", refuse)
+
+    with pytest.raises(entry_sbf.SbfSubcommandMissing):
+        await _run([str(project), "programs/vault/src/lib.rs:vault"], monkeypatch, wiring)
+
+    assert wiring.kwargs == {}, "services were staged before the toolchain was known to be there"
+
+
 def test_the_platform_tools_root_is_granted(monkeypatch):
     """``cargo build-sbf`` reads its toolchain from there. The recipe grants the two default
     locations already; what this adds is the one ``$CERTORA_PLATFORM_TOOLS_ROOT`` names."""
@@ -274,6 +294,11 @@ def wiring(monkeypatch, tmp_path):
         ),
     )
     monkeypatch.setattr(entry, "build_rag_tools", lambda tag, model: (f"tools:{tag}:{model}",))
+    # The real probe shells out to `cargo certora-sbf --version`; these tests are about wiring and
+    # run on machines that have no Solana toolchain at all.
+    async def fake_probe() -> str:
+        return "cargo-certora-sbf 0.0.0-test"
+    monkeypatch.setattr(entry, "sbf_subcommand_version", fake_probe)
     return recorded
 
 

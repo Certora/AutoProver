@@ -36,6 +36,9 @@ from psycopg_pool.pool_async import AsyncConnectionPool as PGAsyncPool
 
 import composer.diagnostics.timing as timing_mod
 from composer.prover.core import ProverOptions, ProverReport
+from composer.sandbox.config import SandboxConfig
+from composer.sandbox.policy import ensure_available
+from composer.spec.cvlr.entry import announce_confinement, build_confinement
 from composer.spec.source.prover import get_prover_tool, in_situ_project, LLM
 
 if TYPE_CHECKING:
@@ -513,3 +516,27 @@ def wire_prompt(instruction: str, system: str | None = None) -> dict[str, Any]:
 def wire_workspace_prep(**overrides: Any) -> dict[str, Any]:
     """A ``WorkspacePrep`` plan that asks for nothing, plus ``overrides``."""
     return {"files": {}, "toolchain_request": {}, **overrides}
+
+
+@pytest_asyncio.fixture
+async def cvlr_confinement() -> SandboxConfig:
+    """The command sandbox a CVLR gate builds under — production's, not the library default.
+
+    Both CVLR gates used to take ``SandboxConfig.from_env()``, whose default is ``none``, so every
+    run of them compiled the target's ``build.rs`` and proc-macros unconfined while
+    ``docs/cvlr-backend-plan.md`` §3 item 3 says production does not. Worse, that is the one
+    configuration a gate must not have quietly: a policy exercised only in production is a policy
+    nobody has tested, and the two defects the first confined Anchor runs found (§7.12 item 4) were
+    both invisible to an unconfined gate.
+
+    So this is :func:`composer.spec.cvlr.entry.build_confinement` — confined unless
+    ``COMPOSER_SANDBOX_PROVIDER`` says otherwise — and a provider that cannot confine *here* fails
+    the test with its reason rather than degrading. Opting out stays possible, because the
+    passthrough provider is the documented carve-out for a machine without Landlock; what is no
+    longer possible is opting out by not thinking about it.
+    """
+    sandbox = build_confinement()
+    announce_confinement(sandbox)
+    if sandbox.enabled:
+        await ensure_available(sandbox.resolve_provider())
+    return sandbox

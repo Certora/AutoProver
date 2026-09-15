@@ -11,6 +11,10 @@ including the rule that is meant to fail and the one that is meant to fail *sani
 Marked ``expensive``: it submits a real cloud job. It also needs a real Rust + Solana platform
 toolchain, and it skips — naming the missing piece — rather than failing when one is absent, since a
 machine without the toolchain is not a machine with a broken backend.
+
+Confinement is the one thing it does *not* skip over: the build runs under production's sandbox
+(``cvlr_confinement``), because the whole point of this gate is the plumbing, and an unconfined
+build exercises a different one.
 """
 
 import json
@@ -23,7 +27,6 @@ import pytest
 from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, Built, platform_tools_installed
 from composer.cargo.session import CargoSession, Warmed
 from composer.prover.core import make_prover_options
-from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.conf import read_conf, tools_version
 from composer.spec.cvlr.prover import BuildRejected, Checked, Submission, submit
 
@@ -92,7 +95,9 @@ def workdir(tmp_path: Path) -> Path:
     return destination
 
 
-async def test_the_examples_project_verifies_exactly_as_its_authors_expect(workdir, capsys):
+async def test_the_examples_project_verifies_exactly_as_its_authors_expect(
+    workdir, cvlr_confinement, capsys
+):
     base_conf = read_conf(workdir / EXAMPLE / "certora" / "conf" / "Default.conf")
     expected = json.loads(
         (workdir / EXAMPLE / "certora" / "conf" / "expectedDefault.json").read_text()
@@ -104,7 +109,7 @@ async def test_the_examples_project_verifies_exactly_as_its_authors_expect(workd
             f"Solana platform tools {wanted_tools} are not installed under {PLATFORM_TOOLS_ROOT}"
         )
 
-    session = CargoSession(workdir=workdir, sandbox=SandboxConfig.from_env())
+    session = CargoSession(workdir=workdir, sandbox=cvlr_confinement)
     assert isinstance(await session.warm(manifest_dirs=(EXAMPLE,)), Warmed)
 
     # The fast tier, measured against the same crate the slow tier builds — the two numbers side by

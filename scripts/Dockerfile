@@ -2,7 +2,11 @@
 #
 # Container for AutoProver's local execution path — `console-autoprove`
 # (or `tui-autoprove`) against a bind-mounted host project, with the Certora
-# Prover running in the cloud.
+# Prover running in the cloud. Also `console-foundry` and, since the CVLR
+# backend, `console-solana` / `tui-solana` — which need a Rust toolchain and a
+# Solana platform-tools release in the image (see the block below `forge
+# --version`), and which additionally require the sandbox overlay, because
+# their builds are confined by default and this image ships no launcher.
 #
 # AutoProver bundles both the `composer` pipeline and `certora_autosetup` in a
 # single `ai-composer` distribution, so this image installs them directly — no
@@ -125,6 +129,64 @@ RUN python3 /tmp/install_solc.py && rm /tmp/install_solc.py
 COPY --from=foundry-builder /src/target/release/forge /usr/local/bin/forge
 RUN forge --version
 
+# ---- Rust + Solana platform tools, for the CVLR backend (console-solana / tui-solana) ----
+#
+# Three pieces, in the order a CVLR run reaches them:
+#
+#   * A host Rust toolchain. The fast tier of the two-tier compile gate is a plain `cargo check`
+#     (composer/cargo/session.py), run per authored edit. rustup, not a bare cargo: a target
+#     project's own rust-toolchain.toml pins the channel its build uses, and rustup resolves that
+#     during the *unconfined* warm step — under confinement RUSTUP_HOME is read-only and the
+#     download cannot happen.
+#   * `cargo certora-sbf` — Certora's build subcommand, which is what the slow tier runs and what
+#     the prover's build_script reruns (composer/cargo/sbf.py).
+#   * The platform-tools release that subcommand compiles with, unpacked at build time. This one is
+#     not an optimization: docs/cvlr-backend-plan.md §3 item 3 runs every build confined, and a
+#     confined build has no network and a read-only tools cache — so a version this image lacks
+#     cannot be fetched at run time, it is a rebuild. A project whose base conf pins a different
+#     `cargo_tools_version` is that case, and composer.cargo.sbf.PlatformToolsMissing names it.
+#
+# All three live under $AUTOPROVE_HOME, root-owned and world-readable — deliberately not under
+# $HOME, which the final layer makes world-*writable*: a read-only Landlock grant over a tree the
+# confined build can also write is not a grant of anything.
+ARG SOLANA_TOOLCHAIN=1
+ARG RUST_VERSION=1.90.0
+ARG CARGO_CERTORA_SBF_VERSION=0.3.5
+# Must agree with `cargo_tools_version` in composer/spec/cvlr/conf.py's TEMPLATE_BASE, which is the
+# version every run asks for unless the project pins its own. tests/test_cvlr_image.py fails the
+# routine gate if the two drift.
+ARG SOLANA_TOOLS_VERSION=v1.43
+ENV RUSTUP_HOME=/opt/autoprove/rustup \
+    CARGO_HOME=/opt/autoprove/cargo \
+    CERTORA_PLATFORM_TOOLS_ROOT=/opt/autoprove/solana \
+    PATH=/opt/autoprove/venv/bin:/opt/autoprove/cargo/bin:/usr/local/bin:/usr/bin:/bin
+# The shared cargo registry is deleted at the end: every confined build fetches into a private,
+# per-run CARGO_HOME under its own workdir (composer.sandbox.recipes.sandbox_cargo_home), and only
+# $CARGO_HOME/bin is granted read-only — so a warm shared registry would be a gigabyte nothing reads.
+RUN set -eux; \
+    if [ "$SOLANA_TOOLCHAIN" != "1" ]; then \
+      echo "[build] SOLANA_TOOLCHAIN=$SOLANA_TOOLCHAIN: no Rust, no platform tools, no console-solana"; \
+      exit 0; \
+    fi; \
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+      | sh -s -- -y --no-modify-path --profile minimal --default-toolchain "$RUST_VERSION"; \
+    cargo --version; \
+    cargo install --locked cargo-certora-sbf --version "$CARGO_CERTORA_SBF_VERSION"; \
+    cargo certora-sbf --no-build --no-rustup \
+        --platform-tools-root "$CERTORA_PLATFORM_TOOLS_ROOT" \
+        --tools-version "$SOLANA_TOOLS_VERSION"; \
+    test -d "$CERTORA_PLATFORM_TOOLS_ROOT/$SOLANA_TOOLS_VERSION"; \
+    rm -rf "$CARGO_HOME/registry" "$CARGO_HOME/git"
+
+# An empty global git config, which a confined build with a git dependency cannot start without.
+# libgit2 reads it before it will open a cached repository at all, and under Landlock the open of a
+# path that was never granted fails with EACCES rather than ENOENT — so libgit2 does not degrade to
+# "no user config", it reports the repository as unopenable and cargo blames the network
+# (composer.sandbox.recipes.git_config_ro_paths). The policy grants this file only if it exists, and
+# every Anchor project needs it: composer.spec.cvlr.munge.ANCHOR_FORK patches anchor-lang to a git
+# repo.
+RUN touch $HOME/.gitconfig
+
 WORKDIR $AUTOPROVE_HOME/AutoProver
 
 # Certora CLI package (release channel), selected at build time. certora-cli
@@ -177,9 +239,18 @@ RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTr
  && chmod -R go+rwX $HF_HOME
 
 # Trim build-only tooling now that wheels are installed.
-RUN apt-get purge -y build-essential libffi-dev curl gnupg \
- && apt-get autoremove -y \
- && rm -rf /var/lib/apt/lists/*
+#
+# `build-essential` survives in a Solana image and is not an oversight: `cargo check` — the fast
+# tier, run per authored edit — compiles and *links* the project's build scripts for the host, and
+# the SBF build does the same for every proc-macro in the graph. Only the target code goes through
+# platform-tools' own LLVM. Without `cc` the first thing a CVLR run does is fail with a linker
+# error about a crate the author never wrote.
+RUN set -eux; \
+    purge="libffi-dev curl gnupg"; \
+    [ "$SOLANA_TOOLCHAIN" = "1" ] || purge="$purge build-essential"; \
+    apt-get purge -y $purge; \
+    apt-get autoremove -y; \
+    rm -rf /var/lib/apt/lists/*
 
 # Database host/port assume the compose-managed postgres service; override
 # per-run if needed.
@@ -197,9 +268,21 @@ RUN chmod +x /usr/local/bin/autoprove-entrypoint
 # it, libraries that call pwd.getpwuid() (e.g. torch via getpass.getuser())
 # crash with `KeyError: 'getpwuid()'`. Done LAST because earlier apt operations
 # (notably the Temurin install) rewrite /etc/group and reset its perms.
-RUN chmod -R go+rX $AUTOPROVE_HOME \
- && chmod -R go+rwX $HOME \
- && chmod 0666 /etc/passwd /etc/group
+#
+# The three toolchain trees are skipped, and the reason is image size rather than permissions:
+# `chmod` makes overlayfs copy a file up into this layer whether or not the mode actually changes,
+# so recursing over ~3 GB of Rust and platform tools would store a second copy of all of it.
+# rustup and `cargo install` write under umask 022, so those trees are already world-readable.
+RUN set -eux; \
+    chmod go+rX "$AUTOPROVE_HOME"; \
+    for entry in "$AUTOPROVE_HOME"/*; do \
+      case "$entry" in \
+        "$RUSTUP_HOME"|"$CARGO_HOME"|"$CERTORA_PLATFORM_TOOLS_ROOT") ;; \
+        *) chmod -R go+rX "$entry" ;; \
+      esac; \
+    done; \
+    chmod -R go+rwX "$HOME"; \
+    chmod 0666 /etc/passwd /etc/group
 
 WORKDIR /work
 

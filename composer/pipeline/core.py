@@ -63,7 +63,8 @@ from composer.input.files import Document
 from composer.spec.source.report.build import build_report
 from composer.spec.source.report.collect import Abandoned, ReportComponentInput, Verdict, EvidenceFetcher, Formalized
 from composer.spec.source.report.schema import (
-    AutoProverReport, DeprioritizedProperty, RuleName, ReportBackend, SourceEditRecord,
+    AutoProverReport, BuildEnvironment, DeprioritizedProperty, RuleName, ReportBackend,
+    SourceEditRecord,
     VerificationArtifactRecord,
 )
 from composer.spec.source.report import build as report_build
@@ -211,6 +212,15 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
         """The per-rule evidence source for findings synthesis, or None if this backend produces no
         findings. Returning None is how a backend opts out — the report then builds no findings for
         it, with no backend-specific branching in the report layer. Default: None."""
+        return None
+
+    def build_environment(self) -> BuildEnvironment | None:
+        """How the builds behind this backend's verdicts were confined, for the report to carry.
+
+        Default None: a backend that compiles nothing of the project under verification has no build
+        to have confined, which is every EVM one. A backend that does compile must answer, because
+        the answer is a caveat on every verdict it produced — ``docs/cvlr-backend-plan.md`` §3 item
+        3 — and stderr on a machine nobody kept is not a record."""
         return None
 
     async def finalize(self, outcomes: list[ComponentOutcome[FormT, U]], run: PipelineRun) -> None:
@@ -846,6 +856,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 fetch_evidence=findings_evidence,
                 run_mode=run.run_mode.value,
                 deprioritized=deprioritized,
+                build_environment=formalizer.build_environment(),
             )
         report = await run.runner(
             job=_report,
