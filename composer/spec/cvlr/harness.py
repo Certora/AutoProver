@@ -189,8 +189,14 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
     @override
     def _job_info_payload(self, summary: RunSummary, *, user_id: str) -> dict[str, object]:
         """Extends the shared manifest with the prover-reported runtime, as the autoprove store
-        does. A CVLR run spends most of its wall clock in the cloud, so a manifest carrying only
-        LLM cost describes the smaller half of what the run cost."""
+        does, so a run records what its cloud jobs cost and not only what its models did.
+
+        Not because the prover dominates — the one run anyone has measured end to end says the
+        opposite. On the vault scenario (``docs/cvlr-backend-plan.md`` §7.8.5) the split was about
+        82% model latency, 16% prover and 2% cargo, with a 76-second mean per submission. The
+        reason to record it is that the ratio is a *property of the target*, not of the backend:
+        a program whose properties are nonlinear puts the same loop in front of split-heavy jobs
+        and timeouts, and a manifest that reports only tokens cannot tell those two runs apart."""
         return {
             **super()._job_info_payload(summary, user_id=user_id),
             "prover_usage": summary.prover_usage_summary(),
