@@ -58,7 +58,10 @@ class PutBuffer[S: WithBuffers](WithImplementation[str | Command], WithInjectedS
     and runs no rules of its own. To depend on a shared buffer, just `import "<name>.spec";` in this
     buffer's CVL — the dependency is read from those import statements, so editing a shared buffer
     correctly re-verifies exactly the buffers that import it. Re-putting an existing buffer keeps its
-    property->rule mapping."""
+    property->rule mapping.
+
+    The number of run-target buffers is capped; creating one past the cap is refused — fold those
+    properties into an existing run-target buffer instead."""
 
     name: str = Field(description="Unique buffer name (also its on-disk spec stem).")
     cvl: str = Field(description="The buffer's full CVL text (rules, methods{}, imports).")

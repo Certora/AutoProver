@@ -4,11 +4,10 @@ Instead of one spec, you author several named CVL **buffers**, each a self-conta
 reviewed on its own. Use `put_buffer` / `edit_buffer` / `get_buffer` / `list_buffers` / `delete_buffer`
 to author them, and `submit_buffer` / `collect_results` to verify them.
 
-**Strongly prefer splitting, and add over-approximating performance summaries preemptively.** A
-single spec has ONE global `methods{}` block, so every rule is verified under the *intersection* of
-what all rules need precise — one property that needs an expensive function kept exact forces EVERY
-rule to pay that cost, which is the usual source of a timeout. Splitting breaks that coupling: each
-buffer keeps precise only the expensive functions ITS properties need, and over-approximates the rest.
+**Strongly prefer splitting, and add over-approximating performance summaries preemptively.** Each
+buffer has its own `methods{}`, so it keeps precise only the expensive functions ITS properties need
+and over-approximates the rest — no rule pays for an expensive function that only a different property
+needs kept exact (that coupling is the usual source of a timeout).
 
 Partition by **prover hotspots**, not by every function — most functions are cheap and should stay
 exact. The functions worth summarizing away (where a property does not need them) are the ones *toxic*
