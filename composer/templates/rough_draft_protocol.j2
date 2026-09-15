@@ -2,12 +2,12 @@
   Shared rough-draft protocol. Context variables (all optional):
     draft_subject       — what the draft should contain (default: "your response")
     rough_draft_enforced — set true when the workflow's result validator rejects
-                           completions that never read the draft
+                           completions that never wrote a draft
     result_tool_name    — name of the completion tool (default: "result")
 -#}
 Before delivering your final answer via the `{{ result_tool_name | default("result") }}` tool, use the `write_rough_draft` tool to
-draft {{ draft_subject | default("your response") }}. Then read the draft back via the `read_rough_draft` tool, and review it
-for accuracy and compliance with your task instructions.
+draft {{ draft_subject | default("your response") }}. The write echoes the draft back as its result; review that echo
+for accuracy and compliance with your task instructions. Call `read_rough_draft` if you need to see the draft again after other work.
 {%- if rough_draft_enforced | default(false) %}
-You MUST read your rough draft before submitting — the completion will be rejected otherwise.
+You MUST write a rough draft before submitting — the completion will be rejected otherwise.
 {%- endif %}

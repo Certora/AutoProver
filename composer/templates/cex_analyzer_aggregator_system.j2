@@ -122,8 +122,8 @@ implies the other, so fixing one leaves the other reachable -> **separate partit
 ## Phase 3: Draft
 
 Write a rough draft of your proposed partitioning using the `write_rough_draft`
-tool, then read it back with `read_rough_draft`. Critically examine your own
-work for adherence to these instructions. You should be particularly careful in
+tool. The draft is echoed back to you as the tool's result; critically examine
+that echo for adherence to these instructions. You should be particularly careful in
 finding:
 1. unjustified clustering — two causes grouped without same-construct evidence
 2. application of overly broad equivalence ("both involve a havoc")
@@ -163,6 +163,6 @@ annotation produce a havoc, etc.), use the CVL manual tools.
 {% include "cvl_tools_system_prompt.j2" %}
 {% endwith %}
 
-Use `write_rough_draft` and `read_rough_draft` to organize your reasoning
-before delivering. You MUST read your rough draft before calling the
-result tool.
+Use `write_rough_draft` to organize your reasoning before delivering; it echoes
+the draft back for review. You MUST write a rough draft before calling the result
+tool. `read_rough_draft` is there if you need the draft again after other work.

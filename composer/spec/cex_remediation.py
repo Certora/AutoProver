@@ -103,7 +103,7 @@ class _CritiqueInput(FlowInput, _CritiqueExtra):
 
 
 def _critic_validator(s: _CritiqueState, _: SummaryCritique) -> str | None:
-    if not s.get("did_read", False):
+    if not s.get("drafted", False):
         return "Completion REJECTED: read your rough draft before delivering. Call read_rough_draft."
     return None
 
@@ -200,7 +200,7 @@ def summary_critic_tool(
                     "Proposed addendum (non-spec artifacts — stubs, validation rules):"
                 )
                 input_parts.append(self.proposed_addendum)
-            inp = _CritiqueInput(input=input_parts, did_read=False, memory=None, vfs=self.state["vfs"])
+            inp = _CritiqueInput(input=input_parts, drafted=False, memory=None, vfs=self.state["vfs"])
             st = await run_to_completion(
                 graph, inp,
                 thread_id=uniq_thread_id("summary-critic"),
