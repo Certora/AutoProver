@@ -25,7 +25,7 @@ from composer.spec.guidance import StructuralInvariantGuidance
 from composer.spec.cvl_generation import (
     cvl_guidance_tools, skip_tools, CVLGenerationExtra, FEEDBACK_VALIDATION_KEY,
     CVL_JUDGE_KEY, run_cvl_generator,
-    GeneratedCVL, PropertyRuleMapping, AppliedEdit, FeedbackToolBase, FeedbackServices,
+    GeneratedCVL, PropertyRuleMapping, AppliedEdit, FeedbackToolBase,
 )
 from composer.prover.core import run_prover, CexHandler, ProverCallbacks, ProverReport
 from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools, WIPE_HISTORY
@@ -62,7 +62,7 @@ from composer.prover.core import ProverOptions
 from langgraph.types import Command
 from graphcore.graph import Builder
 from composer.spec.feedback import (
-    property_feedback_judge, source_feedback_judge, FeedbackTemplate, Properties,
+    source_feedback_judge, FeedbackTemplate, Properties,
     SourceSnapshot, ContextualFeedbackToolImpl,
 )
 from composer.ui.tool_display import tool_display
@@ -669,11 +669,10 @@ class _PerBufferJudge[J]:
 
 class _BufferReviewFeedback(FeedbackToolBase[SourceCVLGenerationState]):
     """Feedback base that reviews each run-target buffer independently — against the properties that
-    buffer claims — with its own persistent per-buffer judge, and stamps ``feedback:<buffer>``. Both
-    source feedback tools — editor-aware (source editing) and property-only (structural invariants /
-    immutable source) — build on it. Subclasses supply ``_review`` (how the per-buffer judge is reached)
-    and ``_all_properties`` (the batch's property set). With no run-target buffers (nothing authored yet,
-    or every property skipped) there is nothing to review."""
+    buffer claims — with its own persistent per-buffer judge, and stamps ``feedback:<buffer>``. A
+    subclass supplies ``_review`` (how the per-buffer judge is reached) and ``_all_properties`` (the
+    batch's property set). With no run-target buffers (nothing authored yet, or every property
+    skipped) there is nothing to review."""
 
     @abstractmethod
     async def _review(
@@ -772,38 +771,7 @@ class EditorAwareFeedbackTool(
             return judges.properties
 
 
-@tool_display("Getting feedback", "Feedback")
-# Buffer-aware feedback for the non-editing author (structural invariants, immutable source): reviews
-# each buffer via the property judge (no source snapshot) and stamps ``feedback:<buffer>``. The
-# agent-facing description is the shared FeedbackToolBase one.
-class BufferPropertyFeedbackTool(
-    _BufferReviewFeedback,
-    WithAsyncDependencies[Command, _PerBufferJudge[FeedbackServices]],
-):
-    __doc__ = FeedbackToolBase.__doc__
-
-    @override
-    async def _review(
-        self, name: str, spec: str, skipped: list[SkippedProperty],
-        properties: list[PropertyFormulation],
-    ) -> PropertyFeedbackProtocol:
-        with self.tool_deps() as judges:
-            return await judges.for_buffer(name, properties).feedback_thunk(
-                spec, skipped, self.rebuttals, self.tool_call_id
-            )
-
-    @override
-    def _all_properties(self) -> list[PropertyFormulation]:
-        with self.tool_deps() as judges:
-            return judges.properties
-
-
 _PropertyGenTemplate = TypedTemplate[PropertyGenParams]("property_generation_prompt.j2")
-
-class PropertyGenSystemParams(TypedDict):
-    source_editing: bool
-
-_PropertyGenSysTemplate = TypedTemplate[PropertyGenSystemParams]("property_generation_system_prompt.j2")
 
 
 #: The prover's tool extension: contributions come from plugins deriving
@@ -932,66 +900,63 @@ async def batch_cvl_generation(
     })
 
     sys_prompt : list[RawPromptInput | type[CacheMarker]] = [
-        _PropertyGenSysTemplate.bind({"source_editing": editing is not None}).render_to,
+        lambda load: load("property_generation_system_prompt.j2"),
         f"\nCreate at most {max_spec_buffers()} run-target buffers; fold further properties into "
         f"existing ones. A single run-target buffer is the one-spec case.",
     ]
 
     added_tools : list[BaseTool] = []
-    if editing_tools is not None:
-        task_host = TaskHost()
-        kit = editing_tools.editing
-        # Run-root strategy (see ProjectDirectory): an empty working copy is read
-        # in-situ, a non-empty one against a temporary materialization whose lifetime
-        # is the contributed tool's invocation.
-        project_directory = materializing_project(kit.live.mat)
+    task_host = TaskHost()
+    kit = editing_tools.editing
+    # Run-root strategy (see ProjectDirectory): an empty working copy is read
+    # in-situ, a non-empty one against a temporary materialization whose lifetime
+    # is the contributed tool's invocation.
+    project_directory = materializing_project(kit.live.mat)
 
-        @asynccontextmanager
-        async def yield_state(
-            plugin_id: str,
-            st: SourceCVLGenerationState
-        ) -> AsyncIterator[CVLAuthorState]:
-            class _PluginStore:
-                async def propose(
-                    self, vfs: dict[str, str], *, executive_summary: str, why_sound: str
-                ) -> str:
-                    # Snapshot completion (the EditProposer contract): the
-                    # proposer's overlay is relative to the working copy this
-                    # read staged, but ApplyEditTool snapshots are wholesale —
-                    # so fold the author's own overlay back in, or applying
-                    # the proposal would silently revert prior edits.
-                    return await kit.store.commit(
-                        {**(st.get("vfs") or {}), **vfs},
-                        executive_summary=executive_summary,
-                        why_sound=why_sound,
-                        attribution=PluginEditor(plugin_id)
-                    )
-            async with project_directory(st.get("vfs") or {}) as run_root:
-                yield CVLAuthorState(
-                    working_dir=pathlib.Path(run_root),
-                    buffers=st.get("buffers") or {},
-                    prover_runner=WrappedProverRunner(
-                        st["config"],
-                        prover_tool.options,
-                        source.contract_name
-                    ).run,
-                    host=task_host,
-                    edit_store=_PluginStore()
+    @asynccontextmanager
+    async def yield_state(
+        plugin_id: str,
+        st: SourceCVLGenerationState
+    ) -> AsyncIterator[CVLAuthorState]:
+        class _PluginStore:
+            async def propose(
+                self, vfs: dict[str, str], *, executive_summary: str, why_sound: str
+            ) -> str:
+                # Snapshot completion (the EditProposer contract): the
+                # proposer's overlay is relative to the working copy this
+                # read staged, but ApplyEditTool snapshots are wholesale —
+                # so fold the author's own overlay back in, or applying
+                # the proposal would silently revert prior edits.
+                return await kit.store.commit(
+                    {**(st.get("vfs") or {}), **vfs},
+                    executive_summary=executive_summary,
+                    why_sound=why_sound,
+                    attribution=PluginEditor(plugin_id)
                 )
+        async with project_directory(st.get("vfs") or {}) as run_root:
+            yield CVLAuthorState(
+                working_dir=pathlib.Path(run_root),
+                buffers=st.get("buffers") or {},
+                prover_runner=WrappedProverRunner(
+                    st["config"],
+                    prover_tool.options,
+                    source.contract_name
+                ).run,
+                host=task_host,
+                edit_store=_PluginStore()
+            )
 
-        tools = await editing_tools.tool_provider(
-            _PROVER_TOOLS, yield_state, SourceCVLGenerationState
-        )
-        if tools:
-            # The retrieval surface for whatever the contributed tools launch;
-            # dead prompt weight when no plugin contributed, so gated on a
-            # non-empty contribution.
-            added_tools.extend([
-                TaskListTool.bind(task_host).as_tool(TASK_LIST),
-                RetrieveTask.bind(task_host).as_tool(RETRIEVE_TASK),
-            ])
-    else:
-        tools = []
+    tools = await editing_tools.tool_provider(
+        _PROVER_TOOLS, yield_state, SourceCVLGenerationState
+    )
+    if tools:
+        # The retrieval surface for whatever the contributed tools launch;
+        # dead prompt weight when no plugin contributed, so gated on a
+        # non-empty contribution.
+        added_tools.extend([
+            TaskListTool.bind(task_host).as_tool(TASK_LIST),
+            RetrieveTask.bind(task_host).as_tool(RETRIEVE_TASK),
+        ])
 
     for inj in tools:
         added_tools.extend(inj.tools)
@@ -1005,34 +970,22 @@ async def batch_cvl_generation(
     judge_prompt = FeedbackTemplate.bind({
         "sort": "existing",
         "context": component,
-        "source_editing": editing is not None,
+        "source_editing": True,
     })
     protected = focus.protected if focus is not None else ()
-    if editing is None:
-        # One persistent judge per buffer, bound to that buffer's claimed properties, on its own child
-        # context (memory scoped to the buffer, and kept across a rebuild when the claim changes).
-        property_judges = _PerBufferJudge(
-            build=lambda name, claimed: property_feedback_judge(
-                judge_ctx.child(CacheKey[CVLJudge, CVLJudge](name)), env, judge_prompt, claimed
-            ),
-            properties=props,
-        )
-        feedback_suite = [
-            BufferPropertyFeedbackTool.bind(property_judges).as_tool("feedback_tool"),
-            *skip_tools(titles, protected=protected),
-        ]
-    else:
-        judge_host = _LiveJudgeHost(env, editing)
-        source_judges = _PerBufferJudge(
-            build=lambda name, claimed: source_feedback_judge(
-                judge_ctx.child(CacheKey[CVLJudge, CVLJudge](name)), judge_host, judge_prompt, claimed
-            ),
-            properties=props,
-        )
-        feedback_suite = [
-            EditorAwareFeedbackTool.bind(source_judges).as_tool("feedback_tool"),
-            *skip_tools(titles, protected=protected),
-        ]
+    # One persistent judge per buffer, bound to that buffer's claimed properties, on its own child
+    # context (memory scoped to the buffer, and kept across a rebuild when the claim changes).
+    judge_host = _LiveJudgeHost(env, editing)
+    source_judges = _PerBufferJudge(
+        build=lambda name, claimed: source_feedback_judge(
+            judge_ctx.child(CacheKey[CVLJudge, CVLJudge](name)), judge_host, judge_prompt, claimed
+        ),
+        properties=props,
+    )
+    feedback_suite = [
+        EditorAwareFeedbackTool.bind(source_judges).as_tool("feedback_tool"),
+        *skip_tools(titles, protected=protected),
+    ]
 
     # use "cache=long" to account for very long prover runs.
     # on anthropic (the only backend we support) a long cache is 1hr
@@ -1041,16 +994,13 @@ async def batch_cvl_generation(
     b = env.builder_heavy(cache_level=CacheLevel.LONG).with_tools(
         env.rag_tools
     )
-    if editing is not None:
-        b = b.with_tools(
-            editing.live.read_tools
-        ).with_tools(
-            [editing.live.explorer, editing.live.doc_tool]
-        ).with_tools(
-            generate_edit_management_tools(ctx, env, editing.store, editing.live)
-        )
-    else:
-        b = b.with_tools(env.source_tools)
+    b = b.with_tools(
+        editing.live.read_tools
+    ).with_tools(
+        [editing.live.explorer, editing.live.doc_tool]
+    ).with_tools(
+        generate_edit_management_tools(ctx, env, editing.store, editing.live)
+    )
     # Multi-buffer authoring is the only mode: the agent writes CVL through the buffer tools and
     # verifies each run-target buffer with the async submit_buffer / collect_results pair. Guidance-only
     # CVL tools are bound (no put_cvl/edit_cvl).

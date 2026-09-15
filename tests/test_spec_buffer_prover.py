@@ -314,37 +314,29 @@ class TestBufferSubmitCollect:
         ).run()
         assert _prover_complete(st) is not None  # nothing verified yet
 
-    async def test_non_editing_feedback_stamps_per_buffer(self):
-        """The non-editing feedback tool (structural invariants / immutable source) must review each
-        buffer and stamp feedback:<buffer> — the path that previously read empty curr_spec and returned
-        'No spec put yet', deadlocking publish."""
+    async def test_feedback_stamps_per_buffer(self):
+        """The feedback tool reviews each run-target buffer in isolation and stamps feedback:<buffer>
+        at the buffer's current digest."""
         from dataclasses import dataclass
-        from composer.spec.source.author import BufferPropertyFeedbackTool, _PerBufferJudge
-        from composer.spec.cvl_generation import FeedbackServices
-        from composer.spec.types import PropertyTitle
+        from composer.spec.source.author import EditorAwareFeedbackTool, _PerBufferJudge
 
         @dataclass
         class _V:
             good: bool
             feedback: str
 
-        async def judge(spec, skipped, rebuttals, within_tool):
+        async def judge(snap, spec, skipped, rebuttals, within_tool):
             return _V(good=True, feedback="")
 
-        tool = BufferPropertyFeedbackTool.bind(
-            _PerBufferJudge(
-                build=lambda name, claimed: FeedbackServices(
-                    feedback_thunk=judge, titles=[PropertyTitle("P-easy")]
-                ),
-                properties=[],
-            )
+        tool = EditorAwareFeedbackTool.bind(
+            _PerBufferJudge(build=lambda name, claimed: judge, properties=[])
         ).as_tool("feedback_tool")
         buffers = {
             "shared": NamedBuffer(name="shared", cvl=SHARED, is_run_target=False),
             "easy": _buf("easy", "r_easy"),
         }
         state = {
-            "buffers": buffers, "curr_spec": None, "skipped": [],
+            "buffers": buffers, "vfs": {}, "curr_spec": None, "skipped": [],
             "validations": {}, "version_history": [], "messages": [],
             "required_validations": [], "property_rules": [], "rule_skips": {},
             "config": {}, "prover_history": [], "reminders_channel": [],

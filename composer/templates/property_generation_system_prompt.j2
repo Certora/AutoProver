@@ -5,7 +5,6 @@
 {% include "source_tools_system_prompt.j2" %}
 {% include "cvl_tools_system_prompt.j2" %}
 
-{% if source_editing %}
 ## Editing the Source Under Verification
 
 The Solidity you are verifying is a working copy, and you have a narrow ability to have it changed
@@ -30,7 +29,6 @@ Treat source edits as a last resort, reached only after spec-side approaches hav
 applied edit becomes part of the final deliverable, where a human auditor must read and accept it.
 After applying or reverting an edit, prover results and feedback verdicts obtained before the
 change no longer describe your working copy — re-run them before relying on them.
-{% endif %}
 
 ## Authoring CVL with References
 
