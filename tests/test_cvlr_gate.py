@@ -20,6 +20,10 @@ Whether the rules are *good* is not a thing an assertion can settle, so the run 
 verdicts, and a human reads them. That is the same standard ``test_solana_gate`` holds itself to,
 and for the same reason.
 
+The builds run confined, as production's do (``cvlr_confinement``) — every earlier run of this gate
+took ``SandboxConfig.from_env``'s ``none`` default and so compiled the target unsandboxed, which is
+the configuration §3 item 3 forbids and the one the two defects in §7.12 item 4 were hiding in.
+
 Marked ``expensive``: real LLM spend, containers, and cloud prover jobs. Run with::
 
     source ~/.autoProverAnthropicApiKey.sh && \\
@@ -48,7 +52,6 @@ from composer.pipeline.ptypes import PipelineRun
 from composer.prover.core import make_prover_options
 from composer.rag.models import DefaultEmbedder
 from composer.rustapp.frontend import GenericRustConsoleHandler
-from composer.sandbox.config import SandboxConfig
 from composer.spec.context import SourceCode, WorkflowContext
 from composer.spec.cvlr.conf import TEMPLATE_BASE, tools_version
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness
@@ -202,7 +205,9 @@ def _undeclared_functions(harness: GeneratedHarness) -> list[str]:
     ]
 
 
-async def test_the_backend_authors_cvlr_rules_for_the_vault(langgraph_db, project, capsys):
+async def test_the_backend_authors_cvlr_rules_for_the_vault(
+    langgraph_db, project, cvlr_confinement, capsys
+):
     assert (project / "programs" / _PACKAGE / "Cargo.toml").is_file(), project
 
     model = MockSentenceTransformer()  # nothing here searches by vector; the corpus is optional
@@ -260,7 +265,7 @@ async def test_the_backend_authors_cvlr_rules_for_the_vault(langgraph_db, projec
         backend = CvlrBackend(
             artifact_store=CvlrArtifactStore(str(project), Path("programs") / _PACKAGE),
             prover_opts=make_prover_options(cloud=True, app="solana"),
-            sandbox=SandboxConfig.from_env(),
+            sandbox=cvlr_confinement,
             # Namespaced by thread so a rule name cannot be read across runs. This is what makes
             # the report's findings possible at all: without it the backend opts out of findings
             # synthesis, which is what `findings: []` meant in every run before §7.7.

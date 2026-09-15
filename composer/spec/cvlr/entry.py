@@ -35,7 +35,7 @@ from typing import AsyncIterator, Awaitable, Callable, Protocol, cast
 
 from graphcore.tools.vfs import DirBackend, GlobalExcludeArg
 
-from composer.cargo.sbf import PLATFORM_TOOLS_ROOT
+from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, sbf_subcommand_version
 from composer.core.user import get_uid
 from composer.diagnostics.timing import RunSummary
 from composer.input.parsing import add_extra_context_args, add_protocol_args
@@ -263,7 +263,10 @@ def build_confinement() -> SandboxConfig:
     elsewhere, and is a no-op when it is not (a non-existent or duplicate grant is dropped).
     """
     return SandboxConfig(
-        provider=os.environ.get("COMPOSER_SANDBOX_PROVIDER", "launcher"),
+        # ``or``, not a ``get`` default: an exported-but-empty variable is the shape a shell and a
+        # container orchestrator both produce by accident, and fail-closed means it must read as
+        # "unset" rather than as an unknown provider — let alone as no confinement.
+        provider=os.environ.get("COMPOSER_SANDBOX_PROVIDER") or "launcher",
         extra_ro=(PLATFORM_TOOLS_ROOT,),
     )
 
@@ -346,6 +349,10 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
         load_pinned_run(pathlib.Path(args.properties).resolve(), SOLANA.system_model)
         if args.properties is not None else None
     )
+
+    # After the workspace read, which already names a missing cargo, and before anything is staged:
+    # the build subcommand is the one prerequisite nothing else touches until the first submission.
+    _log.info("cvlr: building with %s", await sbf_subcommand_version())
 
     sandbox = build_confinement()
     announce_confinement(sandbox)

@@ -22,7 +22,9 @@ from langgraph.store.memory import InMemoryStore
 
 from composer.prover.ptypes import RulePath, RuleResult
 from composer.prover.results import SOLANA_TRACE, counterexample
+from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.pipeline import CvlrFormalizer
+from composer.spec.source.report.schema import ConfinedBuilds, UnconfinedBuilds
 from composer.spec.cvlr.verify import _CaptureCallbacks, _unaccounted
 from composer.spec.source.cex_capture import CexAnalysisStore
 
@@ -131,6 +133,23 @@ async def test_the_backend_opts_into_findings_and_reads_back_what_it_captured():
     evidence = await fetch("rule_withdraw_fee_collector_vault_aliasing")
     assert [e.analysis for e in evidence] == ["the collector aliases the vault"]
     assert await fetch("a_rule_that_never_failed") == []
+
+
+@pytest.mark.parametrize(
+    ("sandbox", "expected"),
+    [
+        (SandboxConfig(provider="launcher"), ConfinedBuilds(provider="launcher")),
+        (SandboxConfig(provider="none"), UnconfinedBuilds()),
+    ],
+)
+def test_the_report_records_how_the_builds_that_earned_its_verdicts_ran(sandbox, expected):
+    """``docs/cvlr-backend-plan.md`` §7.12 item 4: an unconfined run was marked on stderr and
+    nowhere in the deliverable, so a report read a week later could not be told from a production
+    one. The backend answers this unconditionally — the base's ``None`` means "compiles nothing",
+    and a reader who cannot distinguish that from "nobody recorded it" has no use for the field."""
+    formalizer = CvlrFormalizer(object, "prover", SimpleNamespace(sandbox=sandbox), SimpleNamespace())
+
+    assert formalizer.build_environment() == expected
 
 
 # ---------------------------------------------------------------------------------------------
