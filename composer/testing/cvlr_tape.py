@@ -20,10 +20,16 @@ divergence rather than merely a symptom:
   It does **not** remove the ``memory`` tool, which every authoring agent binds unconditionally
   through ``WorkflowContext.get_memory_tool``. That tool is the skill's named hazard — a recorded
   read that succeeded, replayed against an empty store, errors, and LangGraph turns the error into a
-  recovery turn the recording never made, exhausting the lane. What keeps it from biting here is
-  that ``memory_ns`` is left unset, so the namespace is the run's own thread id and is **empty at
-  the start of the recording and of the replay alike**: the same sequence of operations sees the
-  same store. That is a property to confirm on the first replay, not one to assume.
+  recovery turn the recording never made, exhausting the lane. The argument that it would survive
+  here is real: ``memory_ns`` is left unset, so the namespace is the run's own thread id (and a
+  per-unit child of it), empty at the start of the recording and of the replay alike, so the same
+  sequence of operations sees the same store.
+
+  The tape does not rely on that argument. Curation removes every ``memory`` call instead — 47
+  turns whose only tool call was one, and the call alone from two that batched it with real work.
+  What those calls do is keep the agent's own scratchpad; nothing downstream reads them and no
+  assertion in the gate depends on them. So retaining them buys coverage of a tool this gate is not
+  for, in exchange for carrying the one divergence that is documented to exhaust a lane.
 * **The corpus is off.** ``--rag-corpus none``, the same choice the expensive gate makes: a corpus
   is documented as optional and degrades to no search tools, so a tape that depends on one would
   replay differently on a machine that has it than on a machine that does not.
@@ -36,6 +42,7 @@ discovery is shared code with the EVM pipeline and already taped there, so what 
 is one more lane to curate rather than coverage of anything CVLR-shaped.
 """
 
+import pathlib
 import shutil
 from pathlib import Path
 from typing import cast
@@ -62,6 +69,25 @@ MAIN_PROGRAM = "programs/vault/src/lib.rs:vault"
 
 #: Enough to cover the extraction phase without recording rounds that repeat it.
 MAX_BUG_ROUNDS = 1
+
+#: The recording's spend ceiling. A *bound on the catastrophe*, not a target — the first recording
+#: ran unbudgeted for 3h48m and was interrupted with one unit of three delivered, having spent
+#: $166.50 (§7.8.5). Sized from that run's own manifest rather than guessed:
+#:
+#:   front half (analysis + three extractions)   $  1.53
+#:   formalize-0  delivered                      $ 44.77
+#:   formalize-1  lost to a prover-API drop      $  4.04
+#:   formalize-2  interrupted, ten judge rounds  $116.16
+#:
+#: A complete three-unit run therefore projects to roughly $215, and
+#: :data:`~composer.diagnostics.budget.BUDGET_PRESSURE_THRESHOLD` starts curtailing units at 80% of
+#: the total — so a ceiling below about $270 would curtail the largest unit rather than bound a
+#: runaway. $300 leaves that headroom.
+#:
+#: **Curtailment is not a failed recording.** A budget-curtailed unit still publishes what it has
+#: and the run still reaches the report phase, so the tape is complete either way; what the ceiling
+#: prevents is the previous run's actual failure, which was having no bound at all.
+BUDGET = pathlib.Path(__file__).resolve().parent / "cvlr_tape_budget.json"
 
 
 def scenario_source() -> Path:
@@ -115,6 +141,9 @@ def tape_argv(project: Path) -> list[str]:
         "--max-bug-rounds", str(MAX_BUG_ROUNDS),
         # See the module docstring: both of these remove a class of replay divergence.
         "--rag-corpus", "none",
+        # Inert on replay — the tape decides what the run costs, which is nothing — and the whole
+        # point on a recording. See :data:`BUDGET`.
+        "--budget", str(BUDGET),
     ]
 
 

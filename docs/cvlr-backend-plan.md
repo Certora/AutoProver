@@ -2226,6 +2226,105 @@ recovery turn the recording never made, exhausting the lane. What keeps it from 
 setting but the namespace: `memory_ns` is left unset, so it is the run's own thread id and is empty
 at the start of the recording and of the replay alike.
 
+#### 7.8.6 The rough-draft gate, and the first recording that finished
+
+The first recording never produced a usable tape, and diagnosing why found a defect in shared code
+that every backend had been paying for.
+
+`_wrote_rough_draft` (then `_did_rough_draft_read`) is a **completion** validator: it fires once the
+model has already composed its answer. A judge that went from `write_rough_draft` straight to
+`result` was therefore told, *after* generating an 8 K-character verdict, that it had never read its
+draft back — so it read the draft and re-composed the verdict. Measured across the recording: this
+happened in **10 review rounds out of 10**, and the re-composed text was 0.95–1.00 similar to what
+had just been discarded, one pair byte-identical. Twelve verdicts across two units were generated
+and thrown away, at a mean of 8,283 characters each.
+
+The self-review the gate existed to force was therefore not happening either. The answer was written
+before the draft was ever read, and reading it back changed the verdict in none of the ten rounds.
+
+**The fix is that the write is the review.** `write_rough_draft` now echoes the draft back as its own
+tool result and stamps the flag, so the next turn sees the draft as a `ToolMessage` — with the
+`review_reminder`, where one is configured — rather than only as its own prior tool-call arguments.
+A judge that drafts is no longer rejected for it. `read_rough_draft` survives for a genuine later
+re-read after other work. The flag was renamed `did_read` → `drafted` to match, and the spec read-back's ability to stamp
+it was deleted rather than renamed: it had no callers, and a spec read standing in for a draft would
+be two mechanisms sharing one flag and meaning different things by it.
+
+This is not a CVLR concern. `build_feedback_judge_generic` is used by the EVM side too, and the same
+`drafted` gate appears in the munge reviewer, the CEX analyzer, the summary critic, `cvl_research`
+and the natreq extractor. Six hand-written prompts still instructed agents to read the draft back and
+three said they MUST; those were corrected with it.
+
+**Measured, two ways.** A free composition test pins the gate
+([tests/test_rough_draft_tools.py](../tests/test_rough_draft_tools.py)) and fails if the write stops
+stamping the flag. A one-call test runs the real CVLR judge against the 506-line harness the first
+recording delivered ([tests/test_cvlr_judge_round_cost.py](../tests/test_cvlr_judge_round_cost.py)):
+the round is now `get_harness → write_rough_draft → result`, three calls and one verdict, against the
+four-call tail with two verdicts it took before.
+
+**And the second recording finished.** 3 of 3 units delivered, 31 properties, 248 minutes, **$212.78**
+against a $300 ceiling that never applied pressure — the projection that sized it was $215. Drafts to
+readbacks came in at **27 / 0**, against the first recording's **20 / 20**.
+
+The rejection is not gone, and should not be: **19 of the 23 review rounds composed one verdict, 4
+composed two**, and in each of those four the judge called `result` before it had drafted anything at
+all. That is the validator doing the job it exists for. What changed is what it no longer catches —
+before, all ten rounds were rejected *despite having drafted*, because only the read-back stamped the
+flag. The tape carries 708
+entries across 8 lanes including the `report` lane the first recording lacked, which is what made
+that one uncurable.
+
+**What it did not fix is item 9 of §7.12.** The run cost *more* than the first ($212.78 against
+$166.50) because it did about twice the work — three units to completion rather than one delivered
+and two abandoned. Per delivered unit that is $71 against $166, but the two runs split the program
+differently (8/8/15 properties against 9/6/13) and are not strictly comparable. What is comparable is
+the cost *structure*, and it did not move: cache writes are 63% of the bill in both. Removing two
+calls per round does not change what each remaining call has to re-establish.
+
+#### 7.8.7 Curating the tape, and what the replay proved
+
+A recording is a draft. Two edits turned this one into a tape, and both are now checked by tier-1
+tests in [test_tape_setup.py](../tests/test_tape_setup.py) so a re-record cannot quietly ship
+uncurated:
+
+* **Every `memory` call is removed** — 47 turns whose only tool call was one, plus the call alone
+  from two that batched it with real work. The scenario module had argued they would replay safely
+  (the namespace is a per-unit child of the run's own thread id, empty at both ends) and asked for
+  that to be confirmed on the first replay. Removing them is better than confirming it: what those
+  calls keep is the agent's own scratchpad, nothing downstream reads it, and no assertion in the
+  gate depends on it — so retaining them buys coverage of a tool this gate is not for, in exchange
+  for carrying the divergence documented to exhaust a lane.
+* **Every thinking block is removed** — 373 of them, 2.9 MB of signatures and 1.1 MB of text.
+  Signatures matter only on a real API call and a replay makes none. Checked first that no turn is
+  thinking-only, so none became content-less — which is itself the second guard, since a turn with
+  neither text nor a tool call costs a spurious "every AI turn must end with a tool call" retry the
+  lane has no entry for.
+
+708 entries became 661, and 9.3 MB became 5.0 MB.
+
+**The replay passes.** One hour and 53 seconds, 3 components, 31 properties, **3 of 3 delivered**,
+28 cloud prover submissions, and not one model call. The front half — analysis, preflight, three
+extractions — replays in under a minute; `formalize-0` took 16 minutes, `formalize-2` 27, and
+`formalize-1` 59. The report is at schema 3.3 with `build_environment` reading
+`{"kind": "confined", "provider": "launcher"}`, which is the §7.8.4 assertion holding on a real
+artifact.
+
+One number is worth keeping. Of the 61 minutes, the Prover reported **30**. Strip the models out of
+a CVLR run and what is left is about half cloud and half local cargo — against the recording's
+82% model / 16% prover / 2% cargo (§7.8.5). The same run, the same work, and the ratio inverts;
+that is the argument for recording both, since neither number describes the backend on its own.
+
+**What the replay found.** Three findings were drafted and one was published: see §7.12 item 10. The
+tape carries the same two `FindingDraft` calls without their required `title`, so the recording lost
+them too. A gate whose whole purpose is to notice the pipeline changing shape found a defect on its
+first green run, which is the argument for having it.
+
+**Left on the table.** About 2.5 MB more: LangChain stores every tool call twice — once as a
+`tool_use` block in `content`, once in `tool_calls` — and `response_metadata` adds 545 KB on top.
+Dropping both is very likely safe, since the agent loop reads `tool_calls` and nothing re-sends the
+content to a model. "Very likely" is the problem: confirming it costs another hour-long replay, and
+a validated 5.0 MB tape is worth more than an unvalidated 2.5 MB one.
+
 ### 7.9 Phase 8 — Soroban
 
 Only after Solana verifies end-to-end. Expected content: build recipe, conf shape, prover CLI,
@@ -2635,18 +2734,70 @@ list because most of it is not in the phase that will fix it.
    naming a missing kind, and the charter's phrasing ("a change that would need a ninth kind") does
    not invite it — which is why the prompt now asks for the vocabulary of the gap explicitly.
 
+9. **The judge re-derives its whole review every round, and that is where the money goes.** Two
+   complete recordings now agree on the cost structure: **cache writes are 63% of the bill** —
+   $101 of $166.50 on the first, $135 of $212.78 on the second — against roughly 19% output and 18%
+   cache reads. That is not the models being expensive; it is the *prefix being invalidated*. Each
+   review round the judge reads the program and the mounted CVLR crates from scratch — 124
+   `get_file`, 41 `cvlr_source_read` and 33 `cvlr_source_search` in a single unit of the first
+   recording — and every one of those tool results appends to a context that is then re-cached in
+   full. `formalize-1` alone cost $108.06 of the second recording's $212.78.
+
+   **The judge knows it is repeating and cannot do anything about it.** Seven of twenty verdicts in
+   the measured unit contain the word "re-litigate" and eight re-verify "every rule bottoms out in
+   `crate::vault_program::withdraw`"; the verdicts carry whole sections headed *"Accepted, do not
+   re-litigate"*. But that is prose inside the current verdict, not state: the next round starts a
+   fresh sub-agent with a fresh context and reaches the same conclusions by reading the same files.
+
+   **What the rough-draft fix did and did not touch.** Removing the completion-time readback gate
+   (§7.8.6) took two model calls and one discarded verdict out of *every* review round — confirmed
+   at 27 drafts and 0 readbacks against the first recording's 20/20 — and those were the calls
+   carrying the largest context. It changed the number of calls per round; it did not change what
+   each call has to re-establish. The share of spend going to cache writes is identical across the
+   two runs, which is the measurement saying so.
+
+   The shape of a fix is a durable record of what the judge has already cleared — its own
+   "do not re-litigate" list as structured state carried into the next round, so a round reviews the
+   *delta* rather than the artifact. Open questions it has to answer: what invalidates a cleared
+   check (a munge? a new summary? any edit to the rule it covered?), and whether a judge that skips
+   re-verification can still be trusted to catch a regression the author introduced in a part it had
+   previously blessed — which is the whole reason it re-reads today. Deliberately not attempted
+   under the Phase 7 tape work: it is a change to what a review *is*, not an optimization of how one
+   runs.
+
+10. **A malformed finding draft is data loss, not a retry.** The taped replay of the second
+   recording drafted three findings and published **one**. The other two were dropped by
+   `_one` in [findings.py](../composer/spec/source/report/findings.py), which catches every
+   exception, logs `finding synthesis failed for rule ...; skipping`, and returns `None`. In both
+   cases the exception was a `ValidationError`: the model omitted `FindingDraft.title`, a required
+   field. The tape records the same two calls without a `title`, so the recording lost them too —
+   this is the pipeline's behaviour, not a curation artifact.
+
+   The guard itself is right: one finding failing must never fail the report. What is wrong is that
+   it treats a *retryable* error the same as an unrecoverable one. A structured-output slip is the
+   most recoverable failure there is — the validation error names the missing field, and feeding it
+   back is the standard repair — yet it silently deletes a confirmed vulnerability write-up for a
+   rule the Prover refuted with a counterexample. The finding is the user-visible product of the
+   whole run, and two thirds of this run's went missing with a warning in a log nobody reads.
+
+   The fix is a bounded re-ask on `ValidationError` before falling through to the skip, and the
+   report saying how many drafts failed rather than only listing those that survived — an empty
+   findings list currently reads identically to "no counterexamples", which is the opposite
+   conclusion. Not attempted here because it is shared report code and this run is the first
+   evidence of it.
+
 **Checks and residue deferred to a real run** — [single-working-tree.md](./single-working-tree.md) §8
 for the first three, [the-tree-is-a-vfs.md](./the-tree-is-a-vfs.md) §6 for the fourth.
 
-9. **Multi-variant caching under `cargo certora-sbf`.** It passes on host cargo — the third build
+11. **Multi-variant caching under `cargo certora-sbf`.** It passes on host cargo — the third build
    across two unit features ran zero rustc invocations — and the SBF triple ought to behave
    identically, but §7.6.7's rule cuts both ways and this belongs in the expensive gate.
-10. **The disposability invariant end to end**: `rm -rf .cvlr_work` and resume, reaching the same
+12. **The disposability invariant end to end**: `rm -rf .cvlr_work` and resume, reaching the same
     submission. Covered by unit tests; never done against a live run. The mechanism under it has
     since changed — the tree's own derived-file note is gone, and the VFS materializer's manifest
     plus its restore-from-base rule answer for it — which makes the end-to-end form the only check
     that has not been re-run since.
-11. **The VFS migration's own residue** ([the-tree-is-a-vfs.md](./the-tree-is-a-vfs.md) §6). Four of
+13. **The VFS migration's own residue** ([the-tree-is-a-vfs.md](./the-tree-is-a-vfs.md) §6). Four of
     its five risks are untouched by having built it, and one is not a risk but a task: **the
     persistent materializer lives on a graphcore branch**, and `pyproject.toml` pins graphcore by
     commit, so it has to land upstream before this is anything but a private fork of a shared
@@ -2655,27 +2806,27 @@ for the first three, [the-tree-is-a-vfs.md](./the-tree-is-a-vfs.md) §6 for the 
     prover globs the real filesystem, so materialization must be complete before submission and a
     lazier materializer would break that silently; and `get` returns `str`, so anything non-UTF-8 in
     the tree is outside the model.
-12. **Latency under contention.** §3 there predicts one tree wins cold and loses warm, with the
+14. **Latency under contention.** §3 there predicts one tree wins cold and loses warm, with the
     build queue seconds deep rather than minutes. Neither half has been timed.
 
 **Open questions and later phases.**
 
-13. **Open question 5** (§8): whether prover cost actually favours parametric rules over per-handler
+15. **Open question 5** (§8): whether prover cost actually favours parametric rules over per-handler
     restatements. Both forms are offered and the prompt prefers parametric for a cross-handler
     property; the cost question needs runs.
-14. **Capture Phase B has not run** ([cvlr-capture-plan.md](./cvlr-capture-plan.md)). The question
+16. **Capture Phase B has not run** ([cvlr-capture-plan.md](./cvlr-capture-plan.md)). The question
     ledger exists and nobody has spent expert time on it. Three rule idioms reached the authoring
     prompt by hand (§7.6.2); the general form — the reference project's parametric-rule and
     account-construction helpers — is still unextracted.
-15. **Phase 8, Soroban** (§7.9), deliberately untouched until Solana is done. `project_toolchain`
+17. **Phase 8, Soroban** (§7.9), deliberately untouched until Solana is done. `project_toolchain`
     still has no Soroban entry.
 
 **Documentation debt.**
 
-16. [munge-and-working-copies.md](./munge-and-working-copies.md) §4 needs rewriting against the wider
+17. [munge-and-working-copies.md](./munge-and-working-copies.md) §4 needs rewriting against the wider
     corpus survey rather than annotating — its counts are one project's where the evidence is nine of
     eleven. Its §1–§3 CVLR half is already marked as superseded.
-17. A handful of shipped changes have no section here yet: the `--max-properties` cap, the
+18. A handful of shipped changes have no section here yet: the `--max-properties` cap, the
     `composer/layout.py` path consolidation that moved the sandbox's scratch under
     `.certora_internal` and extended `RUST_FORBIDDEN_READ`, `cvlr-spl-token` entering the reference
     set, and `preflight.select_package`. §7.8.1–§7.8.2 cover the entry points they arrived with.

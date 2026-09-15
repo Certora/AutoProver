@@ -8,11 +8,18 @@ Both are here because their failure modes are silent in the same expensive way: 
 ``expensive``, so a break in either is found by whoever next spends an hour on a recording.
 """
 
+import importlib
+import importlib.util
 import shutil
 from pathlib import Path
 
+import pytest
+from langchain_core.messages import AIMessage
+
 import composer.llm.registry as llm_registry
+from composer.diagnostics.budget import BUDGET_PRESSURE_THRESHOLD
 import composer.pipeline.cli as pipeline_cli
+from composer.pipeline.cli import parse_budget_file
 from composer.layout import INTERNAL_DIR
 from composer.spec.cvlr.pipeline import WORK_DIR
 from composer.spec.cvlr.scaffold import HARNESS_DIR
@@ -113,6 +120,32 @@ def test_the_recorded_run_authors_every_extracted_property():
     assert cvlr_tape.tape_args(Path("/proj")).max_properties is None
 
 
+def test_the_recording_is_bounded():
+    """The first recording ran unbudgeted, for 3h48m, and had to be interrupted with one unit of
+    three delivered. The ceiling is what turns that failure into a bounded one — so it is checked
+    here rather than left as a flag someone might drop while editing the argv.
+
+    Parsed, not merely present: a budget file the pipeline would reject at startup is worse than
+    none, because it fails after the operator has walked away."""
+    argv = cvlr_tape.tape_argv(Path("/proj"))
+    assert "--budget" in argv
+    assert argv[argv.index("--budget") + 1] == str(cvlr_tape.BUDGET)
+    budget = parse_budget_file(cvlr_tape.BUDGET)
+    assert budget.total > 0
+
+
+def test_the_ceiling_clears_the_curtailment_threshold():
+    """A ceiling that curtails on a *normal* run is not a bound on a runaway, it is a cap on the
+    work — and a curtailed largest unit is the one outcome that makes a recording less useful. The
+    observed complete-run projection is ~$215 (see ``cvlr_tape.BUDGET``), and curtailment starts at
+    ``BUDGET_PRESSURE_THRESHOLD`` of the total, so the total has to clear that with room."""
+    budget = parse_budget_file(cvlr_tape.BUDGET)
+    assert budget.total * BUDGET_PRESSURE_THRESHOLD > 215.0, (
+        f"wrap-up would begin at ${budget.total * BUDGET_PRESSURE_THRESHOLD:.0f}, below the ~$215 a "
+        f"complete three-unit recording has been measured to need"
+    )
+
+
 def test_the_argv_is_what_the_parser_is_given():
     """The one spelling. ``tape_argv`` is what the recording runs and what the replay parses, so a
     reader comparing the two is comparing one list with itself."""
@@ -124,3 +157,69 @@ def test_the_argv_is_what_the_parser_is_given():
     assert args.project_root == str(project)
     assert args.main_contract == cvlr_tape.MAIN_PROGRAM
     assert args.max_bug_rounds == cvlr_tape.MAX_BUG_ROUNDS
+
+
+# ---------------------------------------------------------------------------
+# What curation took out of the recorded tape
+# ---------------------------------------------------------------------------
+
+
+def _recorded_lanes() -> dict[str, list[AIMessage]]:
+    module = f"composer.testing.ui_harness_{cvlr_tape.TAPE_NAME}"
+    if importlib.util.find_spec(module) is None:
+        pytest.skip(f"no tape at {module} — record one with scripts/record_cvlr_tape.sh")
+    return importlib.import_module(module).get_cvlr_vault_llm().lanes
+
+
+def test_the_tape_carries_no_memory_calls():
+    """A recording is a draft, and this is the one edit it always needs.
+
+    The ``memory`` tool is bound unconditionally by every authoring agent and the agents use it
+    heavily — the raw recording held 49 calls — but what they keep there is their own scratchpad:
+    nothing downstream reads it and no assertion in the replay gate depends on it. Keeping the calls
+    would therefore buy coverage of a tool this gate is not for, in exchange for carrying the
+    divergence that is documented to exhaust a lane (a recorded read replayed against a store that
+    errors, and LangGraph turning the error into a recovery turn the recording never made).
+
+    Checked here rather than left to the curator's memory, because the cost of missing it is an
+    hour of replay that fails somewhere in the middle, and the fix is mechanical.
+    """
+    offenders = [
+        (lane, i, tc["name"])
+        for lane, messages in _recorded_lanes().items()
+        for i, message in enumerate(messages)
+        for tc in message.tool_calls or []
+        if tc["name"] == "memory"
+    ]
+    assert not offenders, (
+        f"{len(offenders)} memory call(s) survived curation, e.g. {offenders[:3]}. Drop the turns "
+        f"whose only tool call is memory, and strip the call from any that batched it with real work"
+    )
+
+
+def test_every_taped_turn_ends_in_a_tool_call_or_text():
+    """A turn with neither is one the agent loop discards, and replaying it costs a spurious
+    "every AI turn must end with a tool call" retry that the lane has no entry for.
+
+    The recorder drops these on the way out; this is the check that it did, and that no hand-edit
+    since has left one behind — deleting a message's last tool call without deleting the message is
+    the easy way to make one.
+    """
+    empty = [
+        (lane, i)
+        for lane, messages in _recorded_lanes().items()
+        for i, message in enumerate(messages)
+        if not (message.tool_calls or []) and not _has_text(message)
+    ]
+    assert not empty, f"turns with neither text nor a tool call: {empty}"
+
+
+def _has_text(message: AIMessage) -> bool:
+    content = message.content
+    if isinstance(content, str):
+        return bool(content.strip())
+    return any(
+        block.get("text", "").strip()
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
+    )

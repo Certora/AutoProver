@@ -326,7 +326,7 @@ def with_assumptions(base: JudgeInput, assumptions: HarnessAssumptions) -> Judge
     return {**base, "input": [*base["input"], *assumptions.briefing()]}
 
 
-def _build_feedback_thunk(
+def build_feedback_thunk(
     judge_ctx: WorkflowContext[CvlrJudge],
     env: ServiceHost,
     props: list[PropertyFormulation],
@@ -594,7 +594,7 @@ async def batch_cvlr_generation(
     titles = [p.title for p in props]
     judge_ctx = ctx.child(CVLR_JUDGE_KEY)
     feedback_deps = FeedbackDependencies(
-        thunk=_build_feedback_thunk(
+        thunk=build_feedback_thunk(
             judge_ctx, env, props, component, program, cvlr_versions, crate_tools
         ),
         stamper=make_validation_stamper(FEEDBACK),
