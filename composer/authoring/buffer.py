@@ -125,13 +125,6 @@ def get_spec_tool(
 ) -> BaseTool:
     """Read-back tool over the buffer. ``missing`` is what the agent is told when nothing has been
     written yet.
-
-    This tool stamps nothing. It used to be able to set the rough-draft flag — the idea being that a
-    judge could satisfy its completion gate by reading the spec back rather than by drafting — and
-    no caller ever asked for it. Now that writing a rough draft is itself the review (the write
-    echoes the draft back, :func:`composer.tools.thinking.get_rough_draft_tools`), a *spec* read
-    standing in for a draft would be two mechanisms sharing one flag and meaning different things by
-    it, so the option is gone rather than renamed.
     """
     return tool_display_of(display)(
         GetSpec.with_template(description=description)[ty]
