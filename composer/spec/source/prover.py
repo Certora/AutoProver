@@ -114,6 +114,10 @@ class ProverRunLog(TypedDict):
     sort: Literal["run"]
     declared_rules: list[str]
     state_digest: str
+    #: The run's job link, so a verdict can be traced back to the run that produced it: a
+    #: scoped run's results are the only record of the rules it alone covered. ``NotRequired``
+    #: because a thread checkpointed before this field existed replays without it.
+    link: NotRequired[str | None]
 
 class NagMarker(TypedDict):
     nagged_rules: list[RulePath]
@@ -671,7 +675,8 @@ def get_prover_tool(
                     spec_digest=spec_hash,
                     sort="run",
                     declared_rules=all_rules,
-                    state_digest=curr_state_digest
+                    state_digest=curr_state_digest,
+                    link=result.link
                 )
             ]
             nag_channel = {
