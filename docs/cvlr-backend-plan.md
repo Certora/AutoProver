@@ -1966,12 +1966,11 @@ symbol. The gate that would have caught it is a live run, which is the argument 
 pattern), the Docker image gaining the Rust + Solana platform-tools toolchain, the replay tape
 and smoke scenario, the expensive-gate test, and user-facing docs.
 
-**Where this stands.** The entry points are built (§7.8.1–§7.8.2) and the expensive gates exist
-([test_cvlr_end_to_end.py](../tests/test_cvlr_end_to_end.py) for the plumbing,
-[test_cvlr_gate.py](../tests/test_cvlr_gate.py) for the loop) — but they still run *unconfined*,
-which §3 item 3 forbids, so no CVLR build has yet been made under the launcher. Not built at all:
-the Docker image's Rust + platform-tools toolchain, the replay tape and its LLM-free smoke scenario,
-and user-facing documentation.
+**Where this stands.** The entry points are built (§7.8.1–§7.8.2), the image carries the toolchain
+(§7.8.3), and the expensive gates ([test_cvlr_end_to_end.py](../tests/test_cvlr_end_to_end.py) for
+the plumbing, [test_cvlr_gate.py](../tests/test_cvlr_gate.py) for the loop) now build confined, as
+production does (§7.8.4). Not built: the replay tape and its LLM-free smoke scenario, and
+user-facing documentation.
 
 #### 7.8.1 The entry points, and the three decisions they had to make
 
@@ -2020,8 +2019,10 @@ defaults, so a backend overriding only the events it cares about opts out of the
 accounting *silently* — and `_CaptureCallbacks` overrode exactly one, `on_prover_result`, for the
 findings capture. `on_prover_link`, `on_prover_runtime` and the wall-clock tally were all the base's
 no-ops, so `summary.prover_usage_summary()` was empty for every run this backend has ever done,
-`summary.format()` reported zero prover time on a run that spent most of its wall clock in the
-cloud, and no phase record carried a prover link. Fixed by lifting the three into a `_RunAccounting`
+`summary.format()` reported zero prover time, and no phase record carried a prover link. (The
+justification originally given here — that a CVLR run spends most of its wall clock in the cloud —
+is measured and wrong for the only scenario anyone has measured; see §7.8.5.) Fixed by lifting the
+three into a `_RunAccounting`
 base that `_CaptureCallbacks` extends — a base of its own because the two are needed independently:
 a submission with no analysis store still costs prover time, and the `else` branch that used to
 construct a bare `ProverCallbacks()` now constructs that.
@@ -2045,6 +2046,185 @@ Deliberately *not* aligned: `--cloud` (§3 item 1 makes it the only mode), `--ra
 string (the tag is the corpus's name in both the importer and the search registry), and the
 `SourceEditing` kit autoprove threads through its backend — CVLR's editor is built per authoring
 session from the tree and needs nothing from the entry point.
+
+#### 7.8.3 The image, and the three things a confined build needs that nothing had asked for
+
+The container had no Rust at all — `console-autoprove` and `console-foundry` need none, and the
+`foundry-builder` stage's toolchain never reached the final image. So the toolchain layers are new:
+rustup with a pinned stable, `cargo install cargo-certora-sbf`, and the platform-tools release
+unpacked at build time. The last of those is the one that is not an optimization. §3 item 3 runs
+every build confined, and a confined build has no network and a read-only tools cache, so **a
+version the image lacks cannot be fetched at run time — it is a rebuild.** A project pinning its own
+`cargo_tools_version` is exactly that case, and [test_cvlr_image.py](../tests/test_cvlr_image.py)
+ties the image's default to `TEMPLATE_BASE`'s so the *default* can never be a version the image does
+not hold.
+
+Three things the confined case needs that no earlier caller did, all of them silent when absent:
+
+* **The toolchain root has to travel on the argv, not in the environment.** `cargo certora-sbf`
+  reads `$CERTORA_PLATFORM_TOOLS_ROOT`, and the confined child never sees it: the launcher scrubs
+  the environment down to `DEFAULT_ENV_PASSTHROUGH`, which is chain-neutral and does not carry it.
+  On the host this is invisible, because the tool's default is where the tools already are — so a
+  deployment that puts them anywhere else would have the *path* granted read-only by
+  `build_confinement` and the build looking somewhere else, finding nothing, and trying to download
+  offline. `sbf_argv` now passes `--platform-tools-root`, which also puts it in the recorded command
+  the prover reruns.
+* **The toolchains must not live under `$HOME`.** The image makes `$HOME` world-writable so the
+  runtime user can persist credentials, and a read-only Landlock grant over a tree the confined
+  build can also write is not a grant of anything. They live under `$AUTOPROVE_HOME`, root-owned.
+* **An empty global git config has to exist.** `git_config_ro_paths` grants the file only if it is
+  there, and under Landlock the open of a path that was never granted fails with `EACCES` rather
+  than `ENOENT` — so libgit2 does not degrade to "no user config", it reports the repository as
+  unopenable and cargo blames the network. That is `f785b211` again, arriving from the other
+  direction: on the host the file exists, and in a fresh container it does not. Every Anchor project
+  hits it, since `ANCHOR_FORK` patches `anchor-lang` to a git repo.
+
+One size trap, found by writing the layers rather than by building them. The image ends with a
+`chmod -R` over `$AUTOPROVE_HOME` so the host-UID runtime user can read everything, and `chmod`
+makes overlayfs copy a file up into the layer that runs it *whether or not the mode changes* — so
+recursing over 3 GB of toolchain would store a second copy of all of it. rustup and `cargo install`
+write under umask 022, so the three trees are already world-readable and the final pass skips them.
+
+**`build-essential` survives the image's trim when the Solana toolchain is in it**, which reads like
+an oversight and is not: `cargo check` — the fast tier, run per authored edit — compiles and *links*
+the project's build scripts for the host, and the SBF build does the same for every proc-macro in
+the graph. Only target code goes through platform-tools' own LLVM.
+
+Two smaller decisions. The toolchain is a build ARG defaulting to on, because ~3 GB is a real cost
+to an EVM-only image and because the opt-out has to be a choice somebody made rather than a default
+nobody read — an image built without it cannot be repaired at run time, so the entry point refuses
+to start rather than failing partway into a run. And the sandbox compose overlay becomes
+*mandatory* for `console-solana`, since the base image ships no launcher and the backend is
+confine-by-default; the entrypoint says so, with the invocation, instead of letting a fail-closed
+provider error stand in for it. Writing that down found that the overlay's own documented
+invocation no longer works: compose used to enable a profiled service's profile implicitly when
+something declared `depends_on` it and now refuses, naming neither the file nor the profile.
+
+One prerequisite is checked in Python rather than in the image, because it is not the image's alone:
+`cargo certora-sbf` is the only thing a run needs that nothing touches until the first submission.
+The fast tier is a plain `cargo check` and passes without it, so a machine missing only the
+subcommand behaves normally through preflight, analysis, extraction and a full authoring iteration
+before failing at the phase that already cost the money. The entry point probes it beside
+`select_package`, where a missing *cargo* was already named.
+
+#### 7.8.4 Confinement, asserted rather than defaulted
+
+§7.12 item 4's remainder, both halves.
+
+**The gates now take production's confinement**, through a `cvlr_confinement` fixture that is
+`build_confinement()` plus a fail-closed availability probe. Every earlier run of either gate took
+`SandboxConfig.from_env`'s `none` default and compiled the target unsandboxed — the one
+configuration §3 item 3 forbids, and the one the two defects item 4 records were hiding in. The
+`none` provider stays reachable, because it is the documented carve-out for a machine without
+Landlock; what is no longer reachable is opting out by not thinking about it.
+
+**And the report says which it was.** `AutoProverReport` gains `build_environment` (schema 3.3): a
+`ConfinedBuilds` naming the mechanism, or an `UnconfinedBuilds` that carries nothing because there
+is nothing to carry — the opt-out is one environment variable and the consequence is the same
+whatever set it. A union rather than a flag, and a presence-marker rather than a boolean, because
+the *absent* case is a third state and not a default: a backend that compiles nothing of the project
+has no build to have confined, and so does every report written before the field existed. Reading
+absence as "confined" is the one mistake the field exists to prevent, so `CvlrFormalizer` answers
+unconditionally and the renderer states only what it was told — a `Builds` row in the header, and a
+banner over the whole document when the answer is unconfined.
+
+#### 7.8.5 The tape, and making the recording repeatable
+
+§6 names a Solana smoke scenario with a recorded tape as a gate, and the scenario it wants is the
+one the expensive gate already drives: `test_scenarios/solana_vault_idl`, the only checked-in Solana
+project the scaffold accepts. The plumbing gate's own target cannot be it — `cvlr_by_example` lives
+in the public SolanaExamples repo, reached through `$SOLANA_EXAMPLES_REPO`, and an external checkout
+cannot be a CI fixture.
+
+**The tape bounds the replay; nothing else does, and nothing else should.** This was the first thing
+to get wrong. A cap on the run — `--max-properties`, which only this backend offers — looks like the
+way to keep a tape small, and it is the wrong instrument twice over. On replay there is nothing to
+bound: the tape's own extraction response *is* the property set, and its analysis response *is* the
+component set, so the run is exactly as large as the transcript says. Passing a cap as well would
+put the size of the run outside the transcript that defines it, making this the only tape in the
+repo whose shape is decided by a flag in a test rather than by its content. And during *recording* a
+cap cannot express what it would be used for: `_capped` takes the first N properties in extractor
+order and drops the components that keep none, so "two units" is not something it can be asked for —
+the answer depends on how many properties the first component extracted, which is not known until
+extraction has run. Record uncapped; trim afterwards by editing the recorded responses, which is
+where every other tape's size comes from.
+
+**Reproducibility is the deliverable, not the tape.** A tape is a recording of one run and will be
+re-recorded whenever the pipeline's shape changes on purpose, so what has to be right is the
+procedure. Two failure classes make that harder than writing the command down:
+
+* *The invocation drifts from what the replay drives.* The skill's recipe records through the CLI
+  and replays through a hand-built args object, and warns that the two must match — which is a
+  warning because nothing enforces it. Here they are the same function:
+  [cvlr_tape.py](../composer/testing/cvlr_tape.py) owns the scenario, the staging, the argv and the
+  args, and both [record_cvlr_tape.py](../composer/testing/record_cvlr_tape.py) and
+  [test_cvlr_tape.py](../tests/test_cvlr_tape.py) call it. There is no second spelling to disagree.
+  The one setting that cannot go through the CLI — `memory_tool`, which the parser exposes no flag
+  for — is why the recording runs as a module rather than as `console-solana`.
+* *A prerequisite fails after the run has been paid for.* [record_cvlr_tape.sh](../scripts/record_cvlr_tape.sh)
+  checks the five that have actually done this: `$CERTORA` set (every submission refused before
+  upload, naming neither the variable nor itself), absent platform tools, an unavailable launcher, a
+  postgres cluster missing a schema, and — the quietest — an expired Certora access token, which
+  leaves submission working on `CERTORAKEY` and sends result-fetching into a 300-second browser flow
+  per attempt. It renews the token when the refresh token still allows it, under a timeout, because
+  a refresh that has to become a login is a person's job.
+
+**One defect found before it could cost a recording, and it was in shared code.**
+`composer/pipeline/cli.py` did `from composer.llm.registry import get_provider_for`, binding the
+name at import time. Both the fake LLM and the recorder install themselves by *replacing* that
+attribute on the registry module, so neither reached it. The two symptoms are the two worst
+available: on replay the pipeline calls a real, paid model inside a test that believes it is taped;
+on recording the tape comes out empty and says so at exit, after the run has been paid for. The EVM
+integration test had been carrying a `monkeypatch` that rebound it, which is why no tape had noticed.
+Fixed at the source, the workaround deleted, and [test_tape_setup.py](../tests/test_tape_setup.py)
+now asserts the module binds no such name — a behavioural check, not a grep.
+
+**Where a CVLR run's wall clock actually goes, measured for the first time.** Attributing every
+inter-event gap in the recording's event log to the tool that had just been dispatched, over a
+120-minute span with three units running concurrently:
+
+| | wall clock | dispatches | mean |
+|---|---|---|---|
+| Model calls (the gap after a non-prover tool) | 137.6 min | 301 | 27.4 s |
+| Prover submissions | 26.7 min | 21 | 76.4 s |
+| Cargo builds | 3.9 min | 21 | 11.1 s |
+
+So **roughly 82% model, 16% prover, 2% cargo** — and the prover share is an overestimate, because
+each gap measures the tool *plus* the model call that follows it. The model bucket is unambiguous:
+the tools in it are `cvlr_source_read`, `get_file` and `cvlr_source_search`, local reads costing
+milliseconds, and the longest single gaps in it (288 s, 260 s, 197 s) each followed one `get_file`.
+
+This contradicts a claim §7.8.2 shipped unchallenged — that a CVLR run spends most of its wall clock
+in the cloud — which was the stated reason for adding `prover_usage` to `job_info.json`. The fix is
+still right and the reason was not: **the ratio is a property of the target, not of the backend.**
+The programs in §7.12 item 3 put the same loop in front of split-heavy jobs and a 122-minute
+timeout, and a manifest reporting only tokens cannot tell those two runs apart — which is the
+argument that survives measurement.
+
+Two smaller things the measurement settles. The two-tier compile gate is doing its job: an 11-second
+mean `cargo_check` on a warm workdir is not where the time goes, so §5.1's inner-loop concern was
+real and is addressed. And **there were no prover timeouts at all** — longest job 317 s against a
+poll timeout of `global_timeout + 5 min`, no non-`SUCCEEDED` job status anywhere in the run. The one
+prover-side failure was a transient connection drop while *fetching* a finished job's sources, which
+is a different problem (see below).
+
+**A recording is exposed to transient infrastructure failure in a way a replay is not.** One unit of
+three was lost to `ProverAPIError: Remote end closed connection without response` while fetching the
+sources of a job that had already succeeded. `install_retry_policy` classifies *LLM-provider*
+failures, so a prover-API blip is not retried and takes the unit's graph down with it — after one
+`put_harness`, on its first submission. The cost is asymmetric in a way worth stating: a replay that
+hits a bad tape fails in seconds, while a recording that loses a unit at minute twenty is discovered
+at minute one hundred and forty. The fetch is a pure read of finished artifacts, so a bounded retry
+around it is safe; that it has not been needed before is a statement about luck rather than design.
+
+**What `memory_tool` is not.** It reads as the switch for the `memory` tool and is not: it adds the
+Anthropic `context-management-2025-06-27` beta to the request and nothing else
+(`composer/llm/anthropic.py`). The `memory` *tool* is bound unconditionally by every authoring agent
+through `WorkflowContext.get_memory_tool`, and it is the skill's named replay hazard — a recorded
+read that succeeded, replayed against an empty store, errors, and LangGraph turns that error into a
+recovery turn the recording never made, exhausting the lane. What keeps it from biting here is not a
+setting but the namespace: `memory_ns` is left unset, so it is the run's own thread id and is empty
+at the start of the recording and of the replay alike.
 
 ### 7.9 Phase 8 — Soroban
 
@@ -2378,12 +2558,14 @@ list because most of it is not in the phase that will fix it.
    ran under platform-tools' own, which hash the git cache differently, so a cache warmed for one
    was cold for the other (`fb58783a`). Both are the shape §3 predicted — a policy that is only
    exercised in production is a policy nobody has tested — and both were silent about their real
-   cause. What remains of this item is the two smaller pieces: production and CI must *assert* a
-   non-`none` provider rather than trusting the default, and an unconfined run is marked on stderr
-   but not in the report.
-5. **The rest of Phase 7** (§7.8): the Docker image's Rust + Solana platform-tools toolchain, the
-   replay tape and the LLM-free smoke scenario it drives (§6 names this as a gate and it does not
-   exist), and user-facing documentation.
+   cause. ~~What remains of this item is the two smaller pieces~~ — **both are now done** (§7.8.4):
+   the gates take production's confinement through a fixture that is fail-closed rather than
+   `from_env`'s `none` default, and `report.json` carries a `build_environment` that names the
+   mechanism or marks the run unconfined.
+5. **The rest of Phase 7** (§7.8): ~~the Docker image's Rust + Solana platform-tools toolchain~~
+   (**built**, §7.8.3 — and building it found three things a confined build needs that no host run
+   ever did), the replay tape and the LLM-free smoke scenario it drives (§6 names this as a gate
+   and it does not exist), and user-facing documentation.
 6. **Cross-unit learning** — §7.11. ~~The deterministic half is the cheapest item on this list~~ —
    **built**: the authoring prompt's worked example is now rendered against the analyzed program
    (`composer/spec/cvlr/example.py`), so a unit reads its own handler, its own accounts and their
