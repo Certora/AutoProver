@@ -241,6 +241,28 @@ def _iterate_history(
             return
         yield elem["prover_results"]
 
+def covering_run_links(
+    l: list[ProverHistoryItem],
+    curr_digest: str,
+) -> list[str]:
+    """Job links of the runs whose results account for ``curr_digest``, newest first.
+
+    The same stretch of history :func:`_iterate_history` walks, so the report attributes
+    verdicts to exactly the runs completion was judged on — a scoped run that covered what a
+    full run left unproved included. Runs recorded before the ``link`` field existed have
+    nothing to contribute and are skipped.
+    """
+    links: list[str] = []
+    for elem in reversed(l):
+        if elem["sort"] != "run":
+            continue
+        if elem["state_digest"] != curr_digest:
+            break
+        if (link := elem.get("link")) is not None:
+            links.append(link)
+    return links
+
+
 def _is_completion_history(
     l: list[ProverHistoryItem],
     curr_digest: str,

@@ -37,7 +37,7 @@ from composer.spec.source.plugin import CertoraProverTools, CVLAuthorState
 from composer.spec.system_model import ContractComponentInstance, SolidityIdentifier, component_context
 from composer.spec.source.prover import (
     OVERLAY_OWNED_KEYS, ProverStateExtra, DELETE_SKIP, VALIDATION_KEY as PROVER_VALIDATION_KEY,
-    declared_rules_at, materializing_project,
+    covering_run_links, declared_rules_at, materializing_project,
 )
 from langgraph.graph import MessagesState
 from pathlib import Path
@@ -1015,6 +1015,10 @@ async def batch_cvl_generation(
         final_link=res_state.get("prover_link"),
         vfs=res_state["vfs"],
         applied_edits=applied_edits,
+        covering_links=covering_run_links(
+            res_state["prover_history"],
+            spec_digest(d, res_state["skipped"], res_state["version_history"]),
+        ),
     )
     if res_state["budget_curtailed"]:
         # Published under lifted gates: hand it back as an explicitly unreliable partial.

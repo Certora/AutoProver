@@ -9,8 +9,8 @@ trivially valid so a re-validate cannot raise. Soft issues go into `CoverageRepo
 from collections import Counter, defaultdict
 
 from composer.spec.source.report.schema import (
-    CoverageReport, CurtailedComponent, FormalizedProperty, GaveUpComponent, PropertyGroup,
-    PropertyKey, RuleRef, RuleVerdict, SkippedClaim,
+    CoverageReport, CurtailedComponent, FormalizedProperty, GaveUpComponent, Outcome,
+    PropertyGroup, PropertyKey, RuleRef, RuleVerdict, SkippedClaim,
 )
 
 
@@ -68,6 +68,18 @@ def validate(
         warnings.append(
             f"{len(curtailed)} component(s) were cut short by the run budget; their properties "
             "are excluded from the groupings above (see the budget appendix)."
+        )
+
+    # A rule a property maps to but no run reported. Distinguishable from a rule the checker
+    # genuinely returned UNKNOWN for, which carries the link of the run that said so. Named
+    # rather than left to render as a bare UNKNOWN row, which reads like a checker failure.
+    no_verdict = sorted(
+        r.name for r in rules if r.outcome is Outcome.UNKNOWN and r.prover_link is None
+    )
+    if no_verdict:
+        warnings.append(
+            f"No run reported a verdict for {len(no_verdict)} rule(s) a property maps to: "
+            f"{', '.join(no_verdict)}."
         )
 
     sizes = [len(g.members) for g in groups]
