@@ -94,7 +94,9 @@ from composer.spec.source.report.collect import (
     RuleEvidence,
     Verdict,
 )
-from composer.spec.source.report.schema import AppliedEditRecord, SourceEditRecord
+from composer.spec.source.report.schema import (
+    AppliedEditRecord, BuildEnvironment, ConfinedBuilds, SourceEditRecord, UnconfinedBuilds,
+)
 from composer.spec.source.report_prover import make_prover_fetcher
 from composer.spec.source.report.schema import RuleName
 from composer.spec.types import PropertyFormulation
@@ -319,6 +321,19 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
                 )
             )
         return records
+
+    @override
+    def build_environment(self) -> BuildEnvironment:
+        """Every verdict in this report came out of a cargo build, so the report says how those ran.
+
+        Answered, never omitted: the ``None`` the base returns means "this backend compiles nothing",
+        and a reader who cannot tell that from "nobody recorded it" has no use for the field at all.
+        """
+        sandbox = self.deps.sandbox
+        return (
+            ConfinedBuilds(provider=sandbox.provider)
+            if sandbox.enabled else UnconfinedBuilds()
+        )
 
     @override
     def findings_evidence(self) -> EvidenceFetcher | None:
