@@ -5,7 +5,6 @@ from contextlib import asynccontextmanager
 import json
 import pathlib
 
-from abc import abstractmethod
 from dataclasses import dataclass, field
 
 from langchain_core.tools import BaseTool
@@ -667,39 +666,15 @@ class _PerBufferJudge[J]:
         return self._cache[name][1]
 
 
-class _BufferReviewFeedback(FeedbackToolBase[SourceCVLGenerationState]):
-    """Feedback base that reviews each run-target buffer independently — against the properties that
-    buffer claims — with its own persistent per-buffer judge, and stamps ``feedback:<buffer>``. A
-    subclass supplies ``_review`` (how the per-buffer judge is reached) and ``_all_properties`` (the
-    batch's property set). With no run-target buffers (nothing authored yet, or every property
-    skipped) there is nothing to review."""
-
-    @abstractmethod
-    async def _review(
-        self, name: str, spec: str, skipped: list[SkippedProperty],
-        properties: list[PropertyFormulation],
-    ) -> PropertyFeedbackProtocol:
-        """Review ``spec`` with the cached per-buffer judge for ``name``, scored against ``properties``
-        (that buffer's claimed subset)."""
-        ...
-
-    @abstractmethod
-    def _all_properties(self) -> list[PropertyFormulation]:
-        """The batch's full property set, for resolving a buffer's claimed subset."""
-        ...
-
-    @override
-    def _version_history(self) -> Sequence[str]:
-        return self.state["version_history"]
-
-    @override
-    async def _get_feedback(
-        self, spec: str, skipped: list[SkippedProperty]
-    ) -> PropertyFeedbackProtocol:
-        # Buffer feedback reviews per buffer through _review; this single-spec entry is unreachable
-        # (curr_spec is always None in buffer mode, and run() handles the no-buffers case directly).
-        # Present only to satisfy the abstract base.
-        raise AssertionError("buffer feedback uses per-buffer _review, not _get_feedback")
+@tool_display("Getting feedback", "Feedback")
+class EditorAwareFeedbackTool(
+    FeedbackToolBase[SourceCVLGenerationState],
+    WithAsyncDependencies[Command, _PerBufferJudge[ContextualFeedbackToolImpl[SourceSnapshot]]],
+):
+    # Reviews each run-target buffer independently — against the properties that buffer claims — with its
+    # own persistent per-buffer judge (reached via _review), stamping feedback:<buffer>; the skip set is
+    # reviewed once as a standalone unit (see run()). With no run-target buffers there is nothing to review.
+    __doc__ = FeedbackToolBase.__doc__
 
     @override
     async def run(self) -> Command:
@@ -750,35 +725,41 @@ class _BufferReviewFeedback(FeedbackToolBase[SourceCVLGenerationState]):
             )
         return tool_state_update(self.tool_call_id, "\n\n".join(blocks), validations=new_stamps)
 
-
-@tool_display("Getting feedback", "Feedback")
-class EditorAwareFeedbackTool(
-    _BufferReviewFeedback,
-    WithAsyncDependencies[Command, _PerBufferJudge[ContextualFeedbackToolImpl[SourceSnapshot]]],
-):
-    __doc__ = FeedbackToolBase.__doc__
-
-    @override
     async def _review(
         self, name: str, spec: str, skipped: list[SkippedProperty],
         properties: list[PropertyFormulation],
     ) -> PropertyFeedbackProtocol:
+        # Review one unit — a buffer's text, or the whole spec for the skip review — with that unit's
+        # cached judge, scored against `properties` (the unit's claimed subset; empty for the skip review).
         with self.tool_deps() as judges:
             assert "vfs" in self.state
             snap = SourceSnapshot(
                 vfs=self.state["vfs"],
                 version_history=self.state["version_history"],
             )
-            # Each buffer's judge sees only the rebuttals filed against its own feedback.
+            # Each unit's judge sees only the rebuttals filed against its own feedback.
             rebuttals = [r for r in self.rebuttals if r.buffer == name]
             return await judges.for_buffer(name, properties)(
                 snap, spec, skipped, rebuttals, self.tool_call_id
             )
 
-    @override
     def _all_properties(self) -> list[PropertyFormulation]:
+        # The batch's full property set, for resolving a unit's claimed subset.
         with self.tool_deps() as judges:
             return judges.properties
+
+    @override
+    def _version_history(self) -> Sequence[str]:
+        return self.state["version_history"]
+
+    @override
+    async def _get_feedback(
+        self, spec: str, skipped: list[SkippedProperty]
+    ) -> PropertyFeedbackProtocol:
+        # run() reviews per unit through _review; this single-spec entry is unreachable (curr_spec is
+        # always None in buffer mode, and run() handles the no-buffers case directly). Present only to
+        # satisfy the abstract base.
+        raise AssertionError("buffer feedback uses per-unit _review, not _get_feedback")
 
 
 _PropertyGenTemplate = TypedTemplate[PropertyGenParams]("property_generation_prompt.j2")

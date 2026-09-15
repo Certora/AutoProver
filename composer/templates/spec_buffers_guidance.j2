@@ -50,14 +50,10 @@ Structuring buffers:
 
 Summaries — your main lever for tractability:
 - For each run-target buffer, **summarize now**, in its `methods{}`, the hotspot functions its
-  properties do not need exact (leave the cheap functions alone) — an over-approximation that *weakens*
-  the real body (a looser constraint on the return, or dropping an effect the buffer's properties never
-  read), written before the first `submit_buffer`. Keep every summary **sound**: a trivializing
-  `NONDET`/havoc that erases a
-  function's side effects is sound only for callees whose effects the buffer's properties never observe
-  (in practice `view`/`pure`). Before summarizing a state-mutating function, consult the
-  **CVL Summarization and Linking Guide** in your context for which summary constructs are sound for a
-  given function and how to write them.
+  properties do not need exact (leave the cheap functions alone) — a sound over-approximation that
+  *weakens* the real body, written before the first `submit_buffer`. For which summary constructs are
+  sound for a given function and how to write them, consult the **CVL Summarization and Linking Guide**
+  in your context.
 - **Soundness rule: an over-approximating summary is sound for `assert` rules but UNSOUND for `satisfy`
   rules.** An over-approximation *adds* behaviors: an `assert` that holds over the larger behavior set
   still holds over the real one (sound), whereas a `satisfy` may be witnessed only by an added, non-real
@@ -68,12 +64,11 @@ Summaries — your main lever for tractability:
   buffer they each `import`; a summary only one buffer needs goes in *that* buffer's own `methods{}`. A
   single-buffer summary parked in a shared buffer that others import makes every later edit re-verify all
   of them — wasted work on buffers that never use it.
-- **Refine on a spurious counterexample.** A too-coarse over-approximation produces a *spurious* cex —
-  one reachable only because the summary admits behavior the real function cannot. When a buffer returns
-  VIOLATED, analyze the cex: if it hinges on behavior your summary allows but the real function forbids,
-  it is spurious → tighten that summary (add the missing constraint) or drop the over-approximation for
-  that function with `edit_buffer`, then re-`submit_buffer`. Start from the
-  simplest sound over-approximation and tighten only as spurious cexes force you to.
+- **Refine on a spurious counterexample.** When a buffer returns VIOLATED, check whether the cex is
+  *spurious* — reachable only because your summary is too coarse (the **CVL Summarization and Linking
+  Guide** in your context covers how over-approximations produce spurious cexes). If so, tighten that
+  summary or drop the over-approximation for that function with `edit_buffer`, then re-`submit_buffer`.
+  Start from the simplest sound over-approximation and tighten only as spurious cexes force you to.
 
 Verifying — submit / collect (buffers prove in parallel; never wait on a slow buffer to work on a fast
 one):
