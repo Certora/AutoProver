@@ -284,8 +284,8 @@ def _per_rule_validator(scratchpad: list[_ScratchpadEntry]):
     n = len(scratchpad)
 
     def validate(state: _PerCexState, result: _PerCexCommitWrapper) -> str | None:
-        if not state.get("did_read", False):
-            return "Completion REJECTED: read your rough draft before delivering."
+        if not state.get("drafted", False):
+            return "Completion REJECTED: write a rough draft before delivering."
         commit = result.commit
         if isinstance(commit, _MatchedExisting):
             if n == 0:
@@ -313,8 +313,8 @@ def _aggregator_validator(input_count: int):
     duplicated index) so the agent's retry has actionable feedback."""
 
     def validate(state: _AggregatorState, result: _AggregatorResult) -> str | None:
-        if not state.get("did_read", False):
-            return "Completion REJECTED: read your rough draft before delivering."
+        if not state.get("drafted", False):
+            return "Completion REJECTED: write a rough draft before delivering."
         seen: dict[int, int] = {}  # idx → first partition that claimed it
         out_of_range: list[int] = []
         for p_idx, partition in enumerate(result.partitions):
@@ -612,7 +612,7 @@ class AgenticCexHandler(CexHandler):
         )
         st = await run_to_completion(
             graph,
-            _PerCexInput(input=[], did_read=False, memory=None),
+            _PerCexInput(input=[], drafted=False, memory=None),
             thread_id=uniq_thread_id("cex-analyzer"),
             recursion_limit=self._recursion_limit,
             description=f"CEX analysis: {instance.name}",
@@ -645,7 +645,7 @@ class AgenticCexHandler(CexHandler):
         )
         st = await run_to_completion(
             graph,
-            _AggregatorInput(input=[], did_read=False, memory=None),
+            _AggregatorInput(input=[], drafted=False, memory=None),
             thread_id=uniq_thread_id("cex-aggregator"),
             recursion_limit=self._recursion_limit,
             description="CEX aggregation",
@@ -656,10 +656,10 @@ class AgenticCexHandler(CexHandler):
 
 
 # ---------------------------------------------------------------------------
-# Review reminders — emitted alongside read_rough_draft to re-state at
-# review time what the agent should be checking. Defeats long-context
-# drift where the agent reviews its draft without remembering the
-# original criteria.
+# Review reminders — emitted alongside draft delivery (write_rough_draft,
+# and again on an explicit read_rough_draft) to re-state at review time
+# what the agent should be checking. Defeats long-context drift where
+# the agent reviews its draft without remembering the original criteria.
 # ---------------------------------------------------------------------------
 
 
@@ -685,5 +685,4 @@ Re-read the draft above and check, before delivering:
 - Is each partition's `diagnosis` actionable + specific enough that
   a concrete fix can be reached without further re-derivation?
 
-If any check fails, revise the draft (`write_rough_draft`) and re-read
-before delivering."""
+If any check fails, revise the draft (`write_rough_draft`) before delivering."""
