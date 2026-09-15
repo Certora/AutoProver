@@ -144,3 +144,19 @@ def resolve_autosetup_prover_usage_file(project_root: Path) -> Path | None:
     """Locate the ``prover_usage.json`` the most recent autosetup run wrote under ``project_root``
     (``None`` if absent). See :func:`_resolve_autosetup_reports_file`."""
     return _resolve_autosetup_reports_file(project_root, FILE_PROVER_USAGE)
+
+
+def same_source_file(candidate: str, wanted: str) -> bool:
+    """Whether two build-reported paths name the same source file.
+
+    The build reports the same file as a project-relative path, as an absolute one, or
+    under the instrumented ``.certora_sources`` copy, depending on how it was reached, so
+    equality is decided on the longest common suffix of path components. Only the trailing
+    components are compared, which is what makes every one of those prefixes harmless.
+    """
+    if not candidate or not wanted:
+        return False
+    cand_parts = Path(candidate).parts
+    want_parts = Path(wanted).parts
+    depth = min(len(cand_parts), len(want_parts))
+    return cand_parts[-depth:] == want_parts[-depth:]

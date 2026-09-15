@@ -191,12 +191,6 @@
     "template_name": "autoprove_report.html.j2",
     "ty_sort": "TypedTemplate"
   },
-  "composer.spec.source.struct_invariant:_typed_invariant_prompt": {
-    "module": "composer.spec.source.struct_invariant",
-    "qualname": "_typed_invariant_prompt",
-    "template_name": "structural_invariant_prompt.j2",
-    "ty_sort": "TypedTemplate"
-  },
   "composer.spec.source.summarizer:_SummarizationTemplate": {
     "module": "composer.spec.source.summarizer",
     "qualname": "_SummarizationTemplate",

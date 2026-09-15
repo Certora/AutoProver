@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 # Canonical certora/ layout
 #
 # Every persisted path variable in the spec pipeline is stored **relative to the
-# project root** (e.g. ``certora/specs/invariants.spec``). Conversions to other
+# project root** (e.g. ``certora/specs/autospec_vault.spec``). Conversions to other
 # bases happen only at the edges: the ``ArtifactStore`` conf writer emits the verify
 # entry verbatim (the prover reads it relative to the project root), and CVL ``import``
 # statements are derived with :func:`import_statement_for` (the prover reads
@@ -93,7 +93,7 @@ def import_statement_for(resource_path: Path, importer_dir: Path) -> str:
 # ---------------------------------------------------------------------------
 
 class CVLResource(BaseModel):
-    path: Path = Field(description="path to the resource file, relative to the project root (e.g. `certora/specs/invariants.spec`)")
+    path: Path = Field(description="path to the resource file, relative to the project root (e.g. `certora/specs/summaries/Vault.spec`)")
     required: bool = Field(description="whether this resource *must* be used in the verification process")
     description: str = Field(description="A description of this resource")
     sort: Literal["import"]
