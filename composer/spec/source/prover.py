@@ -327,7 +327,6 @@ def completing_run_links(
     prover_history: list[ProverHistoryItem],
     buffers: Mapping[str, NamedBuffer],
     *,
-    skipped: Sequence[tuple[str, str]],
     version_history: Sequence[str],
 ) -> list[str]:
     """The prover-run links whose completed results compose the run-target buffers at their current
@@ -338,7 +337,7 @@ def completing_run_links(
     seen: set[str] = set()
     for b in run_targets(buffers):
         digest = buffer_state_digest(
-            buffers, b.name, skipped=skipped, version_history=version_history,
+            buffers, b.name, version_history=version_history,
         )
         for elem in reversed(_history_for_buffer(prover_history, b.name)):
             if elem["sort"] != "run":
@@ -725,7 +724,7 @@ class _BufJob:
     #: The buffer's content digest at submit time; a completion is credited only at the current digest,
     #: so a job whose digest is now stale (its buffer or a shared import changed) can't mark it done.
     digest: str
-    task: "asyncio.Task[None]"
+    task: asyncio.Task[None]
     #: The rule subset this job runs, or None for the whole buffer. Jobs of one buffer are keyed by
     #: ``(name, _selection_key(selection))``, so striped runs at the same content coexist.
     selection: RuleSelection | None = None
@@ -824,9 +823,8 @@ def get_prover_tool(
                 await done_queue.put(_BufDone(name, digest, f"[buffer {name}] job error: {exc}", [], selection))
 
         def _cur_digest(state: StateWithSkips, buffers: Mapping[str, NamedBuffer], name: str) -> str:
-            skipped_pairs = [(str(s.property_title), str(s.reason)) for s in state["skipped"]]
             return buffer_state_digest(
-                buffers, name, skipped=skipped_pairs, version_history=state["version_history"],
+                buffers, name, version_history=state["version_history"],
             )
 
         def _buffer_complete_at(

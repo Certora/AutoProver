@@ -32,8 +32,8 @@ from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools, 
 from composer.spec.source.prover import setup_prover_config_in
 from composer.spec.source.spec_buffers import (
     SpecBuffersExtra, buffer_review_text, buffer_state_digest, check_buffer_completion,
-    combined_buffers_view, max_spec_buffers, run_targets, validate_coverage,
-    validate_disjoint_rules,
+    combined_buffers_view, max_spec_buffers, run_targets, skips_review_digest,
+    SKIPS_VALIDATION_KEY, validate_coverage, validate_disjoint_rules,
 )
 from composer.spec.source.buffer_tools import (
     put_buffer, get_buffer, edit_buffer, list_buffers, delete_buffer,
@@ -708,12 +708,12 @@ class _BufferReviewFeedback(FeedbackToolBase[SourceCVLGenerationState]):
         if not targets:
             return tool_return(self.tool_call_id, "No run-target buffers to review yet.")
 
-        # Review each run-target buffer whose feedback stamp is missing or stale (its text, an import, a
-        # skip, or its claimed properties changed) in isolation, scored against the properties it claims,
-        # and stamp feedback:<buffer> per approved buffer — so an approved, unchanged buffer is never
-        # re-reviewed and the hard buffer is reviewed alone. The claimed properties are part of the
-        # feedback digest (include_claim), so re-assigning a property re-triggers review even with
-        # unchanged CVL.
+        # Review each run-target buffer whose feedback stamp is missing or stale (its text, an import, or
+        # its claimed properties changed) in isolation, scored against the properties it claims, and stamp
+        # feedback:<buffer> per approved buffer — so an approved, unchanged buffer is never re-reviewed and
+        # the hard buffer is reviewed alone. The claimed properties are part of the feedback digest
+        # (include_claim), so re-assigning a property re-triggers review even with unchanged CVL. Skips are
+        # NOT reviewed here; they are reviewed once, below, since a skip belongs to no single buffer.
         skipped = self.state["skipped"]
         skipped_pairs = [(str(s.property_title), str(s.reason)) for s in skipped]
         vh = self._version_history()
@@ -721,25 +721,33 @@ class _BufferReviewFeedback(FeedbackToolBase[SourceCVLGenerationState]):
         all_props = self._all_properties()
 
         def digest(name: str) -> str:
-            return buffer_state_digest(
-                buffers, name, skipped=skipped_pairs, version_history=vh, include_claim=True
-            )
+            return buffer_state_digest(buffers, name, version_history=vh, include_claim=True)
 
-        stale = [b for b in targets if validations.get(f"feedback:{b.name}") != digest(b.name)]
-        if not stale:
-            return tool_return(
-                self.tool_call_id, "All buffers already reviewed and approved at their current state."
-            )
         new_stamps: dict[str, str] = {}
         blocks: list[str] = []
-        for b in stale:
+
+        for b in [b for b in targets if validations.get(f"feedback:{b.name}") != digest(b.name)]:
             claimed = [p for p in all_props if str(p.title) in b.property_rules]
-            verdict = await self._review(
-                b.name, buffer_review_text(buffers, b.name), skipped, claimed
-            )
+            verdict = await self._review(b.name, buffer_review_text(buffers, b.name), [], claimed)
             blocks.append(f"=== buffer {b.name} ===\nGood? {verdict.good}\nFeedback {verdict.feedback}")
             if verdict.good:
                 new_stamps[f"feedback:{b.name}"] = digest(b.name)
+
+        # Skip quality is a whole-spec concern, so review the skip set ONCE (a skip is owned by no
+        # buffer; scrutinizing it in every buffer's judge would make any skip change re-review every
+        # buffer). The judge sees the whole spec (a skip's justification can rest on the code) and only
+        # the skips, with no per-buffer claim to cover.
+        skips_digest = skips_review_digest(buffers, skipped=skipped_pairs, version_history=vh)
+        if skipped and validations.get(SKIPS_VALIDATION_KEY) != skips_digest:
+            verdict = await self._review(SKIPS_VALIDATION_KEY, combined_buffers_view(buffers), skipped, [])
+            blocks.append(f"=== skipped properties ===\nGood? {verdict.good}\nFeedback {verdict.feedback}")
+            if verdict.good:
+                new_stamps[SKIPS_VALIDATION_KEY] = skips_digest
+
+        if not blocks:
+            return tool_return(
+                self.tool_call_id, "All buffers already reviewed and approved at their current state."
+            )
         return tool_state_update(self.tool_call_id, "\n\n".join(blocks), validations=new_stamps)
 
 
@@ -761,8 +769,10 @@ class EditorAwareFeedbackTool(
                 vfs=self.state["vfs"],
                 version_history=self.state["version_history"],
             )
+            # Each buffer's judge sees only the rebuttals filed against its own feedback.
+            rebuttals = [r for r in self.rebuttals if r.buffer == name]
             return await judges.for_buffer(name, properties)(
-                snap, spec, skipped, self.rebuttals, self.tool_call_id
+                snap, spec, skipped, rebuttals, self.tool_call_id
             )
 
     @override
@@ -1138,10 +1148,9 @@ async def batch_cvl_generation(
     assert "vfs" in res_state
     # Every run link that composes the buffers at their final digests, so verdicts spread across
     # striped/per-buffer runs are all reachable from the result.
-    skipped_pairs = [(str(s.property_title), str(s.reason)) for s in res_state["skipped"]]
     run_links = completing_run_links(
         res_state["prover_history"], res_state.get("buffers") or {},
-        skipped=skipped_pairs, version_history=res_state["version_history"],
+        version_history=res_state["version_history"],
     )
     generated = GeneratedCVL(
         commentary=res_state["result"],

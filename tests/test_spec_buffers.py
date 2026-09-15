@@ -13,6 +13,8 @@ from composer.spec.source.spec_buffers import (
     max_spec_buffers,
     merge_buffers,
     run_targets,
+    skips_review_digest,
+    SKIPS_VALIDATION_KEY,
     validate_coverage,
     validate_disjoint_rules,
 )
@@ -231,7 +233,7 @@ def _stamp(buffers, name, key):
     # The feedback stamp also tracks the buffer's claimed properties (include_claim); the prover stamp
     # does not — mirrors check_buffer_completion.
     d = buffer_state_digest(
-        buffers, name, skipped=[], version_history=[], include_claim=(key == "feedback")
+        buffers, name, version_history=[], include_claim=(key == "feedback")
     )
     return {f"{key}:{name}": d}
 
@@ -242,7 +244,7 @@ def test_feedback_digest_tracks_claim_but_prover_digest_does_not():
     # verified).
     b = _buffers()
     reclaimed = {**b, "easy": b["easy"].model_copy(update={"property_rules": {"P-moved": ["r_easy"]}})}
-    kw = dict(skipped=[], version_history=[])
+    kw = dict(version_history=[])
     assert buffer_state_digest(b, "easy", include_claim=True, **kw) != \
         buffer_state_digest(reclaimed, "easy", include_claim=True, **kw)   # feedback: stale
     assert buffer_state_digest(b, "easy", **kw) == \
@@ -303,6 +305,50 @@ def test_buffer_completion_stamp_goes_stale_on_shared_import_edit():
     b["shared"] = NamedBuffer(name="shared", cvl=SHARED + "// edit\n", is_run_target=False)
     err = check_buffer_completion(b, validations, ["feedback", "prover"], skipped=[], version_history=[])
     assert err is not None
+
+
+def test_skip_change_does_not_invalidate_buffer_stamps():
+    # A skip is owned by no buffer, so changing the skip set leaves every buffer's per-buffer digest
+    # unchanged — a skip only invalidates the standalone skip-review stamp, not the buffers.
+    b = _buffers()
+    validations = {}
+    for name in ("easy", "hard"):
+        validations.update(_stamp(b, name, "feedback"))
+        validations.update(_stamp(b, name, "prover"))
+    skipped = [("P-x", "cannot express in CVL")]
+    # The buffer stamps are still current under a skip; only the skip review is missing.
+    err = check_buffer_completion(b, validations, ["feedback", "prover"], skipped=skipped, version_history=[])
+    assert err is not None and "skip review" in err
+    assert "easy" not in err and "hard" not in err
+
+
+def test_completion_requires_skip_review_when_skipped():
+    # With anything skipped, completion additionally requires the standalone skip-review stamp at its
+    # current digest; with nothing skipped it is never required.
+    b = _buffers()
+    validations = {}
+    for name in ("easy", "hard"):
+        validations.update(_stamp(b, name, "feedback"))
+        validations.update(_stamp(b, name, "prover"))
+    assert check_buffer_completion(  # no skips -> no skip stamp needed
+        b, validations, ["feedback", "prover"], skipped=[], version_history=[]
+    ) is None
+    skipped = [("P-x", "cannot express in CVL")]
+    stamped = {**validations, SKIPS_VALIDATION_KEY: skips_review_digest(b, skipped=skipped, version_history=[])}
+    assert check_buffer_completion(
+        b, stamped, ["feedback", "prover"], skipped=skipped, version_history=[]
+    ) is None
+
+
+def test_skips_review_digest_changes_on_skip_and_on_buffer_edit():
+    # The skip-review digest tracks both the skip set and the whole spec (a skip's justification can
+    # rest on the code), so it re-flows when either changes.
+    b = _buffers()
+    base = skips_review_digest(b, skipped=[], version_history=[])
+    assert base != skips_review_digest(b, skipped=[("P-x", "reason")], version_history=[])
+    edited = {**b, "easy": NamedBuffer(name="easy", cvl=EASY + "// edit\n", property_rules={"P-easy": ["r_easy"]})}
+    assert skips_review_digest(b, skipped=[("P-x", "reason")], version_history=[]) != \
+        skips_review_digest(edited, skipped=[("P-x", "reason")], version_history=[])
 
 
 # --- buffers-map reducer ---------------------------------------------------

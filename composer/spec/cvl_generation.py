@@ -57,6 +57,14 @@ class Rebuttal(RebuttalBase):
     etc. Do NOT file rebuttals for feedback you merely disagree with; address those by
     revising the spec.
     """
+    buffer: str = Field(
+        description=(
+            "The name of the review unit whose feedback this rebuts — a buffer name, or "
+            '"skips_review" for the shared skip review. Each unit is reviewed by its own judge, so a '
+            "rebuttal reaches only that unit's judge; file it under the unit the prior-round feedback "
+            "was about."
+        )
+    )
     evidence_type: Literal[
         "typecheck_failure",
         "counterexample",

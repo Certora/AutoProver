@@ -37,14 +37,14 @@ def test_completing_run_links_unions_stripes_and_drops_stale():
     """A buffer's rules proven across striped runs at its current digest yield every run's link (deduped);
     a run at a superseded digest is excluded — the report unions over exactly these."""
     bufs = _buffers2()  # run-target "both" (r_a, r_b) + shared
-    dig = buffer_state_digest(bufs, "both", skipped=[], version_history=[])
+    dig = buffer_state_digest(bufs, "both", version_history=[])
     history = [
         _runlog("t0", "STALE_DIGEST", "old-link", "r_a", ["r_a"]),      # superseded content -> excluded
         _runlog("t1", dig, "link-a", "r_a", ["r_a"]),                   # stripe rule=[r_a]
         _runlog("t2", dig, "link-b", "r_b", ["r_b"]),                   # stripe rule=[r_b]
         _runlog("t3", dig, "link-a", "r_a", ["r_a"]),                   # same link again -> deduped
     ]
-    links = completing_run_links(history, bufs, skipped=[], version_history=[])
+    links = completing_run_links(history, bufs, version_history=[])
     assert set(links) == {"link-a", "link-b"}
     assert "old-link" not in links
     assert len(links) == 2  # deduped
@@ -170,7 +170,7 @@ class TestBufferSubmitCollect:
         ).run()
 
         def digest(n: str) -> str:
-            return buffer_state_digest(st["buffers"], n, skipped=[], version_history=[])
+            return buffer_state_digest(st["buffers"], n, version_history=[])
 
         assert st["validations"].get("prover:easy") == digest("easy")
         assert st["validations"].get("prover:hard") == digest("hard")
@@ -189,7 +189,7 @@ class TestBufferSubmitCollect:
         easy_runs = [c for c in certora_prover.calls if "easy" in str(c.conf.get("verify", ""))]
         assert len(easy_runs) == 1, f"expected one prover run for easy, got {len(easy_runs)}"
         assert st["validations"].get("prover:easy") == buffer_state_digest(
-            st["buffers"], "easy", skipped=[], version_history=[]
+            st["buffers"], "easy", version_history=[]
         )
 
     async def test_rule_stripe_unions_to_completion(self, certora_prover: ProverMock):
@@ -348,5 +348,53 @@ class TestBufferSubmitCollect:
         )
         val = res.update.get("validations", {}) if hasattr(res, "update") else {}
         assert val.get("feedback:easy") == buffer_state_digest(
-            buffers, "easy", skipped=[], version_history=[], include_claim=True
+            buffers, "easy", version_history=[], include_claim=True
         )
+
+    async def test_skip_review_stamps_once_not_per_buffer(self):
+        """A skipped property is reviewed once as the standalone skips_review unit — not folded into
+        each buffer's stamp — and the per-buffer stamp stays independent of the skip."""
+        from dataclasses import dataclass
+        from composer.spec.source.author import EditorAwareFeedbackTool, _PerBufferJudge
+        from composer.spec.source.spec_buffers import SKIPS_VALIDATION_KEY, skips_review_digest
+        from composer.authoring.state import SkippedProperty
+        from composer.spec.types import PropertyTitle
+
+        @dataclass
+        class _V:
+            good: bool
+            feedback: str
+
+        seen: list[str] = []
+
+        async def judge(snap, spec, skipped, rebuttals, within_tool):
+            seen.append("skips" if skipped else "buffer")
+            return _V(good=True, feedback="")
+
+        tool = EditorAwareFeedbackTool.bind(
+            _PerBufferJudge(build=lambda name, claimed: judge, properties=[])
+        ).as_tool("feedback_tool")
+        buffers = {
+            "shared": NamedBuffer(name="shared", cvl=SHARED, is_run_target=False),
+            "easy": _buf("easy", "r_easy"),
+        }
+        skipped = [SkippedProperty(property_title=PropertyTitle("P-x"), reason="cannot express in CVL")]
+        state = {
+            "buffers": buffers, "vfs": {}, "curr_spec": None, "skipped": skipped,
+            "validations": {}, "version_history": [], "messages": [],
+            "required_validations": [], "property_rules": [], "rule_skips": {},
+            "config": {}, "prover_history": [], "reminders_channel": [],
+            "failed": None, "budget_curtailed": False,
+        }
+        res = await tool.ainvoke(
+            {"name": "feedback_tool", "args": {"state": state, "rebuttals": []},
+             "id": "t", "type": "tool_call"}
+        )
+        val = res.update.get("validations", {}) if hasattr(res, "update") else {}
+        assert val.get(SKIPS_VALIDATION_KEY) == skips_review_digest(
+            buffers, skipped=[("P-x", "cannot express in CVL")], version_history=[]
+        )
+        assert val.get("feedback:easy") == buffer_state_digest(
+            buffers, "easy", version_history=[], include_claim=True
+        )
+        assert seen.count("skips") == 1  # reviewed once, not once per buffer

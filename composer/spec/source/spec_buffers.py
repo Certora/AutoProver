@@ -175,33 +175,52 @@ def run_targets(buffers: Mapping[str, NamedBuffer]) -> list[NamedBuffer]:
     return [buffers[n] for n in sorted(buffers) if buffers[n].is_run_target]
 
 
+#: Standalone (not per-buffer) validation key for the single skip review.
+SKIPS_VALIDATION_KEY = "skips_review"
+
+
 def buffer_state_digest(
     buffers: Mapping[str, NamedBuffer],
     name: str,
     *,
-    skipped: Sequence[tuple[str, str]],
     version_history: Sequence[str],
     include_claim: bool = False,
 ) -> str:
     """The per-buffer analogue of ``spec_digest``: a buffer's content + import closure bound to the
-    current authoring state (skip declarations as ``(title, reason)`` pairs, and the applied-edit
-    history). Every per-buffer stamp — feedback and prover — and the completion check key off this, so
-    editing the buffer, anything it imports, a skip, or the source invalidates that buffer's stamps.
+    applied-edit history. Every per-buffer stamp — feedback and prover — and the completion check key
+    off this, so editing the buffer, anything it imports, or the source invalidates that buffer's stamps.
+
+    Skips are deliberately NOT keyed here. A skip declaration is owned by no buffer (``validate_coverage``
+    keeps skipped and buffer-assigned disjoint), and skip quality is reviewed once against the whole spec
+    (:func:`skips_review_digest`), so a skip change must not re-verify every buffer.
 
     With ``include_claim`` the buffer's declared ``property_rules`` also key the digest, so re-assigning
     a claim re-triggers review. The feedback stamp sets it (the judge reviews a buffer against the
     properties it claims); the prover stamp leaves it False (a claim change does not affect what was
     verified)."""
-    extra = [
-        *(f"skip:{t}:{r}" for (t, r) in sorted(skipped)),
-        *(f"edit:{e}" for e in version_history),
-    ]
+    extra = [f"edit:{e}" for e in version_history]
     if include_claim:
         claim = ";".join(
             f"{t}={','.join(rs)}" for t, rs in sorted(buffers[name].property_rules.items())
         )
         extra.append(f"claim:{claim}")
     return buffer_digest(buffers, name, extra_parts=extra)
+
+
+def skips_review_digest(
+    buffers: Mapping[str, NamedBuffer],
+    *,
+    skipped: Sequence[tuple[str, str]],
+    version_history: Sequence[str],
+) -> str:
+    """Digest keying the single skip-review stamp: the skip declarations, every buffer's text (the judge
+    checks a skip's justification against the code), and the edit history. Independent of any one buffer,
+    so a skip change re-reviews the skips alone, not every buffer; editing a buffer re-reviews the skips
+    (a justification can rest on the code) but does not touch other buffers' stamps."""
+    parts = [f"buf:{b.name}:{hash_text(b.cvl)}" for b in sorted(buffers.values(), key=lambda b: b.name)]
+    parts += [f"skip:{t}:{r}" for (t, r) in sorted(skipped)]
+    parts += [f"edit:{e}" for e in version_history]
+    return hash_content_parts(parts)
 
 
 def check_buffer_completion(
@@ -213,9 +232,10 @@ def check_buffer_completion(
     version_history: Sequence[str],
 ) -> str | None:
     """None if every run-target buffer carries each required validation (e.g. ``feedback``, ``prover``)
-    stamped at its current digest, else a message naming every buffer/validation missing or stale. The
-    buffers analogue of ``check_completion``: a per-buffer stamp is keyed ``"<validation>:<buffer>"`` and
-    goes stale when that buffer (or anything it imports, or the skips/edit history) changes.
+    stamped at its current digest AND (when anything is skipped) the single skip review is current, else
+    a message naming every buffer/validation missing or stale. The buffers analogue of
+    ``check_completion``: a per-buffer stamp is keyed ``"<validation>:<buffer>"`` and goes stale when that
+    buffer (or anything it imports, or the edit history) changes; the skip review is a standalone stamp.
 
     With no run-target buffers this is vacuously satisfied (there is nothing to stamp) — the
     all-properties-skipped case, whose validity is decided by ``validate_coverage`` instead."""
@@ -225,11 +245,15 @@ def check_buffer_completion(
             # The feedback stamp tracks a buffer's claimed properties (the judge reviews against them);
             # the prover stamp does not.
             d = buffer_state_digest(
-                buffers, b.name, skipped=skipped, version_history=version_history,
+                buffers, b.name, version_history=version_history,
                 include_claim=(key == FEEDBACK_VALIDATION_KEY),
             )
             if validations.get(f"{key}:{b.name}") != d:
                 stale.append(f"{b.name!r} {key}")
+    if skipped and validations.get(SKIPS_VALIDATION_KEY) != skips_review_digest(
+        buffers, skipped=skipped, version_history=version_history
+    ):
+        stale.append("skip review")
     if stale:
         return (
             "Completion REJECTED: re-verify/re-review each of these buffer validations before "
