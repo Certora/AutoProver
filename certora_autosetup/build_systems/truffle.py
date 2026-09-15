@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 from packaging.version import InvalidVersion, Version
 
 from certora_autosetup.build_systems.base import BuildSystemConfig
+from certora_autosetup.build_systems.config_files import TRUFFLE_CONFIG_FILENAMES
 from certora_autosetup.build_systems.manager import BuildSystemManager
 from certora_autosetup.utils.remappings import build_packages_from_remapping_sources
 
@@ -88,7 +89,7 @@ class TruffleManager(BuildSystemManager):
 
     def get_config_filenames(self) -> List[str]:
         """Return list of config filenames to search for."""
-        return ["truffle-config.js", "truffle.js"]
+        return list(TRUFFLE_CONFIG_FILENAMES)
 
     def get_default_artifact_dir(self) -> str:
         """Return default artifact directory name."""

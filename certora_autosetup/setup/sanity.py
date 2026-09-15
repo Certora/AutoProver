@@ -9,6 +9,7 @@ High-level approach:
 
 import asyncio
 import json
+import os
 import re
 import time
 import uuid
@@ -191,7 +192,23 @@ class SanityResult(Enum):
 
 
 # Per-job prover timeout (seconds) applied to the exploratory sanity runs.
-SANITY_GLOBAL_TIMEOUT = 1200
+SANITY_TIMEOUT_ENV = "AUTOPROVER_SANITY_TIMEOUT"
+DEFAULT_SANITY_TIMEOUT = 1200
+
+
+def sanity_global_timeout() -> int:
+    """The per-job prover timeout (seconds) for the exploratory sanity runs: ``DEFAULT_SANITY_TIMEOUT``,
+    or the integer value of ``AUTOPROVER_SANITY_TIMEOUT`` when set (a non-integer or <1 value is ignored
+    with a warning). Mirrors ``AUTOPROVER_GLOBAL_PROVER_TIMEOUT`` for the sanity phase."""
+    raw = os.environ.get(SANITY_TIMEOUT_ENV)
+    if raw is None:
+        return DEFAULT_SANITY_TIMEOUT
+    try:
+        n = int(raw)
+    except ValueError:
+        logger.warning(f"Ignoring non-integer {SANITY_TIMEOUT_ENV}={raw!r}")
+        return DEFAULT_SANITY_TIMEOUT
+    return n if n >= 1 else DEFAULT_SANITY_TIMEOUT
 
 
 @dataclass
@@ -213,7 +230,7 @@ class BoundConfiguration:
             # excluded from the analysis), so the rule_sanity sub-checks are pure wasted runtime here.
             "rule_sanity": "none",
             # Cap the exploratory sanity runs; only applied to these transient conf copies.
-            "global_timeout": str(SANITY_GLOBAL_TIMEOUT),
+            "global_timeout": str(sanity_global_timeout()),
         }
         if self.hashing_bound is not None:
             properties["hashing_length_bound"] = self.hashing_bound
@@ -579,7 +596,7 @@ class SanityPhase:
                     "coverage_info": "advanced",
                     "method": [method],
                     "rule_sanity": "none",
-                    "global_timeout": str(SANITY_GLOBAL_TIMEOUT),
+                    "global_timeout": str(sanity_global_timeout()),
                 },
                 f"_coverage_rerun_{i}",
                 target_dir=self._internal_confs_dir,
@@ -709,7 +726,7 @@ class SanityPhase:
 
             # Cap the detection run; global_timeout is a top-level property, not a prover arg.
             self.config_manager.update_config_with_properties(
-                bound_detection_config.path, {"global_timeout": str(SANITY_GLOBAL_TIMEOUT)}
+                bound_detection_config.path, {"global_timeout": str(sanity_global_timeout())}
             )
 
             # Submit bound detection job

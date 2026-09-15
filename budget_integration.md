@@ -12,15 +12,22 @@ cooperatively. A component whose formalization was cut short this way is **curta
 it is not a delivery, its outputs are quarantined on disk, and it is reported in a
 dedicated appendix of `report.json` rather than in the main property/rule tables.
 
-## 1. The budget file and the `--budget` flag
+## 1. The budget file and the `--budget` / `--budget-total` flags
 
-Both pipeline entry points (prover and foundry) accept:
+Both pipeline entry points (prover and foundry) accept either:
 
 ```
---budget path/to/budget.json
+--budget path/to/budget.json    # the pool plus per-phase caps
+--budget-total 25.0             # the pool alone, as a bare USD number
 ```
 
-Omitting the flag runs unbudgeted — nothing about an unbudgeted run's behavior or
+`--budget-total X` is exactly `--budget` on a file containing `{"total": X}`: the same
+pool, and every phase cap left at its default of `total`, so only the pool ever trips.
+Reach for it when the caller has one number to hand (a cloud orchestrator forwarding a
+per-run setting) and for the file when you want to shape spend across phases. They are
+an argparse mutually exclusive group, so passing both is rejected at parse time.
+
+Omitting both runs unbudgeted — nothing about an unbudgeted run's behavior or
 outputs changes.
 
 The file is JSON natively; a `.yaml`/`.yml` file also works when PyYAML happens to be
@@ -53,7 +60,7 @@ The five phase names (the keys of `PhaseBudget` in `composer/pipeline/ptypes.py`
 |---|---|
 | `system_analysis` | component analysis of the contract system |
 | `system_preparation` | harness construction |
-| `formalization_preparation` | prover pre-formalization fan-out: structural invariants, custom summaries, protocol-specific setup |
+| `formalization_preparation` | prover pre-formalization: AutoSetup, then custom summaries and protocol-specific setup |
 | `property_extraction` | per-component property inference |
 | `formalization` | per-component CVL / test authoring (usually the dominant cost) |
 
@@ -64,10 +71,12 @@ Validation is strict and fail-fast: unknown top-level keys, unknown phase names,
 `total <= 0`, or a negative cap all reject the file with a `ValueError` **before any
 services spin up**, so a malformed budget fails the run immediately at startup rather
 than mid-pipeline. A cap of `0.0` is legal: that phase starts already inside its
-wrap-up window (useful for forcing curtailment in tests).
+wrap-up window (useful for forcing curtailment in tests). `--budget-total` is validated
+against the same `total` rule, so `--budget-total 0` is rejected too.
 
 The parsed budget is echoed into the run's data log as a `budget` record
-(`{"total": ..., "caps": {...}}`), so run records show what the run was launched with.
+(`{"total": ..., "caps": {...}}`), so run records show what the run was launched with —
+a scalar and its equivalent file are indistinguishable there, by construction.
 
 ### Enforcement semantics (what "trips" means)
 
@@ -204,6 +213,10 @@ published)`.
   never cached, so re-running a curtailed run re-spends on exactly those components.
 - **Autosetup subprocess spend is invisible.** LLM calls made inside the autosetup
   subprocess do not flow through the meter and count toward no cap.
+- **`formalization_preparation` is attribution-only.** Nothing left under it installs a
+  budget monitor — AutoSetup is an unmetered subprocess and the custom-summaries agent
+  installs none — so the cap can neither warn nor hard-stop. Spend still accrues into
+  the shared pool, where it goes on pressuring formalization.
 - **Sub-agents accrue to their parent's phase.** Judges, researchers, and other
   spawned helpers spend from whatever named scope their root agent runs under; there
   is no separate accounting knob for them.
@@ -226,8 +239,9 @@ conversation used. Calibrate on the 1h bound (the authors run with the long cach
 Sub-agent threads fold into their root thread, matching how budget scopes accrue.
 
 `--emit-matrix DIR` writes a ready-made live-test budget matrix (a control budget
-plus budgets that trip the formalization cap, the preparation cap, and the shared
-pool) with a `manifest.md` of expected outcomes per test.
+plus budgets that trip the formalization cap and the shared pool) with a
+`manifest.md` of expected outcomes per test. There is no preparation-cap test: nothing
+under that phase can trip a monitor.
 
 Phase attribution rides on **cost-center telemetry**: every logged thread records the
 named budget scope it ran under (`ThreadMeta.cost_center`), stamped unconditionally —

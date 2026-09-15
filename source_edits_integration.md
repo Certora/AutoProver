@@ -51,10 +51,11 @@ The new top-level field:
 Record semantics:
 
 - A component appears **iff it delivered a result and at least one edit was
-  applied**. Un-edited components, gave-up components, and the synthetic
-  "Structural Invariants" entry never appear — the structural-invariant phase runs
-  with editing denied by design, so its outcomes are always about the on-disk
-  source. Foundry-backend reports never carry entries.
+  applied**. Un-edited and gave-up components never appear. Foundry-backend reports
+  never carry entries.
+- An invariant a component authored to support one of its own properties is covered by
+  that component's edit record, so it is established against exactly the source that
+  component's rules were proven against.
 - `applied_edits` lists every edit that survived to the final working copy, in the
   order they were applied. `executive_summary` and `why_sound` are free prose from
   the editor; the reference renderer treats both as markdown.

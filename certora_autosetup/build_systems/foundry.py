@@ -20,6 +20,7 @@ else:
     import tomli as tomllib
 
 from certora_autosetup.build_systems.base import BuildSystemConfig
+from certora_autosetup.build_systems.config_files import FOUNDRY_CONFIG_FILENAMES
 from certora_autosetup.build_systems.manager import BuildSystemManager
 from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.remappings import build_packages_from_remapping_sources
@@ -137,7 +138,7 @@ class FoundryManager(BuildSystemManager):
 
     def get_config_filenames(self) -> List[str]:
         """Return list of config filenames to search for."""
-        return ["foundry.toml"]
+        return list(FOUNDRY_CONFIG_FILENAMES)
 
     def parse_config(self, config_file: Path, profile: str | None = None) -> FoundryConfig:
         """

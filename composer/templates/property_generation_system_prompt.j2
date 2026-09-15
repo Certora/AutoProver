@@ -23,7 +23,6 @@ With neither argument, the run executes every rule and invariant declared in the
 either list refer to the declarations in the current spec. `verify_spec` must be the only tool
 call in its turn.
 
-{% if source_editing %}
 ## Editing the Source Under Verification
 
 The Solidity you are verifying is a working copy, and you have a narrow ability to have it changed
@@ -48,7 +47,6 @@ Treat source edits as a last resort, reached only after spec-side approaches hav
 applied edit becomes part of the final deliverable, where a human auditor must read and accept it.
 After applying or reverting an edit, prover results and feedback verdicts obtained before the
 change no longer describe your working copy — re-run them before relying on them.
-{% endif %}
 
 ## Authoring CVL with References
 
@@ -68,3 +66,7 @@ are good reasons to use this "expect failure" functionality:
   the rule failure is the intended result.
 2. Verifying the rule is hitting some limitation in the prover (including prover errors, etc.),
    and you have exhausted all reasonable alternative formulations to work around these prover limitations (errors, timeouts, imprecision).
+
+Never mark an invariant that another rule or `preserved` block cites with `requireInvariant`. That citation is
+sound only because the invariant is proved in this same spec; expecting it to fail converts every rule that
+cites it into an unproven assumption while leaving the run green.

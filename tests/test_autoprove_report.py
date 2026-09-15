@@ -14,6 +14,7 @@ from typing import Any, cast
 import pathlib
 
 import pytest
+from pydantic import ValidationError as PydanticValidationError
 from prover_output_utility.models import NodeStatus
 from prover_output_utility import ProverOutputAPI
 from langchain_core.language_models import BaseChatModel
@@ -30,6 +31,7 @@ from composer.spec.source.artifacts import ProverArtifactStore
 from composer.spec.source.report import build
 from composer.spec.source.report.collect import ReportComponentInput, collect
 from composer.spec.source.report.coverage import ValidationError, validate
+from composer.spec.source.report import grouping
 from composer.spec.source.report.grouping import (
     FALLBACK_SLUG, GroupingResult, PropertyGroupDraft, aggregate_status,
     build_fallback_grouping, build_groups,
@@ -299,21 +301,27 @@ async def test_collect_falls_back_to_input_spec_when_verdict_has_no_source():
 
 
 @pytest.mark.asyncio
-async def test_collect_shared_rule_dedupes_and_is_referenced_by_both():
-    """An invariant imported into a component spec reports the same source file from
-    both runs, so it collapses to one rule that both components' properties reference."""
-    comp = _input("Increment", "autospec_Increment.spec", [_prop("c", "component view", sort="invariant")],
-                  _gen({"c": ["countEqualsSum"]}, link="Lc"))
-    inv = _input("Structural Invariants", "invariants.spec", [_prop("i", "structural", sort="invariant")],
-                 _gen({"i": ["countEqualsSum"]}, link="Li"))
-    fetch = _fetcher({
-        "Lc": [_fake_check("countEqualsSum", NodeStatus.VERIFIED, file="invariants.spec")],
-        "Li": [_fake_check("countEqualsSum", NodeStatus.VERIFIED, file="invariants.spec")],
-    })
-    properties, rules, *_ = await collect([comp, inv], fetch_verdicts=fetch)
-    ces = [r for r in rules if r.name == "countEqualsSum"]
-    assert len(ces) == 1 and ces[0].spec_file == "invariants.spec"
-    assert all(p.rule_refs == [("invariants.spec", "countEqualsSum")] for p in properties)
+async def test_collect_keeps_a_supporting_invariant_the_property_names():
+    """An author that needs an invariant proves it in its own component spec and names it in
+    ``property_rules`` alongside the rule it supports. Both must survive collection: ``collect``
+    keeps only rules some property references and counts the rest as orphans, so an unnamed
+    invariant would be proved and then silently dropped from the report."""
+    comp = _input(
+        "Increment", "autospec_Increment.spec", [_prop("c", "count tracks the tally")],
+        _gen({"c": ["increment_increases_count", "countEqualsSum"]}, link="Lc"),
+    )
+    fetch = _fetcher({"Lc": [
+        _fake_check("increment_increases_count", NodeStatus.VERIFIED),
+        _fake_check("countEqualsSum", NodeStatus.VERIFIED),
+    ]})
+    properties, rules, *rest = await collect([comp], fetch_verdicts=fetch)
+    dropped_orphans = rest[-1]
+    assert {r.name for r in rules} == {"increment_increases_count", "countEqualsSum"}
+    assert properties[0].rule_refs == [
+        ("autospec_Increment.spec", "increment_increases_count"),
+        ("autospec_Increment.spec", "countEqualsSum"),
+    ]
+    assert dropped_orphans == 0
 
 
 @pytest.mark.asyncio
@@ -590,6 +598,64 @@ async def test_build_groups_properties(tmp_path):
     assert [g.slug for g in report.groups] == ["g"]
     assert {p.title for p in report.properties} == {"p1", "p2"}
     assert report.coverage.property_coverage_complete is True
+
+
+class _FlakyStructuredModel(_StructuredStubModel):
+    """Raises the given exceptions on successive calls, then returns `output`. Records how many
+    times the structured binding was invoked."""
+    failures: list[Exception]
+    calls: list[str] = []
+
+    def with_structured_output(self, schema, **kwargs) -> Runnable:  # type: ignore[override]
+        out, failures, calls = self.output, self.failures, self.calls
+
+        def _invoke(messages):
+            calls.append(messages[-1].content)
+            if failures:
+                raise failures.pop(0)
+            return out
+
+        return RunnableLambda(_invoke)
+
+
+def _schema_error() -> PydanticValidationError:
+    try:
+        GroupingResult.model_validate({"groups": 17})
+    except PydanticValidationError as e:
+        return e
+    raise AssertionError("expected a validation error")
+
+
+@pytest.mark.asyncio
+async def test_grouping_retries_once_with_the_rejection_appended():
+    good = GroupingResult(groups=[PropertyGroupDraft(
+        slug="g", title="G", description="d", members=[("C", "p1")])])
+    llm = _FlakyStructuredModel(output=good, failures=[_schema_error()], calls=[])
+
+    result = await grouping.call_grouping_llm(
+        llm=llm, contract_name="C", properties=[_fp("C", "p1", [])],
+    )
+
+    assert [g.slug for g in result.groups] == ["g"]
+    assert len(llm.calls) == 2
+    # The retry carries the rejection, and still stands alone as one request.
+    assert "A previous attempt was rejected" in llm.calls[1]
+    assert "A previous attempt was rejected" not in llm.calls[0]
+
+
+@pytest.mark.asyncio
+async def test_grouping_gives_up_after_the_retry_so_the_caller_can_fall_back():
+    llm = _FlakyStructuredModel(
+        output=GroupingResult(groups=[]),
+        failures=[_schema_error(), _schema_error()],
+        calls=[],
+    )
+
+    with pytest.raises(PydanticValidationError):
+        await grouping.call_grouping_llm(
+            llm=llm, contract_name="C", properties=[_fp("C", "p1", [])],
+        )
+    assert len(llm.calls) == 2
 
 
 @pytest.mark.asyncio
