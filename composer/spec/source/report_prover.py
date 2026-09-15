@@ -44,21 +44,38 @@ def _fetch(api: ProverOutputAPI, link: str) -> dict[RuleName, Verdict]:
             loc.line if loc else None,
             c.duration or None,
             Path(loc.file).name if (loc and loc.file) else None,
+            link=link,
         )
         name = RuleName(c.rule_name)
         verdicts[name] = cand.merge(verdicts.get(name))
     return verdicts
 
 
+def _fetch_covering(api: ProverOutputAPI, links: list[str]) -> dict[RuleName, Verdict]:
+    """rule_name -> `Verdict` across the runs that account for one spec, ``links`` newest first.
+
+    Newest run wins per rule, rather than the most terminal outcome: a rule that timed out in
+    one run and verified in a later scoped re-run is verified. Within a single run the rollup
+    stays `Verdict.merge`'s — that is where "most terminal wins" is the right answer.
+    """
+    verdicts: dict[RuleName, Verdict] = {}
+    for link in links:
+        for name, v in _fetch(api, link).items():
+            verdicts.setdefault(name, v)
+    return verdicts
+
+
 def make_prover_fetcher(api: ProverOutputAPI | None = None) -> VerdictFetcher[GeneratedCVL]:
-    """A `VerdictFetcher` that pulls per-rule verdicts from ProverOutputUtility, keyed by each
-    component's run link. POU calls run off the event loop (one blocking call per run). Only ever
-    invoked for delivered results (collect skips gave-up / curtailed inputs)."""
+    """A `VerdictFetcher` that pulls per-rule verdicts from ProverOutputUtility, reading every
+    run that accounts for the component's published spec. POU calls run off the event loop (one
+    blocking call per run). Only ever invoked for delivered results (collect skips gave-up /
+    curtailed inputs)."""
     api = api or ProverOutputAPI()
 
     async def fetch(formalized: Formalized[GeneratedCVL]) -> dict[RuleName, Verdict]:
-        if formalized.run_link is None:
+        links = formalized.result.covering_output_links
+        if not links:
             return {}
-        return await asyncio.to_thread(_fetch, api, formalized.run_link)
+        return await asyncio.to_thread(_fetch_covering, api, links)
 
     return fetch
