@@ -966,7 +966,8 @@ async def batch_cvl_generation(
                 reminders_channel=[],
                 vfs=restored_vfs,
                 version_history=restored_history,
-                spec_stem=spec_stem
+                spec_stem=spec_stem,
+                delegation_tools=[t.name for inj in tools for t in inj.tools],
             )
         )
     except BudgetExceeded as e:

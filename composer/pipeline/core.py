@@ -751,6 +751,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 fetch_evidence=findings_evidence,
                 run_mode=run.run_mode.value,
                 deprioritized=deprioritized,
+                active_plugins=plugin_manager.plugin_manifest,
             )
         report = await run.runner(
             job=_report,

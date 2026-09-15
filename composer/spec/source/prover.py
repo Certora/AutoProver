@@ -156,6 +156,38 @@ def declared_rules_at(
 STUCK_RULE_NAG_THRESHOLD = 3
 
 
+def stuck_rule_reminder(
+    to_warn: Iterable["RulePath"],
+    *,
+    delegation_tools: Sequence[str] = (),
+    seen_post_compaction_history: bool = False,
+) -> list[str]:
+    """The reminder read out to the author about rules stuck on the same failure.
+
+    ``delegation_tools`` are the tools plugins contributed. They are named here rather than
+    left to the system prompt: a rule that has failed three times the same way is what such a
+    tool exists for, and this is the moment the author decides what to do about it. The
+    wording of what each one addresses stays with the plugin that wrote it.
+    """
+    lines = [
+        "The following rule(s) have had identical failures on the last 3 runs of the prover:",
+        *(f"- {it.pprint()}" for it in to_warn),
+        "You may need to significantly change your approach, or skip the property if this is a persistent issue (you may need to use rebuttals to communicate"
+        " these failures to the feedback judge).",
+    ]
+    if delegation_tools:
+        lines.append(
+            "You also have these tools for handing off a rule you cannot get through: "
+            f"{', '.join(sorted(delegation_tools))}. Consult their descriptions for which "
+            "failures each one addresses."
+        )
+    if seen_post_compaction_history:
+        lines.append(
+            "(NB: Some of these prover calls happened before your most recent task history summarization)"
+        )
+    return lines
+
+
 def stuck_rule_warnings(
     # Values are compared for equality only, so the looser ``str`` keeps callers free of
     # the narrowing dance ``StatusCodes`` would otherwise force on a filtered comprehension.
@@ -304,6 +336,11 @@ class ProverStateExtra(TypedDict):
     spec_stem: NotRequired[str]
     prover_history: Annotated[list[ProverHistoryItem], _merge_prover_history]
     reminders_channel: list[str]
+    #: Names of the tools plugins contributed to this author, so the stuck-rule nag can point at
+    #: them by name. Plugins describe their own tools in the system prompt, but a prompt read
+    #: hours earlier competes badly with a reminder arriving on the failure itself. Empty when
+    #: no plugin contributed; ``NotRequired`` for injectors that set no plugin tools.
+    delegation_tools: NotRequired[list[str]]
 
     # The author's working copy of the source under verification; verify_spec runs
     # against its materialization when non-empty (see ProjectDirectory). Absent/empty
@@ -709,16 +746,11 @@ def get_prover_tool(
                     sort="nag",
                     nagged_rules=list(to_warn)
                 ))
-                nag_channel["reminders_channel"] = [
-                    "The following rule(s) have had identical failures on the last 3 runs of the prover:",
-                    *(f"- {it.pprint()}" for it in to_warn),
-                    "You may need to significantly change your approach, or skip the property if this is a persistent issue (you may need to use rebuttals to communicate"
-                    " these failures to the feedback judge)."
-                ]
-                if seen_post_compaction_history:
-                    nag_channel["reminders_channel"].append(
-                        "(NB: Some of these prover calls happened before your most recent task history summarization)"
-                    )
+                nag_channel["reminders_channel"] = stuck_rule_reminder(
+                    to_warn,
+                    delegation_tools=state.get("delegation_tools") or (),
+                    seen_post_compaction_history=seen_post_compaction_history,
+                )
             if all_verified:
                 nag_channel.setdefault("reminders_channel", []).append(
                     "You have successfully verified over your prior prover run(s) that all rules verify. This task is completed."

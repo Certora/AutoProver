@@ -658,6 +658,39 @@ async def test_build_groups_properties(tmp_path):
     assert report.coverage.property_coverage_complete is True
 
 
+@pytest.mark.asyncio
+async def test_build_records_the_active_plugin_manifest():
+    """Which plugins were live is otherwise unrecoverable from a finished run."""
+    gen = _gen({"p1": ["r1"]})
+    fetch = _fetcher({"L1": [_fake_check("r1", NodeStatus.VERIFIED)]})
+    llm = _StructuredStubModel(output=GroupingResult(groups=[PropertyGroupDraft(
+        slug="g", title="G", description="d", members=[("C", "p1")])]))
+
+    report = await build.build_report(
+        contract_name="Counter", backend="prover",
+        components=[_input("C", "autospec_C.spec", [_prop("p1", "d1")], gen)],
+        llm=llm, fetch_verdicts=fetch, active_plugins=["some_plugin"],
+    )
+
+    assert report.active_plugins == ["some_plugin"]
+
+
+@pytest.mark.asyncio
+async def test_build_records_no_plugins_when_none_are_active():
+    gen = _gen({"p1": ["r1"]})
+    fetch = _fetcher({"L1": [_fake_check("r1", NodeStatus.VERIFIED)]})
+    llm = _StructuredStubModel(output=GroupingResult(groups=[PropertyGroupDraft(
+        slug="g", title="G", description="d", members=[("C", "p1")])]))
+
+    report = await build.build_report(
+        contract_name="Counter", backend="prover",
+        components=[_input("C", "autospec_C.spec", [_prop("p1", "d1")], gen)],
+        llm=llm, fetch_verdicts=fetch,
+    )
+
+    assert report.active_plugins == []
+
+
 class _FlakyStructuredModel(_StructuredStubModel):
     """Raises the given exceptions on successive calls, then returns `output`. Records how many
     times the structured binding was invoked."""
