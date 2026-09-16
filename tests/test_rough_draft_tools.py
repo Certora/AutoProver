@@ -118,15 +118,10 @@ def test_read_still_echoes_stored_draft() -> None:
 def test_writing_a_draft_satisfies_the_completion_gate() -> None:
     """The half the tests above do not cover: that the gate *consuming* the flag agrees.
 
-    Each side is individually plausible and the composition is the whole change — a write that
-    stamps the flag is worth nothing if the validator is still waiting for a read. Reaching for the
-    private validator on purpose: it is the thing under test, and the only public way to exercise it
-    is to stand up the judge's whole graph, which needs a model and a database to answer a question
-    that is one function call wide.
-
-    On the code this replaced, ``write_rough_draft`` cleared the flag and this assertion failed —
-    which is exactly the round-trip it exists to keep closed. Measured on the run that motivated it:
-    twelve verdicts across two units were composed, rejected here, and re-composed nearly verbatim.
+    A write that stamps the flag is worth nothing if the validator is waiting on a different one.
+    The private validator is reached for on purpose — it is the thing under test, and the only
+    public way to exercise it is to stand up the judge's whole graph, which needs a model and a
+    database to answer a question one function call wide.
     """
     write, _read = get_rough_draft_tools(_State)
     out = _invoke([write], {
@@ -140,7 +135,7 @@ def test_writing_a_draft_satisfies_the_completion_gate() -> None:
 
 def test_the_gate_still_refuses_an_agent_that_never_drafted() -> None:
     """The other direction, so the test above cannot be satisfied by a validator that always
-    accepts — which is the shape a careless simplification of it would take."""
+    accepts."""
     assert _wrote_rough_draft(
         cast(JudgeState, {"messages": [], "memory": None, "drafted": False}), None
     ) is not None
