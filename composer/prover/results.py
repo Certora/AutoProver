@@ -343,7 +343,7 @@ def calltrace_to_xml(node: CallTraceModel, shape: TraceShape) -> str:
     return "".join(xml_parts)
 
 
-def counterexample(dump: dict, shape: TraceShape) -> Counterexample | None:
+def counterexample(dump: dict[str, object], shape: TraceShape) -> Counterexample | None:
     """One violated rule's counterexample, or None when its output carries no call trace.
 
     ``assertMessage`` matters twice over: on a Solana loop-unwinding violation it is the only
