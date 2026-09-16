@@ -180,12 +180,8 @@ def test_shared_cargo_ro_paths_excludes_credentials(tmp_path):
 
 
 def test_git_config_ro_paths_grants_files_not_the_home(tmp_path, monkeypatch):
-    """A git dependency needs the global git config readable, and nothing around it.
-
-    ``git_config_ro_paths`` grants files because Landlock's PathBeneath is hierarchical: a grant of
-    ``~/.config`` would hand an untrusted ``build.rs`` every other application's configuration, and
-    a grant of ``$HOME`` would hand it everything.
-    """
+    # Files, not directories: Landlock's PathBeneath is hierarchical, so granting ``~/.config``
+    # would hand an untrusted ``build.rs`` every other application's configuration.
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.delenv("GIT_CONFIG_GLOBAL", raising=False)
     home = tmp_path / "home"
@@ -202,7 +198,7 @@ def test_git_config_ro_paths_grants_files_not_the_home(tmp_path, monkeypatch):
 
 
 def test_git_config_ro_paths_follows_the_xdg_and_override_spellings(tmp_path, monkeypatch):
-    """Three spellings of the same file, and a host uses whichever one it uses."""
+    # Three spellings of the same file; a host uses whichever one it uses.
     home = tmp_path / "home"
     home.mkdir()
     xdg = tmp_path / "xdg"
@@ -217,7 +213,7 @@ def test_git_config_ro_paths_follows_the_xdg_and_override_spellings(tmp_path, mo
 
 
 def test_git_config_ro_paths_drops_what_is_not_there(tmp_path, monkeypatch):
-    """A host with no global git config is the ordinary case, not an error."""
+    # A host with no global git config is the ordinary case, not an error.
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.delenv("GIT_CONFIG_GLOBAL", raising=False)
     home = tmp_path / "home"
@@ -227,11 +223,8 @@ def test_git_config_ro_paths_drops_what_is_not_there(tmp_path, monkeypatch):
 
 
 def test_the_policy_grants_the_git_config(tmp_path, monkeypatch):
-    """The failure this prevents is not a permission error but a *network* error: libgit2 that
-    cannot read the global config reports the cached repository as unopenable, and cargo renders
-    that as "you are in the offline mode" against a fully warm cache. Every Anchor target hits it,
-    since the anchor fork is reached through a ``[patch.crates-io]`` git source.
-    """
+    # The failure this prevents reads as a *network* error, not a permission one — see
+    # :func:`git_config_ro_paths`.
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.delenv("GIT_CONFIG_GLOBAL", raising=False)
     home = tmp_path / "home"

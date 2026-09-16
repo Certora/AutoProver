@@ -17,10 +17,9 @@
 #       --profile autoprove --profile sandbox run --rm autoprove \
 #       console-autoprove --cloud /work/<proj> ...
 #
-# `--profile sandbox` is not optional on a current compose. Enabling a profiled service's profile
-# implicitly because something declared `depends_on` it is no longer done; the refusal reads
-# "service autoprove depends on undefined service run-confined-build", which names neither this
-# file nor the profile it wants.
+# `--profile sandbox` is not optional: a `depends_on` does not enable the target's profile. Omit
+# it and compose refuses with "service autoprove depends on undefined service
+# run-confined-build", which names neither this file nor the profile it wants.
 #
 # Adding the sandbox to a FUTURE service: mirror the three keys added to
 # `autoprove` below (the `depends_on` completion gate, the `run_confined` mount,

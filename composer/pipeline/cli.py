@@ -51,8 +51,6 @@ if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
 
 from certora_autosetup.harnesser.swap import swap_library_main_contract_paths
-from composer.spec.util import fs_forbidden_read
-from graphcore.tools.vfs import GlobalExcludeArg
 import hashlib
 
 
@@ -254,12 +252,11 @@ class StagedPipeline:
     logger: RunDataLogger
     root_key: str
 
-class Continuation[P: enum.Enum, H](Protocol):
-    async def __call__[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
+class Continuation[P: enum.Enum, H, App: BaseApplication, Main, U: FeatureUnit](Protocol):
+    async def __call__[FormT: BackendResult, A: ArtifactIdentifier, Pre](
         self,
         env: ServiceHost,
         backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
-        ecosystem: Ecosystem[App, Main, U]
     ) -> CorePipelineResult[FormT]:
         ...
 
@@ -272,21 +269,17 @@ class AtExit(Protocol):
         ...
 
 @asynccontextmanager
-async def cli_pipeline[P: enum.Enum, H](
+async def cli_pipeline[P: enum.Enum, H, App: BaseApplication, Main, U: FeatureUnit](
     args: PipelineArgs,
     thread_id: str,
     summary: RunSummary,
     task_handler: HandlerFactory[P, H],
     design_doc_phase: P,
+    ecosystem: Ecosystem[App, Main, U],
     at_exit: AtExit | None = None,
     run_mode: RunMode = RunMode.COMPREHENSIVE,
-    forbidden_read: GlobalExcludeArg = fs_forbidden_read,
     **metadata
-) -> AsyncIterator[tuple[StagedPipeline, Continuation[P, H]]]:
-    """``forbidden_read`` is what the run's source tools withhold, and defaults to the Solidity
-    rule this was written against. A non-EVM caller passes its ecosystem's
-    ``language.default_forbidden_read`` — on a Cargo project the Solidity default withholds nothing
-    it should and admits ``target/``, whose build artifacts are larger than the source tree."""
+) -> AsyncIterator[tuple[StagedPipeline, Continuation[P, H, App, Main, U]]]:
     project_root = pathlib.Path(args.project_root).resolve()
     main_contract_path, contract_name = args.main_contract.split(":", 1)
 
@@ -334,7 +327,7 @@ async def cli_pipeline[P: enum.Enum, H](
     init_source = SourceFields(
         relative_path=relative_path,
         contract_name=SourceIdentifier(contract_name),
-        forbidden_read=forbidden_read,
+        forbidden_read=ecosystem.language.default_forbidden_read,
         project_root=str(project_root)
     )
 
@@ -431,10 +424,9 @@ async def cli_pipeline[P: enum.Enum, H](
                 relative_path=init_source.relative_path
             )
 
-            async def cont[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
+            async def cont[FormT: BackendResult, A: ArtifactIdentifier, Pre](
                 env: ServiceHost,
                 backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
-                ecosystem: Ecosystem[App, Main, U]
             ) -> CorePipelineResult[FormT]:
                 await data_logger(CACHE_ROOT_RECORD, AutoProveCacheTags(
                     cache_root=list(cache_root) if cache_root is not None else None,
