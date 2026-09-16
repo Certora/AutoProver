@@ -2215,7 +2215,9 @@ failures, so a prover-API blip is not retried and takes the unit's graph down wi
 `put_harness`, on its first submission. The cost is asymmetric in a way worth stating: a replay that
 hits a bad tape fails in seconds, while a recording that loses a unit at minute twenty is discovered
 at minute one hundred and forty. The fetch is a pure read of finished artifacts, so a bounded retry
-around it is safe; that it has not been needed before is a statement about luck rather than design.
+around it is safe; that it had not been needed before was a statement about luck rather than design.
+One is in review on master ([#223](https://github.com/Certora/AutoProver/pull/223)), written
+independently of this run.
 
 **What `memory_tool` is not.** It reads as the switch for the `memory` tool and is not: it adds the
 Anthropic `context-management-2025-06-27` beta to the request and nothing else
