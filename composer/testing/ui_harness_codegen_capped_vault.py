@@ -214,7 +214,7 @@ _PROPOSAL_KEY = string_hash(_REMEDIATED_SPEC)
 # Lane: requirements extraction
 # ---------------------------------------------------------------------------
 # Tools: memory, reqs (result), human_in_the_loop, cvl_manual_search, rough draft.
-# _extraction_res_checker gates `reqs` behind read_rough_draft (did_read).
+# _extraction_res_checker gates `reqs` behind read_rough_draft (drafted).
 
 _REQUIREMENTS_TAPE: list[BaseMessage] = [
     _ai(
@@ -495,7 +495,7 @@ _CODEGEN_TAPE: list[BaseMessage] = [
         "Code + spec verify. Evaluating the requirements.",
         _tc("requirements_evaluation"),
     ),
-    # --- judge sub-agent: no rough draft (memory unset → no did_read gate). Each
+    # --- judge sub-agent: no rough draft (memory unset → no drafted gate). Each
     # requirement text must match the extracted reqs verbatim, by 1-based number.
     _ai(
         "Requirements verdict.",
