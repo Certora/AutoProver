@@ -789,9 +789,8 @@ registration:
 | Step | Artifact |
 |---|---|
 | Build the manuals | [gen_docs.sh](../scripts/gen_docs.sh) → `scripts/prover-docs/solana.html`, now also writing a `PROVENANCE` file naming the docs revision |
-| Parse | [composer/rag/html_manual.py](../composer/rag/html_manual.py) — sphinx HTML → a tree of typed blocks, bs4 only, no RAG dependencies |
-| Produce | `certora-cvlr-kb` `tools/docs_manifest.py` → `cvlr-docs.rag.json` (147 embedded groups, 156 manual sections, 121 code blocks). Built in AutoProver originally; moved with the other two producers (§8.2) |
-| Ingest | `composer.scripts.rag_import` → 148 chunks + 156 sections in the `cvlr_rag` schema |
+| Parse and ingest | `composer.scripts.ragbuild --knowledge-base cvlr_kb` — the same producer the CVL corpus uses, writing chunks and manual sections straight to the `cvlr_rag` schema. There is no documentation manifest and no separate producer: the source is a sphinx build this repo already runs (see [cvlr-todo.md](./cvlr-todo.md) U6, which reversed the arrangement below) |
+| ~~Produce~~ | ~~`certora-cvlr-kb` `tools/docs_manifest.py` → `cvlr-docs.rag.json`~~ — retired. It had rebuilt, in a second repo, a manual this one was already building |
 | Spot-check | 20 authoring-agent questions (§4.9): 20/20 returned a relevant section, `get_section` round-trips, keyword search resolves `cvlr_rules` at 0.998 |
 
 Two notes for whoever extends this:
@@ -1422,12 +1421,14 @@ done:**
 Both of the pieces this section used to list as *not* done are now done, and the shape they took
 is worth recording:
 
-5. **The docs manifest producer** (§4.7.1) — `certora-cvlr-kb` `tools/docs_manifest.py` over
-   [html_manual.py](../composer/rag/html_manual.py). The parser was extracted from `ragbuild.py`
-   instead of written alongside it, with the CVL corpus verified unchanged; a second HTML parser
-   would have drifted within a release. That extraction is also what let the producer move to the
-   private repo later (§8.2) while the parser stayed here for the EVM corpus: the producer imports
-   it from an `AUTOPROVER_REPO` checkout, and reproduces the previous manifest byte-for-byte.
+5. ~~**The docs manifest producer** (§4.7.1)~~ — **retired.** It parsed a manual AutoProver was
+   already building, in a repo that then had to reach back for the parser, to produce a manifest an
+   importer then read. `ragbuild` does the whole of that in one step and always could; the corpus's
+   documentation half is now ingested there directly (`--knowledge-base cvlr_kb`). What the episode
+   left behind is one real fix — a `<blockquote>` the traversal dropped, which is where the Solana
+   manual states its pre/post snapshot methodology — and one measurement, recorded in
+   [rag-import-format.md](./rag-import-format.md) §5: the flat manifest format cannot express
+   `push_child`, and that is the only thing it cannot express.
 6. **Nothing is baked into the image.** `docs-builder` builds only `cvl.html`, for the base
    `rag_db`. All three `cvlr_kb` manifests ship in the `certora-cvlr-kb` package, so `setup-db`
    finds them in one place — a checkout via `CVLR_KB_REPO`, else the installed package — instead of

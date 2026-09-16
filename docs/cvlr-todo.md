@@ -65,12 +65,13 @@ split, argued for in [rag-import-format.md](./rag-import-format.md) §6-7. CVL c
 other ways: in-tree by [ragbuild.py](../composer/scripts/ragbuild.py), which parses sphinx HTML and
 writes the DB itself, and separately by [certorag](https://github.com/Certora/certorag).
 
-**Decided: the Solana Prover manual is generated here, as it already is.**
+**Done: the Solana Prover manual is generated here, as it already was.**
 [gen_docs.sh](../scripts/gen_docs.sh) has always built `solana.html` alongside `cvl.html` — four
 manuals, of which one is published — so the documentation half of the corpus needs no producer
 anywhere else. `certora-cvlr-kb` drops `tools/docs_manifest.py` and `cvlr-docs.rag.json`, and the
-docs half is ingested in-tree, which `ragbuild` can already do: it and `rag_import` write through
-the same two database calls, so pointing `ragbuild` at the `cvlr_kb` connection needs no new code.
+docs half is ingested in-tree by `ragbuild --knowledge-base cvlr_kb` — it and `rag_import` write
+through the same two database calls, so the registry lookup was the only code needed. The shared
+HTML parser that existed to let a second repo do this is reverted with it.
 This reverses half of [the backend plan](./cvlr-backend-plan.md) §7.3.3, and the reason that section
 gave is the cost to watch: three manifests built in three places can be three vintages, and the
 corpus carries one tag that hides the seam. The `PROVENANCE` stamp beside the built HTML is what
