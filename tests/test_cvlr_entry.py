@@ -228,16 +228,6 @@ def test_the_corpus_defaults_to_the_cvlr_knowledge_base():
     assert entry.build_parser().parse_args(["/proj", "src/lib.rs:p"]).rag_corpus == "cvlr_kb"
 
 
-def test_the_run_can_be_bounded_by_what_it_takes_on():
-    """``--budget`` bounds spend and curtails whatever is in flight when it runs out;
-    ``--max-properties`` bounds the work before any of it is paid for. Easing into an unfamiliar
-    program wants both."""
-    args = entry.build_parser().parse_args(["/proj", "src/lib.rs:p", "--max-properties", "5"])
-
-    assert args.max_properties == 5
-    assert entry.build_parser().parse_args(["/proj", "src/lib.rs:p"]).max_properties is None
-
-
 def test_the_design_doc_is_optional():
     assert entry.build_parser().parse_args(["/proj", "src/lib.rs:p"]).system_doc is None
 
@@ -385,16 +375,6 @@ async def test_design_doc_discovery_has_a_phase_of_its_own(project, monkeypatch,
     await _run([str(project), "programs/vault/src/lib.rs:vault"], monkeypatch, wiring)
 
     assert wiring.kwargs["design_doc_phase"] is CvlrPhase.DISCOVER_DESIGN_DOC
-
-
-@pytest.mark.asyncio
-async def test_the_property_cap_reaches_the_pipeline(project, monkeypatch, wiring):
-    await _run(
-        [str(project), "programs/vault/src/lib.rs:vault", "--max-properties", "5"],
-        monkeypatch, wiring,
-    )
-
-    assert wiring.kwargs["max_properties"] == 5
 
 
 @pytest.mark.asyncio

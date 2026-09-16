@@ -1,6 +1,6 @@
 # Landing the CVLR backend
 
-`eric/solanaProver` is 128 commits over 166 files — about 95,000 inserted lines, of which one
+`eric/solanaProver` is 128 commits over 165 files — about 95,000 inserted lines, of which one
 recorded tape is 51,000 and one pinned fixture is 4,200. It cannot be reviewed as a branch. This
 document breaks it into pull requests that each stand on their own, ordered so that the work with
 no CVLR dependency lands first.
@@ -53,20 +53,19 @@ motivation. Sizes are insertions/deletions against master.
 | **S6** Select the Prover CLI by app | 4 | +203 −30 | `ProverApp = "evm" \| "solana" \| "soroban"`, a registry of entry points, and `certoraRunWrapper` taking the app as `argv[2]`. Everything downstream of submission is already chain-neutral; this is the one place they differ. |
 | **S7** Counterexamples, and which frames to show | 10 | +411 −48 | `Counterexample`/`SourceSpan` as data rather than a rendered string, `classify_violation`, and `TraceShape` — per-chain rules for which call-trace frames survive rendering. Carries the Solana treeView fixtures that prove the parser is chain-neutral. |
 | **S8** Report: what a component gave up on | 7 | +280 −37 | `Abandoned` replacing a `None` that discarded the reason, `GaveUpComponent.reason`, and the `BuildEnvironment` discriminated union (`ConfinedBuilds \| UnconfinedBuilds \| None`) so a report says how the builds behind its verdicts were confined. Includes the `pipeline/core.py` hook that supplies it. |
-| **S9** `--max-properties` | 2 | +80 + hunks | A blunt cap on how many extracted properties a run attempts, applied before the staged formalizer starts. Complements the budget rather than duplicating it: one bounds what a run takes on, the other what it spends. |
-| **S10** Pinned runs | 4 | +4752 | `composer/pipeline/pinned.py`: write a run's analysis *and* properties to disk with `--pin-to`, start a later run at formalization with `--properties`. Both halves, because a unit is an index into the analysis. 4,233 of those lines are one checked-in fixture — worth asking whether it belongs in the repo. |
-| **S11** What a source-reading agent may see | 7 | +184 −18 | `RUST_FORBIDDEN_READ` extended to withhold `INTERNAL_DIR` anywhere in the tree (one `list_files` returned 28,904 lines, 28,739 of them a nested cargo registry, and the next request was 2.2M tokens against a 1M limit); `build_layered_source_tools` and `LibrarySource` for a second read-only mount; `crate_source` on the code explorer's prompt. |
-| **S12** Confine a build that has git dependencies | 3 | +146 −12 | `git_config_ro_paths`: libgit2 will not open a cached git source at all without the global config, and reports it as an offline-mode network error. Plus the sandbox scratch dirs moving under `INTERNAL_DIR`. |
+| **S9** Pinned runs | 4 | +4752 | `composer/pipeline/pinned.py`: write a run's analysis *and* properties to disk with `--pin-to`, start a later run at formalization with `--properties`. Both halves, because a unit is an index into the analysis. 4,233 of those lines are one checked-in fixture — worth asking whether it belongs in the repo. |
+| **S10** What a source-reading agent may see | 7 | +184 −18 | `RUST_FORBIDDEN_READ` extended to withhold `INTERNAL_DIR` anywhere in the tree (one `list_files` returned 28,904 lines, 28,739 of them a nested cargo registry, and the next request was 2.2M tokens against a 1M limit); `build_layered_source_tools` and `LibrarySource` for a second read-only mount; `crate_source` on the code explorer's prompt. |
+| **S11** Confine a build that has git dependencies | 3 | +146 −12 | `git_config_ro_paths`: libgit2 will not open a cached git source at all without the global config, and reports it as an offline-mode network error. Plus the sandbox scratch dirs moving under `INTERNAL_DIR`. |
 
-Dependencies inside the wave: **S1** before **S11** and **S12**; **S6** before **S7**. The rest are
+Dependencies inside the wave: **S1** before **S10** and **S11**; **S6** before **S7**. The rest are
 independent of each other.
 
-**A caution about `pipeline/core.py` and `pipeline/cli.py`.** Four of these PRs touch them, each for
-its own feature — the build-environment hook (S8), the property cap (S9), the pinned fixture (S10),
-the forbidden-read parameter (S11). Take the hunks, not the files, and land them in that order;
-whichever goes last will want a rebase. One unrelated hunk in `cli.py` is a genuine bug fix — a main
-contract path resolved against the process's cwd rather than the project root — and should travel
-with S11 or alone, not be smuggled in.
+**A caution about `pipeline/core.py` and `pipeline/cli.py`.** Three of these PRs touch them, each
+for its own feature — the build-environment hook (S8), the pinned fixture (S9), the forbidden-read
+parameter (S10). Take the hunks, not the files, and land them in that order; whichever goes last
+will want a rebase. One unrelated hunk in `cli.py` is a genuine bug fix — a main contract path
+resolved against the process's cwd rather than the project root — and should travel with S10 or
+alone, not be smuggled in.
 
 ---
 
@@ -116,7 +115,7 @@ themselves. No shared module reaches into the backend.
 | **C7** Register the CVLR corpus | 7 | +322 −19 | The `cvlr_kb` knowledge base: the tools module, both registry halves, the DB role, and the populate script. The corpus content itself lives in a separate repo — see U6 in [cvlr-todo.md](./cvlr-todo.md). |
 | **C8a** The end-to-end gate and its scenario | 9 | +2945 | `test_cvlr_gate.py` and the `solana_vault_idl` Anchor program it runs against. Real models, real cargo, real cloud jobs. |
 | **C8b** The replay tape | 7 | +52251 | The recorded run that lets the gate's shape be re-checked for the price of the builds and prover jobs alone. 51,000 of those lines are one generated file. |
-| **D** Documentation | 10 | +8135 | The backend plan, the capture plan, the upstream-defect record, the working-copy and VFS notes, and the to-do index. |
+| **D** Documentation | 10 | +8153 | The backend plan, the capture plan, the upstream-defect record, the working-copy and VFS notes, and the to-do index. |
 
 ---
 
@@ -164,10 +163,9 @@ the exception noted in wave 1 — take the feature's hunks, not the whole file.
 | S6 | `composer/certora_env.py` `composer/prover/certoraRunWrapper.py` `composer/prover/core.py` `composer/prover/ptypes.py` |
 | S7 | `composer/prover/results.py` `analyzer/analysis.py` `tests/test_solana_cex_trace.py` `tests/data/solana_cex/` `tests/test_tree_parsing.py` `tests/test_cex_analysis_failure_isolation.py` |
 | S8 | `composer/spec/source/report/{schema,collect,build,render}.py` `composer/spec/source/report_prover.py` `composer/templates/autoprove_report.html.j2` `tests/test_autoprove_report.py` `composer/pipeline/core.py` *(hunks)* |
-| S9 | `tests/test_pipeline_property_cap.py` `composer/pipeline/{core,cli}.py` *(hunks)* |
-| S10 | `composer/pipeline/pinned.py` `tests/test_pinned_properties.py` `tests/data/pins/` `composer/pipeline/{core,cli}.py` *(hunks)* |
-| S11 | `composer/pipeline/ecosystem.py` `composer/spec/source/source_env.py` `composer/spec/code_explorer.py` `composer/templates/code_explorer/rust/common_fragment.j2` `tests/test_fs_forbidden_read.py` `composer/spec/source/prover.py` `composer/spec/context.py` `composer/pipeline/cli.py` *(hunks)* |
-| S12 | `composer/sandbox/recipes.py` `tests/test_sandbox_config.py` `scripts/docker-compose.sandbox.yml` |
+| S9 | `composer/pipeline/pinned.py` `tests/test_pinned_properties.py` `tests/data/pins/` `composer/pipeline/{core,cli}.py` *(hunks)* |
+| S10 | `composer/pipeline/ecosystem.py` `composer/spec/source/source_env.py` `composer/spec/code_explorer.py` `composer/templates/code_explorer/rust/common_fragment.j2` `tests/test_fs_forbidden_read.py` `composer/spec/source/prover.py` `composer/spec/context.py` `composer/pipeline/cli.py` *(hunks)* |
+| S11 | `composer/sandbox/recipes.py` `tests/test_sandbox_config.py` `scripts/docker-compose.sandbox.yml` |
 | R1 | `composer/cargo/` `composer/rustapp/toolchain.py` `tests/test_cvlr_symbols.py` `tests/data/vault_sbf_symbols.txt` |
 | R2 | `graphcore` `pyproject.toml` *(the pin only)* |
 | R3 | `scripts/Dockerfile` `scripts/autoprove-entrypoint.sh` `scripts/docker-compose.yml` `tests/test_cvlr_image.py` |
