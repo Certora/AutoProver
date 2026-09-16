@@ -1,6 +1,6 @@
 # Landing the CVLR backend
 
-`eric/solanaProver` is 128 commits over 167 files — about 95,000 inserted lines, of which one
+`eric/solanaProver` is 128 commits over 166 files — about 95,000 inserted lines, of which one
 recorded tape is 51,000 and one pinned fixture is 4,200. It cannot be reviewed as a branch. This
 document breaks it into pull requests that each stand on their own, ordered so that the work with
 no CVLR dependency lands first.
@@ -116,18 +116,18 @@ themselves. No shared module reaches into the backend.
 | **C7** Register the CVLR corpus | 7 | +322 −19 | The `cvlr_kb` knowledge base: the tools module, both registry halves, the DB role, and the populate script. The corpus content itself lives in a separate repo — see U6 in [cvlr-todo.md](./cvlr-todo.md). |
 | **C8a** The end-to-end gate and its scenario | 9 | +2945 | `test_cvlr_gate.py` and the `solana_vault_idl` Anchor program it runs against. Real models, real cargo, real cloud jobs. |
 | **C8b** The replay tape | 7 | +52251 | The recorded run that lets the gate's shape be re-checked for the price of the builds and prover jobs alone. 51,000 of those lines are one generated file. |
-| **D** Documentation | 9 | +7965 | The backend plan, the capture plan, the upstream-defect record, the working-copy and VFS notes, and the to-do index. |
+| **D** Documentation | 10 | +8135 | The backend plan, the capture plan, the upstream-defect record, the working-copy and VFS notes, and the to-do index. |
 
 ---
 
 ## Decisions to make before starting
 
-**1. [#238](https://github.com/Certora/AutoProver/pull/238) duplicates
-[#223](https://github.com/Certora/AutoProver/pull/223).** They are the same change. #223 came first
-and should be the one that lands. Two things in #238 are worth carrying over as review comments
-rather than as a competing PR: it declines to retry the four failures a second attempt cannot change
+**1. ~~[#238](https://github.com/Certora/AutoProver/pull/238) duplicates
+[#223](https://github.com/Certora/AutoProver/pull/223).~~ Settled: #238 is closed and #223 is the
+one that lands, and this branch no longer carries its own copy of the change.** Two things from the
+closed PR are still worth raising as review comments on #223: it declined to retry the four failures a second attempt cannot change
 (a missing job, a bad token, a malformed reference, an unparseable document), where #223 retries
-every exception; and it relies on the client library's own completion markers to resume, where #223
+every exception; and it relied on the client library's own completion markers to resume, where #223
 wipes the destination between attempts and re-downloads what already arrived.
 
 **2. Does the 5 MB tape belong in the repository?** C8b is the only PR here that a reviewer cannot
