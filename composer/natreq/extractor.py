@@ -94,7 +94,7 @@ def _extraction_res_checker(
     _id: str
 ) -> str | None:
     if "memory" in st and not st.get("drafted", False):
-        return "Completion REJECTED: You must write a rough draft before submitting. Call write_rough_draft first."
+        return "Completion REJECTED: You must read your rough draft before submitting. Call read_rough_draft first."
     return None
 
 results_tool = result_tool_generator(

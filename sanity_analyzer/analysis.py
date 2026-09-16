@@ -91,7 +91,7 @@ sanity_analysis_output_tool = result_tool_generator(
     validator=(
         SanityState,
         lambda state, _result, _tool_call_id: (
-            "You must call write_rough_draft before submitting your final result."
+            "You must call read_rough_draft before submitting your final result."
             if state.get("memory") and not state["drafted"]
             else None
         ),
