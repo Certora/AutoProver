@@ -45,7 +45,7 @@ motivation. Sizes are insertions/deletions against master.
 
 | PR | Files | Size | What it is |
 |----|-------|------|------------|
-| **S1** Project-root layout | 2 | +27 −3 | `composer/layout.py`: `CERTORA_DIR` and `INTERNAL_DIR` spelled once, where `composer.sandbox` can import them without pulling in pydantic. `gen_types` keeps the per-backend subdirectories and imports the two roots. |
+| **S1** Confined builds: one scratch directory, a readable git config, an unreadable output | 7 | +265 −22 | Three findings from making Rust builds run under the sandbox, and one story. `composer/layout.py` declares `CERTORA_DIR` / `INTERNAL_DIR` where `composer.sandbox` can import them without pulling in pydantic — the escape suite runs it in a guest that has only pytest. The sandbox's scratch (`CARGO_HOME`, tmp) moves under `INTERNAL_DIR`, and `RUST_FORBIDDEN_READ` withholds that directory anywhere in the tree: a build's private cargo registry was 730 MB, one `list_files` returned 28,904 lines with 28,739 of them from it, and the next request was 2.2M tokens against a 1M limit. And `git_config_ro_paths` grants the global git config, without which libgit2 refuses to open a fully warm cached git dependency and reports it as an offline-mode *network* error. |
 | **S2** Rescue a mis-encoded grouping | 1 | +26 −1 | A `field_validator` that accepts the whole grouping object JSON-encoded into its own `groups` field. Observed on a real run; the existing fallback silently flattens a report to one group. |
 | **S3** A readable cost budget | 1 | +11 −2 | `token_cost_budget` yields its counter instead of `None`, so a caller can report what it spent rather than only trip on the cap. |
 | **S4** A `measurement` pytest mark | 1 | +4 −1 | The nightly expensive sweep selects `expensive and not measurement`, so a test that exists to produce a one-off number is not billed every night. Already committed here as `da211b2a`. |
@@ -54,18 +54,19 @@ motivation. Sizes are insertions/deletions against master.
 | **S7** Counterexamples, and which frames to show | 10 | +411 −48 | `Counterexample`/`SourceSpan` as data rather than a rendered string, `classify_violation`, and `TraceShape` — per-chain rules for which call-trace frames survive rendering. Carries the Solana treeView fixtures that prove the parser is chain-neutral. |
 | **S8** Report: what a component gave up on | 7 | +280 −37 | `Abandoned` replacing a `None` that discarded the reason, `GaveUpComponent.reason`, and the `BuildEnvironment` discriminated union (`ConfinedBuilds \| UnconfinedBuilds \| None`) so a report says how the builds behind its verdicts were confined. Includes the `pipeline/core.py` hook that supplies it. |
 | **S9** Pinned runs | 4 | +4752 | `composer/pipeline/pinned.py`: write a run's analysis *and* properties to disk with `--pin-to`, start a later run at formalization with `--properties`. Both halves, because a unit is an index into the analysis. 4,233 of those lines are one checked-in fixture — worth asking whether it belongs in the repo. |
-| **S10** What a source-reading agent may see | 7 | +184 −18 | `RUST_FORBIDDEN_READ` extended to withhold `INTERNAL_DIR` anywhere in the tree (one `list_files` returned 28,904 lines, 28,739 of them a nested cargo registry, and the next request was 2.2M tokens against a 1M limit); `build_layered_source_tools` and `LibrarySource` for a second read-only mount; `crate_source` on the code explorer's prompt. |
-| **S11** Confine a build that has git dependencies | 3 | +146 −12 | `git_config_ro_paths`: libgit2 will not open a cached git source at all without the global config, and reports it as an offline-mode network error. Plus the sandbox scratch dirs moving under `INTERNAL_DIR`. |
+| **S10** A second read-only source mount | 4 | +84 −9 | `build_layered_source_tools` and `LibrarySource` — tools over a library the analyzed project depends on, and the statement that tells an agent they exist, which travel together because either alone is worse than neither. Plus `crate_source` on the code explorer's prompt. Carries a stray docstring correction in `source/prover.py` that belongs nowhere in particular. |
 
-Dependencies inside the wave: **S1** before **S10** and **S11**; **S6** before **S7**. The rest are
-independent of each other.
+Dependencies inside the wave: **S6** before **S7**, and nothing else. Merging the sandbox work into
+one PR removed the wave's other ordering constraint, which had been an artefact of the split rather
+than of the code: the forbidden-read test imports the sandbox's own scratch-directory constants, so
+the two could never have been reviewed apart.
 
 **A caution about `pipeline/core.py` and `pipeline/cli.py`.** Three of these PRs touch them, each
-for its own feature — the build-environment hook (S8), the pinned fixture (S9), the forbidden-read
-parameter (S10). Take the hunks, not the files, and land them in that order; whichever goes last
-will want a rebase. One unrelated hunk in `cli.py` is a genuine bug fix — a main contract path
-resolved against the process's cwd rather than the project root — and should travel with S10 or
-alone, not be smuggled in.
+for its own feature — the `forbidden_read` parameter that lets a caller pass its ecosystem's rule
+(S1), the build-environment hook (S8), the pinned fixture (S9). Take the hunks, not the files, and
+land them in that order; whichever goes last will want a rebase. One unrelated hunk in `cli.py` is a
+genuine bug fix — a main contract path resolved against the process's cwd rather than the project
+root — and should travel with S1 or alone, not be smuggled in.
 
 ---
 
@@ -94,7 +95,7 @@ code and land C6 last, after which the backend appears all at once and works.
 | **C2** The working copy and the crate mount | 6 | +1219 | The per-unit working tree, the read-only mount of the CVLR crates the target resolves, and the source tools over both. Needs **R2**. |
 | **C3a** The munge vocabulary | 5 | +2982 | The six kinds of source modification a harness may need, and how each is expressed against a Rust crate. |
 | **C3b** The munge editor | 3 | +2542 | The agent that proposes and applies them, and the review that accepts or rejects. |
-| **C4a** The authoring loop | 9 | +2634 | Author, state, rule extraction, the judge's prompts, and the feedback round. |
+| **C4a** The authoring loop | 10 | +2642 | Author, state, rule extraction, the judge's prompts, and the feedback round. Carries the `CvlrJudge` / `CvlrGeneration` cache markers in `spec/context.py`, which are CVLR-specific and have no business in a shared PR. |
 | **C4b** The prompt corpus | 8 | +3179 | Guidance, the worked example rendered against the analyzed program, and the knowledge tests that pin what the prompts must and must not claim. |
 | **C5** Verification and tuning | 10 | +3105 | Submission, the prover-side tuning directives, loop bounds, and the Anchor surface analysis. |
 | **C6** Pipeline and entry | 12 | +3091 −6 | `CvlrBackend`, the CLI entry points, the artifact store, and the plumbing tests. The PR that makes the backend exist. |
@@ -155,7 +156,7 @@ the exception noted in wave 1 — take the feature's hunks, not the whole file.
 
 | PR | Paths |
 |----|-------|
-| S1 | `composer/layout.py` `composer/spec/gen_types.py` |
+| S1 | `composer/layout.py` `composer/spec/gen_types.py` `composer/sandbox/recipes.py` `composer/pipeline/ecosystem.py` `tests/test_fs_forbidden_read.py` `tests/test_sandbox_config.py` `scripts/docker-compose.sandbox.yml` `composer/pipeline/cli.py` *(hunks)* |
 | S2 | `composer/spec/source/report/grouping.py` |
 | S3 | `composer/diagnostics/budget.py` |
 | S4 | `.github/workflows/integration-tests.yml` `pyproject.toml` *(the marker registration only)* |
@@ -164,8 +165,7 @@ the exception noted in wave 1 — take the feature's hunks, not the whole file.
 | S7 | `composer/prover/results.py` `analyzer/analysis.py` `tests/test_solana_cex_trace.py` `tests/data/solana_cex/` `tests/test_tree_parsing.py` `tests/test_cex_analysis_failure_isolation.py` |
 | S8 | `composer/spec/source/report/{schema,collect,build,render}.py` `composer/spec/source/report_prover.py` `composer/templates/autoprove_report.html.j2` `tests/test_autoprove_report.py` `composer/pipeline/core.py` *(hunks)* |
 | S9 | `composer/pipeline/pinned.py` `tests/test_pinned_properties.py` `tests/data/pins/` `composer/pipeline/{core,cli}.py` *(hunks)* |
-| S10 | `composer/pipeline/ecosystem.py` `composer/spec/source/source_env.py` `composer/spec/code_explorer.py` `composer/templates/code_explorer/rust/common_fragment.j2` `tests/test_fs_forbidden_read.py` `composer/spec/source/prover.py` `composer/spec/context.py` `composer/pipeline/cli.py` *(hunks)* |
-| S11 | `composer/sandbox/recipes.py` `tests/test_sandbox_config.py` `scripts/docker-compose.sandbox.yml` |
+| S10 | `composer/spec/source/source_env.py` `composer/spec/code_explorer.py` `composer/templates/code_explorer/rust/common_fragment.j2` `composer/spec/source/prover.py` |
 | R1 | `composer/cargo/` `composer/rustapp/toolchain.py` `tests/test_cvlr_symbols.py` `tests/data/vault_sbf_symbols.txt` |
 | R2 | `graphcore` `pyproject.toml` *(the pin only)* |
 | R3 | `scripts/Dockerfile` `scripts/autoprove-entrypoint.sh` `scripts/docker-compose.yml` `tests/test_cvlr_image.py` |
@@ -174,7 +174,7 @@ the exception noted in wave 1 — take the feature's hunks, not the whole file.
 | C2 | `composer/spec/cvlr/{tree,crate_mount,rust_source,source_tools}.py` `composer/templates/cvlr_source_tools.j2` `tests/test_cvlr_tree.py` |
 | C3a | `composer/spec/cvlr/munge.py` `composer/templates/cvlr_munge_{editor,review}_system.j2` `tests/test_cvlr_munge.py` `tests/test_cvlr_module_redirect.py` |
 | C3b | `composer/spec/cvlr/editor.py` `tests/test_cvlr_editor.py` `tests/test_cvlr_derive_swap.py` |
-| C4a | `composer/spec/cvlr/{author,state,rules}.py` `composer/templates/cvlr_feedback_prompt.j2` `composer/templates/cvlr_property_judge_system_prompt.j2` `tests/test_cvlr_{author,judge_input,rules}.py` `template_manifest.json` |
+| C4a | `composer/spec/cvlr/{author,state,rules}.py` `composer/spec/context.py` `composer/templates/cvlr_feedback_prompt.j2` `composer/templates/cvlr_property_judge_system_prompt.j2` `tests/test_cvlr_{author,judge_input,rules}.py` `template_manifest.json` |
 | C4b | `composer/spec/cvlr/{guidance,example}.py` `composer/templates/cvlr_property_generation{,_system}_prompt.j2` `tests/test_cvlr_{worked_example,knowledge,judge_round_cost}.py` `tests/data/cvlr_judge/` |
 | C5 | `composer/spec/cvlr/{verify,prover,tuning,anchor_surface}.py` `tests/test_cvlr_{tuning,anchor_surface,anchor_reach,loop_bound}.py` `tests/data/{anchor_reach,loop_bound}_probe.rs` |
 | C6 | `composer/spec/cvlr/{pipeline,entry,harness,__init__}.py` `composer/cli/{console,tui}_solana.py` `tests/test_cvlr_{entry,plumbing,end_to_end,findings}.py` `tests/conftest.py` `tests/test_autoprove_integration.py` `pyproject.toml` *(the console scripts and package data)* |
