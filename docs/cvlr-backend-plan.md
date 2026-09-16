@@ -2513,6 +2513,9 @@ would supply its own probe shape and reuse the step.
 Every phase above records what building it found; this is the residue, and it is deliberately in one
 list because most of it is not in the phase that will fix it.
 
+[cvlr-todo.md](./cvlr-todo.md) indexes this list in one paragraph per item, alongside work that has
+no section here at all. Read it to choose something; read this to understand what you chose.
+
 **Upstream, and blocking.**
 
 1. **P6 — a summarized CPI havocs the caller's deserialized `Account<T>`**, not just the account data
