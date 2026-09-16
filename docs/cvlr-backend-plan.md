@@ -698,6 +698,15 @@ the docs producer imports it from an `AUTOPROVER_REPO` checkout like everything 
 rather than restates. The moved producer reproduces the previous manifest byte-for-byte from the same
 manual, which is the check that the move changed only where the code lives.
 
+**Half of this has since been reversed by decision** (see [cvlr-todo.md](./cvlr-todo.md) U6). The
+documentation manifest comes back, because the thing it was rebuilding was already being built here:
+`scripts/gen_docs.sh` has always produced `solana.html` beside `cvl.html`, and `ragbuild` already
+writes through the same two database calls `rag_import` does, so the docs half needs no producer,
+no manifest and no new code — only a connection. The provenance argument above is what that costs,
+and it is the reason the built HTML now carries a `PROVENANCE` stamp naming the docs revision. The
+crate reference and the practice corpus are unaffected: they are expensive to build, for the reasons
+this section gives, and where they belong is still open.
+
 The one thing that got *simpler* is discovery. `populate_cvlr_rag.sh` had a four-tier ladder because
 one manifest came from this repo's tree and the others from a package; both it and the Docker
 entrypoint are now two tiers over one source — a checkout, else the installed package. The

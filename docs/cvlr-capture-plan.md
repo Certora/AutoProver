@@ -1274,7 +1274,7 @@ sharing a DB (`test_part_numbering_continues_across_manifests_sharing_a_db`).
 
 | Manifest | Content | Public content? | Rebuilding it needs |
 |---|---|---|---|
-| `cvlr-docs.rag.json` | Published Solana/CVLR manual (§4.7) | Yes | A sphinx build of the public docs repo |
+| `cvlr-docs.rag.json` | Published Solana/CVLR manual (§4.7) | Yes | A sphinx build of the public docs repo — **superseded**: this half is generated in AutoProver by `gen_docs.sh` + `ragbuild`, and this manifest is retired (see [cvlr-todo.md](./cvlr-todo.md) U6) |
 | `cvlr-crates.rag.json` | Generated CVLR crate reference | Yes | An API key and a cargo toolchain |
 | `cvlr-practice.rag.json` | Project-derived idioms (§4.6) | **No** | Project checkouts |
 
