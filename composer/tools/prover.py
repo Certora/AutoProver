@@ -14,9 +14,9 @@ from langgraph.runtime import get_runtime
 from langgraph.types import Command
 
 from composer.core.state import AIComposerState
-from composer.core.context import AIComposerContext, ProverOptions, stamp
+from composer.core.context import AIComposerContext, stamp
 from composer.core.validation import ProverValidation
-from composer.prover.core import ProverReport, CexHandler, ProverOptions as CoreProverOptions, run_prover
+from composer.prover.core import ProverReport, CexHandler, ProverOptions, run_prover
 from composer.prover.callbacks import ProverEventCallbacks
 from composer.ui.tool_display import tool_display
 
@@ -30,9 +30,15 @@ _WORKING_SPEC_SCRATCH = "_composer_working.spec"
 class ProverDeps:
     """Per-run dependencies injected into the prover tool — the CEX-analysis
     strategy and the prover options — bound at workflow setup (see the codegen
-    executor) rather than read off the runtime context."""
+    executor) rather than read off the runtime context.
+
+    ``prover_opts`` is the run's options as ``run_prover`` consumes them, carried rather than
+    rebuilt: a tool that reassembled them would silently default whatever it forgot to copy.
+    ``keep_folder`` rides along because it is the same debugging intent, but it is a
+    materialization flag, not a prover argument."""
     cex_handler: CexHandler
     prover_opts: ProverOptions
+    keep_folder: bool
 
 
 @tool_display(
@@ -121,7 +127,7 @@ class CertoraProverTool(WithAsyncDependencies[Command, ProverDeps], WithInjected
 
     async def run(self) -> Command:
         with self.tool_deps() as deps:
-            result = await _run_certora_prover(self, deps.cex_handler, deps.prover_opts)
+            result = await _run_certora_prover(self, deps)
         match result:
             case str():
                 return tool_return(tool_call_id=self.tool_call_id, content=result)
@@ -151,8 +157,7 @@ class CertoraProverTool(WithAsyncDependencies[Command, ProverDeps], WithInjected
 
 async def _run_certora_prover(
     tool: CertoraProverTool,
-    cex_handler: CexHandler,
-    prover_opts: ProverOptions,
+    deps: ProverDeps,
 ) -> ProverReport | str:
     """Codegen-specific prover invocation: materialize the VFS, assemble the
     fixed codegen ``certoraRun`` args from the tool's fields, and run. Reads
@@ -174,7 +179,7 @@ async def _run_certora_prover(
     ctxt = get_runtime(AIComposerContext).context
     writer = get_stream_writer()
 
-    with ctxt.vfs_materializer.materialize(tool.state, debug=prover_opts.keep_folder) as temp_dir:
+    with ctxt.vfs_materializer.materialize(tool.state, debug=deps.keep_folder) as temp_dir:
         if tool.use_working_spec:
             ws = tool.state["working_spec"]
             assert ws is not None
@@ -201,9 +206,9 @@ async def _run_certora_prover(
                 Path(temp_dir),
                 args,
                 tool.tool_call_id,
-                CoreProverOptions(extra_args=prover_opts.extra_args),
+                deps.prover_opts,
                 ProverEventCallbacks(writer, tool.tool_call_id),
-                cex_handler,
+                deps.cex_handler,
             )
         except Exception as e:
             print(e)
