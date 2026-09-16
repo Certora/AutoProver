@@ -31,8 +31,9 @@ from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools, 
 from composer.spec.source.prover import setup_prover_config_in
 from composer.spec.source.spec_buffers import (
     SpecBuffersExtra, buffer_review_text, buffer_state_digest, check_buffer_completion,
-    combined_buffers_view, max_spec_buffers, run_targets, skips_review_digest,
-    SKIPS_VALIDATION_KEY, validate_coverage, validate_disjoint_rules,
+    combined_buffers_view, max_spec_buffers, requireinvariant_citations, run_targets,
+    skips_review_digest, SKIPS_VALIDATION_KEY, validate_coverage, validate_declared_rules_mapped,
+    validate_disjoint_rules, validate_requireinvariant_proved,
 )
 from composer.spec.source.buffer_tools import (
     put_buffer, get_buffer, edit_buffer, list_buffers, delete_buffer,
@@ -45,7 +46,7 @@ from composer.spec.source.plugin import CertoraProverTools, CVLAuthorState
 from composer.spec.system_model import ContractComponentInstance, SolidityIdentifier, component_context
 from composer.spec.source.prover import (
     OVERLAY_OWNED_KEYS, ProverStateExtra, DELETE_SKIP, VALIDATION_KEY as PROVER_VALIDATION_KEY,
-    materializing_project, completing_run_links,
+    materializing_project, completing_run_links, declared_rules_at,
 )
 from langgraph.graph import MessagesState
 from pathlib import Path
@@ -180,6 +181,27 @@ class PublishResultTool(
             if (err := validate_coverage(buffers, all_properties=set(titles), skipped=skip_titles)) is not None:
                 return f"Completion REJECTED: {err}"
         if (err := validate_disjoint_rules(buffers)) is not None:
+            return f"Completion REJECTED: {err}"
+        # Reverse of validate_coverage: every rule/invariant the typechecker declared in a buffer must be
+        # named in that buffer's property_rules, so the mapping accounts for everything proved (nothing
+        # proved is left attributed to no property). Read each buffer's declared set off its completing
+        # prover run (None when no run covered it — a lifted publish gate).
+        declared_by_buffer = {
+            b.name: declared_rules_at(
+                self.state["prover_history"],
+                buffer_state_digest(buffers, b.name, version_history=self.state["version_history"]),
+            )
+            for b in run_targets(buffers)
+        }
+        if (err := validate_declared_rules_mapped(buffers, declared_by_buffer)) is not None:
+            return f"Completion REJECTED: {err}"
+        # Every invariant a buffer cites with requireInvariant must be declared (hence proved) in that
+        # same buffer: an imported invariant is not re-verified in the importing run, so citing one that
+        # lives only in another buffer — e.g. an unproven shared buffer — is an unproven assumption.
+        cited_by_buffer = {b.name: requireinvariant_citations(b.cvl) for b in run_targets(buffers)}
+        if (err := validate_requireinvariant_proved(
+            buffers, cited_by_buffer, declared_by_buffer
+        )) is not None:
             return f"Completion REJECTED: {err}"
         pr = [
             PropertyRuleMapping(property_title=PropertyTitle(p), rules=[RuleName(rn) for rn in rs])

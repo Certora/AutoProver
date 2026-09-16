@@ -398,3 +398,106 @@ class TestBufferSubmitCollect:
             buffers, "easy", version_history=[], include_claim=True
         )
         assert seen.count("skips") == 1  # reviewed once, not once per buffer
+
+    async def test_publish_rejects_a_declared_but_unmapped_rule(self):
+        """The publish gate refuses when a buffer's prover run declared a rule/invariant that no
+        property maps — the published mapping would otherwise leave it attributed to no property."""
+        from composer.spec.source.author import PublishResultTool
+        from composer.spec.types import PropertyTitle
+
+        buffers = {
+            "shared": NamedBuffer(name="shared", cvl=SHARED, is_run_target=False),
+            "easy": _buf("easy", "r_easy"),
+            "hard": _buf("hard", "r_hard"),
+        }
+
+        def pdig(n: str) -> str:
+            return buffer_state_digest(buffers, n, version_history=[])
+
+        def fdig(n: str) -> str:
+            return buffer_state_digest(buffers, n, version_history=[], include_claim=True)
+
+        def _run(buf: str, declared: list[str]) -> ProverRunLog:
+            return ProverRunLog(
+                tool_call_id="t", prover_results=[], rules={"sort": "include", "selector": declared},
+                spec_digest="", sort="run", declared_rules=declared, state_digest=pdig(buf),
+                buffer=buf, link="l",
+            )
+
+        state = {
+            "buffers": buffers, "vfs": {}, "curr_spec": None, "skipped": [],
+            "validations": {
+                "prover:easy": pdig("easy"), "feedback:easy": fdig("easy"),
+                "prover:hard": pdig("hard"), "feedback:hard": fdig("hard"),
+            },
+            "required_validations": ["prover", "feedback"],
+            "version_history": [], "messages": [], "property_rules": [], "rule_skips": {},
+            "config": {}, "reminders_channel": [], "failed": None, "budget_curtailed": False,
+            "prover_history": [
+                _run("easy", ["r_easy", "inv_x"]),  # inv_x declared but named by no property -> unmapped
+                _run("hard", ["r_hard"]),
+            ],
+        }
+        tool = PublishResultTool.bind(
+            [PropertyTitle("P-easy"), PropertyTitle("P-hard")]
+        ).as_tool("result")
+        res = await tool.ainvoke(
+            {"name": "result", "args": {"state": state, "commentary": ""},
+             "id": "t", "type": "tool_call"}
+        )
+        msg = res if isinstance(res, str) else getattr(res, "content", str(res))
+        assert "inv_x" in msg
+
+    async def test_publish_rejects_requireinvariant_of_an_unproved_invariant(self):
+        """The publish gate refuses when a buffer requireInvariant's an invariant it does not declare —
+        e.g. one that lives only in an unproven shared buffer it imports, so this run never verifies it."""
+        from composer.spec.source.author import PublishResultTool
+        from composer.spec.types import PropertyTitle
+
+        # `easy` cites requireInvariant inv_shared but declares only r_easy; inv_shared lives in the
+        # imported, never-proved shared buffer.
+        buffers = {
+            "shared": NamedBuffer(
+                name="shared", cvl="invariant inv_shared() true;\n", is_run_target=False
+            ),
+            "easy": NamedBuffer(
+                name="easy",
+                cvl='import "shared.spec";\nrule r_easy() { requireInvariant inv_shared(); assert true; }\n',
+                property_rules={"P-easy": ["r_easy"]},
+            ),
+            "hard": _buf("hard", "r_hard"),
+        }
+
+        def pdig(n: str) -> str:
+            return buffer_state_digest(buffers, n, version_history=[])
+
+        def fdig(n: str) -> str:
+            return buffer_state_digest(buffers, n, version_history=[], include_claim=True)
+
+        def _run(buf: str, declared: list[str]) -> ProverRunLog:
+            return ProverRunLog(
+                tool_call_id="t", prover_results=[], rules={"sort": "include", "selector": declared},
+                spec_digest="", sort="run", declared_rules=declared, state_digest=pdig(buf),
+                buffer=buf, link="l",
+            )
+
+        state = {
+            "buffers": buffers, "vfs": {}, "curr_spec": None, "skipped": [],
+            "validations": {
+                "prover:easy": pdig("easy"), "feedback:easy": fdig("easy"),
+                "prover:hard": pdig("hard"), "feedback:hard": fdig("hard"),
+            },
+            "required_validations": ["prover", "feedback"],
+            "version_history": [], "messages": [], "property_rules": [], "rule_skips": {},
+            "config": {}, "reminders_channel": [], "failed": None, "budget_curtailed": False,
+            "prover_history": [_run("easy", ["r_easy"]), _run("hard", ["r_hard"])],
+        }
+        tool = PublishResultTool.bind(
+            [PropertyTitle("P-easy"), PropertyTitle("P-hard")]
+        ).as_tool("result")
+        res = await tool.ainvoke(
+            {"name": "result", "args": {"state": state, "commentary": ""},
+             "id": "t", "type": "tool_call"}
+        )
+        msg = res if isinstance(res, str) else getattr(res, "content", str(res))
+        assert "inv_shared" in msg

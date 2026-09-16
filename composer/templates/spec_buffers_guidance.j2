@@ -37,13 +37,18 @@ When to split:
   of the run — you can ignore it and only the buffer you actually edit pays re-verification and re-review.
 
 Structuring buffers:
-- Put infrastructure shared by two or more run-target buffers (ghosts, common invariants, helper CVL
-  functions, token/oracle models, and summaries several groups need) in a buffer with
+- Put infrastructure shared by two or more run-target buffers (ghosts, helper CVL functions,
+  token/oracle models, and summaries several groups need) in a buffer with
   `is_run_target=false`, and `import "<shared>.spec"` it from **each run-target that uses it**. A shared
   buffer is pulled in only by the buffers that import it, so
   editing it re-verifies only those — you can make one shared buffer for a subset of groups and another
   for a different subset. **Import the shared buffer where you need it; never restate its contents in a
   run-target** (a duplicate `methods{}` entry or ghost is a compile error).
+- **A `requireInvariant`'d invariant must be declared in the run-target buffer whose rule cites it** —
+  NOT in a shared (`is_run_target=false`) buffer. A shared buffer is never run, and importing an
+  invariant does not verify it in the importing run, so citing an unproven invariant is an unsound
+  assumption and is refused at publish. If two run-target buffers each need the same invariant, declare
+  it in each of them.
 - Each **run-target** buffer declares its `property_rules` (the properties it verifies + their rule
   names). Across all run-target buffers, every non-skipped property must appear in **exactly one**
   buffer, and each rule lives in exactly one buffer.

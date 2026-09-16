@@ -27,6 +27,7 @@ from typing_extensions import TypedDict
 
 from certora_autosetup.cache.content_cache import hash_content_parts, hash_text
 from certora_autosetup.parsers.spec_imports import imports_in_cvl
+from certora_autosetup.setup.summary_resolver import extract_cvl_ast
 from composer.spec.cvl_generation import FEEDBACK_VALIDATION_KEY
 from composer.spec.gen_types import SPECS_DIR
 
@@ -322,6 +323,96 @@ def validate_disjoint_rules(buffers: Mapping[str, NamedBuffer]) -> str | None:
         for r in b.owned_rules:
             (dup if r in seen else seen).add(r)
     return f"rules owned by more than one buffer: {sorted(dup)}" if dup else None
+
+
+def validate_declared_rules_mapped(
+    buffers: Mapping[str, NamedBuffer], declared_by_buffer: Mapping[str, set[str] | None]
+) -> str | None:
+    """The reverse of :func:`validate_coverage`: every rule/invariant the typechecker declared in a
+    run-target buffer must be named in that buffer's ``property_rules``, so the published mapping
+    accounts for everything proved — no rule or supporting invariant is left attributed to no property.
+    Checked per buffer: the typechecker attributes a rule only to the buffer that declares it (an
+    imported invariant is not listed for the importing buffer), so a buffer's declared set is its own.
+    ``declared_by_buffer[name]`` is the rules the prover found in that buffer, or None when no run
+    covered it (a lifted publish gate) — then there is nothing to cross-check. Publication is refused,
+    naming each unmapped rule, until it is mapped (a supporting invariant under the property whose rule
+    cites it) or removed from the buffer."""
+    problems: list[str] = []
+    for b in run_targets(buffers):
+        declared = declared_by_buffer.get(b.name)
+        if declared is None:
+            continue
+        if unmapped := declared - b.owned_rules:
+            problems.append(f"{b.name!r}: {', '.join(sorted(unmapped))}")
+    if not problems:
+        return None
+    return (
+        "these rules/invariants are declared but named by no property — every declared rule must be "
+        "attributed to the property it verifies. Map each under that property, or remove it from the "
+        "buffer: " + "; ".join(problems)
+    )
+
+
+#: The parsed-AST command tag for a ``requireInvariant`` statement (an "assume invariant" command).
+_ASSUME_INVARIANT_CMD = "AssumeCmd.AssumeInvariant"
+
+
+def requireinvariant_citations(cvl: str) -> set[str]:
+    """The invariant names cited with ``requireInvariant`` in ``cvl``, read from the parsed CVL AST
+    (``ASTExtraction.jar`` via :func:`extract_cvl_ast`) rather than by scanning text. Each citation is
+    an ``AssumeInvariant`` command whose ``id`` is the invariant name. Empty when the source has no
+    AST (a hard syntax error — the buffer is rejected at the parse gate anyway)."""
+    ast = extract_cvl_ast(cvl)
+    if ast is None:
+        return set()
+    cited: set[str] = set()
+
+    def walk(node: object) -> None:
+        if isinstance(node, dict):
+            if str(node.get("cmd_type", "")).endswith(_ASSUME_INVARIANT_CMD):
+                name = node.get("id")
+                if isinstance(name, str):
+                    cited.add(name)
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    walk(ast)
+    return cited
+
+
+# TODO(future): support shared invariants. Today an invariant must be declared (and so proved) in the
+# buffer that cites it, forcing duplication when several run-targets need the same one. A follow-up will
+# let a shared buffer prove an invariant once and have importers cite it — which needs cross-buffer
+# resolution here plus a coverage model for an invariant-only (property-less) run-target buffer.
+def validate_requireinvariant_proved(
+    buffers: Mapping[str, NamedBuffer],
+    cited_by_buffer: Mapping[str, set[str]],
+    declared_by_buffer: Mapping[str, set[str] | None],
+) -> str | None:
+    """Every invariant a run-target buffer cites with ``requireInvariant`` must be declared in THAT
+    buffer, so it is proved in the same run under the same summaries. An invariant declared only in
+    another buffer — including an unproven shared buffer it imports — is not re-verified in this run, so
+    citing it would assume it unproven (unsound). Refuses, naming the offending citations.
+    ``declared_by_buffer[name]`` is None when no run covered the buffer (a lifted publish gate) — then
+    there is nothing to cross-check."""
+    problems: list[str] = []
+    for b in run_targets(buffers):
+        declared = declared_by_buffer.get(b.name)
+        if declared is None:
+            continue
+        if unproved := cited_by_buffer.get(b.name, set()) - declared:
+            problems.append(f"{b.name!r}: {', '.join(sorted(unproved))}")
+    if not problems:
+        return None
+    return (
+        "these invariants are cited with requireInvariant but not declared (so not proved) in the "
+        "citing buffer — an imported invariant is not re-verified in the importing run, so the citation "
+        "would be an unproven assumption. Declare each invariant in the buffer whose rule cites it: "
+        + "; ".join(problems)
+    )
 
 
 _METHODS_BLOCK = re.compile(r"methods\s*\{([^}]*)\}", re.DOTALL)

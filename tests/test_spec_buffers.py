@@ -12,11 +12,14 @@ from composer.spec.source.spec_buffers import (
     import_closure,
     max_spec_buffers,
     merge_buffers,
+    requireinvariant_citations,
     run_targets,
     skips_review_digest,
     SKIPS_VALIDATION_KEY,
     validate_coverage,
+    validate_declared_rules_mapped,
     validate_disjoint_rules,
+    validate_requireinvariant_proved,
 )
 
 
@@ -337,6 +340,48 @@ def test_completion_requires_skip_review_when_skipped():
     stamped = {**validations, SKIPS_VALIDATION_KEY: skips_review_digest(b, skipped=skipped, version_history=[])}
     assert check_buffer_completion(
         b, stamped, ["feedback", "prover"], skipped=skipped, version_history=[]
+    ) is None
+
+
+def test_declared_rules_must_all_be_mapped():
+    # Reverse of validate_coverage: every rule/invariant the prover declared in a buffer must be named
+    # in that buffer's property_rules (an imported invariant is not listed for the importer, so the
+    # check is per-buffer). An unmapped one (e.g. a supporting invariant) blocks publication.
+    b = _buffers()  # easy owns {r_easy}, hard owns {r_hard}
+    assert validate_declared_rules_mapped(b, {"easy": {"r_easy"}, "hard": {"r_hard"}}) is None
+    err = validate_declared_rules_mapped(b, {"easy": {"r_easy", "inv_x"}, "hard": {"r_hard"}})
+    assert err is not None and "inv_x" in err and "easy" in err
+    # a buffer with no prover run (lifted gate) is skipped, not faulted
+    assert validate_declared_rules_mapped(b, {"easy": None, "hard": {"r_hard"}}) is None
+
+
+def test_requireinvariant_citations_from_ast():
+    # Citations are read from the parsed CVL AST, not by scanning text. Golden guard: if the AST node
+    # shape (the AssumeInvariant command) changes, this fails loudly.
+    cvl = (
+        "methods { function count() external returns (uint256) envfree; }\n"
+        "invariant a() count() >= 0;\n"
+        "invariant b() count() < 100;\n"
+        "rule r() { requireInvariant a(); requireInvariant b(); assert true; }\n"
+        "rule s() { assert true; }\n"
+    )
+    assert requireinvariant_citations(cvl) == {"a", "b"}
+    assert requireinvariant_citations("rule r() { assert true; }") == set()
+
+
+def test_requireinvariant_must_be_declared_in_citing_buffer():
+    # An invariant a buffer cites with requireInvariant must be declared (hence proved) in THAT buffer;
+    # citing one declared only elsewhere (e.g. an unproven shared buffer) is refused.
+    b = _buffers()  # easy, hard are run-targets
+    declared = {"easy": {"r_easy", "inv_local"}, "hard": {"r_hard"}}
+    # easy cites inv_local, which it declares -> OK
+    assert validate_requireinvariant_proved(b, {"easy": {"inv_local"}, "hard": set()}, declared) is None
+    # easy cites inv_shared, not in its own declared set (would be an imported/unproven invariant) -> refused
+    err = validate_requireinvariant_proved(b, {"easy": {"inv_shared"}, "hard": set()}, declared)
+    assert err is not None and "inv_shared" in err and "easy" in err
+    # a buffer with no run (None declared) is skipped, not faulted
+    assert validate_requireinvariant_proved(
+        b, {"easy": {"inv_shared"}}, {"easy": None, "hard": {"r_hard"}}
     ) is None
 
 
