@@ -48,22 +48,21 @@ motivation. Sizes are insertions/deletions against master.
 | **S1** Confined builds: one scratch directory, a readable git config, an unreadable output — [#239](https://github.com/Certora/AutoProver/pull/239), draft | 10 | +247 −37 | Three findings from making Rust builds run under the sandbox, and one story. `composer/layout.py` declares `CERTORA_DIR` / `INTERNAL_DIR` where `composer.sandbox` can name them without importing pydantic, which that package stays free of. The sandbox's scratch (`CARGO_HOME`, tmp) moves under `INTERNAL_DIR`; `RUST_FORBIDDEN_READ` withholds that directory — and the entry itself, so graphcore prunes the subtree instead of rejecting a 730 MB registry file by file — wherever it sits; and the rule is read off the ecosystem `cli_pipeline` is handed rather than passed beside it, so the two cannot disagree. And `git_config_ro_paths` grants the global git config, without which libgit2 refuses to open a fully warm cached git dependency and reports it as an offline-mode *network* error. |
 | **S2** Rescue a mis-encoded grouping | 1 | +26 −1 | A `field_validator` that accepts the whole grouping object JSON-encoded into its own `groups` field. Observed on a real run; the existing fallback silently flattens a report to one group. |
 | **S3** A readable cost budget | 1 | +11 −2 | `token_cost_budget` yields its counter instead of `None`, so a caller can report what it spent rather than only trip on the cap. |
-| **S4** A `measurement` pytest mark | 1 | +4 −1 | The nightly expensive sweep selects `expensive and not measurement`, so a test that exists to produce a one-off number is not billed every night. Already committed here as `da211b2a`. |
-| **S5** Split the manual parser from the chunker | 5 | +504 −238 | `composer/rag/html_manual.py` — sphinx HTML to a tree of typed blocks, importing neither spaCy nor a DB — with `ragbuild` reduced to the chunking half that drives it. What makes an out-of-tree corpus producer possible at all. |
-| **S6** Select the Prover CLI by app | 4 | +203 −30 | `ProverApp = "evm" \| "solana" \| "soroban"`, a registry of entry points, and `certoraRunWrapper` taking the app as `argv[2]`. Everything downstream of submission is already chain-neutral; this is the one place they differ. |
-| **S7** Counterexamples, and which frames to show | 10 | +411 −48 | `Counterexample`/`SourceSpan` as data rather than a rendered string, `classify_violation`, and `TraceShape` — per-chain rules for which call-trace frames survive rendering. Carries the Solana treeView fixtures that prove the parser is chain-neutral. |
-| **S8** Report: what a component gave up on | 7 | +280 −37 | `Abandoned` replacing a `None` that discarded the reason, `GaveUpComponent.reason`, and the `BuildEnvironment` discriminated union (`ConfinedBuilds \| UnconfinedBuilds \| None`) so a report says how the builds behind its verdicts were confined. Includes the `pipeline/core.py` hook that supplies it. |
-| **S9** Pinned runs | 4 | +4752 | `composer/pipeline/pinned.py`: write a run's analysis *and* properties to disk with `--pin-to`, start a later run at formalization with `--properties`. Both halves, because a unit is an index into the analysis. 4,233 of those lines are one checked-in fixture — worth asking whether it belongs in the repo. |
-| **S10** A second read-only source mount | 4 | +84 −9 | `build_layered_source_tools` and `LibrarySource` — tools over a library the analyzed project depends on, and the statement that tells an agent they exist, which travel together because either alone is worse than neither. Plus `crate_source` on the code explorer's prompt. Carries a stray docstring correction in `source/prover.py` that belongs nowhere in particular. |
+| **S4** Split the manual parser from the chunker | 5 | +504 −238 | `composer/rag/html_manual.py` — sphinx HTML to a tree of typed blocks, importing neither spaCy nor a DB — with `ragbuild` reduced to the chunking half that drives it. What makes an out-of-tree corpus producer possible at all. |
+| **S5** Select the Prover CLI by app | 4 | +203 −30 | `ProverApp = "evm" \| "solana" \| "soroban"`, a registry of entry points, and `certoraRunWrapper` taking the app as `argv[2]`. Everything downstream of submission is already chain-neutral; this is the one place they differ. |
+| **S6** Counterexamples, and which frames to show | 10 | +411 −48 | `Counterexample`/`SourceSpan` as data rather than a rendered string, `classify_violation`, and `TraceShape` — per-chain rules for which call-trace frames survive rendering. Carries the Solana treeView fixtures that prove the parser is chain-neutral. |
+| **S7** Report: what a component gave up on | 7 | +280 −37 | `Abandoned` replacing a `None` that discarded the reason, `GaveUpComponent.reason`, and the `BuildEnvironment` discriminated union (`ConfinedBuilds \| UnconfinedBuilds \| None`) so a report says how the builds behind its verdicts were confined. Includes the `pipeline/core.py` hook that supplies it. |
+| **S8** Pinned runs | 4 | +4752 | `composer/pipeline/pinned.py`: write a run's analysis *and* properties to disk with `--pin-to`, start a later run at formalization with `--properties`. Both halves, because a unit is an index into the analysis. 4,233 of those lines are one checked-in fixture — worth asking whether it belongs in the repo. |
+| **S9** A second read-only source mount | 4 | +84 −9 | `build_layered_source_tools` and `LibrarySource` — tools over a library the analyzed project depends on, and the statement that tells an agent they exist, which travel together because either alone is worse than neither. Plus `crate_source` on the code explorer's prompt. Carries a stray docstring correction in `source/prover.py` that belongs nowhere in particular. |
 
-Dependencies inside the wave: **S6** before **S7**, and nothing else. Merging the sandbox work into
+Dependencies inside the wave: **S5** before **S6**, and nothing else. Merging the sandbox work into
 one PR removed the wave's other ordering constraint, which had been an artefact of the split rather
 than of the code: the forbidden-read test imports the sandbox's own scratch-directory constants, so
 the two could never have been reviewed apart.
 
 **A caution about `pipeline/core.py` and `pipeline/cli.py`.** Three of these PRs touch them, each
-for its own feature — the `forbidden_read` parameter that lets a caller pass its ecosystem's rule
-(S1), the build-environment hook (S8), the pinned fixture (S9). Take the hunks, not the files, and
+for its own feature — the `ecosystem` parameter the exclusion rule is read off (S1), the
+build-environment hook (S7), the pinned fixture (S8). Take the hunks, not the files, and
 land them in that order; whichever goes last will want a rebase. One unrelated hunk in `cli.py` is a
 genuine bug fix — a main contract path resolved against the process's cwd rather than the project
 root — and goes alone rather than riding a themed PR; S1 was opened without it.
@@ -96,7 +95,7 @@ code and land C6 last, after which the backend appears all at once and works.
 | **C3a** The munge vocabulary | 5 | +2982 | The six kinds of source modification a harness may need, and how each is expressed against a Rust crate. |
 | **C3b** The munge editor | 3 | +2542 | The agent that proposes and applies them, and the review that accepts or rejects. |
 | **C4a** The authoring loop | 10 | +2642 | Author, state, rule extraction, the judge's prompts, and the feedback round. Carries the `CvlrJudge` / `CvlrGeneration` cache markers in `spec/context.py`, which are CVLR-specific and have no business in a shared PR. |
-| **C4b** The prompt corpus | 8 | +3179 | Guidance, the worked example rendered against the analyzed program, and the knowledge tests that pin what the prompts must and must not claim. |
+| **C4b** The prompt corpus, and a mark for one-off measurements | 10 | +3186 | Guidance, the worked example rendered against the analyzed program, and the knowledge tests that pin what the prompts must and must not claim. Carries the `measurement` pytest mark and the CI selector `expensive and not measurement`, because `test_cvlr_judge_round_cost.py` — which lands here — is the only test that has it: a mark registered before its first user would deselect nothing and give a reviewer no way to judge the CI change. |
 | **C5** Verification and tuning | 10 | +3105 | Submission, the prover-side tuning directives, loop bounds, and the Anchor surface analysis. |
 | **C6** Pipeline and entry | 12 | +3091 −6 | `CvlrBackend`, the CLI entry points, the artifact store, and the plumbing tests. The PR that makes the backend exist. |
 
@@ -139,12 +138,12 @@ early unblocks C2 and gives the bump its own blast radius; landing it late keeps
 the shared seams go in.
 
 **4. [#185](https://github.com/Certora/AutoProver/pull/185) is open and touches the same report
-files** as S8. Whichever lands second pays the merge. Worth deciding the order deliberately rather
+files** as S7. Whichever lands second pays the merge. Worth deciding the order deliberately rather
 than discovering it.
 
 **5. Is there an EVM-visible behaviour change anywhere in wave 1?** The claim is no — every seam
 either defaults to today's value or is reached only by a caller that does not exist yet on master.
-S6 and S7 are where that claim is least obvious and should be reviewed as if it were false.
+S5 and S6 are where that claim is least obvious and should be reviewed as if it were false.
 
 ---
 
@@ -159,13 +158,12 @@ the exception noted in wave 1 — take the feature's hunks, not the whole file.
 | S1 | `composer/layout.py` `composer/spec/gen_types.py` `composer/sandbox/recipes.py` `composer/pipeline/ecosystem.py` `tests/test_fs_forbidden_read.py` `tests/test_sandbox_config.py` `scripts/docker-compose.sandbox.yml` `composer/pipeline/cli.py` *(hunks)* |
 | S2 | `composer/spec/source/report/grouping.py` |
 | S3 | `composer/diagnostics/budget.py` |
-| S4 | `.github/workflows/integration-tests.yml` `pyproject.toml` *(the marker registration only)* |
-| S5 | `composer/rag/html_manual.py` `composer/scripts/ragbuild.py` `tests/test_html_manual.py` `docs/rag-import-format.md` `scripts/gen_docs.sh` `.gitignore` |
-| S6 | `composer/certora_env.py` `composer/prover/certoraRunWrapper.py` `composer/prover/core.py` `composer/prover/ptypes.py` |
-| S7 | `composer/prover/results.py` `analyzer/analysis.py` `tests/test_solana_cex_trace.py` `tests/data/solana_cex/` `tests/test_tree_parsing.py` `tests/test_cex_analysis_failure_isolation.py` |
-| S8 | `composer/spec/source/report/{schema,collect,build,render}.py` `composer/spec/source/report_prover.py` `composer/templates/autoprove_report.html.j2` `tests/test_autoprove_report.py` `composer/pipeline/core.py` *(hunks)* |
-| S9 | `composer/pipeline/pinned.py` `tests/test_pinned_properties.py` `tests/data/pins/` `composer/pipeline/{core,cli}.py` *(hunks)* |
-| S10 | `composer/spec/source/source_env.py` `composer/spec/code_explorer.py` `composer/templates/code_explorer/rust/common_fragment.j2` `composer/spec/source/prover.py` |
+| S4 | `composer/rag/html_manual.py` `composer/scripts/ragbuild.py` `tests/test_html_manual.py` `docs/rag-import-format.md` `scripts/gen_docs.sh` `.gitignore` |
+| S5 | `composer/certora_env.py` `composer/prover/certoraRunWrapper.py` `composer/prover/core.py` `composer/prover/ptypes.py` |
+| S6 | `composer/prover/results.py` `analyzer/analysis.py` `tests/test_solana_cex_trace.py` `tests/data/solana_cex/` `tests/test_tree_parsing.py` `tests/test_cex_analysis_failure_isolation.py` |
+| S7 | `composer/spec/source/report/{schema,collect,build,render}.py` `composer/spec/source/report_prover.py` `composer/templates/autoprove_report.html.j2` `tests/test_autoprove_report.py` `composer/pipeline/core.py` *(hunks)* |
+| S8 | `composer/pipeline/pinned.py` `tests/test_pinned_properties.py` `tests/data/pins/` `composer/pipeline/{core,cli}.py` *(hunks)* |
+| S9 | `composer/spec/source/source_env.py` `composer/spec/code_explorer.py` `composer/templates/code_explorer/rust/common_fragment.j2` `composer/spec/source/prover.py` |
 | R1 | `composer/cargo/` `composer/rustapp/toolchain.py` `tests/test_cvlr_symbols.py` `tests/data/vault_sbf_symbols.txt` |
 | R2 | `graphcore` `pyproject.toml` *(the pin only)* |
 | R3 | `scripts/Dockerfile` `scripts/autoprove-entrypoint.sh` `scripts/docker-compose.yml` `tests/test_cvlr_image.py` |
@@ -175,10 +173,10 @@ the exception noted in wave 1 — take the feature's hunks, not the whole file.
 | C3a | `composer/spec/cvlr/munge.py` `composer/templates/cvlr_munge_{editor,review}_system.j2` `tests/test_cvlr_munge.py` `tests/test_cvlr_module_redirect.py` |
 | C3b | `composer/spec/cvlr/editor.py` `tests/test_cvlr_editor.py` `tests/test_cvlr_derive_swap.py` |
 | C4a | `composer/spec/cvlr/{author,state,rules}.py` `composer/spec/context.py` `composer/templates/cvlr_feedback_prompt.j2` `composer/templates/cvlr_property_judge_system_prompt.j2` `tests/test_cvlr_{author,judge_input,rules}.py` `template_manifest.json` |
-| C4b | `composer/spec/cvlr/{guidance,example}.py` `composer/templates/cvlr_property_generation{,_system}_prompt.j2` `tests/test_cvlr_{worked_example,knowledge,judge_round_cost}.py` `tests/data/cvlr_judge/` |
+| C4b | `composer/spec/cvlr/{guidance,example}.py` `.github/workflows/integration-tests.yml` `pyproject.toml` *(the marker registration only)* `composer/templates/cvlr_property_generation{,_system}_prompt.j2` `tests/test_cvlr_{worked_example,knowledge,judge_round_cost}.py` `tests/data/cvlr_judge/` |
 | C5 | `composer/spec/cvlr/{verify,prover,tuning,anchor_surface}.py` `tests/test_cvlr_{tuning,anchor_surface,anchor_reach,loop_bound}.py` `tests/data/{anchor_reach,loop_bound}_probe.rs` |
 | C6 | `composer/spec/cvlr/{pipeline,entry,harness,__init__}.py` `composer/cli/{console,tui}_solana.py` `tests/test_cvlr_{entry,plumbing,end_to_end,findings}.py` `tests/conftest.py` `tests/test_autoprove_integration.py` `pyproject.toml` *(the console scripts and package data)* |
 | C7 | `composer/tools/cvlr_rag.py` `composer/rag/db.py` `composer/tools/rag_env.py` `composer/scripts/init-db.sql` `scripts/populate_cvlr_rag.sh` `composer/templates/cvlr_rag_tools.j2` `tests/test_rag_env.py` |
 | C8a | `tests/test_cvlr_gate.py` `test_scenarios/solana_vault_idl/` |
 | C8b | `composer/testing/` `scripts/record_cvlr_tape.sh` `tests/test_cvlr_tape.py` `tests/test_tape_setup.py` |
-| D | `docs/` *(except `rag-import-format.md`, which goes with S5)* |
+| D | `docs/` *(except `rag-import-format.md`, which goes with S4)* |
