@@ -52,6 +52,19 @@ six files plus a submodule pin that had been orphaned upstream, and that cost is
 time master moves. Worth deciding how this lands — and whether shared-code changes should go to
 master directly from now on, as the rough-draft fix did.
 
+**U6. Two unreconciled approaches to producing RAG content.**
+The CVLR corpus is produced outside this repo, in the private
+[certora-cvlr-kb](https://github.com/Certora/certora-cvlr-kb), by three producers that emit a
+self-describing `<kb>.rag.json` and hand it to the generic importer — a deliberate producer/importer
+split, argued for in [rag-import-format.md](./rag-import-format.md) §6-7. CVL content is produced two
+other ways: in-tree by [ragbuild.py](../composer/scripts/ragbuild.py), which parses sphinx HTML and
+writes the DB itself, and separately by [certorag](https://github.com/Certora/certorag). Nobody has
+decided how these relate. The questions are whether certorag adopts the manifest-and-importer split
+(which would make the CVLR repo an instance of one pattern rather than a fork of the idea), whether
+the CVLR corpus should live in certorag instead of its own repo, and — if they stay apart — what the
+boundary between them actually is. Left alone, every new corpus picks one of three precedents by
+accident.
+
 ---
 
 ## Blocked on upstream
