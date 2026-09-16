@@ -301,7 +301,7 @@ async def _run_bug_round(
     ).compile_async()
 
     flow_input: BugAnalysisInput = BugAnalysisInput(
-        input=[], memory=None, did_read=False,
+        input=[], memory=None, drafted=False,
     )
 
     r = await run_to_completion(

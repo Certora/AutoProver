@@ -92,7 +92,7 @@ sanity_analysis_output_tool = result_tool_generator(
         SanityState,
         lambda state, _result, _tool_call_id: (
             "You must call read_rough_draft before submitting your final result."
-            if state.get("memory") and not state["did_read"]
+            if state.get("memory") and not state["drafted"]
             else None
         ),
     ),
@@ -283,7 +283,7 @@ async def async_analyze(args: SanityAnalysisArgs) -> SanityAnalysisResult | None
         f"The rule being analyzed is: {rule}",
         f"Method context: {method if method else 'N/A'}",
         f"Unsat core data:\n{unsat_core_txt_content}"
-    ], memory=None, did_read=False), config=conf, stream_mode=["checkpoints", "updates"]):
+    ], memory=None, drafted=False), config=conf, stream_mode=["checkpoints", "updates"]):
         if ty == "checkpoints":
             assert isinstance(d, dict)
             print("current checkpoint: " + d["config"]["configurable"]["checkpoint_id"])
