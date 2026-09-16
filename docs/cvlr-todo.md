@@ -46,11 +46,12 @@ bounded retry. A transient `Remote end closed connection without response` lost 
 formalization unit during the first tape recording. The plan records that as something that
 happened; no item asks for the retry.
 
-**U5. Landing this branch has no plan.**
-The CVLR work is ~124 commits on a long-lived branch. Rebasing onto master needed hand resolution in
-six files plus a submodule pin that had been orphaned upstream, and that cost is paid again every
-time master moves. Worth deciding how this lands — and whether shared-code changes should go to
-master directly from now on, as the rough-draft fix did.
+**~~U5. Landing this branch has no plan.~~** — **written.**
+[cvlr-landing-plan.md](./cvlr-landing-plan.md) breaks the branch into PRs that can be reviewed on
+their own, shared code first, with a coverage table that accounts for every changed file. What it
+leaves open are five decisions it cannot make on its own — the duplicate retry PR, whether the 5 MB
+tape belongs in the repository, when the graphcore pin moves, the order against the open findings
+PR, and whether any of wave 1 changes EVM behaviour.
 
 **U6. Two unreconciled approaches to producing RAG content.**
 The CVLR corpus is produced outside this repo, in the private
