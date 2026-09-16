@@ -126,7 +126,7 @@ def _base() -> JudgeInput:
         input=["The proposed CVLR harness module is", "fn r() {}"],
         curr_spec="fn r() {}",
         memory=None,
-        did_read=False,
+        drafted=False,
     )
 
 
@@ -143,7 +143,7 @@ def test_the_briefing_is_added_to_the_judges_input_rather_than_replacing_it():
 def test_the_rest_of_the_judges_input_survives_the_lift():
     lifted = with_assumptions(_base(), HarnessAssumptions((), ()))
     assert lifted["curr_spec"] == "fn r() {}"
-    assert lifted["did_read"] is False
+    assert lifted["drafted"] is False
 
 
 def test_the_briefing_lands_after_what_input_parts_built():

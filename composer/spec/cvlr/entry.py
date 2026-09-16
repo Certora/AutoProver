@@ -46,6 +46,7 @@ from composer.pipeline.cli import AtExit, cli_pipeline, user_ns
 from composer.pipeline.pinned import load_pinned_run
 from composer.pipeline.ecosystem import SOLANA
 from composer.pipeline.ptypes import DEFAULT_MAX_CPU_TASKS, CorePipelineResult
+from composer.pipeline.run_mode import RunMode
 from composer.prover.core import make_prover_options
 from composer.rag.db import KNOWLEDGE_BASES
 from composer.sandbox.config import SandboxConfig
@@ -95,6 +96,7 @@ class CvlrArgs(ExtendedModelOptions, Protocol):
     pin_to: str | None
     recursion_limit: int
     budget: str | None
+    budget_total: float | None
     time_budget: float | None
     extra_context: list[str] | None
     threat_model: str | None
@@ -169,7 +171,11 @@ def build_parser() -> argparse.ArgumentParser:
              "replay. Records the target's commit so a later run can say when the checkout has "
              "moved out from under it.",
     )
-    parser.add_argument("--budget", default=None, help="Path to a run-budget file (JSON or YAML): {total: USD, caps: {phase: USD, ...}}. Omit to run unbudgeted.")
+    # One budget, two spellings — the file shapes spend across phases, the scalar sets the pool
+    # alone. Mutually exclusive here so argparse renders the choice in --help.
+    budget_group = parser.add_mutually_exclusive_group()
+    budget_group.add_argument("--budget", default=None, help="Path to a run-budget file (JSON or YAML): {total: USD, caps: {phase: USD, ...}}. Omit to run unbudgeted.")
+    budget_group.add_argument("--budget-total", default=None, type=float, help="The run pool in USD as a bare number — the budget file's `total` with no per-phase caps. Omit both budget flags to run unbudgeted.")
     parser.add_argument("--time-budget", default=None, type=float, help="Total wall time to run the entire execution. Omit to run without in process limit")
     add_extra_context_args(parser)
     return parser
@@ -294,15 +300,19 @@ def _usage_exit_logger(summary: RunSummary, selected: SelectedPackage) -> AtExit
     async def exit_logger(run: SourceFields, logger: RunDataLogger) -> None:
         try:
             await logger("token_usage", summary.token_usage_summary())
-            # A CVLR run's dominant cost is prover time, not tokens — logged for the same reason
-            # the autoprove entry point logs it, and absent here for as long as CVLR's callbacks
-            # were not recording it (§7.8.1).
+            # Logged for the same reason the autoprove entry point logs it, and absent here for
+            # as long as CVLR's callbacks were not recording it (§7.8.1). Not because it dominates:
+            # measured end to end, the split is about 82% model latency and 16% prover (§7.8.5).
+            # It is worth recording because the ratio is a property of the target, not the backend.
             await logger("prover_usage", summary.prover_usage_summary())
         except Exception:
             _log.exception("failed to log cvlr usage to run data")
         try:
             CvlrArtifactStore(run.project_root, selected.package_dir).write_job_info(
-                summary, user_id=get_uid()
+                # This backend exposes no --run-mode and passes none to the pipeline, so the
+                # manifest records the mode the run actually took rather than a resolved
+                # preference it would have ignored.
+                summary, user_id=get_uid(), run_mode=RunMode.COMPREHENSIVE.value
             )
         except Exception:
             _log.exception("failed to dump cvlr job info")
