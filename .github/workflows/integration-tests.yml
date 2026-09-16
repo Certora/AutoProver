@@ -76,8 +76,11 @@ jobs:
             --aws-sigv4 "aws:amz:us-west-2:lambda"
 
       - name: run autoprover integration tests
+        # `not measurement` drops the tests that exist to produce a number rather than
+        # to guard an invariant: a nightly sweep would pay for the same measurement
+        # every night and assert nothing new. Run those by name when the number is wanted.
         run: |
-          uv run --no-dev pytest -n 3 -m 'expensive' tests
+          uv run --no-dev pytest -n 3 -m 'expensive and not measurement' tests
         env:
           CERTORAKEY: ${{ secrets.CERTORAKEY }}
       - name: run template fuzz tests

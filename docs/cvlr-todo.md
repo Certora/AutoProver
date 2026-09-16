@@ -9,21 +9,21 @@ Two kinds of entry appear below. Most are the plan's own items, restated in one 
 **Unfiled** ones are not in the plan at all — they were noticed while doing other work and have no
 section anywhere else, so this document is their only record until someone gives them one.
 
-If you want somewhere to start: **U1** is a regression with a recurring cost, **U4** is the cheapest
-fix on the page and has already cost a delivered unit, and **U2** decides whether the smoke gate
-protects anything at all.
+If you want somewhere to start: **U4** is the cheapest fix on the page and has already cost a
+delivered unit, and **U2** decides whether the smoke gate protects anything at all.
 
 ---
 
 ## Unfiled — no section anywhere else
 
-**U1. The judge round-cost test bills a real model call on every expensive CI run.**
-`integration-tests.yml` runs `pytest -m 'expensive'`. Its two CVLR siblings skip there because they
-check for cargo and the Solana platform tools;
-[test_cvlr_judge_round_cost.py](../tests/test_cvlr_judge_round_cost.py) checks for neither, so it is
-the one CVLR expensive test that actually executes in CI — and it pays for a heavy-tier call each
-time. Its purpose was a single before/after measurement, not a standing check. It should be guarded
-like its siblings, made opt-in, or retired now that it has produced its number.
+**~~U1. The judge round-cost test bills a real model call on every expensive CI run.~~** —
+**fixed.** [test_cvlr_judge_round_cost.py](../tests/test_cvlr_judge_round_cost.py) now carries a
+`measurement` mark alongside `expensive`, and the nightly sweep selects `expensive and not
+measurement`, so the number is paid for only when someone names the file. Of the three options
+recorded here, guarding it like its siblings would have been a lie — it needs neither cargo nor the
+platform tools, and skipping for their absence would have made CI's silence mean something it does
+not. Retiring it would have thrown away the ability to retake the measurement, which is the only
+thing that answers "did the gate regress on a real judge".
 
 **U2. The smoke gate does not run in CI, and nothing says whether that is intended.**
 The expensive CI job installs uv, JDK and solc. The Solana platform tools are a Certora-specific

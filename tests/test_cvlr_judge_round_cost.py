@@ -24,6 +24,15 @@ toy, because the thing being measured is how the judge behaves on work substanti
 about. Run with::
 
     env -u CERTORA uv run --no-sync pytest tests/test_cvlr_judge_round_cost.py -m expensive -q -s
+
+**Why this is marked ``measurement`` as well as ``expensive``.** A number is worth paying for once;
+it is not worth paying for nightly. Its two CVLR siblings skip in CI for a reason of their own —
+neither the cargo toolchain nor the Solana platform tools are installed there — but this one needs
+no toolchain at all, so nothing stopped it billing a heavy-tier call on every scheduled sweep. The
+``measurement`` mark is what stops it: sweeping selections exclude it (see
+``.github/workflows/integration-tests.yml``), and naming the file, as above, still runs it. The
+composition half of the claim stays free and unconditional in
+:func:`tests.test_rough_draft_tools.test_writing_a_draft_satisfies_the_completion_gate`.
 """
 
 import difflib
@@ -51,7 +60,9 @@ from composer.workflow.services import standard_connections
 
 from tests.conftest import MockSentenceTransformer, needs_postgres
 
-pytestmark = [pytest.mark.expensive, needs_postgres, pytest.mark.asyncio]
+pytestmark = [
+    pytest.mark.expensive, pytest.mark.measurement, needs_postgres, pytest.mark.asyncio
+]
 
 _HARNESS = Path(__file__).parent / "data" / "cvlr_judge" / "vault_lifecycle_initialization.rs"
 
