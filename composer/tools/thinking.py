@@ -50,7 +50,7 @@ def get_rough_draft_tools[ST](
     ``write_rough_draft`` stores the draft, echoes it back as the tool result, and
     stamps ``drafted``. The next model turn therefore sees the draft as a
     ToolMessage rather than only as its own previous tool-arg — that is the
-    review. ``read_rough_draft`` is for a later re-read after other work.
+    review. ``read_rough_draft`` remains for a later re-read after other work.
 
     ``review_reminder`` is an optional prompt fragment surfaced as a
     ``<system-reminder>`` HumanMessage whenever the draft is delivered (on
