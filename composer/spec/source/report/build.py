@@ -14,7 +14,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 
 from composer.spec.types import Curtailed
 from composer.spec.source.report.collect import (
-    EvidenceFetcher, ReportableResult, ReportComponentInput, VerdictFetcher, collect,
+    Abandoned, EvidenceFetcher, ReportableResult, ReportComponentInput, VerdictFetcher, collect,
 )
 from composer.spec.source.report.coverage import ValidationError, validate
 from composer.spec.source.report.findings import build_findings
@@ -22,8 +22,8 @@ from composer.spec.source.report.grouping import (
     build_fallback_grouping, build_groups, call_grouping_llm, PropertyGroup
 )
 from composer.spec.source.report.schema import (
-    AutoProverReport, DeprioritizedProperty, Finding, Outcome, PropertyKey, ReportBackend,
-    RuleRef, SourceEditRecord,
+    AutoProverReport, BuildEnvironment, DeprioritizedProperty, Finding, Outcome, PropertyKey,
+    ReportBackend, RuleRef, SourceEditRecord,
     VerificationArtifactRecord,
 )
 
@@ -52,6 +52,7 @@ async def build_report[R: ReportableResult](
     fetch_evidence: EvidenceFetcher | None = None,
     run_mode: str | None = None,
     deprioritized: list[DeprioritizedProperty] | None = None,
+    build_environment: BuildEnvironment | None = None,
 ) -> AutoProverReport:
     """Build and return the in-memory `AutoProverReport`. Persistence is the caller's job.
 
@@ -116,8 +117,7 @@ async def build_report[R: ReportableResult](
     prover_links = {
         c.name: c.formalized.run_link
         for c in components
-        if c.formalized is not None and not isinstance(c.formalized, Curtailed)
-        and c.formalized.run_link
+        if not isinstance(c.formalized, (Abandoned, Curtailed)) and c.formalized.run_link
     }
     # Violated rules -> findings. Its own guard: findings synthesis must never fail the report
     # (the whole phase is also best-effort in the caller, but this keeps a working report even when
@@ -148,6 +148,7 @@ async def build_report[R: ReportableResult](
         gave_up_components=gave_up,
         curtailed_components=curtailed,
         source_edits=source_edits or [],
+        build_environment=build_environment,
         verification_artifacts=verification_artifacts or [],
         coverage=coverage,
         findings=findings,
