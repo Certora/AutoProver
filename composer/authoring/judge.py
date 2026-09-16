@@ -145,7 +145,7 @@ class JudgeInput(FlowInput, _JudgeExtra):
     pass
 
 
-def _wrote_rough_draft(s: JudgeState, _: Any) -> str | None:
+def _wrote_rough_draft(s: JudgeState, _: object) -> str | None:
     if not s["drafted"]:
         return "Completion REJECTED: never wrote a rough draft for review"
     return None

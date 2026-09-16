@@ -31,6 +31,7 @@ async def _run_test_prover_job(
             "--wait_for_results", "none",
             *extra_args
         ],
+        app="evm",
         on_err=lambda _ret, _out, _err: None,
         on_stdout=swallow,
         timeout=BUILD_TIMEOUT_S,

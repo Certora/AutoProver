@@ -15,9 +15,13 @@ back to the pip-installed ``certora_cli`` / ``certora_jars`` packages.
 import importlib
 import os
 import sys
+from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
-from typing import Any, Callable, Literal, cast
+from typing import TYPE_CHECKING, Callable, Literal, cast
+
+if TYPE_CHECKING:
+    from certoraRun import CertoraRunResult
 
 
 class CertoraEnvironmentError(Exception):
@@ -45,12 +49,25 @@ def certora_home() -> Path | None:
 #: is a choice of entry point, not an argument to one.
 type ProverApp = Literal["evm", "solana", "soroban"]
 
-#: ``ProverApp`` -> (module, run function). The module is spelled once, relative to the package, and
-#: ``$CERTORA`` decides whether it is imported from the checkout or from the installed package.
-_PROVER_ENTRIES: dict[str, tuple[str, str]] = {
-    "evm": ("certoraRun", "run_certora"),
-    "solana": ("certoraSolanaProver", "run_solana_prover"),
-    "soroban": ("certoraSorobanProver", "run_soroban_prover"),
+#: What every Prover CLI is: the argument list in, a submitted run out, or ``None`` when the run
+#: never reached submission. Shared across the apps, which is what lets everything downstream of
+#: submission — the wrapper, cloud polling, result parsing — stay app-agnostic.
+type ProverEntry = Callable[[list[str]], CertoraRunResult | None]
+
+
+@dataclass(frozen=True)
+class _EntryPoint:
+    """Where an app's run function lives. The module is spelled once, relative to the package, and
+    ``$CERTORA`` decides whether it is imported from the checkout or from the installed package."""
+
+    module: str
+    function: str
+
+
+_PROVER_ENTRIES: dict[ProverApp, _EntryPoint] = {
+    "evm": _EntryPoint("certoraRun", "run_certora"),
+    "solana": _EntryPoint("certoraSolanaProver", "run_solana_prover"),
+    "soroban": _EntryPoint("certoraSorobanProver", "run_soroban_prover"),
 }
 
 
@@ -61,34 +78,34 @@ def prover_app(name: str) -> ProverApp:
     here rather than inside :func:`import_prover_entry` leaves every in-process caller a checked
     literal.
     """
-    if name not in _PROVER_ENTRIES:
-        raise CertoraEnvironmentError(
-            f"unknown prover app {name!r}; known: {sorted(_PROVER_ENTRIES)}"
-        )
-    return cast(ProverApp, name)
+    for app in _PROVER_ENTRIES:
+        if app == name:
+            return app
+    raise CertoraEnvironmentError(
+        f"unknown prover app {name!r}; known: {sorted(_PROVER_ENTRIES)}"
+    )
 
 
-def import_prover_entry(app: ProverApp) -> Callable[[list[str]], Any]:
+def import_prover_entry(app: ProverApp) -> ProverEntry:
     """The run function for ``app``, honoring ``$CERTORA``.
 
     When ``$CERTORA`` is set we run against a source checkout (added to ``sys.path``); otherwise we
     use the pip-installed ``certora_cli`` package. Used by the sandboxed subprocess wrappers.
 
-    Every entry takes the CLI argument list and returns that CLI's ``CertoraRunResult | None``, so
-    everything downstream of submission — the wrapper, cloud polling, result parsing — is
-    app-agnostic.
+    The cast is the unchecked step: the entry is resolved by name out of a dynamically imported
+    module, so nothing but :data:`_PROVER_ENTRIES` says it is a :data:`ProverEntry`.
     """
-    module, function = _PROVER_ENTRIES[app]
+    entry = _PROVER_ENTRIES[app]
     home = certora_home()
     if home is None:
-        imported = importlib.import_module(f"certora_cli.{module}")
+        imported = importlib.import_module(f"certora_cli.{entry.module}")
     else:
         sys.path.append(str(home))
-        imported = importlib.import_module(module)
-    return getattr(imported, function)
+        imported = importlib.import_module(entry.module)
+    return cast(ProverEntry, getattr(imported, entry.function))
 
 
-def import_run_certora():
+def import_run_certora() -> ProverEntry:
     """Import and return the EVM ``run_certora``. See :func:`import_prover_entry`."""
     return import_prover_entry("evm")
 

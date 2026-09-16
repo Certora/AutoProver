@@ -478,8 +478,12 @@ async def run_prover_inner(
     on_err: Callable[[int | None, str, str], None],
     on_stdout: Callable[[str], Awaitable[None]],
     timeout: float,
-    app: ProverApp = "evm",
+    app: ProverApp,
 ) -> tuple[ProverResult | str, str]:
+    """Run one Prover CLI to completion in a sandboxed subprocess.
+
+    ``app`` is not defaulted: it selects the CLI, and so the build step, which is where the chains
+    differ most — a default would build a Rust project with the Solidity front end."""
     # 3-5. Spawn async subprocess, stream stdout, collect stderr
     wrapper_script = Path(__file__).parent / "certoraRunWrapper.py"
 
