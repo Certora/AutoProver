@@ -10,7 +10,10 @@ and over-approximates the rest — no rule pays for an expensive function that o
 needs kept exact (that coupling is the usual source of a timeout).
 
 Partition by **prover hotspots**, not by every function — most functions are cheap and should stay
-exact. The functions worth summarizing away (where a property does not need them) are the ones *toxic*
+exact. When the **Prover-hostile functions** list is present in your prompt, it is the ranked
+starting point for these hotspots (from a static analysis of the difficulty run); treat it as the
+candidate set to partition around, still confirming against the property each buffer verifies. The
+functions worth summarizing away (where a property does not need them) are the ones *toxic*
 to the prover's performance or precision:
 - heavy **nonlinear** arithmetic (variable `*` / `/` / exponentiation — not scaling by a constant);
 - non-trivial **bitwise** reasoning;

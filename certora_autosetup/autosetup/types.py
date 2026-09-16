@@ -42,6 +42,7 @@ class AutosetupConfig:
     skip_call_resolution: bool = False
     skip_proxy_detection: bool = False
     skip_harnessing: bool = False
+    skip_test_run: bool = False
     no_strip_contracts: bool = False
     keep_intermediate_typechecker_files: bool = False
     dummy_erc20: int | None = None
@@ -79,6 +80,9 @@ class AutosetupResult:
 
     # Deferred sanity test run jobs (created during warmup, submitted by ConfRunner)
     test_run_specs: list = field(default_factory=list)    # list[ProverJobSpec]
+
+    # Deferred Collect Difficulties jobs (skip the SMT solve; feed the summarization detector)
+    difficulty_run_specs: list = field(default_factory=list)  # list[ProverJobSpec]
 
     # Build system info (needed by conf_runner for merging into checker confs)
     build_system_config_dict: dict[str, Any] = field(default_factory=dict)
