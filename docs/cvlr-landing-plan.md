@@ -48,7 +48,7 @@ motivation. Sizes are insertions/deletions against master.
 | **S1** Confined builds: one scratch directory, a readable git config, an unreadable output — [#239](https://github.com/Certora/AutoProver/pull/239), draft | 10 | +247 −37 | Three findings from making Rust builds run under the sandbox, and one story. `composer/layout.py` declares `CERTORA_DIR` / `INTERNAL_DIR` where `composer.sandbox` can name them without importing pydantic, which that package stays free of. The sandbox's scratch (`CARGO_HOME`, tmp) moves under `INTERNAL_DIR`; `RUST_FORBIDDEN_READ` withholds that directory — and the entry itself, so graphcore prunes the subtree instead of rejecting a 730 MB registry file by file — wherever it sits; and the rule is read off the ecosystem `cli_pipeline` is handed rather than passed beside it, so the two cannot disagree. And `git_config_ro_paths` grants the global git config, without which libgit2 refuses to open a fully warm cached git dependency and reports it as an offline-mode *network* error. |
 | **S2** Rescue a mis-encoded grouping | 1 | +26 −1 | A `field_validator` that accepts the whole grouping object JSON-encoded into its own `groups` field. Observed on a real run; the existing fallback silently flattens a report to one group. |
 | **S3** The prover layer learns there is more than one chain — [#240](https://github.com/Certora/AutoProver/pull/240), draft | 16 | +577 −80 | Two halves of one seam. *Which CLI:* `ProverApp` names the three entry points `certora_cli` ships, `import_prover_entry` resolves one honouring `$CERTORA`, and `prover_app` narrows an untrusted string at the single boundary where one arrives. *Which frames:* a counterexample stops being a rendered string and becomes data — trace, assertion, source span — so `classify_violation` can decide whether a violation says anything about the program; `TraceShape` then says which frames of a chain's trace survive rendering. Between those two points nothing learns which chain ran, which is the claim `tests/data/solana_cex` measures. |
-| **S4** Report: what a component gave up on | 7 | +280 −37 | `Abandoned` replacing a `None` that discarded the reason, `GaveUpComponent.reason`, and the `BuildEnvironment` discriminated union (`ConfinedBuilds \| UnconfinedBuilds \| None`) so a report says how the builds behind its verdicts were confined. Includes the `pipeline/core.py` hook that supplies it. |
+| **S4** Report: what a component gave up on, and how its builds were confined — [#241](https://github.com/Certora/AutoProver/pull/241), draft | 8 | +251 −37 | `Abandoned` replacing a `None` that discarded the reason, `GaveUpComponent.reason`, and the `BuildEnvironment` discriminated union (`ConfinedBuilds \| UnconfinedBuilds \| None`) so a report says how the builds behind its verdicts were confined. Includes the `pipeline/core.py` hook that supplies it, and `make_prover_fetcher` typed at `ReportableResult` rather than at CVL — plus `job_input`, the one part of the PR with no caller on master. |
 | **S5** A second read-only source mount | 4 | +84 −9 | `build_layered_source_tools` and `LibrarySource` — tools over a library the analyzed project depends on, and the statement that tells an agent they exist, which travel together because either alone is worse than neither. Plus `crate_source` on the code explorer's prompt. Carries a stray docstring correction in `source/prover.py` that belongs nowhere in particular. |
 
 Dependencies inside the wave: none — the one that remained was the CLI seam before the trace
@@ -159,9 +159,12 @@ protects nothing — but it is also 51,000 lines in every future clone and diff.
 early unblocks C2 and gives the bump its own blast radius; landing it late keeps master still while
 the shared seams go in.
 
-**4. [#185](https://github.com/Certora/AutoProver/pull/185) is open and touches the same report
-files** as S4. Whichever lands second pays the merge. Worth deciding the order deliberately rather
-than discovering it.
+**4. Three open PRs touch the same files as S4.**
+[#185](https://github.com/Certora/AutoProver/pull/185) and
+[#232](https://github.com/Certora/AutoProver/pull/232) are in the report package itself;
+[#228](https://github.com/Certora/AutoProver/pull/228) is in `pipeline/core.py`, a few lines from
+the give-up boundary S4 retypes. Whichever lands second pays the merge in each pair. Worth deciding
+the order deliberately rather than discovering it.
 
 **5. Is there an EVM-visible behaviour change anywhere in wave 1?** The claim is *nearly* no —
 every seam either defaults to today's value or is reached only by a caller that does not exist yet
