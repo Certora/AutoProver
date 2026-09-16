@@ -45,7 +45,7 @@ motivation. Sizes are insertions/deletions against master.
 
 | PR | Files | Size | What it is |
 |----|-------|------|------------|
-| **S1** Confined builds: one scratch directory, a readable git config, an unreadable output | 7 | +265 −22 | Three findings from making Rust builds run under the sandbox, and one story. `composer/layout.py` declares `CERTORA_DIR` / `INTERNAL_DIR` where `composer.sandbox` can import them without pulling in pydantic — the escape suite runs it in a guest that has only pytest. The sandbox's scratch (`CARGO_HOME`, tmp) moves under `INTERNAL_DIR`, and `RUST_FORBIDDEN_READ` withholds that directory anywhere in the tree: a build's private cargo registry was 730 MB, one `list_files` returned 28,904 lines with 28,739 of them from it, and the next request was 2.2M tokens against a 1M limit. And `git_config_ro_paths` grants the global git config, without which libgit2 refuses to open a fully warm cached git dependency and reports it as an offline-mode *network* error. |
+| **S1** Confined builds: one scratch directory, a readable git config, an unreadable output — [#239](https://github.com/Certora/AutoProver/pull/239), draft | 8 | +265 −22 | Three findings from making Rust builds run under the sandbox, and one story. `composer/layout.py` declares `CERTORA_DIR` / `INTERNAL_DIR` where `composer.sandbox` can import them without pulling in pydantic — the escape suite runs it in a guest that has only pytest. The sandbox's scratch (`CARGO_HOME`, tmp) moves under `INTERNAL_DIR`, and `RUST_FORBIDDEN_READ` withholds that directory anywhere in the tree: a build's private cargo registry was 730 MB, one `list_files` returned 28,904 lines with 28,739 of them from it, and the next request was 2.2M tokens against a 1M limit. And `git_config_ro_paths` grants the global git config, without which libgit2 refuses to open a fully warm cached git dependency and reports it as an offline-mode *network* error. |
 | **S2** Rescue a mis-encoded grouping | 1 | +26 −1 | A `field_validator` that accepts the whole grouping object JSON-encoded into its own `groups` field. Observed on a real run; the existing fallback silently flattens a report to one group. |
 | **S3** A readable cost budget | 1 | +11 −2 | `token_cost_budget` yields its counter instead of `None`, so a caller can report what it spent rather than only trip on the cap. |
 | **S4** A `measurement` pytest mark | 1 | +4 −1 | The nightly expensive sweep selects `expensive and not measurement`, so a test that exists to produce a one-off number is not billed every night. Already committed here as `da211b2a`. |
@@ -66,7 +66,7 @@ for its own feature — the `forbidden_read` parameter that lets a caller pass i
 (S1), the build-environment hook (S8), the pinned fixture (S9). Take the hunks, not the files, and
 land them in that order; whichever goes last will want a rebase. One unrelated hunk in `cli.py` is a
 genuine bug fix — a main contract path resolved against the process's cwd rather than the project
-root — and should travel with S1 or alone, not be smuggled in.
+root — and goes alone rather than riding a themed PR; S1 was opened without it.
 
 ---
 
