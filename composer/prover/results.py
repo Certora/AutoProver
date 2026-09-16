@@ -1,13 +1,9 @@
 """Parsing a prover run's treeView reports into per-rule results.
 
-Chain-neutral, and deliberately so: ``certoraSolanaProver`` emits the same treeView shape as
-``certoraRun``, which is what lets one parser serve every backend. Confirmed by measurement rather
-than assumed — the Solana outputs under ``tests/data/solana_cex`` parse here with no chain-specific
-code, and a violated Solana rule yields a call trace of the same nesting as an EVM one.
-
-What does differ per chain is *which frames in that trace are worth showing*, which is what
-:class:`TraceShape` is for. A trace is mostly the runtime the property is not about, and each chain
-buries the counterexample under its own kind of scaffolding.
+Chain-neutral: every Prover CLI emits the same treeView shape, so one parser serves them all. What
+differs per chain is which frames of a counterexample's call trace are worth showing — a trace is
+mostly runtime the property is not about, and each chain buries the counterexample under its own
+scaffolding. That is what :class:`TraceShape` is for.
 """
 
 from typing import Optional, Callable, TypeVar
@@ -69,11 +65,8 @@ class TraceShape:
     """Which call-trace frames a chain's counterexamples are worth rendering.
 
     Frames are matched by :func:`_frame_name`. ``dropped`` removes a frame *and everything under
-    it*; ``elided`` keeps the frame and replaces its subtree with a count of what was removed.
-
-    The distinction is the point. Dropping a frame is only safe when nothing interesting can be
-    nested inside it, and that is a per-chain fact: see :data:`SOLANA_TRACE` for a measured case
-    where a frame EVM drops carries the failing assertion.
+    it*, which is only safe where nothing interesting can nest inside it — a per-chain fact, see
+    :data:`SOLANA_TRACE`. ``elided`` keeps the frame and replaces its subtree with a count.
     """
 
     dropped: frozenset[str] = frozenset()
@@ -84,23 +77,22 @@ class TraceShape:
 _GENERIC_NOISE = frozenset({"Setup", "Global State"})
 
 #: Nothing chain-specific claimed. What a chain's own setup frame is called is a thing to measure
-#: from one of its counterexamples, not to guess: Soroban gets this until Phase 8 produces one.
+#: from one of its counterexamples rather than guess, so a chain gets this until one exists.
 GENERIC_TRACE = TraceShape(dropped=_GENERIC_NOISE)
 
 EVM_TRACE = TraceShape(
     dropped=_GENERIC_NOISE | {"Evaluate branch condition", "unknown loop source code"},
 )
 
-#: Solana's traces are dominated by account materialization: on a real counterexample, 128 of 135
-#: frames were the allocator and nondet-size choices under ``cvlr_deserialize_nondet_accounts``.
-#: That subtree is *elided* rather than dropped, so a reader can tell setup happened and how much
-#: of it was hidden.
+#: Solana's traces are dominated by account materialization: on one measured counterexample, 128 of
+#: 135 frames were the allocator and nondet-size choices under ``cvlr_deserialize_nondet_accounts``.
+#: That subtree is elided rather than dropped, so a reader can tell setup happened and how much of
+#: it was hidden.
 #:
-#: **Deliberately not inheriting EVM's two extra drops.** ``unknown loop source code`` is the frame
-#: a Solana loop-unwinding violation nests its ``Assert 'loop has terminated' failed`` under, along
-#: with the per-iteration structure that says how far the loop got — so dropping it takes the
-#: failure with it. That was measured, not reasoned about: with EVM's shape applied, the trace for
-#: such a violation ended at the handler call and stated no failure at all.
+#: Does not take EVM's two extra drops. A Solana loop-unwinding violation nests both its
+#: ``Assert 'loop has terminated' failed`` and the per-iteration structure that says how far the
+#: loop got under ``unknown loop source code``, so dropping that frame renders a trace that states
+#: no failure at all.
 SOLANA_TRACE = TraceShape(
     dropped=_GENERIC_NOISE | {"__rust_alloc", "CVT_alloc_slice"},
     elided=frozenset({"cvlr_solana::layout::cvlr_deserialize_nondet_accounts(...)"}),
@@ -332,8 +324,8 @@ def _descendants(node: CallTraceModel) -> int:
 def calltrace_to_xml(node: CallTraceModel, shape: TraceShape) -> str:
     """Render one counterexample's call trace as the XML an analyzer reads.
 
-    ``shape`` is required rather than defaulted: rendering a trace with the wrong chain's shape is
-    the failure this parameter exists to prevent, and a default is how that happens silently."""
+    ``shape`` is deliberately not defaulted: a default silently renders a trace with the wrong
+    chain's shape."""
     xml_parts = [f"<message>{_rendered_message(node.message)}</message>"]
 
     for child in node.childrenList:
@@ -354,11 +346,10 @@ def calltrace_to_xml(node: CallTraceModel, shape: TraceShape) -> str:
 def counterexample(dump: dict, shape: TraceShape) -> Counterexample | None:
     """One violated rule's counterexample, or None when its output carries no call trace.
 
-    ``assertMessage`` and ``jumpToDefinition`` are in every rule output the prover writes and were
-    reaching nothing. They matter twice over: on a Solana loop-unwinding violation the assertion is
-    the *only* statement of what failed — the trace shows the loop getting two iterations in and
-    then stopping — and it is what tells a violation that found a bug from one that ran into an
-    analysis bound (:func:`~composer.prover.ptypes.classify_violation`).
+    ``assertMessage`` matters twice over: on a Solana loop-unwinding violation it is the only
+    statement of what failed — the trace just shows the loop getting two iterations in and stopping
+    — and it is what separates a violation that found a bug from one that ran into an analysis
+    bound (:func:`~composer.prover.ptypes.classify_violation`).
     """
     if "callTrace" not in dump:
         return None

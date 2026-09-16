@@ -37,11 +37,10 @@ SPEC_KEY = "curr_spec"
 
 #: The flag a completion gate reads: has this agent written a rough draft of its answer? Set by
 #: :func:`composer.tools.thinking.get_rough_draft_tools`, whose ``write_rough_draft`` echoes the
-#: draft back as its own tool result — so the write *is* the review, and there is nothing further
-#: to read before answering.
+#: draft back as its own tool result — so the write is the review.
 #:
-#: Writing the spec clears it, and that is the reason it lives here rather than beside the draft
-#: tools: a draft written about the previous spec is not a draft of this one.
+#: It lives here rather than beside the draft tools because writing the spec clears it: a draft
+#: written about the previous spec is not a draft of this one.
 DRAFT_KEY = "drafted"
 
 

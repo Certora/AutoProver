@@ -68,10 +68,8 @@ class Counterexample:
 
     ``trace`` arrives already rendered, because how much of a call trace is worth showing is a
     per-chain question the parser answers (:class:`composer.prover.results.TraceShape`). The
-    assertion and its location are kept as fields rather than only inside that rendering, because
-    whether the violation says anything about the *program* is decided from the assertion — see
-    :func:`classify_violation` — and re-reading it out of the rendered string would be the same fact
-    stored twice.
+    assertion stays a field of its own because :func:`classify_violation` decides from it whether
+    the violation says anything about the *program* at all.
     """
 
     trace: str
@@ -100,9 +98,8 @@ class IncompleteCheck:
 
     The check did not finish, so nothing about the program follows from it — an unwound loop bound
     is the prover saying it stopped, not the program misbehaving. Still worth showing an author,
-    who can raise the bound or constrain the loop; not worth writing up as a finding, which is the
-    distinction this type exists to make. ``assertion`` is the prover's own message, which carries
-    its own recommendation.
+    who can raise the bound or constrain the loop; not worth writing up as a finding.
+    ``assertion`` is the prover's own message, which carries its own recommendation.
     """
 
     assertion: str
@@ -111,21 +108,18 @@ class IncompleteCheck:
 type ViolationKind = PropertyViolation | IncompleteCheck
 
 #: Assertions the prover generates for itself when an analysis bound is reached rather than a
-#: property broken, by prefix — the tail carries advice that has changed between versions.
+#: property broken, matched by prefix — the tail carries advice that changes between versions.
 #:
-#: The list is a filter that fails safe. An assertion it does not recognize is treated as the rule's
-#: own, so a stale entry costs a spuriously reported finding — the state of things before this
-#: existed — and can never suppress a real one.
+#: The list fails safe: an assertion it does not recognize is treated as the rule's own, so a stale
+#: entry costs a spuriously reported finding and can never suppress a real one.
 #:
 #: ``Cannot overflow`` is the Solana Prover's sound-signed-math pass. Under
 #: ``-solanaTACSoundSignedMath`` it annotates pointer arithmetic it believes cannot exceed 64 bits
-#: and then *asserts* that belief (``sbf/tac/TACModSimplifier.kt``, ``removeNoOverflow``); the
-#: assertion fails where a pointer is computed from a value the analysis could not pin down —
-#: an account's ``data_len`` that no rule bounded, typically. That is the prover reporting the limit
-#: of its own pointer analysis, so it belongs here for the same reason the loop bound does: an
-#: author can act on it, by pinning the length or by falling back to
-#: ``-solanaTACOptimisticOverflowOptimization``, and a findings synthesizer handed it would write up
-#: the prover's limitation as a defect in the program under verification.
+#: and then asserts that belief (``sbf/tac/TACModSimplifier.kt``, ``removeNoOverflow``); the
+#: assertion fails where a pointer is computed from a value the analysis could not pin down,
+#: typically an account's ``data_len`` that no rule bounded. An author can act on it — pin the
+#: length, or fall back to ``-solanaTACOptimisticOverflowOptimization`` — but a findings synthesizer
+#: handed it writes the prover's limitation up as a defect in the program under verification.
 _GENERATED_ASSERTIONS = ("Unwinding condition in a loop", "Cannot overflow")
 
 
@@ -160,7 +154,7 @@ class RuleResult:
 
     @property
     def cex_dump(self) -> str | None:
-        """The rendered counterexample every analysis prompt and report capture reads."""
+        """The counterexample as analysis prompts and report captures read it."""
         return None if self.counterexample is None else self.counterexample.render()
 
 

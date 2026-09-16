@@ -62,10 +62,9 @@ DEFAULT_GLOBAL_TIMEOUT: float = 7200.0
 @dataclass
 class ProverOptions:
     extra_args: list[str] = field(default_factory=list)
-    #: Which Prover CLI takes this run. A property of the run rather than a parameter threaded
-    #: through :func:`run_prover`, because everything downstream of submission — cloud polling,
-    #: the treeView parse, the verdict roll-up — is already chain-neutral, and the app is the one
-    #: place they differ.
+    #: Which Prover CLI takes this run — the one place a run differs by chain. Everything
+    #: downstream of submission (cloud polling, the treeView parse, the verdict roll-up) is
+    #: chain-neutral.
     app: ProverApp = "evm"
 
     @property
