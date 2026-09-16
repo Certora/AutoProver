@@ -48,7 +48,7 @@ motivation. Sizes are insertions/deletions against master.
 | **S1** Confined builds: one scratch directory, a readable git config, an unreadable output — [#239](https://github.com/Certora/AutoProver/pull/239), draft | 10 | +247 −37 | Three findings from making Rust builds run under the sandbox, and one story. `composer/layout.py` declares `CERTORA_DIR` / `INTERNAL_DIR` where `composer.sandbox` can name them without importing pydantic, which that package stays free of. The sandbox's scratch (`CARGO_HOME`, tmp) moves under `INTERNAL_DIR`; `RUST_FORBIDDEN_READ` withholds that directory — and the entry itself, so graphcore prunes the subtree instead of rejecting a 730 MB registry file by file — wherever it sits; and the rule is read off the ecosystem `cli_pipeline` is handed rather than passed beside it, so the two cannot disagree. And `git_config_ro_paths` grants the global git config, without which libgit2 refuses to open a fully warm cached git dependency and reports it as an offline-mode *network* error. |
 | **S2** Rescue a mis-encoded grouping | 1 | +26 −1 | A `field_validator` that accepts the whole grouping object JSON-encoded into its own `groups` field. Observed on a real run; the existing fallback silently flattens a report to one group. |
 | **S3** The prover layer learns there is more than one chain — [#240](https://github.com/Certora/AutoProver/pull/240), draft | 16 | +577 −80 | Two halves of one seam. *Which CLI:* `ProverApp` names the three entry points `certora_cli` ships, `import_prover_entry` resolves one honouring `$CERTORA`, and `prover_app` narrows an untrusted string at the single boundary where one arrives. *Which frames:* a counterexample stops being a rendered string and becomes data — trace, assertion, source span — so `classify_violation` can decide whether a violation says anything about the program; `TraceShape` then says which frames of a chain's trace survive rendering. Between those two points nothing learns which chain ran, which is the claim `tests/data/solana_cex` measures. |
-| **S4** Report: what a component gave up on, and how its builds were confined — [#241](https://github.com/Certora/AutoProver/pull/241), draft | 8 | +251 −37 | `Abandoned` replacing a `None` that discarded the reason, `GaveUpComponent.reason`, and the `BuildEnvironment` discriminated union (`ConfinedBuilds \| UnconfinedBuilds \| None`) so a report says how the builds behind its verdicts were confined. Includes the `pipeline/core.py` hook that supplies it, and `make_prover_fetcher` typed at `ReportableResult` rather than at CVL — plus `job_input`, the one part of the PR with no caller on master. |
+| **S4** Report: what a component gave up on — [#241](https://github.com/Certora/AutoProver/pull/241), draft | 10 | +173 −51 | `Abandoned` replacing a `None` that discarded the reason, and `GaveUpComponent.reason` where it lands — the only change in wave 1 that alters an EVM run's output. Plus `make_prover_fetcher` typed at `ReportableResult` rather than at CVL, and `job_input`, the one part of the PR with no caller on master: POU cannot parse a Solana job link, and the best-effort fetch turns that into every rule UNKNOWN. |
 | **S5** A second read-only source mount | 4 | +84 −9 | `build_layered_source_tools` and `LibrarySource` — tools over a library the analyzed project depends on, and the statement that tells an agent they exist, which travel together because either alone is worse than neither. Plus `crate_source` on the code explorer's prompt. Carries a stray docstring correction in `source/prover.py` that belongs nowhere in particular. |
 
 Dependencies inside the wave: none — the one that remained was the CLI seam before the trace
@@ -58,9 +58,9 @@ than of the code: the forbidden-read test imports the sandbox's own scratch-dire
 the two could never have been reviewed apart.
 
 **A caution about `pipeline/core.py` and `pipeline/cli.py`.** Two of these PRs touch them, each for
-its own feature — the `ecosystem` parameter the exclusion rule is read off (S1) and the
-build-environment hook (S4). Take the hunks, not the files, and land them in that order; whichever
-goes second will want a rebase. One unrelated hunk in `cli.py` is a
+its own feature — the `ecosystem` parameter the exclusion rule is read off (S1) and the give-up
+boundary that now carries a reason (S4). Take the hunks, not the files, and land them in that
+order; whichever goes second will want a rebase. One unrelated hunk in `cli.py` is a
 genuine bug fix — a main contract path resolved against the process's cwd rather than the project
 root — and goes alone rather than riding a themed PR; S1 was opened without it.
 
@@ -141,6 +141,23 @@ If it is dropped instead, the same paths are what to delete from the branch.
 
 ---
 
+## Dropped: reporting whether the builds were confined
+
+`AutoProverReport.build_environment` — `ConfinedBuilds | UnconfinedBuilds | None`, a `Builds` row in
+the report header, a banner when a run was unconfined, and the `Formalizer.build_environment()` hook
+that supplies it. It was written on the reasoning that an unconfined build makes every verdict in
+the document a development result, and that stderr on the machine that ran it is not a record.
+
+**It is not worth a schema field.** Nothing reads it, and no formalizer on this branch overrides the
+hook either — so the field renders absent on every run that exists, here as much as on master. S4
+was opened with it and the field was removed before review.
+
+The branch still carries it in `report/schema.py`, `report/render.py`, `autoprove_report.html.j2`,
+`pipeline/core.py` and three render tests; those are what to delete. `docs/cvlr-backend-plan.md`
+mentions it in the record of a run that actually happened and should be left alone.
+
+---
+
 ## Decisions to make before starting
 
 **1. ~~[#238](https://github.com/Certora/AutoProver/pull/238) duplicates
@@ -166,12 +183,13 @@ the shared seams go in.
 the give-up boundary S4 retypes. Whichever lands second pays the merge in each pair. Worth deciding
 the order deliberately rather than discovering it.
 
-**5. Is there an EVM-visible behaviour change anywhere in wave 1?** The claim is *nearly* no —
-every seam either defaults to today's value or is reached only by a caller that does not exist yet
-on master. **S3 is the exception and should be reviewed as if the claim were false**: every EVM
-trace now renders through `TraceShape`, and `cex_dump` becomes a derived property whose text gains a
-`<counterexample>` envelope, which two report tests had to be updated for. The CLI-selection half of
-that same PR is inert by comparison, and its body separates the two for exactly this reason.
+**5. Is there an EVM-visible behaviour change anywhere in wave 1?** Two, and both PRs say so in
+their own bodies rather than leaving a reviewer to find it. **S3** is the larger: every EVM trace now
+renders through `TraceShape`, and `cex_dump` becomes a derived property whose text gains a
+`<counterexample>` envelope, which two report tests had to be updated for — it should be reviewed as
+if the no-change claim were false. **S4** is smaller and deliberate: a component that gives up now
+records its reason in the report, on EVM runs as much as any other. Everything else in the wave
+either defaults to today's value or is reached only by a caller that does not exist yet on master.
 
 ---
 
