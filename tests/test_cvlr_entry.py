@@ -15,7 +15,7 @@ import pytest
 
 from composer.cargo import sbf as entry_sbf
 from composer.cargo.metadata import CratePackage, LibTarget, Workspace
-from composer.pipeline.ecosystem import SOLANA
+from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ, SOLANA
 from composer.spec.cvlr import entry, preflight
 from composer.spec.cvlr.pipeline import BUILD_DIR, WORK_DIR, CvlrPhase
 
@@ -257,9 +257,11 @@ def wiring(monkeypatch, tmp_path):
     @asynccontextmanager
     async def fake_cli_pipeline(**kwargs):
         recorded.kwargs = kwargs
+        recorded.ecosystem = kwargs["ecosystem"]
         staged = SimpleNamespace(
             source=SimpleNamespace(
-                project_root=str(tmp_path), forbidden_read=kwargs["forbidden_read"]
+                project_root=str(tmp_path),
+                forbidden_read=kwargs["ecosystem"].language.default_forbidden_read,
             ),
             llm_models=object(),
             embed_model="staged-embedder",
@@ -267,8 +269,8 @@ def wiring(monkeypatch, tmp_path):
             root_key="rootkey",
         )
 
-        async def cont(env, backend, ecosystem):
-            recorded.env, recorded.backend, recorded.ecosystem = env, backend, ecosystem
+        async def cont(env, backend):
+            recorded.env, recorded.backend = env, backend
             return "result"
 
         yield staged, cont
@@ -336,12 +338,14 @@ async def test_the_main_program_is_located_relative_to_the_project(project, monk
 
 @pytest.mark.asyncio
 async def test_the_source_surface_is_cargos_not_soliditys(project, monkeypatch, wiring):
-    """``cli_pipeline`` defaults to the Solidity exclusion rule, which admits ``target/`` — on a
-    project that has been built once, the largest thing in the tree."""
+    """The exclusion rule is the ecosystem's, and cannot be chosen apart from it: ``cli_pipeline``
+    reads ``language.default_forbidden_read`` off the ecosystem it is handed. The Solidity rule
+    admits ``target/``, which on a project that has been built once is the largest thing in the
+    tree."""
     await _run([str(project), "programs/vault/src/lib.rs:vault"], monkeypatch, wiring)
 
-    assert wiring.kwargs["forbidden_read"] == SOLANA.language.default_forbidden_read
     assert wiring.ecosystem is SOLANA
+    assert SOLANA.language.default_forbidden_read == RUST_FORBIDDEN_READ
 
 
 @pytest.mark.asyncio
