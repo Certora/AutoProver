@@ -46,6 +46,7 @@ from graphcore.utils import ainvoke
 from prover_output_utility import cloud_server_for_env
 
 from composer.prover.analysis import analyze_cex_raw
+from composer.certora_env import ProverApp
 from composer.prover.cloud import CloudJobError, cloud_results
 from composer.prover.ptypes import RuleResult, RulePath, StatusCodes
 from composer.prover.results import read_and_format_run_result
@@ -61,6 +62,11 @@ DEFAULT_GLOBAL_TIMEOUT: float = 7200.0
 @dataclass
 class ProverOptions:
     extra_args: list[str] = field(default_factory=list)
+    #: Which Prover CLI takes this run. A property of the run rather than a parameter threaded
+    #: through :func:`run_prover`, because everything downstream of submission — cloud polling,
+    #: the treeView parse, the verdict roll-up — is already chain-neutral, and the app is the one
+    #: place they differ.
+    app: ProverApp = "evm"
 
     @property
     def cloud(self) -> bool:
@@ -92,7 +98,7 @@ def _resolved_global_prover_timeout() -> int:
         return default
 
 
-def make_prover_options(*, cloud: bool) -> ProverOptions:
+def make_prover_options(*, cloud: bool, app: ProverApp = "evm") -> ProverOptions:
     """Build prover options. Cloud runs get a global prover timeout and the
     certoraRun ``--server`` resolved from the deployment env."""
     extras: list[str] = []
@@ -101,7 +107,7 @@ def make_prover_options(*, cloud: bool) -> ProverOptions:
             "--global_timeout", str(_resolved_global_prover_timeout()),
             "--server", cloud_server_for_env()
         ]
-    return ProverOptions(extra_args=extras)
+    return ProverOptions(extra_args=extras, app=app)
 
 
 @dataclass
@@ -473,6 +479,7 @@ async def run_prover_inner(
     on_err: Callable[[int | None, str, str], None],
     on_stdout: Callable[[str], Awaitable[None]],
     timeout: float,
+    app: ProverApp = "evm",
 ) -> tuple[ProverResult | str, str]:
     # 3-5. Spawn async subprocess, stream stdout, collect stderr
     wrapper_script = Path(__file__).parent / "certoraRunWrapper.py"
@@ -480,7 +487,7 @@ async def run_prover_inner(
     with tempfile.NamedTemporaryFile("rb", suffix=".json") as output_file:
         async with _bounded_subprocess(
             sys.executable,
-            str(wrapper_script), str(output_file.name), *args,
+            str(wrapper_script), str(output_file.name), app, *args,
             cwd=str(folder),
             timeout=timeout,
             stdout=asyncio.subprocess.PIPE,
@@ -642,6 +649,7 @@ async def run_prover(
             lambda ret_code, stdout, stderr: _logger.error("Process failed %d\nstdout:%s\nstderr:%s", ret_code, stdout, stderr),
             callbacks.on_stdout_line,
             subprocess_timeout,
+            prover_opts.app,
         )
     except ProverSubprocessTimeout as e:
         # Returned rather than raised: the agent reads this as a tool result and
