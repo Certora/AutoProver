@@ -170,9 +170,8 @@ no Soroban entry.
 **17.** [munge-and-working-copies.md](./munge-and-working-copies.md) §4 needs rewriting against the
 wider corpus survey — its counts are one project's where the evidence is nine of eleven.
 
-**18.** Several shipped changes have no section in the plan: the `--max-properties` cap, the
-`composer/layout.py` path consolidation, `cvlr-spl-token` entering the reference set, and
-`preflight.select_package`.
+**18.** Several shipped changes have no section in the plan: the `composer/layout.py` path
+consolidation, `cvlr-spl-token` entering the reference set, and `preflight.select_package`.
 
 **19. The plan has two stale items, and they should be corrected there rather than only here.**
 §7.12 item 5 says the replay tape "does not exist" — it exists, is curated and has passed twice.

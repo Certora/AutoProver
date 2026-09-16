@@ -91,7 +91,6 @@ class CvlrArgs(ExtendedModelOptions, Protocol):
     memory_ns: str | None
     interactive: bool
     max_bug_rounds: int
-    max_properties: int | None
     properties: str | None
     pin_to: str | None
     recursion_limit: int
@@ -152,12 +151,6 @@ def build_parser() -> argparse.ArgumentParser:
              "the EVM pipeline does.",
     )
     parser.add_argument("--max-bug-rounds", type=int, default=3, help="Max bug-extraction rounds per component (default: 3)")
-    parser.add_argument(
-        "--max-properties", type=int, default=None,
-        help="Author rules for at most this many extracted properties, taken in order across "
-             "components. Omit for all of them. Bounds what the run takes on, where --budget bounds "
-             "what it spends — the two are worth pairing on a program this backend has not seen.",
-    )
     parser.add_argument(
         "--properties", default=None, metavar="PATH",
         help="Re-enter the pipeline at formalization using a fixture written by --pin-to: its "
@@ -376,7 +369,6 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
             design_doc_phase=CvlrPhase.DISCOVER_DESIGN_DOC,
             at_exit=_usage_exit_logger(summary, selected),
             forbidden_read=SOLANA.language.default_forbidden_read,
-            max_properties=args.max_properties,
             pinned=pinned,
             pin_to=pathlib.Path(args.pin_to).resolve() if args.pin_to else None,
             workflow="cvlr",

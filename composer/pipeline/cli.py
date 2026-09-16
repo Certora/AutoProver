@@ -282,7 +282,6 @@ async def cli_pipeline[P: enum.Enum, H](
     at_exit: AtExit | None = None,
     run_mode: RunMode = RunMode.COMPREHENSIVE,
     forbidden_read: GlobalExcludeArg = fs_forbidden_read,
-    max_properties: int | None = None,
     pinned: PinnedRun | None = None,
     pin_to: pathlib.Path | None = None,
     **metadata
@@ -291,10 +290,6 @@ async def cli_pipeline[P: enum.Enum, H](
     rule this was written against. A non-EVM caller passes its ecosystem's
     ``language.default_forbidden_read`` — on a Cargo project the Solidity default withholds nothing
     it should and admits ``target/``, whose build artifacts are larger than the source tree.
-
-    ``max_properties`` bounds how many extracted properties the run attempts to formalize (see
-    :func:`composer.pipeline.core._capped`). Independent of ``budget``, which bounds what a run
-    spends rather than what it takes on.
 
     ``pinned`` supplies the analysis and the properties, skipping the two phases that between
     them dominate a real target's cost; ``pin_to`` writes that fixture from a full run. See
@@ -495,7 +490,6 @@ async def cli_pipeline[P: enum.Enum, H](
                     budget=budget,
                     time_budget_s=args.time_budget,
                     ecosystem=ecosystem,
-                    max_properties=max_properties,
                     pinned=pinned,
                     pin_to=pin_to,
                 )

@@ -113,13 +113,6 @@ def test_the_recorded_run_depends_on_no_corpus():
     assert cvlr_tape.tape_args(Path("/proj")).rag_corpus == "none"
 
 
-def test_the_recorded_run_authors_every_extracted_property():
-    """No property cap: on replay the tape's own extraction response *is* the property set, so a cap
-    would put the size of the run outside the transcript that defines it — and this would be the
-    only tape in the repo whose shape is decided by a flag in the test rather than by its content."""
-    assert cvlr_tape.tape_args(Path("/proj")).max_properties is None
-
-
 def test_the_recording_is_bounded():
     """The first recording ran unbudgeted, for 3h48m, and had to be interrupted with one unit of
     three delivered. The ceiling is what turns that failure into a bounded one — so it is checked

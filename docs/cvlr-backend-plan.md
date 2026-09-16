@@ -2137,17 +2137,21 @@ in the public SolanaExamples repo, reached through `$SOLANA_EXAMPLES_REPO`, and 
 cannot be a CI fixture.
 
 **The tape bounds the replay; nothing else does, and nothing else should.** This was the first thing
-to get wrong. A cap on the run — `--max-properties`, which only this backend offers — looks like the
-way to keep a tape small, and it is the wrong instrument twice over. On replay there is nothing to
-bound: the tape's own extraction response *is* the property set, and its analysis response *is* the
-component set, so the run is exactly as large as the transcript says. Passing a cap as well would
-put the size of the run outside the transcript that defines it, making this the only tape in the
-repo whose shape is decided by a flag in a test rather than by its content. And during *recording* a
-cap cannot express what it would be used for: `_capped` takes the first N properties in extractor
-order and drops the components that keep none, so "two units" is not something it can be asked for —
-the answer depends on how many properties the first component extracted, which is not known until
-extraction has run. Record uncapped; trim afterwards by editing the recorded responses, which is
-where every other tape's size comes from.
+to get wrong. A cap on how many properties a run attempts — the backend briefly carried one — looks
+like the way to keep a tape small, and it is the wrong instrument twice over. On replay there is
+nothing to bound: the tape's own extraction response *is* the property set, and its analysis
+response *is* the component set, so the run is exactly as large as the transcript says. Passing a
+cap as well would put the size of the run outside the transcript that defines it, making this the
+only tape in the repo whose shape is decided by a flag in a test rather than by its content. And
+during *recording* a cap cannot express what it would be used for: taking the first N properties in
+extractor order and dropping the components that keep none means "two units" is not something it can
+be asked for — the answer depends on how many properties the first component extracted, which is not
+known until extraction has run. Record uncapped; trim afterwards by editing the recorded responses,
+which is where every other tape's size comes from.
+
+The cap has since been removed altogether. What it was reaching for — starting a run somewhere other
+than the beginning, cheaply and repeatably — is what the pinned fixture actually does, and a blunt
+prefix of the extractor's order was never going to be the general form of that.
 
 **Reproducibility is the deliverable, not the tape.** A tape is a recording of one run and will be
 re-recorded whenever the pipeline's shape changes on purpose, so what has to be right is the
@@ -2806,7 +2810,7 @@ for the first three, [the-tree-is-a-vfs.md](./the-tree-is-a-vfs.md) §6 for the 
 17. [munge-and-working-copies.md](./munge-and-working-copies.md) §4 needs rewriting against the wider
     corpus survey rather than annotating — its counts are one project's where the evidence is nine of
     eleven. Its §1–§3 CVLR half is already marked as superseded.
-18. A handful of shipped changes have no section here yet: the `--max-properties` cap, the
+18. A handful of shipped changes have no section here yet: the
     `composer/layout.py` path consolidation that moved the sandbox's scratch under
     `.certora_internal` and extended `RUST_FORBIDDEN_READ`, `cvlr-spl-token` entering the reference
     set, and `preflight.select_package`. §7.8.1–§7.8.2 cover the entry points they arrived with.
