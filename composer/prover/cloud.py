@@ -18,6 +18,9 @@ from urllib.parse import urlparse, parse_qs
 
 import aiohttp
 from prover_output_utility import ProverOutputAPI
+from prover_output_utility.exceptions import (
+    AuthenticationError, InvalidJobError, JobNotFoundError, ParseError, ProverAPIError,
+)
 from prover_output_utility.models import JobStatus, convert_job_status
 
 logger = logging.getLogger("composer.spec")
@@ -49,6 +52,19 @@ _TERMINAL_STATUSES = frozenset({
 
 # Avoid requesting Brotli — aiohttp's brotli support is often broken/missing.
 _NO_BROTLI_HEADERS = {"Accept-Encoding": "gzip, deflate"}
+
+#: Attempts at retrieving a finished job's artifacts, and the wait before each retry (doubling).
+#: The failure being tolerated is a dropped connection partway through a fetch that makes hundreds
+#: of requests: POU retries an individual request that fails before its response begins, but a peer
+#: that goes away mid-transfer, or after those retries are spent, fails the whole call. The job is
+#: finished and its artifacts are immutable, so asking again is safe and usually enough.
+_FETCH_ATTEMPTS = 3
+_FETCH_BACKOFF_S = 5.0
+
+#: POU raises everything as a ``ProverAPIError``; these subclasses are the ones a second attempt
+#: cannot change — a bad token, a malformed job reference, a job that is not there, a document that
+#: does not parse. Retrying those spends the backoff to fail identically.
+_PERMANENT_FETCH_ERRORS = (AuthenticationError, InvalidJobError, JobNotFoundError, ParseError)
 
 
 @dataclass
@@ -159,6 +175,34 @@ def _results_api() -> ProverOutputAPI:
     return ProverOutputAPI(enable_cache=False)
 
 
+
+async def _fetch_results(job_id: str, dest: Path) -> None:
+    """Retrieve a finished job's sources and tree view, retrying a transient failure.
+
+    A read of immutable artifacts, so a retry re-asks rather than redoing work: POU marks each
+    half complete as it lands, and a second attempt resumes from those marks instead of
+    re-downloading what already arrived. Exhausting the attempts re-raises, which takes down the
+    caller's graph — the cost of that is why the attempts exist, not something they hide.
+    """
+    for attempt in range(1, _FETCH_ATTEMPTS + 1):
+        try:
+            await asyncio.to_thread(
+                _results_api().fetch_sources_and_treeview_files, job_id, dest
+            )
+            return
+        # ``requests`` failures that escape POU's wrapping are OSErrors (RequestException is an
+        # IOError), so the two clauses together cover the transport.
+        except (ProverAPIError, OSError) as exc:
+            if isinstance(exc, _PERMANENT_FETCH_ERRORS) or attempt == _FETCH_ATTEMPTS:
+                raise
+            delay = _FETCH_BACKOFF_S * 2 ** (attempt - 1)
+            logger.warning(
+                "Fetching results for job %s failed (attempt %d/%d): %s. Retrying in %.0fs",
+                job_id[:8], attempt, _FETCH_ATTEMPTS, exc, delay,
+            )
+            await asyncio.sleep(delay)
+
+
 @asynccontextmanager
 async def cloud_results(
     run_result_link: str,
@@ -202,7 +246,5 @@ async def cloud_results(
         # tens of gigabytes on real jobs and used to exhaust the disk; across the
         # jobs measured here these two subtrees are ~3% of the archive. POU writes
         # them in the same layout the archive had, so the parse is unchanged.
-        await asyncio.to_thread(
-            _results_api().fetch_sources_and_treeview_files, cloud_job.job_id, dest
-        )
+        await _fetch_results(cloud_job.job_id, dest)
         yield (dest, runtime_ms)
