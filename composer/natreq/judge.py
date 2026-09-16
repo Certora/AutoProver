@@ -119,7 +119,7 @@ def judge_res_checker(
     _: str
 ) -> str | None:
     if st["memory"] is not None and not st["drafted"]:
-        return "Completion REJECTED: You must read your rough draft before submitting. Call read_rough_draft first."
+        return "Completion REJECTED: You must write a rough draft before submitting. Call write_rough_draft first."
     reqs = st["orig_reqs"]
     if len(reqs) != len(r.judgement_result):
         return f"Completion REJECTED: Incorrect number of requirement results: expected {len(reqs)} received {len(r.judgement_result)}"

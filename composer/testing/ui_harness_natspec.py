@@ -603,8 +603,8 @@ _COUNTER_TAPE: list[BaseMessage] = [
 
     # J1 — feedback judge, first invocation, turn 1.
     # Tools available: write_rough_draft, read_rough_draft, memory, get_cvl,
-    # env.all_tools (source + rag), result. Validator `did_rough_draft_read`
-    # requires a read_rough_draft before result.
+    # env.all_tools (source + rag), result. Validator `_wrote_rough_draft`
+    # requires a write_rough_draft before result.
     _ai(
         "Judge: gathering state and notes.",
         _tc(

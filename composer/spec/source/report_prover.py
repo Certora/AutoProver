@@ -79,8 +79,7 @@ def make_prover_fetcher(api: ProverOutputAPI | None = None) -> VerdictFetcher[Re
     invoked for delivered results (collect skips gave-up / curtailed inputs).
 
     Typed at ``ReportableResult`` rather than at one backend's result: it reads nothing but
-    ``run_link``, so every backend with a prover job behind it wants this same fetcher. CVLR was
-    reaching past it for the inner function because the annotation named CVL.
+    ``run_link``, so every backend with a prover job behind it shares this fetcher.
     """
     api = api or ProverOutputAPI()
 

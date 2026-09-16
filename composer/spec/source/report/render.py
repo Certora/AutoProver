@@ -223,9 +223,8 @@ class ReportTemplateParams(TypedDict):
     gave_up: list[GaveUpComponent]
     curtailed: list[CurtailedView]
     source_edits: list[SourceEditRecord]
-    #: ``None`` both for a backend that compiles nothing and for a report written before the field
-    #: existed, so the template states only what it has rather than inferring confinement from
-    #: silence.
+    #: ``None`` when the report does not say; the template then states nothing rather than
+    #: inferring confinement from silence.
     build_environment: BuildEnvironment | None
 
 

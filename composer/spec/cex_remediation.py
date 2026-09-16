@@ -104,7 +104,7 @@ class _CritiqueInput(FlowInput, _CritiqueExtra):
 
 def _critic_validator(s: _CritiqueState, _: SummaryCritique) -> str | None:
     if not s.get("drafted", False):
-        return "Completion REJECTED: read your rough draft before delivering. Call read_rough_draft."
+        return "Completion REJECTED: write a rough draft before delivering. Call write_rough_draft."
     return None
 
 

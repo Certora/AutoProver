@@ -6,9 +6,10 @@ translation is exercised), outcome aggregation, grouping + fallback, coverage's
 property-partition, HTML render — plus the build orchestrator. No DB / no real LLM /
 no real prover: POU is faked, the grouping LLM is a `BaseChatModel` stub whose
 structured output is preset (so the real `call_grouping_llm` — templates + parsing —
-still runs), and inputs are in-memory `GeneratedCVL` (or `None` for a give-up/crash,
+still runs), and inputs are in-memory `GeneratedCVL` (or `Abandoned` for a give-up/crash,
 which is how a caller hands a gap to the report layer).
 """
+import dataclasses
 from types import SimpleNamespace
 from typing import Any, cast
 import pathlib
@@ -72,6 +73,16 @@ class _FakeAPI_Impl:
 
 def _FakeAPI(by_link: dict[str, list]) -> ProverOutputAPI:
     return cast(ProverOutputAPI, _FakeAPI_Impl(by_link))
+
+
+@dataclasses.dataclass(frozen=True)
+class _NonCVLFormalized:
+    """A `Formalized` from no particular backend: the fetcher touches only ``run_link``, and the
+    rest is here to satisfy the protocol."""
+    run_link: str | None
+    result: Any = None
+    deliverable: pathlib.Path = pathlib.Path("unit")
+    unit_file: str = "unit"
 
 
 def _fetcher(by_link: dict[str, list]):
@@ -206,11 +217,8 @@ async def test_collect_splits_skipped_property_into_gap():
 @pytest.mark.asyncio
 async def test_collect_abandoned_result_is_a_gap_that_says_why():
     """A component that produced nothing (gave up, or crashed) is a formalization gap — all its
-    properties unimplemented, no per-property reason.
-
-    Its *component*-level reason is carried, which it was not until a run gave up twice on one
-    prover limitation, diagnosed it exactly, named the tuning directive that would have fixed it,
-    and had all of that discarded at this boundary because the input type was `None`."""
+    properties unimplemented, no per-property reason, but the component-level reason carried
+    through."""
     props = [_prop("p1", "d1")]
     properties, rules, skipped, gave_up, curtailed, dropped = await collect(
         [_input("C", "autospec_C.spec", props, None, gave_up_reason="[3308] on VaultError")],
@@ -480,8 +488,8 @@ def _mini_report() -> AutoProverReport:
 
 def test_render_html_says_nothing_about_builds_it_was_not_told_about():
     """A report with no ``build_environment`` is either an EVM backend's — nothing of the project
-    was compiled — or one written before the field existed. Neither is evidence of confinement, so
-    the render states nothing rather than implying the reassuring half."""
+    was compiled — or one that predates the field. Neither is evidence of confinement, so the
+    render states nothing rather than implying the reassuring half."""
     h = render_html(_mini_report())
     assert "unconfined" not in h.lower()
     assert "<dt>Builds</dt>" not in h
@@ -489,7 +497,7 @@ def test_render_html_says_nothing_about_builds_it_was_not_told_about():
 
 def test_render_html_marks_an_unconfined_run():
     """The whole point of the field: a result produced without confinement must not be mistaken for
-    a production one, and stderr on a machine nobody kept is not a record."""
+    a production one."""
     h = render_html(_mini_report().model_copy(update={"build_environment": UnconfinedBuilds()}))
     assert "<dt>Builds</dt>" in h
     assert "Unconfined builds:" in h
@@ -1026,14 +1034,13 @@ async def test_parametric_instantiations_are_all_kept_and_purged_when_stale():
 # ---------------------------------------------------------------------------
 # Which link shapes reach POU
 #
-# The Solana Prover reports a job as `/jobStatus/<userId>/<jobHash>?anonymousKey=...`, and
-# `prover_output_utility` knows `/output/<user>/<job>` and `/job/<job>` and nothing else — so it
-# raised, `fetch_verdicts` swallowed the raise and returned {}, and every rule of such a run landed
-# in the report as UNKNOWN. Silently: the run itself was green, the rules were VERIFIED in the job,
-# and only the deliverable said otherwise.
+# The Solana Prover reports a job as `/jobStatus/<userId>/<jobHash>?anonymousKey=...`, which
+# `prover_output_utility` does not parse: it raises, `fetch_verdicts` swallows the raise and
+# returns {}, and every rule of that run silently lands in the report as UNKNOWN while the job
+# itself is green. Handing POU the job id instead sidesteps its URL parser entirely.
 #
-# The fix hands POU the job id, which it accepts directly. These tests pin the shapes rather than
-# the mechanism, because the mechanism is somebody else's regex.
+# These tests pin the link shapes rather than the extraction, because the extraction is somebody
+# else's regex.
 
 
 def test_the_solana_provers_link_yields_the_job_id():
@@ -1044,8 +1051,7 @@ def test_the_solana_provers_link_yields_the_job_id():
 
 
 def test_the_anonymous_key_is_not_part_of_the_job_id():
-    """The whole failure was a parse, so the parse is worth checking at its edge: an anonymousKey
-    carried into the id would fetch nothing, the same symptom by a different route."""
+    """An anonymousKey carried into the id fetches nothing — the same symptom by another route."""
     assert "anonymousKey" not in job_input(
         "https://prover.certora.com/jobStatus/1/abc123?anonymousKey=deadbeef"
     )
@@ -1061,15 +1067,16 @@ def test_the_anonymous_key_is_not_part_of_the_job_id():
     ],
 )
 def test_a_shape_pou_already_handles_is_passed_through_untouched(link):
-    """Deliberately not a second implementation of POU's extraction. Every shape it parses today —
-    including the local ``emv-`` path its offline mode wants — has to reach it verbatim, or fixing
-    the Solana link would break the EVM one."""
+    """Deliberately not a second implementation of POU's extraction: every shape it parses today —
+    including the local ``emv-`` path its offline mode wants — must reach it verbatim."""
     assert job_input(link) == link
 
 
-def test_the_fetcher_serves_any_reportable_result():
-    """A backend was reaching past the factory for the module's private fetch, re-implementing the
-    ``run_link is None`` check around it, because the factory's annotation named CVL. It reads
-    nothing but ``run_link``, so the annotation was the only thing backend-specific about it."""
-    fetcher = make_prover_fetcher(_FakeAPI({}))
-    assert callable(fetcher)
+@pytest.mark.asyncio
+async def test_the_fetcher_serves_any_reportable_result():
+    """The fetcher reads nothing off a result but ``run_link``, so it serves every backend with a
+    prover job behind it rather than only the CVL one its annotation used to name."""
+    fetcher = make_prover_fetcher(_FakeAPI({"L1": [_fake_check("r1", NodeStatus.VERIFIED)]}))
+    verdicts = await fetcher(_NonCVLFormalized("L1"))
+    assert verdicts["r1"].outcome == Outcome.GOOD
+    assert await fetcher(_NonCVLFormalized(None)) == {}

@@ -217,8 +217,7 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
 
         Default None: a backend that compiles nothing of the project under verification has no build
         to have confined, which is every EVM one. A backend that does compile must answer, because
-        the answer is a caveat on every verdict it produced, and stderr on a machine nobody kept is
-        not a record."""
+        the answer is a caveat on every verdict it produced."""
         return None
 
     async def finalize(self, outcomes: list[ComponentOutcome[FormT, U]], run: PipelineRun) -> None:
@@ -474,8 +473,7 @@ def _abandonment(result: GaveUp | BaseException) -> str:
     """What to record for a component that produced nothing.
 
     A ``GaveUp`` carries the author's own account, which is the useful case — an authoring loop that
-    stops usually knows exactly what stopped it. An exception carries only its text, which is still
-    better than the silence this replaced."""
+    stops usually knows exactly what stopped it. An exception carries only its text."""
     if isinstance(result, GaveUp):
         return result.reason
     return f"{type(result).__name__}: {result}"

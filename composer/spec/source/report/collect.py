@@ -62,8 +62,7 @@ class Formalized[R: ReportableResult](Protocol):
 class Abandoned:
     """The component produced nothing: no units formalized, no file written, no run.
 
-    A variant rather than a ``None``, so the account of *why* has somewhere to live. It used to be
-    ``None`` and the reason was discarded at the boundary."""
+    A variant rather than a ``None``, so the account of *why* has somewhere to live."""
     reason: str
 
 

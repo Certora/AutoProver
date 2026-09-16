@@ -126,11 +126,8 @@ class GaveUpComponent(BaseModel):
     """A formalization gap at component granularity: the component's generation gave up (or
     crashed), so none of its inferred properties were formalized. No per-property reason.
 
-    ``reason`` is the author's own account, or the exception text when the component crashed. It was
-    dropped until a CVLR run gave up twice on one prover limitation and diagnosed it precisely,
-    naming the tuning directive that would have unblocked it — an analysis that reached the
-    transcript and nothing else. Whatever stopped a component is usually the most actionable thing
-    a report carries."""
+    ``reason`` is the author's own account, or the exception text when the component crashed;
+    ``None`` when no account was recorded."""
     component: ComponentName
     properties: list[PropertyFormulation]
     reason: str | None = None
@@ -257,9 +254,8 @@ class UnconfinedBuilds(BaseModel):
     """The verdicts in this report were earned by builds that ran with the operator's full
     environment — the project's own ``build.rs`` and proc-macros included.
 
-    Carries nothing, because there is nothing about it to record beyond the fact: the opt-out is a
-    single environment variable and the consequence is the same whatever set it. What it is *for* is
-    that a reader of the document can tell, which stderr on a machine nobody kept cannot."""
+    Carries nothing: the opt-out is a single environment variable and the consequence is the same
+    whatever set it."""
     kind: Literal["unconfined"] = "unconfined"
 
 
