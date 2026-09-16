@@ -1,5 +1,7 @@
 """Unit tests for the multi-spec-buffer substrate."""
 
+import pytest
+
 from composer.spec.source.spec_buffers import (
     DEFAULT_MAX_SPEC_BUFFERS,
     NamedBuffer,
@@ -355,6 +357,18 @@ def test_declared_rules_must_all_be_mapped():
     assert validate_declared_rules_mapped(b, {"easy": None, "hard": {"r_hard"}}) is None
 
 
+def _ast_extraction_available() -> bool:
+    """True when ASTExtraction.jar can actually run (needs Java 19+). The unit suite is otherwise
+    JVM-free — the jar-backed golden test skips where Java is too old (CI's pytest job); it runs
+    where Java is set up (locally, and the integration-tests workflow)."""
+    try:
+        requireinvariant_citations("rule r() { assert true; }")
+        return True
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(not _ast_extraction_available(), reason="ASTExtraction.jar (Java 19+) unavailable")
 def test_requireinvariant_citations_from_ast():
     # Citations are read from the parsed CVL AST, not by scanning text. Golden guard: if the AST node
     # shape (the AssumeInvariant command) changes, this fails loudly.

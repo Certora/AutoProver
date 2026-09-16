@@ -448,7 +448,7 @@ class TestBufferSubmitCollect:
         msg = res if isinstance(res, str) else getattr(res, "content", str(res))
         assert "inv_x" in msg
 
-    async def test_publish_rejects_requireinvariant_of_an_unproved_invariant(self):
+    async def test_publish_rejects_requireinvariant_of_an_unproved_invariant(self, monkeypatch):
         """The publish gate refuses when a buffer requireInvariant's an invariant it does not declare —
         e.g. one that lives only in an unproven shared buffer it imports, so this run never verifies it."""
         from composer.spec.source.author import PublishResultTool
@@ -492,6 +492,12 @@ class TestBufferSubmitCollect:
             "config": {}, "reminders_channel": [], "failed": None, "budget_curtailed": False,
             "prover_history": [_run("easy", ["r_easy"]), _run("hard", ["r_hard"])],
         }
+        # The gate reads requireInvariant citations from the CVL AST (ASTExtraction.jar); mock that
+        # here so the unit suite stays JVM-free — this test exercises the gate wiring, not the parse.
+        monkeypatch.setattr(
+            "composer.spec.source.author.requireinvariant_citations",
+            lambda cvl: {"inv_shared"} if "inv_shared" in cvl else set(),
+        )
         tool = PublishResultTool.bind(
             [PropertyTitle("P-easy"), PropertyTitle("P-hard")]
         ).as_tool("result")
