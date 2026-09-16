@@ -62,7 +62,7 @@ source ─analyze─▶ App model ─extract─▶ properties ─formalize─▶
 | Prover result parsing (treeView JSON → `RuleResult`), cloud polling, callbacks | **Built, chain-neutral** | [prover/results.py](../composer/prover/results.py), [prover/cloud.py](../composer/prover/cloud.py) |
 | `certoraSolanaProver` / `certoraSorobanProver` CLIs | **Already installed in the venv** | `certora_cli` |
 | RAG corpus registry (`KNOWLEDGE_BASES`, `rag_env`) | **`cvlr_kb` registered** — the first corpus in either map | [rag/db.py](../composer/rag/db.py), [tools/rag_env.py](../composer/tools/rag_env.py) |
-| CVLR corpus · CVLR KB articles | **Three manifests under one tag** (§7.3.1): published docs, generated crate reference, project-derived idioms — all produced in and shipped from the private repo | [rag/import_format.py](../composer/rag/import_format.py), [rag/html_manual.py](../composer/rag/html_manual.py) |
+| CVLR corpus · CVLR KB articles | **One tag, two sources** (§7.3.1): the published manual, built and ingested here; the generated crate reference and project-derived idioms, produced in and shipped from the private repo | [rag/import_format.py](../composer/rag/import_format.py), [scripts/ragbuild.py](../composer/scripts/ragbuild.py) |
 | Preflight scaffold | **Done** (§7.4): deterministic, idempotent, refuses two decisions rather than guessing | [cvlr/scaffold.py](../composer/spec/cvlr/scaffold.py), [cvlr/preflight.py](../composer/spec/cvlr/preflight.py) |
 | Authoring loop | **Built and exercised end to end** (§7.5): successive gate runs against a real Anchor program have published harnesses, and what each found is recorded from §7.5.5 on. The feedback judge is contextual (§7.7.5): the author's summaries ride into its input, and since §7.10 so does the munge diff | [cvlr/author.py](../composer/spec/cvlr/author.py), [cvlr/pipeline.py](../composer/spec/cvlr/pipeline.py) |
 | Program-source edits | **Built, with one owner** (§7.6.6, §7.10): the munge editor agent holds the edit tools and a reviewer rules on the request; the author asks through `code_editor` and can `revert_munge` | [cvlr/editor.py](../composer/spec/cvlr/editor.py), [who-edits-the-program.md](./who-edits-the-program.md) |
@@ -692,20 +692,21 @@ what produced it.
 
 So all three now ship in the `certora-cvlr-kb` package, and **a plain AutoProver install has no CVLR
 corpus** — a supported state (the backend falls back to `backend_guidance`) but no longer a partial
-one. What this repo keeps is the piece with two consumers:
-[html_manual.py](../composer/rag/html_manual.py) stays, because the EVM corpus builder uses it, and
-the docs producer imports it from an `AUTOPROVER_REPO` checkout like everything else that repo reads
-rather than restates. The moved producer reproduces the previous manifest byte-for-byte from the same
-manual, which is the check that the move changed only where the code lives.
+one. What this repo kept was the piece with two consumers: the HTML parser, because the EVM corpus
+builder used it and the moved producer imported it from an `AUTOPROVER_REPO` checkout like
+everything else that repo reads rather than restates. The moved producer reproduced the previous
+manifest byte-for-byte from the same manual, which is the check that the move changed only where the
+code lives.
 
-**Half of this has since been reversed by decision** (see [cvlr-todo.md](./cvlr-todo.md) U6). The
-documentation manifest comes back, because the thing it was rebuilding was already being built here:
-`scripts/gen_docs.sh` has always produced `solana.html` beside `cvl.html`, and `ragbuild` already
-writes through the same two database calls `rag_import` does, so the docs half needs no producer,
-no manifest and no new code — only a connection. The provenance argument above is what that costs,
-and it is the reason the built HTML now carries a `PROVENANCE` stamp naming the docs revision. The
-crate reference and the practice corpus are unaffected: they are expensive to build, for the reasons
-this section gives, and where they belong is still open.
+**Half of this has since been reversed by decision** (see [cvlr-todo.md](./cvlr-todo.md) U6), and
+the reversal went further than the producer: there is no documentation manifest at all now. The
+thing it was rebuilding was already being built here — `scripts/gen_docs.sh` has always produced
+`solana.html` beside `cvl.html` — and `ragbuild` already writes through the same two database calls
+`rag_import` does, so the manual is ingested directly with `--knowledge-base cvlr_kb`. No producer,
+no manifest, no shared parser, no `AUTOPROVER_REPO` reach-back. The provenance argument above is
+what that costs, and it is why the built HTML carries a `PROVENANCE` stamp naming the docs revision.
+The crate reference and the practice corpus are unaffected: they are expensive to build, for the
+reasons this section gives, and where they belong is still open.
 
 The one thing that got *simpler* is discovery. `populate_cvlr_rag.sh` had a four-tier ladder because
 one manifest came from this repo's tree and the others from a package; both it and the Docker

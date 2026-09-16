@@ -1,22 +1,27 @@
 #!/bin/bash
 # Ingest the `cvlr_kb` corpus — published documentation + CVLR reference + verification practice.
 #
-# The corpus is fed by THREE manifests sharing one knowledge-base tag, and the importer numbers
-# their sections apart (docs/cvlr-capture-plan.md §8.2):
+# The corpus has two sources, and they are fed differently.
 #
-#   cvlr-docs.rag.json      the published Solana/CVLR manual — the corpus's methodology half.
-#   cvlr-crates.rag.json    the generated CVLR crate reference: every public item of the pinned
-#                           reference set, with compile-gated examples.
-#   cvlr-practice.rag.json  project-derived idioms.
+# 1. The published Solana/CVLR manual — the corpus's methodology half — is built HERE, by
+#    ./gen_docs.sh, which has always produced solana.html beside the CVL manual it publishes. It is
+#    ingested straight into the knowledge base by ragbuild, the same producer the CVL corpus uses;
+#    there is no manifest for it, because rebuilding it needs nothing this repo does not have.
 #
-# All three are PUBLIC content in two cases out of three, but all three are *produced* in the
-# private `certora-cvlr-kb` repo and ship in its package, because that is where the machinery to
-# rebuild them lives — an API key and cargo for the crate reference, a sphinx build for the docs.
-# So this script does not build anything: it finds manifests and ingests them.
+# 2. TWO manifests sharing the knowledge-base tag, with the importer numbering their sections apart
+#    (docs/cvlr-capture-plan.md §8.2):
 #
-# Without access to that package there is no CVLR corpus. That is a supported state — the backend
-# falls back to its static guidance — but it is not a state this script can do anything useful in,
-# so finding nothing is an error rather than a warning.
+#      cvlr-crates.rag.json    the generated CVLR crate reference: every public item of the pinned
+#                              reference set, with compile-gated examples.
+#      cvlr-practice.rag.json  project-derived idioms.
+#
+#    Both are *produced* in the private `certora-cvlr-kb` repo and ship in its package, because
+#    that is where the machinery to rebuild them lives — an API key, cargo, and a model. This
+#    script does not build them: it finds them and ingests them.
+#
+# Either source can be missing and the other still lands: the manual without the surface, or the
+# surface without the methodology. Both absent is the supported no-corpus state (the backend falls
+# back to its static guidance) but not one this script can do anything in, so it is an error.
 #
 # Manifest resolution, in order:
 #   1. any paths given on the command line (before `--`), which override discovery entirely
@@ -30,6 +35,21 @@ set -euo pipefail
 
 script_dir="$(realpath "$(dirname "$0")")"
 parent="$(realpath "$script_dir/..")"
+
+# The manual, from this repo's own build. Its PROVENANCE stamp says which docs revision it is, so a
+# corpus that carries it can be traced; a missing HTML is a prompt to run gen_docs.sh rather than a
+# failure, since the manifests below can still land without it.
+manual="$script_dir/prover-docs/solana.html"
+ingest_manual() {
+    if [[ ! -f "$manual" ]]; then
+        echo "No $manual — run ./gen_docs.sh to build it. Skipping the documentation half." >&2
+        return 1
+    fi
+    echo "Ingesting $(basename "$manual") into cvlr_kb ..." >&2
+    [[ -f "$script_dir/prover-docs/PROVENANCE" ]] && cat "$script_dir/prover-docs/PROVENANCE" >&2
+    (cd "$parent"; uv run --isolated --group ragbuild \
+        python -m composer.scripts.ragbuild --knowledge-base cvlr_kb "$manual")
+}
 
 manifests=()
 forward=()
@@ -81,21 +101,29 @@ except Exception:
 fi
 
 if [[ ${#manifests[@]} -eq 0 ]]; then
+    # The manual alone is a usable corpus, so try it before giving up.
+    if ingest_manual; then
+        echo "No manifest found; ingested the manual alone." >&2
+        exit 0
+    fi
     cat >&2 <<'MSG'
-Error: no cvlr_kb manifest found, so there is nothing to ingest.
+Error: no cvlr_kb manifest found and no local manual, so there is nothing to ingest.
 
-All three manifests ship in the certora-cvlr-kb package. To get them:
+Both manifests ship in the certora-cvlr-kb package. To get them:
 
   - clone the private certora-cvlr-kb repo and point CVLR_KB_REPO at it, or
   - `pip install certora-cvlr-kb`.
 
 Rebuilding them from source is done in that repo (tools/README.md maps each manifest to its
-producer); nothing here builds a CVLR manifest any more.
+producer). The documentation half is not among them: run ./gen_docs.sh and this script ingests it
+from scripts/prover-docs/solana.html.
 
 Pass manifest paths explicitly to bypass discovery.
 MSG
     exit 1
 fi
+
+ingest_manual || true
 
 echo "Ingesting ${#manifests[@]} manifest(s) into cvlr_kb ..." >&2
 (cd "$parent"; uv run --isolated --group ragbuild \

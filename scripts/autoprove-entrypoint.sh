@@ -57,13 +57,19 @@ if [[ "${1:-}" == "setup-db" ]]; then
   echo "[autoprove] populating LangGraph knowledge base ..."
   python -m composer.scripts.kb_populate
 
-  # The `cvlr_kb` corpus (published docs + CVLR reference + verification practice). Three manifests
-  # share the tag and the importer numbers their sections apart (docs/cvlr-capture-plan.md §8.2).
-  # All three ship together in the separate certora-cvlr-kb package, so they are here only if that
-  # package is installed or CVLR_KB_REPO points at a checkout — nothing is baked into this image.
+  # The `cvlr_kb` corpus. Its methodology half is the Solana manual built into this image beside the
+  # CVL one, ingested by the same producer; its surface and practice halves are two manifests that
+  # share the tag, with the importer numbering their sections apart (docs/cvlr-capture-plan.md
+  # §8.2). Those two ship in the separate certora-cvlr-kb package, so they are here only if it is
+  # installed or CVLR_KB_REPO points at a checkout.
   #
-  # An install with none of them is supported (the backend falls back to its static guidance), so
+  # An install with neither half is supported (the backend falls back to its static guidance), so
   # finding nothing reports a skip rather than failing setup-db.
+  echo "[autoprove] populating cvlr_kb from the Solana manual ..."
+  python -m composer.scripts.ragbuild \
+      --knowledge-base cvlr_kb \
+      "$AUTOPROVE_HOME/prover-docs/solana.html"
+
   cvlr_manifests=()
   if [[ -n "${CVLR_KB_REPO:-}" && -d "${CVLR_KB_REPO%/}/src/certora_cvlr_kb/data" ]]; then
     shopt -s nullglob
@@ -88,7 +94,7 @@ except Exception:
     echo "[autoprove] populating cvlr_kb from ${#cvlr_manifests[@]} manifest(s) ..."
     python -m composer.scripts.rag_import "${cvlr_manifests[@]}"
   else
-    echo "[autoprove] no cvlr_kb manifest found; skipping (CVLR corpus will be unavailable)"
+    echo "[autoprove] no cvlr_kb manifest found; the corpus has the manual but no crate reference"
   fi
 
   echo "[autoprove] setup-db done."
