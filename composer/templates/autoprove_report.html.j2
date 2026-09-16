@@ -332,13 +332,6 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
   <dl class="meta-grid">
     <dt>Contract</dt><dd>{{ contract_name }}</dd>
     <dt>Run timestamp</dt><dd>{{ run_timestamp_utc or "—" }}</dd>
-    {%- if build_environment %}
-    <dt>Builds</dt>
-    <dd>
-      {%- if build_environment.kind == "confined" %}confined ({{ build_environment.provider }})
-      {%- else %}<strong>unconfined</strong>{% endif %}
-    </dd>
-    {%- endif %}
     {%- if has_links %}
     <dt>Prover runs</dt>
     <dd>
@@ -362,13 +355,6 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
     {%- if not group_counts %}<span class="muted">—</span>{% endif %}
   </div>
 </header>
-
-{%- if build_environment and build_environment.kind == "unconfined" %}
-<div class="warnings"><strong>Unconfined builds:</strong>
-  the project was compiled with the operator's full environment — its own build scripts and
-  procedural macros ran unsandboxed. These are development results, not production ones.
-</div>
-{%- endif %}
 
 {%- if coverage.warnings %}
 <div class="warnings"><strong>Coverage warnings:</strong>

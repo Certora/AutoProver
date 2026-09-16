@@ -243,30 +243,6 @@ class VerificationArtifactRecord(BaseModel):
     path: str
 
 
-class ConfinedBuilds(BaseModel):
-    """The verdicts in this report were earned by builds that ran under a command sandbox, and
-    ``provider`` names the mechanism (``composer.sandbox.config.SandboxConfig``)."""
-    kind: Literal["confined"] = "confined"
-    provider: str
-
-
-class UnconfinedBuilds(BaseModel):
-    """The verdicts in this report were earned by builds that ran with the operator's full
-    environment — the project's own ``build.rs`` and proc-macros included.
-
-    Carries nothing: the opt-out is a single environment variable and the consequence is the same
-    whatever set it."""
-    kind: Literal["unconfined"] = "unconfined"
-
-
-type BuildEnvironment = ConfinedBuilds | UnconfinedBuilds
-"""How the builds behind a report's verdicts were run — absent on a backend that compiles nothing
-of the project (every EVM one), where there is no build to have confined.
-
-A union rather than a flag because the two carry different things, and a presence-marker rather
-than a bare boolean because the absent case is a third state and not a default."""
-
-
 type ReportBackend = Literal["prover", "foundry", "none"]
 """Which pipeline produced this report. Provenance only — every backend fills the same fields;
 this tag just lets the renderer pick the right outcome labels ("Verified" vs "Successful test"
@@ -351,7 +327,7 @@ class DeprioritizedProperty(PropertyFormulation):
 
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
-    schema_version: Literal["3.0", "3.1", "3.2", "3.3"] = "3.3"
+    schema_version: Literal["3.0", "3.1", "3.2"] = "3.2"
     backend: ReportBackend = "prover"
     #: How much of the inferred property set the run pursued ("comprehensive" or
     #: "prioritized"). Absent on reports written before the mode existed, which are all
@@ -375,10 +351,6 @@ class AutoProverReport(BaseModel):
     #: Source modifications each component's verification ran against; empty when every
     #: component was verified against the on-disk source.
     source_edits: list[SourceEditRecord] = Field(default_factory=list)
-    #: How the builds behind these verdicts were confined. ``None`` on a backend that compiles
-    #: nothing of the project, and on any report written before schema 3.3 — which is why the
-    #: absent case must not be read as "confined".
-    build_environment: BuildEnvironment | None = Field(default=None, discriminator="kind")
     #: Verification-supporting artifacts registered by plugin tools during
     #: formalization (Lean proofs et al.), written to disk by the artifact store.
     verification_artifacts: list[VerificationArtifactRecord] = Field(default_factory=list)
