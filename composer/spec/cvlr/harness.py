@@ -187,7 +187,9 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
         )
 
     @override
-    def _job_info_payload(self, summary: RunSummary, *, user_id: str) -> dict[str, object]:
+    def _job_info_payload(
+        self, summary: RunSummary, *, user_id: str, run_mode: str
+    ) -> dict[str, object]:
         """Extends the shared manifest with the prover-reported runtime, as the autoprove store
         does, so a run records what its cloud jobs cost and not only what its models did.
 
@@ -198,7 +200,7 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
         a program whose properties are nonlinear puts the same loop in front of split-heavy jobs
         and timeouts, and a manifest that reports only tokens cannot tell those two runs apart."""
         return {
-            **super()._job_info_payload(summary, user_id=user_id),
+            **super()._job_info_payload(summary, user_id=user_id, run_mode=run_mode),
             "prover_usage": summary.prover_usage_summary(),
         }
 
