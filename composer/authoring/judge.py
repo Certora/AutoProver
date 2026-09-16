@@ -4,10 +4,11 @@ A judge is a sub-agent, not a scoring function: it gets the session's tool belt,
 scratchpad, a memory namespace of its own, and a read-back of the spec under review, and it must
 call ``result`` with a structured :class:`PropertyFeedback`.
 
-Two properties are enforced rather than requested. It must read the draft back through the tool
-(``did_read``) instead of reviewing the copy pasted into its prompt, and the author may file
-:class:`RebuttalBase` entries against prior-round feedback, which are rendered into the judge's
-input so a point already answered with evidence is answered rather than repeated.
+Two properties are enforced rather than requested. Writing a rough draft echoes it back as the
+tool result (``drafted``) so the next turn reviews that copy rather than the one in its own
+prompt, and the author may file :class:`RebuttalBase` entries against prior-round feedback, which
+are rendered into the judge's input so a point already answered with evidence is answered rather
+than repeated.
 """
 
 import inspect
@@ -144,9 +145,9 @@ class JudgeInput(FlowInput, _JudgeExtra):
     pass
 
 
-def _did_rough_draft_read(s: JudgeState, _: Any) -> str | None:
-    if not s["did_read"]:
-        return "Completion REJECTED: never read rough draft for review"
+def _wrote_rough_draft(s: JudgeState, _: Any) -> str | None:
+    if not s["drafted"]:
+        return "Completion REJECTED: never wrote a rough draft for review"
     return None
 
 
@@ -208,7 +209,7 @@ def build_feedback_judge_generic[R: RebuttalBase, S: JudgeState, I: JudgeInput, 
     staged = bind_standard(
         host.builder_heavy().with_tools(host.judge_tools),
         st,
-        validator=_did_rough_draft_read,
+        validator=_wrote_rough_draft,
     ).with_input(
         inp
     ).inject(
@@ -235,7 +236,7 @@ def build_feedback_judge_generic[R: RebuttalBase, S: JudgeState, I: JudgeInput, 
             res = await run_to_completion(
                 workflow,
                 input_lift(
-                    JudgeInput(input=parts, curr_spec=spec, memory=None, did_read=False),
+                    JudgeInput(input=parts, curr_spec=spec, memory=None, drafted=False),
                     exec_ctx,
                 ),
                 thread_id=uniq_thread_id(thread_prefix),

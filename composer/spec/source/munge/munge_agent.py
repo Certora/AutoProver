@@ -35,7 +35,7 @@ from composer.spec.util import uniq_thread_id
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 
 class MungerStateExtra(VFSState):
-    did_read: bool
+    drafted: bool
     memory: str | None
     orig_vfs: dict[str, str]
     compile_conf: dict
@@ -128,7 +128,7 @@ class EditMungeTool(WithAsyncDependencies[str, MungeToolDeps], WithInjectedId, W
                 input=[self.request],
                 request=self.request,
                 orig_vfs=self.state["vfs"].copy(),
-                did_read=False,
+                drafted=False,
                 memory=None,
                 compile_conf=self.state["config"],
                 vfs=self.state["vfs"].copy(),
@@ -242,13 +242,13 @@ def munge_feedback_judge(
 
     rough_draft_tools = get_rough_draft_tools(MungeFeedbackState)
 
-    def did_rough_draft_read(s: MungeFeedbackState, _: MungeFeedback) -> str | None:
-        if not s["did_read"]:
-            return "Completion REJECTED: never read rough draft for review"
+    def wrote_rough_draft(s: MungeFeedbackState, _: MungeFeedback) -> str | None:
+        if not s["drafted"]:
+            return "Completion REJECTED: never wrote a rough draft for review"
         return None
 
     workflow = bind_standard(
-        env.builder_heavy(), MungeFeedbackState, validator=did_rough_draft_read
+        env.builder_heavy(), MungeFeedbackState, validator=wrote_rough_draft
     ).with_input(
         MungeFeedbackInput
     ).with_sys_prompt_template(
@@ -266,7 +266,7 @@ def munge_feedback_judge(
     ) -> MungeFeedback:
         res = await run_to_completion(
             workflow,
-            MungeFeedbackInput(input=review, vfs=vfs, memory=None, did_read=False),
+            MungeFeedbackInput(input=review, vfs=vfs, memory=None, drafted=False),
             thread_id=uniq_thread_id("munge-feedback"),
             recursion_limit=ctx.recursion_limit,
             description="Editor feedback judge",
