@@ -269,23 +269,18 @@ represent neither the overlap nor the flags; two independent products represent 
 
 The genuinely corpus-specific pieces — Foundry's `.mdx → .html` conversion
 ([`foundry_process.py`](../composer/scripts/foundry_process.py)) and table-to-parameter-list
-translation — stay in producers either way. So the model absorbs both non-trivial corpora cleanly;
-the design isn't Crucible-only.
+translation, CVL's docutils traversal — would stay in producers either way. So the model absorbs
+both non-trivial corpora cleanly; the design isn't Crucible-only.
 
-**This has since been tested against CVL's traversal for real.** The `cvlr_kb` docs producer
-(§7 item 4) needed the same docutils walk, so the walk was lifted out of `ragbuild.py` into
-[`html_manual.py`](../composer/rag/html_manual.py), which emits a tree of blocks tagged with the
-*same* `EmbeddedBlockKind` values this format defines. Two findings, both encouraging for a future
-CVL migration:
-
-- The per-element mapping above is exactly right: every element the CVL traversal handles has one
-  kind, and `ragbuild.py`'s calls into `BlockBuilder` reduced to a five-line match on kind with no
-  residue.
-- The one thing the flat format cannot express is `push_child`, which links a parent chunk to its
-  first child's header path and opening sentence. The tree keeps the nesting, so `ragbuild.py` still
-  does it; a manifest-based producer simply omits it. That is the whole gap between the two
-  representations, and it is small — but it is real, so a CVL migration should decide about it
-  deliberately rather than discovering it as a quality regression.
+**One measurement, from a corpus that briefly tried it.** The `cvlr_kb` documentation half was for a
+while produced out of tree, which meant lifting `ragbuild.py`'s docutils walk into a shared parser.
+That lift is reverted — the manual is built and ingested here — but what it showed is worth keeping:
+the per-element mapping above is exactly right, with every element the CVL traversal handles having
+one kind and no residue; and the one thing this flat format cannot express is `push_child`, which
+links a parent chunk to its first child's header path and opening sentence. A manifest-based
+producer simply omits it. That is the whole gap between the two representations, and it is small —
+but real, so a CVL migration should decide about it deliberately rather than discovering it as a
+quality regression.
 
 ---
 
@@ -334,24 +329,20 @@ What an adopting application adds, in one go: its committed `<kb>.rag.json`, bot
 DB role/schema in [`init-db.sql`](../composer/scripts/init-db.sql), and whatever container wiring
 populates it at `setup-db` time.
 
-4. The first real producers, all three of which live **outside this repo**, in the private
-   `certora-cvlr-kb` repo, and reach back into it for the pieces they must not restate. That is the
-   producer/importer split working as intended, and further than originally planned: a producer
-   needs the manifest model and — for the documentation one — the shared parser
-   [`html_manual.py`](../composer/rag/html_manual.py), and neither pulls in spaCy, an embedding
-   model or a DB. `html_manual.py` stays here because
-   [`ragbuild.py`](../composer/scripts/ragbuild.py) is its other consumer;
-   [`tests/test_html_manual.py`](../tests/test_html_manual.py) still covers it, and the tests for
-   each producer's own layout decisions moved with the producer.
+4. The first real producers: the CVLR crate reference and the project-derived practice entries,
+   both living **outside this repo**, in the private `certora-cvlr-kb` repo, and reaching back into
+   it for the pieces they must not restate — the manifest model, which pulls in neither spaCy, an
+   embedding model nor a DB. That is the producer/importer split working as intended. The corpus's
+   documentation half is *not* a producer: it is a sphinx build this repo already runs, ingested by
+   `ragbuild.py` straight into the knowledge base (`--knowledge-base cvlr_kb`), which is the right
+   shape whenever the source is something we build anyway.
 
 **Untouched:** `foundry_ragbuild.py`, its wrapper, and `refresh_rag.sh`. No runtime code changes —
 the search tools, `rag_env.py`, and the DB API are the same.
 
-`ragbuild.py` (CVL) *was* touched, but only to move its HTML traversal into the shared parser: its
-output was verified byte-identical before and after on all three manuals it can read (`cvl.html`
-232 chunks / 198 manual sections, `prover.html` 182 / 184, unchanged). The one deliberate
-behavioural change is confined to the Solana manual, which is not part of the CVL corpus: a
-`<blockquote>` was falling through the traversal unhandled and is now kept as prose.
+`ragbuild.py` (CVL) gained two things: the knowledge-base target above, and a `<blockquote>` case —
+prose that was falling through the traversal unhandled, which the CVL and Prover manuals never hit
+and the Solana manual states its pre/post snapshot methodology in.
 
 ---
 

@@ -60,7 +60,7 @@ RUN python -m venv /venv \
 # TODO: Include extended_rag for sanity analyzer
 RUN set -eux; \
     mkdir -p /out; \
-    for name in cvl; do \
+    for name in cvl solana; do \
         target="/build/docs/docs/$name"; \
         cp /build/docs/conf.py "$target/"; \
         ( cd "$target" && /venv/bin/sphinx-build -M singlehtml . tmp ); \
@@ -216,15 +216,16 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     uv sync --frozen --no-editable \
       --extra cpu --extra ml --extra "$CERTORA_CLI_PACKAGE" --group ragbuild
 
-# Pre-built documentation HTML — the entrypoint's setup-db reads cvl.html to populate rag_db.
-# PROVENANCE names the docs revision it came from.
-COPY --from=docs-builder /out/cvl.html /out/PROVENANCE $AUTOPROVE_HOME/prover-docs/
+# Pre-built documentation HTML — the entrypoint's setup-db reads cvl.html to populate rag_db and
+# solana.html to populate the methodology half of cvlr_kb. PROVENANCE names the docs revision both
+# came from.
+COPY --from=docs-builder /out/cvl.html /out/solana.html /out/PROVENANCE $AUTOPROVE_HOME/prover-docs/
 
-# No cvlr_kb manifest is baked into this image. All three of them — the published documentation,
-# the generated CVLR crate reference and the project-derived practice entries — are produced in the
-# private certora-cvlr-kb repo and ship in its package, so the entrypoint's setup-db finds them
-# through CVLR_KB_REPO or an installed `certora_cvlr_kb`. An image with neither has no CVLR corpus,
-# which the backend reports rather than crashes on.
+# The rest of cvlr_kb is not baked in. The generated CVLR crate reference and the project-derived
+# practice entries are produced in the private certora-cvlr-kb repo and ship in its package, so the
+# entrypoint's setup-db finds them through CVLR_KB_REPO or an installed `certora_cvlr_kb`. An image
+# without them still has the manual; an image with neither half has no CVLR corpus, which the
+# backend reports rather than crashes on.
 
 # The `run-confined` command-sandbox launcher is intentionally NOT baked in here
 # (not every AutoProver image needs it). Services that select the `launcher`
