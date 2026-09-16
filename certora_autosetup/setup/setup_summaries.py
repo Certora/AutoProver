@@ -52,40 +52,21 @@ from certora_autosetup.utils.llm_util import (
     is_local_backend,
 )
 
-from certora_autosetup.setup.solidity_utils import DEPENDENCIES, find_all_library_files as util_find_all_library_files
+from certora_autosetup.setup.solidity_utils import DEPENDENCIES, compiled_library_file
+from certora_autosetup.setup.solidity_utils import find_all_library_files as util_find_all_library_files
 from certora_autosetup.setup.solidity_utils import find_all_solidity_files as util_find_all_solidity_files
 from certora_autosetup.setup.solidity_utils import walk_files_by_suffix
 
 # Import method parser
 from certora_autosetup.parsers.method_parser import MethodParser
+from certora_autosetup.utils.solc_version_resolver import read_pragma_from_source_file
 from certora_autosetup.parsers.spec_imports import parse_imports_from_spec
-from certora_autosetup.setup.summary_resolver import resolve_summary_specs
+from certora_autosetup.setup.summary_resolver import curated_scene_contracts, resolve_summary_specs
 from certora_autosetup.setup.signature_types import InheritanceGraph
+from certora_autosetup.utils.cvl_keywords import escape_reserved
 
 
-# CVL grammar keyword terminals that cannot double as an identifier. A Solidity parameter whose name
-# equals one of these is lexed as that keyword inside a methods{} entry, which is a syntax error; such
-# names are suffixed with "_" before emission (see _cvl_safe_param_name).
-#
-# This deliberately EXCLUDES the terminals listed under the `usable_keywords` production in cvl.cup
-# (exists, forall, sum, usum, using, as, import, use, builtin, override, sig, description, invariant,
-# preserved, weak, strong, onTransactionBoundary, old, hook, unresolved). The grammar accepts those
-# wherever an identifier is expected, so a parameter named after one parses fine and must NOT be
-# mangled. Note: uppercase "UNRESOLVED" is a distinct summary keyword and remains reserved.
-CVL_RESERVED_WORDS = frozenset({
-    "ALL", "ALWAYS", "ASSERT_FALSE", "AUTO", "CONSTANT", "Create", "DELETE", "DISPATCH", "DISPATCHER",
-    "HAVOC_ALL", "HAVOC_ECF", "NONDET", "PER_CALLEE_CONSTANT", "STORAGE", "Sload", "Sstore", "Tload",
-    "Tstore", "UNRESOLVED", "assert", "assuming", "at", "axiom", "default", "definition", "else",
-    "event", "expect", "fallback", "false", "filtered", "function", "ghost", "good_description",
-    "havoc", "if", "in", "indexed", "lastReverted", "lastStorage", "links", "mapping", "methods",
-    "new", "norevert", "persistent", "require", "requireInvariant", "reset_storage", "return",
-    "returns", "revert", "rule", "satisfy", "sort", "true", "void", "with", "withrevert", "xor",
-})
 
-
-def _cvl_safe_param_name(name: str) -> str:
-    """The parameter name with a trailing "_" if it equals a CVL reserved word, otherwise unchanged."""
-    return f"{name}_" if name in CVL_RESERVED_WORDS else name
 
 
 try:
@@ -227,8 +208,8 @@ class DecimalSummary(BaseModel):
 
     @property
     def summary_line(self) -> str:
-        params = ", ".join([ f"{_pprint_type(p.ty)} {_cvl_safe_param_name(p.name)}" for p in self.param_list ])
-        return f"function _.{self.method_name}({params}) internal => {self.cvl_function_name}({_cvl_safe_param_name(self.amount_parameter)}) expect {self.return_type.ty_name};"
+        params = ", ".join([ f"{_pprint_type(p.ty)} {escape_reserved(p.name)}" for p in self.param_list ])
+        return f"function _.{self.method_name}({params}) internal => {self.cvl_function_name}({escape_reserved(self.amount_parameter)}) expect {self.return_type.ty_name};"
 
     @property
     def cvl_function(self) -> str:
@@ -270,7 +251,7 @@ class NondetSummary(BaseModel):
 
     @property
     def summary_line(self) -> str:
-        params = ", ".join([f"{_pprint_type(p.ty)} {_cvl_safe_param_name(p.name)}" for p in self.param_list])
+        params = ", ".join([f"{_pprint_type(p.ty)} {escape_reserved(p.name)}" for p in self.param_list])
         if self.return_type is not None:
             return_types = ", ".join([
                 _pprint_type(ty) for ty in self.return_type
@@ -381,6 +362,10 @@ class SummarySetup:
         # ``_summarized_library_names`` to figure out which libraries have a curated
         # summary attached and therefore should be added to the scene.
         self.matched_functions: Set[str] = set()
+
+        # A library whose own code is the verification target, so it is the one thing
+        # that must never be summarized. None on every ordinary run.
+        self.excluded_library: Optional[str] = None
 
         # Every contract name that has entered the verification scene so far
         # (initial main + additional + call-resolution batches). Drives the
@@ -717,16 +702,51 @@ class SummarySetup:
             log_func=self.log,
         )
 
-    def copy_summaries_folder(self, matched_function_keys: Iterable[str]) -> Path:
-        """Copy only the bundled summary files referenced by matched curated keys
-        into ``certora/specs/summaries/``.
+    def curated_scene_contracts(self) -> List[str]:
+        """Conf entries for the contracts the matched curated summaries reroute through."""
+        return curated_scene_contracts(
+            self.matched_functions,
+            self.function_summaries,
+            self.user_summaries_dir,
+            self.log,
+        )
+
+    def _excluded_library_keys(self) -> Set[str]:
+        """Curated keys that would summarize the library under verification."""
+        if self.excluded_library is None:
+            return set()
+        return {
+            key
+            for key, info in self.function_summaries.items()
+            if self.excluded_library in (info.get("library_names") or ())
+        }
+
+    def _excluded_library_methods(self) -> Set[Tuple[str, str]]:
+        """``(contract, method)`` pairs the LLM must leave alone, in its skip-set shape."""
+        if self.excluded_library is None:
+            return set()
+        return {
+            (self.excluded_library, m["name"])
+            for m in self.methods_parser.get_all_methods()
+            if m.get("contractName") == self.excluded_library and m.get("name")
+        }
+
+    def copy_summaries_folder(self, matched_function_keys: Iterable[str]) -> Set[str]:
+        """Copy the bundled summary files referenced by matched curated keys into
+        ``certora/specs/summaries/``, and report the keys that could not be set up.
 
         For each key in ``matched_function_keys`` we resolve the entry in
         ``function_summaries.json`` and copy its ``summary_file`` (a ``.spec`` or
         ``.template.spec``) plus any ``additional_contracts`` files (e.g. harness
         ``.sol`` files). Unmatched library specs aren't copied so the user's
         ``certora/specs/summaries/`` stays focused on what's actually used.
+
+        Companions are generated before anything is copied, because a key whose companion
+        cannot be generated has to be dropped whole: its spec reroutes the library's calls
+        to a contract that would not exist. The returned keys are those; the caller must
+        stop treating them as matched.
         """
+        matched_function_keys = list(matched_function_keys)
         source_summaries = self.summaries_dir
         target_summaries = self.user_summaries_dir
 
@@ -734,7 +754,10 @@ class SummarySetup:
             self.log(
                 f"Source summaries folder not found at {source_summaries}", "WARNING"
             )
-            return target_summaries
+            return set()
+
+        dropped = self._generate_companions(matched_function_keys, source_summaries, target_summaries)
+        matched_function_keys = [key for key in matched_function_keys if key not in dropped]
 
         # Seed the closure with the matched summary_files and any additional_contracts.
         # Templates ARE included in the closure (so we follow their `import` lines to
@@ -766,9 +789,9 @@ class SummarySetup:
 
         copied = 0
         for rel in sorted(closure):
-            # Templates are read from the package source by _materialize_template;
-            # never copy them to the user's dir.
-            if str(rel).endswith(".template.spec"):
+            # Nothing templated is copied: spec templates are read from the package source by
+            # _materialize_template, companions were written by _generate_companions above.
+            if ".template." in rel.name:
                 continue
             src = source_summaries / rel
             dst = target_summaries / rel
@@ -780,7 +803,109 @@ class SummarySetup:
             copied += 1
 
         self.log(f"Copied {copied} curated summary file(s) to {target_summaries}")
-        return target_summaries
+        return dropped
+
+    @staticmethod
+    def _untemplated(path: Path) -> Path:
+        """``X.template.sol`` -> ``X.sol``; anything else unchanged.
+
+        Deliberately not ``_versioned_template_relpath``: that one is ``.spec``-shaped and
+        appends the main contract's name, while a companion's content depends only on the
+        project, so two main contracts in one project share a single companion.
+        """
+        name = path.name
+        return path.with_name(name.replace(".template.", ".", 1)) if ".template." in name else path
+
+    def _generate_companions(
+        self, matched_function_keys: Iterable[str], source_summaries: Path, target_summaries: Path
+    ) -> Set[str]:
+        """Write the companion contract of every matched key that declares one.
+
+        A companion cannot be shipped ready to use: its parameter types have to come from
+        the project's own copy of the library, so it is generated here from a template.
+
+        Returns the keys whose companion could not be generated. Those summaries are worse
+        than no summary — the reroute would send the library's calls to a contract that is
+        not there — so the caller drops them.
+        """
+        dropped: Set[str] = set()
+        for key in matched_function_keys:
+            info = self.function_summaries.get(key)
+            if not info:
+                continue
+            library_names = info.get("library_names") or []
+            for ac in info.get("additional_contracts", []):
+                rel = Path(ac).relative_to(SUMMARIES_SUBDIR)
+                if ".template." not in rel.name:
+                    continue
+                template = source_summaries / rel
+                if not template.exists():
+                    self.log(f"Bundled companion template missing: {template}", "WARNING")
+                    dropped.add(key)
+                    continue
+                destination = self._untemplated(target_summaries / rel)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                if not library_names or not self._materialize_companion(
+                    library_names[0], template, destination
+                ):
+                    dropped.add(key)
+        if dropped:
+            self.log(f"Dropped curated summaries with no companion: {sorted(dropped)}", "WARNING")
+        return dropped
+
+    def _project_library_file(self, library_name: str) -> Optional[str]:
+        """The file the build compiled ``library <library_name>`` from.
+
+        Taken from the compilation metadata rather than by searching for a file declaring the
+        name: a project can vendor several copies of one library, and only the copy the
+        contract under verification actually imported carries the canonicalId the summary has
+        to match. The scene at large is asked first, and the main contract's own compilation
+        unit breaks a tie between copies that are both in it.
+        """
+        methods = self.methods_parser.get_all_methods()
+        source_file = compiled_library_file(library_name, methods, self._scene_contracts)
+        if source_file is None and self.main_contract:
+            source_file = compiled_library_file(library_name, methods, {self.main_contract})
+        return source_file
+
+    def _materialize_companion(self, library_name: str, template: Path, destination: Path) -> bool:
+        """Fill a companion template in from the project and write it. False if we cannot.
+
+        Returns False rather than raising so the caller can drop the key: a summary whose
+        companion never materialized is worse than no summary, because the reroute would send
+        the library's calls to a contract that is not in the scene.
+        """
+        library_file = self._project_library_file(library_name)
+        if library_file is None:
+            self.log(
+                f"Cannot generate {destination.name}: the compiled scene has no single "
+                f"library {library_name} to take its types from",
+                "WARNING",
+            )
+            return False
+
+        # The library's own spec, so the companion can never fall outside the range the
+        # library itself compiles under.
+        pragma_spec = read_pragma_from_source_file(Path(library_file), Path.cwd())
+        if not pragma_spec:
+            self.log(
+                f"Cannot generate {destination.name}: {library_file} declares no pragma",
+                "WARNING",
+            )
+            return False
+
+        # Relative, because the emitted file sits under certora/ while the library can be
+        # anywhere; an absolute path would also bake the build machine's layout into a source
+        # file that gets uploaded with the run.
+        import_path = os.path.relpath(Path(library_file).resolve(), destination.parent.resolve())
+        content = (
+            template.read_text()
+            .replace("$PRAGMA$", f"pragma solidity {pragma_spec};")
+            .replace("$LIBRARY_IMPORT$", import_path)
+        )
+        destination.write_text(content)
+        self.log(f"Generated {destination.name} against {library_file}")
+        return True
 
     def process_template_in_place(
         self,
@@ -1013,7 +1138,13 @@ class SummarySetup:
         # Then any other emitted spec (LLM per-contract, call resolution) — lower dedup precedence.
         for spec in walk_files_by_suffix(self.user_summaries_dir, ".spec"):
             _add(spec)
-        resolve_summary_specs(ordered_specs, PATH_ALL_METHODS_JSON, log=self.log)
+        # The companions are in the conf but not in the index, which is built from the
+        # project's own compilation; without this their summaries would be pruned as out of
+        # scene and the reroute would land on the companion's unsummarized bodies.
+        companions = {entry.split(":")[-1] for entry in self.curated_scene_contracts()}
+        resolve_summary_specs(
+            ordered_specs, PATH_ALL_METHODS_JSON, exempt_receivers=companions, log=self.log
+        )
 
     def should_process_file(self, file_path: str) -> bool:
         """Check if a file should be processed (not a dependency or internal file).
@@ -1280,7 +1411,7 @@ If the function cannot be summarized (e.g., struct parameters), return an Invali
         params = []
         for i, param_type in enumerate(param_types):
             param_name = param_names[i] if i < len(param_names) and param_names[i] else f""
-            param_name = _cvl_safe_param_name(param_name)
+            param_name = escape_reserved(param_name)
             location = locations[i] if i < len(locations) else ""
 
             cvl_type, classification = classify_solidity_type(param_type)
@@ -2475,12 +2606,31 @@ Method signature: {method_signature}
         # single -> mixed) without re-matching oz_Math_mulDiv itself, so
         # scene-sensitive templates are re-materialized whenever they have ever
         # matched (materialization is idempotent, aggregator imports dedup).
+        # A summary replaces the code it summarizes, so summarizing the library under
+        # verification would have every rule assert against the summary instead of the code
+        # the run exists to check. Subtracted here rather than skipped inside the matcher: the
+        # matcher also returns the (contract, method) tuples that become per_contract_skip
+        # below, and those still have to shield the same methods from the LLM step.
+        excluded = self._excluded_library_keys()
+        if excluded & curated_keys:
+            self.log(
+                f"Not summarizing {self.excluded_library} — it is the library under "
+                f"verification; dropped curated {sorted(excluded & curated_keys)}"
+            )
+        curated_keys -= excluded
+
         rerender_keys = curated_keys | (self.matched_functions & SCENE_SENSITIVE_TEMPLATE_KEYS)
         if rerender_keys:
+            # A key whose companion could not be generated is dropped rather than summarized:
+            # its spec reroutes to a contract nothing put in the scene, so what it would
+            # summarize is calls into a hole. The library then goes unsummarized, which is the
+            # fallback the entry documents.
+            dropped = self.copy_summaries_folder(rerender_keys)
+            rerender_keys -= dropped
             # Publish for downstream consumers (autosetup's library-scene filter) and for
             # prune_emitted_specs's curated-over-LLM dedup precedence.
             self.matched_functions |= curated_keys
-            self.copy_summaries_folder(rerender_keys)
+            self.matched_functions -= dropped
             registered = self._add_aggregator_imports(
                 self.curated_summary_import_path(key, main_contract) for key in rerender_keys
             )
@@ -2489,11 +2639,16 @@ Method signature: {method_signature}
 
         # 2. LLM analysis per contract, skipping curated-covered methods.
         if self._enable_llm:
+            excluded_methods = self._excluded_library_methods()
             for name in contract_names:
                 await self.analyze_contract(
                     name,
                     self._llm_contract_files,
-                    methods_to_skip=per_contract_skip.get(name),
+                    # The LLM would otherwise summarize the library under verification on its
+                    # own: its non-linear-ops recipe targets exactly the internal pure
+                    # functions an arithmetic library is made of, and unlike BitMaps that
+                    # failure is silent — the run comes back green having proved nothing.
+                    methods_to_skip=set(per_contract_skip.get(name) or ()) | excluded_methods,
                     custom_recipe=self._custom_recipe,
                 )
 
@@ -2518,6 +2673,7 @@ Method signature: {method_signature}
         include_dependencies: bool = False,
         enable_llm: bool = False,
         custom_recipe: Optional[str] = None,
+        excluded_library: Optional[str] = None,
     ) -> bool:
         """Capture the configuration for a summarization run; perform no summarization.
 
@@ -2554,6 +2710,7 @@ Method signature: {method_signature}
 
         self.main_contract = main_contract
         self.additional_names = [split_contract_spec(ac)[1] for ac in (additional_contracts or [])]
+        self.excluded_library = excluded_library
 
         self.log(f"Main contract for analysis: {main_contract}")
         if self.additional_names:

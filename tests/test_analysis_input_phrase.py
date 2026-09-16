@@ -51,3 +51,36 @@ def test_the_input_phrase_carries_no_article_of_its_own(template: str, has_doc: 
     # it — which is exactly what the broken no-document branch used to produce.
     rendered = load_jinja_template(template, sort="existing", has_doc=has_doc)
     assert "the the" not in rendered
+
+
+# The ``path_convention`` macro states the frame the analysis validator enforces on every
+# declared source path. Only the initial prompt asks for paths, and only outside greenfield —
+# where there is no source tree and ``env.analysis_tools`` is empty, so naming ``list_files``
+# there would promise a tool the agent does not have.
+PATH_TEMPLATE = "application_analysis_prompt.j2"
+CONVENTION = "Paths are relative to the **project root**"
+
+
+@pytest.mark.parametrize("sort", ["existing", "update"])
+def test_both_requested_paths_are_framed_against_the_project_root(sort: str) -> None:
+    # Two sentences ask for a path — one per component kind — and each is anchored on its own
+    # sentence, so dropping the convention from either is a failure rather than a silent pass.
+    rendered = load_jinja_template(PATH_TEMPLATE, sort=sort, has_doc=True)
+    assert rendered.count(CONVENTION) == 2
+    assert f"describing this external actor. {CONVENTION}" in rendered
+    assert f"contract you are describing. {CONVENTION}" in rendered
+    assert "`list_files`" in rendered
+
+
+@pytest.mark.parametrize("sort", ["existing", "update"])
+def test_an_actor_path_that_cannot_be_found_is_to_be_omitted(sort: str) -> None:
+    # The actor's path is optional, and the validator's own complaint offers the same way out, so
+    # the prompt has to name it before the agent invents a path to fill the field.
+    rendered = load_jinja_template(PATH_TEMPLATE, sort=sort, has_doc=True)
+    assert "omit the path rather than guessing" in rendered
+
+
+@pytest.mark.parametrize("template", EVM_TEMPLATES)
+def test_greenfield_states_no_path_convention(template: str) -> None:
+    rendered = load_jinja_template(template, sort="greenfield", has_doc=True)
+    assert CONVENTION not in rendered

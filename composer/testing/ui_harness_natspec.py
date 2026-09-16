@@ -260,7 +260,7 @@ _COUNTER_TAPE: list[BaseMessage] = [
     # read_rough_draft, result. ``env.analysis_tools`` is empty in
     # greenfield, so no source/rag tools here.
     # Validator: ``validate_solidity_connectivity`` — checks unique names and
-    # resolved component references. No did_read gate.
+    # resolved component references. No drafted gate.
 
     # P1.1 — exercise the `memory` tool once. The memory backend constrains
     # paths to the `/memories` subtree, so `view /memories` is the no-op
@@ -364,7 +364,7 @@ _COUNTER_TAPE: list[BaseMessage] = [
     # P4. Property inference (extraction for the Increment component)
     # ─────────────────────────────────────────────────────────────────
     # Tools available: write_rough_draft, read_rough_draft, result.
-    # ``env.analysis_tools`` is empty in greenfield. No did_read gate.
+    # ``env.analysis_tools`` is empty in greenfield. No drafted gate.
     # Result schema: ``_AgentRoundResult`` = ``{items, reasoning}``.
     # Validator: ``_unique_titles_validator`` — every property title must
     # be unique within the batch (and across prior rounds, but this run
@@ -405,7 +405,7 @@ _COUNTER_TAPE: list[BaseMessage] = [
     #     cvl_keyword_search, get_cvl_manual_section, get_cvl_recipe,
     #     cvl_research, cvl_document_ref)
     #   - injected_tools: request_stub_field, register_verification_file,
-    #     list_verification_files
+    #     unregister_verification_file, list_verification_files
     #   - static_tools: put_cvl, put_cvl_raw, feedback_tool, record_skip,
     #     unskip_property, get_cvl, erc20_guidance, unresolved_call_guidance
     #   - give_up, advisory_typecheck, publish, memory
@@ -506,7 +506,7 @@ _COUNTER_TAPE: list[BaseMessage] = [
 
     # CR1 — research sub-agent turn 1. Tools: write_rough_draft,
     # read_rough_draft, base_rag_tools (cvl_manual_*, kb_*), result.
-    # Validator `_did_read_draft` rejects the result tool until did_read is set.
+    # Validator `_wrote_draft` rejects the result tool until drafted is set.
     _ai(
         "Researcher: sketching an answer + pulling the manual.",
         _tc(
@@ -525,7 +525,7 @@ _COUNTER_TAPE: list[BaseMessage] = [
         ),
     ),
 
-    # CR2 — research: read the rough draft (flips did_read=True so the
+    # CR2 — research: read the rough draft (flips drafted=True so the
     # result-tool validator will pass on the next turn).
     _ai(
         "Researcher: reading the draft before answering.",
@@ -557,7 +557,7 @@ _COUNTER_TAPE: list[BaseMessage] = [
     ),
 
     # A8 — second put_cvl_raw with valid CVL. Accepted — state["curr_spec"]
-    # and state["did_read"] (as reset_read) are mutated.
+    # and state["drafted"] (as reset_draft) are mutated.
     _ai(
         "Putting a minimal valid spec after the parse error.",
         _tc("put_cvl_raw", cvl_file=VALID_CVL),
@@ -642,7 +642,7 @@ _COUNTER_TAPE: list[BaseMessage] = [
     ),
 
     # A13 — author addresses the feedback by publishing an improved spec.
-    # put_cvl_raw resets did_read=False and curr_spec changes, so the
+    # put_cvl_raw resets drafted=False and curr_spec changes, so the
     # stamped digest (if any) goes stale — forcing the next feedback_tool
     # call to re-stamp.
     _ai(

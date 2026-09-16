@@ -41,12 +41,15 @@ from composer.spec.source.harness import (
     AgentSystemDescription,
     HarnessResult,
 )
-from composer.pipeline.cli import root_cache_key, user_ns
+from composer.pipeline.cli import autoprover_version, root_cache_key, user_ns
 from composer.pipeline.keys import (
     AGENT_RESULT_KEY, AGENT_ROUND_KEY, BUG_ANALYSIS_KEY,
-    COMMON_SYSTEM_CACHE_KEY, COMPONENT_KEY, FORMALIZATION_KEY,
+    COMMON_SYSTEM_CACHE_KEY, COMPONENT_KEY, FINAL_PROPERTIES_KEY, FORMALIZATION_KEY,
     PRE_PROPERTY_KEY, PROPERTIES_KEY, SYSTEM_ANALYSIS_KEY,
 )
+from composer.pipeline.ptypes import FinalProperties
+from composer.pipeline.run_mode import run_mode_name
+from composer.spec.types import PropertyFormulation
 from composer.pipeline.plugins import applicable_plugin_manifest, manifest_digest
 from composer.pipeline.run_tags import AutoProveCacheTags, CACHE_ROOT_RECORD
 from composer.core.user import get_uid
@@ -55,11 +58,10 @@ from composer.io.run_index import get_run_data
 from composer.spec.util import combine_digests
 from composer.spec.source.keys import (
     AP_PROPERTIES_KEY_NAME, CVL_JUDGE_KEY, HARNESS_ANALYSIS_KEY,
-    HARNESS_GENERATION_KEY, INV_CVL_KEY, LAST_ATTEMPT_KEY, STRUCTURAL_INV_KEY,
+    HARNESS_GENERATION_KEY, LAST_ATTEMPT_KEY,
     SUMMARY_KEY, SYSTEM_SETUP_KEY, config_key,
 )
 from composer.spec.source.summarizer import _SummaryCache
-from composer.spec.source.struct_invariant import Invariants
 from composer.spec.prop_inference import (
     _BugAnalysisCache, _AgentResult, _AgentRoundWithHistory,
 )
@@ -91,7 +93,6 @@ type AutoProveCachedValue = (
     | AgentSystemDescription
     | HarnessResult
     | _SummaryCache
-    | Invariants
     | GeneratedCVL
     | _LastAttemptCache
     | _BugAnalysisCache
@@ -191,6 +192,34 @@ async def _resolve_bug_key(
     )
 
 
+async def _resolve_formalization_key(
+    feat_ctx: WorkflowContext,
+    tags: AutoProveCacheTags,
+    bug_items: list[PropertyFormulation],
+) -> CacheKey:
+    """The formalization edge, rebuilt the way the driver derived it.
+
+    ``FinalProperties`` exists for exactly this: it records the batch as it entered
+    formalization, after any post-inference plugin rewrote it and after a prioritized run pruned
+    it, together with the plugin ids that suffix the key. Reconstructing from the raw
+    property-inference output instead misses all three, and lands on a namespace that holds
+    nothing.
+
+    Falls back to the inference output for records written before that entry existed."""
+    xc_digest = combine_digests(tags.extra_context_digests)
+    final = await feat_ctx.child(
+        FINAL_PROPERTIES_KEY(
+            tags.threat_model_digest,
+            bool(tags.interactive),
+            xc_digest,
+            run_mode_name(tags.run_mode),
+        )
+    ).cache_get(FinalProperties)
+    if final is not None:
+        return FORMALIZATION_KEY(GeneratedCVL, final.items, final.tool_plugins)
+    return FORMALIZATION_KEY(GeneratedCVL, bug_items)
+
+
 async def _build_cvl_gen_nodes(
     ctx: WorkflowContext[CVLGeneration],
 ) -> AsyncGenerator[CacheTreeNode[AutoProveCachedValue], None]:
@@ -235,7 +264,7 @@ async def _build_component_nodes(
         bug_cache = await feat_ctx.child(bug_key).cache_get(_BugAnalysisCache)
         if bug_cache is None:
             return
-        batch_key = FORMALIZATION_KEY(GeneratedCVL, bug_cache.items)
+        batch_key = await _resolve_formalization_key(feat_ctx, tags, bug_cache.items)
         async with node_for(feat_ctx, batch_key, "CVL Generation", GeneratedCVL) as cvl_ctx:
             async for n in _build_cvl_gen_nodes(cvl_ctx.abstract(CVLGeneration)):
                 yield n
@@ -272,11 +301,6 @@ async def build_tree_inner(
     # Summary — key derivable only once ContractSetup is cached
     if config_val is not None:
         yield await leaf(root_ctx, SUMMARY_KEY(config_val), "summary", _SummaryCache)
-
-    yield await leaf(root_ctx, STRUCTURAL_INV_KEY, "structural-inv", Invariants)
-    async with node_for(root_ctx, INV_CVL_KEY, "invariant-cvl", GeneratedCVL) as inv_cvl_ctx:
-        async for n in _build_cvl_gen_nodes(inv_cvl_ctx.abstract(CVLGeneration)):
-            yield n
 
     # Properties — per-component plugin pre-inference + bug analysis + CVL generation
     if sa_leaf.value is None:
@@ -404,11 +428,6 @@ def format_value(val: AutoProveCachedValue) -> list[str]:
         case _SummaryCache(content=content):
             lines.extend(content.splitlines())
 
-        case Invariants(inv=invs):
-            lines.append(f"Invariants ({len(invs)}):")
-            for inv in invs:
-                lines.append(f"  {inv.description}")
-
         case GeneratedCVL(commentary=commentary, cvl=cvl, skipped=skipped):
             lines.append(f"Commentary: {commentary}")
             if skipped:
@@ -473,7 +492,7 @@ def _resolve_from_inputs(args: argparse.Namespace) -> AutoProveCacheTags | None:
 
     root_ns = user_ns(
         args.cache_ns,
-        root_cache_key(str(project_root), sys_path, relative_path, contract_name),
+        root_cache_key(str(project_root), sys_path, relative_path, contract_name, autoprover_version()),
     )
     memory_ns = args.memory_ns
     if memory_ns:

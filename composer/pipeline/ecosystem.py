@@ -15,8 +15,10 @@ Solana model + prompts and reuses the shared ``RUST`` language facet. See ``docs
 """
 
 from dataclasses import dataclass
-from pathlib import PurePath
+from pathlib import Path, PurePath
 from typing import Any, Callable, Collection, Literal, Mapping, TypedDict
+
+from graphcore.tools.vfs import GlobalExcludeArg
 
 from composer.spec.context import SourceCode
 from composer.spec.code_explorer import CodeExplorerPromptParams
@@ -132,8 +134,13 @@ class Ecosystem[App: BaseApplication, Main, Unit: FeatureUnit]:
     analysis_prompts: PromptPair[AnalysisPromptParams, AnalysisPromptParams]
     #: Prompts for the per-component property-inference agent.
     property_prompts: PropertyPrompts[Unit]
-    #: Connectivity/shape validation of the analyzed model (retry feedback on failure).
-    validate_analysis: Callable[[App, SourceIdentifier | None], str | None]
+    #: Connectivity/shape validation of the analyzed model (retry feedback on failure). The last
+    #: two arguments are the source surface any paths the model carries are read in: the project
+    #: root, ``None`` when the run has no source tree, and the ``forbidden_read`` that root is
+    #: served through. An ecosystem whose model carries no paths ignores both.
+    validate_analysis: Callable[
+        [App, SourceIdentifier | None, Path | None, GlobalExcludeArg], str | None
+    ]
     #: Locate the target unit (the "main contract"/program) in the analyzed model.
     locate_main: Callable[[App, SourceCode], Main]
     #: Enumerate the units the extraction phase infers properties for — one batch per unit. Both
@@ -333,14 +340,21 @@ def _validate_program_components(prog: SolanaProgram) -> list[str]:
     return errors
 
 
-def _solana_validate(app: SolanaApplication, expected_main: SourceIdentifier | None) -> str | None:
+def _solana_validate(
+    app: SolanaApplication,
+    expected_main: SourceIdentifier | None,
+    _project_root: Path | None,
+    _forbidden_read: GlobalExcludeArg,
+) -> str | None:
     """Connectivity/shape validation for a ``SolanaApplication`` (retry feedback on failure).
 
     Typed over ``SolanaApplication``, not ``BaseApplication``: ``Ecosystem.validate_analysis`` is
     ``Callable[[App, ...]]``, so the seam already guarantees the model came from *this* ecosystem's
     ``system_model``. An earlier version narrowed at runtime and returned ``None`` for a foreign
     application; that silently passed a model this function cannot check, and the parameter type is
-    what makes the case unreachable instead.
+    what makes the case unreachable instead. The source surface is part of the seam because a
+    Solidity model's components carry source file paths to check; nothing in the Solana model does,
+    so it is unused here.
     Mirrors the EVM ``validate_solidity_connectivity`` structure: unique program identifiers and names,
     unique instruction slugs within a program, unique component names/slugs within a program, the
     component↔instruction mapping valid and total, component interactions resolving, and the
@@ -547,7 +561,10 @@ def _validate_contract_components(contract: SorobanContract) -> list[str]:
 
 
 def _soroban_validate(
-    app: SorobanApplication, expected_main: SourceIdentifier | None
+    app: SorobanApplication,
+    expected_main: SourceIdentifier | None,
+    _project_root: Path | None,
+    _forbidden_read: GlobalExcludeArg,
 ) -> str | None:
     errors: list[str] = []
     known_identifiers: set[str] = set()

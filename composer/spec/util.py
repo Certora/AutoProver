@@ -105,6 +105,19 @@ def _is_generated_bundle(path: PurePath) -> bool:
     return path.suffix == ".js" and path.stem.endswith(_BUNDLE_STEM_SUFFIXES)
 
 
+def fs_withheld_subtree(path: PurePath) -> bool:
+    """True when nothing under the project-root-relative directory *path* is readable, so a
+    walk of the tree can prune it instead of testing every file beneath it.
+
+    Only the whole-withheld directories qualify: everywhere else the Solidity carve-out below
+    keeps .sol readable, so a directory named there still holds files the agent may open.
+    """
+    parts = path.parts
+    return bool(_WITHHELD_WHOLE_DIRS.intersection(parts)) or (
+        bool(parts) and parts[0].startswith(_REPORT_DIR_PREFIX)
+    )
+
+
 def fs_forbidden_read(path: PurePath) -> bool:
     """True to withhold *path* from the agent's source tools (``list_files`` /
     ``get_file`` / ``grep_files``). Paths are project-root-relative.
@@ -115,15 +128,12 @@ def fs_forbidden_read(path: PurePath) -> bool:
     contracts in ``lib/`` and ``test/``. The one exception is the whole-withheld
     directories, which is why they are tested before the carve-out.
     """
-    parts = path.parts
-    if _WITHHELD_WHOLE_DIRS.intersection(parts):
-        return True
-    if parts and parts[0].startswith(_REPORT_DIR_PREFIX):
+    if fs_withheld_subtree(path):
         return True
     if path.suffix == ".sol":
         return False
     return (
-        bool(_NON_SOLIDITY_DIRS.intersection(parts))
+        bool(_NON_SOLIDITY_DIRS.intersection(path.parts))
         or path.suffix in _GENERATED_SUFFIXES
         or _is_generated_bundle(path)
     )

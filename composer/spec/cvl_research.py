@@ -71,9 +71,9 @@ tool's ``tool_call_id`` so the sub-agent's UI panel anchors under the tool
 widget; pass ``None`` for top-level invocations."""
 
 
-def _did_read_draft(s: _CVLResearchST, _: Any) -> str | None:
-    if not s.get("did_read"):
-        return "You must read your rough draft before delivering your answer"
+def _wrote_draft(s: _CVLResearchST, _: Any) -> str | None:
+    if not s.get("drafted"):
+        return "You must write a rough draft before delivering your answer"
     return None
 
 def _build_research_graph(
@@ -87,7 +87,7 @@ def _build_research_graph(
     })
 
     graph = bind_standard(
-        builder, _CVLResearchST, "Your research findings", validator=_did_read_draft
+        builder, _CVLResearchST, "Your research findings", validator=_wrote_draft
     ).with_input(
         _CVLResearchInput
     ).with_tools(
@@ -132,7 +132,7 @@ def _build_research_tool(
         async def run(self) -> str:
             st = await runner(
                 graph,
-                _CVLResearchInput(input=[self.question], did_read=False, memory=None),
+                _CVLResearchInput(input=[self.question], drafted=False, memory=None),
                 self.tool_call_id,
             )
             assert "result" in st
@@ -195,7 +195,7 @@ def indexed_cvl_research_tool(
                 input=_CVLResearchInput(input=[
                     self.question,
                     *context
-                ], did_read=False, memory=None),
+                ], drafted=False, memory=None),
                 within_tool=self.tool_call_id,
             )
             assert "result" in res

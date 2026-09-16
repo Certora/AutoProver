@@ -7,6 +7,7 @@ and artifact management. Concrete managers only implement build-system-specific
 parsing and artifact filtering.
 """
 
+import json
 import os
 import sys
 from abc import ABC, abstractmethod
@@ -127,6 +128,77 @@ class BuildSystemManager(ABC):
             True if the directory holds this build system's artifacts
         """
         pass
+
+    @staticmethod
+    @abstractmethod
+    def recorded_source(artifact: dict) -> Optional[str]:
+        """
+        The source path *artifact* records having been compiled from, or None.
+
+        Every build system stamps this into its artifacts, under its own key and in its own
+        frame: some relative to the project that ran the build, some absolute. Callers get
+        the value as written and decide what to do with it; ``artifacts_belong_to`` is the
+        one that cares. None covers both a payload this build system did not write (a
+        sidecar or a build-info file caught by the same directory walk) and one that records
+        no source at all.
+
+        Args:
+            artifact: Parsed JSON of a single artifact file
+
+        Returns:
+            Source path as recorded, or None if this artifact records none
+        """
+        pass
+
+    @classmethod
+    def artifacts_belong_to(cls, config_dir: Path, artifacts_dir: Path, limit: int = 20) -> bool:
+        """
+        Whether the artifacts in *artifacts_dir* were written by the project at *config_dir*.
+
+        Two configs can name the same physical artifact directory — a root ``foundry.toml``
+        with ``out = 'pkg/out'`` next to ``pkg/foundry.toml`` with the default ``out`` — and
+        only one of them ran. The artifacts settle it: the source path each one records
+        resolves against the project that produced it, so if none of them lands inside
+        *config_dir*, these are somebody else's artifacts and this is the wrong frame to
+        read them in.
+
+        An absolute recorded path is tested for containment; a relative one is resolved
+        against *config_dir* and tested for existence. Sampling stops at the first artifact
+        that answers, so the common case reads one file.
+
+        Artifacts that record no source at all (older Foundry, metadata stripped) answer
+        True: absence of evidence leaves the caller where it was.
+
+        Args:
+            config_dir: Candidate project directory
+            artifacts_dir: Directory holding this build system's artifacts
+            limit: How many artifacts to read before giving up on finding a recorded source
+
+        Returns:
+            True if these artifacts are this project's, or record nothing to judge by
+        """
+        read = 0
+        for json_file in artifacts_dir.rglob("*.json"):
+            if read >= limit:
+                break
+            try:
+                with json_file.open() as f:
+                    data = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            source = cls.recorded_source(data)
+            if source is None:
+                continue
+            read += 1
+            candidate = Path(source)
+            if candidate.is_absolute():
+                if candidate.is_relative_to(config_dir):
+                    return True
+            elif (config_dir / candidate).exists():
+                return True
+        return read == 0
 
     @abstractmethod
     def filter_artifacts(self, artifacts_dir: Path) -> List[Path]:

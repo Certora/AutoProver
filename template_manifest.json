@@ -149,12 +149,6 @@
     "template_name": "property_generation_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
-  "composer.spec.source.author:_PropertyGenSysTemplate": {
-    "module": "composer.spec.source.author",
-    "qualname": "_PropertyGenSysTemplate",
-    "template_name": "property_generation_system_prompt.j2",
-    "ty_sort": "TypedTemplate"
-  },
   "composer.spec.source.design_doc_finder:_FINDER_PROMPT": {
     "module": "composer.spec.source.design_doc_finder",
     "qualname": "_FINDER_PROMPT",
@@ -189,12 +183,6 @@
     "module": "composer.spec.source.report.render",
     "qualname": "_REPORT_TEMPLATE",
     "template_name": "autoprove_report.html.j2",
-    "ty_sort": "TypedTemplate"
-  },
-  "composer.spec.source.struct_invariant:_typed_invariant_prompt": {
-    "module": "composer.spec.source.struct_invariant",
-    "qualname": "_typed_invariant_prompt",
-    "template_name": "structural_invariant_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
   "composer.spec.source.summarizer:_SummarizationTemplate": {

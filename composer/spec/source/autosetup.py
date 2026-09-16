@@ -18,7 +18,7 @@ from pydantic import Discriminator
 import asyncio
 from composer.prover.core import ProverOptions
 
-from graphcore.utils import TokenUsageDict
+from graphcore.utils import NormalizedTokenUsage
 from composer.io.context import emit_custom_event
 # Locators for autosetup's on-disk usage files (certora_autosetup owns that layout).
 from certora_autosetup.utils.paths import (
@@ -218,22 +218,27 @@ async def run_autosetup(
 # owns that on-disk layout and exposes resolve_autosetup_{llm,prover}_usage_file() to locate them.
 
 
-def _to_token_usage(model: str, bucket: dict) -> TokenUsageDict:
-    """Build a graphcore ``TokenUsageDict`` from one AutoSetup rollup bucket,
-    keeping only the four token fields composer tracks (AutoSetup's ``calls``
-    count has no slot in ``TokenTotals`` and is dropped)."""
+def _to_token_usage(model: str, bucket: dict) -> NormalizedTokenUsage:
+    """Build a graphcore ``NormalizedTokenUsage`` from one AutoSetup rollup bucket.
+    The bucket keeps the raw Anthropic convention (input excludes the cache
+    buckets) while the normalized form totals them, hence the sum. AutoSetup's
+    ``calls`` count has no slot in ``TokenTotals`` and is dropped; it reports no
+    thinking-token split, so ``thinking_tokens`` is 0."""
+    cache_read = int(bucket.get("cache_read_input_tokens", 0))
+    cache_write = int(bucket.get("cache_creation_input_tokens", 0))
     return {
         "model_name": model,
-        "input_tokens": int(bucket.get("input_tokens", 0)),
-        "output_tokens": int(bucket.get("output_tokens", 0)),
-        "cache_read_input_tokens": int(bucket.get("cache_read_input_tokens", 0)),
-        "cache_creation_input_tokens": int(bucket.get("cache_creation_input_tokens", 0)),
+        "total_input_tokens": int(bucket.get("input_tokens", 0)) + cache_read + cache_write,
+        "total_output_tokens": int(bucket.get("output_tokens", 0)),
+        "cache_read_tokens": cache_read,
+        "cache_write_tokens": cache_write,
+        "thinking_tokens": 0,
     }
 
 
-def read_autosetup_usage(project_root: Path) -> list[TokenUsageDict]:
+def read_autosetup_usage(project_root: Path) -> list[NormalizedTokenUsage]:
     """Return AutoSetup's per-model token usage for the most recent run, one
-    ``TokenUsageDict`` per model — ready to feed straight into
+    ``NormalizedTokenUsage`` per model — ready to feed straight into
     ``RunSummary.record_token_usage``.
 
     Returns ``[]`` on any failure (file absent — autosetup skipped, cache hit,

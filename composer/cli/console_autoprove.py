@@ -19,8 +19,13 @@ async def _main() -> int:
         result = await run(AutoProveConsoleHandler().make_handler)
         print(f"\n{'=' * 60}")
         print(summary.format())
-        print(f"\n  Components:  {result.n_components}")
+        print(f"\n  Run mode:    {result.run_mode.value}")
+        print(f"  Components:  {result.n_components}")
         print(f"  Properties:  {result.n_properties}")
+        if result.n_deprioritized:
+            # Say it on stdout, not only in report.json: the number that matters about a
+            # prioritized run is the one it did NOT look at.
+            print(f"  Deprioritized: {result.n_deprioritized} (not examined)")
         if result.failures:
             print(f"  Failures:    {len(result.failures)}")
             for f in result.failures:

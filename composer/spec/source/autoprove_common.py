@@ -18,6 +18,7 @@ from composer.spec.context import (
     SourceFields
 )
 from composer.pipeline.cli import cli_pipeline, user_ns
+from composer.pipeline.run_mode import RunMode, resolve_run_mode
 from composer.pipeline.ptypes import DEFAULT_MAX_CPU_TASKS
 from composer.pipeline.ecosystem import EVM
 from composer.spec.source.pipeline import ProverBackend, GeneratedCVL
@@ -59,7 +60,9 @@ class AutoProveArgs(ExtendedModelOptions, RAGDBOptions, Protocol):
     recursion_limit: int
     max_bug_rounds: int
     budget: str | None
+    budget_total: float | None
     time_budget: float | None
+    run_mode: str | None
 
 
 # ---------------------------------------------------------------------------
@@ -88,8 +91,20 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
     parser.add_argument("--threat-model", type=str, default=None, help="Path to a 'threat' model (text or pdf) with which to seed the property extraction process")
     add_extra_context_args(parser)
     parser.add_argument("--max-bug-rounds", type=int, default=3, help="Maximum number of bug-extraction rounds run per component during property analysis (default: 3)")
-    parser.add_argument("--budget", default=None, help="Path to a run-budget file (JSON or YAML): {total: USD, caps: {phase: USD, ...}}. Omit to run unbudgeted.")
+    # One budget, two spellings: the file shapes spend across phases, the scalar
+    # sets the pool alone. argparse reports taking both, and renders the choice in
+    # --help; resolve_budget re-checks it for callers that skip the parser.
+    budget_group = parser.add_mutually_exclusive_group()
+    budget_group.add_argument("--budget", default=None, help="Path to a run-budget file (JSON or YAML): {total: USD, caps: {phase: USD, ...}}. Omit to run unbudgeted.")
+    budget_group.add_argument("--budget-total", default=None, type=float, help="The run pool in USD as a bare number — the budget file's `total` with no per-phase caps. Omit both budget flags to run unbudgeted.")
     parser.add_argument("--time-budget", default=None, type=float, help="Total wall time to run the entire execution. Omit to run without in process limit")
+    parser.add_argument(
+        "--run-mode", choices=[m.value for m in RunMode], default=None,
+        help="How much of the inferred property set to pursue. 'comprehensive' (the default) "
+             "formalizes every property of every component. 'prioritized' ranks them all, then "
+             "spends the run on the highest-contribution property and the properties it rests "
+             "on. Also settable as AUTOPROVER_RUN_MODE; this flag wins.",
+    )
 
     args = cast(AutoProveArgs, parser.parse_args())
     async with autoprove_executor(args, summary) as runner:
@@ -105,6 +120,7 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
     """
 
     thread_id = f"autoprove_{uuid.uuid4().hex[:12]}"
+    run_mode = resolve_run_mode(args.run_mode)
 
     async def exit_logger(
         run: SourceFields,
@@ -121,7 +137,7 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
         # discovery crashed).
         try:
             ProverArtifactStore(run.project_root, run.contract_name).write_job_info(
-                summary, user_id=get_uid()
+                summary, user_id=get_uid(), run_mode=run_mode.value
             )
         except Exception:
             _logger.exception("failed to dump job info")
@@ -137,6 +153,7 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
                 thread_id=thread_id,
                 task_handler=handler,
                 at_exit=exit_logger,
+                run_mode=run_mode,
                 workflow="autoprove"
             ) as (staged, cont),
             PostgreSQLRAGDatabase.rag_context(staged.embed_model, args.rag_db) as rag_db

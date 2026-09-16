@@ -11,16 +11,21 @@ What varies on skip and give-up is LLM-facing text, so those are
 instantiate time. Unskip does not vary.
 """
 
-from typing import Callable, Sequence, override
+from dataclasses import dataclass
+from typing import Callable, Literal, NotRequired, Sequence, override
 
-from langchain_core.messages import ToolMessage
+from typing_extensions import ReadOnly
+
+from langchain_core.messages import AIMessage, AnyMessage, ToolMessage
 from langchain_core.tools import BaseTool
+from langgraph.graph import MessagesState
 from langgraph.types import Command
 from pydantic import Field
 
 from graphcore.graph import tool_state_update
 from graphcore.tools.schemas import (
-    ToolFamilyParams, WithAsyncDependencies, WithImplementation, WithInjectedId, tool_family,
+    ToolFamilyParams, WithAsyncDependencies, WithImplementation, WithInjectedId,
+    WithInjectedState, tool_family,
 )
 
 from composer.authoring.state import SkippedProperty
@@ -38,6 +43,30 @@ def _as_titles(titles: Titles | Sequence[PropertyTitle]) -> Titles:
         return titles
     snapshot = titles
     return lambda: snapshot
+
+
+class CurtailableState(MessagesState):
+    """The authoring state :class:`RecordSkip` reads.
+
+    ``budget_curtailed`` is where the budget monitor records its wrap-up order, and the focus
+    protection stands down when it is set. Optional because only the prover and foundry authors
+    have a budget to be curtailed by; the natspec and rustapp sessions share this tool and carry
+    no such field, and absent reads as "still trying"."""
+    budget_curtailed: NotRequired[bool]
+
+
+@dataclass(frozen=True)
+class SkipScope:
+    """What ``record_skip`` is allowed to retire: the batch's titles, and the subset it must
+    refuse.
+
+    The protection is unconditional only while the run is still trying. Once the budget monitor
+    orders a wrap-up it tells the agent to skip everything that does not work, so a protection
+    that outlived that order would deadlock the session it was meant to curtail. That state lives
+    in ``budget_curtailed``, which is where the tool reads it — not in a flag on this object,
+    which would not survive a checkpoint and could disagree with the state it shadows."""
+    titles: Titles
+    protected: frozenset[PropertyTitle] = frozenset()
 
 
 # ---------------------------------------------------------------------------
@@ -61,7 +90,11 @@ def _skip_result(
 
 @tool_family_display(_skip_label, _skip_result)
 @tool_family(SkipParams)
-class RecordSkip(WithInjectedId, WithAsyncDependencies[Command, Titles]):
+class RecordSkip(
+    WithInjectedId,
+    WithInjectedState[CurtailableState],
+    WithAsyncDependencies[str | Command, SkipScope],
+):
     """{description}"""
     property_title: PropertyTitle = Field(
         description="The snake_case title of the property from the batch listing"
@@ -69,20 +102,24 @@ class RecordSkip(WithInjectedId, WithAsyncDependencies[Command, Titles]):
     reason: str = Field(description="{reason}")
 
     @override
-    async def run(self) -> Command:
-        with self.tool_deps() as titles:
-            known = titles()
+    async def run(self) -> str | Command:
+        with self.tool_deps() as scope:
+            known = scope.titles()
+            protected = scope.protected
         if self.property_title not in known:
-            return tool_state_update(
-                self.tool_call_id,
+            return (
                 f"Unknown property title {self.property_title!r}. Must be one "
-                f"of: {', '.join(known)}.",
+                f"of: {', '.join(known)}."
+            )
+        if self.property_title in protected and not self.state.get("budget_curtailed"):
+            return (
+                f"Property {self.property_title!r} is the focus of this run and cannot be "
+                "skipped. Prove a smaller statement it is built out of, or formalize the "
+                "strongest version of it that holds and say what you could not prove — but do "
+                "not retire it."
             )
         if not self.reason.strip():
-            return tool_state_update(
-                self.tool_call_id,
-                "A non-empty justification is required when skipping a property.",
-            )
+            return "A non-empty justification is required when skipping a property."
         return tool_state_update(
             self.tool_call_id,
             f"Recorded skip for property {self.property_title}.",
@@ -122,12 +159,19 @@ def skip_tools(
     *,
     skip_description: str,
     skip_reason: str,
+    protected: Sequence[PropertyTitle] = (),
 ) -> list[BaseTool]:
-    """The skip / unskip pair, bound to the batch's property titles."""
+    """The skip / unskip pair, bound to the batch's property titles.
+
+    ``protected`` names titles ``record_skip`` must refuse — the focus of a prioritized run,
+    whose whole point is that it is pursued rather than retired. The refusal lifts on its own
+    once the run is budget-curtailed. Unskip is deliberately not constrained: un-retiring a
+    property is always allowed."""
     get = _as_titles(titles)
+    scope = SkipScope(titles=get, protected=frozenset(protected))
     return [
         RecordSkip.with_template(description=skip_description, reason=skip_reason)
-        .bind(get)
+        .bind(scope)
         .as_tool("record_skip"),
         Unskip.bind(get).as_tool("unskip_property"),
     ]
@@ -180,3 +224,109 @@ def give_up_tool(
         reason=reason_description,
         label=label,
     ).as_tool(name)
+
+
+# ---------------------------------------------------------------------------
+# Give up, behind an escalation gate
+# ---------------------------------------------------------------------------
+
+def _gated_give_up_label(p: dict, *, description: str, reason: str, label: str) -> str:
+    return f"Giving up on {label}: {p['reason']}"
+
+
+class GatedGiveUpState(MessagesState):
+    """What a session must carry for :class:`GatedGiveUp` to run on it: the message history the
+    gate counts prover attempts from, and the two fields a surrender records.
+
+    ``result`` and ``failed`` are ``ReadOnly`` because the tool never writes them through the
+    state object; it returns a ``Command`` and the graph applies it. Declaring them anyway is
+    what makes the dependency visible, so a session missing them fails to typecheck rather than
+    at runtime."""
+    result: ReadOnly[NotRequired[str]]
+    failed: ReadOnly[bool | None]
+
+
+def _verify_attempts(state: GatedGiveUpState) -> int:
+    """How many times this session has put a spec in front of the prover.
+
+    Counted from the message history rather than from ``prover_history``: that list only grows
+    when the prover returns a *report*, and the failures worth escalating through — a spec that
+    will not type-check, a toolchain that will not run — return early without one. Counting
+    calls counts attempts, which is what the gate is about. The same walk over ``messages`` is
+    how the prover tool identifies its own prior calls."""
+    return sum(
+        1
+        for msg in state.get("messages", [])
+        if isinstance(msg, AIMessage)
+        for call in msg.tool_calls
+        if call["name"] == "verify_spec"
+    )
+
+
+@tool_family_display(_gated_give_up_label, None)
+@tool_family(GiveUpParams)
+class GatedGiveUp[S: GatedGiveUpState](
+    WithInjectedId,
+    WithInjectedState[S],
+    WithAsyncDependencies[str | Command, int],
+):
+    """{description}"""
+    sort: Literal["environment", "exhausted"] = Field(
+        description="Why you are stopping. 'environment' means the toolchain itself is unusable "
+        "— the prover or compiler is missing or broken — and nothing you could write would "
+        "succeed. 'exhausted' means you have tried to verify this and cannot find a way."
+    )
+    reason: str = Field(description="{reason}")
+    attempts: list[str] = Field(
+        min_length=1,
+        description="One entry per distinct approach you actually tried, saying what you "
+        "attempted and how it failed.",
+    )
+
+    @override
+    async def run(self) -> str | Command:
+        with self.tool_deps() as floor:
+            if self.sort == "exhausted" and (ran := _verify_attempts(self.state)) < floor:
+                return (
+                    f"Rejected: you have run the prover {ran} time(s) on this task, and this run "
+                    f"requires at least {floor} before a property may be abandoned. This is the "
+                    "property the run exists to establish. Prove a smaller statement it is built "
+                    "out of, or formalize the strongest version of it that holds and state what "
+                    "you could not prove — then verify. Do not reach a passing rule by assuming "
+                    "away the states where the property is interesting. If the toolchain itself "
+                    "is broken, stop with sort='environment' instead."
+                )
+        return tool_state_update(
+            self.tool_call_id,
+            "Accepted",
+            failed=True,
+            result=self.reason,
+        )
+
+
+def gated_give_up_tool[S: GatedGiveUpState](
+    *,
+    name: str,
+    description: str,
+    label: str,
+    min_attempts: int,
+    state_ty: type[S],
+    reason_description: str = "The reason for giving up on your task",
+) -> BaseTool:
+    """:func:`give_up_tool` with a floor under it: an ``exhausted`` surrender is refused until
+    the session has actually put a spec in front of the prover ``min_attempts`` times, and the
+    reason must enumerate what was tried.
+
+    For a run that has staked itself on one property, where an early surrender is the whole run.
+    The ``environment`` escape is not optional: a missing prover or compiler produces no prover
+    run at all, so a bare attempt floor would be unsatisfiable and would hold the agent against
+    its recursion limit instead of letting it report a broken toolchain."""
+    # The subscript comes after the render, not before: the family decorator hands back an
+    # already-specialized type, so ``GatedGiveUp[state_ty]`` is not a thing but
+    # ``GatedGiveUp.with_template(...)[state_ty]`` is. Naming the session's own state type here
+    # means the fields this tool reads are checked against the state it actually runs on.
+    return GatedGiveUp.with_template(
+        description=description,
+        reason=reason_description,
+        label=label,
+    )[state_ty].bind(min_attempts).as_tool(name)

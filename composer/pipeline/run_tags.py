@@ -44,3 +44,9 @@ class AutoProveCacheTags(BaseModel):
     """Whether the run used interactive refinement (selects the ``|refine``
     bug-analysis key variant). ``None`` on records written before this
     field existed — readers must probe both variants."""
+
+    run_mode: str | None = None
+    """The run's :class:`~composer.pipeline.run_mode.RunMode` value. A prioritized run
+    suffixes its ``final_props`` leaf with the mode, so a reader needs this to know which
+    variant to look under. ``None`` on records written before this field existed, which
+    are all comprehensive."""

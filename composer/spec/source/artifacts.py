@@ -3,8 +3,8 @@
 A subclass of the shared :class:`composer.spec.artifacts.ArtifactStore`. Adds the
 CVL-specific bundle (``specs/``, ``confs/``) and the autoprove report on top of the
 base's shared property / commentary / token-usage primitives. The stem / filename /
-run-key conventions for a spec (``autospec_{slug}`` vs ``invariants``) are captured by
-the :data:`SpecIdentity` sum type, not interpolated at call sites.
+run-key conventions for a spec (``autospec_{slug}``) are captured by
+:class:`ComponentSpec`, not interpolated at call sites.
 """
 
 import json
@@ -48,31 +48,7 @@ class ComponentSpec:
         return self.spec_filename
 
 
-@dataclass(frozen=True)
-class InvariantSpec:
-    """The single structural-invariants spec."""
-
-    @property
-    def stem(self) -> str:
-        return "invariants"
-
-    @property
-    def spec_filename(self) -> str:
-        return f"{self.stem}.spec"
-
-    @property
-    def run_key(self) -> str:
-        return "invariants"
-    
-    @property
-    def artifact_file(self) -> str:
-        return self.spec_filename
-
-
-type SpecIdentity = ComponentSpec | InvariantSpec
-
-
-class ProverArtifactStore(ArtifactStore[SpecIdentity, GeneratedCVL]):
+class ProverArtifactStore(ArtifactStore[ComponentSpec, GeneratedCVL]):
     """Persists the autoprove pipeline's outputs under ``certora/`` (plus
     ``.certora_internal/autoProve/`` diagnostics)."""
 
@@ -91,13 +67,13 @@ class ProverArtifactStore(ArtifactStore[SpecIdentity, GeneratedCVL]):
         return under_project(self._project_root, CERTORA_DIR)
 
     @override
-    def write_artifact(self, i: ComponentSpec | InvariantSpec, artifact: GeneratedCVL) -> Path:
+    def write_artifact(self, i: ComponentSpec, artifact: GeneratedCVL) -> Path:
         written_spec = super().write_artifact(i, artifact)
         self._write_conf(i, artifact.config, written_spec)
         return written_spec
 
     def _write_conf(
-        self, spec: SpecIdentity, base_config: dict | None, spec_path: Path,
+        self, spec: ComponentSpec, base_config: dict | None, spec_path: Path,
     ) -> None:
         """The prover conf for the run: the generation's final ``state["config"]`` plus
         the fixed run overlay (shared with the live ``verify_spec`` run). No-op if no
@@ -122,11 +98,13 @@ class ProverArtifactStore(ArtifactStore[SpecIdentity, GeneratedCVL]):
         (out_dir / "components_to_prover_runs.json").write_text(json.dumps(runs, indent=2))
 
     @override
-    def _job_info_payload(self, summary: RunSummary, *, user_id: str) -> dict[str, object]:
+    def _job_info_payload(
+        self, summary: RunSummary, *, user_id: str, run_mode: str
+    ) -> dict[str, object]:
         """Extends the shared manifest body with the prover-reported runtime: the
         autoprove ``job_info.json`` also records ``prover_usage`` (summed prover
         start-to-end time), alongside the base identity + ``token_usage``."""
         return {
-            **super()._job_info_payload(summary, user_id=user_id),
+            **super()._job_info_payload(summary, user_id=user_id, run_mode=run_mode),
             "prover_usage": summary.prover_usage_summary(),
         }
