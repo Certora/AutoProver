@@ -51,18 +51,17 @@ motivation. Sizes are insertions/deletions against master.
 | **S4** Select the Prover CLI by app | 4 | +203 −30 | `ProverApp = "evm" \| "solana" \| "soroban"`, a registry of entry points, and `certoraRunWrapper` taking the app as `argv[2]`. Everything downstream of submission is already chain-neutral; this is the one place they differ. |
 | **S5** Counterexamples, and which frames to show | 10 | +411 −48 | `Counterexample`/`SourceSpan` as data rather than a rendered string, `classify_violation`, and `TraceShape` — per-chain rules for which call-trace frames survive rendering. Carries the Solana treeView fixtures that prove the parser is chain-neutral. |
 | **S6** Report: what a component gave up on | 7 | +280 −37 | `Abandoned` replacing a `None` that discarded the reason, `GaveUpComponent.reason`, and the `BuildEnvironment` discriminated union (`ConfinedBuilds \| UnconfinedBuilds \| None`) so a report says how the builds behind its verdicts were confined. Includes the `pipeline/core.py` hook that supplies it. |
-| **S7** Pinned runs | 4 | +4752 | `composer/pipeline/pinned.py`: write a run's analysis *and* properties to disk with `--pin-to`, start a later run at formalization with `--properties`. Both halves, because a unit is an index into the analysis. 4,233 of those lines are one checked-in fixture — worth asking whether it belongs in the repo. |
-| **S8** A second read-only source mount | 4 | +84 −9 | `build_layered_source_tools` and `LibrarySource` — tools over a library the analyzed project depends on, and the statement that tells an agent they exist, which travel together because either alone is worse than neither. Plus `crate_source` on the code explorer's prompt. Carries a stray docstring correction in `source/prover.py` that belongs nowhere in particular. |
+| **S7** A second read-only source mount | 4 | +84 −9 | `build_layered_source_tools` and `LibrarySource` — tools over a library the analyzed project depends on, and the statement that tells an agent they exist, which travel together because either alone is worse than neither. Plus `crate_source` on the code explorer's prompt. Carries a stray docstring correction in `source/prover.py` that belongs nowhere in particular. |
 
 Dependencies inside the wave: **S4** before **S5**, and nothing else. Merging the sandbox work into
 one PR removed the wave's other ordering constraint, which had been an artefact of the split rather
 than of the code: the forbidden-read test imports the sandbox's own scratch-directory constants, so
 the two could never have been reviewed apart.
 
-**A caution about `pipeline/core.py` and `pipeline/cli.py`.** Three of these PRs touch them, each
-for its own feature — the `ecosystem` parameter the exclusion rule is read off (S1), the
-build-environment hook (S6), the pinned fixture (S7). Take the hunks, not the files, and
-land them in that order; whichever goes last will want a rebase. One unrelated hunk in `cli.py` is a
+**A caution about `pipeline/core.py` and `pipeline/cli.py`.** Two of these PRs touch them, each for
+its own feature — the `ecosystem` parameter the exclusion rule is read off (S1) and the
+build-environment hook (S6). Take the hunks, not the files, and land them in that order; whichever
+goes second will want a rebase. One unrelated hunk in `cli.py` is a
 genuine bug fix — a main contract path resolved against the process's cwd rather than the project
 root — and goes alone rather than riding a themed PR; S1 was opened without it.
 
@@ -96,7 +95,7 @@ code and land C6 last, after which the backend appears all at once and works.
 | **C4a** The authoring loop | 10 | +2642 | Author, state, rule extraction, the judge's prompts, and the feedback round. Carries the `CvlrJudge` / `CvlrGeneration` cache markers in `spec/context.py`, which are CVLR-specific and have no business in a shared PR. |
 | **C4b** The prompt corpus, and a mark for one-off measurements | 10 | +3186 | Guidance, the worked example rendered against the analyzed program, and the knowledge tests that pin what the prompts must and must not claim. Carries the `measurement` pytest mark and the CI selector `expensive and not measurement`, because `test_cvlr_judge_round_cost.py` — which lands here — is the only test that has it: a mark registered before its first user would deselect nothing and give a reviewer no way to judge the CI change. |
 | **C5** Verification and tuning | 10 | +3105 | Submission, the prover-side tuning directives, loop bounds, and the Anchor surface analysis. |
-| **C6** Pipeline and entry | 12 | +3091 −6 | `CvlrBackend`, the CLI entry points, the artifact store, and the plumbing tests. The PR that makes the backend exist. |
+| **C6** Pipeline and entry | 12 | +3083 −6 | `CvlrBackend`, the CLI entry points, the artifact store, and the plumbing tests. The PR that makes the backend exist. Lands without the two pinned-run flags — see *Deferred* below. |
 
 Order inside the wave: **C1a** before **C1b** (the env refresher imports the scaffold's constants),
 **R2** before **C2**, and **C6** last. C3a/C3b, C4a/C4b and C5 are independent of each other.
@@ -115,6 +114,31 @@ themselves. No shared module reaches into the backend.
 | **C8a** The end-to-end gate and its scenario | 10 | +2956 | `test_cvlr_gate.py` and the `solana_vault_idl` Anchor program it runs against. Real models, real cargo, real cloud jobs. Carries the change that makes `token_cost_budget` yield its counter instead of `None`: the gate is its only reader, and it reads it to report what the run cost rather than only to trip on the ceiling. |
 | **C8b** The replay tape | 7 | +52251 | The recorded run that lets the gate's shape be re-checked for the price of the builds and prover jobs alone. 51,000 of those lines are one generated file. |
 | **D** Documentation | 10 | +8153 | The backend plan, the capture plan, the upstream-defect record, the working-copy and VFS notes, and the to-do index. |
+
+---
+
+## Deferred: pinned runs
+
+`composer/pipeline/pinned.py` writes a run's analysis *and* properties to disk (`--pin-to`) so a
+later run can re-enter at formalization (`--properties`), skipping the two phases that on one real
+target were 98% of the wall clock before the first prover job. Both halves are pinned because a unit
+is an index into the analysis, so properties keyed by component name can attach to a component that
+has changed under the name.
+
+**It is held back deliberately, and the decision is the point.** Whether this is the right shape for
+"start a run somewhere other than the beginning" is not settled, and nothing else in the branch needs
+it — so the cost of deciding later is zero, while landing it early would make a 4,233-line checked-in
+fixture and a second way to configure a run into things master has to keep working.
+
+What its dependents must do while it is deferred:
+
+* **C6** lands without `--pin-to` and `--properties` and without the `load_pinned_run` import —
+  roughly eight lines of `composer/spec/cvlr/entry.py`. No test exercises them, so nothing else moves.
+* The `pinned` / `pin_to` parameters stay out of `cli_pipeline` and `run_pipeline`, which is why the
+  shared-pipeline caution above names two PRs rather than three.
+* `tests/test_pinned_properties.py` and `tests/data/pins/` travel with the feature if it ever lands.
+
+If it is dropped instead, the same paths are what to delete from the branch.
 
 ---
 
@@ -160,8 +184,7 @@ the exception noted in wave 1 — take the feature's hunks, not the whole file.
 | S4 | `composer/certora_env.py` `composer/prover/certoraRunWrapper.py` `composer/prover/core.py` `composer/prover/ptypes.py` |
 | S5 | `composer/prover/results.py` `analyzer/analysis.py` `tests/test_solana_cex_trace.py` `tests/data/solana_cex/` `tests/test_tree_parsing.py` `tests/test_cex_analysis_failure_isolation.py` |
 | S6 | `composer/spec/source/report/{schema,collect,build,render}.py` `composer/spec/source/report_prover.py` `composer/templates/autoprove_report.html.j2` `tests/test_autoprove_report.py` `composer/pipeline/core.py` *(hunks)* |
-| S7 | `composer/pipeline/pinned.py` `tests/test_pinned_properties.py` `tests/data/pins/` `composer/pipeline/{core,cli}.py` *(hunks)* |
-| S8 | `composer/spec/source/source_env.py` `composer/spec/code_explorer.py` `composer/templates/code_explorer/rust/common_fragment.j2` `composer/spec/source/prover.py` |
+| S7 | `composer/spec/source/source_env.py` `composer/spec/code_explorer.py` `composer/templates/code_explorer/rust/common_fragment.j2` `composer/spec/source/prover.py` |
 | R1 | `composer/cargo/` `composer/rustapp/toolchain.py` `tests/test_cvlr_symbols.py` `tests/data/vault_sbf_symbols.txt` |
 | R2 | `graphcore` `pyproject.toml` *(the pin only)* |
 | R3 | `scripts/Dockerfile` `scripts/autoprove-entrypoint.sh` `scripts/docker-compose.yml` `tests/test_cvlr_image.py` |
