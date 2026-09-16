@@ -47,19 +47,19 @@ motivation. Sizes are insertions/deletions against master.
 |----|-------|------|------------|
 | **S1** Confined builds: one scratch directory, a readable git config, an unreadable output — [#239](https://github.com/Certora/AutoProver/pull/239), draft | 10 | +247 −37 | Three findings from making Rust builds run under the sandbox, and one story. `composer/layout.py` declares `CERTORA_DIR` / `INTERNAL_DIR` where `composer.sandbox` can name them without importing pydantic, which that package stays free of. The sandbox's scratch (`CARGO_HOME`, tmp) moves under `INTERNAL_DIR`; `RUST_FORBIDDEN_READ` withholds that directory — and the entry itself, so graphcore prunes the subtree instead of rejecting a 730 MB registry file by file — wherever it sits; and the rule is read off the ecosystem `cli_pipeline` is handed rather than passed beside it, so the two cannot disagree. And `git_config_ro_paths` grants the global git config, without which libgit2 refuses to open a fully warm cached git dependency and reports it as an offline-mode *network* error. |
 | **S2** Rescue a mis-encoded grouping | 1 | +26 −1 | A `field_validator` that accepts the whole grouping object JSON-encoded into its own `groups` field. Observed on a real run; the existing fallback silently flattens a report to one group. |
-| **S3** Select the Prover CLI by app — branch `eric/prover-app-seam` | 3 | +70 −25 | `ProverApp = "evm" \| "solana" \| "soroban"`, a registry of entry points, and `certoraRunWrapper` taking the app as `argv[2]`. Everything downstream of submission is already chain-neutral; this is the one place they differ. |
-| **S4** Counterexamples, and which frames to show | 11 | +505 −49 | `Counterexample`/`SourceSpan` as data rather than a rendered string, `classify_violation`, and `TraceShape` — per-chain rules for which call-trace frames survive rendering. Carries the Solana treeView fixtures that prove the parser is chain-neutral. |
-| **S5** Report: what a component gave up on | 7 | +280 −37 | `Abandoned` replacing a `None` that discarded the reason, `GaveUpComponent.reason`, and the `BuildEnvironment` discriminated union (`ConfinedBuilds \| UnconfinedBuilds \| None`) so a report says how the builds behind its verdicts were confined. Includes the `pipeline/core.py` hook that supplies it. |
-| **S6** A second read-only source mount | 4 | +84 −9 | `build_layered_source_tools` and `LibrarySource` — tools over a library the analyzed project depends on, and the statement that tells an agent they exist, which travel together because either alone is worse than neither. Plus `crate_source` on the code explorer's prompt. Carries a stray docstring correction in `source/prover.py` that belongs nowhere in particular. |
+| **S3** The prover layer learns there is more than one chain — branch `eric/prover-app-seam` | 17 | +616 −80 | Two halves of one seam. *Which CLI:* `ProverApp` names the three entry points `certora_cli` ships, `import_prover_entry` resolves one honouring `$CERTORA`, and `prover_app` narrows an untrusted string at the single boundary where one arrives. *Which frames:* a counterexample stops being a rendered string and becomes data — trace, assertion, source span — so `classify_violation` can decide whether a violation says anything about the program; `TraceShape` then says which frames of a chain's trace survive rendering. Between those two points nothing learns which chain ran, which is the claim `tests/data/solana_cex` measures. |
+| **S4** Report: what a component gave up on | 7 | +280 −37 | `Abandoned` replacing a `None` that discarded the reason, `GaveUpComponent.reason`, and the `BuildEnvironment` discriminated union (`ConfinedBuilds \| UnconfinedBuilds \| None`) so a report says how the builds behind its verdicts were confined. Includes the `pipeline/core.py` hook that supplies it. |
+| **S5** A second read-only source mount | 4 | +84 −9 | `build_layered_source_tools` and `LibrarySource` — tools over a library the analyzed project depends on, and the statement that tells an agent they exist, which travel together because either alone is worse than neither. Plus `crate_source` on the code explorer's prompt. Carries a stray docstring correction in `source/prover.py` that belongs nowhere in particular. |
 
-Dependencies inside the wave: **S3** before **S4**, and nothing else. Merging the sandbox work into
+Dependencies inside the wave: none — the one that remained was the CLI seam before the trace
+parser, and they are now one PR. Merging the sandbox work into
 one PR removed the wave's other ordering constraint, which had been an artefact of the split rather
 than of the code: the forbidden-read test imports the sandbox's own scratch-directory constants, so
 the two could never have been reviewed apart.
 
 **A caution about `pipeline/core.py` and `pipeline/cli.py`.** Two of these PRs touch them, each for
 its own feature — the `ecosystem` parameter the exclusion rule is read off (S1) and the
-build-environment hook (S5). Take the hunks, not the files, and land them in that order; whichever
+build-environment hook (S4). Take the hunks, not the files, and land them in that order; whichever
 goes second will want a rebase. One unrelated hunk in `cli.py` is a
 genuine bug fix — a main contract path resolved against the process's cwd rather than the project
 root — and goes alone rather than riding a themed PR; S1 was opened without it.
@@ -160,12 +160,15 @@ early unblocks C2 and gives the bump its own blast radius; landing it late keeps
 the shared seams go in.
 
 **4. [#185](https://github.com/Certora/AutoProver/pull/185) is open and touches the same report
-files** as S5. Whichever lands second pays the merge. Worth deciding the order deliberately rather
+files** as S4. Whichever lands second pays the merge. Worth deciding the order deliberately rather
 than discovering it.
 
-**5. Is there an EVM-visible behaviour change anywhere in wave 1?** The claim is no — every seam
-either defaults to today's value or is reached only by a caller that does not exist yet on master.
-S3 and S4 are where that claim is least obvious and should be reviewed as if it were false.
+**5. Is there an EVM-visible behaviour change anywhere in wave 1?** The claim is *nearly* no —
+every seam either defaults to today's value or is reached only by a caller that does not exist yet
+on master. **S3 is the exception and should be reviewed as if the claim were false**: every EVM
+trace now renders through `TraceShape`, and `cex_dump` becomes a derived property whose text gains a
+`<counterexample>` envelope, which two report tests had to be updated for. The CLI-selection half of
+that same PR is inert by comparison, and its body separates the two for exactly this reason.
 
 ---
 
@@ -179,10 +182,9 @@ the exception noted in wave 1 — take the feature's hunks, not the whole file.
 |----|-------|
 | S1 | `composer/layout.py` `composer/spec/gen_types.py` `composer/sandbox/recipes.py` `composer/pipeline/ecosystem.py` `tests/test_fs_forbidden_read.py` `tests/test_sandbox_config.py` `scripts/docker-compose.sandbox.yml` `composer/pipeline/cli.py` *(hunks)* |
 | S2 | `composer/spec/source/report/grouping.py` |
-| S3 | `composer/certora_env.py` `composer/prover/certoraRunWrapper.py` `composer/prover/core.py` *(hunks: the `app` field, parameter and wrapper argument)* |
-| S4 | `composer/prover/results.py` `composer/prover/ptypes.py` `analyzer/analysis.py` `tests/test_solana_cex_trace.py` `tests/data/solana_cex/` `tests/test_tree_parsing.py` `tests/test_cex_analysis_failure_isolation.py` `composer/prover/core.py` *(hunk: the app argument to `read_and_format_run_result`)* |
-| S5 | `composer/spec/source/report/{schema,collect,build,render}.py` `composer/spec/source/report_prover.py` `composer/templates/autoprove_report.html.j2` `tests/test_autoprove_report.py` `composer/pipeline/core.py` *(hunks)* |
-| S6 | `composer/spec/source/source_env.py` `composer/spec/code_explorer.py` `composer/templates/code_explorer/rust/common_fragment.j2` `composer/spec/source/prover.py` |
+| S3 | `composer/certora_env.py` `composer/prover/{certoraRunWrapper,core,ptypes,results}.py` `analyzer/analysis.py` `tests/test_prover_app.py` `tests/test_solana_cex_trace.py` `tests/data/solana_cex/` `tests/test_tree_parsing.py` `tests/test_cex_analysis_failure_isolation.py` `tests/test_autoprove_report.py` *(hunks: the `_violated` helper and its expectation)* |
+| S4 | `composer/spec/source/report/{schema,collect,build,render}.py` `composer/spec/source/report_prover.py` `composer/templates/autoprove_report.html.j2` `tests/test_autoprove_report.py` `composer/pipeline/core.py` *(hunks)* |
+| S5 | `composer/spec/source/source_env.py` `composer/spec/code_explorer.py` `composer/templates/code_explorer/rust/common_fragment.j2` `composer/spec/source/prover.py` |
 | R1 | `composer/cargo/` `composer/rustapp/toolchain.py` `tests/test_cvlr_symbols.py` `tests/data/vault_sbf_symbols.txt` |
 | R2 | `graphcore` `pyproject.toml` *(the pin only)* |
 | R3 | `scripts/Dockerfile` `scripts/autoprove-entrypoint.sh` `scripts/docker-compose.yml` `tests/test_cvlr_image.py` |
