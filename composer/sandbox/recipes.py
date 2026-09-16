@@ -16,6 +16,7 @@ import os
 import shutil
 from pathlib import Path
 
+from composer.layout import INTERNAL_DIR
 from composer.sandbox.policy import SandboxPolicy
 
 # Benign build vars passed through to the child (values read from the current env).
@@ -34,6 +35,27 @@ DEFAULT_ENV_PASSTHROUGH: tuple[str, ...] = (
     "SSL_CERT_FILE",
     "SSL_CERT_DIR",
 )
+
+#: The private, per-run scratch directories a sandboxed build gets *under the workdir* (see
+#: :func:`sandbox_cargo_home` and the ``TMPDIR`` redirect in :func:`rust_build_policy` for why each
+#: is private rather than shared). They live under ``.certora_internal/``, where every other
+#: generated, non-source, non-deliverable output goes (``AUTOPROVE_INTERNAL_DIR``,
+#: ``FOUNDRY_INTERNAL_DIR``) — so a project that already ignores that directory ignores these too,
+#: and a copy or clean that skips it skips these too.
+#:
+#: **Not a contradiction of the rule next door.** ``composer.spec.cvlr.pipeline.WORK_DIR`` is
+#: deliberately *outside* ``.certora_internal`` because the prover's source collector skips that
+#: directory, and a working tree living there uploads no Rust. These are the other case: a private
+#: ``CARGO_HOME`` and a scratch ``TMPDIR`` are not source and must never be collected, so being
+#: skipped is the point rather than the hazard.
+#:
+#: Named constants because consumers outside this module have to agree on the spellings — notably
+#: ``composer.pipeline.ecosystem.RUST_FORBIDDEN_READ``, which hides them from the source tools'
+#: file listing so the hundreds of MB they hold never reach the model's context.
+SANDBOX_INTERNAL_DIR = INTERNAL_DIR / "sandbox"
+SANDBOX_CARGO_DIR = SANDBOX_INTERNAL_DIR / "cargo"
+SANDBOX_TMP_DIR = SANDBOX_INTERNAL_DIR / "tmp"
+
 
 # Read-only system directories the toolchain + its dynamic linker need. ``/etc`` is
 # included because glibc NSS (``getpwuid`` via ``getuser``, CA-cert lookup) reads
@@ -73,7 +95,7 @@ def sandbox_cargo_home(workdir: str | Path) -> Path:
     a shared *read-only* index/cache to avoid re-download is a deferred optimization
     (command-sandbox.md §11 item 5).
     """
-    return Path(workdir).resolve() / ".sandbox_cargo"
+    return Path(workdir).resolve() / SANDBOX_CARGO_DIR
 
 
 def shared_cargo_ro_paths(cargo_home: str | Path) -> tuple[Path, ...]:
@@ -93,6 +115,37 @@ def shared_cargo_ro_paths(cargo_home: str | Path) -> tuple[Path, ...]:
     return (bin_dir,) if bin_dir.is_dir() else ()
 
 
+def git_config_ro_paths(home: str | Path) -> tuple[Path, ...]:
+    """The global git config files, read-only — what a build with a **git dependency** needs.
+
+    Cargo resolves a ``[patch.crates-io]`` git source through libgit2, and libgit2 reads the global
+    config before it will open the cached repository at all. Denied that read it does not degrade to
+    "no user config": it reports the source as unopenable, which cargo surfaces as
+
+        Unable to update https://…: can't checkout from '…': you are in the offline mode (--offline)
+
+    — a message about the *network* for a cache that is fully warm, and one that no amount of
+    pre-fetching fixes. Every Anchor project hits this, since ``composer.spec.cvlr.munge.ANCHOR_FORK``
+    redirects ``anchor-lang`` and ``anchor-spl`` to a git repo.
+
+    Files, never ``$HOME`` and never ``~/.config`` — Landlock's PathBeneath is hierarchical, so a
+    directory grant here would hand an untrusted ``build.rs`` the rest of the home directory. The
+    residual exposure is the git config itself, which can name a credential helper and, in a badly
+    configured checkout, carry a token in a ``url.*.insteadOf``. That is a real if narrow leak, and
+    it is the price of building a git dependency at all; the alternative considered and rejected was
+    a private ``$HOME``, which silently relocates rustup's and ``cargo-build-sbf``'s toolchain
+    lookups and fails much later, mid-build, in a message about downloading Rust.
+    """
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    candidates = [
+        Path(home) / ".gitconfig",
+        Path(xdg) / "git" / "config" if xdg else Path(home) / ".config" / "git" / "config",
+    ]
+    if override := os.environ.get("GIT_CONFIG_GLOBAL"):
+        candidates.append(Path(override))
+    return tuple(p for p in candidates if p.exists())
+
+
 def rust_build_policy(
     workdir: str | Path,
     *,
@@ -109,8 +162,9 @@ def rust_build_policy(
 
     Grants: ``workdir`` + the device nodes (+ ``extra_rw``) read-write; the Rust
     toolchain (``RUSTUP_HOME``), the shared cargo **bin/** only (not the cargo-home
-    root — see :func:`shared_cargo_ro_paths`), Solana platform-tool directories, the
-    system dirs, and ``extra_ro`` read-only. Non-existent paths are dropped.
+    root — see :func:`shared_cargo_ro_paths`), the global git config files (see
+    :func:`git_config_ro_paths`), Solana platform-tool directories, the system dirs,
+    and ``extra_ro`` read-only. Non-existent paths are dropped.
 
     With ``offline`` (the default — the sandbox has no network, §5),
     ``CARGO_NET_OFFLINE=true`` is set in the child env. Spelled ``true`` because cargo parses
@@ -130,6 +184,8 @@ def rust_build_policy(
         rustup,
         # Shared cargo: bin/ only — never the home root (credentials.toml).
         *shared_cargo_ro_paths(cargo),
+        # The global git config, without which a git dependency cannot be opened at all.
+        *git_config_ro_paths(home),
         # cargo-build-sbf's downloaded sBPF platform-tools (layout varies by version).
         home / ".cache" / "solana",
         home / ".local" / "share" / "solana",
@@ -150,7 +206,7 @@ def rust_build_policy(
     # — notably the linker, which writes to $TMPDIR (default /tmp) during `cargo build` —
     # work without granting the shared /tmp (which may hold host/other-run secrets and
     # would defeat the escape test). Created here so $TMPDIR points at an existing dir.
-    sandbox_tmp = wd / ".sandbox_tmp"
+    sandbox_tmp = wd / SANDBOX_TMP_DIR
     sandbox_tmp.mkdir(parents=True, exist_ok=True)
     for var in ("TMPDIR", "TMP", "TEMP"):
         env[var] = str(sandbox_tmp)
