@@ -367,8 +367,8 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
             summary=summary,
             task_handler=fact,
             design_doc_phase=CvlrPhase.DISCOVER_DESIGN_DOC,
+            ecosystem=SOLANA,
             at_exit=_usage_exit_logger(summary, selected),
-            forbidden_read=SOLANA.language.default_forbidden_read,
             pinned=pinned,
             pin_to=pathlib.Path(args.pin_to).resolve() if args.pin_to else None,
             workflow="cvlr",
@@ -424,6 +424,6 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
                 ),
                 package=selected.name,
             )
-            return await cont(env, backend, SOLANA)
+            return await cont(env, backend)
 
     yield runner

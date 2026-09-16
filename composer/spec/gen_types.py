@@ -18,9 +18,8 @@ from composer.layout import CERTORA_DIR, INTERNAL_DIR
 # statements are derived with :func:`import_statement_for` (the prover reads
 # those relative to the importing spec's own directory).
 # ---------------------------------------------------------------------------
-# ``CERTORA_DIR`` and ``INTERNAL_DIR`` are imported above rather than declared here:
-# :mod:`composer.sandbox` needs the latter and must not pull pydantic in to get it. Everything
-# below is a subdirectory of one of the two.
+# Everything below is a subdirectory of ``CERTORA_DIR`` or ``INTERNAL_DIR``, which
+# :mod:`composer.layout` declares so that pydantic-free modules can name them too.
 #: Generated specs (the "importers") are written here.
 SPECS_DIR = CERTORA_DIR / "specs"
 #: Per-component property dumps (`<stem>.properties.json` / `.property_rules.json`)

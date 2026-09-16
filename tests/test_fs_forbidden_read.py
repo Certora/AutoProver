@@ -12,8 +12,11 @@ graphcore hands the predicate a ``PurePosixPath`` of a project-root-relative pat
 that is how it is exercised here.
 """
 
+import re
 from pathlib import PurePosixPath
 
+from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ
+from composer.sandbox.recipes import SANDBOX_CARGO_DIR, SANDBOX_TMP_DIR
 from composer.spec.util import fs_forbidden_read
 
 
@@ -91,21 +94,10 @@ def test_ordinary_sources_are_not_caught_by_the_generated_output_rules() -> None
 def _rust_can_read(path: str) -> bool:
     """``RUST_FORBIDDEN_READ`` as graphcore applies it — a full match against a
     project-root-relative path."""
-    import re
-
-    from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ
-
     return re.fullmatch(RUST_FORBIDDEN_READ, path) is None
 
 
 def test_the_sandboxs_private_cargo_home_is_never_readable():
-    """The confined build's ``CARGO_HOME`` lives inside the workdir and holds an entire cargo
-    registry — 730 MB on the first real Solana program this backend was pointed at. A file listing
-    that enumerated it would exceed the model's context on its own, so the whole internal directory
-    is withheld rather than that one subdirectory: the next scratch tree to grow without bound is
-    the one nobody remembers to add here."""
-    from composer.sandbox.recipes import SANDBOX_CARGO_DIR, SANDBOX_TMP_DIR
-
     assert not _rust_can_read(
         str(SANDBOX_CARGO_DIR / "registry/src/index.crates.io-6f17/anchor-lang-0.31.1/src/lib.rs")
     )
@@ -114,28 +106,33 @@ def test_the_sandboxs_private_cargo_home_is_never_readable():
 
 
 def test_the_internal_directory_is_withheld_wherever_it_sits():
-    """Anchoring this at the project root is not enough, and the gap cost a run.
-
-    A CVLR run builds in a working copy under the project, and the sandbox puts that build's private
-    ``CARGO_HOME`` inside *it* — so the registry lands at ``.cvlr_work/build/.certora_internal/…``,
-    which an anchored pattern does not match. One ``list_files`` returned 28,904 lines, 28,739 of
-    them from there, and the authoring agent's next request was 2.27M tokens against a 1M limit."""
+    # A backend that builds in a working copy under the project root puts that build's private
+    # ``CARGO_HOME`` inside the copy, so the tree to withhold is not at a fixed depth.
     assert not _rust_can_read(
-        ".cvlr_work/build/.certora_internal/sandbox/cargo/registry/src/idx/solana-sbpf-0.1/lib.rs"
+        "build_work/copy/.certora_internal/sandbox/cargo/registry/src/idx/solana-sbpf-0.1/lib.rs"
     )
     assert not _rust_can_read("any/depth/at/all/.certora_internal/x")
 
 
 def test_a_nested_target_directory_is_not_readable_either():
-    # The anchored `^target/` misses cargo output below the root — a generated crate's own
-    # `target/` was ~900 MB in the case that prompted this.
     assert not _rust_can_read("crates/harness/target/debug/deps/x.rs")
     assert not _rust_can_read("target/debug/deps/x.rs")
 
 
+def test_a_withheld_directory_matches_as_an_entry_so_a_walk_can_prune_it():
+    """graphcore prunes a subtree by testing the bare directory entry (``DirBackend.dump_to``
+    hands ``copytree``'s ``ignore`` the entry names). Matching only the contents still yields the
+    right answer, but walks the whole tree to reach it."""
+    assert not _rust_can_read(".certora_internal")
+    assert not _rust_can_read("build_work/copy/.certora_internal")
+    assert not _rust_can_read("target")
+    assert not _rust_can_read("crates/harness/target")
+
+
 def test_the_programs_own_source_and_harness_stay_readable():
-    # The point of withholding whole directories is that nothing carved out of them is source;
-    # everything the run authors lives beside the program instead.
     assert _rust_can_read("program/src/processor.rs")
     assert _rust_can_read("program/src/certora/specs/deposits.rs")
     assert _rust_can_read("program/src/certora/envs/cvlr_summaries.txt")
+    # Only the directories themselves, not every name they are a substring of.
+    assert _rust_can_read("src/targets.rs")
+    assert _rust_can_read("my_target/src/lib.rs")

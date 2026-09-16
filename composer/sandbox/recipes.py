@@ -36,26 +36,14 @@ DEFAULT_ENV_PASSTHROUGH: tuple[str, ...] = (
     "SSL_CERT_DIR",
 )
 
-#: The private, per-run scratch directories a sandboxed build gets *under the workdir* (see
+#: The private, per-run scratch a sandboxed build gets *under the workdir* (see
 #: :func:`sandbox_cargo_home` and the ``TMPDIR`` redirect in :func:`rust_build_policy` for why each
-#: is private rather than shared). They live under ``.certora_internal/``, where every other
-#: generated, non-source, non-deliverable output goes (``AUTOPROVE_INTERNAL_DIR``,
-#: ``FOUNDRY_INTERNAL_DIR``) — so a project that already ignores that directory ignores these too,
-#: and a copy or clean that skips it skips these too.
-#:
-#: **Not a contradiction of the rule next door.** ``composer.spec.cvlr.pipeline.WORK_DIR`` is
-#: deliberately *outside* ``.certora_internal`` because the prover's source collector skips that
-#: directory, and a working tree living there uploads no Rust. These are the other case: a private
-#: ``CARGO_HOME`` and a scratch ``TMPDIR`` are not source and must never be collected, so being
-#: skipped is the point rather than the hazard.
-#:
-#: Named constants because consumers outside this module have to agree on the spellings — notably
-#: ``composer.pipeline.ecosystem.RUST_FORBIDDEN_READ``, which hides them from the source tools'
-#: file listing so the hundreds of MB they hold never reach the model's context.
+#: is private rather than shared). Placed under ``INTERNAL_DIR`` with every other generated
+#: non-deliverable, which is what keeps hundreds of MB of cargo registry out of both the source
+#: tools' view and the prover's upload — neither is source, so being skipped is the point.
 SANDBOX_INTERNAL_DIR = INTERNAL_DIR / "sandbox"
 SANDBOX_CARGO_DIR = SANDBOX_INTERNAL_DIR / "cargo"
 SANDBOX_TMP_DIR = SANDBOX_INTERNAL_DIR / "tmp"
-
 
 # Read-only system directories the toolchain + its dynamic linker need. ``/etc`` is
 # included because glibc NSS (``getpwuid`` via ``getuser``, CA-cert lookup) reads
@@ -119,22 +107,21 @@ def git_config_ro_paths(home: str | Path) -> tuple[Path, ...]:
     """The global git config files, read-only — what a build with a **git dependency** needs.
 
     Cargo resolves a ``[patch.crates-io]`` git source through libgit2, and libgit2 reads the global
-    config before it will open the cached repository at all. Denied that read it does not degrade to
-    "no user config": it reports the source as unopenable, which cargo surfaces as
+    config before it will open the cached repository at all. Denied that read it does not degrade
+    to "no user config": it reports the source as unopenable, which cargo surfaces as
 
         Unable to update https://…: can't checkout from '…': you are in the offline mode (--offline)
 
-    — a message about the *network* for a cache that is fully warm, and one that no amount of
-    pre-fetching fixes. Every Anchor project hits this, since ``composer.spec.cvlr.munge.ANCHOR_FORK``
-    redirects ``anchor-lang`` and ``anchor-spl`` to a git repo.
+    — a message about the *network* for a cache that is fully warm, which no amount of pre-fetching
+    fixes. Any project patching a dependency to a git repo hits this, an Anchor fork included.
 
-    Files, never ``$HOME`` and never ``~/.config`` — Landlock's PathBeneath is hierarchical, so a
-    directory grant here would hand an untrusted ``build.rs`` the rest of the home directory. The
+    Files, never ``$HOME`` and never ``~/.config``: Landlock's PathBeneath is hierarchical, so a
+    directory grant would hand an untrusted ``build.rs`` the rest of the home directory. The
     residual exposure is the git config itself, which can name a credential helper and, in a badly
-    configured checkout, carry a token in a ``url.*.insteadOf``. That is a real if narrow leak, and
-    it is the price of building a git dependency at all; the alternative considered and rejected was
-    a private ``$HOME``, which silently relocates rustup's and ``cargo-build-sbf``'s toolchain
-    lookups and fails much later, mid-build, in a message about downloading Rust.
+    configured checkout, carry a token in a ``url.*.insteadOf`` — the price of building a git
+    dependency at all. Do not substitute a private ``$HOME``: it silently relocates rustup's and
+    ``cargo-build-sbf``'s toolchain lookups and fails much later, mid-build, complaining about
+    downloading Rust.
     """
     xdg = os.environ.get("XDG_CONFIG_HOME")
     candidates = [
