@@ -1,17 +1,14 @@
 """How a Solana counterexample renders for an analyzer.
 
-``docs/cvlr-backend-plan.md`` §7.7. The fixtures are unedited output from two real Solana Prover
-runs against ``test_scenarios/solana_vault_idl``, which makes this the first test of
-:mod:`composer.prover.results` that does not submit a live job — the only other one
-(``test_tree_parsing``) is marked ``expensive`` and costs a cloud run per assertion.
-
-Two counterexamples, because they fail in the two different ways this backend has actually seen:
+Runs off checked-in fixtures (``tests/data/solana_cex``) rather than a live job, so unlike
+``test_tree_parsing`` it is not ``expensive``. Two counterexamples, covering the two ways this
+backend fails:
 
 * ``assertion_failed`` — a genuine property violation. ``withdraw`` of 100 lamports left the vault
   down only 99, because a fee collector aliased with the vault got the rest.
 * ``loop_unwinding`` — not a violation of the property at all, but the prover reporting that it
-  could not discharge a loop bound. Worth keeping as a fixture precisely because a findings
-  synthesizer handed this would write it up as a bug in the program.
+  could not discharge a loop bound. Worth a fixture precisely because a findings synthesizer handed
+  this would write it up as a bug in the program.
 """
 
 import json
@@ -59,7 +56,7 @@ def _loop_unwinding_cex() -> str:
 
 
 def test_a_real_solana_run_parses_with_no_chain_specific_code():
-    """The claim §5.3 made — one treeView parser serves both chains — against real Solana output."""
+    """One treeView parser serves both chains, checked against real Solana output."""
     parsed = read_and_format_run_result(FIXTURES / "loop_unwinding", "solana")
     assert not isinstance(parsed, str), parsed
     assert {name: r.status for name, r in parsed.items()} == {
@@ -96,13 +93,9 @@ def test_the_counterexample_keeps_the_values_that_make_it_a_finding():
 
 
 def test_the_loop_bound_failure_survives_rendering():
-    """The regression that motivated a per-chain shape.
-
-    EVM drops the ``unknown loop source code`` frame and everything under it. On Solana that frame
-    is where a loop-unwinding violation keeps both its per-iteration structure and the assertion
-    that failed, so EVM's shape renders a trace that ends at the handler call and states no
-    failure at all.
-    """
+    """EVM drops the ``unknown loop source code`` frame and everything under it. On Solana that
+    frame is where a loop-unwinding violation keeps both its per-iteration structure and the
+    assertion that failed, so EVM's shape renders a trace that states no failure at all."""
     messages = _messages(_loop_unwinding_cex())
     assert "Assert 'loop has terminated' failed" in messages
     assert "Loop Iteration 2" in messages
@@ -127,10 +120,8 @@ def test_allocator_frames_are_matched_by_name_not_by_the_value_they_hold():
     assert "__rust_alloc" not in _rendered(_assertion_failed_dump(), SOLANA_TRACE)
 
 
-def test_the_evm_shape_is_the_one_it_had_before_the_chain_seam():
-    """Pinned rather than measured against an EVM fixture, which would cost a cloud run. What
-    matters is that introducing the seam changed EVM's rendering only by adding the two new
-    elements, and that is a property of these four names and an empty elision set."""
+def test_the_evm_shape_drops_four_frames_and_elides_none():
+    """Pinned rather than measured against an EVM fixture, which would cost a cloud run."""
     assert EVM_TRACE.dropped == frozenset(
         {"Setup", "Global State", "Evaluate branch condition", "unknown loop source code"}
     )
@@ -138,8 +129,8 @@ def test_the_evm_shape_is_the_one_it_had_before_the_chain_seam():
 
 
 def test_a_chain_with_no_measured_trace_claims_nothing_about_it():
-    """Soroban reaches this parser once §7.9 lands, and what its setup frame is called is a thing
-    to measure from one of its counterexamples rather than inherit from Solana's."""
+    """What Soroban's setup frame is called is a thing to measure from one of its counterexamples
+    rather than inherit from Solana's."""
     assert trace_shape("soroban") == GENERIC_TRACE
     assert GENERIC_TRACE.elided == frozenset()
     assert trace_shape("solana") == SOLANA_TRACE
@@ -151,8 +142,8 @@ def test_output_without_a_call_trace_is_not_a_counterexample():
 
 
 def test_a_loop_bound_the_prover_could_not_discharge_is_not_a_property_violation():
-    """The gate this phase needed. Both of these are VIOLATED with a counterexample attached, and
-    only one of them is a bug in the program: the other is the prover reporting that it stopped."""
+    """Both of these are VIOLATED with a counterexample attached, and only one is a bug in the
+    program: the other is the prover reporting that it stopped."""
     loop = counterexample(_loop_unwinding_dump(), SOLANA_TRACE)
     match classify_violation(loop):
         case IncompleteCheck(assertion=assertion):
@@ -165,13 +156,9 @@ def test_a_loop_bound_the_prover_could_not_discharge_is_not_a_property_violation
 
 
 def test_the_sound_math_pass_reporting_its_own_limit_is_not_a_property_violation():
-    """`-solanaTACSoundSignedMath` annotates pointer arithmetic it believes cannot exceed 64 bits
-    and then asserts that belief. The assertion fails where a pointer is computed from a value the
-    analysis could not pin down — an unbounded `data_len`, typically — which is the prover
-    reporting the limit of its own pointer analysis, not a defect in the program.
-
-    Without this the failure classifies as the rule's own, becomes evidence, and the findings
-    synthesizer writes the prover's limitation up as a bug in the code under verification."""
+    """The sound-signed-math pass asserting its own inference (see ``_GENERATED_ASSERTIONS``).
+    Misclassified as the rule's own it becomes evidence, and the findings synthesizer writes the
+    prover's limitation up as a bug in the code under verification."""
     cex = counterexample(
         {
             "assertMessage": "Cannot overflow: inferred pointer",
@@ -187,8 +174,8 @@ def test_the_sound_math_pass_reporting_its_own_limit_is_not_a_property_violation
 
 
 def test_an_unrecognized_assertion_is_treated_as_the_rule_s_own():
-    """The classification is a filter that fails safe: drift in the list of prover-generated
-    assertions costs a spuriously reported finding, never a suppressed real one."""
+    """The classification fails safe: drift in the list of prover-generated assertions costs a
+    spuriously reported finding, never a suppressed real one."""
     assert classify_violation(None) == PropertyViolation()
     assert classify_violation(
         counterexample({"callTrace": {"message": {"text": "r()", "arguments": []},

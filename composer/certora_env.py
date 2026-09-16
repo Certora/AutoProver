@@ -41,9 +41,8 @@ def certora_home() -> Path | None:
 
 
 #: Which Prover a run submits to. Each is a separate CLI in ``certora_cli`` with its own build
-#: step — the Solana one compiles a Rust project where the EVM one compiles Solidity — so they are
-#: distinct entry points rather than one function with an app argument, and this is the name that
-#: selects between them.
+#: step — the Solana one compiles a Rust project where the EVM one compiles Solidity — so the app
+#: is a choice of entry point, not an argument to one.
 type ProverApp = Literal["evm", "solana", "soroban"]
 
 #: ``ProverApp`` -> (module, run function). The module is spelled once, relative to the package, and
@@ -58,9 +57,10 @@ _PROVER_ENTRIES: dict[str, tuple[str, str]] = {
 def prover_app(name: str) -> ProverApp:
     """Narrow an untrusted string to a :data:`ProverApp`.
 
-    One caller: the subprocess wrapper, reading the app out of its own ``argv``. The parse belongs
-    at that boundary rather than inside :func:`import_prover_entry`, so that every in-process caller
-    keeps a checked literal and only the process boundary pays for a runtime check."""
+    For the subprocess wrapper, which reads the app out of its own ``argv``. Keeping the parse
+    here rather than inside :func:`import_prover_entry` leaves every in-process caller a checked
+    literal.
+    """
     if name not in _PROVER_ENTRIES:
         raise CertoraEnvironmentError(
             f"unknown prover app {name!r}; known: {sorted(_PROVER_ENTRIES)}"
@@ -75,8 +75,8 @@ def import_prover_entry(app: ProverApp) -> Callable[[list[str]], Any]:
     use the pip-installed ``certora_cli`` package. Used by the sandboxed subprocess wrappers.
 
     Every entry takes the CLI argument list and returns that CLI's ``CertoraRunResult | None``, so
-    the wrapper around them is app-agnostic — which is the only reason a Solana submission can reuse
-    the EVM backend's cloud polling and result parsing unchanged.
+    everything downstream of submission — the wrapper, cloud polling, result parsing — is
+    app-agnostic.
     """
     module, function = _PROVER_ENTRIES[app]
     home = certora_home()

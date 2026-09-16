@@ -1,11 +1,4 @@
-"""Which Prover CLI a run submits to, and what a caller may name.
-
-``certora_cli`` ships one entry point per Prover — ``certoraRun``, ``certoraSolanaProver``,
-``certoraSorobanProver`` — each with its own build step, since one compiles Solidity and another
-compiles a Rust crate. What makes them interchangeable everywhere else is the signature they share,
-``list[str] -> CertoraRunResult | None``: cloud polling, the treeView parse and the verdict roll-up
-never learn which one ran.
-"""
+"""Which Prover CLI a run submits to, and what a caller may name."""
 
 import pytest
 
@@ -17,7 +10,7 @@ def test_the_solana_cli_is_reachable_under_the_name_a_run_selects_it_by():
     assert import_prover_entry("solana").__name__ == "run_solana_prover"
 
 
-def test_the_evm_cli_is_the_one_it_always_was():
+def test_the_evm_cli_is_reachable_under_its_own_name():
     assert import_prover_entry("evm").__name__ == "run_certora"
 
 
@@ -28,8 +21,7 @@ def test_a_run_defaults_to_the_evm_prover():
 
 
 def test_an_unknown_prover_app_is_named_at_the_process_boundary():
-    """The wrapper reads the app out of its own ``argv``, which is the one place an unchecked
-    string arrives. A message that does not repeat the bad name leaves the reader guessing which
-    of the arguments was wrong."""
+    """The wrapper's ``argv`` is the one place an unchecked app name arrives, and a message that
+    does not repeat it leaves the reader guessing which argument was wrong."""
     with pytest.raises(CertoraEnvironmentError, match="solanna"):
         prover_app("solanna")
