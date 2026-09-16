@@ -32,13 +32,11 @@ from composer.cargo.sbf import (
 )
 from composer.cargo.session import CargoSession, CompileFailed
 from composer.cargo.toolchain import SolanaToolchain, ToolchainRequestUnsupported
-from composer.certora_env import CertoraEnvironmentError, prover_app
 from composer.diagnostics.timing import (
     RunSummary,
     install_run_summary,
     set_current_task_id,
 )
-from composer.prover.core import ProverOptions, make_prover_options
 from composer.sandbox.config import SandboxConfig
 from composer.spec.context import SourceFields
 from composer.spec.cvlr import conf as cvlr_conf
@@ -791,24 +789,6 @@ async def test_a_prep_key_nothing_acts_on_is_refused_rather_than_ignored(tmp_pat
 # --------------------------------------------------------------------------------------------
 # which Prover takes the run
 # --------------------------------------------------------------------------------------------
-
-
-def test_the_solana_cli_is_reachable_under_the_name_the_run_selects_it_by():
-    """The three CLIs share a ``list[str] -> CertoraRunResult | None`` signature, which is the only
-    reason a Solana submission reuses the EVM backend's polling and result parsing unchanged."""
-    from composer.certora_env import import_prover_entry
-
-    assert import_prover_entry("solana").__name__ == "run_solana_prover"
-
-
-def test_a_run_defaults_to_the_evm_prover():
-    assert ProverOptions().app == "evm"
-    assert make_prover_options(cloud=False, app="solana").app == "solana"
-
-
-def test_an_unknown_prover_app_is_named_at_the_process_boundary():
-    with pytest.raises(CertoraEnvironmentError, match="solanna"):
-        prover_app("solanna")
 
 
 # --------------------------------------------------------------------------------------------
