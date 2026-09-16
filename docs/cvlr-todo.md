@@ -57,18 +57,31 @@ leaves open are five decisions it cannot make on its own — the duplicate retry
 tape belongs in the repository, when the graphcore pin moves, the order against the open findings
 PR, and whether any of wave 1 changes EVM behaviour.
 
-**U6. Two unreconciled approaches to producing RAG content.**
+**U6. The published-docs half is decided; the rest of the corpus is not.**
 The CVLR corpus is produced outside this repo, in the private
 [certora-cvlr-kb](https://github.com/Certora/certora-cvlr-kb), by three producers that emit a
 self-describing `<kb>.rag.json` and hand it to the generic importer — a deliberate producer/importer
 split, argued for in [rag-import-format.md](./rag-import-format.md) §6-7. CVL content is produced two
 other ways: in-tree by [ragbuild.py](../composer/scripts/ragbuild.py), which parses sphinx HTML and
-writes the DB itself, and separately by [certorag](https://github.com/Certora/certorag). Nobody has
-decided how these relate. The questions are whether certorag adopts the manifest-and-importer split
-(which would make the CVLR repo an instance of one pattern rather than a fork of the idea), whether
-the CVLR corpus should live in certorag instead of its own repo, and — if they stay apart — what the
-boundary between them actually is. Left alone, every new corpus picks one of three precedents by
-accident.
+writes the DB itself, and separately by [certorag](https://github.com/Certora/certorag).
+
+**Decided: the Solana Prover manual is generated here, as it already is.**
+[gen_docs.sh](../scripts/gen_docs.sh) has always built `solana.html` alongside `cvl.html` — four
+manuals, of which one is published — so the documentation half of the corpus needs no producer
+anywhere else. `certora-cvlr-kb` drops `tools/docs_manifest.py` and `cvlr-docs.rag.json`, and the
+docs half is ingested in-tree, which `ragbuild` can already do: it and `rag_import` write through
+the same two database calls, so pointing `ragbuild` at the `cvlr_kb` connection needs no new code.
+This reverses half of [the backend plan](./cvlr-backend-plan.md) §7.3.3, and the reason that section
+gave is the cost to watch: three manifests built in three places can be three vintages, and the
+corpus carries one tag that hides the seam. The `PROVENANCE` stamp beside the built HTML is what
+answers that for the half now built here.
+
+**Still open: the other two manifests.** The crate reference and the project-derived practice
+corpus are genuinely expensive to build — an API key, cargo, a model — and nothing about this
+decision says where they belong. Nor does it say how any of it relates to `certorag`. The remaining
+questions are whether that generator adopts the manifest-and-importer split, whether what is left of
+the CVLR corpus belongs in it rather than its own repo, and — if they stay apart — what the boundary
+is.
 
 **U7. A partial tree-view fetch reports itself as complete.**
 POU's `fetch_job_treeview` downloads each output file in a thread pool and *swallows* per-file
