@@ -115,8 +115,9 @@ def test_account_setup_is_elided_rather_than_dropped():
 
 
 def test_allocator_frames_are_matched_by_name_not_by_the_value_they_hold():
-    """``__rust_alloc: '0x300000498'`` is one frame per allocation, all with different text. A shape
-    that matched whole messages would drop none of them."""
+    """Every allocation is its own frame, but the prover keeps the address in ``arguments`` and
+    emits the same ``__rust_alloc: '{0}'`` template for all 33 of them. A shape naming that template
+    drops the lot; one naming a rendered ``__rust_alloc: '0x300000498'`` would drop none."""
     assert "__rust_alloc" not in _rendered(_assertion_failed_dump(), SOLANA_TRACE)
 
 

@@ -50,9 +50,30 @@ class SarifArgs(BaseModel):
     # ignoring the other fields
 
 
+#: The prover writes a frame's message as a format template: literal text with ``'{n}'`` standing in
+#: for the n-th of ``arguments`` (``report/calltrace/sarif/Sarif.kt`` in EVMVerifier, whose
+#: ``toString`` emits exactly this quoted, zero-based form).
+_PLACEHOLDER = re.compile(r"'\{(\d+)\}'")
+
+
 class MessageModel(BaseModel):
     text: str
     arguments: list[SarifArgs]
+
+    @property
+    def frame(self) -> str:
+        """This message's identity, shared by every frame the prover emits from the same site.
+
+        A counterexample's values live in ``arguments``, never in ``text``, so the template already
+        *is* the identity: all 33 ``__rust_alloc`` frames of one measured trace carry the same
+        ``text`` and differ only in the argument they took."""
+        return _PLACEHOLDER.sub("{}", self.text)
+
+    def render(self) -> str:
+        """The template with this counterexample's values substituted for its placeholders."""
+        return _PLACEHOLDER.sub(
+            lambda placeholder: f"'{self.arguments[int(placeholder.group(1))].value}'", self.text
+        )
 
 
 class CallTraceModel(BaseModel):
@@ -64,9 +85,11 @@ class CallTraceModel(BaseModel):
 class TraceShape:
     """Which call-trace frames a chain's counterexamples are worth rendering.
 
-    Frames are matched by :func:`_frame_name`. ``dropped`` removes a frame *and everything under
-    it*, which is only safe where nothing interesting can nest inside it — a per-chain fact, see
-    :data:`SOLANA_TRACE`. ``elided`` keeps the frame and replaces its subtree with a count.
+    Frames are named by :attr:`MessageModel.frame`, so a value-bearing frame is written the way the
+    prover's format string writes it, with ``{}`` where its value goes. ``dropped`` removes a frame
+    *and everything under it*, which is only safe where nothing interesting can nest inside it — a
+    per-chain fact, see :data:`SOLANA_TRACE`. ``elided`` keeps the frame and replaces its subtree
+    with a count.
     """
 
     dropped: frozenset[str] = frozenset()
@@ -94,7 +117,7 @@ EVM_TRACE = TraceShape(
 #: loop got under ``unknown loop source code``, so dropping that frame renders a trace that states
 #: no failure at all.
 SOLANA_TRACE = TraceShape(
-    dropped=_GENERIC_NOISE | {"__rust_alloc", "CVT_alloc_slice"},
+    dropped=_GENERIC_NOISE | {"__rust_alloc: {}", "CVT_alloc_slice: {}"},
     elided=frozenset({"cvlr_solana::layout::cvlr_deserialize_nondet_accounts(...)"}),
 )
 
@@ -299,23 +322,6 @@ def read_and_format_run_result(s: Path, app: ProverApp) -> dict[str, RuleResult]
         to_ret[r.name] = r
     return to_ret
 
-def _rendered_message(m: MessageModel) -> str:
-    """The frame's message with this counterexample's values substituted into it."""
-    text = m.text
-    for i, arg in enumerate(m.arguments):
-        text = text.replace(f"{{{i}}}", arg.value)
-    return text
-
-
-def _frame_name(text: str) -> str:
-    """A frame's identity, with whatever value it held stripped off.
-
-    The prover formats a value-bearing frame as ``name: '{0}'`` — the name is the frame, the
-    argument is the value it took in this counterexample. Matching a :class:`TraceShape` against the
-    whole text would make every single allocation its own frame."""
-    head, sep, _ = text.partition(": '")
-    return head if sep else text
-
 
 def _descendants(node: CallTraceModel) -> int:
     return sum(1 + _descendants(c) for c in node.childrenList)
@@ -326,15 +332,15 @@ def calltrace_to_xml(node: CallTraceModel, shape: TraceShape) -> str:
 
     ``shape`` is deliberately not defaulted: a default silently renders a trace with the wrong
     chain's shape."""
-    xml_parts = [f"<message>{_rendered_message(node.message)}</message>"]
+    xml_parts = [f"<message>{node.message.render()}</message>"]
 
     for child in node.childrenList:
-        name = _frame_name(child.message.text)
-        if name in shape.dropped:
+        frame = child.message.frame
+        if frame in shape.dropped:
             continue
-        if name in shape.elided:
+        if frame in shape.elided:
             xml_parts.append(
-                f"<child><message>{_rendered_message(child.message)}</message>"
+                f"<child><message>{child.message.render()}</message>"
                 f"<elided>{_descendants(child)} frames of setup</elided></child>"
             )
             continue
