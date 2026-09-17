@@ -414,7 +414,7 @@ async def _run_codegen(
     # The prover tool's per-run deps, built here so _codegen_author_tools can bind them.
     prover_deps = ProverDeps(
         cex_handler=cex_handler,
-        prover_opts=make_prover_options(cloud=not workflow_options.local_prover),
+        prover_opts=make_prover_options(cloud=not workflow_options.local_prover, app="evm"),
         keep_folder=workflow_options.prover_keep_folders,
     )
 

@@ -25,7 +25,7 @@ import sys
 import tempfile
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Protocol, cast, override, Awaitable
 from abc import ABC, abstractmethod
@@ -56,61 +56,46 @@ from composer.prover.prover_protocol import ProverResult
 _logger = logging.getLogger(__name__)
 
 
-DEFAULT_GLOBAL_TIMEOUT: float = 7200.0
+#: How long we wait on a run the Prover was given no budget of its own, before concluding it is
+#: wedged. Ours, not the Prover's: it never reaches the CLI.
+DEFAULT_GLOBAL_TIMEOUT: int = 7200
 
 
 @dataclass(frozen=True)
-class LocalRun:
-    """The run is verified by a prover on this machine, and is bounded only by our own patience:
-    no ``--global_timeout`` reaches the CLI, and :data:`DEFAULT_GLOBAL_TIMEOUT` serves as the
-    subprocess backstop."""
-
-
-@dataclass(frozen=True)
-class CloudRun:
-    """The run is submitted to ``server``, which enforces ``global_timeout`` itself.
-
-    The two travel together because that is the only shape the CLI accepts: a timeout is
-    meaningless without a server to enforce it, and our own subprocess and polling budgets are
-    derived from the same number."""
-
-    server: str
-    #: Seconds, as the CLI flag and ``AUTOPROVER_GLOBAL_PROVER_TIMEOUT`` both spell it.
-    global_timeout: int
-
-
-type RunTarget = LocalRun | CloudRun
-
-
-@dataclass
 class ProverOptions:
     #: Which Prover CLI takes this run — the one place a run differs by chain. Everything
     #: downstream of submission (cloud polling, the treeView parse, the verdict roll-up) is
-    #: chain-neutral.
-    app: ProverApp = "evm"
-    #: Where the run is verified, which is the only thing that puts arguments on the CLI.
-    target: RunTarget = field(default_factory=LocalRun)
+    #: chain-neutral. Not defaulted: it must match the ecosystem the spec was written for, and
+    #: a default would silently build a Rust project with the Solidity front end.
+    app: ProverApp
+    #: ``certoraRun --server``, or ``None`` when the prover runs on this machine — which the
+    #: environment decides, not the command line, so a local run simply names no server.
+    server: str | None = None
+    #: Seconds, as the CLI flag and ``AUTOPROVER_GLOBAL_PROVER_TIMEOUT`` both spell it, or
+    #: ``None`` to let the run go unbounded. Independent of ``server``: the Prover enforces this
+    #: itself (``-userGlobalTimeout``) wherever the run executes, so a local run may carry one
+    #: too — we just don't impose one by default.
+    global_timeout: int | None = None
 
     @property
     def cloud(self) -> bool:
-        return isinstance(self.target, CloudRun)
+        return self.server is not None
 
     @property
-    def global_timeout(self) -> float:
-        """What the run is allowed to take, which our subprocess and poll budgets extend."""
-        match self.target:
-            case CloudRun(global_timeout=seconds):
-                return float(seconds)
-            case LocalRun():
-                return DEFAULT_GLOBAL_TIMEOUT
+    def runtime_bound(self) -> int:
+        """How long the run may take before we treat it as wedged: the budget the Prover was
+        given, or our own patience when it was given none. Our subprocess and polling backstops
+        extend this, never the other way round."""
+        return DEFAULT_GLOBAL_TIMEOUT if self.global_timeout is None else self.global_timeout
 
     def cli_args(self) -> list[str]:
-        """The arguments the target contributes to the CLI invocation."""
-        match self.target:
-            case CloudRun(server=server, global_timeout=seconds):
-                return ["--global_timeout", str(seconds), "--server", server]
-            case LocalRun():
-                return []
+        """The arguments these options contribute to the CLI invocation."""
+        args: list[str] = []
+        if self.global_timeout is not None:
+            args += ["--global_timeout", str(self.global_timeout)]
+        if self.server is not None:
+            args += ["--server", self.server]
+        return args
 
 
 GLOBAL_PROVER_TIMEOUT_ENV = "AUTOPROVER_GLOBAL_PROVER_TIMEOUT"
@@ -120,7 +105,7 @@ def _resolved_global_prover_timeout() -> int:
     """Global prover timeout in seconds: ``DEFAULT_GLOBAL_TIMEOUT``, or the integer value of
     ``AUTOPROVER_GLOBAL_PROVER_TIMEOUT`` when that env var is set. A non-integer env value is
     ignored with a warning."""
-    default = int(DEFAULT_GLOBAL_TIMEOUT)
+    default = DEFAULT_GLOBAL_TIMEOUT
     raw = os.environ.get(GLOBAL_PROVER_TIMEOUT_ENV)
     if raw is None:
         return default
@@ -131,16 +116,17 @@ def _resolved_global_prover_timeout() -> int:
         return default
 
 
-def make_prover_options(*, cloud: bool, app: ProverApp = "evm") -> ProverOptions:
-    """Build prover options. Cloud runs get a global prover timeout and the
-    certoraRun ``--server`` resolved from the deployment env."""
-    target: RunTarget = LocalRun()
-    if cloud:
-        target = CloudRun(
-            server=cloud_server_for_env(),
-            global_timeout=_resolved_global_prover_timeout(),
-        )
-    return ProverOptions(app=app, target=target)
+def make_prover_options(*, cloud: bool, app: ProverApp) -> ProverOptions:
+    """Build prover options from the deployment env. A cloud run gets the certoraRun ``--server``
+    to submit to and a global prover timeout to go with it; a local run is left unbounded, as it
+    always has been, and falls back on our own patience."""
+    if not cloud:
+        return ProverOptions(app=app)
+    return ProverOptions(
+        app=app,
+        server=cloud_server_for_env(),
+        global_timeout=_resolved_global_prover_timeout(),
+    )
 
 
 @dataclass
@@ -660,7 +646,7 @@ async def run_prover(
         str — error message
     """
 
-    # 1. Build effective args. Only the run target contributes any.
+    # 1. Build effective args.
     effective_args = args + prover_opts.cli_args()
     # On the cloud path we poll for results ourselves (step 7), so certoraRun must submit and return
     # the link rather than block on the verdict. certoraRun force-enables wait_for_results when it
@@ -678,7 +664,7 @@ async def run_prover(
     # The same bound the result poller uses (step 7): whatever the run is allowed
     # to take, plus slack. It is a backstop against a wedged local phase, not a
     # budget -- a healthy cloud submit finishes in minutes.
-    subprocess_timeout = prover_opts.global_timeout + 5 * 60
+    subprocess_timeout = prover_opts.runtime_bound + 5 * 60
     try:
         run_result, stdout = await run_prover_inner(
             folder,
@@ -719,7 +705,7 @@ async def run_prover(
         results_cm = cloud_results(
             run_result["link"],
             poll_callback=callbacks.on_cloud_poll,
-            poll_timeout=prover_opts.global_timeout + 5 * 60,
+            poll_timeout=prover_opts.runtime_bound + 5 * 60,
         )
     else:
         if not run_result["is_local_link"]:
