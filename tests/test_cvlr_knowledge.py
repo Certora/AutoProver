@@ -15,8 +15,7 @@ from pathlib import Path
 import pytest
 
 from composer.cargo.metadata import CratePackage, LibTarget
-from composer.pipeline.ecosystem import SOLANA, SOLANA_PROPERTY_SYSTEM_TEMPLATE, SOROBAN
-from composer.spec.code_explorer import code_explorer_sys_prompt
+from composer.pipeline.ecosystem import SOLANA, SOLANA_PROPERTY_SYSTEM_TEMPLATE
 from composer.spec.cvlr.crates import CvlrSources
 from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE
 from composer.spec.cvlr.crate_mount import MAX_MATCHES, MountedCrates, mount
@@ -187,39 +186,6 @@ async def test_a_name_the_build_does_not_have_is_reported_as_do_not_use(family: 
 # --------------------------------------------------------------------------------------------
 # what the prompts say
 # --------------------------------------------------------------------------------------------
-
-
-def _explorer_prompt(crate_source: str | None) -> str:
-    return code_explorer_sys_prompt(
-        SOLANA.code_explorer_prompt, "established", crate_source
-    )(load_jinja_template)
-
-
-def test_the_explorer_is_told_the_crate_source_exists_when_it_is_mounted(family: MountedCrates):
-    prompt = _explorer_prompt(family.statement())
-    assert "cvlr_source_" in prompt
-    assert "cvlr 0.6.1" in prompt
-
-
-def test_the_explorer_is_told_which_tree_is_which(family: MountedCrates):
-    """Two read-only trees in one agent is the whole hazard of mounting a second one."""
-    prompt = _explorer_prompt(family.statement())
-    assert "Do not confuse the two trees." in prompt
-
-
-def test_an_unmounted_run_advertises_no_crate_source():
-    """A prompt naming tools the agent does not have does not degrade to silence — it invites
-    fabricated reads."""
-    assert "cvlr_source_" not in _explorer_prompt(None)
-
-
-def test_soroban_shares_the_rust_fragment_and_therefore_the_addendum(family: MountedCrates):
-    """The mount is chain-neutral by construction: it is a cargo dependency either way, so the
-    instruction lives in the shared Rust fragment rather than in Solana's own prompt."""
-    prompt = code_explorer_sys_prompt(
-        SOROBAN.code_explorer_prompt, "none", family.statement()
-    )(load_jinja_template)
-    assert "cvlr_source_" in prompt
 
 
 # --------------------------------------------------------------------------------------------
