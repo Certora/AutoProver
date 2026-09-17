@@ -1,14 +1,13 @@
-"""Tests for rules striping: satisfying a spec's rules piecemeal across several
-``verify_spec`` calls (rule-scoped includes and excludes) instead of one full run.
+"""Tests for coverage accrual across spec buffers: each run-target buffer is verified whole, and
+the task completes once every buffer carries a fresh prover stamp.
 
 Covers:
 
-- the pure helpers — which rules a logged run executed (``_executed_rules``) and
-  whether the run history against the current authoring state adds up to full
-  coverage (``_is_completion_history``);
-- the ``verify_spec`` tool surface — include/exclude plumbing into the conf, the
-  ``ProverRunLog`` entries, and completion (validation stamp + reminder) arriving
-  on whichever run completes coverage, however it was scoped;
+- the pure helpers — which rules a logged run executed (``_executed_rules``) and whether the run
+  history against the current authoring state adds up to full coverage (``_is_completion_history``);
+- the buffer prover surface — ``submit_buffer`` / ``collect_results`` logging ``ProverRunLog``
+  entries and stamping per-buffer completion, so coverage accrues across buffers and the completion
+  reminder arrives once the last run-target buffer verifies;
 - ``declared_rules_list``, with its certoraRun/typechecker subprocesses faked;
 - the ``known_rules`` cross-check of ``validate_property_rules``.
 
@@ -18,31 +17,26 @@ The prover core is mocked throughout (the ``certora_prover`` fixture's seams:
 import asyncio
 import json
 from pathlib import Path
-from typing import Annotated
 
 import pytest
 
-from langchain_core.tools import InjectedToolCallId, tool
-from langgraph.types import Command
-
-from composer.authoring.state import check_completion, spec_digest
 from composer.prover.core import (
     ProverReport, SpecCompilationError, declared_rules_list
 )
 from composer.prover.ptypes import RulePath, StatusCodes
 from composer.spec.cvl_generation import PropertyRuleMapping, validate_property_rules
 from composer.spec.source.author import ExpectRuleFailure
+from composer.spec.source.buffer_tools import put_buffer
 from composer.spec.source.prover import (
     NagMarker, ProverHistoryItem, ProverRunLog, RuleSelection, StateWithSkips,
     VALIDATION_KEY, _executed_rules, _is_completion_history,
 )
+from composer.spec.source.spec_buffers import NamedBuffer, check_buffer_completion
 from composer.spec.types import PropertyTitle, RuleName
 
-from graphcore.graph import tool_state_update
 from graphcore.testing import Scenario, ToolCallDict, tool_call_raw
-from graphcore.tools.results import result_tool_generator
 
-from .conftest import ProverMock, ProverToolResponse
+from .conftest import ProverMock
 
 RA = RulePath(rule="a")
 RB = RulePath(rule="b")
@@ -329,35 +323,34 @@ class TestDeclaredRulesList:
 
 
 # =========================================================================
-# verify_spec: striped runs through the tool surface
+# Coverage accrual across buffers: submit_buffer / collect_results
 # =========================================================================
 
-_PROVER = "verify_spec"
 _SKIP = "expect_rule_failure"
-_RESULT = "result"
 
 
-result_tool = result_tool_generator(
-    "result",
-    (str, "Commentary"),
-    "Signal completion",
-    validator=(StateWithSkips, lambda st, *_: check_completion(st)),
-)
+@pytest.fixture(autouse=True)
+def _accept_cvl(monkeypatch):
+    """put_buffer validates writes by shelling out to the real CVL typechecker jar, which is absent
+    in unit-test CI. These tests exercise the async submit/collect flow, not CVL parsing, so accept
+    all writes."""
+    monkeypatch.setattr(
+        "composer.spec.source.buffer_tools.cvl_syntax_error", lambda *a, **k: None
+    )
 
 
-@tool
-def set_spec(
-    spec: str,
-    tool_call_id: Annotated[str, InjectedToolCallId],
-) -> Command:
-    """Replace the spec under authoring (a digest-changing edit)."""
-    return tool_state_update(tool_call_id=tool_call_id, content="spec updated", curr_spec=spec)
-
-
-def _spec_decls(*rules: str) -> str:
-    """A spec declaring exactly ``rules`` — the mocked ``declared_rules_list``
+def _buf(name: str, *rules: str) -> NamedBuffer:
+    """A run-target buffer declaring and owning exactly ``rules``; the mocked ``declared_rules_list``
     parses these declarations back out as the run's declared-rules ground truth."""
-    return "\n".join(f"rule {r} {{ assert true; }}" for r in rules)
+    cvl = "".join(f"rule {r} {{ assert true; }}\n" for r in rules)
+    return NamedBuffer(
+        name=name, cvl=cvl,
+        property_rules={f"P-{name}": list(rules)} if rules else {},
+    )
+
+
+def _buffers(**named: NamedBuffer) -> dict[str, NamedBuffer]:
+    return dict(named)
 
 
 def _report(**rule_status: bool) -> ProverReport:
@@ -372,18 +365,18 @@ def _report(**rule_status: bool) -> ProverReport:
     )
 
 
-def _verify(
-    rules: list[str] | None = None, exclude_rules: list[str] | None = None
-) -> ToolCallDict:
-    return tool_call_raw(_PROVER, rules=rules, exclude_rules=exclude_rules)
+def _submit(name: str) -> ToolCallDict:
+    # `name` is also tool_call_raw's first positional, so build the ToolCallDict directly.
+    return {"name": "submit_buffer", "args": {"name": name}}
 
 
-def _result(commentary: str) -> ToolCallDict:
-    return tool_call_raw(_RESULT, value=commentary)
+def _collect(wait: bool = False) -> ToolCallDict:
+    return tool_call_raw("collect_results", wait=wait)
 
 
-def _set_spec(spec: str) -> ToolCallDict:
-    return tool_call_raw("set_spec", spec=spec)
+def _put(name: str, cvl: str) -> ToolCallDict:
+    return {"name": "put_buffer", "args": {"name": name, "cvl": cvl,
+                                           "property_rules": {}, "imports": [], "is_run_target": True}}
 
 
 def _skip(rule_name: str, reason: str) -> ToolCallDict:
@@ -392,18 +385,21 @@ def _skip(rule_name: str, reason: str) -> ToolCallDict:
 
 def _scenario(
     certora_prover: ProverMock,
-    *responses: ProverToolResponse,
-    curr_spec: str,
+    buffers: dict[str, NamedBuffer],
+    *,
     rule_skips: dict[str, str] | None = None,
+    **responses: ProverReport | str,
 ):
+    """A scenario over the buffer prover tools plus put_buffer and the skip tool. ``responses`` maps
+    a buffer name to the report (or error string) its background job returns."""
     tools = [
-        certora_prover(responses),
+        *certora_prover.buffers(dict(responses)),
+        put_buffer(StateWithSkips),
         ExpectRuleFailure.as_tool(_SKIP),
-        result_tool,
-        set_spec,
     ]
     return Scenario(StateWithSkips, *tools).init(
-        curr_spec=curr_spec,
+        curr_spec=None,
+        buffers=buffers,
         skipped=[],
         property_rules=[],
         validations={},
@@ -415,26 +411,28 @@ def _scenario(
     )
 
 
-def _result_accepted(st: StateWithSkips) -> str:
-    assert "result" in st
-    return st["result"]
+def _prover_complete(st: StateWithSkips) -> str | None:
+    """None once every run-target buffer carries a prover stamp at its current digest."""
+    return check_buffer_completion(
+        st["buffers"], st["validations"], ["prover"], skipped=[], version_history=[]
+    )
 
 
-def _is_result_rejection(st: StateWithSkips) -> bool:
-    return "result" not in st and Scenario.last_single_tool(
-        _RESULT, st
-    ).startswith("Completion REJECTED:")
+# Dropped from the striping suite: test_rules_and_exclude_rules_mutually_exclusive,
+# test_include_selection_reaches_conf_and_history, and test_exclude_selection_reaches_conf_and_history
+# tested the removed single-run rule-scoping surface (verify_spec's include/exclude args plumbed into
+# one conf). A buffer is verified whole, so there is no include/exclude arg to plumb; the surviving
+# "a run reaches prover_history" intent is kept below as test_buffer_run_is_logged_in_history.
 
 
 @pytest.mark.asyncio
-class TestStripedVerification:
-    async def test_a_spec_that_does_not_compile_comes_back_to_the_agent(
+class TestBufferCoverage:
+    async def test_a_buffer_that_does_not_compile_comes_back_to_the_agent(
         self, certora_prover: ProverMock, monkeypatch
     ):
-        """The rule-listing pre-pass runs the compiler before the prover. A spec that
-        fails to compile is the author agent's to fix and the compiler says exactly
-        where, so it has to arrive as a tool result — raising past the agent ends the
-        whole run over a repairable mistake."""
+        """The rule-listing pre-pass runs the compiler before the prover. A buffer that fails to
+        compile is the author agent's to fix and the compiler says exactly where, so it has to arrive
+        as a collect_results tool result rather than sinking the whole run over a repairable mistake."""
         async def failing(**_kwargs):
             raise SpecCompilationError(
                 'Error in spec file (invariants.spec:34:5): could not type '
@@ -446,126 +444,106 @@ class TestStripedVerification:
             "composer.spec.source.prover.declared_rules_list", failing
         )
         msg = await _scenario(
-            certora_prover, curr_spec=_spec_decls("a", "b"),
-        ).turn(
-            _verify()
-        ).run_last_single_tool(_PROVER)
+            certora_prover, _buffers(b=_buf("b", "a", "b")),
+        ).turns(
+            _submit("b"), _collect(wait=True),
+        ).run_last_single_tool("collect_results")
         assert "failed to compile" in msg
         assert "invariants.spec:34:5" in msg
         assert "non-envfree" in msg
         # The prover is never reached — there is nothing to verify.
         assert certora_prover.calls == []
 
-
-    async def test_rules_and_exclude_rules_mutually_exclusive(self, certora_prover: ProverMock):
-        msg = await _scenario(
-            certora_prover, curr_spec=_spec_decls("a", "b"),
-        ).turn(
-            _verify(rules=["a"], exclude_rules=["b"])
-        ).run_last_single_tool(_PROVER)
-        assert "both" in msg
-        assert certora_prover.calls == []
-
-    async def test_include_selection_reaches_conf_and_history(self, certora_prover: ProverMock):
-        spec = _spec_decls("a", "b")
+    async def test_buffer_run_is_logged_in_history(self, certora_prover: ProverMock):
+        # A whole-buffer run is logged in prover_history against the buffer's current state, with its
+        # declared rules and results — the buffer analogue of the old include/exclude conf-history check
+        # (rules is None because a buffer is verified whole, not rule-scoped).
         history = await _scenario(
-            certora_prover, _report(a=True), curr_spec=spec,
-        ).turn(
-            _verify(rules=["a"])
+            certora_prover, _buffers(b=_buf("b", "a", "b")),
+            b=_report(a=True, b=True),
+        ).turns(
+            _submit("b"), _collect(wait=True),
         ).map_run(lambda st: st["prover_history"])
-        [entry] = history
-        assert entry["sort"] == "run"
-        assert entry["rules"] == {"sort": "include", "selector": ["a"]}
-        assert entry["declared_rules"] == ["a", "b"]
-        assert entry["state_digest"] == spec_digest(spec, [], [])
-        [call] = certora_prover.calls
-        assert call.conf["rule"] == ["a"]
-        assert "exclude_rule" not in call.conf
+        [entry] = [h for h in history if h["sort"] == "run"]
+        assert entry["buffer"] == "b"
+        assert entry["rules"] is None
+        assert sorted(entry["declared_rules"]) == ["a", "b"]
+        assert (RulePath(rule="a"), "VERIFIED") in entry["prover_results"]
 
-    async def test_exclude_selection_reaches_conf_and_history(self, certora_prover: ProverMock):
-        history = await _scenario(
-            certora_prover, _report(a=True), curr_spec=_spec_decls("a", "b"),
-        ).turn(
-            _verify(exclude_rules=["b"])
-        ).map_run(lambda st: st["prover_history"])
-        [entry] = history
-        assert entry["sort"] == "run"
-        assert entry["rules"] == {"sort": "exclude", "selector": ["b"]}
-        [call] = certora_prover.calls
-        assert call.conf["exclude_rule"] == ["b"]
-        assert "rule" not in call.conf
-
-    async def test_piecemeal_completion_stamps(self, certora_prover: ProverMock):
-        # The whole point of striping: two rule-scoped runs that together cover the
-        # spec complete the task, no full run required.
-        assert await _scenario(
-            certora_prover, _report(a=True), _report(b=True),
-            curr_spec=_spec_decls("a", "b"),
+    async def test_all_buffers_verified_completes(self, certora_prover: ProverMock):
+        # Coverage accrues across buffers: two run-target buffers, each verified whole, together
+        # complete the task — no single full run required.
+        st = await _scenario(
+            certora_prover, _buffers(b1=_buf("b1", "a"), b2=_buf("b2", "b")),
+            b1=_report(a=True), b2=_report(b=True),
         ).turns(
-            _verify(rules=["a"]),
-            _verify(rules=["b"]),
-            _result("done"),
-        ).map_run(_result_accepted) == "done"
+            _submit("b1"), _submit("b2"), _collect(wait=True), _collect(wait=True),
+        ).run()
+        assert _prover_complete(st) is None
 
-    async def test_exclude_run_alone_doesnt_complete(self, certora_prover: ProverMock):
-        assert await _scenario(
-            certora_prover, _report(a=True), curr_spec=_spec_decls("a", "b"),
+    async def test_one_unverified_buffer_blocks_completion(self, certora_prover: ProverMock):
+        # One run-target buffer verified, the other never submitted → coverage is partial.
+        st = await _scenario(
+            certora_prover, _buffers(b1=_buf("b1", "a"), b2=_buf("b2", "b")),
+            b1=_report(a=True),
         ).turns(
-            _verify(exclude_rules=["b"]),
-            _result("done"),
-        ).map_run(_is_result_rejection)
+            _submit("b1"), _collect(wait=True),
+        ).run()
+        assert _prover_complete(st) is not None
 
-    async def test_exclude_then_include_completes(self, certora_prover: ProverMock):
-        assert await _scenario(
-            certora_prover, _report(a=True, b=True), _report(c=True),
-            curr_spec=_spec_decls("a", "b", "c"),
+    async def test_coverage_accrues_across_separate_collect_rounds(self, certora_prover: ProverMock):
+        # The buffers are verified in separate submit/collect rounds; completion arrives on the round
+        # that verifies the last run-target buffer.
+        st = await _scenario(
+            certora_prover, _buffers(b1=_buf("b1", "a"), b2=_buf("b2", "b")),
+            b1=_report(a=True), b2=_report(b=True),
         ).turns(
-            _verify(exclude_rules=["c"]),
-            _verify(rules=["c"]),
-            _result("done"),
-        ).map_run(_result_accepted) == "done"
+            _submit("b1"), _collect(wait=True),
+            _submit("b2"), _collect(wait=True),
+        ).run()
+        assert _prover_complete(st) is None
 
-    async def test_spec_edit_resets_piecemeal_coverage(self, certora_prover: ProverMock):
-        spec_v1 = _spec_decls("a", "b")
-        spec_v2 = spec_v1 + "\n// tightened"
-        assert await _scenario(
-            certora_prover, _report(a=True), _report(b=True), curr_spec=spec_v1,
+    async def test_editing_a_buffer_resets_its_coverage(self, certora_prover: ProverMock):
+        # Both buffers verify, then editing b1 changes its digest, so its prover stamp goes stale and
+        # overall completion is withdrawn until b1 is re-verified.
+        st = await _scenario(
+            certora_prover, _buffers(b1=_buf("b1", "a"), b2=_buf("b2", "b")),
+            b1=_report(a=True), b2=_report(b=True),
         ).turns(
-            _verify(rules=["a"]),
-            _set_spec(spec_v2),
-            _verify(rules=["b"]),
-            _result("done"),
-        ).map_run(_is_result_rejection)
+            _submit("b1"), _submit("b2"), _collect(wait=True), _collect(wait=True),
+            _put("b1", "rule a { assert true; }\n// tightened\n"),
+        ).run()
+        assert _prover_complete(st) is not None
 
     async def test_skipped_rule_failure_counts_toward_coverage(self, certora_prover: ProverMock):
-        assert await _scenario(
-            certora_prover, _report(a=True), _report(b=False),
-            curr_spec=_spec_decls("a", "b"),
+        # b2's rule fails but is skipped, so its buffer still completes and coverage is met across both.
+        st = await _scenario(
+            certora_prover, _buffers(b1=_buf("b1", "a"), b2=_buf("b2", "b")),
+            b1=_report(a=True), b2=_report(b=False),
         ).turn(
             _skip("b", "known limitation"),
         ).turns(
-            _verify(rules=["a"]),
-            _verify(rules=["b"]),
-            _result("done"),
-        ).map_run(_result_accepted) == "done"
+            _submit("b1"), _submit("b2"), _collect(wait=True), _collect(wait=True),
+        ).run()
+        assert _prover_complete(st) is None
 
-    async def test_completion_reminder_delivered_on_completing_run(self, certora_prover: ProverMock):
+    async def test_completion_reminder_delivered_once_all_buffers_verify(self, certora_prover: ProverMock):
         reminders = await _scenario(
-            certora_prover, _report(a=True), _report(b=True),
-            curr_spec=_spec_decls("a", "b"),
+            certora_prover, _buffers(b1=_buf("b1", "a"), b2=_buf("b2", "b")),
+            b1=_report(a=True), b2=_report(b=True),
         ).turns(
-            _verify(rules=["a"]),
-            _verify(rules=["b"]),
+            _submit("b1"), _submit("b2"), _collect(wait=True), _collect(wait=True),
         ).map_run(lambda st: st["reminders_channel"])
-        assert any("task is completed" in r for r in reminders)
+        assert any("verified at its current content" in r for r in reminders)
 
     async def test_no_completion_reminder_while_coverage_is_partial(self, certora_prover: ProverMock):
         reminders = await _scenario(
-            certora_prover, _report(a=True), curr_spec=_spec_decls("a", "b"),
-        ).turn(
-            _verify(rules=["a"]),
+            certora_prover, _buffers(b1=_buf("b1", "a"), b2=_buf("b2", "b")),
+            b1=_report(a=True),
+        ).turns(
+            _submit("b1"), _collect(wait=True),
         ).map_run(lambda st: st["reminders_channel"])
-        assert reminders == []
+        assert not any("verified at its current content" in r for r in reminders)
 
 
 # =========================================================================

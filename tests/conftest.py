@@ -16,6 +16,7 @@ from pathlib import Path
 os.environ.setdefault("ANTHROPIC_API_KEY", "dummy-key-for-tests")
 from typing import Any, AsyncIterator, Iterator, Callable, Iterable, TYPE_CHECKING, Sequence
 from contextlib import asynccontextmanager
+import dataclasses
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
@@ -382,12 +383,19 @@ class ProverMock:
         self,
         bind: Callable[[Iterable[ProverToolResponse]], BaseTool],
         calls: list[ProverCall],
+        bind_buffers: Callable[[dict[str, ProverToolResponse]], list[BaseTool]],
     ) -> None:
         self._bind = bind
         self.calls = calls
+        self._bind_buffers = bind_buffers
 
     def __call__(self, l: Iterable[ProverToolResponse]) -> BaseTool:
         return self._bind(l)
+
+    def buffers(self, responses_by_name: dict[str, ProverToolResponse]) -> list[BaseTool]:
+        """The multi-buffer submit_buffer / collect_results tools, wired to return ``responses_by_name``
+        keyed by buffer name (jobs run concurrently, so responses can't be order-scripted)."""
+        return self._bind_buffers(responses_by_name)
 
 
 @pytest.fixture
@@ -402,7 +410,25 @@ def certora_prover(
 ) -> ProverMock:
     response_script : list[ProverToolResponse] | None = None
     response_ptr = 0
+    # Per-buffer responses, keyed by buffer name (the multi-buffer submit/collect path). Keyed rather
+    # than ordered because buffer jobs run concurrently, so call order is nondeterministic.
+    buffer_responses: dict[str, ProverToolResponse] = {}
     calls: list[ProverCall] = []
+
+    def _buffer_of_conf(conf: dict) -> str | None:
+        # verify target "Dummy:certora/specs/<name>.spec" -> buffer name (the spec stem).
+        return Path(conf["verify"].split(":", 1)[1]).stem
+
+    def _select_rules(resp: ProverToolResponse, conf: dict) -> ProverToolResponse:
+        # Mirror the prover's rule selection: keep only the rules the conf's rule/exclude_rule ask for.
+        if isinstance(resp, str) or ("rule" not in conf and "exclude_rule" not in conf):
+            return resp
+        if "rule" in conf:
+            keep = lambda rp: rp.rule in set(conf["rule"])
+        else:
+            keep = lambda rp: rp.rule not in set(conf["exclude_rule"])
+        selected = {rp: st for rp, st in resp.raw_rule_status.items() if keep(rp)}
+        return dataclasses.replace(resp, raw_rule_status=selected)
 
     async def mock_declared_rules(folder: Path, args: list[str]) -> list[str]:
         return SPEC_DECL_RE.findall(spec_of_prover_conf(folder, conf_of_prover_call(folder, args)))
@@ -410,10 +436,17 @@ def certora_prover(
     async def mock_prover(
         folder: Path, args: list[str], *rest, **kwargs
     ) -> ProverToolResponse:
+        conf = conf_of_prover_call(folder, args)
+        calls.append(ProverCall(folder=folder, args=list(args), conf=conf))
+        if buffer_responses:
+            name = _buffer_of_conf(conf)
+            assert name in buffer_responses, f"no buffer response for {name!r}"
+            # Honour the conf's rule selection, as the real prover does: a rule-striped run reports only
+            # its selected rules, so completion has to union several runs.
+            return _select_rules(buffer_responses[name], conf)
         assert response_script is not None
         nonlocal response_ptr
         assert response_ptr < len(response_script)
-        calls.append(ProverCall(folder=folder, args=list(args), conf=conf_of_prover_call(folder, args)))
         to_ret = response_script[response_ptr]
         response_ptr += 1
         return to_ret
@@ -424,7 +457,7 @@ def certora_prover(
         lambda _: None
     ))
 
-    the_tool = get_prover_tool(
+    toolset = get_prover_tool(
         prover_opts=ProverOptions(),
         llm=fake_llm,
         main_contract="Dummy",
@@ -434,9 +467,14 @@ def certora_prover(
     def bind_tool(l: Iterable[ProverToolResponse]) -> BaseTool:
         nonlocal response_script
         response_script = list(l)
-        return the_tool
+        return toolset.verify_spec
 
-    return ProverMock(bind_tool, calls)
+    def bind_buffers(responses_by_name: dict[str, ProverToolResponse]) -> list[BaseTool]:
+        buffer_responses.clear()
+        buffer_responses.update(responses_by_name)
+        return toolset.make_buffer_tools()
+
+    return ProverMock(bind_tool, calls, bind_buffers)
 
 
 # ---------------------------------------------------------------------------

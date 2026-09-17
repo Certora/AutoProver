@@ -26,7 +26,7 @@ from composer.spec.source.design_doc_finder import DesignDocChosenEvent
 
 
 # ---------------------------------------------------------------------------
-# Event type — events emitted by _SpecCallbacks (verify_spec tool)
+# Event type — events emitted by _SpecCallbacks (buffer prover jobs)
 # ---------------------------------------------------------------------------
 
 type AutoProveEvent = ProverOutputEvent | CloudPollingEvent

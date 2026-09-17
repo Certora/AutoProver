@@ -11,7 +11,7 @@ from pathlib import Path
 from prover_output_utility import ProverOutputAPI
 from prover_output_utility.models import CheckResult, NodeStatus
 
-from composer.spec.cvl_generation import GeneratedCVL
+from composer.spec.cvl_generation import GeneratedCVL, _output_link
 from composer.spec.source.report.collect import Formalized, Verdict, VerdictFetcher
 from composer.spec.source.report.schema import Outcome, RuleName
 
@@ -30,7 +30,12 @@ _NODE_TO_OUTCOME: dict[NodeStatus, Outcome] = {
 
 
 def _fetch(api: ProverOutputAPI, link: str) -> dict[RuleName, Verdict]:
-    """rule_name -> rolled-up `Verdict` for one prover run. Best-effort: any POU failure -> {}."""
+    """rule_name -> rolled-up `Verdict` for one prover run. Best-effort: any POU failure -> {}.
+
+    ``run_links`` holds raw ``/jobStatus/`` job URLs; POU (and the report's own links) want the
+    ``/output/`` view, so normalize before the call and stamp the normalized link onto the verdict.
+    """
+    link = _output_link(link) or link
     try:
         checks: list[CheckResult] = api.get_all_checks(link)
     except Exception:
@@ -44,6 +49,7 @@ def _fetch(api: ProverOutputAPI, link: str) -> dict[RuleName, Verdict]:
             loc.line if loc else None,
             c.duration or None,
             Path(loc.file).name if (loc and loc.file) else None,
+            link=link,
         )
         name = RuleName(c.rule_name)
         verdicts[name] = cand.merge(verdicts.get(name))
@@ -51,14 +57,21 @@ def _fetch(api: ProverOutputAPI, link: str) -> dict[RuleName, Verdict]:
 
 
 def make_prover_fetcher(api: ProverOutputAPI | None = None) -> VerdictFetcher[GeneratedCVL]:
-    """A `VerdictFetcher` that pulls per-rule verdicts from ProverOutputUtility, keyed by each
-    component's run link. POU calls run off the event loop (one blocking call per run). Only ever
-    invoked for delivered results (collect skips gave-up / curtailed inputs)."""
+    """A `VerdictFetcher` that pulls per-rule verdicts from ProverOutputUtility and unions them across
+    every prover run that composes the result (``GeneratedCVL.run_links``). With buffers + rule-striping
+    one component's rules are run across several jobs, so a fetch keyed on a single link would report
+    every rule whose verdict came from another run as UNKNOWN. POU calls run off the event loop (one per
+    run). Only ever invoked for delivered results (collect skips gave-up / curtailed inputs)."""
     api = api or ProverOutputAPI()
 
     async def fetch(formalized: Formalized[GeneratedCVL]) -> dict[RuleName, Verdict]:
-        if formalized.run_link is None:
+        links = formalized.result.run_links
+        if not links:
             return {}
-        return await asyncio.to_thread(_fetch, api, formalized.run_link)
+        merged: dict[RuleName, Verdict] = {}
+        for per_link in await asyncio.gather(*(asyncio.to_thread(_fetch, api, l) for l in links)):
+            for name, v in per_link.items():
+                merged[name] = v.merge(merged.get(name))
+        return merged
 
     return fetch

@@ -57,6 +57,14 @@ class Rebuttal(RebuttalBase):
     etc. Do NOT file rebuttals for feedback you merely disagree with; address those by
     revising the spec.
     """
+    buffer: str = Field(
+        description=(
+            "The name of the review unit whose feedback this rebuts — a buffer name, or "
+            '"skips_review" for the shared skip review. Each unit is reviewed by its own judge, so a '
+            "rebuttal reaches only that unit's judge; file it under the unit the prior-round feedback "
+            "was about."
+        )
+    )
     evidence_type: Literal[
         "typecheck_failure",
         "counterexample",
@@ -96,6 +104,10 @@ class GeneratedCVL(BaseModel):
     # The last prover-run link (URL or local results dir), persisted for the report and so a
     # cache hit retains it. None when the prover never produced a link.
     final_link: str | None = Field(default=None)
+    # Every prover-run link whose results compose the buffers at their final digests, deduped (empty
+    # when no run-target buffer has a completed run at its final digest). With rule-striping a buffer's
+    # rules are run across several jobs, so this holds all of them, not just the last ``final_link``.
+    run_links: list[str] = Field(default_factory=list)
     # The author's working copy at completion: the edited source files the proof
     # actually ran against (empty when no edits were applied — always the case
     # outside the editing-enabled source pipeline), and the provenance of each
@@ -276,16 +288,24 @@ class VanillaFeedbackTool(
     def _version_history(self) -> Sequence[str]:
         return ()
 
+def cvl_guidance_tools() -> list[BaseTool]:
+    """The dependency-free CVL *guidance* tools — no spec-writing tools. Used by the buffer-authoring
+    agent, which writes CVL through the buffer tools (put_buffer / edit_buffer) rather than put_cvl."""
+    return [
+        ERC20TokenGuidance.as_tool("erc20_guidance"),
+        UnresolvedCallGuidance.as_tool("unresolved_call_guidance"),
+    ]
+
+
 def static_tools() -> list[BaseTool]:
-    """The dependency-free CVL authoring tools. The property-management suite
-    (feedback / skip tools) is NOT here — it carries runtime deps; see
+    """The dependency-free CVL authoring tools — the single-``curr_spec`` writing tools plus guidance.
+    The property-management suite (feedback / skip tools) is NOT here — it carries runtime deps; see
     :func:`skip_tools` and :class:`FeedbackToolBase`."""
     return [
         put_cvl, put_cvl_raw,
         get_cvl(CVLGenerationState),
         edit_cvl(CVLGenerationState),
-        ERC20TokenGuidance.as_tool("erc20_guidance"),
-        UnresolvedCallGuidance.as_tool("unresolved_call_guidance"),
+        *cvl_guidance_tools(),
     ]
 
 
