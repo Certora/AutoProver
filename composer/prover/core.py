@@ -56,7 +56,7 @@ from composer.prover.prover_protocol import ProverResult
 _logger = logging.getLogger(__name__)
 
 
-DEFAULT_GLOBAL_TIMEOUT: int = 7200
+DEFAULT_GLOBAL_TIMEOUT: int = 1500  # 25 minutes
 
 
 @dataclass(frozen=True)
