@@ -1,0 +1,7 @@
+{% import 'nondet_v.j2' as nondet %}{% for elt in types %}{% if elt.kind == "struct" %}
+impl Nondet for {{ elt.name }} {
+    fn nondet() -> Self {
+      {{ elt.name }}({% for v in elt.fields %}{{ nondet.nondet(v.type) }}{% if not loop.last %}, {% endif %} {% endfor %})
+    }
+}
+{% endif %}{% endfor %}

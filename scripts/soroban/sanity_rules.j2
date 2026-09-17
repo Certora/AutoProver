@@ -1,0 +1,20 @@
+{% import 'nondet_v.j2' as nondet %}use cvlr::cvlr_satisfy;
+use cvlr::nondet::Nondet;
+use cvlr_soroban_derive::rule;
+use cvlr_soroban::*;
+use soroban_sdk::{vec, map};{% set seen = [] %}
+
+{% for c in contracts %}
+{% for f in c.functions %}{% if f.name not in seen %}{% set seen = seen.append( f.name ) %}
+#[allow(unused)]
+#[rule]
+pub fn {{ f.name }}_sanity_test({{ f.params[0].name }}: Env) { {% for p in f.params %}{% if not loop.first %}
+    let {{ p.name }} = {{ nondet.nondet(p.type) }};{% endif %}{% endfor %}
+    
+    {{ f.name }}_sanity({% for a in f.params %}{% if not loop.first %}, {% endif %}{% if a.by_ref %}&{% endif %}{{ a.name }}{% endfor %});   
+
+    cvlr_satisfy!(true);
+}
+
+{% endif %}{% endfor %}{% endfor %}
+

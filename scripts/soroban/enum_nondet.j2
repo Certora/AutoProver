@@ -1,0 +1,9 @@
+{% import 'nondet_v.j2' as nondet %}{% for elt in types %}{% if elt.kind == "enum" %}
+impl Nondet for {{ elt.name }} {
+    fn nondet() -> Self { {% for v in elt.variants %}{% if v.public is not defined or v.public %}
+        {% if not loop.first %}} else {% endif %}{% if not loop.last %}if bool::nondet() {% endif %}{
+            {{ elt.name }}::{{ v.variant }}{% if v.fields %}({% for a in v.fields %}{{ nondet.nondet(a.type) }}{% if not loop.last %}, {% endif %}{% endfor %}){% endif %}{% endif %}{% endfor %}
+	}
+    }
+}
+{% endif %}{% endfor %}
