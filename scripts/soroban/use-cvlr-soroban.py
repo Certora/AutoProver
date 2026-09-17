@@ -60,24 +60,26 @@ def get_version(obj):
   y = get_version_tuple(get_version_string(obj))
 
 
-def check_muxed_address(t):
+def check_muxed_address():
   vs = sdk_version
   if vs is not None:
     if vs[0] >= 23:
       print(vs.__str__() + " has MuxedAddress")
+      return True
     else:
       print(vs.__str__() + " doesn't have MuxedAddress")
-      if "features" not in t:
-        t["features"] = {}
-      t["features"]["nomuxedaddress"] = [ true ]
+      return False
 
 
 def inherit_cvlr_stuff(t):
   t["dependencies"]["soroban-sdk"] = put_stuff( { "workspace": True, "default-features": False })
     
   t["dependencies"]["cvlr"] = put_stuff({ "workspace": True, "default-features": False })
-  t["dependencies"]["cvlr-soroban"] = put_stuff({ "workspace": True, "default-features": False })
   t["dependencies"]["cvlr-soroban-derive"] = put_stuff({ "workspace": True, "default-features": False })
+  if check_muxed_address():
+    t["dependencies"]["cvlr-soroban"] = put_stuff({ "workspace": True, "default-features": False })
+  else:
+    t["dependencies"]["cvlr-soroban"] = put_stuff({ "workspace": True, "default-features": False, "features": ["nomuxedaddress"] })
 
   
 def put_dependencies(t):
@@ -122,7 +124,6 @@ with open( sys.argv[2] ) as cvlrsf:
         case "WORKSPACE_ROOT":
           fix_profile(t)
           fix_soroban_sdk(t["workspace"])
-          check_muxed_address(t)
           put_dependencies(t["workspace"])
           ensure_cvlr_soroban(t["workspace"]["dependencies"], sys.argv[2], sys.argv[1])
           remove_test_projects(t,  r"tests?/")
@@ -131,7 +132,6 @@ with open( sys.argv[2] ) as cvlrsf:
         case "UNRELATED_STANDALONE":
           fix_profile(t)
           fix_soroban_sdk(t)
-          check_muxed_address(t)
           put_dependencies(t)
           ensure_cvlr_soroban(t["dependencies"], sys.argv[2], sys.argv[1]) 
           
