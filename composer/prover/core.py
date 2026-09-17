@@ -56,25 +56,13 @@ from composer.prover.prover_protocol import ProverResult
 _logger = logging.getLogger(__name__)
 
 
-#: How long we wait on a run the Prover was given no budget of its own, before concluding it is
-#: wedged. Ours, not the Prover's: it never reaches the CLI.
 DEFAULT_GLOBAL_TIMEOUT: int = 7200
 
 
 @dataclass(frozen=True)
 class ProverOptions:
-    #: Which Prover CLI takes this run — the one place a run differs by chain. Everything
-    #: downstream of submission (cloud polling, the treeView parse, the verdict roll-up) is
-    #: chain-neutral. Not defaulted: it must match the ecosystem the spec was written for, and
-    #: a default would silently build a Rust project with the Solidity front end.
     app: ProverApp
-    #: ``certoraRun --server``, or ``None`` when the prover runs on this machine — which the
-    #: environment decides, not the command line, so a local run simply names no server.
     server: str | None = None
-    #: Seconds, as the CLI flag and ``AUTOPROVER_GLOBAL_PROVER_TIMEOUT`` both spell it, or
-    #: ``None`` to let the run go unbounded. Independent of ``server``: the Prover enforces this
-    #: itself (``-userGlobalTimeout``) wherever the run executes, so a local run may carry one
-    #: too — we just don't impose one by default.
     global_timeout: int | None = None
 
     @property
@@ -83,9 +71,6 @@ class ProverOptions:
 
     @property
     def runtime_bound(self) -> int:
-        """How long the run may take before we treat it as wedged: the budget the Prover was
-        given, or our own patience when it was given none. Our subprocess and polling backstops
-        extend this, never the other way round."""
         return DEFAULT_GLOBAL_TIMEOUT if self.global_timeout is None else self.global_timeout
 
     def cli_args(self) -> list[str]:
@@ -117,9 +102,8 @@ def _resolved_global_prover_timeout() -> int:
 
 
 def make_prover_options(*, cloud: bool, app: ProverApp) -> ProverOptions:
-    """Build prover options from the deployment env. A cloud run gets the certoraRun ``--server``
-    to submit to and a global prover timeout to go with it; a local run is left unbounded, as it
-    always has been, and falls back on our own patience."""
+    """Build prover options. Cloud runs get a global prover timeout and the
+    certoraRun ``--server`` resolved from the deployment env."""
     if not cloud:
         return ProverOptions(app=app)
     return ProverOptions(
@@ -500,10 +484,6 @@ async def run_prover_inner(
     timeout: float,
     app: ProverApp,
 ) -> tuple[ProverResult | str, str]:
-    """Run one Prover CLI to completion in a sandboxed subprocess.
-
-    ``app`` is not defaulted: it selects the CLI, and so the build step, which is where the chains
-    differ most — a default would build a Rust project with the Solidity front end."""
     # 3-5. Spawn async subprocess, stream stdout, collect stderr
     wrapper_script = Path(__file__).parent / "certoraRunWrapper.py"
 

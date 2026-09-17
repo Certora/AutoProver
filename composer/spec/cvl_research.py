@@ -71,7 +71,7 @@ tool's ``tool_call_id`` so the sub-agent's UI panel anchors under the tool
 widget; pass ``None`` for top-level invocations."""
 
 
-def _wrote_draft(s: _CVLResearchST, _: object) -> str | None:
+def _wrote_draft(s: _CVLResearchST, _: Any) -> str | None:
     if not s.get("drafted"):
         return "You must write a rough draft before delivering your answer"
     return None
