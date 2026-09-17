@@ -204,6 +204,32 @@ async def test_collect_stamps_each_rule_with_the_run_that_proved_it():
 
 
 @pytest.mark.asyncio
+async def test_collect_normalizes_jobstatus_run_links_to_output_view():
+    """``run_links`` carry raw ``/jobStatus/`` job URLs, but POU's ``get_all_checks`` only accepts the
+    ``/output/`` view. Regression: an unnormalized link made ``get_all_checks`` fail and every rule
+    read UNKNOWN even though the prover verified it. Each striped run link is normalized independently."""
+    job_a = "https://prover.certora.com/jobStatus/22224/aaa?anonymousKey=k1"
+    job_b = "https://prover.certora.com/jobStatus/22224/bbb?anonymousKey=k2"
+    out_a = job_a.replace("/jobStatus/", "/output/")
+    out_b = job_b.replace("/jobStatus/", "/output/")
+    props = [_prop("p_a", "rule a"), _prop("p_b", "rule b")]
+    gen = _gen({"p_a": ["rule_a"], "p_b": ["rule_b"]}, link=job_a, run_links=[job_a, job_b])
+    fetch = _fetcher({  # keyed on the /output/ view only — a raw /jobStatus/ lookup finds nothing
+        out_a: [_fake_check("rule_a", NodeStatus.VERIFIED, file="autospec_C.spec")],
+        out_b: [_fake_check("rule_b", NodeStatus.VIOLATED, file="autospec_C.spec")],
+    })
+
+    _properties, rules, *_ = await collect(
+        [_input("C", "autospec_C.spec", props, gen)], fetch_verdicts=fetch)
+
+    by_ref = {r.ref: r for r in rules}
+    assert by_ref[("autospec_C.spec", "rule_a")].outcome == Outcome.GOOD
+    assert by_ref[("autospec_C.spec", "rule_a")].prover_link == out_a  # stamped as the /output/ view
+    assert by_ref[("autospec_C.spec", "rule_b")].outcome == Outcome.BAD
+    assert by_ref[("autospec_C.spec", "rule_b")].prover_link == out_b
+
+
+@pytest.mark.asyncio
 async def test_collect_splits_skipped_property_into_gap():
     props = [_prop("p_done", "formalized"), _prop("p_skip", "cannot express in CVL")]
     gen = _gen({"p_done": ["r1"]}, skipped={"p_skip": "needs a ghost"})
