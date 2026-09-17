@@ -82,7 +82,6 @@ time — the only part of the former S5 that master can use today.
 | PR | Files | Size | What it is |
 |----|-------|------|------------|
 | **R1** Cargo, SBF and symbols | 10 | +1552 | `composer/cargo/`: workspace metadata, a build session, dep-info parsing, the SBF toolchain and the symbol reader, plus the `SolanaToolchain` registration in `PROJECT_TOOLCHAINS`. Nothing in it knows what CVLR is; it knows how to build and inspect a Solana crate. |
-| **R2** Bump the graphcore pin | 2 | +10 −2 | `85be3db` → `9f4e9fc`, which carries graphcore #39 (incremental VFS dumps into a reused build directory). Affects every consumer of graphcore, so it is its own PR with its own justification, and it is a prerequisite for C2. |
 | **R3** The image grows a Rust toolchain | 4 | +281 −32 | Dockerfile, entrypoint and compose changes for the Solana platform tools, and the test that asserts the image has them. Gated behind `SOLANA_TOOLCHAIN` so an EVM-only build does not pay for it. The docs stage's one-element `for name in cvl` loop becomes `cvl solana`, so the image's corpus has the manual the backend is for. |
 
 ---
@@ -99,7 +98,7 @@ code and land C6 last, after which the backend appears all at once and works.
 |----|-------|------|------------|
 | **C1a** Preflight, scaffold, conf | 5 | +2611 | Selecting the package under verification, scaffolding a CVLR workspace into a project that has none, and generating the prover conf. |
 | **C1b** The reference set and its envs | 10 | +1453 | Which cvlr / cvlr-solana versions a run is bound to, the checked-in inlining and summary env files, and the script that refreshes them. |
-| **C2** The working copy and the crate mount | 7 | +1243 | The per-unit working tree, the read-only mount of the CVLR crates the target resolves, and the source tools over both. Carries `build_layered_source_tools` — shared code, but `cvlr/entry.py` is its only caller, and a seam is better reviewed beside the caller that shows what it is for than alone in wave 1. Needs **R2**. |
+| **C2** The working copy and the crate mount | 9 | +1253 −2 | The per-unit working tree, the read-only mount of the CVLR crates the target resolves, and the source tools over both. Carries the graphcore pin bump `85be3db` → `9f4e9fc` (graphcore #39, incremental VFS dumps into a reused build directory) and `build_layered_source_tools`. Both are shared code whose only caller anywhere is in this PR — `cvlr/tree.py` is the sole user of `PersistentMaterializer` and `DictBackend`, `cvlr/entry.py` the sole user of the layered builder — and a seam reviewed beside its caller beats the same seam alone a wave earlier. |
 | **C3a** The munge vocabulary | 5 | +2982 | The six kinds of source modification a harness may need, and how each is expressed against a Rust crate. |
 | **C3b** The munge editor | 3 | +2542 | The agent that proposes and applies them, and the review that accepts or rejects. |
 | **C4a** The authoring loop | 10 | +2642 | Author, state, rule extraction, the judge's prompts, and the feedback round. Carries the `CvlrJudge` / `CvlrGeneration` cache markers in `spec/context.py`, which are CVLR-specific and have no business in a shared PR. |
@@ -108,7 +107,7 @@ code and land C6 last, after which the backend appears all at once and works.
 | **C6** Pipeline and entry | 12 | +3083 −6 | `CvlrBackend`, the CLI entry points, the artifact store, and the plumbing tests. The PR that makes the backend exist. Lands without the two pinned-run flags — see *Deferred* below. |
 
 Order inside the wave: **C1a** before **C1b** (the env refresher imports the scaffold's constants),
-**R2** before **C2**, and **C6** last. C3a/C3b, C4a/C4b and C5 are independent of each other.
+and **C6** last. C3a/C3b, C4a/C4b and C5 are independent of each other.
 
 Checked rather than assumed: the only modules outside `composer/spec/cvlr/` that import from it are
 the two Solana CLI entry points, the tape driver and the env refresher — all of them CVLR-specific
@@ -243,9 +242,12 @@ own copy, so its next rebase takes the fix rather than conflicting with it.
 read. It is a generated artifact, and the argument for checking it in is that a gate nobody can run
 protects nothing — but it is also 51,000 lines in every future clone and diff.
 
-**3. When does the graphcore pin move?** R2 changes the library under every consumer. Landing it
-early unblocks C2 and gives the bump its own blast radius; landing it late keeps master still while
-the shared seams go in.
+**3. ~~When does the graphcore pin move?~~ Settled: with C2.** The bump was its own PR (R2) on the
+reasoning that it changes the library under every consumer and deserves its own blast radius. It
+does not, in practice: graphcore #39 is additive, and the one line it changes in an existing
+function gives `fs_tools_layered` a `materializer` factory that defaults to today's behaviour, so no
+existing caller moves. Nothing outside `cvlr/tree.py` uses what it adds. A two-file pin bump with no
+user is not a review, so it lands with the code that needs it.
 
 **4. Three open PRs touch the same files as S4.**
 [#185](https://github.com/Certora/AutoProver/pull/185) and
@@ -279,11 +281,10 @@ record of what went where; nothing is left to check out for those.
 | S3 *(merged)* | `composer/certora_env.py` `composer/prover/{certoraRunWrapper,core,ptypes,results}.py` `analyzer/analysis.py` `composer/tools/{prover,thinking}.py` `composer/authoring/buffer.py` `composer/core/context.py` `composer/cvl/tools.py` `composer/workflow/executor.py` `composer/spec/source/{autoprove_common,harness}.py` `composer/spec/source/munge/compile_check.py` `tests/conftest.py` `tests/test_prover_app.py` `tests/test_prover_options.py` `tests/test_wrapped_prover_runner.py` `tests/test_solana_cex_trace.py` `tests/data/solana_cex/` `tests/test_tree_parsing.py` `tests/test_cex_analysis_failure_isolation.py` `tests/test_autoprove_report.py` *(hunks: the `_violated` helper and its expectation)* |
 | S4 | `composer/spec/source/report/{schema,collect,build}.py` `composer/spec/source/report_prover.py` `tests/test_autoprove_report.py` `composer/pipeline/core.py` *(hunks)* |
 | R1 | `composer/cargo/` `composer/rustapp/toolchain.py` `tests/test_cvlr_symbols.py` `tests/data/vault_sbf_symbols.txt` |
-| R2 | `graphcore` `pyproject.toml` *(the pin only)* |
 | R3 | `scripts/Dockerfile` `scripts/autoprove-entrypoint.sh` `scripts/docker-compose.yml` `tests/test_cvlr_image.py` |
 | C1a | `composer/spec/cvlr/{preflight,scaffold,conf,crates}.py` `tests/test_cvlr_scaffold.py` |
 | C1b | `composer/spec/cvlr_reference.py` `composer/spec/cvlr/env_paths.py` `composer/spec/cvlr/envs/` `composer/scripts/refresh_cvlr_envs.py` `tests/test_cvlr_env_paths.py` `tests/test_cvlr_reference.py` |
-| C2 | `composer/spec/cvlr/{tree,crate_mount,rust_source,source_tools}.py` `composer/templates/cvlr_source_tools.j2` `tests/test_cvlr_tree.py` `composer/spec/source/source_env.py` *(hunks: `build_layered_source_tools`)* |
+| C2 | `composer/spec/cvlr/{tree,crate_mount,rust_source,source_tools}.py` `composer/templates/cvlr_source_tools.j2` `tests/test_cvlr_tree.py` `composer/spec/source/source_env.py` *(hunks: `build_layered_source_tools`)* `graphcore` `pyproject.toml` *(the pin only)* |
 | C3a | `composer/spec/cvlr/munge.py` `composer/templates/cvlr_munge_{editor,review}_system.j2` `tests/test_cvlr_munge.py` `tests/test_cvlr_module_redirect.py` |
 | C3b | `composer/spec/cvlr/editor.py` `tests/test_cvlr_editor.py` `tests/test_cvlr_derive_swap.py` |
 | C4a | `composer/spec/cvlr/{author,state,rules}.py` `composer/spec/context.py` `composer/templates/cvlr_feedback_prompt.j2` `composer/templates/cvlr_property_judge_system_prompt.j2` `tests/test_cvlr_{author,judge_input,rules}.py` `template_manifest.json` |
