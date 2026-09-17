@@ -10,6 +10,7 @@ import logging
 import re
 import sys
 import tempfile
+import time
 from collections.abc import Callable
 from pydantic import BaseModel, Field
 from pathlib import Path
@@ -83,6 +84,46 @@ async def _drain(
     if buf := buf.strip():
         _logger.log(log_level, buf)
         sink(buf)
+
+
+#: How long to give the AutoSetup child to exit before we stop waiting on it. The wait below sits
+#: in a ``finally`` that a cancellation also travels through, so it has to be bounded: an
+#: unbounded wait there parks the whole run behind one subprocess, with no timeout above it that
+#: can help and nothing left running to say why.
+_REAP_TIMEOUT_S = 30.0
+
+
+async def _reap(proc: asyncio.subprocess.Process) -> int | None:
+    """Wait for ``proc`` to exit, escalating to a kill, and stop waiting rather than block forever.
+
+    Returns the exit status, or ``None`` if the child could not be reaped at all — a child that
+    will not die tells us nothing about whether AutoSetup succeeded, so the caller treats that as
+    a failure.
+    """
+    started = time.monotonic()
+    for escalate in (False, True):
+        if escalate and proc.returncode is None:
+            _logger.warning(
+                "AutoSetup child still alive after %.0fs, killing it", _REAP_TIMEOUT_S
+            )
+            proc.kill()
+        try:
+            async with asyncio.timeout(_REAP_TIMEOUT_S):
+                # Shielded: the timeout must cancel our wait, not the child's exit plumbing.
+                returncode = await asyncio.shield(proc.wait())
+        except TimeoutError:
+            continue
+        # Logged where it ends, not only where it begins: a wait that says nothing on the way out
+        # cannot be told apart, afterwards, from one that never returned.
+        _logger.info(
+            "AutoSetup child exited %d after %.1fs", returncode, time.monotonic() - started
+        )
+        return returncode
+    _logger.error(
+        "AutoSetup child outlived a kill after %.1fs, giving up on it and continuing",
+        time.monotonic() - started,
+    )
+    return proc.returncode
 
 
 async def run_autosetup(
@@ -176,7 +217,12 @@ async def run_autosetup(
             raise
         finally:
             _logger.debug("AutoSetup process complete, waiting for exit")
-            returncode = await proc.wait()
+            returncode = await _reap(proc)
+        if returncode is None:
+            return SetupFailure(
+                error="AutoSetup did not exit",
+                stderr="\n".join(stderr_lines),
+            )
         cb.log_complete(returncode)
         if returncode != 0:
             return SetupFailure(

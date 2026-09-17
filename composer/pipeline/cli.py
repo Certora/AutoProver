@@ -1,5 +1,6 @@
 from typing import Protocol, AsyncIterator, TYPE_CHECKING
 import json
+import logging
 import sys
 import pathlib
 import enum
@@ -53,6 +54,8 @@ if TYPE_CHECKING:
 from certora_autosetup.harnesser.swap import swap_library_main_contract_paths
 from composer.spec.util import fs_forbidden_read
 import hashlib
+
+_logger = logging.getLogger(__name__)
 
 
 def autoprover_version() -> str:
@@ -487,3 +490,4 @@ async def cli_pipeline[P: enum.Enum, H](
                     await at_exit(init_source, data_logger)
                 except Exception:
                     pass
+                _logger.info("run exit handlers done")
