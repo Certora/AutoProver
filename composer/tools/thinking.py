@@ -7,7 +7,7 @@ the jtoman/auto-prover branch.
 from typing import cast, overload, override
 from typing_extensions import TypedDict
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph import MessagesState
 from langgraph.types import Command
@@ -86,8 +86,8 @@ def get_rough_draft_tools[ST](
                 )
         return None
 
-    def _echo(tool_call_id: str, draft: str) -> list:
-        messages: list = [
+    def _echo(tool_call_id: str, draft: str) -> list[BaseMessage]:
+        messages: list[BaseMessage] = [
             ToolMessage(tool_call_id=tool_call_id, content=draft),
         ]
         if review_reminder is not None:

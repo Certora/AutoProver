@@ -25,7 +25,7 @@ class _NoCex(CexHandler):
 def _runner() -> WrappedProverRunner:
     return WrappedProverRunner(
         config={"files": ["src/Foo.sol"]},
-        prover_options=ProverOptions(),
+        prover_options=ProverOptions(app="evm"),
         main_contract="Foo",
     )
 
