@@ -186,9 +186,10 @@ Two arguments against landing it meanwhile. It widens `GroupingResult`'s contrac
 type is validated, to rescue one provider-level serialization slip — and the wrapper the model
 doubles is forced by the API, since a tool-input schema cannot be a bare array, so there is no
 schema change that would prevent it. And it leaves the part that made the failure dangerous: a
-degraded grouping is invisible in the artifact. `build.py` computes a `fallback_reason`, logs it,
+degraded grouping is invisible in the artifact — `build.py` computes a `fallback_reason`, logs it,
 and never puts it in the report, so a flattened eighty-nine-property run still reads as a
-legitimate single-group report.
+legitimate single-group report. That is filed as U8 in
+[cvlr-todo.md](./cvlr-todo.md).
 
 **How to revive it.** `eric/grouping-rescue` (local, branched from master at `0fcec7d1`) carries the
 validator, a docstring built around the two accepted encodings, and four tests — both rescued shapes

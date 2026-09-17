@@ -11,7 +11,8 @@ section anywhere else, so this document is their only record until someone gives
 
 If you want somewhere to start: **U2** decides whether the smoke gate protects anything at all, and
 **U7** is a silent-data-loss risk on the same path whose loud half **U4** was; that half is
-fixed now, and the fix cannot reach U7.
+fixed now, and the fix cannot reach U7. **U8** is the same shape one layer up, in the artifact a
+reader actually keeps.
 
 ---
 
@@ -94,9 +95,23 @@ tree-view half produces no exception at all, just a results directory missing ru
 [read_and_format_run_result](../composer/prover/results.py) parses as a smaller run. U4's retry
 wraps this call and so cannot help — it fires on a raise, and the whole point here is that nothing
 raises. Nothing downstream can tell that from a job that genuinely had fewer rules. This is
-upstream code (`certora-prover-cli`), so the work is to confirm the reading against the installed version, decide
+upstream code (`certora-prover-cli`), so the work is to confirm the reading against the installed
+version, decide
 whether a completeness check belongs on our side, and route it with the rest of
 [upstream-defects.md](./upstream-defects.md).
+
+**U8. A report whose grouping failed does not say so.**
+[build.py](../composer/spec/source/report/build.py) degrades to a single `general` bucket when the
+grouping LLM raises, when validation rejects the grouping, or when it covers no properties. It
+computes a `fallback_reason` describing which, logs it at warning, and puts it in no field of
+`AutoProverReport`. A single-group report is a shape a report can legitimately have, so the artifact
+is indistinguishable from one whose grouping worked — a run that flattens eighty-nine properties
+into `general` reads as a considered editorial choice. The same blindness is why a recurrence of the
+mis-encoding behind the reverted S2 (`1df970c8` on `eric/grouping-rescue`) would go unnoticed: the
+evidence for it was a log line on somebody's terminal, and the artifact that outlives the terminal
+says nothing. The work is to carry the reason onto the schema and render it, which is a
+`schema_version` bump, and to decide whether it belongs as a report-level field or as a mark on the
+fallback group itself. Kin to U7 — both are a degraded result that presents as a complete one.
 
 ---
 
