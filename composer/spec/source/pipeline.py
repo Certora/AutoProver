@@ -42,7 +42,7 @@ from composer.spec.source.harness import (
     lift_harnessed,
 )
 from composer.spec.source.summarizer import setup_summaries
-from composer.spec.source.struct_invariant import get_invariant_formulation
+from composer.spec.source.struct_invariant import Invariants, get_invariant_formulation
 from composer.spec.source.autosetup import SetupSuccess
 from composer.spec.source.prover import get_prover_tool, materializing_project
 from composer.spec.source.plugin import CertoraProverTools
@@ -319,10 +319,11 @@ class ProverPrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance, Con
         return setup_config, resources
 
     async def _invariants(self, run: PipelineRun):
-        return await run.runner(
-            TaskInfo(INVARIANTS_TASK_ID, "Structural Invariants", AutoProvePhase.INVARIANTS),
-            lambda: get_invariant_formulation(run.ctx, run.source, run.env, self._harnessed),
-        )
+        return Invariants(inv=[])
+        # return await run.runner(
+        #     TaskInfo(INVARIANTS_TASK_ID, "Structural Invariants", AutoProvePhase.INVARIANTS),
+        #     lambda: get_invariant_formulation(run.ctx, run.source, run.env, self._harnessed),
+        # )
 
 @dataclass
 class ProverBackend:

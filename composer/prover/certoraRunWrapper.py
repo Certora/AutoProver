@@ -46,7 +46,7 @@ os.putenv("DONT_USE_VERIFICATION_RESULTS_FOR_EXITCODE", "1")
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from certoraRun import run_certora
+from certoraRun import run_certora
 else:
     from composer.certora_env import import_run_certora
     run_certora = import_run_certora()

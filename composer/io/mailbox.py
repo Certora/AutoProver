@@ -17,8 +17,8 @@ latter, the mailbox by the former, and the types keep them apart. Answers are
 text, always.
 
 :class:`Mailbox` is the transport: four calls, implemented over whatever the
-run's control plane is (``aws_mock.mailbox`` for the laptop mock, the AISS API
-once it has the endpoints). :class:`MailboxInterrupts` is the ``IOHandler``
+run's control plane is (``aws_mock.mailbox`` for the laptop mock, the cloud
+control plane's API once it has the endpoints). :class:`MailboxInterrupts` is the ``IOHandler``
 piece: it records every question it is asked, with the thread that paused on
 it, answers what the inbox already holds, waits warm for the rest, and raises
 ``GraphSuspended``. An answer is acked only once the handler has SEEN it
