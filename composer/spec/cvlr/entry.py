@@ -390,10 +390,9 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
                 ],
                 forbidden_read=_source_surface(staged.source.forbidden_read),
             )
-            # ``library_source`` is left unset for the same reason the expensive gate leaves it
-            # unset: it would mount the CVLR crates for the code explorer, but which crates those
-            # are is only resolved by preflight, which has not run yet. The backend mounts them for
-            # the *author* from ``prepare_system``, where the resolved graph is known.
+            # The code explorer reads only the project. Which CVLR crates the target resolves is
+            # not known until preflight, which runs after this; the backend mounts them for the
+            # *author* from ``prepare_system``, where the resolved graph is in hand.
             full = build_source_tools(
                 basic,
                 staged.llm_models,
