@@ -123,10 +123,14 @@ class SkippedClaim(PropertyFormulation):
 
 
 class GaveUpComponent(BaseModel):
-    """A formalization gap at component granularity: the component's CVL generation gave up (or
-    crashed), so none of its inferred properties were formalized. No per-property reason."""
+    """A formalization gap at component granularity: the component's generation gave up (or
+    crashed), so none of its inferred properties were formalized. No per-property reason.
+
+    ``reason`` is the author's own account, or the exception text when the component crashed;
+    ``None`` when no account was recorded."""
     component: ComponentName
     properties: list[PropertyFormulation]
+    reason: str | None = None
 
 
 class DraftedProperty(PropertyFormulation):
@@ -323,7 +327,7 @@ class DeprioritizedProperty(PropertyFormulation):
 
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
-    schema_version: Literal["3.0", "3.1"] = "3.1"
+    schema_version: Literal["3.0", "3.1", "3.2"] = "3.2"
     backend: ReportBackend = "prover"
     #: How much of the inferred property set the run pursued ("comprehensive" or
     #: "prioritized"). Absent on reports written before the mode existed, which are all
