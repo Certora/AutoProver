@@ -46,7 +46,6 @@ motivation. Sizes are insertions/deletions against master.
 | PR | Files | Size | What it is |
 |----|-------|------|------------|
 | **S1** Confined builds: one scratch directory, a readable git config, an unreadable output — [#239](https://github.com/Certora/AutoProver/pull/239), open | 10 | +247 −37 | Three findings from making Rust builds run under the sandbox, and one story. `composer/layout.py` declares `CERTORA_DIR` / `INTERNAL_DIR` where `composer.sandbox` can name them without importing pydantic, which that package stays free of. The sandbox's scratch (`CARGO_HOME`, tmp) moves under `INTERNAL_DIR`; `RUST_FORBIDDEN_READ` withholds that directory — and the entry itself, so graphcore prunes the subtree instead of rejecting a 730 MB registry file by file — wherever it sits; and the rule is read off the ecosystem `cli_pipeline` is handed rather than passed beside it, so the two cannot disagree. And `git_config_ro_paths` grants the global git config, without which libgit2 refuses to open a fully warm cached git dependency and reports it as an offline-mode *network* error. |
-| **S2** Rescue a mis-encoded grouping | 1 | +26 −1 | A `field_validator` that accepts the whole grouping object JSON-encoded into its own `groups` field. Observed on a real run; the existing fallback silently flattens a report to one group. |
 | **S3** The prover layer learns there is more than one chain — [#240](https://github.com/Certora/AutoProver/pull/240), changes requested | 28 | +703 −164 | Three parts, two of them one seam. *Which CLI:* `ProverApp` names the three entry points `certora_cli` ships, `import_prover_entry` resolves one honouring `$CERTORA`, and `prover_app` narrows an untrusted string at the single boundary where one arrives. *Which frames:* a counterexample stops being a rendered string and becomes data — trace, assertion, source span — so `classify_violation` can decide whether a violation says anything about the program; `TraceShape` then says which frames of a chain's trace survive rendering. Between those two points nothing learns which chain ran, which is the claim `tests/data/solana_cex` measures. *How a run is configured:* `ProverOptions` carries the app, the server and the Prover's budget as fields, instead of a `list[str]` of CLI flags it read its own meaning back out of, and one `ProverOptions` reaches the codegen tool rather than being reassembled from parts. That part grew out of the review, and is most of the difference between the size this PR opened at and its size now. |
 | **S4** Report: what a component gave up on — [#241](https://github.com/Certora/AutoProver/pull/241), open | 6 | +160 −32 | `Abandoned` replacing a `None` that discarded the reason, and `GaveUpComponent.reason` where it lands — the only change in wave 1 that alters an EVM run's output. Plus `make_prover_fetcher` typed at `ReportableResult` rather than at CVL, and `job_input`, the one part of the PR with no caller on master: POU cannot parse a Solana job link, and the best-effort fetch turns that into every rule UNKNOWN. |
 | **S5** A second read-only source mount | 4 | +84 −9 | `build_layered_source_tools` and `LibrarySource` — tools over a library the analyzed project depends on, and the statement that tells an agent they exist, which travel together because either alone is worse than neither. Plus `crate_source` on the code explorer's prompt. Carries a stray docstring correction in `source/prover.py` that belongs nowhere in particular. |
@@ -169,6 +168,35 @@ mentions it in the record of a run that actually happened and should be left alo
 
 ---
 
+## Dropped: rescuing a grouping the model encoded as JSON text
+
+Wave 1's S2, now reverted on the branch. A `field_validator` on `GroupingResult.groups` accepted a
+string that parses as JSON and is either the group list or the whole `GroupingResult` wrapping it,
+returning anything else untouched for pydantic to reject. One Fluid run produced the second shape,
+and the report fell back to a single `general` bucket.
+
+**Its one observation predates the more general fix.** `ae5cc069` was authored 2026-09-08;
+[#212](https://github.com/Certora/AutoProver/pull/212) — retry a rejected grouping once with the
+rejection appended — merged 2026-09-14. A rebase replayed the branch and put the validator *after*
+the retry in the history, which is misleading: it was written against a `call_grouping_llm` where a
+single rejection went straight to the fallback. Whether the retry alone fixes this has never been
+tested, and the mis-encoding has not recurred since.
+
+Two arguments against landing it meanwhile. It widens `GroupingResult`'s contract everywhere the
+type is validated, to rescue one provider-level serialization slip — and the wrapper the model
+doubles is forced by the API, since a tool-input schema cannot be a bare array, so there is no
+schema change that would prevent it. And it leaves the part that made the failure dangerous: a
+degraded grouping is invisible in the artifact. `build.py` computes a `fallback_reason`, logs it,
+and never puts it in the report, so a flattened eighty-nine-property run still reads as a
+legitimate single-group report.
+
+**How to revive it.** `eric/grouping-rescue` (local, branched from master at `0fcec7d1`) carries the
+validator, a docstring built around the two accepted encodings, and four tests — both rescued shapes
+and four strings that must still be rejected. Cherry-pick `1df970c8`. The condition is a recurrence
+with #212 in place, which is also the thing the invisible fallback makes hard to notice.
+
+---
+
 ## Decisions to make before starting
 
 **1. ~~[#238](https://github.com/Certora/AutoProver/pull/238) duplicates
@@ -216,7 +244,6 @@ wave 1 — take the feature's hunks there, not the whole file.
 | PR | Paths |
 |----|-------|
 | S1 | `composer/layout.py` `composer/spec/gen_types.py` `composer/sandbox/recipes.py` `composer/pipeline/ecosystem.py` `composer/foundry/entry.py` `composer/spec/source/autoprove_common.py` `tests/test_fs_forbidden_read.py` `tests/test_sandbox_config.py` `scripts/docker-compose.sandbox.yml` `composer/pipeline/cli.py` *(hunks)* |
-| S2 | `composer/spec/source/report/grouping.py` |
 | S3 | `composer/certora_env.py` `composer/prover/{certoraRunWrapper,core,ptypes,results}.py` `analyzer/analysis.py` `composer/tools/{prover,thinking}.py` `composer/authoring/buffer.py` `composer/core/context.py` `composer/cvl/tools.py` `composer/workflow/executor.py` `composer/spec/source/{autoprove_common,harness}.py` `composer/spec/source/munge/compile_check.py` `tests/conftest.py` `tests/test_prover_app.py` `tests/test_prover_options.py` `tests/test_wrapped_prover_runner.py` `tests/test_solana_cex_trace.py` `tests/data/solana_cex/` `tests/test_tree_parsing.py` `tests/test_cex_analysis_failure_isolation.py` `tests/test_autoprove_report.py` *(hunks: the `_violated` helper and its expectation)* |
 | S4 | `composer/spec/source/report/{schema,collect,build}.py` `composer/spec/source/report_prover.py` `tests/test_autoprove_report.py` `composer/pipeline/core.py` *(hunks)* |
 | S5 | `composer/spec/source/source_env.py` `composer/spec/code_explorer.py` `composer/templates/code_explorer/rust/common_fragment.j2` `composer/spec/source/prover.py` |
