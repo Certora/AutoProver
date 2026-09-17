@@ -10,7 +10,8 @@ Two kinds of entry appear below. Most are the plan's own items, restated in one 
 section anywhere else, so this document is their only record until someone gives them one.
 
 If you want somewhere to start: **U2** decides whether the smoke gate protects anything at all, and
-**U7** is a silent-data-loss risk on the same path whose loud half **U4** is waiting on.
+**U7** is a silent-data-loss risk on the same path whose loud half **U4** was; that half is
+fixed now, and the fix cannot reach U7.
 
 ---
 
@@ -40,15 +41,16 @@ hours ([scripts/record_cvlr_tape.sh](../scripts/record_cvlr_tape.sh)). Nothing s
 a re-record is due, or how you find out the tape is stale short of an hour-long failure in the
 middle of a run.
 
-**U4. A dropped prover-API connection has no retry, and it has already cost a unit.** —
-**fixed elsewhere; waiting on the merge.** `fetch_sources_and_treeview_files` in
-[cloud.py](../composer/prover/cloud.py) is called without a bounded retry, and a transient `Remote
+**~~U4. A dropped prover-API connection has no retry, and it has already cost a unit.~~** —
+**fixed on master.** `fetch_sources_and_treeview_files` in
+[cloud.py](../composer/prover/cloud.py) was called without a bounded retry, and a transient `Remote
 end closed connection without response` lost an entire formalization unit during the first tape
-recording. [#223](https://github.com/Certora/AutoProver/pull/223) does exactly this, and landed
-here first: a duplicate written on this branch was closed in its favour. Nothing is left to do but
-watch it merge — and, if the review takes comments, two worth carrying: it retries every exception
-rather than declining the four a second attempt cannot change, and it wipes the destination between
-attempts where the client library's own completion markers would let a retry resume.
+recording. [#223](https://github.com/Certora/AutoProver/pull/223) merged on 2026-09-17: three
+attempts with exponential backoff around the fetch of a job that has already polled `SUCCEEDED`,
+re-raising at once the four failures a second attempt cannot change. A duplicate written on this
+branch was closed in its favour, so a rebase picks the fix up rather than conflicting with it. One
+carried comment was not taken: each attempt still starts from an empty destination and re-downloads
+what already arrived, rather than resuming from the client library's completion markers.
 
 **~~U5. Landing this branch has no plan.~~** — **written.**
 [cvlr-landing-plan.md](./cvlr-landing-plan.md) breaks the branch into PRs that can be reviewed on
@@ -87,11 +89,12 @@ is.
 **U7. A partial tree-view fetch reports itself as complete.**
 POU's `fetch_job_treeview` downloads each output file in a thread pool and *swallows* per-file
 failures — it logs `Warning: Failed to fetch <name>` and then writes the completion marker anyway.
-So the connection drop U4 is about is the visible half of the problem: the same blip during the
+So the connection drop U4 was about is the visible half of the problem: the same blip during the
 tree-view half produces no exception at all, just a results directory missing rules, which
-[read_and_format_run_result](../composer/prover/results.py) parses as a smaller run. Nothing
-downstream can tell that from a job that genuinely had fewer rules. This is upstream code
-(`certora-prover-cli`), so the work is to confirm the reading against the installed version, decide
+[read_and_format_run_result](../composer/prover/results.py) parses as a smaller run. U4's retry
+wraps this call and so cannot help — it fires on a raise, and the whole point here is that nothing
+raises. Nothing downstream can tell that from a job that genuinely had fewer rules. This is
+upstream code (`certora-prover-cli`), so the work is to confirm the reading against the installed version, decide
 whether a completeness check belongs on our side, and route it with the rest of
 [upstream-defects.md](./upstream-defects.md).
 
