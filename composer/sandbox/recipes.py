@@ -104,24 +104,29 @@ def shared_cargo_ro_paths(cargo_home: str | Path) -> tuple[Path, ...]:
 
 
 def git_config_ro_paths(home: str | Path) -> tuple[Path, ...]:
-    """The global git config files, read-only — what a build with a **git dependency** needs.
+    """Read-only paths of the global git config files a git-dependency build needs.
 
-    Cargo resolves a ``[patch.crates-io]`` git source through libgit2, and libgit2 reads the global
-    config before it will open the cached repository at all. Denied that read it does not degrade
-    to "no user config": it reports the source as unopenable, which cargo surfaces as
+    Cargo resolves a ``[patch.crates-io]`` git source through libgit2. libgit2
+    reads the global config before it will open the cached repository. If that
+    read is denied, it does not fall back to "no user config" — it reports the
+    source as unopenable, and cargo surfaces that as:
 
         Unable to update https://…: can't checkout from '…': you are in the offline mode (--offline)
 
-    — a message about the *network* for a cache that is fully warm, which no amount of pre-fetching
-    fixes. Any project patching a dependency to a git repo hits this, an Anchor fork included.
+    That looks like a network error even when the cache is fully warm, so
+    pre-fetching does not help. Any project that patches a dependency onto a
+    git repo hits this, including an Anchor fork.
 
-    Files, never ``$HOME`` and never ``~/.config``: Landlock's PathBeneath is hierarchical, so a
-    directory grant would hand an untrusted ``build.rs`` the rest of the home directory. The
-    residual exposure is the git config itself, which can name a credential helper and, in a badly
-    configured checkout, carry a token in a ``url.*.insteadOf`` — the price of building a git
-    dependency at all. Do not substitute a private ``$HOME``: it silently relocates rustup's and
-    ``cargo-build-sbf``'s toolchain lookups and fails much later, mid-build, complaining about
-    downloading Rust.
+    Grant the files themselves, never ``$HOME`` and never ``~/.config``.
+    Landlock PathBeneath is hierarchical, so granting a directory would give
+    an untrusted ``build.rs`` the rest of the home directory. The remaining
+    exposure is the git config itself: it can name a credential helper, and a
+    badly configured checkout can put a token in ``url.*.insteadOf``. That is
+    the cost of building a git dependency at all.
+
+    Do not substitute a private ``$HOME``. That silently relocates rustup's
+    and ``cargo-build-sbf``'s toolchain lookups, and the build then fails much
+    later complaining about downloading Rust.
     """
     xdg = os.environ.get("XDG_CONFIG_HOME")
     candidates = [
