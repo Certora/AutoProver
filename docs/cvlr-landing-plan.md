@@ -48,12 +48,12 @@ motivation. Sizes are insertions/deletions against master.
 | **S1** Confined builds: one scratch directory, a readable git config, an unreadable output — [#239](https://github.com/Certora/AutoProver/pull/239), **merged** `27f2fe93` | 10 | +247 −37 | Three findings from making Rust builds run under the sandbox, and one story. `composer/layout.py` declares `CERTORA_DIR` / `INTERNAL_DIR` where `composer.sandbox` can name them without importing pydantic, which that package stays free of. The sandbox's scratch (`CARGO_HOME`, tmp) moves under `INTERNAL_DIR`; `RUST_FORBIDDEN_READ` withholds that directory — and the entry itself, so graphcore prunes the subtree instead of rejecting a 730 MB registry file by file — wherever it sits; and the rule is read off the ecosystem `cli_pipeline` is handed rather than passed beside it, so the two cannot disagree. And `git_config_ro_paths` grants the global git config, without which libgit2 refuses to open a fully warm cached git dependency and reports it as an offline-mode *network* error. |
 | **S3** The prover layer learns there is more than one chain — [#240](https://github.com/Certora/AutoProver/pull/240), **merged** `568ba02d` | 28 | +703 −164 | Three parts, two of them one seam. *Which CLI:* `ProverApp` names the three entry points `certora_cli` ships, `import_prover_entry` resolves one honouring `$CERTORA`, and `prover_app` narrows an untrusted string at the single boundary where one arrives. *Which frames:* a counterexample stops being a rendered string and becomes data — trace, assertion, source span — so `classify_violation` can decide whether a violation says anything about the program; `TraceShape` then says which frames of a chain's trace survive rendering. Between those two points nothing learns which chain ran, which is the claim `tests/data/solana_cex` measures. *How a run is configured:* `ProverOptions` carries the app, the server and the Prover's budget as fields, instead of a `list[str]` of CLI flags it read its own meaning back out of, and one `ProverOptions` reaches the codegen tool rather than being reassembled from parts. That part grew out of the review, and is most of the difference between the size this PR opened at and its size now. |
 | **S4** Report: what a component gave up on — [#241](https://github.com/Certora/AutoProver/pull/241), open | 6 | +160 −32 | `Abandoned` replacing a `None` that discarded the reason, and `GaveUpComponent.reason` where it lands — the only change in wave 1 that alters an EVM run's output. Plus `make_prover_fetcher` typed at `ReportableResult` rather than at CVL, and `job_input`, the one part of the PR with no caller on master: POU cannot parse a Solana job link, and the best-effort fetch turns that into every rule UNKNOWN. |
-| **S5** A second read-only source mount | 4 | +84 −9 | `build_layered_source_tools` and `LibrarySource` — tools over a library the analyzed project depends on, and the statement that tells an agent they exist, which travel together because either alone is worse than neither. Plus `crate_source` on the code explorer's prompt. Carries a stray docstring correction in `source/prover.py` that belongs nowhere in particular. |
 
 **Where the wave stands.** S1 and S3 merged on 2026-09-17, in that order, half an hour apart. S3
 answered a changes-requested review by absorbing the `ProverOptions` rework rather than by argument,
 which is most of why it nearly doubled between opening and merging. S2 is dropped (below). S4 is the
-one PR still open, unreviewed; S5 is unwritten.
+one PR still open, unreviewed. S5 is gone: its mount is dropped (below), its one live function
+folds into C2, and its docstring fix goes to master on its own — so wave 1 ends with S4.
 
 Dependencies inside the wave: none — the one that remained was the CLI seam before the trace
 parser, and they were one PR. Merging the sandbox work into
@@ -69,9 +69,11 @@ be before it is reviewed. The `autoprove_common.py` collision between S1 and S3 
 to `cont` and `app=EVM.name` on the options built three lines above it — resolved itself in the
 merge order.
 
-One unrelated hunk in `cli.py` is still unlanded: a main contract path resolved against the
-process's cwd rather than the project root. It is a genuine bug fix and goes alone rather than
-riding a themed PR; S1 was merged without it.
+Two unrelated fixes are still unlanded and go alone rather than riding a themed PR. One hunk in
+`cli.py` resolves a main contract path against the process's cwd rather than the project root; S1
+was merged without it. And `source/prover.py`'s `OVERLAY_OWNED_KEYS` docstring names the author's
+flag registry as `author.EDITABLE_FLAGS`, which has been `author._FLAG_KEYS` on master for some
+time — the only part of the former S5 that master can use today.
 
 ---
 
@@ -97,7 +99,7 @@ code and land C6 last, after which the backend appears all at once and works.
 |----|-------|------|------------|
 | **C1a** Preflight, scaffold, conf | 5 | +2611 | Selecting the package under verification, scaffolding a CVLR workspace into a project that has none, and generating the prover conf. |
 | **C1b** The reference set and its envs | 10 | +1453 | Which cvlr / cvlr-solana versions a run is bound to, the checked-in inlining and summary env files, and the script that refreshes them. |
-| **C2** The working copy and the crate mount | 6 | +1219 | The per-unit working tree, the read-only mount of the CVLR crates the target resolves, and the source tools over both. Needs **R2**. |
+| **C2** The working copy and the crate mount | 7 | +1243 | The per-unit working tree, the read-only mount of the CVLR crates the target resolves, and the source tools over both. Carries `build_layered_source_tools` — shared code, but `cvlr/entry.py` is its only caller, and a seam is better reviewed beside the caller that shows what it is for than alone in wave 1. Needs **R2**. |
 | **C3a** The munge vocabulary | 5 | +2982 | The six kinds of source modification a harness may need, and how each is expressed against a Rust crate. |
 | **C3b** The munge editor | 3 | +2542 | The agent that proposes and applies them, and the review that accepts or rejects. |
 | **C4a** The authoring loop | 10 | +2642 | Author, state, rule extraction, the judge's prompts, and the feedback round. Carries the `CvlrJudge` / `CvlrGeneration` cache markers in `spec/context.py`, which are CVLR-specific and have no business in a shared PR. |
@@ -197,6 +199,34 @@ with #212 in place, which is also the thing the invisible fallback makes hard to
 
 ---
 
+## Dropped: a second read-only source mount for the explorer
+
+Wave 1's S5, now removed from the branch in `8fec7fad`. `LibrarySource` paired a set of read-only
+tools over the specification library the target depends on with the statement that tells an agent
+they exist; `build_source_tools` took one and gave the tools to the code explorer's env and the
+statement to its prompt, through a `crate_source` parameter threaded into the shared Rust explorer
+fragment. The argument was that a sub-agent is where a broad read costs least, since it returns a
+short answer instead of filling the caller's context.
+
+**Nothing ever built one.** Not on master, not on the branch. `cvlr/entry.py`, the only caller that
+could, leaves it unset because which crates the target resolves is not known until preflight has
+run. The crates do reach the author — `cvlr/pipeline.py` builds `cvlr_source_tools` and hands them
+through `CvlrDeps` — but by a route that never touches this seam. It is a design for a mount that
+was then built another way.
+
+Two defects only a first user would have found, both arguing the same thing. The
+`{% if crate_source %}` block lives in the Rust fragment alone, so an EVM caller would have bound
+the tools and dropped the statement — exactly the pairing failure `LibrarySource` exists to prevent.
+And that fragment names `cvlr_source_*` tools it cannot see, in a file `solana.j2` and `soroban.j2`
+both include.
+
+**How to revive it.** Revert `8fec7fad`, which carries the type, the parameter, the prompt plumbing
+and the four `test_cvlr_knowledge.py` tests that covered the rendering. The condition is a caller
+that actually wants the explorer to read the library — which means resolving the crates before the
+source tools are built, or rebuilding the seam against `cvlr/source_tools.py` as it now exists.
+
+---
+
 ## Decisions to make before starting
 
 **1. ~~[#238](https://github.com/Certora/AutoProver/pull/238) duplicates
@@ -248,13 +278,12 @@ record of what went where; nothing is left to check out for those.
 | S1 *(merged)* | `composer/layout.py` `composer/spec/gen_types.py` `composer/sandbox/recipes.py` `composer/pipeline/ecosystem.py` `composer/foundry/entry.py` `composer/spec/source/autoprove_common.py` `tests/test_fs_forbidden_read.py` `tests/test_sandbox_config.py` `scripts/docker-compose.sandbox.yml` `composer/pipeline/cli.py` *(hunks)* |
 | S3 *(merged)* | `composer/certora_env.py` `composer/prover/{certoraRunWrapper,core,ptypes,results}.py` `analyzer/analysis.py` `composer/tools/{prover,thinking}.py` `composer/authoring/buffer.py` `composer/core/context.py` `composer/cvl/tools.py` `composer/workflow/executor.py` `composer/spec/source/{autoprove_common,harness}.py` `composer/spec/source/munge/compile_check.py` `tests/conftest.py` `tests/test_prover_app.py` `tests/test_prover_options.py` `tests/test_wrapped_prover_runner.py` `tests/test_solana_cex_trace.py` `tests/data/solana_cex/` `tests/test_tree_parsing.py` `tests/test_cex_analysis_failure_isolation.py` `tests/test_autoprove_report.py` *(hunks: the `_violated` helper and its expectation)* |
 | S4 | `composer/spec/source/report/{schema,collect,build}.py` `composer/spec/source/report_prover.py` `tests/test_autoprove_report.py` `composer/pipeline/core.py` *(hunks)* |
-| S5 | `composer/spec/source/source_env.py` `composer/spec/code_explorer.py` `composer/templates/code_explorer/rust/common_fragment.j2` `composer/spec/source/prover.py` |
 | R1 | `composer/cargo/` `composer/rustapp/toolchain.py` `tests/test_cvlr_symbols.py` `tests/data/vault_sbf_symbols.txt` |
 | R2 | `graphcore` `pyproject.toml` *(the pin only)* |
 | R3 | `scripts/Dockerfile` `scripts/autoprove-entrypoint.sh` `scripts/docker-compose.yml` `tests/test_cvlr_image.py` |
 | C1a | `composer/spec/cvlr/{preflight,scaffold,conf,crates}.py` `tests/test_cvlr_scaffold.py` |
 | C1b | `composer/spec/cvlr_reference.py` `composer/spec/cvlr/env_paths.py` `composer/spec/cvlr/envs/` `composer/scripts/refresh_cvlr_envs.py` `tests/test_cvlr_env_paths.py` `tests/test_cvlr_reference.py` |
-| C2 | `composer/spec/cvlr/{tree,crate_mount,rust_source,source_tools}.py` `composer/templates/cvlr_source_tools.j2` `tests/test_cvlr_tree.py` |
+| C2 | `composer/spec/cvlr/{tree,crate_mount,rust_source,source_tools}.py` `composer/templates/cvlr_source_tools.j2` `tests/test_cvlr_tree.py` `composer/spec/source/source_env.py` *(hunks: `build_layered_source_tools`)* |
 | C3a | `composer/spec/cvlr/munge.py` `composer/templates/cvlr_munge_{editor,review}_system.j2` `tests/test_cvlr_munge.py` `tests/test_cvlr_module_redirect.py` |
 | C3b | `composer/spec/cvlr/editor.py` `tests/test_cvlr_editor.py` `tests/test_cvlr_derive_swap.py` |
 | C4a | `composer/spec/cvlr/{author,state,rules}.py` `composer/spec/context.py` `composer/templates/cvlr_feedback_prompt.j2` `composer/templates/cvlr_property_judge_system_prompt.j2` `tests/test_cvlr_{author,judge_input,rules}.py` `template_manifest.json` |
