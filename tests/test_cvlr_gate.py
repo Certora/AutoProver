@@ -231,11 +231,6 @@ async def test_the_backend_authors_cvlr_rules_for_the_vault(
             heavy_model=tiered.heavy, lite_model=tiered.lite, checkpointer=conns.checkpointer
         )
         basic = build_basic_source_tools(root=str(project), forbidden_read=RUST_FORBIDDEN_READ)
-        # ``library_source`` is deliberately left unset. It would mount the CVLR sources for the
-        # code explorer (§5.5), but the crates are not resolved until preflight runs, which is after
-        # this. The backend mounts them for the *author* instead, from ``prepare_system``, where the
-        # resolved graph is known — so the reading that matters is covered and only the explorer's
-        # broad-read shortcut is missing.
         full = build_source_tools(
             basic,
             models,
