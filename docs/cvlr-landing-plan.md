@@ -45,34 +45,33 @@ motivation. Sizes are insertions/deletions against master.
 
 | PR | Files | Size | What it is |
 |----|-------|------|------------|
-| **S1** Confined builds: one scratch directory, a readable git config, an unreadable output — [#239](https://github.com/Certora/AutoProver/pull/239), open | 10 | +247 −37 | Three findings from making Rust builds run under the sandbox, and one story. `composer/layout.py` declares `CERTORA_DIR` / `INTERNAL_DIR` where `composer.sandbox` can name them without importing pydantic, which that package stays free of. The sandbox's scratch (`CARGO_HOME`, tmp) moves under `INTERNAL_DIR`; `RUST_FORBIDDEN_READ` withholds that directory — and the entry itself, so graphcore prunes the subtree instead of rejecting a 730 MB registry file by file — wherever it sits; and the rule is read off the ecosystem `cli_pipeline` is handed rather than passed beside it, so the two cannot disagree. And `git_config_ro_paths` grants the global git config, without which libgit2 refuses to open a fully warm cached git dependency and reports it as an offline-mode *network* error. |
-| **S3** The prover layer learns there is more than one chain — [#240](https://github.com/Certora/AutoProver/pull/240), changes requested | 28 | +703 −164 | Three parts, two of them one seam. *Which CLI:* `ProverApp` names the three entry points `certora_cli` ships, `import_prover_entry` resolves one honouring `$CERTORA`, and `prover_app` narrows an untrusted string at the single boundary where one arrives. *Which frames:* a counterexample stops being a rendered string and becomes data — trace, assertion, source span — so `classify_violation` can decide whether a violation says anything about the program; `TraceShape` then says which frames of a chain's trace survive rendering. Between those two points nothing learns which chain ran, which is the claim `tests/data/solana_cex` measures. *How a run is configured:* `ProverOptions` carries the app, the server and the Prover's budget as fields, instead of a `list[str]` of CLI flags it read its own meaning back out of, and one `ProverOptions` reaches the codegen tool rather than being reassembled from parts. That part grew out of the review, and is most of the difference between the size this PR opened at and its size now. |
+| **S1** Confined builds: one scratch directory, a readable git config, an unreadable output — [#239](https://github.com/Certora/AutoProver/pull/239), **merged** `27f2fe93` | 10 | +247 −37 | Three findings from making Rust builds run under the sandbox, and one story. `composer/layout.py` declares `CERTORA_DIR` / `INTERNAL_DIR` where `composer.sandbox` can name them without importing pydantic, which that package stays free of. The sandbox's scratch (`CARGO_HOME`, tmp) moves under `INTERNAL_DIR`; `RUST_FORBIDDEN_READ` withholds that directory — and the entry itself, so graphcore prunes the subtree instead of rejecting a 730 MB registry file by file — wherever it sits; and the rule is read off the ecosystem `cli_pipeline` is handed rather than passed beside it, so the two cannot disagree. And `git_config_ro_paths` grants the global git config, without which libgit2 refuses to open a fully warm cached git dependency and reports it as an offline-mode *network* error. |
+| **S3** The prover layer learns there is more than one chain — [#240](https://github.com/Certora/AutoProver/pull/240), **merged** `568ba02d` | 28 | +703 −164 | Three parts, two of them one seam. *Which CLI:* `ProverApp` names the three entry points `certora_cli` ships, `import_prover_entry` resolves one honouring `$CERTORA`, and `prover_app` narrows an untrusted string at the single boundary where one arrives. *Which frames:* a counterexample stops being a rendered string and becomes data — trace, assertion, source span — so `classify_violation` can decide whether a violation says anything about the program; `TraceShape` then says which frames of a chain's trace survive rendering. Between those two points nothing learns which chain ran, which is the claim `tests/data/solana_cex` measures. *How a run is configured:* `ProverOptions` carries the app, the server and the Prover's budget as fields, instead of a `list[str]` of CLI flags it read its own meaning back out of, and one `ProverOptions` reaches the codegen tool rather than being reassembled from parts. That part grew out of the review, and is most of the difference between the size this PR opened at and its size now. |
 | **S4** Report: what a component gave up on — [#241](https://github.com/Certora/AutoProver/pull/241), open | 6 | +160 −32 | `Abandoned` replacing a `None` that discarded the reason, and `GaveUpComponent.reason` where it lands — the only change in wave 1 that alters an EVM run's output. Plus `make_prover_fetcher` typed at `ReportableResult` rather than at CVL, and `job_input`, the one part of the PR with no caller on master: POU cannot parse a Solana job link, and the best-effort fetch turns that into every rule UNKNOWN. |
 | **S5** A second read-only source mount | 4 | +84 −9 | `build_layered_source_tools` and `LibrarySource` — tools over a library the analyzed project depends on, and the statement that tells an agent they exist, which travel together because either alone is worse than neither. Plus `crate_source` on the code explorer's prompt. Carries a stray docstring correction in `source/prover.py` that belongs nowhere in particular. |
 
-**Where the three open ones stand.** All three are out of draft, with `pytest` and `pyright` green on CI.
-S1 and S4 have had no review yet. S3 is blocked on changes requested: eight threads, none marked resolved,
-six of them outdated because later commits answered them — the `ProverOptions` rework is most of that
-answer. The two still live are questions rather than changes: whether the Solana and Soroban Provers have
-an optimistic-loops flag of their own, and a remark that the prover tool's separate arguments were always
-silly. What it needs next is a re-read, not more code.
+**Where the wave stands.** S1 and S3 merged on 2026-09-17, in that order, half an hour apart. S3
+answered a changes-requested review by absorbing the `ProverOptions` rework rather than by argument,
+which is most of why it nearly doubled between opening and merging. S2 is dropped (below). S4 is the
+one PR still open, unreviewed; S5 is unwritten.
 
 Dependencies inside the wave: none — the one that remained was the CLI seam before the trace
-parser, and they are now one PR. Merging the sandbox work into
+parser, and they were one PR. Merging the sandbox work into
 one PR removed the wave's other ordering constraint, which had been an artefact of the split rather
 than of the code: the forbidden-read test imports the sandbox's own scratch-directory constants, so
 the two could never have been reviewed apart.
 
-**A caution about `pipeline/core.py` and `pipeline/cli.py`.** Two of these PRs touch them, each for
-its own feature — the `ecosystem` parameter the exclusion rule is read off (S1) and the give-up
-boundary that now carries a reason (S4). Take the hunks, not the files, and land them in that
-order; whichever goes second will want a rebase. One unrelated hunk in `cli.py` is a
-genuine bug fix — a main contract path resolved against the process's cwd rather than the project
-root — and goes alone rather than riding a themed PR; S1 was opened without it.
+**What S1 and S3 left for S4 to rebase past.** Both landed in `pipeline/core.py` (S1's `ecosystem`
+parameter, a few lines from the give-up boundary S4 retypes) and in `tests/test_autoprove_report.py`
+(S3's `cex_dump` envelope, in a file S4 otherwise rewrites). `git merge-tree` says #241 still merges
+into master without textual conflict, but it has not been re-gated against the new head and should
+be before it is reviewed. The `autoprove_common.py` collision between S1 and S3 — the `EVM` argument
+to `cont` and `app=EVM.name` on the options built three lines above it — resolved itself in the
+merge order.
 
-S1 and S3 also both change `composer/spec/source/autoprove_common.py`, three lines apart in the same
-`ProverBackend` construction: S1 drops the `EVM` argument `cont` no longer takes, and S3 adds `app=EVM.name`
-to the options built just above it. Both are open, so that one is a merge to pay rather than a hunk to pick.
+One unrelated hunk in `cli.py` is still unlanded: a main contract path resolved against the
+process's cwd rather than the project root. It is a genuine bug fix and goes alone rather than
+riding a themed PR; S1 was merged without it.
 
 ---
 
@@ -222,16 +221,17 @@ the shared seams go in.
 [#185](https://github.com/Certora/AutoProver/pull/185) and
 [#232](https://github.com/Certora/AutoProver/pull/232) are in the report package itself;
 [#228](https://github.com/Certora/AutoProver/pull/228) is in `pipeline/core.py`, a few lines from
-the give-up boundary S4 retypes. Whichever lands second pays the merge in each pair. Worth deciding
-the order deliberately rather than discovering it.
+the give-up boundary S4 retypes. All three are still open. Whichever lands second pays the merge in
+each pair, and S4 now also carries whatever S1 and S3 left in those files. Worth deciding the order
+deliberately rather than discovering it.
 
-**5. Is there an EVM-visible behaviour change anywhere in wave 1?** Two, and both PRs say so in
-their own bodies rather than leaving a reviewer to find it. **S3** is the larger: every EVM trace now
-renders through `TraceShape`, and `cex_dump` becomes a derived property whose text gains a
-`<counterexample>` envelope, which two report tests had to be updated for — it should be reviewed as
-if the no-change claim were false. **S4** is smaller and deliberate: a component that gives up now
-records its reason in the report, on EVM runs as much as any other. Everything else in the wave
-either defaults to today's value or is reached only by a caller that does not exist yet on master.
+**5. Is there an EVM-visible behaviour change anywhere in wave 1?** Two, and both PRs said so in
+their own bodies rather than leaving a reviewer to find it. **S3** was the larger and is now on
+master: every EVM trace renders through `TraceShape`, and `cex_dump` is a derived property whose
+text gained a `<counterexample>` envelope, which two report tests had to be updated for. **S4** is
+smaller and deliberate: a component that gives up now records its reason in the report, on EVM runs
+as much as any other. Everything else in the wave either defaults to today's value or is reached
+only by a caller that does not exist yet on master.
 
 ---
 
@@ -240,12 +240,13 @@ either defaults to today's value or is reached only by a caller that does not ex
 What to hand `git checkout eric/solanaProver -- …` after branching from `origin/master`. Every file
 the branch changes appears below, except those carrying only the dropped build-environment field.
 A path under two PRs, and the shared pipeline files marked *(hunks)*, are the overlaps noted in
-wave 1 — take the feature's hunks there, not the whole file.
+wave 1 — take the feature's hunks there, not the whole file. Rows for merged PRs are kept as the
+record of what went where; nothing is left to check out for those.
 
 | PR | Paths |
 |----|-------|
-| S1 | `composer/layout.py` `composer/spec/gen_types.py` `composer/sandbox/recipes.py` `composer/pipeline/ecosystem.py` `composer/foundry/entry.py` `composer/spec/source/autoprove_common.py` `tests/test_fs_forbidden_read.py` `tests/test_sandbox_config.py` `scripts/docker-compose.sandbox.yml` `composer/pipeline/cli.py` *(hunks)* |
-| S3 | `composer/certora_env.py` `composer/prover/{certoraRunWrapper,core,ptypes,results}.py` `analyzer/analysis.py` `composer/tools/{prover,thinking}.py` `composer/authoring/buffer.py` `composer/core/context.py` `composer/cvl/tools.py` `composer/workflow/executor.py` `composer/spec/source/{autoprove_common,harness}.py` `composer/spec/source/munge/compile_check.py` `tests/conftest.py` `tests/test_prover_app.py` `tests/test_prover_options.py` `tests/test_wrapped_prover_runner.py` `tests/test_solana_cex_trace.py` `tests/data/solana_cex/` `tests/test_tree_parsing.py` `tests/test_cex_analysis_failure_isolation.py` `tests/test_autoprove_report.py` *(hunks: the `_violated` helper and its expectation)* |
+| S1 *(merged)* | `composer/layout.py` `composer/spec/gen_types.py` `composer/sandbox/recipes.py` `composer/pipeline/ecosystem.py` `composer/foundry/entry.py` `composer/spec/source/autoprove_common.py` `tests/test_fs_forbidden_read.py` `tests/test_sandbox_config.py` `scripts/docker-compose.sandbox.yml` `composer/pipeline/cli.py` *(hunks)* |
+| S3 *(merged)* | `composer/certora_env.py` `composer/prover/{certoraRunWrapper,core,ptypes,results}.py` `analyzer/analysis.py` `composer/tools/{prover,thinking}.py` `composer/authoring/buffer.py` `composer/core/context.py` `composer/cvl/tools.py` `composer/workflow/executor.py` `composer/spec/source/{autoprove_common,harness}.py` `composer/spec/source/munge/compile_check.py` `tests/conftest.py` `tests/test_prover_app.py` `tests/test_prover_options.py` `tests/test_wrapped_prover_runner.py` `tests/test_solana_cex_trace.py` `tests/data/solana_cex/` `tests/test_tree_parsing.py` `tests/test_cex_analysis_failure_isolation.py` `tests/test_autoprove_report.py` *(hunks: the `_violated` helper and its expectation)* |
 | S4 | `composer/spec/source/report/{schema,collect,build}.py` `composer/spec/source/report_prover.py` `tests/test_autoprove_report.py` `composer/pipeline/core.py` *(hunks)* |
 | S5 | `composer/spec/source/source_env.py` `composer/spec/code_explorer.py` `composer/templates/code_explorer/rust/common_fragment.j2` `composer/spec/source/prover.py` |
 | R1 | `composer/cargo/` `composer/rustapp/toolchain.py` `tests/test_cvlr_symbols.py` `tests/data/vault_sbf_symbols.txt` |
