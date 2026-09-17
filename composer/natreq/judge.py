@@ -118,7 +118,7 @@ def judge_res_checker(
     r: JudgeResult,
     _: str
 ) -> str | None:
-    if st["memory"] is not None and not st["did_read"]:
+    if st["memory"] is not None and not st["drafted"]:
         return "Completion REJECTED: You must read your rough draft before submitting. Call read_rough_draft first."
     reqs = st["orig_reqs"]
     if len(reqs) != len(r.judgement_result):
@@ -151,7 +151,7 @@ def get_judge_tool(
     ) -> Command | str:
         judge_state = await run_to_completion(
             compiled_graph,
-            JudgeInput(input=[req_list], vfs=state["vfs"], orig_reqs=reqs, memory=None, did_read=False),
+            JudgeInput(input=[req_list], vfs=state["vfs"], orig_reqs=reqs, memory=None, drafted=False),
             thread_id=uuid.uuid1().hex,
             context=None,
             # Preserves the langgraph default this run has always ridden on.

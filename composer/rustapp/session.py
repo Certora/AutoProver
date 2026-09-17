@@ -862,7 +862,7 @@ async def run_session[K: (RustFormalResult, RustSetupSpec)](
             missing="No spec written yet — use `put_spec` first.",
             display=ToolDisplay("Editing spec", suppress_ack("Spec edit result")),
             validator=_syntax_check(module, input_json),
-            reset_read=None,
+            reset_draft=None,
         ),
         give_up_tool(
             name="give_up", description=_GIVE_UP_DESCRIPTION, label=f"{backend_name} authoring",

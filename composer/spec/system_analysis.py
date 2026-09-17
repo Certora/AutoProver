@@ -378,7 +378,7 @@ async def run_component_analysis[T: BaseApplication](
         ])
     inputs.extend(extra_input)
 
-    flow_input = AnalysisInput(input=inputs, did_read=False, memory=None)
+    flow_input = AnalysisInput(input=inputs, drafted=False, memory=None)
 
     res = await run_to_completion(
         graph,

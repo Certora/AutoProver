@@ -9,7 +9,7 @@ source_spec (source-based spec generation) workflows.
 import logging
 import subprocess
 import tempfile
-from typing import Annotated, Literal, overload
+from typing import Annotated, overload
 from langchain_core.messages import AIMessage
 from typing_extensions import TypedDict, ReadOnly
 
@@ -18,7 +18,7 @@ from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from composer.authoring.buffer import (
-    READ_KEY, SPEC_KEY, SpecBuffer, SpecBufferSet, SpecBufferWithRead,
+    DRAFT_KEY, SPEC_KEY, SpecBuffer, SpecBufferSet, SpecBufferWithDraft,
     apply_spec_update, edit_spec_tool, get_spec_tool,
 )
 from composer.certora_env import typechecker_jar
@@ -59,7 +59,7 @@ class PutCVLSchemaLG(BaseModel):
 
 PutCVLSchemaLG.__doc__ = put_cvl_description
 
-DEFAULT_READ_KEY = READ_KEY
+DEFAULT_DRAFT_KEY = DRAFT_KEY
 
 DEFAULT_SPEC_KEY = SPEC_KEY
 
@@ -132,7 +132,7 @@ def maybe_update_cvl(
     pp: str,
     spec_key: str,
     ast_json: dict | None = None,
-    reset_read: str | None = None
+    reset_draft: str | None = None
 ) -> str | Command:
     """
     Validate CVL syntax and update state if valid.
@@ -144,7 +144,7 @@ def maybe_update_cvl(
         tool_call_id=tool_call_id,
         text=pp,
         spec_key=spec_key,
-        reset_read=reset_read,
+        reset_draft=reset_draft,
         validator=lambda text: cvl_syntax_error(text, ast_json),
     )
 
@@ -161,7 +161,7 @@ def put_cvl(
         pp = pretty_print(CVLFile.model_validate(cvl_file))
     except Exception:
         return "Failed to pretty print the AST"
-    return maybe_update_cvl(tool_call_id=tool_call_id, pp=pp, ast_json=cvl_file, reset_read=DEFAULT_READ_KEY, spec_key=DEFAULT_SPEC_KEY)
+    return maybe_update_cvl(tool_call_id=tool_call_id, pp=pp, ast_json=cvl_file, reset_draft=DEFAULT_DRAFT_KEY, spec_key=DEFAULT_SPEC_KEY)
 
 @tool_display_of(_put_cvl_raw_display)
 @tool(args_schema=PutCVLRaw)
@@ -170,23 +170,16 @@ def put_cvl_raw(
     cvl_file: str
 ) -> str | Command:
     """Put a CVL file using raw surface syntax."""
-    return maybe_update_cvl(tool_call_id=tool_call_id, pp=cvl_file, reset_read=DEFAULT_READ_KEY, spec_key=DEFAULT_SPEC_KEY)
+    return maybe_update_cvl(tool_call_id=tool_call_id, pp=cvl_file, reset_draft=DEFAULT_DRAFT_KEY, spec_key=DEFAULT_SPEC_KEY)
 
 #: The CVL flows' names for the shared buffer state shapes.
 WithCurrSpec = SpecBuffer
-WithCurrSpecAndDidRead = SpecBufferWithRead
+WithCurrSpecAndDrafted = SpecBufferWithDraft
 WithCurrSpecNonNull = SpecBufferSet
 
 _GET_CVL_DESCRIPTION = """
     Retrive the textual representation of the current specification.
     """
-
-@overload
-def get_cvl[S: SpecBufferWithRead](
-    ty: type[S],
-    *,
-    set_did_read: Literal[True],
-) -> BaseTool: ...
 
 @overload
 def get_cvl[S: SpecBufferSet](
@@ -199,22 +192,8 @@ def get_cvl[S: SpecBuffer](
     ty: type[S],
 ) -> BaseTool: ...
 
-def get_cvl(
-    ty: type,
-    *,
-    set_did_read: bool = False,
-) -> BaseTool:
-    """The CVL read-back tool over ``curr_spec``. ``set_did_read`` additionally stamps
-    ``did_read``, which the property judge's completion validator requires."""
-    if set_did_read:
-        return get_spec_tool(
-            ty,
-            name="get_cvl",
-            description=_GET_CVL_DESCRIPTION,
-            missing="No spec file written yet",
-            display=_get_cvl_display,
-            set_did_read=True,
-        )
+def get_cvl(ty: type) -> BaseTool:
+    """The CVL read-back tool over ``curr_spec``."""
     return get_spec_tool(
         ty,
         name="get_cvl",
