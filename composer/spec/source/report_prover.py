@@ -11,7 +11,7 @@ from pathlib import Path
 from prover_output_utility import ProverOutputAPI
 from prover_output_utility.models import CheckResult, NodeStatus
 
-from composer.spec.cvl_generation import GeneratedCVL
+from composer.spec.cvl_generation import GeneratedCVL, _output_link
 from composer.spec.source.report.collect import Formalized, Verdict, VerdictFetcher
 from composer.spec.source.report.schema import Outcome, RuleName
 
@@ -30,7 +30,12 @@ _NODE_TO_OUTCOME: dict[NodeStatus, Outcome] = {
 
 
 def _fetch(api: ProverOutputAPI, link: str) -> dict[RuleName, Verdict]:
-    """rule_name -> rolled-up `Verdict` for one prover run. Best-effort: any POU failure -> {}."""
+    """rule_name -> rolled-up `Verdict` for one prover run. Best-effort: any POU failure -> {}.
+
+    ``run_links`` holds raw ``/jobStatus/`` job URLs; POU (and the report's own links) want the
+    ``/output/`` view, so normalize before the call and stamp the normalized link onto the verdict.
+    """
+    link = _output_link(link) or link
     try:
         checks: list[CheckResult] = api.get_all_checks(link)
     except Exception:
