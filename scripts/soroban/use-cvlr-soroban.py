@@ -75,16 +75,18 @@ def inherit_cvlr_stuff(t):
   t["dependencies"]["soroban-sdk"] = put_stuff( { "workspace": True, "default-features": False })
     
   t["dependencies"]["cvlr"] = put_stuff({ "workspace": True, "default-features": False })
+  t["dependencies"]["cvlr-soroban"] = put_stuff({ "workspace": True, "default-features": False })
   t["dependencies"]["cvlr-soroban-derive"] = put_stuff({ "workspace": True, "default-features": False })
-  if check_muxed_address():
-    t["dependencies"]["cvlr-soroban"] = put_stuff({ "workspace": True, "default-features": False })
-  else:
-    t["dependencies"]["cvlr-soroban"] = put_stuff({ "workspace": True, "default-features": False, "features": ["nomuxedaddress"] })
 
   
 def put_dependencies(t):
   t["dependencies"]["cvlr"] = put_stuff({"git": "https://github.com/Certora/cvlr", "branch": "0.6.1-soroban-changes", "default-features": False})
-  t["dependencies"]["cvlr-soroban"] = put_stuff({ "path": "../cvlr-soroban/cvlr-soroban", "default-features": False })
+  
+  if check_muxed_address():
+    t["dependencies"]["cvlr-soroban"] = put_stuff({ "path": "../cvlr-soroban/cvlr-soroban", "default-features": False })
+  else:
+    t["dependencies"]["cvlr-soroban"] = put_stuff({ "path": "../cvlr-soroban/cvlr-soroban", "default-features": False, "features": ["nomuxedaddress"] })
+
   t["dependencies"]["cvlr-soroban-derive"] = put_stuff({ "path": "../cvlr-soroban/cvlr-soroban-derive", "default-features": False })
 
 
