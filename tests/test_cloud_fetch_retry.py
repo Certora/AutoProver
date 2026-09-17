@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 import composer.prover.cloud as cloud
+from prover_output_utility.exceptions import JobNotFoundError
 
 
 class _FakeAPI:
@@ -50,3 +51,22 @@ def test_gives_up_after_max_attempts(tmp_path, monkeypatch):
     with pytest.raises(ConnectionResetError):
         _fetch(fake, tmp_path, monkeypatch)
     assert fake.calls == cloud._FETCH_MAX_ATTEMPTS  # capped — it never loops forever
+
+
+class _PermanentFailAPI:
+    """A POU client whose fetch always raises a permanent error — retrying cannot change it."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def fetch_sources_and_treeview_files(self, job_id: str, dest: Path) -> None:
+        self.calls += 1
+        raise JobNotFoundError("no such job")
+
+
+def test_permanent_error_is_not_retried(tmp_path, monkeypatch):
+    fake = _PermanentFailAPI()
+    monkeypatch.setattr(cloud, "_results_api", lambda: fake)
+    with pytest.raises(JobNotFoundError):
+        asyncio.run(cloud._fetch_results("deadbeefcafebabe", tmp_path))
+    assert fake.calls == 1  # surfaced at once — no backoff spent re-failing identically

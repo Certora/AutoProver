@@ -19,6 +19,9 @@ from urllib.parse import urlparse, parse_qs
 
 import aiohttp
 from prover_output_utility import ProverOutputAPI
+from prover_output_utility.exceptions import (
+    AuthenticationError, InvalidJobError, JobNotFoundError, ParseError, ProverAPIError,
+)
 from prover_output_utility.models import JobStatus, convert_job_status
 
 logger = logging.getLogger("composer.spec")
@@ -169,6 +172,11 @@ def _results_api() -> ProverOutputAPI:
 _FETCH_MAX_ATTEMPTS = 3
 _FETCH_BACKOFF_BASE_S = 2.0
 
+#: POU raises everything as a ``ProverAPIError``; these subclasses are the ones a second attempt
+#: cannot change — a bad token, a malformed job reference, a job that is not there, a document that
+#: does not parse. Retrying those spends the backoff to fail identically, so re-raise them at once.
+_PERMANENT_FETCH_ERRORS = (AuthenticationError, InvalidJobError, JobNotFoundError, ParseError)
+
 
 async def _fetch_results(job_id: str, dest: Path) -> None:
     """Download a completed job's sources + tree view into ``dest``, retrying a transient failure.
@@ -182,8 +190,10 @@ async def _fetch_results(job_id: str, dest: Path) -> None:
                 _results_api().fetch_sources_and_treeview_files, job_id, dest
             )
             return
-        except Exception as exc:
-            if attempt == _FETCH_MAX_ATTEMPTS:
+        # ``requests`` failures that escape POU's wrapping are OSErrors (RequestException is an
+        # IOError), so the two clauses together cover the transport.
+        except (ProverAPIError, OSError) as exc:
+            if isinstance(exc, _PERMANENT_FETCH_ERRORS) or attempt == _FETCH_MAX_ATTEMPTS:
                 raise
             backoff = _FETCH_BACKOFF_BASE_S * 2 ** (attempt - 1)
             logger.warning(
