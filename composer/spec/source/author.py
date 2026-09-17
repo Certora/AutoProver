@@ -38,6 +38,8 @@ from composer.spec.source.spec_buffers import (
 from composer.spec.source.buffer_tools import (
     put_buffer, get_buffer, edit_buffer, list_buffers, delete_buffer,
 )
+from composer.spec.source.autosetup import read_summarization_candidates
+from summarization_detector.schema import HostileCandidate
 from composer.spec.context import WorkflowContext, CVLGeneration, CacheKey, CVLJudge, SourceCode
 from composer.spec.types import PropertyFormulation, PropertyTitle, RuleName
 from composer.pipeline.core import GaveUp, ToolBinder, InjectingToolExtension, Curtailed
@@ -268,6 +270,8 @@ class PropertyGenParams(TypedDict):
     #: list. It changes what the agent is told to do when stuck: a focused batch has no other
     #: work to fall back on, so the prompt directs it to decompose rather than to skip.
     focused: bool
+    #: The summarization detector's prover-hostile candidates from the AutoSetup run (may be empty).
+    hostile_candidates: list[HostileCandidate]
 
 class PropertyGenerationConfig(SummaryConfig[SourceCVLGenerationState]):
     @override
@@ -910,6 +914,7 @@ async def batch_cvl_generation(
         "contract_name": source.contract_name,
         "sort": "existing",
         "focused": focus is not None,
+        "hostile_candidates": read_summarization_candidates(Path(source.project_root)),
     })
 
     sys_prompt : list[RawPromptInput | type[CacheMarker]] = [

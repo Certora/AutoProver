@@ -130,6 +130,12 @@ Default Behavior: By default, all configurations must be successfully submitted.
         help='Skip cache warmup phase'
     )
 
+    parser.add_argument(
+        '--skip-test-run',
+        action='store_true',
+        help='Skip the sanity Test Run (and its setup-completeness / comprehensive reports).'
+    )
+
     # Generator options (all enabled by default)
     parser.add_argument(
         '--disable-extcall',
