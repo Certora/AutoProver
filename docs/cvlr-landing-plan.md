@@ -172,12 +172,14 @@ mentions it in the record of a run that actually happened and should be left alo
 ## Decisions to make before starting
 
 **1. ~~[#238](https://github.com/Certora/AutoProver/pull/238) duplicates
-[#223](https://github.com/Certora/AutoProver/pull/223).~~ Settled: #238 is closed and #223 is the
-one that lands, and this branch no longer carries its own copy of the change.** Two things from the
-closed PR are still worth raising as review comments on #223: it declined to retry the four failures a second attempt cannot change
-(a missing job, a bad token, a malformed reference, an unparseable document), where #223 retries
-every exception; and it relied on the client library's own completion markers to resume, where #223
-wipes the destination between attempts and re-downloads what already arrived.
+[#223](https://github.com/Certora/AutoProver/pull/223).~~ Settled: #238 is closed, and #223 merged
+on 2026-09-17 as `0fcec7d1`.** Of the two things worth carrying from the closed PR, one landed with
+it: `_PERMANENT_FETCH_ERRORS` declines the four failures a second attempt cannot change — a bad
+token, a malformed job reference, a missing job, an unparseable document. The other did not, and is
+now a stated choice rather than an oversight: each attempt starts from an empty destination so a
+truncated file cannot survive one, at the cost of re-downloading what already arrived, where the
+client library's own completion markers would have let a retry resume. This branch never carried its
+own copy, so its next rebase takes the fix rather than conflicting with it.
 
 **2. Does the 5 MB tape belong in the repository?** C8b is the only PR here that a reviewer cannot
 read. It is a generated artifact, and the argument for checking it in is that a gate nobody can run
