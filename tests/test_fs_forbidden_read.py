@@ -12,8 +12,11 @@ graphcore hands the predicate a ``PurePosixPath`` of a project-root-relative pat
 that is how it is exercised here.
 """
 
+import re
 from pathlib import PurePosixPath
 
+from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ
+from composer.sandbox.recipes import SANDBOX_CARGO_DIR, SANDBOX_TMP_DIR
 from composer.spec.util import fs_forbidden_read
 
 
@@ -81,3 +84,55 @@ def test_ordinary_sources_are_not_caught_by_the_generated_output_rules() -> None
     assert can_read("apps/src/min.js")
     assert can_read("services/daemon.mjs")
     assert can_read("README.md")
+
+
+# ---------------------------------------------------------------------------------------------
+# The Rust counterpart, which is a regex rather than a predicate
+# ---------------------------------------------------------------------------------------------
+
+
+def _rust_can_read(path: str) -> bool:
+    """``RUST_FORBIDDEN_READ`` as graphcore applies it — a full match against a
+    project-root-relative path."""
+    return re.fullmatch(RUST_FORBIDDEN_READ, path) is None
+
+
+def test_the_sandboxs_private_cargo_home_is_never_readable():
+    assert not _rust_can_read(
+        str(SANDBOX_CARGO_DIR / "registry/src/index.crates.io-6f17/anchor-lang-0.31.1/src/lib.rs")
+    )
+    assert not _rust_can_read(str(SANDBOX_TMP_DIR / "rustc123/symbols.o"))
+    assert not _rust_can_read(".certora_internal/anything/at/all.rs")
+
+
+def test_the_internal_directory_is_withheld_wherever_it_sits():
+    # A backend that builds in a working copy under the project root puts that build's private
+    # ``CARGO_HOME`` inside the copy, so the tree to withhold is not at a fixed depth.
+    assert not _rust_can_read(
+        "build_work/copy/.certora_internal/sandbox/cargo/registry/src/idx/solana-sbpf-0.1/lib.rs"
+    )
+    assert not _rust_can_read("any/depth/at/all/.certora_internal/x")
+
+
+def test_a_nested_target_directory_is_not_readable_either():
+    assert not _rust_can_read("crates/harness/target/debug/deps/x.rs")
+    assert not _rust_can_read("target/debug/deps/x.rs")
+
+
+def test_a_withheld_directory_matches_as_an_entry_so_a_walk_can_prune_it():
+    """graphcore prunes a subtree by testing the bare directory entry (``DirBackend.dump_to``
+    hands ``copytree``'s ``ignore`` the entry names). Matching only the contents still yields the
+    right answer, but walks the whole tree to reach it."""
+    assert not _rust_can_read(".certora_internal")
+    assert not _rust_can_read("build_work/copy/.certora_internal")
+    assert not _rust_can_read("target")
+    assert not _rust_can_read("crates/harness/target")
+
+
+def test_the_programs_own_source_and_harness_stay_readable():
+    assert _rust_can_read("program/src/processor.rs")
+    assert _rust_can_read("program/src/certora/specs/deposits.rs")
+    assert _rust_can_read("program/src/certora/envs/cvlr_summaries.txt")
+    # Only the directories themselves, not every name they are a substring of.
+    assert _rust_can_read("src/targets.rs")
+    assert _rust_can_read("my_target/src/lib.rs")
