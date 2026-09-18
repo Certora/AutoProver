@@ -29,9 +29,9 @@
     "template_name": "foundry_property_generation_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
-  "composer.kb.kb_context:CVL_INDEX_TEMPLATE": {
+  "composer.kb.kb_context:KB_INDEX_TEMPLATE": {
     "module": "composer.kb.kb_context",
-    "qualname": "CVL_INDEX_TEMPLATE",
+    "qualname": "KB_INDEX_TEMPLATE",
     "template_name": "kb_index.j2",
     "ty_sort": "TypedTemplate"
   },

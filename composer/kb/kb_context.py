@@ -38,6 +38,10 @@ class KBRecipe[C: str](BaseModel):
 
 
 class IndexModel[C: str](BaseModel):
+    #: What each channel means for the agent reading it. Rendered with the index: a channel tells a
+    #: stuck agent whether the fix is in its action space, which it cannot do if only the index file
+    #: says what the name means.
+    channels: dict[C, str]
     recipes: list[KBRecipe[C]]
 
 
@@ -46,6 +50,7 @@ class RecipeIndexParams(TypedDict):
     #: the index was validated. Keeping it narrow here would make the params type generic, which
     #: the template fuzzer cannot resolve (``composer/meta/resolver.py``).
     recipes: Sequence[KBRecipe[str]]
+    channels: Mapping[str, str]
     kb_retrieval_name: str
     label: str
 
@@ -116,9 +121,11 @@ def kb_loader[C: str](recipes: RecipeSet[C]) -> Callable[[str], str | None]:
 
 
 def _recipe_index_document[C: str](label: str, recipes: RecipeSet[C]) -> str:
+    model = _kb_model(recipes)
     params: RecipeIndexParams = {
         "kb_retrieval_name": recipes.tool_name,
-        "recipes": cast(Sequence[KBRecipe[str]], _kb_model(recipes).recipes),
+        "recipes": cast(Sequence[KBRecipe[str]], model.recipes),
+        "channels": cast(Mapping[str, str], model.channels),
         "label": label,
     }
     return recipes.index_template.bind(params).render_to(load_jinja_template)
@@ -154,13 +161,13 @@ def with_context[C: str](bundle: KnowledgeBundle[C], prompt: "PromptInput") -> "
     return [*context_documents(bundle), CacheMarker, *rest]
 
 
-CVL_INDEX_TEMPLATE = TypedTemplate[RecipeIndexParams]("kb_index.j2")
+KB_INDEX_TEMPLATE = TypedTemplate[RecipeIndexParams]("kb_index.j2")
 
 CVL_RECIPES = RecipeSet[CvlChannel](
     tool_name="get_cvl_recipe",
     index_resource="cvl_recipes_index.yaml",
     parse_index=lambda raw: IndexModel[CvlChannel].model_validate(raw),
-    index_template=CVL_INDEX_TEMPLATE,
+    index_template=KB_INDEX_TEMPLATE,
 )
 
 CVL_BUNDLE = KnowledgeBundle[CvlChannel](
@@ -194,8 +201,16 @@ def with_cvl_context(prompt: "PromptInput") -> "PromptInput":
 #: SKIP is ``record_skip`` — the honest terminal channel, which CVL has no peer for.
 type CvlrChannel = Literal["RULE", "MOCK", "EDIT", "CONF", "SKIP"]
 
+CVLR_RECIPES = RecipeSet[CvlrChannel](
+    tool_name="get_cvlr_recipe",
+    index_resource="cvlr_recipes_index.yaml",
+    parse_index=lambda raw: IndexModel[CvlrChannel].model_validate(raw),
+    index_template=KB_INDEX_TEMPLATE,
+)
+
 CVLR_BUNDLE = KnowledgeBundle[CvlrChannel](
     label="CVLR",
+    recipes=CVLR_RECIPES,
     specs=(
         ContextSpec(
             title="CVLR and the Certora Solana Prover",

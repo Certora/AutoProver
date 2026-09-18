@@ -64,10 +64,9 @@ genuinely cannot receive — and it is also how a rule becomes vacuous, passing 
 satisfies its preconditions at all. Two contradicting assumptions make every assertion true.
 
 So: assume the *least* you can get away with. Vacuity is reported rather than mistaken for success
-whenever the conf sets `rule_sanity` — check the conf your run was given, because one that omits
-it gets no
-such report and a vacuous rule reads as a clean pass. If a rule passes immediately and you are surprised, check
-for vacuity before believing it.
+whenever the conf sets `rule_sanity` — check the conf your run was given, because one that omits it
+gets no such report and a vacuous rule reads as a clean pass. If a rule passes immediately and you
+are surprised, check for vacuity before believing it.
 
 ## Nondeterminism is the quantifier
 
