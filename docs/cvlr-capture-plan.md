@@ -789,7 +789,7 @@ registration:
 | Step | Artifact |
 |---|---|
 | Build the manuals | [gen_docs.sh](../scripts/gen_docs.sh) → `scripts/prover-docs/solana.html`, now also writing a `PROVENANCE` file naming the docs revision |
-| Parse and ingest | `composer.scripts.ragbuild --knowledge-base cvlr_kb` — the same producer the CVL corpus uses, writing chunks and manual sections straight to the `cvlr_rag` schema. There is no documentation manifest and no separate producer: the source is a sphinx build this repo already runs (see [cvlr-todo.md](./cvlr-todo.md) U6, which reversed the arrangement below) |
+| Parse and ingest | `composer.scripts.ragbuild --output "$CVLR_DEFAULT_CONNECTION"` — the same producer the CVL corpus uses, writing chunks and manual sections straight to the `cvlr_rag` schema. There is no documentation manifest and no separate producer: the source is a sphinx build this repo already runs (see [cvlr-todo.md](./cvlr-todo.md) U6, which reversed the arrangement below) |
 | ~~Produce~~ | ~~`certora-cvlr-kb` `tools/docs_manifest.py` → `cvlr-docs.rag.json`~~ — retired. It had rebuilt, in a second repo, a manual this one was already building |
 | Spot-check | 20 authoring-agent questions (§4.9): 20/20 returned a relevant section, `get_section` round-trips, keyword search resolves `cvlr_rules` at 0.998 |
 
@@ -1424,7 +1424,7 @@ is worth recording:
 5. ~~**The docs manifest producer** (§4.7.1)~~ — **retired.** It parsed a manual AutoProver was
    already building, in a repo that then had to reach back for the parser, to produce a manifest an
    importer then read. `ragbuild` does the whole of that in one step and always could; the corpus's
-   documentation half is now ingested there directly (`--knowledge-base cvlr_kb`). What the episode
+   documentation half is now ingested there directly (`--output CVLR_DEFAULT_CONNECTION`). What the episode
    left behind is one real fix — a `<blockquote>` the traversal dropped, which is where the Solana
    manual states its pre/post snapshot methodology — and one measurement, recorded in
    [rag-import-format.md](./rag-import-format.md) §5: the flat manifest format cannot express

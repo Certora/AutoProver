@@ -334,7 +334,7 @@ populates it at `setup-db` time.
    it for the pieces they must not restate — the manifest model, which pulls in neither spaCy, an
    embedding model nor a DB. That is the producer/importer split working as intended. The corpus's
    documentation half is *not* a producer: it is a sphinx build this repo already runs, ingested by
-   `ragbuild.py` straight into the knowledge base (`--knowledge-base cvlr_kb`), which is the right
+   `ragbuild.py` straight into its database (`--output CVLR_DEFAULT_CONNECTION`), which is the right
    shape whenever the source is something we build anyway.
 
 **Untouched:** `foundry_ragbuild.py`, its wrapper, and `refresh_rag.sh`. No runtime code changes —
