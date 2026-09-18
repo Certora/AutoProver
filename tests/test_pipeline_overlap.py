@@ -151,7 +151,9 @@ async def _drive(
 
     async def fake_extract_all(*_a, **_kw):
         await extract.run()
-        return []  # no batches — the driver's own "nothing extracted" error, if it gets that far
+        # no batches and nothing failed — the driver's own "nothing extracted" error,
+        # if it gets that far
+        return core.ExtractionResult([], [])
 
     monkeypatch.setattr(core, "run_component_analysis", fake_analysis)
     monkeypatch.setattr(core, "_extract_all", fake_extract_all)
@@ -225,7 +227,7 @@ async def test_cancelling_the_run_cancels_the_steps_it_was_waiting_on(monkeypatc
         return await analysis.run()
 
     async def fake_extract_all(*_a, **_kw):
-        return []
+        return core.ExtractionResult([], [])
 
     monkeypatch.setattr(core, "run_component_analysis", fake_analysis)
     monkeypatch.setattr(core, "_extract_all", fake_extract_all)
