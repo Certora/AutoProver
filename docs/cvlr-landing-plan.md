@@ -103,18 +103,19 @@ code and land C6 last, after which the backend appears all at once and works.
 | **C4a** The authoring loop | 10 | +2642 | Author, state, rule extraction, the judge's prompts, and the feedback round. Carries the `CvlrJudge` / `CvlrGeneration` cache markers in `spec/context.py`, which are CVLR-specific and have no business in a shared PR. |
 | **C4b** The prompt corpus, and a mark for one-off measurements | 10 | +3186 | Guidance, the worked example rendered against the analyzed program, and the knowledge tests that pin what the prompts must and must not claim. Carries the `measurement` pytest mark and the CI selector `expensive and not measurement`, because `test_cvlr_judge_round_cost.py` — which lands here — is the only test that has it: a mark registered before its first user would deselect nothing and give a reviewer no way to judge the CI change. |
 | **C5** Verification and tuning | 10 | +3105 | Submission, the prover-side tuning directives, loop bounds, and the Anchor surface analysis. |
-| **R3** A Solana container | 8 | +400 −60 | `scripts/Dockerfile.solana` and `scripts/docker-compose.solana.yml`: a second AutoProver container, `autoprove-solana`, carrying the Rust toolchain and the platform-tools release, layered on the base image — which stays lean and loses nothing but its docs stage, where the one-element `for name in cvl` loop becomes `cvl solana` so the shared postgres gets the manual the backend is for. The shared service body moves to `scripts/docker-compose.common.yml`, which the EVM and Solana services both extend. |
 | **C6** Pipeline and entry | 12 | +3083 −6 | `CvlrBackend`, the CLI entry points, the artifact store, and the plumbing tests. The PR that makes the backend exist. Lands without the two pinned-run flags — see *Deferred: pinned runs* below. |
+| **R3** A Solana container | 8 | +400 −60 | `scripts/Dockerfile.solana` and `scripts/docker-compose.solana.yml`: a second AutoProver container, `autoprove-solana`, carrying the Rust toolchain and the platform-tools release, layered on the base image — which stays lean and loses nothing but its docs stage, where the one-element `for name in cvl` loop becomes `cvl solana` so the shared postgres gets the manual the backend is for. The shared service body moves to `scripts/docker-compose.common.yml`, which the EVM and Solana services both extend. |
 
 Order inside the wave: **C1a** before **C1b** (the env refresher imports the scaffold's constants),
-and **C6** last. C3a/C3b, C4a/C4b and C5 are independent of each other.
+then **C6**, then **R3**. C3a/C3b, C4a/C4b and C5 are independent of each other.
 
-**R3** was wave 2 until the split above was measured against the rule that every PR passes the gate
-on master alone. `tests/test_cvlr_image.py` imports `composer.spec.cvlr.conf` to check that the
-image bakes the platform-tools version the conf template asks for, so it cannot pass before **C1a**;
-and its entrypoint guard names `console-solana`, which is not a console script until **C6**. It is
-scheduled here, after C1a, and is the one PR in this wave that touches no `composer/spec/cvlr/`
-file.
+**R3** was wave 2, and goes last instead — after **C6**, not merely after **C1a**. C1a is the hard
+floor: `tests/test_cvlr_image.py` imports `composer.spec.cvlr.conf` to check that the image bakes
+the platform-tools version the conf template asks for. But the container exists to run
+`console-solana`, which is not a console script until C6, and nothing builds the image in CI, so
+landing it earlier would ship an entrypoint guarding a command that does not exist and would not
+even buy a build-breakage signal in exchange. It is the one PR in this wave that touches no
+`composer/spec/cvlr/` file.
 
 The container layout is the one `eric/crucible-app` already ships: one lean base image, and a
 sibling image per toolchain layered on it with `FROM ${BASE_IMAGE}`. Crucible, Solana and a future
