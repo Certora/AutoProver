@@ -1,21 +1,16 @@
-"""Which source files a cargo build actually compiled, read back from rustc's dep-info.
+"""Source files a cargo build compiled, from rustc's dep-info.
 
-The Rust answer to the EVM backend's ``EditsNotCompiled``: an edit that lands in a file the build
-never reads changes nothing and reports nothing, and the run goes on to claim a verdict about code it
-did not verify. On Solana that failure has a specific and common shape: an attribute inserted into a
-file the ``certora`` feature gates out, or into a module no enabled feature declares.
+Same role as the EVM backend's ``EditsNotCompiled``: an edit in a file the
+build never reads changes nothing, and the run then claims a verdict about code
+it did not verify. On Solana that usually means an attribute in a file the
+``certora`` feature gates out.
 
-rustc emits a Makefile-style ``.d`` beside each artifact listing every source it read, and cargo keeps
-them under ``target/<profile>/deps/``. So "did my edit reach the build" is a set-membership question
-against a file the compiler wrote.
-
-**Finding the right ``.d`` is the whole problem, and a marker solves it.** Several feature variants of
-one crate coexist in a shared ``target/`` by design — that is what keeps a rebuild incremental —
-each with its own ``.d``, and nothing in the filename says which feature set produced it. Rather
-than guess from mtimes, the caller names a file it *knows* this build compiled — the unit's own
-harness module, which only this unit's feature declares — and the dep-info that mentions it is this
-build's by construction. A caller that can name no such file gets ``None`` and should say it could
-not check, rather than reporting a false pass.
+rustc writes a Makefile-style ``.d`` next to each artifact. Several feature
+variants of one crate share a ``target/``, each with its own ``.d``, and the
+filename does not say which feature set produced it. The caller names a file
+this build is known to have compiled (the unit's harness module). The dep-info
+that mentions it belongs to this build. If the caller cannot name such a file,
+this returns ``None``.
 """
 
 import logging
@@ -24,17 +19,16 @@ from pathlib import Path
 
 _log = logging.getLogger(__name__)
 
-#: Rustc escapes a space in a path as ``\ ``; every other byte is literal. Splitting on unescaped
-#: whitespace is therefore the whole parse.
+#: rustc escapes a space in a path as ``\ ``; every other byte is literal.
 _UNESCAPED_SPACE = re.compile(r"(?<!\\)\s+")
 
 
 def _targets(text: str) -> list[list[str]]:
-    """The dependency lists in one ``.d``, one per rule.
+    """Dependency lists in one ``.d``, one per rule.
 
-    A dep-info file carries a rule per emitted artifact (``foo.d:`` and ``libfoo.rmeta:`` name the
-    same sources) followed by an empty rule per source. Empty right-hand sides are dropped, which is
-    what removes the trailing per-source stanzas without having to recognise them.
+    A dep-info file has a rule per emitted artifact, then an empty rule per
+    source. Empty right-hand sides are dropped, which removes those trailing
+    stanzas.
     """
     lists: list[list[str]] = []
     for line in text.splitlines():
@@ -46,12 +40,11 @@ def _targets(text: str) -> list[list[str]]:
 
 
 def _resolve(raw: str, roots: tuple[Path, ...]) -> Path | None:
-    """A dep-info path as an absolute one, or ``None`` if it names nothing here.
+    """A dep-info path as an absolute path, or ``None`` if it does not exist here.
 
-    Paths are relative to the directory cargo invoked rustc from, which is the workspace root for a
-    workspace and the package root for a lone crate — and the two are the same directory often
-    enough that guessing wrong is easy to miss. Both are tried, and a path that resolves under
-    neither is dropped rather than fabricated.
+    Paths are relative to the directory cargo invoked rustc from: the workspace
+    root for a workspace, the package root for a single crate. Those are often
+    the same directory, so both are tried.
     """
     candidate = Path(raw)
     if candidate.is_absolute():
@@ -68,11 +61,8 @@ def compiled_sources(
 ) -> frozenset[Path] | None:
     """Absolute paths of every source read by the build that compiled ``marker``.
 
-    ``package`` is the cargo package name; its dep-info files are named after the crate, with ``-``
-    normalised to ``_``. ``marker`` identifies which feature variant's build to read — see the module
-    docstring. ``None`` means no dep-info naming ``marker`` was found, which is the honest answer
-    when the build did not happen, was a no-op from a previous session, or wrote somewhere this does
-    not look.
+    ``package`` is the cargo package name; dep-info files use ``_`` for ``-``.
+    ``None`` means no dep-info naming ``marker`` was found.
     """
     crate = package.replace("-", "_")
     roots = tuple(dict.fromkeys(r for r in (workdir, package_root) if r is not None))

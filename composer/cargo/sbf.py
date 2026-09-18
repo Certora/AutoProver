@@ -1,32 +1,24 @@
-"""Solana's verification build: ``cargo certora-sbf``, and the JSON it speaks.
+"""Solana verification build: ``cargo certora-sbf`` and its JSON output.
 
-This is the **slow tier** of the two-tier compile gate (:mod:`composer.cargo.session` is the fast
-one) — the real chain build, run before a prover submission rather than per write — and it is also
-the one place where the backend and ``certoraSolanaProver`` have to agree on what was built.
+The slow compile gate (:mod:`composer.cargo.session` is the fast one), and the
+point where the backend and ``certoraSolanaProver`` agree on what was built.
 
-They agree through a JSON document that neither of them invents. ``cargo certora-sbf --json`` prints
-it (to stdout, with the compile log on stderr), and ``certoraSolanaProver``'s ``build_script``
-attribute is defined as "run this and read that JSON from its stdout"
-(``CertoraProver/certoraParseBuildScript.py``): ``project_directory``, ``executables``, ``sources``,
-and — read out of the package's own ``[package.metadata.certora]`` — ``solana_inlining`` /
-``solana_summaries``. So the backend does not construct a manifest, does not translate one, and does
-not record one to replay later. It runs the build, reads the JSON, and hands the prover a
-:func:`build_script` that reruns *the same command*, confined the same way.
+``cargo certora-sbf --json`` prints a JSON document (stdout; compile log on
+stderr). ``certoraSolanaProver``'s ``build_script`` is defined as "run this and
+read that JSON from stdout" (``CertoraProver/certoraParseBuildScript.py``). The
+backend runs the build, reads the JSON, and gives the prover a
+:func:`build_script` that reruns the same command, confined the same way.
 
-Why rerun rather than replay, given the build is already done: the second run is a warm cargo no-op
-(sub-second), and what it buys is that the manifest the prover acts on always describes a build that
-exists on disk right now. A recorded one goes stale the moment anything moves, and its failure mode
-is the prover uploading the wrong sources or a missing artifact — which surfaces as a verification
-result, not as a build error.
+The prover reruns the build instead of replaying a saved manifest. The second
+run is a warm cargo no-op. A saved manifest goes stale if anything moves, and
+the prover can then upload the wrong sources or a missing artifact.
 
-Why a build script at all, rather than handing over the finished ``.so`` through the conf's ``files``
-key: ``set_rust_build_directory`` only collects the project's Rust sources into ``.certora_sources``
-on the build-script path (with ``files`` it copies the artifact and nothing else), and those sources
-are what the report renders and what a counterexample analyzer reads. The other half of the same
-answer is confinement: ``certoraSolanaProver``'s own from-sources path runs ``cargo certora-sbf``
-directly inside its process, unconfined, which our sandbox posture does not allow. Owning the build
-script is what lets the build stay inside the sandbox while the prover still sees a from-sources
-run.
+The conf uses a build script instead of handing over the finished ``.so`` via
+``files``. ``set_rust_build_directory`` only copies the project's Rust sources
+into ``.certora_sources`` on the build-script path; with ``files`` it copies the
+artifact and nothing else. ``certoraSolanaProver``'s own from-sources path also
+runs ``cargo certora-sbf`` unconfined inside its process, which the sandbox does
+not allow.
 """
 
 import asyncio
@@ -42,31 +34,29 @@ from composer.cargo.session import CargoSession, CompileFailed, WarmFailed
 
 _log = logging.getLogger(__name__)
 
-#: The cargo subcommand that builds a Solana program for verification. Certora's own, not
-#: ``cargo-build-sbf``: it pins the platform-tools version and emits the build manifest below.
+#: Certora's tool, not ``cargo-build-sbf``: it pins the platform-tools version
+#: and prints the build manifest.
 SBF_SUBCOMMAND = "certora-sbf"
 
-#: Where ``cargo certora-sbf`` keeps its platform toolchains. Mirrors the tool's own default and the
-#: read-only grant in :func:`composer.sandbox.recipes.rust_build_policy`; overridable by the same
+#: Same default as the tool, and the read-only grant in
+#: :func:`composer.sandbox.recipes.rust_build_policy`. Override with the same
 #: environment variable the tool reads.
 PLATFORM_TOOLS_ROOT = Path(
     os.environ.get("CERTORA_PLATFORM_TOOLS_ROOT", Path.home() / ".cache" / "solana")
 )
 
-#: A full sbf build of a real program, from a warm cache.
 BUILD_TIMEOUT_S = 1800
 
-#: Where the generated build script and its command file live inside the workdir. Under the workdir
-#: because that is the one path the confinement policy grants read-write, and beside each other
-#: because the script reads the command from its own directory.
+#: Under the workdir (the only path the confinement policy grants read-write).
+#: The script reads the command file from next to itself.
 BUILD_DIR = Path(".certora_build")
 BUILD_SCRIPT_NAME = "confined_build.py"
 BUILD_COMMAND_NAME = "confined_build.json"
 
 
 class PlatformToolsMissing(RuntimeError):
-    """The requested platform-tools version is not installed under the toolchain root, and a
-    confined build cannot install it on demand the way ``cargo certora-sbf`` otherwise would."""
+    """The requested platform-tools version is not installed, and a confined
+    build cannot download it the way ``cargo certora-sbf`` would unconfined."""
 
     def __init__(self, version: str, root: Path):
         self.version = version
@@ -80,23 +70,22 @@ class PlatformToolsMissing(RuntimeError):
 
 
 class SbfSubcommandMissing(RuntimeError):
-    """``cargo certora-sbf`` is not installed, so this run has no way to build for verification."""
+    """``cargo certora-sbf`` is not installed."""
 
     def __init__(self, detail: str):
         super().__init__(
-            f"`cargo certora-sbf` is not available: {detail}. It is the command the pre-submission "
-            f"build runs and the one the prover's build script reruns, so nothing can be verified "
-            f"without it. Install it with `cargo install cargo-certora-sbf`, which needs Rust 1.81 "
-            f"or newer."
+            f"`cargo certora-sbf` is not available: {detail}. The pre-submission build and the "
+            f"prover's build script both run it. Install it with `cargo install cargo-certora-sbf` "
+            f"(Rust 1.81 or newer)."
         )
 
 
 async def sbf_subcommand_version() -> str:
-    """What ``cargo certora-sbf --version`` reports, or raise :class:`SbfSubcommandMissing`.
+    """Output of ``cargo certora-sbf --version``, or raise :class:`SbfSubcommandMissing`.
 
-    The subcommand is run rather than looked up on ``PATH``: cargo resolves ``cargo X`` through
-    ``$CARGO_HOME/bin`` and the active toolchain's libexec as well, so a ``which`` that came up
-    empty would refuse installations that work.
+    Runs the subcommand instead of searching ``PATH``. Cargo also looks in
+    ``$CARGO_HOME/bin`` and the active toolchain's libexec, so a failed ``which``
+    would reject working installs.
     """
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -113,11 +102,11 @@ async def sbf_subcommand_version() -> str:
 
 @dataclasses.dataclass(frozen=True)
 class BuildManifest:
-    """What ``cargo certora-sbf --json`` reported, validated against what the prover requires.
+    """Output of ``cargo certora-sbf --json``, checked against what the prover requires.
 
-    Paths are as cargo printed them: ``project_directory`` absolute, everything else relative to it.
-    Left that way on purpose — ``certoraParseBuildScript`` re-resolves them against
-    ``project_directory`` itself, so normalizing here would only create a second convention.
+    Paths are as cargo printed them: ``project_directory`` absolute, everything
+    else relative to it. ``certoraParseBuildScript`` resolves them against
+    ``project_directory``, so rewriting them here would add a second convention.
     """
 
     project_directory: Path
@@ -128,7 +117,6 @@ class BuildManifest:
 
     @property
     def artifact(self) -> Path:
-        """The built ``.so``."""
         return self.project_directory / self.executables
 
 
@@ -137,12 +125,11 @@ class MalformedBuildManifest(ValueError):
 
 
 def parse_manifest(stdout: str) -> BuildManifest:
-    """Parse the build JSON, requiring exactly what ``certoraParseBuildScript`` requires.
+    """Parse the build JSON. Requires the same keys ``certoraParseBuildScript`` requires.
 
-    Checked here rather than left to the prover because the two failures read completely differently:
-    a missing key found here is a build-tool problem reported next to the build, while the same key
-    missing at submission time is a ``CertoraUserInputError`` inside a prover run that has already
-    started."""
+    Checked here so a missing key is a build-tool error next to the build, not a
+    ``CertoraUserInputError`` inside a prover run that has already started.
+    """
     try:
         payload = json.loads(stdout)
     except json.JSONDecodeError as exc:
@@ -165,8 +152,6 @@ def parse_manifest(stdout: str) -> BuildManifest:
 
 @dataclasses.dataclass(frozen=True)
 class Built:
-    """The chain build succeeded, and this is what it produced."""
-
     manifest: BuildManifest
 
 
@@ -175,8 +160,6 @@ type SbfVerdict = Built | CompileFailed
 
 @dataclasses.dataclass(frozen=True)
 class SbfRun:
-    """One slow-tier build: what it decided, what it cost, and whether it was confined."""
-
     duration_ms: int
     verdict: SbfVerdict
     confined: bool
@@ -193,23 +176,19 @@ def sbf_argv(
     tools_version: str | None = None,
     arch: str | None = None,
 ) -> list[str]:
-    """The ``cargo certora-sbf`` argument vector, shared by the direct build and the build script.
+    """``cargo certora-sbf`` arguments, shared by the direct build and the build script.
 
-    One function so the two cannot drift: the prover's rerun has to be the same command as the
-    gate's, or the artifact it reports is not the artifact the gate approved.
+    ``--no-rustup`` is required under confinement. The tool otherwise registers a
+    ``certora-solana`` rustup toolchain and writes to ``RUSTUP_HOME``, which is
+    read-only.
 
-    ``--no-rustup`` is not optional. The tool registers a ``certora-solana`` rustup toolchain around
-    each build and removes it afterwards, which writes to ``RUSTUP_HOME`` — read-only under
-    confinement. The flag skips that entirely and the build resolves the platform toolchain by path.
-
-    ``--platform-tools-root`` is passed rather than left to ``$CERTORA_PLATFORM_TOOLS_ROOT``, which
-    the tool also reads, because the confined child never sees that variable: the launcher scrubs
-    the environment down to :data:`~composer.sandbox.recipes.DEFAULT_ENV_PASSTHROUGH`, which is a
-    chain-neutral list and does not carry it. So a deployment that installs the toolchains anywhere
-    but the tool's default would have the *path* granted read-only by the run's confinement and the
-    build still looking somewhere else, finding nothing, and trying to download offline. Naming it
-    on the argv makes the three agree by construction, and puts it in the recorded command the
-    prover reruns.
+    ``--platform-tools-root`` is passed on the argv, not left to
+    ``$CERTORA_PLATFORM_TOOLS_ROOT``. The confined child never sees that
+    variable: the launcher keeps only
+    :data:`~composer.sandbox.recipes.DEFAULT_ENV_PASSTHROUGH`, which does not
+    include it. If the toolchains are not in the tool's default location, the
+    confinement grant and the build would disagree, and the build would try to
+    download offline.
     """
     args = [
         SBF_SUBCOMMAND,
@@ -234,21 +213,18 @@ def platform_tools_installed(version: str, *, root: Path = PLATFORM_TOOLS_ROOT) 
 
 
 def platform_tools_cargos(version: str, *, root: Path = PLATFORM_TOOLS_ROOT) -> tuple[Path, ...]:
-    """The ``cargo`` binaries shipped with a platform-tools version.
+    """``cargo`` binaries shipped with a platform-tools version.
 
-    Not the same cargo as the one on ``PATH``, and that difference is load-bearing: **cargo hashes a
-    git source into a cache directory name, and the hash is not stable across cargo versions.** The
-    host's cargo 1.89 fetches ``Certora/anchor`` into ``git/db/anchor-8a7e45e4c93a95b5``; the cargo
-    1.79 inside platform-tools v1.43 looks for ``git/db/anchor-1f3eb14fb7b4e8f1``, finds nothing, and
-    — confined and therefore offline — reports it as
+    Not the cargo on ``PATH``. Cargo hashes a git source into a cache directory
+    name, and that hash is not stable across cargo versions. Host cargo 1.89
+    fetches ``Certora/anchor`` into ``git/db/anchor-8a7e45e4c93a95b5``; cargo
+    1.79 in platform-tools v1.43 looks for ``git/db/anchor-1f3eb14fb7b4e8f1``,
+    finds nothing, and offline reports::
 
         can't checkout from '...': you are in the offline mode (--offline)
 
-    So a warm run by the wrong cargo is not warm at all for a project with a git dependency — which
-    an Anchor project is, since Anchor verification needs Certora's fork rather than the crates.io
-    release. A tuple rather than one path because a version can ship both ``platform-tools`` and
-    ``platform-tools-certora``, and which one ``cargo certora-sbf`` selects is its business, not
-    ours; warming both is cheap (they share the registry cache) and removes the need to guess.
+    A version can ship both ``platform-tools`` and ``platform-tools-certora``.
+    Warming both is cheap (they share the registry cache).
     """
     return tuple(
         cargo
@@ -260,11 +236,10 @@ def platform_tools_cargos(version: str, *, root: Path = PLATFORM_TOOLS_ROOT) -> 
 async def _warm_for_the_build_cargo(
     session: CargoSession, tools_version: str, manifest_path: Path
 ) -> None:
-    """Fetch the graph with the cargos the chain build itself will run, once per session.
+    """Fetch with the cargos the chain build will run. Confined builds only.
 
-    Confined builds only: an unconfined one is not forced offline and can fetch what it lacks. A
-    failure here is logged rather than raised — a partially warm cache still compiles what it
-    covers, and the build below names the crate it could not find, which a fetch cannot.
+    A failure is logged, not raised — a partial cache still compiles what it
+    has, and the build names the crate it could not find.
     """
     for cargo in platform_tools_cargos(tools_version):
         if session.already_warmed(cargo):
@@ -288,10 +263,9 @@ async def sbf_build(
 ) -> SbfRun:
     """Run the slow tier in ``session``'s workdir, confined.
 
-    Raises :class:`PlatformToolsMissing` rather than returning a failed run when the toolchain is
-    absent: a compile failure is something an authoring agent can act on, and this is not — it is an
-    operator action, and returning it through the same channel would put it in front of an agent that
-    will try to fix the Rust.
+    Raises :class:`PlatformToolsMissing` instead of returning a failed run when
+    the toolchain is missing: that is an operator problem, not a Rust error an
+    authoring agent can fix.
     """
     if tools_version is not None and session.confined and not platform_tools_installed(tools_version):
         raise PlatformToolsMissing(tools_version, PLATFORM_TOOLS_ROOT)
@@ -312,8 +286,7 @@ async def sbf_build(
     try:
         manifest = parse_manifest(built.stdout)
     except MalformedBuildManifest as exc:
-        # The compiler was happy and the tool was not, so the compile log is the wrong thing to
-        # report; what went wrong is the manifest, and it is the tool's contract that broke.
+        # Compiler succeeded; JSON did not. Report the manifest error, not stderr.
         return SbfRun(
             elapsed,
             CompileFailed(diagnostics=str(exc), exit_code=built.exit_code),
@@ -326,10 +299,8 @@ _SCRIPT_TEMPLATE = '''\
 #!/usr/bin/env python3
 """Generated by composer.cargo.sbf — do not edit.
 
-certoraSolanaProver runs this as its `build_script` and reads the build manifest from stdout. The
-build itself is AutoProver's: the command and its confinement wrapper were fixed when the backend
-ran the same build as its pre-submission gate, so this rerun is a warm cargo no-op that reprints the
-manifest for the run that is about to happen.
+certoraSolanaProver runs this as its `build_script` and reads the build manifest
+from stdout.
 """
 
 import json
@@ -340,9 +311,8 @@ import sys
 command = json.loads(pathlib.Path(__file__).with_name({command_name!r}).read_text())
 argv = [*command["argv_prefix"], *command["argv"]]
 
-# Certora passes --json and -l; the manifest is printed unconditionally, and the compile log goes to
-# stderr either way, so the flags carry no decision here. --cargo_features is the exception: it is
-# how the prover adds features to a build, and dropping it would silently build the wrong crate.
+# Certora passes --json and -l; those flags do nothing here. --cargo_features
+# is how the prover adds features, and ignoring it would build the wrong crate.
 extra = sys.argv[sys.argv.index("--cargo_features") + 1:] if "--cargo_features" in sys.argv else []
 if extra:
     argv += ["--features", " ".join(extra)]
@@ -365,11 +335,9 @@ async def write_build_script(
 ) -> Path:
     """Write the ``build_script`` the conf points at, and return its path.
 
-    The script carries no policy of its own. :meth:`SandboxConfig.backend_spec` resolves the
-    confinement into an opaque ``argv_prefix`` — the same mechanism a Rust wheel is handed
-    (``docs/command-sandbox.md`` §4) — so the script names no sandbox, and swapping the mechanism
-    changes nothing here. It is fail-closed for the same reason that call is: a provider that cannot
-    confine raises before anything runs.
+    Confinement is an opaque ``argv_prefix`` from
+    :meth:`SandboxConfig.backend_spec` (``docs/command-sandbox.md`` §4). If the
+    provider cannot confine, that call raises before anything runs.
     """
     spec = await session.sandbox.backend_spec(session.workdir, timeout_s=timeout_s)
     build_dir = session.workdir / BUILD_DIR
@@ -394,7 +362,6 @@ async def write_build_script(
     )
     script = build_dir / BUILD_SCRIPT_NAME
     script.write_text(_SCRIPT_TEMPLATE.format(command_name=BUILD_COMMAND_NAME))
-    # certoraRun execs the script directly rather than through an interpreter, so the shebang needs
-    # the execute bit to mean anything.
+    # certoraRun execs the script directly, so the shebang needs the execute bit.
     script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return script

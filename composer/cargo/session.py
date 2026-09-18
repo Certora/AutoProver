@@ -1,22 +1,17 @@
-"""The warm workdir a Rust compile loop runs in, and the fast tier of the two-tier gate.
+"""Reused workdir for a Rust compile loop, and the fast compile gate.
 
-A compile in the authoring inner loop is the whole reason this is an object. CVL authoring gates
-every edit on a sub-second typecheck; CVLR's only equivalent is a Rust build, so the gate moves
-into the inner loop — and the sandbox recipe gives each *run* a private ``CARGO_HOME``
-(:func:`~composer.sandbox.recipes.sandbox_cargo_home`), deliberately, so that an untrusted
-``build.rs`` cannot poison a later run. Those two facts collide: a per-compile workdir would re-fetch
-the dependency graph on every edit. So the workdir is owned by a **session** and reused across every
-compile in that session's loop, and the fetch is paid once, in :meth:`CargoSession.warm`.
+A compile sits in the authoring inner loop. Each run also gets a private
+``CARGO_HOME`` so an untrusted ``build.rs`` cannot poison a later run
+(:func:`~composer.sandbox.recipes.sandbox_cargo_home`). Fetching the dependency
+graph on every edit is too slow, so the workdir is owned by a session and
+:meth:`CargoSession.warm` fetches once.
 
-The split between warm and compile is the trust boundary, not an optimization
-(``docs/command-sandbox.md`` §5): ``cargo fetch`` downloads and executes nothing, so it runs
-unconfined *with* the network; everything that compiles runs confined and offline, where the deps it
-needs are already present because the warm put them there.
+Warm vs compile is a trust boundary (``docs/command-sandbox.md`` §5).
+``cargo fetch`` downloads and does not execute, so it runs unconfined with the
+network. Compile runs confined and offline, using the deps the warm already
+fetched.
 
-Nothing here is Solana-specific. The fast tier is a host-target ``cargo check``, which is the same
-question on any chain — "does this Rust say something the compiler understands" — and it is
-deliberately the *cheap* half: whether it is a faithful proxy for the chain build is an open
-question, to be answered by measurement rather than assumed here.
+The fast tier is a host-target ``cargo check``, not the chain build.
 """
 
 import dataclasses
@@ -31,30 +26,24 @@ from composer.sandbox.recipes import sandbox_cargo_home
 
 _log = logging.getLogger(__name__)
 
-#: Which gate produced a run: the ``fast`` tier runs per write, the ``slow`` tier only before a
-#: prover submission.
+#: ``fast`` runs on every write; ``slow`` only before a prover submission.
 type CompileTier = Literal["fast", "slow"]
 
-#: A fetch resolves and downloads a dependency graph; on a cold cache for a real program that is
-#: minutes, not seconds.
+#: A cold ``cargo fetch`` of a real program can take several minutes.
 WARM_TIMEOUT_S = 900
-#: A host-target ``cargo check``. Long enough for a cold graph, short enough that a wedged compiler
-#: surfaces as a timeout inside one authoring turn rather than stalling the run.
+#: Long enough for a cold graph; short enough that a stuck compiler times out
+#: inside one authoring turn.
 CHECK_TIMEOUT_S = 600
 
 
 @dataclasses.dataclass(frozen=True)
 class Compiled:
-    """The compiler accepted the crate. Nothing to feed back."""
+    pass
 
 
 @dataclasses.dataclass(frozen=True)
 class CompileFailed:
-    """The compiler rejected it. ``diagnostics`` is what it said, verbatim.
-
-    Verbatim rather than parsed: the consumer is an authoring agent, and rustc's human-format
-    output — the span, the note, the suggested fix — is the most actionable form it can be given.
-    """
+    """``diagnostics`` is rustc's human-format output, unparsed."""
 
     diagnostics: str
     exit_code: int
@@ -65,20 +54,11 @@ type CompileVerdict = Compiled | CompileFailed
 
 @dataclasses.dataclass(frozen=True)
 class CompileRun:
-    """One invocation of one tier: what it decided, and what it cost.
-
-    The cost rides along on every run because measured per-tier latency is an exit criterion for
-    this work, and a number collected only when someone remembers to instrument is a number nobody
-    has.
-    """
-
     tier: CompileTier
     duration_ms: int
     verdict: CompileVerdict
-    #: False when the command ran without confinement — the development carve-out for hosts the
-    #: sandbox does not support. Carried on the result so a verdict produced unconfined is never
-    #: mistaken for a production one; the operator-facing warning is emitted by
-    #: :class:`CargoSession`.
+    #: Copied onto the result so an unconfined verdict is visible.
+    #: :class:`CargoSession` logs the operator warning.
     confined: bool
 
     @property
@@ -88,16 +68,13 @@ class CompileRun:
 
 @dataclasses.dataclass(frozen=True)
 class Warmed:
-    """Dependencies are present in the session's cargo home; confined offline builds can proceed."""
+    pass
 
 
 @dataclasses.dataclass(frozen=True)
 class WarmFailed:
-    """The fetch did not complete.
-
-    Non-fatal by design, and reported rather than raised: a partially warm cache still compiles
-    everything it covers, and the failure the operator needs to see is the *build* that then cannot
-    find a crate — which names the crate, where this names only the fetch."""
+    """Logged, not raised: a partial cache still compiles what it has, and the
+    later build error names the missing crate."""
 
     diagnostics: str
     exit_code: int
@@ -108,19 +85,16 @@ type WarmOutcome = Warmed | WarmFailed
 
 @dataclasses.dataclass
 class CargoSession:
-    """A workdir that stays warm across an authoring session's compiles.
+    """A workdir reused across an authoring session's compiles.
 
-    ``workdir`` is where every command runs and the only path the confinement policy grants
-    read-write. It is the caller's to choose and the caller's to clean up: building in the analyzed
-    project itself works (and is what a one-shot deterministic run does), while an authoring loop
-    hands in a materialization of the project over its edit VFS, so the user's checkout is never
-    written to. Either way the session does not create or destroy it.
+    ``workdir`` is where every command runs, and the only path the confinement
+    policy grants read-write. The caller chooses it and cleans it up; the session
+    does not create or delete it.
     """
 
     workdir: Path
     sandbox: SandboxConfig
-    #: Which ``cargo`` binaries have already fetched into this session's home, so a warm that has
-    #: happened is not paid for again. Keyed by binary because two cargos do not share a git cache
+    #: Keyed by binary because two cargos do not share a git cache
     #: (see :func:`~composer.cargo.sbf.platform_tools_cargos`).
     _warmed: set[str] = dataclasses.field(default_factory=set, repr=False, compare=False)
 
@@ -139,12 +113,10 @@ class CargoSession:
 
     @property
     def cargo_home(self) -> Path | None:
-        """Where this session's crates live, or ``None`` to inherit the ambient one.
+        """Private per-run home when confined, else the process default.
 
-        A confined session must use the private per-run home the policy grants and forces
-        (:func:`~composer.sandbox.recipes.sandbox_cargo_home`), so the warm — which runs *outside*
-        the sandbox and would otherwise inherit the shared ``~/.cargo`` — has to be pointed at the
-        same place, or it would warm a cache the build cannot read.
+        Warm runs outside the sandbox, so it has to use the same directory the
+        confined build will read (:func:`~composer.sandbox.recipes.sandbox_cargo_home`).
         """
         return sandbox_cargo_home(self.workdir) if self.sandbox.enabled else None
 
@@ -153,8 +125,9 @@ class CargoSession:
     ) -> CommandResult:
         """Run a command in the workdir under this session's confinement.
 
-        The posture every command that *compiles* must use, and fail-closed: a configured provider
-        that cannot confine here raises rather than falling back."""
+        If the configured provider cannot confine, this raises instead of falling
+        back.
+        """
         return await run_local_command(
             program,
             args,
@@ -168,11 +141,11 @@ class CargoSession:
     async def run_unconfined(
         self, program: str, args: list[str], *, timeout_s: int
     ) -> CommandResult:
-        """Run a command in the workdir with the network and without confinement.
+        """Run a command in the workdir with the network and no confinement.
 
-        For the prep steps only — a fetch resolves and downloads, and executes nothing
-        (``docs/command-sandbox.md`` §5). It is still pointed at the session's cargo home, or it
-        would warm a cache the confined build cannot read."""
+        For prep steps only (``docs/command-sandbox.md`` §5). Uses the session's
+        cargo home so the confined build can read the cache.
+        """
         home = self.cargo_home
         if home is not None:
             home.mkdir(parents=True, exist_ok=True)
@@ -194,15 +167,14 @@ class CargoSession:
     ) -> WarmOutcome:
         """Fetch this session's dependency graph, unconfined and online, once.
 
-        ``manifest_dirs`` names the directories whose ``Cargo.toml`` should be fetched, relative to
-        the workdir; empty means the workdir itself. More than one is the normal case when the
-        verification artifact is its own crate outside the program's workspace — each root resolves
-        its own graph, and warming only one leaves the confined build unable to reach the other.
+        ``manifest_dirs`` are directories with a ``Cargo.toml``, relative to the
+        workdir. Empty means the workdir itself. Pass more than one when the
+        verification crate sits outside the program's workspace: each root has
+        its own graph.
 
-        ``cargo`` is which binary does the fetching, and it matters for the same reason the cargo
-        home does: a cache is only warm for the cargo that filled it. The chain build runs the
-        cargo inside platform-tools, not the one on ``PATH``, and the two disagree about where a
-        git dependency lives — so :func:`~composer.cargo.sbf.sbf_build` warms with its own.
+        A cache is only warm for the cargo that filled it. The chain build uses
+        the cargo inside platform-tools, not the one on ``PATH``, and the two
+        store git dependencies in different places.
         """
         dirs = manifest_dirs or (Path("."),)
         for d in dirs:
@@ -229,13 +201,7 @@ class CargoSession:
         manifest_dir: Path | None = None,
         timeout_s: int = CHECK_TIMEOUT_S,
     ) -> CompileRun:
-        """The fast tier: ``cargo check`` on the **host** target, confined.
-
-        Host target, not the chain's: that is what makes it fast enough to gate every write, and it
-        catches the class of error an LLM actually makes in a language it has thin training data for
-        — an unknown macro, a wrong signature, a misused derive. It does not catch what only the
-        chain build can, which is why the slow tier exists.
-        """
+        """Host-target ``cargo check``, confined. Fast enough to run on every write."""
         args = ["check", "--quiet"]
         if manifest_dir is not None:
             args += ["--manifest-path", str(self.workdir / manifest_dir / "Cargo.toml")]
