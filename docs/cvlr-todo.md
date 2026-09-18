@@ -159,9 +159,25 @@ exhausted". Three shapes, and the evidence does not yet pick one:
   `record_skip` naming the loop, which is the honest answer when no sound remedy exists and is what
   the author effectively did by hand.
 
-Before choosing, two things are worth measuring rather than assumed: whether CVL's unconditional
-true is a considered position or an inherited one, and whether the one-in-354 corpus figure reflects
-practice or reflects projects that never met a loop like this. Evidence in
+**The survey is weaker than it reads, by this project's own standard.** The expert-written Solana
+specs were authored by a small group who hold strong and shared views about this setting; the CVL
+specs had other writers with different preferences, which is where the unconditional true on that
+side comes from. So the two numbers are not 354 decisions against one — they are a handful of
+opinions, replicated across the confs and projects each author touched, against a differently
+composed handful. [cvlr-capture-plan.md](./cvlr-capture-plan.md) §4.5 already says to count this
+way: *"same-client projects share tooling, layout and house style — so a convention local to one
+team can appear in two repos and read as an industry idiom. Two repos from one client is one vote
+plus a note, not two votes; the honest ≥2 bar is two teams."* `conf.py` counts **confs**, two levels
+below the unit §4.5 names, and `guidance.py`'s own docstring cites §4.5 for why recurrence alone is
+the wrong axis. The argument in that comment should be revised to say what it actually rests on —
+the spec template's position, and the judgement of the authors who set it — whichever way U9 is
+decided.
+
+That leaves nothing on either side that is evidence about the *decision* rather than about who made
+it, so the deciding evidence has to be produced. The cheapest form is the run we already know how to
+do: the vault pin re-entered with `optimistic_loop` true, against the same 30 properties, read for
+two things — whether the Deposits rules reach their own assertions, and whether any rule that
+verifies under it would have failed at a higher bound. Evidence so far in
 [cvlr-backend-plan.md](./cvlr-backend-plan.md) §7.6.2 and in `conf.py`'s own commentary.
 
 ---
