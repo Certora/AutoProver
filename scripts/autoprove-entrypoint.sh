@@ -118,26 +118,27 @@ case "${1:-}" in
     exec "$cmd" "$@"
     ;;
   console-solana|tui-solana)
-    # The CVLR backend confines every cargo build by default (docs/cvlr-backend-plan.md §3 item 3),
-    # and this image ships no launcher — the sandbox compose overlay mounts one and points
-    # RUN_CONFINED_BIN at it. Without either, the run fails fail-closed several services in, in a
-    # message about a provider rather than about how this container is started; say it here instead.
+    # Both front ends live in the Solana image (scripts/Dockerfile.solana), which carries the Rust
+    # toolchain and is run with the sandbox overlay. Each check below is something only the operator
+    # can fix, and each otherwise surfaces much later: the missing launcher as a fail-closed
+    # provider error several services in, the missing toolchain as a compile failure mid-run.
     if [[ "${COMPOSER_SANDBOX_PROVIDER:-launcher}" != "none" && ! -x "${RUN_CONFINED_BIN:-}" ]]; then
       echo "[autoprove] $1 confines its builds, and no run-confined launcher is mounted." >&2
       echo "[autoprove] Add the sandbox overlay to the compose invocation:" >&2
       echo "[autoprove]   docker compose -f scripts/docker-compose.yml \\" >&2
       echo "[autoprove]       -f scripts/docker-compose.sandbox.yml \\" >&2
-      echo "[autoprove]       --profile autoprove --profile sandbox run --rm \\" >&2
-      echo "[autoprove]       autoprove $1 ..." >&2
+      echo "[autoprove]       -f scripts/docker-compose.solana.yml \\" >&2
+      echo "[autoprove]       --profile solana --profile sandbox run --rm \\" >&2
+      echo "[autoprove]       autoprove-solana $1 ..." >&2
       echo "[autoprove] Or set COMPOSER_SANDBOX_PROVIDER=none to build this project unconfined —" >&2
       echo "[autoprove] development only: the results are not production results." >&2
       exit 2
     fi
-    # The toolchain is a build-time choice (SOLANA_TOOLCHAIN); an image built without it cannot be
-    # repaired at run time, because a confined build has no network.
+    # A confined build has no network, so a missing toolchain cannot be repaired at run time.
     if ! command -v cargo >/dev/null 2>&1; then
-      echo "[autoprove] $1 needs a Rust toolchain and this image was built without one." >&2
-      echo "[autoprove] Rebuild with SOLANA_TOOLCHAIN=1 (the default)." >&2
+      echo "[autoprove] $1 needs a Rust toolchain, which this image does not carry." >&2
+      echo "[autoprove] This is the base AutoProver image; $1 runs in the Solana one." >&2
+      echo "[autoprove] Add -f scripts/docker-compose.solana.yml and run autoprove-solana." >&2
       exit 2
     fi
     exec "$@"

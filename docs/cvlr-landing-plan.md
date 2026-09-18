@@ -82,7 +82,6 @@ time — the only part of the former S5 that master can use today.
 | PR | Files | Size | What it is |
 |----|-------|------|------------|
 | **R1** Cargo, SBF and symbols — [#243](https://github.com/Certora/AutoProver/pull/243), open | 8 | +1242 | `composer/cargo/`: workspace metadata, a build session, the SBF build, dep-info parsing and the symbol reader. Nothing in it knows what CVLR is; it knows how to build and inspect a Solana crate. Eight new files and no change to an existing one — the `PROJECT_TOOLCHAINS` registration that would have made it nine went to *Deferred* below. |
-| **R3** The image grows a Rust toolchain | 4 | +281 −32 | Dockerfile, entrypoint and compose changes for the Solana platform tools, and the test that asserts the image has them. Gated behind `SOLANA_TOOLCHAIN` so an EVM-only build does not pay for it. The docs stage's one-element `for name in cvl` loop becomes `cvl solana`, so the image's corpus has the manual the backend is for. |
 
 ---
 
@@ -104,10 +103,26 @@ code and land C6 last, after which the backend appears all at once and works.
 | **C4a** The authoring loop | 10 | +2642 | Author, state, rule extraction, the judge's prompts, and the feedback round. Carries the `CvlrJudge` / `CvlrGeneration` cache markers in `spec/context.py`, which are CVLR-specific and have no business in a shared PR. |
 | **C4b** The prompt corpus, and a mark for one-off measurements | 10 | +3186 | Guidance, the worked example rendered against the analyzed program, and the knowledge tests that pin what the prompts must and must not claim. Carries the `measurement` pytest mark and the CI selector `expensive and not measurement`, because `test_cvlr_judge_round_cost.py` — which lands here — is the only test that has it: a mark registered before its first user would deselect nothing and give a reviewer no way to judge the CI change. |
 | **C5** Verification and tuning | 10 | +3105 | Submission, the prover-side tuning directives, loop bounds, and the Anchor surface analysis. |
+| **R3** A Solana container | 8 | +400 −60 | `scripts/Dockerfile.solana` and `scripts/docker-compose.solana.yml`: a second AutoProver container, `autoprove-solana`, carrying the Rust toolchain and the platform-tools release, layered on the base image — which stays lean and loses nothing but its docs stage, where the one-element `for name in cvl` loop becomes `cvl solana` so the shared postgres gets the manual the backend is for. The shared service body moves to `scripts/docker-compose.common.yml`, which the EVM and Solana services both extend. |
 | **C6** Pipeline and entry | 12 | +3083 −6 | `CvlrBackend`, the CLI entry points, the artifact store, and the plumbing tests. The PR that makes the backend exist. Lands without the two pinned-run flags — see *Deferred: pinned runs* below. |
 
 Order inside the wave: **C1a** before **C1b** (the env refresher imports the scaffold's constants),
 and **C6** last. C3a/C3b, C4a/C4b and C5 are independent of each other.
+
+**R3** was wave 2 until the split above was measured against the rule that every PR passes the gate
+on master alone. `tests/test_cvlr_image.py` imports `composer.spec.cvlr.conf` to check that the
+image bakes the platform-tools version the conf template asks for, so it cannot pass before **C1a**;
+and its entrypoint guard names `console-solana`, which is not a console script until **C6**. It is
+scheduled here, after C1a, and is the one PR in this wave that touches no `composer/spec/cvlr/`
+file.
+
+The container layout is the one `eric/crucible-app` already ships: one lean base image, and a
+sibling image per toolchain layered on it with `FROM ${BASE_IMAGE}`. Crucible, Solana and a future
+Soroban are then peers rather than flags on a single image, and none of them obliges an EVM run to
+carry a toolchain it never invokes. The two branches disagreed on where the toolchain goes — under
+`$HOME`, which the base image makes world-writable, or under `$AUTOPROVE_HOME`, root-owned and
+world-readable. Solana's answer is the one to follow: a read-only Landlock grant over a tree the
+confined build can also write grants nothing.
 
 Checked rather than assumed: the only modules outside `composer/spec/cvlr/` that import from it are
 the two Solana CLI entry points, the tape driver and the env refresher — all of them CVLR-specific
@@ -304,7 +319,7 @@ record of what went where; nothing is left to check out for those.
 | S3 *(merged)* | `composer/certora_env.py` `composer/prover/{certoraRunWrapper,core,ptypes,results}.py` `analyzer/analysis.py` `composer/tools/{prover,thinking}.py` `composer/authoring/buffer.py` `composer/core/context.py` `composer/cvl/tools.py` `composer/workflow/executor.py` `composer/spec/source/{autoprove_common,harness}.py` `composer/spec/source/munge/compile_check.py` `tests/conftest.py` `tests/test_prover_app.py` `tests/test_prover_options.py` `tests/test_wrapped_prover_runner.py` `tests/test_solana_cex_trace.py` `tests/data/solana_cex/` `tests/test_tree_parsing.py` `tests/test_cex_analysis_failure_isolation.py` `tests/test_autoprove_report.py` *(hunks: the `_violated` helper and its expectation)* |
 | S4 | `composer/spec/source/report/{schema,collect,build}.py` `composer/spec/source/report_prover.py` `tests/test_autoprove_report.py` `composer/pipeline/core.py` *(hunks)* |
 | R1 | `composer/cargo/` *(less `toolchain.py`)* `tests/test_cvlr_symbols.py` `tests/data/vault_sbf_symbols.txt` |
-| R3 | `scripts/Dockerfile` `scripts/autoprove-entrypoint.sh` `scripts/docker-compose.yml` `tests/test_cvlr_image.py` |
+| R3 | `scripts/Dockerfile.solana` `scripts/docker-compose.{common,solana}.yml` `scripts/Dockerfile` *(hunks: the docs stage and the header)* `scripts/docker-compose.yml` `scripts/docker-compose.sandbox.yml` `scripts/autoprove-entrypoint.sh` `tests/test_cvlr_image.py` |
 | C1a | `composer/spec/cvlr/{preflight,scaffold,conf,crates}.py` `tests/test_cvlr_scaffold.py` |
 | C1b | `composer/spec/cvlr_reference.py` `composer/spec/cvlr/env_paths.py` `composer/spec/cvlr/envs/` `composer/scripts/refresh_cvlr_envs.py` `tests/test_cvlr_env_paths.py` `tests/test_cvlr_reference.py` |
 | C2 | `composer/spec/cvlr/{tree,crate_mount,rust_source,source_tools}.py` `composer/templates/cvlr_source_tools.j2` `tests/test_cvlr_tree.py` `composer/spec/source/source_env.py` *(hunks: `build_layered_source_tools`)* `graphcore` `pyproject.toml` *(the pin only)* |
