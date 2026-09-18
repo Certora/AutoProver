@@ -94,6 +94,7 @@ from composer.spec.cvlr.verify import (
     VerifyDeps,
     gate_tools,
 )
+from composer.kb.kb_context import with_cvlr_context
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import run_to_completion
 from composer.spec.service_host import ServiceHost
@@ -353,14 +354,16 @@ def build_feedback_thunk(
         _skipped: Sequence[SkippedProperty],
         _rebuttals: Sequence[Rebuttal],
     ) -> JudgeBuilder:
-        return _JudgeTemplate.bind(
-            {
-                "properties": props,
-                "context": component,
-                "sort": "existing",
-                "program": program,
-            }
-        ).render_to(builder.with_initial_prompt_template)
+        return builder.with_initial_prompt(with_cvlr_context(
+            _JudgeTemplate.bind(
+                {
+                    "properties": props,
+                    "context": component,
+                    "sort": "existing",
+                    "program": program,
+                }
+            ).render_to
+        ))
 
     def input_parts(
         draft: str, skipped: Sequence[SkippedProperty], rebuttals: Sequence[Rebuttal]
@@ -652,7 +655,7 @@ async def batch_cvlr_generation(
             ]
         )
         .with_sys_prompt(sys_prompt)
-        .inject(lambda b: bound_template.render_to(b.with_initial_prompt_template))
+        .inject(lambda b: b.with_initial_prompt(with_cvlr_context(bound_template.render_to)))
         .with_summary_config(CvlrGenerationSummaryConfig())
         .with_monitor(
             budget_monitor(

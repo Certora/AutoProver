@@ -58,6 +58,7 @@ from graphcore.tools.schemas import (
     WithInjectedState,
 )
 
+from composer.kb.kb_context import with_cvlr_context
 from composer.cargo.depinfo import compiled_sources
 from composer.cargo.session import CompileFailed, Compiled
 from composer.spec.context import (
@@ -1258,7 +1259,9 @@ def build_reviewer(
         bind_standard(env.builder_heavy(), ReviewState)
         .with_input(ReviewInput)
         .with_sys_prompt_template("cvlr_munge_review_system.j2")
-        .with_initial_prompt("Review the following proposed edits to the program under verification:")
+        .with_initial_prompt(with_cvlr_context(
+            "Review the following proposed edits to the program under verification:"
+        ))
         .with_tools([review_ctx.get_memory_tool(), *read_tools])
         .compile_async()
     )
@@ -1587,7 +1590,7 @@ def editor_tools(
         .with_state(EditorState)
         .with_output_key("result")
         .with_sys_prompt_template("cvlr_munge_editor_system.j2")
-        .with_initial_prompt("Respond to the following edit request:")
+        .with_initial_prompt(with_cvlr_context("Respond to the following edit request:"))
         .with_tools(read_tools)
         .with_tools(
             [
