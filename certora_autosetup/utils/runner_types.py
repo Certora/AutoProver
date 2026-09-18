@@ -46,6 +46,10 @@ class JobStatus(Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    # Cancelled by the preprocessing watchdog: the prover never produced a treeview
+    # (never finished preprocessing) within the watchdog budget. Distinct from FAILED
+    # so retry logic can skip conf workarounds that cannot help.
+    PREPROCESSING_TIMEOUT = "preprocessing_timeout"
 
 
 @dataclass
@@ -146,6 +150,11 @@ class ProverResult:
     rule_results: List[RuleResult] = field(default_factory=list)
     alerts: List[ParsedAlert] = field(default_factory=list)
     transformed_result: Optional[Any] = None  # Generic transformed result
+
+    @property
+    def is_preprocessing_timeout(self) -> bool:
+        """True when the job was cancelled by the preprocessing watchdog."""
+        return self.job_handle.status == JobStatus.PREPROCESSING_TIMEOUT
 
     @property
     def job_url(self) -> Optional[str]:
