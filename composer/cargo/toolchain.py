@@ -23,8 +23,8 @@ The two halves land in different states, deliberately, and the difference is not
   a table cell would be worse than saying it is missing.
 """
 
-import dataclasses
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -53,7 +53,7 @@ class ToolchainRequestUnsupported(ValueError):
     chain: every alternative defers the failure to a place where it reads as the agent's fault."""
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class SolanaToolchain:
     """Cargo, for a project whose verification artifact is an sBPF program."""
 
