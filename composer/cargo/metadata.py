@@ -15,11 +15,11 @@ dependency graph, which needs a warm cache or the network; see
 """
 
 import asyncio
-import dataclasses
 import json
 import logging
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 _log = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ class CargoUnavailable(RuntimeError):
     """``cargo`` is not on ``PATH``."""
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class LibTarget:
     """A package's library target.
 
@@ -62,7 +62,7 @@ class LibTarget:
         return "cdylib" in self.crate_types
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class CratePackage:
     name: str
     version: str
@@ -82,7 +82,7 @@ class CratePackage:
         return self.source is None
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class Workspace:
     root: Path
     target_directory: Path

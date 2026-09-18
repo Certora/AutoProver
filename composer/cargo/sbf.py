@@ -22,12 +22,12 @@ not allow.
 """
 
 import asyncio
-import dataclasses
 import json
 import logging
 import os
 import stat
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from composer.cargo.session import CargoSession, CompileFailed, WarmFailed
@@ -100,7 +100,7 @@ async def sbf_subcommand_version() -> str:
     return stdout.decode().strip()
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class BuildManifest:
     """Output of ``cargo certora-sbf --json``, checked against what the prover requires.
 
@@ -150,7 +150,7 @@ def parse_manifest(stdout: str) -> BuildManifest:
     )
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class Built:
     manifest: BuildManifest
 
@@ -158,7 +158,7 @@ class Built:
 type SbfVerdict = Built | CompileFailed
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class SbfRun:
     duration_ms: int
     verdict: SbfVerdict
