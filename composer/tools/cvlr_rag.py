@@ -8,6 +8,29 @@ tag to this module's :func:`get_tools`. Structurally a sibling of
 What a given database was loaded from is deliberately invisible here: the tag is the unit of
 resolution, and the corpus is meant to take further sources under it without these tools learning
 which one answered a search.
+
+Possible future work:
+
+A corpus this size admits an alternative these tools do not: inlining it. The Solana manual is
+~15k words over ~157 sections against the CVL manual's ~40k over ~167 — about as many things to
+tell apart, each a third as long — and its authoring core (speclanguage, spec, nondet, accounts,
+mocks, parametric-rules, methodology) is ~10k words, the same order as the CVL context documents
+:mod:`composer.kb.kb_context` already puts in front of every CVL agent. Inlining that core and
+leaving these tools the lookup-shaped tail (options, troubleshooting, installation, output) is
+therefore a live option, and not an obviously better one: a context document is paid by every
+agent on every call, amortized only while it stays byte-stable enough to cache, whereas a search
+is paid only when someone searches.
+
+What would settle it, none of it observed yet:
+
+* Retrieval concentrates — a handful of sections answer most searches. Then the tool call buys
+  what a cached prefix gives away.
+* Searches cluster at the start of an authoring step instead of spreading through it. That is
+  orienting, which a document does better than a query.
+* Specs go wrong in ways a section covers and no search asked after. Retrieval cannot fix not
+  knowing to ask; inlining can.
+* The core stays inlinable. This tag is meant to take further sources, and the first one to land
+  may put the corpus past what a prompt should carry — which settles it the other way.
 """
 
 from typing import Iterable
