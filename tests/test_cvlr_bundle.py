@@ -9,9 +9,15 @@ run cannot live here, and one that names a tool only the author holds should not
 import re
 from pathlib import Path
 
-from composer.kb.kb_context import CVLR_BUNDLE, context_documents
+from composer.kb.kb_context import (
+    CVLR_BUNDLE,
+    CVLR_RECIPES,
+    _kb_model,
+    context_documents,
+)
 
-_FACTS = Path(__file__).parent.parent / "composer" / "kb" / "resources" / "cvlr_baseline_facts.md"
+_RESOURCES = Path(__file__).parent.parent / "composer" / "kb" / "resources"
+_FACTS = _RESOURCES / "cvlr_baseline_facts.md"
 _AUTHOR_PROMPT = (
     Path(__file__).parent.parent
     / "composer"
@@ -52,7 +58,23 @@ def test_the_bundle_keeps_what_every_cvlr_agent_needs():
     assert any("nonlinear" in h for h in facts)
 
 
-def test_the_bundle_is_one_document_until_it_has_recipes():
-    """Recipes arrive with the material to fill them. Until then the tool would answer every id
-    with a miss and the index would advertise it."""
-    assert len(context_documents(CVLR_BUNDLE)) == 1
+def test_the_recipe_index_is_a_document_and_the_facts_are_another():
+    """Two delivery shapes, on purpose: the facts are what every CVLR agent should already know, and
+    the index is a list of situations it should recognise and then go read about."""
+    docs = context_documents(CVLR_BUNDLE)
+    assert len(docs) == 2
+    assert "CVLR and the Certora Solana Prover" in docs[0]
+    assert "get_cvlr_recipe" in docs[1]
+
+
+def test_the_index_says_what_each_channel_means():
+    """A channel tells a stuck agent whether the fix is in its action space, which it cannot do if
+    only the index file on disk says what the name stands for."""
+    index = context_documents(CVLR_BUNDLE)[1]
+    assert "`SKIP`" in index and "record_skip" in index
+    assert "`CONF`" in index and "loop bound" in index
+
+
+def test_every_recipe_points_at_a_file_that_exists():
+    for recipe in _kb_model(CVLR_RECIPES).recipes:
+        assert (_RESOURCES / recipe.file).is_file(), f"{recipe.id} points at {recipe.file}"

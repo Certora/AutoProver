@@ -1138,18 +1138,28 @@ averages ~25 lines.
 `EDIT`, reflecting the CVL action space. CVLR's is different, and §4.3.4's taxonomy hands us the
 vocabulary:
 
-| Channel | Meaning |
-|---|---|
-| `RULE` | Fix it in the rule — assertions, assumptions, nondet |
-| `MOCK` | Redirect a module to a mock implementation |
-| `GATE` | Feature-gate a swap in the program source |
-| `ENVFILE` | An entry in a `cvlr_inlining.txt` / `cvlr_summaries.txt` file |
-| `CONF` | A prover option — diagnose and surface, outside the agent's action space |
-| `SCAFFOLD` | Project structure or Cargo wiring |
+| Channel | Tool | Meaning |
+|---|---|---|
+| `RULE` | `put_harness` | Fix it in the harness module — assertions, assumptions, nondet |
+| `MOCK` | `summarize_for_prover` | An unconstrained stand-in; unsound by construction, and it invalidates the prover stamp |
+| `EDIT` | `code_editor` | The program's own source. Describe the problem, not the edit |
+| `CONF` | `adjust_prover_config` | The loop bound and the solver portfolio, and nothing else |
+| `SKIP` | `record_skip` | No fix in the action space. The honest terminal channel, which CVL has no peer for |
 
-Defining this *from* the capture data rather than guessing is a concrete payoff of capturing before
-authoring the KB, and the channel is what tells a stuck agent whether the fix is even in its
-action space.
+**Corrected: the vocabulary comes from the tool list, not from the artifact taxonomy.** This table
+first read `RULE / MOCK / GATE / ENVFILE / CONF / SCAFFOLD`, derived from §4.3.4's shape of the
+artifacts. A channel's job is to tell a stuck agent whether the fix is in its action space, and that
+space is literally enumerable from the author's tools — so it is what the vocabulary must be drawn
+from. `ENVFILE` and `SCAFFOLD` are not channels at all: env files are vendored data rendered by
+`env_paths.py`, and scaffolding happens in a separate phase, so a recipe whose action is "add a line
+to `cvlr_inlining.txt`" names something this agent cannot do. `GATE` folds into `EDIT`, which is the
+tool that would carry it. The chain-dependence note below was about `ENVFILE` and goes with it.
+
+**Corrected: a trigger may be a symptom, a code situation, or a verification goal.** The requirement
+below that a trigger be "an observable symptom" is narrower than the CVL recipes this section says
+to follow exactly: R1's trigger is a code situation (*a struct annotated `erc7201:` plus an assembly
+slot getter*) and R18's is a verification goal (*reentrancy safety to verify*). §7.2.1's separate
+rejection of *reference prose* stands — that filter was right and is about something else.
 
 **Part of this vocabulary is chain-dependent, so validate it per chain before fixing it.**
 `ENVFILE` is derived from Solana's `cvlr_inlining.txt` / `cvlr_summaries.txt` files; the surveyed

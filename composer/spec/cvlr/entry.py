@@ -57,6 +57,8 @@ from composer.spec.cvlr.preflight import SelectedPackage, select_package
 from composer.spec.service_host import PureServiceHost
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.source_env import build_layered_source_tools, build_source_tools
+from composer.kb.kb_context import CVLR_BUNDLE
+from composer.kb.knowledge_base import kb_tools
 from composer.tools.rag_env import build_rag_tools
 
 _log = logging.getLogger(__name__)
@@ -403,7 +405,10 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
             )
             # The staged embedding model, not a fresh one: ``get_model`` is not memoized, and a
             # second load is a second multi-hundred-megabyte transformer doing the same job.
-            rag_tools = (
+            # The recipes ride with the corpus tools rather than with the bundle's documents: the
+            # documents are a cached prefix every CVLR agent gets, and a tool is something an agent
+            # is given. Every agent that searches the corpus can also retrieve a recipe.
+            rag_tools = tuple(kb_tools(CVLR_BUNDLE)) + (
                 build_rag_tools(args.rag_corpus, staged.embed_model)
                 if args.rag_corpus != "none" else ()
             )

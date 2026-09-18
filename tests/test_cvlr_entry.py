@@ -417,7 +417,10 @@ async def test_the_corpus_can_be_turned_off(project, monkeypatch, wiring):
         monkeypatch, wiring,
     )
 
-    assert wiring.env["rag_tools"] == ()  # type: ignore[index]
+    # The recipes are not the corpus: they are files in this repo, and they stay. What the flag
+    # turns off is the search over an ingested database.
+    names = {t.name for t in wiring.env["rag_tools"]}  # type: ignore[index]
+    assert names == {"get_cvlr_recipe"}
 
 
 @pytest.mark.asyncio
@@ -425,7 +428,7 @@ async def test_the_corpus_is_searched_by_default(project, monkeypatch, wiring):
     await _run([str(project), "programs/vault/src/lib.rs:vault"], monkeypatch, wiring)
 
     # The embedder the run already staged, not a second load of the same transformer.
-    assert wiring.env["rag_tools"] == ("tools:cvlr_kb:staged-embedder",)  # type: ignore[index]
+    assert "tools:cvlr_kb:staged-embedder" in wiring.env["rag_tools"]  # type: ignore[index]
 
 
 @pytest.mark.asyncio
