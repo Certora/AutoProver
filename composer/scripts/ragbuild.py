@@ -196,6 +196,14 @@ def translate_block(streamer: TextStreamer, s: Tag, headers: list[str]) -> Gener
                 ul = convert_ul(ch)
                 streamer.stream_text(ul)
                 builder.append_text(ul, is_structured_boundary=True, unbreakable=True)
+            case Tag(name="blockquote"):
+                # Prose, so it chunks like a paragraph rather than as an atomic unit. The CVL and
+                # Prover manuals contain none; the Solana manual states the pre/post snapshot
+                # methodology in one, and without this case it falls through unhandled.
+                quote = " ".join(ch.get_text(" ").split())
+                if quote:
+                    streamer.stream_text(quote)
+                    builder.append_text(quote, is_structured_boundary=False, unbreakable=False)
             case Tag(name="table"):
                 tbl = convert_table(ch)
                 if tbl:
