@@ -59,8 +59,7 @@ CREATE SCHEMA IF NOT EXISTS foundry_rag AUTHORIZATION foundry_rag_user;
 GRANT USAGE ON SCHEMA extensions TO foundry_rag_user;
 ALTER ROLE foundry_rag_user IN DATABASE rag_db SET search_path = foundry_rag, extensions;
 
--- cvlr rag (the `cvlr_kb` corpus: CVLR reference + verification practice, one schema fed by
--- several manifests sharing the tag)
+-- cvlr rag
 CREATE SCHEMA IF NOT EXISTS cvlr_rag AUTHORIZATION cvlr_rag_user;
 GRANT USAGE ON SCHEMA extensions TO cvlr_rag_user;
 ALTER ROLE cvlr_rag_user IN DATABASE rag_db SET search_path = cvlr_rag, extensions;

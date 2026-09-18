@@ -1,23 +1,3 @@
-"""Search tools for the ``cvlr_kb`` corpus — CVLR reference and verification practice.
-
-Bound onto an authoring env by :mod:`composer.tools.rag_env`, which resolves the ``cvlr_kb``
-tag to this module's :func:`get_tools`. Structurally a sibling of
-:mod:`composer.tools.foundry_rag`: the same three retrieval styles over the same
-:class:`~composer.rag.db.ComposerRAGDB` API.
-
-The corpus is fed by **three manifests sharing this one tag** (``docs/cvlr-capture-plan.md`` §8.2):
-the published Solana/CVLR documentation, a generated reference for every public item of the pinned
-CVLR release set, and a project-derived manifest carrying idioms extracted from completed
-verification projects. Which manifests a given database was loaded from is deliberately invisible
-here — the tag is the unit of resolution, and an install with only some of them is a supported
-state.
-
-One thing the tool surface *does* expose: a project-derived entry can be marked unreviewed
-(``docs/cvlr-capture-plan.md`` §4.8 — ``proposed`` status, pending expert sign-off). The
-descriptions say so, because an agent that cannot tell a certified idiom from a machine-abstracted
-guess will trust both equally, and the two have very different failure modes.
-"""
-
 from typing import Iterable
 
 from langchain_core.tools import BaseTool
@@ -60,13 +40,13 @@ class CvlrKeywordSearch(WithAsyncDependencies[str, ComposerRAGDB]):
 
 class CvlrVectorSearch(WithAsyncDependencies[str, ComposerRAGDB]):
     """
-    Search the CVLR knowledge base with a natural-language question. Covers both the CVLR API
-    (what a macro does, what a helper's signature is) and verification practice (how to mock an
-    SDK boundary, how to make a counterexample readable, when a property is not worth pursuing).
+    Search the CVLR knowledge base with a natural-language question. Covers the CVLR API (what a
+    macro does, what a helper's signature is) and the methodology around it (how to mock an SDK
+    boundary, how to make a counterexample readable, when a rule should be parametric).
 
-    Returns the section title, the relevant text, and a relevance score. An entry whose text is
-    marked UNREVIEWED was machine-abstracted from prior projects and has not been signed off:
-    treat it as a lead worth compiling, not as authority.
+    Returns the section title, the relevant text, and a relevance score. An entry marked
+    UNREVIEWED was abstracted from past projects and not signed off: treat it as a lead, not
+    as authority.
     """
 
     query: str = Field(description=(

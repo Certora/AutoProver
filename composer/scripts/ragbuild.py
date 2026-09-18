@@ -24,7 +24,7 @@ import pathlib
 from bs4 import BeautifulSoup, Tag
 from bs4.element import NavigableString
 import spacy
-from composer.rag.db import get_rag_db, DEFAULT_CONNECTION, KNOWLEDGE_BASES
+from composer.rag.db import get_rag_db, DEFAULT_CONNECTION
 from composer.rag.types import BlockChunk
 from composer.rag.text import get_code_refs
 from composer.rag.models import get_model
@@ -197,9 +197,6 @@ def translate_block(streamer: TextStreamer, s: Tag, headers: list[str]) -> Gener
                 streamer.stream_text(ul)
                 builder.append_text(ul, is_structured_boundary=True, unbreakable=True)
             case Tag(name="blockquote"):
-                # Prose, so it chunks like a paragraph rather than as an atomic unit. The CVL and
-                # Prover manuals contain none; the Solana manual states the pre/post snapshot
-                # methodology in one, and without this case it falls through unhandled.
                 quote = " ".join(ch.get_text(" ").split())
                 if quote:
                     streamer.stream_text(quote)
@@ -277,23 +274,14 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description='Build RAG database from HTML documentation')
     parser.add_argument('files', nargs='+', metavar='HTML_FILE',
                         help='One or more HTML files to process directly')
-    target = parser.add_mutually_exclusive_group()
-    target.add_argument('--output', '-o',
+    parser.add_argument('--output', '-o',
         help='Output directory for ChromaDB, or PostgreSQL connection string. '
              f'Defaults to PostgreSQL ({DEFAULT_CONNECTION})')
-    # A registered corpus is named, not spelled: the connection for a knowledge base lives in
-    # ``KNOWLEDGE_BASES`` beside the tools that read it, and a caller that retyped the DSN could
-    # feed a corpus its own search tools never look at.
-    target.add_argument('--knowledge-base', '-k', choices=sorted(KNOWLEDGE_BASES),
-        help='Write to a registered knowledge base instead of the default CVL manual database.')
     args = parser.parse_args()
 
     file_entries = [{"file": (path:=pathlib.Path(f)), "section": path.stem} for f in args.files]
 
-    output = (
-        KNOWLEDGE_BASES[args.knowledge_base] if args.knowledge_base
-        else args.output or DEFAULT_CONNECTION
-    )
+    output = args.output or DEFAULT_CONNECTION
     db = await get_rag_db(output, get_model())
 
     buffer: list[BlockChunk] = []

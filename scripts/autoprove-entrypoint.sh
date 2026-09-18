@@ -66,8 +66,9 @@ if [[ "${1:-}" == "setup-db" ]]; then
   # An install with neither half is supported (the backend falls back to its static guidance), so
   # finding nothing reports a skip rather than failing setup-db.
   echo "[autoprove] populating cvlr_kb from the Solana manual ..."
+  cvlr_conn="$(python -c 'from composer.rag.db import CVLR_DEFAULT_CONNECTION as c; print(c)')"
   python -m composer.scripts.ragbuild \
-      --knowledge-base cvlr_kb \
+      --output "$cvlr_conn" \
       "$AUTOPROVE_HOME/prover-docs/solana.html"
 
   cvlr_manifests=()

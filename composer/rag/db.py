@@ -59,11 +59,9 @@ CVLR_DEFAULT_CONNECTION: str = f"postgresql://cvlr_rag_user:rag_password@{_RAG_H
 # `composer.tools.rag_env` requires both halves before a tag is usable. The CVL/Foundry builders
 # predate the importer and use the constants above instead.
 #
-# `cvlr_kb` is fed by more than one manifest under this single tag (docs/cvlr-capture-plan.md
-# §8.2): the published documentation, a generated CVLR crate reference, and project-derived idioms.
-# All three are produced and shipped by the private `certora-cvlr-kb` package — nothing here builds
-# one. Which of them a given database holds is not modelled: the tag names the corpus, not its
-# sources, and an install carrying only some of them is a supported state.
+# `cvlr_kb` is fed by the Solana manual built here (scripts/gen_docs.sh, ingested by ragbuild) and
+# by two manifests from the private `certora-cvlr-kb` package. Which of them a database holds is
+# not modelled; an install carrying only some of them is supported.
 KNOWLEDGE_BASES: dict[str, str] = {
     "cvlr_kb": CVLR_DEFAULT_CONNECTION,
 }
