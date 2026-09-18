@@ -1,8 +1,8 @@
 """Solana's verification build: ``cargo certora-sbf``, and the JSON it speaks.
 
 This is the **slow tier** of the two-tier compile gate (:mod:`composer.cargo.session` is the fast
-one) — the real chain build, run before a prover submission rather than per write — and it is also the one place where the backend and
-``certoraSolanaProver`` have to agree on what was built.
+one) — the real chain build, run before a prover submission rather than per write — and it is also
+the one place where the backend and ``certoraSolanaProver`` have to agree on what was built.
 
 They agree through a JSON document that neither of them invents. ``cargo certora-sbf --json`` prints
 it (to stdout, with the compile log on stderr), and ``certoraSolanaProver``'s ``build_script``
@@ -22,10 +22,11 @@ result, not as a build error.
 Why a build script at all, rather than handing over the finished ``.so`` through the conf's ``files``
 key: ``set_rust_build_directory`` only collects the project's Rust sources into ``.certora_sources``
 on the build-script path (with ``files`` it copies the artifact and nothing else), and those sources
-are what the report renders and what a counterexample analyzer reads. The other half of the
-same answer is confinement: ``certoraSolanaProver``'s own from-sources path runs ``cargo certora-sbf``
-directly inside its process, unconfined, which our sandbox posture does not allow. Owning the build script is
-what lets the build stay inside the sandbox while the prover still sees a from-sources run.
+are what the report renders and what a counterexample analyzer reads. The other half of the same
+answer is confinement: ``certoraSolanaProver``'s own from-sources path runs ``cargo certora-sbf``
+directly inside its process, unconfined, which our sandbox posture does not allow. Owning the build
+script is what lets the build stay inside the sandbox while the prover still sees a from-sources
+run.
 """
 
 import asyncio
@@ -64,13 +65,8 @@ BUILD_COMMAND_NAME = "confined_build.json"
 
 
 class PlatformToolsMissing(RuntimeError):
-    """The requested platform-tools version is not installed.
-
-    Its own exception because the failure is otherwise mute: ``cargo certora-sbf`` installs missing
-    tools by downloading them, which a confined build cannot do (no network, and the cache is granted
-    read-only), so the build fails somewhere inside the toolchain with a message that names neither
-    the version nor the fact that installing it is an operator action. Naming it here is the same
-    treatment a missing solc gets, for the same reason."""
+    """The requested platform-tools version is not installed under the toolchain root, and a
+    confined build cannot install it on demand the way ``cargo certora-sbf`` otherwise would."""
 
     def __init__(self, version: str, root: Path):
         self.version = version
@@ -84,20 +80,14 @@ class PlatformToolsMissing(RuntimeError):
 
 
 class SbfSubcommandMissing(RuntimeError):
-    """``cargo certora-sbf`` is not installed, so this run has no way to build for verification.
-
-    Raised at startup rather than left to the first submission. The fast tier is a plain
-    ``cargo check`` and passes without it, so a run missing only this subcommand behaves normally
-    through preflight, analysis, extraction and a full authoring iteration, and then fails at the
-    slow tier with cargo's own ``no such subcommand`` — after the phases that cost the money.
-    """
+    """``cargo certora-sbf`` is not installed, so this run has no way to build for verification."""
 
     def __init__(self, detail: str):
         super().__init__(
             f"`cargo certora-sbf` is not available: {detail}. It is the command the pre-submission "
             f"build runs and the one the prover's build script reruns, so nothing can be verified "
-            f"without it. Install it with `cargo install cargo-certora-sbf` (needs Rust 1.81 or "
-            f"newer), or rebuild the container image with SOLANA_TOOLCHAIN=1."
+            f"without it. Install it with `cargo install cargo-certora-sbf`, which needs Rust 1.81 "
+            f"or newer."
         )
 
 
@@ -216,11 +206,10 @@ def sbf_argv(
     the tool also reads, because the confined child never sees that variable: the launcher scrubs
     the environment down to :data:`~composer.sandbox.recipes.DEFAULT_ENV_PASSTHROUGH`, which is a
     chain-neutral list and does not carry it. So a deployment that installs the toolchains anywhere
-    but the tool's default — the container does, since the default lives under a ``$HOME`` the image
-    makes world-writable — would have the *path* granted read-only by
-    :func:`composer.spec.cvlr.entry.build_confinement` and the build still looking somewhere else,
-    finding nothing, and trying to download offline. Naming it on the argv makes the three agree by
-    construction, and puts it in the recorded command the prover reruns.
+    but the tool's default would have the *path* granted read-only by the run's confinement and the
+    build still looking somewhere else, finding nothing, and trying to download offline. Naming it
+    on the argv makes the three agree by construction, and puts it in the recorded command the
+    prover reruns.
     """
     args = [
         SBF_SUBCOMMAND,
@@ -255,11 +244,11 @@ def platform_tools_cargos(version: str, *, root: Path = PLATFORM_TOOLS_ROOT) -> 
 
         can't checkout from '...': you are in the offline mode (--offline)
 
-    So a warm run by the wrong cargo is not warm at all for a project with a git dependency, which
-    since ``ANCHOR_FORK`` is every Anchor project. A tuple rather than one path because a version can
-    ship both ``platform-tools`` and ``platform-tools-certora`` and which one ``cargo certora-sbf``
-    selects is its business, not ours; warming both is cheap (they share the registry cache) and
-    removes the need to guess.
+    So a warm run by the wrong cargo is not warm at all for a project with a git dependency — which
+    an Anchor project is, since Anchor verification needs Certora's fork rather than the crates.io
+    release. A tuple rather than one path because a version can ship both ``platform-tools`` and
+    ``platform-tools-certora``, and which one ``cargo certora-sbf`` selects is its business, not
+    ours; warming both is cheap (they share the registry cache) and removes the need to guess.
     """
     return tuple(
         cargo
@@ -274,9 +263,8 @@ async def _warm_for_the_build_cargo(
     """Fetch the graph with the cargos the chain build itself will run, once per session.
 
     Confined builds only: an unconfined one is not forced offline and can fetch what it lacks. A
-    failure here is logged rather than raised, exactly as :meth:`CargoSession.warm`'s own callers
-    treat it — a partially warm cache still compiles what it covers, and the build below names the
-    crate it could not find, which a fetch cannot.
+    failure here is logged rather than raised — a partially warm cache still compiles what it
+    covers, and the build below names the crate it could not find, which a fetch cannot.
     """
     for cargo in platform_tools_cargos(tools_version):
         if session.already_warmed(cargo):

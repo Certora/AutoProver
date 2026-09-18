@@ -36,10 +36,7 @@ METADATA_TIMEOUT_S = 300
 
 
 class CargoUnavailable(RuntimeError):
-    """``cargo`` is not on ``PATH``.
-
-    Distinct from "this project is not a Cargo project": one is a broken machine and the other is a
-    fact about the target, and only the first is worth telling an operator to fix."""
+    """``cargo`` is not on ``PATH``."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -203,8 +200,8 @@ def _cargo_metadata(
         _log.warning("cargo metadata in %s could not run: %r", project_root, exc)
         return None
     if completed.returncode != 0:
-        # Warning rather than info: this is the one `None` a caller cannot diagnose from the return
-        # value, and the preflight gate's whole value is a legible early failure.
+        # Warning rather than info: this is the one `None` whose cause a caller cannot recover
+        # from the return value.
         _log.warning(
             "cargo metadata in %s failed (%s): %s",
             project_root,
@@ -241,12 +238,11 @@ def read_workspace_sync(
     ``features`` selects the graph the *verification* build resolves rather than the default one,
     and passing it is not optional wherever the answer is about CVLR. A scaffolded project declares
     its CVLR crates ``optional = true`` behind the ``certora`` feature — which is what keeps them
-    out of a release build — so a default-feature read reports them as absent. Discovered by
-    scaffolding a real project: the version-gap report said ``cvlr-solana is not a dependency`` for a
-    project that had just been given one, and a source mount reading those crates would have found
-    nothing to mount. Features resolve against the package cargo considers current, so pass the
-    *package* directory as ``project_root`` when naming one; ``workspace_root`` in the payload is
-    the workspace either way.
+    out of a release build — so a default-feature read reports them as absent: a caller asking
+    which CVLR a freshly scaffolded project resolves is told it has none, and one mounting those
+    crates' sources finds nothing to mount. Features resolve against the package cargo considers
+    current, so pass the *package* directory as ``project_root`` when naming one;
+    ``workspace_root`` in the payload is the workspace either way.
 
     Synchronous because :meth:`composer.rustapp.toolchain.ProjectToolchain.source_unit` is, and a
     blocking primitive with an async wrapper is the only arrangement that serves both callers

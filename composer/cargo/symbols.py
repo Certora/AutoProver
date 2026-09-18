@@ -5,10 +5,9 @@ points-to summary is a regex over strings like
 ``<vault::VaultState as anchor_lang::AccountDeserialize>::try_deserialize``. So a directive that
 names a symbol the build does not define matches nothing and does nothing, and there is no
 diagnostic: the run reports the same error it reported before, and the author is left guessing at
-spellings. An end-to-end run wrote five variants of one directive for exactly that reason —
-``(_\\d+)?`` for a suspected demangling suffix, ``.*Display`` for an unknown trait path, ``std::`` in
-case it was not ``core::`` — and every one of them missed, because the symbol it was reaching for had
-been inlined out of existence and no spelling would have found it.
+spellings — at the mangling suffix, at a trait's full path, at ``core::`` versus ``std::``. No
+guess can be right when the symbol was inlined out of existence, which is the common case for the
+small functions a directive most wants to name.
 
 Two things are worth knowing about the names, both learned by comparing against ``rustfilt``:
 
@@ -47,7 +46,10 @@ _ESCAPES = {
 
 
 def _decode(segment: str) -> str:
-    """One path segment: drop the disambiguating underscore, decode escapes, ``..`` back to ``::``."""
+    """One path segment, unescaped.
+
+    The leading underscore is rustc's, not the name's: it disambiguates a segment that would
+    otherwise start with ``$``."""
     if segment.startswith("_$"):
         segment = segment[1:]
     for escaped, plain in _ESCAPES.items():
