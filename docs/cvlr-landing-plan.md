@@ -73,41 +73,74 @@ Two unrelated fixes are still unlanded and go alone rather than riding a themed 
 `cli.py` resolves a main contract path against the process's cwd rather than the project root; S1
 was merged without it. And `source/prover.py`'s `OVERLAY_OWNED_KEYS` docstring names the author's
 flag registry as `author.EDITABLE_FLAGS`, which has been `author._FLAG_KEYS` on master for some
-time — the only part of the former S5 that master can use today.
+time — the only part of the former S5 that master can use today. Two one-line annotation
+tightenings ride along with them: `authoring/judge.py` and `spec/cvl_research.py` each type an
+ignored callback parameter `object` rather than `Any`. They belong to no CVLR PR and would
+otherwise be the only changed files on the branch that no row below accounts for.
 
 ---
 
 ## Wave 2 — Rust and Solana machinery, still backend-agnostic
 
+**C7** is here rather than in wave 4, where it sat until the wave-3 dependency map was drawn.
+`composer/tools/cvlr_rag.py` imports `composer.rag.db` and nothing else; no part of C7 reaches
+`composer/spec/cvlr/` or `composer/cargo/`, so it is the one CVLR-adjacent PR that could be written
+today. It is also *required* earlier than wave 4: `cvlr_property_generation_system_prompt.j2`
+carries an unguarded `{% include "cvlr_rag_tools.j2" %}`, so **C4a2 cannot render its prompts
+without C7's template**. Landing C7 whole before C6 also keeps the prompt from advertising corpus
+tools the backend has not yet been given.
+
 | PR | Files | Size | What it is |
 |----|-------|------|------------|
+| **C7** Register the CVLR corpus, and build its documentation half here | 11 | +390 −30 | The `cvlr_kb` knowledge base: the tools module, both registry halves, the DB role, and the populate script — which ingests the Solana manual `gen_docs.sh` already builds, through `ragbuild --knowledge-base cvlr_kb`. No manifest and no second producer for that half (U6); the crate reference and practice manifests still come from the private repo. Carries the `PROVENANCE` stamp in `gen_docs.sh`, the `<blockquote>` case the Solana manual needs, and the `rag-import-format.md` revisions. |
 | **R1** Cargo, SBF and symbols — [#243](https://github.com/Certora/AutoProver/pull/243), open | 8 | +1242 | `composer/cargo/`: workspace metadata, a build session, the SBF build, dep-info parsing and the symbol reader. Nothing in it knows what CVLR is; it knows how to build and inspect a Solana crate. Eight new files and no change to an existing one — the `PROJECT_TOOLCHAINS` registration that would have made it nine went to *Deferred* below. |
 
 ---
 
 ## Wave 3 — the CVLR backend
 
-Every PR here is `composer/spec/cvlr/` plus its own tests, and each is unit-tested in isolation —
-which is what makes the split possible. It is also the honest objection to the split: **nothing in
-C1–C5 is reachable by a user until C6 wires it up.** The alternative is one PR of roughly 23,000
-lines, which is not a review. The recommendation is to accept a few weeks of unreachable-but-tested
-code and land C6 last, after which the backend appears all at once and works.
+Every PR here is `composer/spec/cvlr/` plus the tests that become runnable with it. The honest
+objection to the split stands: **nothing before C6 is reachable by a user until C6 wires it up.**
+The alternative is one PR of roughly 23,000 lines, which is not a review. The recommendation is to
+accept a few weeks of unreachable-but-tested code and land C6 last, after which the backend appears
+all at once and works.
 
 | PR | Files | Size | What it is |
 |----|-------|------|------------|
-| **C1a** Preflight, scaffold, conf | 5 | +2611 | Selecting the package under verification, scaffolding a CVLR workspace into a project that has none, and generating the prover conf. |
-| **C1b** The reference set and its envs | 10 | +1453 | Which cvlr / cvlr-solana versions a run is bound to, the checked-in inlining and summary env files, and the script that refreshes them. |
-| **C2** The working copy and the crate mount | 9 | +1253 −2 | The per-unit working tree, the read-only mount of the CVLR crates the target resolves, and the source tools over both. Carries the graphcore pin bump `85be3db` → `9f4e9fc` (graphcore #39, incremental VFS dumps into a reused build directory) and `build_layered_source_tools`. Both are shared code whose only caller anywhere is in this PR — `cvlr/tree.py` is the sole user of `PersistentMaterializer` and `DictBackend`, `cvlr/entry.py` the sole user of the layered builder — and a seam reviewed beside its caller beats the same seam alone a wave earlier. |
-| **C3a** The munge vocabulary | 5 | +2982 | The six kinds of source modification a harness may need, and how each is expressed against a Rust crate. |
-| **C3b** The munge editor | 3 | +2542 | The agent that proposes and applies them, and the review that accepts or rejects. |
-| **C4a** The authoring loop | 10 | +2642 | Author, state, rule extraction, the judge's prompts, and the feedback round. Carries the `CvlrJudge` / `CvlrGeneration` cache markers in `spec/context.py`, which are CVLR-specific and have no business in a shared PR. |
-| **C4b** The prompt corpus, and a mark for one-off measurements | 10 | +3186 | Guidance, the worked example rendered against the analyzed program, and the knowledge tests that pin what the prompts must and must not claim. Carries the `measurement` pytest mark and the CI selector `expensive and not measurement`, because `test_cvlr_judge_round_cost.py` — which lands here — is the only test that has it: a mark registered before its first user would deselect nothing and give a reviewer no way to judge the CI change. |
-| **C5** Verification and tuning | 10 | +3105 | Submission, the prover-side tuning directives, loop bounds, and the Anchor surface analysis. |
-| **C6** Pipeline and entry | 12 | +3083 −6 | `CvlrBackend`, the CLI entry points, the artifact store, and the plumbing tests. The PR that makes the backend exist. Lands without the two pinned-run flags — see *Deferred: pinned runs* below. |
+| **C1a** The reference set and the conf vocabulary | 5 | +1132 | `conf.py` `crates.py` `env_paths.py` `cvlr_reference.py`: which cvlr / cvlr-solana versions a run is bound to, how a crate set is described, and the generated prover conf. Nothing here imports another `cvlr/` module. |
+| **C3a** The munge vocabulary | 2 | +1627 | `munge.py` `rust_source.py`: the six kinds of source modification a harness may need, and the Rust parsing primitives they are expressed with. |
+| **C1c** Preflight, scaffold and the envs | 9 | +2260 | `scaffold.py` `preflight.py`: selecting the package under verification and scaffolding a CVLR workspace into a project that has none. Carries the checked-in inlining and summary env files and the script that refreshes them. |
+| **C2** The working copy and the crate mount | 7 | +731 −4 | `tree.py` `crate_mount.py` `source_tools.py`: the per-unit working tree, the read-only mount of the CVLR crates the target resolves, and the source tools over both. Carries the graphcore pin bump `85be3db` → `9f4e9fc` (graphcore #39) and `build_layered_source_tools`, both shared code whose only caller anywhere is this PR. |
+| **C5a** Submission, tuning and the Anchor surface | 4 | +996 | `prover.py` `tuning.py` `anchor_surface.py`: the prover-side submission, the tuning directives and loop bounds, and the Anchor surface analysis. |
+| **C4a1** Rules, state and the harness module | 12 | +3034 −2 | `rules.py` `state.py` `harness.py`: rule extraction, the authoring state, and the generated harness module. Carries the `CvlrJudge` / `CvlrGeneration` cache markers in `spec/context.py`, which are CVLR-specific and have no business in a shared PR. The largest test set in the wave lands here, because this is the layer four earlier PRs' tests were waiting on. |
+| **C5b** Verification | 3 | +2179 | `verify.py`: the gate that decides what a run has proved, and what it means when it has not. |
+| **C3b** The munge editor | 5 | +2853 | `editor.py`: the agent that proposes and applies munges, and the review that accepts or rejects. |
+| **C4b** Guidance and the worked example | 4 | +1046 | `guidance.py` `example.py`: the static guidance and the worked example rendered against the analyzed program. |
+| **C4a2** The authoring loop | 9 | +3426 | `author.py` and the four prompt templates: the author, the feedback round, and the judge. The top of the DAG — it imports from seven of the PRs above. |
+| **C6** Pipeline and entry | 12 | +3470 −7 | `CvlrBackend`, the CLI entry points, the artifact store, and the plumbing tests. The PR that makes the backend exist. Lands without the two pinned-run flags — see *Deferred: pinned runs* below. |
 | **R3** A Solana container | 8 | +400 −60 | `scripts/Dockerfile.solana` and `scripts/docker-compose.solana.yml`: a second AutoProver container, `autoprove-solana`, carrying the Rust toolchain and the platform-tools release, layered on the base image — which stays lean and loses nothing but its docs stage, where the one-element `for name in cvl` loop becomes `cvl solana` so the shared postgres gets the manual the backend is for. The shared service body moves to `scripts/docker-compose.common.yml`, which the EVM and Solana services both extend. |
 
-Order inside the wave: **C1a** before **C1b** (the env refresher imports the scaffold's constants),
-then **C6**, then **R3**. C3a/C3b, C4a/C4b and C5 are independent of each other.
+Order inside the wave is forced, and the table is in it:
+
+**C1a → C3a → C1c → C2 → C5a → C4a1 → C5b → C3b → C4b → C4a2 → C6 → R3**
+
+`composer/spec/cvlr/` is a clean DAG — 24 modules, no import cycles, eleven layers deep — so an
+order exists; what does not exist is freedom within it. An earlier draft of this wave grouped
+modules by subject rather than by layer, and four of those groups straddled the DAG: `rust_source`
+(a leaf) sat with the working copy while the munge vocabulary needed it; `conf` and `crates` (also
+leaves) sat with `scaffold` and `preflight`, four layers up; `state` sat with `author`, which
+imports everything that imports `state`; and `harness` and `tuning` sat with `pipeline` and
+`verify`, which import them. Each straddle made two PRs depend on each other, and no sequencing of
+that split passes the gate. The repartition above is those four groups cut along the layer
+boundary; no code moved to achieve it.
+
+The cost is paid in tests. A test file lands with the PR that completes its imports, not with the
+PR that owns its subject, and several of these tests reach across the whole stack: `test_cvlr_tree`
+lands with **C5b**, `test_cvlr_scaffold` and `test_cvlr_module_redirect` with **C4a1**,
+`test_cvlr_munge` and `test_cvlr_author` with **C6**. So `munge.py`, `scaffold.py` and `tree.py`
+each land a wave-stage or more before the test that exercises them, which is a real weakening of
+"unit-tested in isolation" and the honest price of splitting a DAG this deep. Splitting those three
+test files along the same boundary would buy it back, and is worth doing if a reviewer asks.
 
 **R3** was wave 2, and goes last instead — after **C6**, not merely after **C1a**. C1a is the hard
 floor: `tests/test_cvlr_image.py` imports `composer.spec.cvlr.conf` to check that the image bakes
@@ -135,7 +168,6 @@ themselves. No shared module reaches into the backend.
 
 | PR | Files | Size | What it is |
 |----|-------|------|------------|
-| **C7** Register the CVLR corpus, and build its documentation half here | 11 | +390 −30 | The `cvlr_kb` knowledge base: the tools module, both registry halves, the DB role, and the populate script — which ingests the Solana manual `gen_docs.sh` already builds, through `ragbuild --knowledge-base cvlr_kb`. No manifest and no second producer for that half (U6); the crate reference and practice manifests still come from the private repo. Carries the `PROVENANCE` stamp in `gen_docs.sh`, the `<blockquote>` case the Solana manual needs, and the `rag-import-format.md` revisions. |
 | **C8a** The end-to-end gate and its scenario | 10 | +2956 | `test_cvlr_gate.py` and the `solana_vault_idl` Anchor program it runs against. Real models, real cargo, real cloud jobs. Carries the change that makes `token_cost_budget` yield its counter instead of `None`: the gate is its only reader, and it reads it to report what the run cost rather than only to trip on the ceiling. |
 | **C8b** The replay tape | 7 | +52251 | The recorded run that lets the gate's shape be re-checked for the price of the builds and prover jobs alone. 51,000 of those lines are one generated file. |
 | **D** Documentation | 10 | +8153 | The backend plan, the capture plan, the upstream-defect record, the working-copy and VFS notes, and the to-do index. |
@@ -320,16 +352,18 @@ record of what went where; nothing is left to check out for those.
 | S3 *(merged)* | `composer/certora_env.py` `composer/prover/{certoraRunWrapper,core,ptypes,results}.py` `analyzer/analysis.py` `composer/tools/{prover,thinking}.py` `composer/authoring/buffer.py` `composer/core/context.py` `composer/cvl/tools.py` `composer/workflow/executor.py` `composer/spec/source/{autoprove_common,harness}.py` `composer/spec/source/munge/compile_check.py` `tests/conftest.py` `tests/test_prover_app.py` `tests/test_prover_options.py` `tests/test_wrapped_prover_runner.py` `tests/test_solana_cex_trace.py` `tests/data/solana_cex/` `tests/test_tree_parsing.py` `tests/test_cex_analysis_failure_isolation.py` `tests/test_autoprove_report.py` *(hunks: the `_violated` helper and its expectation)* |
 | S4 | `composer/spec/source/report/{schema,collect,build}.py` `composer/spec/source/report_prover.py` `tests/test_autoprove_report.py` `composer/pipeline/core.py` *(hunks)* |
 | R1 | `composer/cargo/` *(less `toolchain.py`)* `tests/test_cvlr_symbols.py` `tests/data/vault_sbf_symbols.txt` |
-| R3 | `scripts/Dockerfile.solana` `scripts/docker-compose.{common,solana}.yml` `scripts/Dockerfile` *(hunks: the docs stage and the header)* `scripts/docker-compose.yml` `scripts/docker-compose.sandbox.yml` `scripts/autoprove-entrypoint.sh` `tests/test_cvlr_image.py` |
-| C1a | `composer/spec/cvlr/{preflight,scaffold,conf,crates}.py` `tests/test_cvlr_scaffold.py` |
-| C1b | `composer/spec/cvlr_reference.py` `composer/spec/cvlr/env_paths.py` `composer/spec/cvlr/envs/` `composer/scripts/refresh_cvlr_envs.py` `tests/test_cvlr_env_paths.py` `tests/test_cvlr_reference.py` |
-| C2 | `composer/spec/cvlr/{tree,crate_mount,rust_source,source_tools}.py` `composer/templates/cvlr_source_tools.j2` `tests/test_cvlr_tree.py` `composer/spec/source/source_env.py` *(hunks: `build_layered_source_tools`)* `graphcore` `pyproject.toml` *(the pin only)* |
-| C3a | `composer/spec/cvlr/munge.py` `composer/templates/cvlr_munge_{editor,review}_system.j2` `tests/test_cvlr_munge.py` `tests/test_cvlr_module_redirect.py` |
-| C3b | `composer/spec/cvlr/editor.py` `tests/test_cvlr_editor.py` `tests/test_cvlr_derive_swap.py` |
-| C4a | `composer/spec/cvlr/{author,state,rules}.py` `composer/spec/context.py` `composer/templates/cvlr_feedback_prompt.j2` `composer/templates/cvlr_property_judge_system_prompt.j2` `tests/test_cvlr_{author,judge_input,rules}.py` `template_manifest.json` |
-| C4b | `composer/spec/cvlr/{guidance,example}.py` `.github/workflows/integration-tests.yml` `pyproject.toml` *(the marker registration only)* `composer/templates/cvlr_property_generation{,_system}_prompt.j2` `tests/test_cvlr_{worked_example,knowledge,judge_round_cost}.py` `tests/data/cvlr_judge/` |
-| C5 | `composer/spec/cvlr/{verify,prover,tuning,anchor_surface}.py` `tests/test_cvlr_{tuning,anchor_surface,anchor_reach,loop_bound}.py` `tests/data/{anchor_reach,loop_bound}_probe.rs` |
-| C6 | `composer/spec/cvlr/{pipeline,entry,harness,__init__}.py` `composer/cli/{console,tui}_solana.py` `tests/test_cvlr_{entry,plumbing,end_to_end,findings}.py` `tests/conftest.py` `tests/test_autoprove_integration.py` `pyproject.toml` *(the console scripts and package data)* |
+| R3 | `scripts/Dockerfile` `scripts/Dockerfile.solana` `scripts/docker-compose.yml` `scripts/docker-compose.common.yml` `scripts/docker-compose.solana.yml` `scripts/autoprove-entrypoint.sh` `tests/test_cvlr_image.py` |
+| C1a | `composer/spec/cvlr/conf.py` `composer/spec/cvlr/crates.py` `composer/spec/cvlr/env_paths.py` `composer/spec/cvlr_reference.py` `tests/test_cvlr_reference.py` |
+| C3a | `composer/spec/cvlr/munge.py` `composer/spec/cvlr/rust_source.py` |
+| C1c | `composer/spec/cvlr/scaffold.py` `composer/spec/cvlr/preflight.py` `composer/spec/cvlr/envs/` `composer/scripts/refresh_cvlr_envs.py` `tests/test_cvlr_env_paths.py` |
+| C2 | `composer/spec/cvlr/tree.py` `composer/spec/cvlr/crate_mount.py` `composer/spec/cvlr/source_tools.py` `composer/templates/cvlr_source_tools.j2` `composer/spec/source/source_env.py` `graphcore` `pyproject.toml` |
+| C5a | `composer/spec/cvlr/anchor_surface.py` `composer/spec/cvlr/prover.py` `composer/spec/cvlr/tuning.py` `tests/test_cvlr_end_to_end.py` |
+| C4a1 | `composer/spec/cvlr/rules.py` `composer/spec/cvlr/state.py` `composer/spec/cvlr/harness.py` `composer/spec/context.py` `tests/test_cvlr_rules.py` `tests/test_cvlr_scaffold.py` `tests/test_cvlr_tuning.py` `tests/test_cvlr_module_redirect.py` `tests/test_cvlr_anchor_reach.py` `tests/test_cvlr_loop_bound.py` `tests/data/anchor_reach_probe.rs` `tests/data/loop_bound_probe.rs` |
+| C5b | `composer/spec/cvlr/verify.py` `tests/test_cvlr_tree.py` `tests/test_cvlr_plumbing.py` |
+| C3b | `composer/spec/cvlr/editor.py` `composer/templates/cvlr_munge_editor_system.j2` `composer/templates/cvlr_munge_review_system.j2` `tests/test_cvlr_editor.py` `tests/test_cvlr_derive_swap.py` |
+| C4b | `composer/spec/cvlr/guidance.py` `composer/spec/cvlr/example.py` `tests/test_cvlr_worked_example.py` `tests/test_cvlr_anchor_surface.py` |
+| C4a2 | `composer/spec/cvlr/author.py` `composer/templates/cvlr_feedback_prompt.j2` `composer/templates/cvlr_property_judge_system_prompt.j2` `composer/templates/cvlr_property_generation_prompt.j2` `composer/templates/cvlr_property_generation_system_prompt.j2` `tests/test_cvlr_judge_input.py` `tests/test_cvlr_knowledge.py` `tests/data/cvlr_judge/` `template_manifest.json` |
+| C6 | `composer/spec/cvlr/pipeline.py` `composer/spec/cvlr/entry.py` `composer/spec/cvlr/__init__.py` `composer/cli/console_solana.py` `composer/cli/tui_solana.py` `tests/test_cvlr_entry.py` `tests/test_cvlr_findings.py` `tests/test_cvlr_author.py` `tests/test_cvlr_munge.py` `tests/test_cvlr_judge_round_cost.py` `tests/test_autoprove_integration.py` `.github/workflows/integration-tests.yml` |
 | C7 | `composer/tools/cvlr_rag.py` `composer/rag/db.py` `composer/tools/rag_env.py` `composer/scripts/init-db.sql` `scripts/populate_cvlr_rag.sh` `composer/templates/cvlr_rag_tools.j2` `tests/test_rag_env.py` `scripts/gen_docs.sh` `.gitignore` `composer/scripts/ragbuild.py` `docs/rag-import-format.md` |
 | C8a | `tests/test_cvlr_gate.py` `test_scenarios/solana_vault_idl/` `composer/diagnostics/budget.py` |
 | C8b | `composer/testing/` `scripts/record_cvlr_tape.sh` `tests/test_cvlr_tape.py` `tests/test_tape_setup.py` |
