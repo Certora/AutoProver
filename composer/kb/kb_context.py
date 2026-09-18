@@ -185,3 +185,25 @@ CVL_BUNDLE = KnowledgeBundle[CvlChannel](
 
 def with_cvl_context(prompt: "PromptInput") -> "PromptInput":
     return with_context(CVL_BUNDLE, prompt)
+
+
+#: Where a CVLR recipe's action lies. Taken from the author's tool list rather than from the shape
+#: of the artifact, because a channel's job is to tell a stuck agent whether the fix is in its
+#: action space: RULE is ``put_harness``, MOCK is ``summarize_for_prover``, EDIT is ``code_editor``,
+#: CONF is ``adjust_prover_config`` (the loop bound and the solver portfolio, and nothing else), and
+#: SKIP is ``record_skip`` — the honest terminal channel, which CVL has no peer for.
+type CvlrChannel = Literal["RULE", "MOCK", "EDIT", "CONF", "SKIP"]
+
+CVLR_BUNDLE = KnowledgeBundle[CvlrChannel](
+    label="CVLR",
+    specs=(
+        ContextSpec(
+            title="CVLR and the Certora Solana Prover",
+            loader=_resource_file_loader("cvlr_baseline_facts.md"),
+        ),
+    ),
+)
+
+
+def with_cvlr_context(prompt: "PromptInput") -> "PromptInput":
+    return with_context(CVLR_BUNDLE, prompt)
