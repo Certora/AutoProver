@@ -301,3 +301,43 @@ def test_update_via_ir_map_noop_when_already_present(tmp_path: Path) -> None:
         conf, ContractHandle(contract_name="Sample_1", source_file="lib/dep/Sample_1.sol")
     ) is False
     assert conf["solc_via_ir_map"] == {"Sample_1": True}
+
+
+# =============================================================================
+# ConfigManager.create_config: the additional contracts get their map entries
+#
+# A file in `files` with no compiler_map entry makes certoraRun reject the conf.
+# Most projects name no additional contract at all, so the empty case has to be
+# as ordinary as the populated one.
+# =============================================================================
+
+
+def _create_config(tmp_path: Path, additional_files: list[str]) -> dict:
+    mgr = _config_manager(tmp_path)
+    conf_path = tmp_path / "out.conf"
+    mgr.create_config(
+        "Sample",
+        [ContractHandle(contract_name="Sample", source_file="src/Sample.sol")],
+        additional_files,
+        tmp_path / "sanity.spec",
+        conf_path=conf_path,
+        properties={"compiler_map": {"Sample": "0.8.20"}},
+    )
+    return __import__("json").loads(conf_path.read_text())
+
+
+def test_create_config_without_additional_contracts(tmp_path: Path) -> None:
+    conf = _create_config(tmp_path, [])
+    assert conf["files"] == ["src/Sample.sol"]
+    assert conf["compiler_map"] == {"Sample": "0.8.20"}
+
+
+def test_create_config_gives_an_additional_contract_its_compiler_map_entry(tmp_path: Path) -> None:
+    companion = tmp_path / "certora" / "specs" / "summaries" / "OZ_BitMaps.sol"
+    companion.parent.mkdir(parents=True)
+    companion.write_text("pragma solidity 0.8.19;\nlibrary OZ_BitMaps {}\n")
+    entry = "certora/specs/summaries/OZ_BitMaps.sol:OZ_BitMaps"
+
+    conf = _create_config(tmp_path, [entry])
+    assert entry in conf["files"]
+    assert conf["compiler_map"]["OZ_BitMaps"] == "solc8.19"

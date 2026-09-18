@@ -449,11 +449,12 @@ examined. It is the same mechanism as CVL's `expect_rule_failure` and foundry's
 `feedback_tool`; a wheel with no judge gets no review machinery and no feedback stamp among its
 required validations. That question is asked once, when the session is built, and takes no spec —
 whether an input is reviewed and who reviews it are both fixed before anything is authored, so only
-`judge_instruction` is given a draft, once per round. The judge is a sub-agent that must read the draft
-back through `get_spec` (`did_read`) and must call `result` with a `PropertyFeedback` — `good` is a
-field it had to set, so there is no unparseable reply to interpret and no fail-open default. Its
-acceptance is a stamp like any other. The author may answer a prior round with a `rebuttal`, typed
-by the wheel's declared `evidence_kinds`.
+`judge_instruction` is given a draft, once per round. The judge is a sub-agent that must draft its
+verdict before delivering it (`drafted` — the write echoes the draft back as the tool result, so the
+next turn reviews what it wrote rather than the copy in its own prompt) and must call `result` with a
+`PropertyFeedback` — `good` is a field it had to set, so there is no unparseable reply to interpret
+and no fail-open default. Its acceptance is a stamp like any other. The author may answer a prior
+round with a `rebuttal`, typed by the wheel's declared `evidence_kinds`.
 
 **Publishing** requires every stamp to match the current buffer and the property→checks mapping to
 account for every property that was not skipped, checked against the checks the wheel declared.

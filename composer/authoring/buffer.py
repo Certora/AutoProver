@@ -11,7 +11,7 @@ display, because those are not schema nouns.
 """
 
 from dataclasses import dataclass
-from typing import Callable, Literal, overload, override
+from typing import Callable, overload, override
 from typing_extensions import TypedDict, ReadOnly
 
 from langchain_core.messages import AIMessage
@@ -35,9 +35,14 @@ type SpecValidator = Callable[[str], str | None]
 
 SPEC_KEY = "curr_spec"
 
-#: The flag a judge's ``did_read`` gate reads. Writing the spec clears it: a review that read the
-#: previous draft has not read this one.
-READ_KEY = "did_read"
+#: The flag a completion gate reads: has this agent written a rough draft of its answer? Set by
+#: :func:`composer.tools.thinking.get_rough_draft_tools`, whose ``write_rough_draft`` echoes the
+#: draft back as its own tool result — so the write *is* the review, and there is nothing further
+#: to read before answering.
+#:
+#: Writing the spec clears it, and that is the reason it lives here rather than beside the draft
+#: tools: a draft written about the previous spec is not a draft of this one.
+DRAFT_KEY = "drafted"
 
 
 class SpecBuffer(TypedDict):
@@ -50,17 +55,13 @@ class SpecBufferSet(TypedDict):
     curr_spec: str
 
 
-class SpecBufferWithRead(SpecBuffer):
-    did_read: bool
-
-
 def apply_spec_update(
     *,
     tool_call_id: str,
     text: str,
     validator: SpecValidator | None = None,
     spec_key: str = SPEC_KEY,
-    reset_read: str | None = None,
+    reset_draft: str | None = None,
 ) -> str | Command:
     """Write ``text`` into the buffer, or reject it.
 
@@ -69,8 +70,8 @@ def apply_spec_update(
     if validator is not None and (err := validator(text)) is not None:
         return err
     update: dict[str, object] = {spec_key: text}
-    if reset_read:
-        update[reset_read] = False
+    if reset_draft:
+        update[reset_draft] = False
     return tool_state_update(tool_call_id=tool_call_id, content="Accepted", **update)
 
 
@@ -81,7 +82,6 @@ class BufferDoc(ToolFamilyParams):
 @dataclass(frozen=True)
 class GetDeps:
     missing: str
-    set_did_read: bool = False
 
 
 @tool_family(BufferDoc)
@@ -96,20 +96,7 @@ class GetSpec[T: SpecBuffer](
     async def run(self) -> str | Command:
         with self.tool_deps() as deps:
             spec = self.state[SPEC_KEY]
-            if spec is None:
-                return deps.missing
-            if deps.set_did_read:
-                return tool_state_update(
-                    tool_call_id=self.tool_call_id, content=spec, **{READ_KEY: True}
-                )
-            return spec
-
-
-@overload
-def get_spec_tool[S: SpecBufferWithRead](
-    ty: type[S], *, name: str, description: str, missing: str, display: ToolDisplay,
-    set_did_read: Literal[True],
-) -> BaseTool: ...
+            return deps.missing if spec is None else spec
 
 
 @overload
@@ -131,17 +118,13 @@ def get_spec_tool(
     description: str,
     missing: str,
     display: ToolDisplay,
-    set_did_read: bool = False,
 ) -> BaseTool:
     """Read-back tool over the buffer. ``missing`` is what the agent is told when nothing has been
     written yet.
-
-    ``set_did_read`` additionally stamps :data:`READ_KEY`, which is how a judge's completion
-    validator knows the review actually looked at the draft rather than at the copy in its prompt.
     """
     return tool_display_of(display)(
         GetSpec.with_template(description=description)[ty]
-        .bind(GetDeps(missing=missing, set_did_read=set_did_read))
+        .bind(GetDeps(missing=missing))
         .as_tool(name)
     )
 
@@ -151,7 +134,7 @@ class EditDeps:
     name: str
     missing: str
     validator: SpecValidator | None = None
-    reset_read: str | None = READ_KEY
+    reset_draft: str | None = DRAFT_KEY
 
 
 @tool_family(BufferDoc)
@@ -191,7 +174,7 @@ class EditSpec[T: SpecBuffer](
                         tool_call_id=self.tool_call_id,
                         text=new_text,
                         validator=deps.validator,
-                        reset_read=deps.reset_read,
+                        reset_draft=deps.reset_draft,
                     )
 
 
@@ -203,7 +186,7 @@ def edit_spec_tool[S: SpecBuffer](
     missing: str,
     display: ToolDisplay,
     validator: SpecValidator | None = None,
-    reset_read: str | None = READ_KEY,
+    reset_draft: str | None = DRAFT_KEY,
 ) -> BaseTool:
     """Surgical single-occurrence replace over the buffer, re-validated exactly as a put is.
 
@@ -217,7 +200,7 @@ def edit_spec_tool[S: SpecBuffer](
     return tool_display_of(display)(
         EditSpec.with_template(description=description)[ty]
         .bind(EditDeps(
-            name=name, missing=missing, validator=validator, reset_read=reset_read,
+            name=name, missing=missing, validator=validator, reset_draft=reset_draft,
         ))
         .as_tool(name)
     )

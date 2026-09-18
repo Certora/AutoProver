@@ -7,6 +7,7 @@ job URL (so waiting needs no credentials), then retrieves its results through
 
 import asyncio
 import logging
+import shutil
 import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -18,6 +19,9 @@ from urllib.parse import urlparse, parse_qs
 
 import aiohttp
 from prover_output_utility import ProverOutputAPI
+from prover_output_utility.exceptions import (
+    AuthenticationError, InvalidJobError, JobNotFoundError, ParseError, ProverAPIError,
+)
 from prover_output_utility.models import JobStatus, convert_job_status
 
 logger = logging.getLogger("composer.spec")
@@ -159,6 +163,49 @@ def _results_api() -> ProverOutputAPI:
     return ProverOutputAPI(enable_cache=False)
 
 
+#: A fetch failure here is a *transport* fault, not a bad job: by the time we download documents
+#: the job has already polled ``SUCCEEDED``. Re-fetching the same completed job is cheap; re-running
+#: the whole proof (what the caller does if this context raises) throws away a finished — often
+#: hours-long — verification. So retry the fetch itself a few times with exponential backoff before
+#: giving up. POU retries at the individual-request level; this covers a whole-fetch failure that
+#: outlives those (e.g. a mid-transfer reset that exhausts the request-level retries on one file).
+_FETCH_MAX_ATTEMPTS = 3
+_FETCH_BACKOFF_BASE_S = 2.0
+
+#: POU raises everything as a ``ProverAPIError``; these subclasses are the ones a second attempt
+#: cannot change — a bad token, a malformed job reference, a job that is not there, a document that
+#: does not parse. Retrying those spends the backoff to fail identically, so re-raise them at once.
+_PERMANENT_FETCH_ERRORS = (AuthenticationError, InvalidJobError, JobNotFoundError, ParseError)
+
+
+async def _fetch_results(job_id: str, dest: Path) -> None:
+    """Download a completed job's sources + tree view into ``dest``, retrying a transient failure.
+
+    Each attempt starts from an empty ``dest`` so a partially-written archive from a failed attempt
+    cannot leave a truncated file behind. Never re-runs the job — only re-reads it.
+    """
+    for attempt in range(1, _FETCH_MAX_ATTEMPTS + 1):
+        try:
+            await asyncio.to_thread(
+                _results_api().fetch_sources_and_treeview_files, job_id, dest
+            )
+            return
+        # ``requests`` failures that escape POU's wrapping are OSErrors (RequestException is an
+        # IOError), so the two clauses together cover the transport.
+        except (ProverAPIError, OSError) as exc:
+            if isinstance(exc, _PERMANENT_FETCH_ERRORS) or attempt == _FETCH_MAX_ATTEMPTS:
+                raise
+            backoff = _FETCH_BACKOFF_BASE_S * 2 ** (attempt - 1)
+            logger.warning(
+                "Fetching results for completed job %s failed (attempt %d/%d): %s. "
+                "Re-fetching the finished job in %.0fs (not re-proving).",
+                job_id[:8], attempt, _FETCH_MAX_ATTEMPTS, exc, backoff,
+            )
+            for child in dest.iterdir():
+                shutil.rmtree(child) if child.is_dir() else child.unlink()
+            await asyncio.sleep(backoff)
+
+
 @asynccontextmanager
 async def cloud_results(
     run_result_link: str,
@@ -202,7 +249,5 @@ async def cloud_results(
         # tens of gigabytes on real jobs and used to exhaust the disk; across the
         # jobs measured here these two subtrees are ~3% of the archive. POU writes
         # them in the same layout the archive had, so the parse is unchanged.
-        await asyncio.to_thread(
-            _results_api().fetch_sources_and_treeview_files, cloud_job.job_id, dest
-        )
+        await _fetch_results(cloud_job.job_id, dest)
         yield (dest, runtime_ms)

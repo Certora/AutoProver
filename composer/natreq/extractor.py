@@ -93,7 +93,7 @@ def _extraction_res_checker(
     _r: list[str],
     _id: str
 ) -> str | None:
-    if "memory" in st and not st.get("did_read", False):
+    if "memory" in st and not st.get("drafted", False):
         return "Completion REJECTED: You must read your rough draft before submitting. Call read_rough_draft first."
     return None
 
@@ -171,7 +171,7 @@ async def get_requirements(
                 if prior is not None:
                     input_text.append(prior.contents)
 
-        graph_input = ExtractionInput(input=input_text, memory=None, did_read=False)
+        graph_input = ExtractionInput(input=input_text, memory=None, drafted=False)
 
         async with with_handler(io, NullEventHandler()):  # type: ignore[arg-type]
             with set_current_task_id(REQUIREMENTS_TASK_ID):
