@@ -1,6 +1,5 @@
 #!/bin/bash
-# Ingest the `cvlr_kb` corpus: the Solana manual ./gen_docs.sh builds beside the CVL one, into the
-# cvlr_rag schema rather than the default CVL database.
+# Ingest solana.html (from gen_docs.sh) into the cvlr_rag schema, not the default CVL database.
 set -euo pipefail
 
 script_dir="$(realpath "$(dirname "$0")")"
@@ -12,8 +11,8 @@ if [[ ! -f "$docs_dir/solana.html" ]]; then
     exit 1
 fi
 
-# Asked for rather than spelled out here: the constant follows CERTORA_AI_COMPOSER_PGHOST/PGPORT,
-# so a copy of the DSN in this script would send a container's ingest to the wrong host.
+# Read CVLR_DEFAULT_CONNECTION so CERTORA_AI_COMPOSER_PGHOST/PGPORT apply. A copied
+# DSN would send a container ingest to the wrong host.
 conn="$(cd "$parent"; uv run --isolated --group ragbuild \
     python -c 'from composer.rag.db import CVLR_DEFAULT_CONNECTION as c; print(c)')"
 
