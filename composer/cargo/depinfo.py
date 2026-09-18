@@ -4,16 +4,15 @@ The Rust answer to the EVM backend's ``EditsNotCompiled``: an edit that lands in
 never reads changes nothing and reports nothing, and the run goes on to claim a verdict about code it
 did not verify. On Solana that failure has a specific and common shape — an attribute inserted into a
 file the ``certora`` feature gates out, or into a module no enabled feature declares — and until now
-nothing noticed it (``docs/munge-and-working-copies.md`` §8 gap 2).
+nothing noticed it.
 
 rustc emits a Makefile-style ``.d`` beside each artifact listing every source it read, and cargo keeps
 them under ``target/<profile>/deps/``. So "did my edit reach the build" is a set-membership question
 against a file the compiler wrote.
 
 **Finding the right ``.d`` is the whole problem, and a marker solves it.** Several feature variants of
-one crate coexist in a shared ``target/`` (that is the point of
-``docs/single-working-tree.md`` §3), each with its own ``.d``, and nothing in the filename says which
-feature set produced it. Rather than guess from mtimes, the caller names a file it *knows* this build
+one crate coexist in a shared ``target/`` by design — that is what keeps a rebuild incremental —
+each with its own ``.d``, and nothing in the filename says which feature set produced it. Rather than guess from mtimes, the caller names a file it *knows* this build
 compiled — the unit's own harness module, which only this unit's feature declares — and the dep-info
 that mentions it is this build's by construction. A caller that can name no such file gets ``None``
 and should say it could not check, rather than reporting a false pass.
