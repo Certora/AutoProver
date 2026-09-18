@@ -101,7 +101,7 @@ description.
 
 | PR | Files | Size | What it is |
 |----|-------|------|------------|
-| **C7a** The corpus, fed by the manual built here | 7 | +190 | `composer/tools/cvlr_rag.py`'s three search tools, the `cvlr_rag_user` role and schema they read, and `CVLR_DEFAULT_CONNECTION` beside the three constants that already name a corpus's database. `gen_docs.sh` has always built `solana.html` and dropped it; `populate_cvlr_rag.sh` ingests it with the existing `ragbuild`, which gains only the `<blockquote>` case the Solana manual needs. No manifest and no producer (U6). Adds only — it deletes no line master has. |
+| **C7a** The corpus, fed by the manual built here — [#244](https://github.com/Certora/AutoProver/pull/244), open | 7 | +210 | `composer/tools/cvlr_rag.py`'s three search tools, the `cvlr_rag_user` role and schema they read, and `CVLR_DEFAULT_CONNECTION` beside the three constants that already name a corpus's database. `gen_docs.sh` has always built `solana.html` and dropped it; `populate_cvlr_rag.sh` ingests it with the existing `ragbuild`, which gains only the `<blockquote>` case the Solana manual needs. No manifest and no producer (U6). Adds only — it deletes no line master has. |
 | **R1** Cargo, SBF and symbols — [#243](https://github.com/Certora/AutoProver/pull/243), open | 8 | +1242 | `composer/cargo/`: workspace metadata, a build session, the SBF build, dep-info parsing and the symbol reader. Nothing in it knows what CVLR is; it knows how to build and inspect a Solana crate. Eight new files and no change to an existing one — the `PROJECT_TOOLCHAINS` registration that would have made it nine went to *Deferred* below. |
 
 ---
