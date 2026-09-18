@@ -1197,7 +1197,7 @@ def generate_contract_sanity(contract: dict) -> tuple[str, list[dict]]:
     # Direct impl methods → add _sanity suffix
     for fns in [direct_fns, trait_fns]:
         for fn in fns:
-            suffix = '_sanity'
+            suffix = '_' + struct_name + '_sanity'
             wrapped_name = fn['name'] + suffix
             decl = fn_decl(wrapped_name, fn['params'], fn['ret'])
             body = fn_call(struct_name, fn['name'], fn['params'], fn['ret'])
@@ -1297,7 +1297,7 @@ def generate_trait_sanity_lib(trait: dict, trait_crate: str, trait_module: str) 
     lines += ['}', '']
 
     for fn in fns:
-        suffix = '_sanity'
+        suffix = '_' + trait_name + '_sanity'
         wrapped_name = fn['name'] + suffix
         decl = fn_decl(wrapped_name, fn['params'], fn['ret'])
         body = fn_call(contract_name, fn['name'], fn['params'], fn['ret'])
@@ -1414,6 +1414,20 @@ def find_nearest_cargo(start: Path, root: Path) -> Optional[Path]:
             break
         candidate = candidate.parent
     return None
+
+
+def find_crate_name(file_path: Path, root: Path) -> Optional[str]:
+    """Return the [package] name from the Cargo.toml nearest to file_path."""
+    cargo = find_nearest_cargo(file_path, root)
+    if cargo is None:
+        return None
+    try:
+        content = cargo.read_text()
+        m = re.search(r'^\[package\].*?^name\s*=\s*"([^"]+)"', content,
+                      re.MULTILINE | re.DOTALL)
+        return m.group(1) if m else None
+    except Exception:
+        return None
 
 
 # ─── Workspace / lib.rs patching ─────────────────────────────────────────────
@@ -1598,6 +1612,7 @@ def main():
             emitted_fns = emitted_fns_by_contract[contract['name']]
             summary['contracts'].append({
                 'name': contract['name'],
+                'crate': find_crate_name(contract['file'], root),
                 'file': str(contract['file'].relative_to(root)),
                 'sanity_file': str(sanity_path.relative_to(root)),
                 'functions': [fn_summary(fn) for fn in emitted_fns],
