@@ -103,6 +103,11 @@ class GeneratedCVL(BaseModel):
     # the spec, so the proof's source view is never silently lost.
     vfs: dict[str, str] = Field(default_factory=dict)
     applied_edits: list[AppliedEdit] = Field(default_factory=list)
+    # Every run whose results count for this spec, newest first, as raw job links. Completion
+    # may be reached piecemeal — a scoped run covering the rules a full run left unproved — so
+    # the last link alone does not account for every rule. Empty for a cache entry written
+    # before the field existed, or when no run produced a link.
+    covering_links: list[str] = Field(default_factory=list)
 
     def property_checks(self) -> list[tuple[PropertyTitle, list[RuleName]]]:
         """Property title -> the CVL rule names that verify it (the report's `ReportableResult`
@@ -118,6 +123,15 @@ class GeneratedCVL(BaseModel):
         """The prover run's ``/output/`` link, rewritten from the raw ``/jobStatus/`` job URL;
         ``None`` when no run link was produced. Drives the report's ``run_link``."""
         return _output_link(self.final_link)
+
+    @property
+    def covering_output_links(self) -> list[str]:
+        """``covering_links`` in ``/output/`` form, newest first, falling back to the last run
+        when the covering set is empty. What the report reads verdicts from."""
+        links = [l for link in self.covering_links if (l := _output_link(link)) is not None]
+        if links:
+            return links
+        return [self.output_link] if self.output_link is not None else []
 
 
 # ---------------------------------------------------------------------------
