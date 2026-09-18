@@ -101,7 +101,7 @@ description.
 
 | PR | Files | Size | What it is |
 |----|-------|------|------------|
-| **C7a** The `cvlr_kb` corpus, fed by the manual built here | 10 | +265 −25 | The knowledge base itself: `composer/tools/cvlr_rag.py`'s three search tools, the `cvlr_rag_user` role and schema, the `KNOWLEDGE_BASES` connection, and one way in — `gen_docs.sh` has always built `solana.html` beside the CVL manual, and `ragbuild --knowledge-base cvlr_kb` now files it under its own tag. No manifest and no second producer (U6). Carries the `PROVENANCE` stamp in `gen_docs.sh`, the `<blockquote>` case the Solana manual needs, and the `rag-import-format.md` revisions that say what a tag in that registry does and does not buy. |
+| **C7a** The corpus, fed by the manual built here | 10 | +224 −2 | `composer/tools/cvlr_rag.py`'s three search tools, the `cvlr_rag_user` role and schema they read, and `CVLR_DEFAULT_CONNECTION` beside the three constants that already name a corpus's database. `gen_docs.sh` has always built `solana.html` and dropped it; `populate_cvlr_rag.sh` ingests it with the existing `ragbuild`, which gains only the `<blockquote>` case the Solana manual needs. No manifest and no producer (U6). Carries the `PROVENANCE` stamp and the `rag-import-format.md` note on what the out-of-tree experiment measured. |
 | **R1** Cargo, SBF and symbols — [#243](https://github.com/Certora/AutoProver/pull/243), open | 8 | +1242 | `composer/cargo/`: workspace metadata, a build session, the SBF build, dep-info parsing and the symbol reader. Nothing in it knows what CVLR is; it knows how to build and inspect a Solana crate. Eight new files and no change to an existing one — the `PROJECT_TOOLCHAINS` registration that would have made it nine went to *Deferred* below. |
 
 ---
@@ -126,7 +126,7 @@ all at once and works.
 | **C3b** The munge editor | 5 | +2853 | `editor.py`: the agent that proposes and applies munges, and the review that accepts or rejects. |
 | **C4b** Guidance and the worked example | 4 | +1046 | `guidance.py` `example.py`: the static guidance and the worked example rendered against the analyzed program. |
 | **C4a2** The authoring loop | 9 | +3426 | `author.py` and the four prompt templates: the author, the feedback round, and the judge. The top of the DAG — it imports from seven of the PRs above. |
-| **C6** Pipeline and entry | 12 | +3470 −7 | `CvlrBackend`, the CLI entry points, the artifact store, and the plumbing tests. The PR that makes the backend exist. Lands without the two pinned-run flags — see *Deferred: pinned runs* below — and opens the corpus the way the CVL backend does, not by tag; see *Dropped: selecting the CVLR corpus by tag*. |
+| **C6** Pipeline and entry | 12 | +3470 −7 | `CvlrBackend`, the CLI entry points, the artifact store, and the plumbing tests. The PR that makes the backend exist. Lands without the two pinned-run flags — see *Deferred: pinned runs* below — and opens the corpus the way the CVL backend does, not by tag; see *Dropped: naming the CVLR corpus by tag*. |
 | **R3** A Solana container | 8 | +400 −60 | `scripts/Dockerfile.solana` and `scripts/docker-compose.solana.yml`: a second AutoProver container, `autoprove-solana`, carrying the Rust toolchain and the platform-tools release, layered on the base image — which stays lean and loses nothing but its docs stage, where the one-element `for name in cvl` loop becomes `cvl solana` so the shared postgres gets the manual the backend is for. The shared service body moves to `scripts/docker-compose.common.yml`, which the EVM and Solana services both extend. |
 
 Order inside the wave is forced, and the table is in it:
@@ -250,25 +250,31 @@ mentions it in the record of a run that actually happened and should be left alo
 
 ---
 
-## Dropped: selecting the CVLR corpus by tag
+## Dropped: naming the CVLR corpus by tag
 
-The branch registers `cvlr_kb` in `composer/tools/rag_env.py` as well as in `KNOWLEDGE_BASES`, and
-gives `entry.py` a `--rag-corpus` flag whose value that registry resolves to a connection and a set
-of search tools. `rag_env` exists for wheels: a Rust descriptor's `rag_db_default` crosses the FFI
-as a string, so something has to turn a string into a corpus. The CVLR backend is in-tree Python and
-has no such string unless a flag invents one, and nothing selects a corpus other than the default.
+The branch treats `cvlr_kb` as a *tag*: an entry in `composer.rag.db.KNOWLEDGE_BASES`, a matching
+factory in `composer/tools/rag_env.py`, a `--knowledge-base` flag on `ragbuild` that resolves the
+first, and a `--rag-corpus` flag on `entry.py` that resolves both. None of that is how CVL, sanity or
+Foundry reach a corpus, and asking why CVLR needs it has no answer that survives being asked twice.
 
-So the backend opens `CVLR_DEFAULT_CONNECTION` and calls `cvlr_rag.get_tools(db)` directly, which is
-what the CVL and Foundry backends already do — `composer/spec/services.py` is handed a built
-`PostgreSQLRAGDatabase` and never sees a tag. `cvlr_kb` stays in `KNOWLEDGE_BASES`, which is the
-ingest side: `ragbuild --knowledge-base` and `rag_import` both resolve their target from it.
+A tag exists because a *wheel* has one: a Rust descriptor's `rag_db_default` crosses the FFI as a
+string, so `rag_env` has to turn a string into a connection and a tool set. In-tree Python never
+holds such a string unless a flag invents one. CVL's composition root builds a
+`PostgreSQLRAGDatabase` from a constant and hands the object to `composer/spec/services.py`, which
+never sees a name; `populate_extended_rag.sh` passes `ragbuild` an `--output` connection. The CVLR
+backend does both of those and needs no registry at either end.
 
-Not landing, in **C7a** or anywhere: `composer/tools/rag_env.py`'s `_FACTORIES` entry, the
+So `db.py` gains one line — `CVLR_DEFAULT_CONNECTION`, beside the three constants that already name
+a corpus's database — and nothing else. Not landing, in **C7a** or anywhere: the `KNOWLEDGE_BASES`
+entry, `ragbuild`'s `--knowledge-base` flag, `rag_env`'s `_FACTORIES` entry, the
 `build_rag_tools(model=...)` parameter added for a caller this drops, and the four
-`tests/test_rag_env.py` tests that cover a registered corpus. `tests/test_cvlr_rag.py` replaces the
-one of those worth keeping — that the three tools bind, and that the prompt template names the
-tools that exist. **C6** carries the `entry.py` change: no `--rag-corpus`, and its own handling for
-a corpus that will not open, since `build_rag_tools`'s degrade path is what it stops using.
+`tests/test_rag_env.py` tests covering a registered corpus. `tests/test_cvlr_rag.py` replaces the one
+of those worth keeping — that the three tools bind, and that the prompt template names the tools that
+exist.
+
+**C6** carries the consequence: no `--rag-corpus`, `cvlr_rag.get_tools()` on a database it opens
+itself, and its own handling for a corpus that will not open, since `build_rag_tools`'s
+degrade-to-no-RAG path is what it stops using.
 
 ---
 
@@ -399,7 +405,7 @@ record of what went where; nothing is left to check out for those.
 | C4b | `composer/spec/cvlr/guidance.py` `composer/spec/cvlr/example.py` `tests/test_cvlr_worked_example.py` `tests/test_cvlr_anchor_surface.py` |
 | C4a2 | `composer/spec/cvlr/author.py` `composer/templates/cvlr_feedback_prompt.j2` `composer/templates/cvlr_property_judge_system_prompt.j2` `composer/templates/cvlr_property_generation_prompt.j2` `composer/templates/cvlr_property_generation_system_prompt.j2` `tests/test_cvlr_judge_input.py` `tests/test_cvlr_knowledge.py` `tests/data/cvlr_judge/` `template_manifest.json` |
 | C6 | `composer/spec/cvlr/pipeline.py` `composer/spec/cvlr/entry.py` `composer/spec/cvlr/__init__.py` `composer/cli/console_solana.py` `composer/cli/tui_solana.py` `tests/test_cvlr_entry.py` `tests/test_cvlr_findings.py` `tests/test_cvlr_author.py` `tests/test_cvlr_munge.py` `tests/test_cvlr_judge_round_cost.py` `tests/test_autoprove_integration.py` `.github/workflows/integration-tests.yml` |
-| C7a | `composer/tools/cvlr_rag.py` `composer/rag/db.py` `composer/scripts/init-db.sql` `composer/templates/cvlr_rag_tools.j2` `composer/scripts/ragbuild.py` `scripts/gen_docs.sh` `.gitignore` `tests/test_cvlr_rag.py` *(new, not on the branch)* `scripts/populate_cvlr_rag.sh` *(hunks: the manual half)* `docs/rag-import-format.md` *(hunks: §4, §5, and the registry entry in §7)* |
+| C7a | `composer/tools/cvlr_rag.py` `composer/rag/db.py` *(hunks: the connection constant)* `composer/scripts/init-db.sql` `composer/templates/cvlr_rag_tools.j2` `composer/scripts/ragbuild.py` *(hunks: the `<blockquote>` case)* `scripts/gen_docs.sh` `.gitignore` `tests/test_cvlr_rag.py` *(new, not on the branch)* `scripts/populate_cvlr_rag.sh` *(hunks: the manual half)* `docs/rag-import-format.md` *(hunks: §5 and the `ragbuild` note in §7)* |
 | C7b | `scripts/populate_cvlr_rag.sh` *(hunks: manifest discovery)* `composer/templates/cvlr_rag_tools.j2` *(hunks)* `docs/rag-import-format.md` *(hunks: the producer paragraph in §7)* |
 | C7c | `composer/tools/cvlr_rag.py` *(hunks: the unreviewed disclosure)* `scripts/populate_cvlr_rag.sh` *(hunks)* `composer/templates/cvlr_rag_tools.j2` *(hunks)* `docs/rag-import-format.md` *(hunks)* |
 | C8a | `tests/test_cvlr_gate.py` `test_scenarios/solana_vault_idl/` `composer/diagnostics/budget.py` |
