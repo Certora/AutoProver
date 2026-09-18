@@ -1,0 +1,50 @@
+# docker-compose.common.yml — the service body every AutoProver app container shares.
+#
+# NOT a compose file in its own right: `autoprove-common` names no image, so including this file
+# with -f makes the project invalid. It exists only as an `extends:` source, which compose does
+# not require to be a valid project.
+#
+# Each app container is a service of its own — `autoprove` in docker-compose.yml, `autoprove-solana`
+# in docker-compose.solana.yml — so that all of them are defined at once and `docker compose build`
+# under one profile builds one image rather than every image. Extending a *sibling service* would
+# not give that: compose merges `profiles` across files instead of overriding them, so a service
+# extending `autoprove` would answer to the `autoprove` profile as well, and an EVM build would
+# pull a chain toolchain image in with it. Hence a template with no profile of its own.
+
+services:
+  autoprove-common:
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Run as the host user so /work outputs aren't owned by root. Override with:
+    #   export HOST_UID=$(id -u) HOST_GID=$(id -g)
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY must be set in your shell}
+      # Cloud Certora Prover credentials. CERTORAKEY drives certoraRun job
+      # submission; the CERTORA_* OAuth tokens are used to fetch job results.
+      # When the OAuth tokens are unset, they're left empty so certora_login
+      # falls back to the credentials file written by `certora-cloud login`
+      # (mounted from the host ~/.certora below).
+      CERTORAKEY: ${CERTORAKEY:-}
+      CERTORA_USER: ${CERTORA_USER:-}
+      CERTORA_TOKEN: ${CERTORA_TOKEN:-}
+      CERTORA_REFRESH_TOKEN: ${CERTORA_REFRESH_TOKEN:-}
+      CERTORA_LOGIN_NO_BROWSER: "true"
+      CERTORA_AI_COMPOSER_PGHOST: postgres
+      CERTORA_AI_COMPOSER_PGPORT: "5432"
+      # The command sandbox, passed through only when the shell sets it — written without a value
+      # on purpose, since `${VAR:-}` would set it to the empty string and an empty value is not the
+      # same as an unset one to the code that reads it. The CVLR backend reads an unset variable as
+      # `launcher` and needs the sandbox overlay; `none` is the development opt-out, and marks the
+      # run's results as non-production.
+      COMPOSER_SANDBOX_PROVIDER:
+    volumes:
+      # Host directory holding your project(s) + design docs -> /work.
+      # Defaults to $PWD when compose was invoked.
+      - ${HOST_WORK_DIR:-${PWD}}:/work
+      # Certora cloud credentials from `certora-cloud login`. Mounted rw so the
+      # token-refresh path can rewrite credentials.json. $HOME inside the
+      # container is /opt/autoprove/home (see scripts/Dockerfile).
+      - ${HOME}/.certora:/opt/autoprove/home/.certora
+    working_dir: /work

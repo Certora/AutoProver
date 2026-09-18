@@ -1,0 +1,90 @@
+# syntax=docker/dockerfile:1.7
+#
+# The Solana AutoProver container — `console-solana` / `tui-solana` — layered on the lean base
+# image (scripts/Dockerfile), which carries no Rust on purpose. This adds a host Rust toolchain,
+# Certora's SBF build subcommand, and the Solana platform-tools release a CVLR run builds with:
+# roughly 3 GB, which is why it is an image of its own rather than a flag on the base one.
+#
+# It bundles no `run-confined` launcher. The CVLR backend confines every cargo build and its
+# provider is fail-closed, so this image is run with both overlays — see
+# scripts/docker-compose.solana.yml.
+#
+# Nothing here is private: rustup, crates.io and the platform-tools release are all public, which
+# keeps the base image's "no SSH/private auth at all" property.
+
+ARG BASE_IMAGE=autoprover-local:latest
+FROM --platform=linux/amd64 ${BASE_IMAGE} AS solana
+
+ARG RUST_VERSION=1.90.0
+ARG CARGO_CERTORA_SBF_VERSION=0.3.5
+# Must agree with `cargo_tools_version` in composer/spec/cvlr/conf.py's TEMPLATE_BASE, which is the
+# version every run asks for unless the project pins its own. tests/test_cvlr_image.py fails the
+# routine gate if the two drift.
+ARG SOLANA_TOOLS_VERSION=v1.43
+# Inherited from the base service's build args through the compose template; the channel is baked
+# into $BASE_IMAGE rather than chosen here. Declared so the build does not warn about it.
+ARG CERTORA_CLI_PACKAGE
+
+# The base image purges its C toolchain once the wheels are built; this one needs it permanently.
+# `cargo check` — the fast tier of the compile gate, run per authored edit — compiles and *links*
+# the project's build scripts for the host, and the SBF build does the same for every proc-macro in
+# the graph. Only the target code goes through platform-tools' own LLVM. Without `cc`, the first
+# thing a CVLR run does is fail with a linker error about a crate the author never wrote.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# The toolchain lives under $AUTOPROVE_HOME, root-owned and world-readable — deliberately not under
+# $HOME, which the base image makes world-*writable*: a read-only Landlock grant over a tree the
+# confined build can also write is not a grant of anything. The sandbox policy follows these
+# variables rather than assuming the installers' default locations
+# (composer.sandbox.recipes.rust_build_policy reads the first two; composer.spec.cvlr.entry grants
+# the third).
+ENV RUSTUP_HOME=/opt/autoprove/rustup \
+    CARGO_HOME=/opt/autoprove/cargo \
+    CERTORA_PLATFORM_TOOLS_ROOT=/opt/autoprove/solana \
+    PATH=/opt/autoprove/cargo/bin:${PATH}
+
+# Three pieces, in the order a CVLR run reaches them:
+#
+#   * A host Rust toolchain. rustup, not a bare cargo: a target project's own rust-toolchain.toml
+#     pins the channel its build uses, and rustup resolves that during the *unconfined* warm step —
+#     under confinement RUSTUP_HOME is read-only and the download cannot happen.
+#   * `cargo certora-sbf` — Certora's build subcommand, which is what the slow tier runs and what
+#     the prover's build_script reruns (composer/cargo/sbf.py).
+#   * The platform-tools release that subcommand compiles with, unpacked at build time. This one is
+#     not an optimization: every build runs confined, and a confined build has no network and a
+#     read-only tools cache — so a version this image lacks cannot be fetched at run time, it is a
+#     rebuild. A project whose base conf pins a different `cargo_tools_version` is that case, and
+#     composer.cargo.sbf.PlatformToolsMissing names it.
+#
+# The shared cargo registry is deleted at the end: every confined build fetches into a private,
+# per-run CARGO_HOME under its own workdir (composer.sandbox.recipes.sandbox_cargo_home), and only
+# $CARGO_HOME/bin is granted read-only — so a warm shared registry would be a gigabyte nothing reads.
+RUN set -eux; \
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+      | sh -s -- -y --no-modify-path --profile minimal --default-toolchain "$RUST_VERSION"; \
+    cargo --version; \
+    cargo install --locked cargo-certora-sbf --version "$CARGO_CERTORA_SBF_VERSION"; \
+    cargo certora-sbf --no-build --no-rustup \
+        --platform-tools-root "$CERTORA_PLATFORM_TOOLS_ROOT" \
+        --tools-version "$SOLANA_TOOLS_VERSION"; \
+    test -d "$CERTORA_PLATFORM_TOOLS_ROOT/$SOLANA_TOOLS_VERSION"; \
+    rm -rf "$CARGO_HOME/registry" "$CARGO_HOME/git"
+
+# An empty global git config, which a confined build with a git dependency cannot start without.
+# libgit2 reads it before it will open a cached repository at all, and under Landlock the open of a
+# path that was never granted fails with EACCES rather than ENOENT — so libgit2 does not degrade to
+# "no user config", it reports the repository as unopenable and cargo blames the network
+# (composer.sandbox.recipes.git_config_ro_paths). The policy grants this file only if it exists, and
+# every Anchor project needs it: composer.spec.cvlr.munge.ANCHOR_FORK patches anchor-lang to a git
+# repo.
+RUN touch $HOME/.gitconfig
+
+# No permissions pass over the three trees above, and that is the point rather than an omission:
+# `chmod` makes overlayfs copy a file up into the layer that runs it whether or not the mode
+# actually changes, so recursing over ~3 GB of Rust and platform tools would store a second copy of
+# all of it in this image. rustup, `cargo install` and the tools unpack all write under umask 022,
+# so the runtime user (an arbitrary host UID) can already read them.
+
+WORKDIR /work
