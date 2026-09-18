@@ -9,7 +9,8 @@ Two kinds of entry appear below. Most are the plan's own items, restated in one 
 **Unfiled** ones are not in the plan at all — they were noticed while doing other work and have no
 section anywhere else, so this document is their only record until someone gives them one.
 
-If you want somewhere to start: **U2** decides whether the smoke gate protects anything at all, and
+If you want somewhere to start: **U9** is the one with fresh evidence and an open design question;
+**U2** decides whether the smoke gate protects anything at all, and
 **U7** is a silent-data-loss risk on the same path whose loud half **U4** was; that half is
 fixed now, and the fix cannot reach U7. **U8** is the same shape one layer up, in the artifact a
 reader actually keeps.
@@ -112,6 +113,56 @@ evidence for it was a log line on somebody's terminal, and the artifact that out
 says nothing. The work is to carry the reason onto the schema and render it, which is a
 `schema_version` bump, and to decide whether it belongs as a report-level field or as a mark on the
 fallback group itself. Kin to U7 — both are a degraded result that presents as a complete one.
+
+**U9. `optimistic_loop` is false here and unconditionally true on the CVL side, and today's run
+found the case where neither of our two answers works.**
+[`conf.py`](../composer/spec/cvlr/conf.py)'s `TEMPLATE_BASE` sets `"optimistic_loop": False` and
+argues it well: the Solana spec template says false, and a survey of 354 confs across fifteen Solana
+projects finds it true in exactly one. It assumes a loop's halt conditions rather than proving them,
+so it hides any violation reachable only after more iterations. The stated remedies, in order, are
+to constrain the loop, munge it, and only then raise `loop_iter` — which is why the default bound is
+2 rather than the template's 1. It is also deliberately outside the author's action space:
+`adjust_prover_config` moves the loop bound and the solver portfolio, both sound, and its docstring
+names `optimistic_loop` as one of the settings kept away precisely because it changes what a green
+verdict means.
+
+The EVM side does the opposite without comment.
+[`source/prover.py`](../composer/spec/source/prover.py)'s `make_prover_config` sets
+`"optimistic_loop": True` on every run, unconditionally, alongside `rule_sanity: "basic"`. Nothing
+in either file acknowledges the other, so the divergence is currently a fact about two codebases
+rather than a decision anybody made.
+
+**What is new is that the ladder has a rung missing.** The vault run of 2026-09-18
+(`cvlr_d71e0ec8c99f`) hit *Unwinding condition in a loop* on all five Deposits rules, three times
+over, and the author's diagnosis — recorded in the harness it shipped — is that no finite bound
+discharges it: bound 2 reported "Loop Iteration 3", bound 3 reported "Loop Iteration 4", so the
+trip count is one the analysis cannot fix. The loop is in `system_instruction::transfer`'s own
+`Vec`/bincode construction, evaluated as an argument before the CPI and inlined into the handler,
+where no summary directive can name it. Constraining it is not available, munging it is not
+available, and raising the bound provably does not terminate. The unit ended up stating its balance
+properties over `vault_accounting::apply_deposit` instead, which cost it the handler entirely: what
+`deposit` passes on, how often, and to which account are all outside the proof it shipped.
+
+So the question is not only "default or last resort" but "what happens when every sound rung is
+exhausted". Three shapes, and the evidence does not yet pick one:
+
+* **Default true, as CVL does.** Cheapest to state, and it would have let today's Deposits rules
+  reach their own assertions. It also makes every Solana verdict quietly weaker than the corpus's
+  own practice, against a survey that is one-sided.
+* **A third editable key, reached after the existing ladder.** Keeps the default honest and gives
+  the author a rung it currently does not have. The cost is that `adjust_prover_config`'s promise —
+  *every setting here is sound* — stops being true, so the tool would need to distinguish the sound
+  edits from the one that invalidates more than the prover stamp, and the report would need to
+  carry that distinction to a reader.
+* **Neither: make the unwinding condition a first-class outcome.** The pipeline already classifies
+  it as prover-generated and excludes it from evidence. It could also be the trigger for a
+  `record_skip` naming the loop, which is the honest answer when no sound remedy exists and is what
+  the author effectively did by hand.
+
+Before choosing, two things are worth measuring rather than assumed: whether CVL's unconditional
+true is a considered position or an inherited one, and whether the one-in-354 corpus figure reflects
+practice or reflects projects that never met a loop like this. Evidence in
+[cvlr-backend-plan.md](./cvlr-backend-plan.md) §7.6.2 and in `conf.py`'s own commentary.
 
 ---
 
