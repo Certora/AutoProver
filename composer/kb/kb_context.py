@@ -1,4 +1,4 @@
-from typing import Callable, Literal, Annotated, Mapping, TypedDict, TYPE_CHECKING
+from typing import Callable, Literal, Annotated, Mapping, Sequence, TypedDict, cast, TYPE_CHECKING
 from functools import cache
 from importlib.resources import files
 from dataclasses import dataclass
@@ -15,56 +15,95 @@ if TYPE_CHECKING:
 
 type _ContextLoader = Callable[[], str]
 
-type RecipeChannel = Literal["CVL", "CONF", "EDIT"]
+#: Where a CVL recipe's action lies, so an agent can tell whether the fix is in its action space.
+type CvlChannel = Literal["CVL", "CONF", "EDIT"]
 
-ChannelList = Annotated[list[RecipeChannel], BeforeValidator(
-    lambda v: [v] if isinstance(v, str) else v
-)]
 
-KB_TOOL_NAME = "get_cvl_recipe"
+def _one_or_many(v: object) -> object:
+    return [v] if isinstance(v, str) else v
 
-class KBRecipe(BaseModel):
+
+class KBRecipe[C: str](BaseModel):
+    """A recipe's index entry. Generic over its channel vocabulary because a channel names a tool
+    the reading agent has, and two agent families do not have the same tools — a shared union would
+    validate a recipe pointing at an action its readers cannot take."""
+
     id: str
     name: str
     triggers: list[str]
     file: str
     search_terms: list[str] = Field(default_factory=list)
     note: str | None = Field(default=None)
-    channel: ChannelList
+    channel: Annotated[list[C], BeforeValidator(_one_or_many)]
 
-class IndexModel(BaseModel):
-    recipes: list[KBRecipe]
+
+class IndexModel[C: str](BaseModel):
+    recipes: list[KBRecipe[C]]
+
 
 class RecipeIndexParams(TypedDict):
-    recipes: list[KBRecipe]
+    #: Widened: the template only prints a channel, and the vocabulary was already enforced when
+    #: the index was validated. Keeping it narrow here would make the params type generic, which
+    #: the template fuzzer cannot resolve (``composer/meta/resolver.py``).
+    recipes: Sequence[KBRecipe[str]]
     kb_retrieval_name: str
+    label: str
 
-index_template = TypedTemplate[RecipeIndexParams]("cvl_kb_index.j2")
 
 def _resource_file_loader(s: str) -> _ContextLoader:
     return lambda: (files() / "resources" / s).read_text()
 
-@dataclass
+
+@dataclass(frozen=True)
 class ContextSpec:
     title: str
     loader: _ContextLoader
 
-@cache
-def _kb_model() -> IndexModel:
-    index_text = (files() / "resources" / "cvl_recipes_index.yaml").read_text()
-    return IndexModel.model_validate(yaml.safe_load(index_text))
+
+@dataclass(frozen=True)
+class RecipeSet[C: str]:
+    """The on-demand half of a bundle: an index that goes in front of every agent, and bodies
+    fetched by id. A family acquires one when it has recipes to serve; until then it has none, and
+    that is the whole of the difference."""
+
+    tool_name: str
+    index_resource: str
+    parse_index: Callable[[object], IndexModel[C]]
+    index_template: TypedTemplate[RecipeIndexParams]
+
+
+@dataclass(frozen=True)
+class KnowledgeBundle[C: str]:
+    """One agent family's practice knowledge: context documents that go in front of every agent,
+    and optionally a recipe set.
+
+    Frozen because the loaders below are memoized on the bundle, and every document is read once per
+    process. That is also the bundle's defining constraint: it is a *cacheable prefix*, so nothing
+    in it may vary per run. Per-run material belongs in the agent's own prompt.
+    """
+
+    #: Names the manual this family's knowledge sits beside, in the recipe index preamble.
+    label: str
+    specs: tuple[ContextSpec, ...]
+    recipes: RecipeSet[C] | None = None
+
+
+# Not memoized, unlike the public entry points below: ``functools.cache`` erases a generic return
+# type, and every caller is itself cached, so this parses at most twice per recipe set.
+def _kb_model[C: str](recipes: RecipeSet[C]) -> IndexModel[C]:
+    index_text = (files() / "resources" / recipes.index_resource).read_text()
+    return recipes.parse_index(yaml.safe_load(index_text))
+
+
+def _kb_index[C: str](recipes: RecipeSet[C]) -> Mapping[str, str]:
+    return {r.id: r.file for r in _kb_model(recipes).recipes}
+
 
 @cache
-def _kb_index() -> Mapping[str, str]:
-    to_ret : dict[str, str] = {}
-    for r in _kb_model().recipes:
-        to_ret[r.id] = r.file
-    return to_ret
-
-@cache
-def kb_loader() -> Callable[[str], str | None]:
-    ind = _kb_index()
+def kb_loader[C: str](recipes: RecipeSet[C]) -> Callable[[str], str | None]:
+    ind = _kb_index(recipes)
     kb_resource_dir = files() / "resources"
+
     def loader(id: str) -> str | None:
         if id not in ind:
             return None
@@ -72,51 +111,77 @@ def kb_loader() -> Callable[[str], str | None]:
         if not f.is_file():
             return None
         return f.read_text()
+
     return loader
 
-_INDEX = [
-    ContextSpec(
-        title="CVL Baseline Knowledge",
-        loader=_resource_file_loader("cvl_baseline_facts.md")
-    ),
-    ContextSpec(
-        title="CVL Summarization and Linking Guide",
-        loader=_resource_file_loader(
-            "cvl_summarization_rag_draft.md"
-        )
-    ),
-    ContextSpec(
-        title="Invariants and Quantifiers Guide",
-        loader=_resource_file_loader(
-            "cvl_invariants_quantifiers.md"
-        )
-    ),
-    ContextSpec(
-        title="CVL Recipes",
-        loader=lambda: index_template.bind({
-            "kb_retrieval_name": KB_TOOL_NAME,
-            "recipes": _kb_model().recipes
-        }).render_to(load_jinja_template)
-    )
-]
+
+def _recipe_index_document[C: str](label: str, recipes: RecipeSet[C]) -> str:
+    params: RecipeIndexParams = {
+        "kb_retrieval_name": recipes.tool_name,
+        "recipes": cast(Sequence[KBRecipe[str]], _kb_model(recipes).recipes),
+        "label": label,
+    }
+    return recipes.index_template.bind(params).render_to(load_jinja_template)
+
 
 @cache
-def cvl_context_raw() -> list[str]:
-    return [
-f"""
+def context_documents[C: str](bundle: KnowledgeBundle[C]) -> tuple[str, ...]:
+    """The bundle's documents, the recipe index last. The index is appended rather than listed
+    among ``specs`` because it is rendered from the bundle rather than read from a file."""
+    titled = [(s.title, s.loader()) for s in bundle.specs]
+    if bundle.recipes is not None:
+        titled.append(
+            (f"{bundle.label} Recipes", _recipe_index_document(bundle.label, bundle.recipes))
+        )
+    return tuple(
+        f"""
 <context-document>
-Title: {s.title}
+Title: {title}
 
-{s.loader()}
+{body}
 </context-document>
-""" for s in _INDEX
-    ]
+"""
+        for title, body in titled
+    )
+
+
+def with_context[C: str](bundle: KnowledgeBundle[C], prompt: "PromptInput") -> "PromptInput":
+    """The bundle's context documents (cache marker on the trailing block; the TTL is whatever the
+    builder's cache manager applies) followed by ``prompt`` — the standard initial-prompt shape for
+    an agent in that family. Goes through the initial prompt rather than ``front_matter`` so the
+    documents survive summarization rebuilds."""
+    rest = prompt if isinstance(prompt, list) else [prompt]
+    return [*context_documents(bundle), CacheMarker, *rest]
+
+
+CVL_INDEX_TEMPLATE = TypedTemplate[RecipeIndexParams]("kb_index.j2")
+
+CVL_RECIPES = RecipeSet[CvlChannel](
+    tool_name="get_cvl_recipe",
+    index_resource="cvl_recipes_index.yaml",
+    parse_index=lambda raw: IndexModel[CvlChannel].model_validate(raw),
+    index_template=CVL_INDEX_TEMPLATE,
+)
+
+CVL_BUNDLE = KnowledgeBundle[CvlChannel](
+    label="CVL",
+    recipes=CVL_RECIPES,
+    specs=(
+        ContextSpec(
+            title="CVL Baseline Knowledge",
+            loader=_resource_file_loader("cvl_baseline_facts.md"),
+        ),
+        ContextSpec(
+            title="CVL Summarization and Linking Guide",
+            loader=_resource_file_loader("cvl_summarization_rag_draft.md"),
+        ),
+        ContextSpec(
+            title="Invariants and Quantifiers Guide",
+            loader=_resource_file_loader("cvl_invariants_quantifiers.md"),
+        ),
+    ),
+)
+
 
 def with_cvl_context(prompt: "PromptInput") -> "PromptInput":
-    """The CVL context documents (cache marker on the trailing block; the TTL
-    is whatever the builder's cache manager applies) followed by ``prompt`` —
-    the standard initial-prompt shape for agents whose task is CVL. Goes
-    through the initial prompt rather than ``front_matter`` so the documents
-    survive summarization rebuilds."""
-    rest = prompt if isinstance(prompt, list) else [prompt]
-    return [*cvl_context_raw(), CacheMarker, *rest]
+    return with_context(CVL_BUNDLE, prompt)
