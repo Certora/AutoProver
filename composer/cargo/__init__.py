@@ -1,10 +1,8 @@
 """Cargo — the build system of every Rust chain we target.
 
-Chain knowledge, not backend knowledge: what lives here is shared by the CVLR Python backend
-(``composer.spec.cvlr``) and by the Rust wheels that reach it through
-:data:`composer.rustapp.toolchain.PROJECT_TOOLCHAINS`. Both need to read a workspace, warm a
-dependency graph, and compile — Crucible to load a program into LiteSVM, CVLR to submit one to
-the Prover — and neither should own the answer.
+Chain knowledge, not backend knowledge. Reading a workspace, warming a dependency graph and
+compiling are the same work whoever asks — a Python backend submitting a program to the Prover, a
+Rust wheel loading one into LiteSVM — so the answer lives here rather than inside either product.
 
 The split inside is by *what varies*:
 
