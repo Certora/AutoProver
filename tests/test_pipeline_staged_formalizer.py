@@ -178,10 +178,13 @@ async def _drive[F: (_Staged, _Formalizer)](
     async def fake_analysis(*_a, **_kw): return "analyzed"
 
     async def fake_extract_all(*_a, **_kw):
-        return [
-            core._Batch(_Unit(name, i), [_prop(t) for t in titles], _FeatCtx())  # type: ignore[arg-type]
-            for i, (name, titles) in enumerate(units.items())
-        ], []  # nothing failed extraction
+        return core.ExtractionResult(
+            [
+                core._Batch(_Unit(name, i), [_prop(t) for t in titles], _FeatCtx())  # type: ignore[arg-type]
+                for i, (name, titles) in enumerate(units.items())
+            ],
+            [],  # nothing failed extraction
+        )
 
     async def fake_report(*_a, **_kw): return object()
 
@@ -346,7 +349,9 @@ async def test_ranking_does_not_wait_for_pre_formalization(monkeypatch):
 
     async def fake_extract_all(*_a, **_kw):
         await started.wait()  # the setup is in flight, exactly as in a real run
-        return [core._Batch(_Unit("deposits", 0), [_prop("a")], _FeatCtx())], []  # type: ignore[arg-type]
+        return core.ExtractionResult(
+            [core._Batch(_Unit("deposits", 0), [_prop("a")], _FeatCtx())], []  # type: ignore[arg-type]
+        )
 
     async def fake_rank(**_kw):
         order.append("rank")

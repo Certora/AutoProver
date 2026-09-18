@@ -34,7 +34,8 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
-    Protocol, Any, ClassVar, Concatenate, cast, Awaitable, Sequence, Callable, ContextManager, overload
+    Protocol, Any, ClassVar, Concatenate, cast, Awaitable, Sequence, Callable, ContextManager, overload,
+    NamedTuple
 )
 from abc import ABC, abstractmethod
 from contextlib import nullcontext
@@ -308,6 +309,19 @@ class _Batch[U: FeatureUnit](BackendJob[U]):
     feat_ctx: WorkflowContext[ComponentGroup]
 
 
+class ExtractionFailure[U: FeatureUnit](NamedTuple):
+    """A component whose property extraction raised, and what took it down."""
+    unit: U
+    error: BaseException
+
+
+class ExtractionResult[U: FeatureUnit](NamedTuple):
+    """What an extraction fan-out settled to: the batches it produced and the components it
+    lost. A component appears in at most one of the two."""
+    batches: list[_Batch[U]]
+    failed: list[ExtractionFailure[U]]
+
+
 def extract_task_id(idx: int) -> str:
     return f"extract-{idx}"
 
@@ -575,7 +589,9 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     staged = await staged_task
     if not batches:
         if extraction_failures:
-            detail = "; ".join(f"{u.display_name}: {e}" for u, e in extraction_failures)
+            detail = "; ".join(
+                f"{f.unit.display_name}: {f.error}" for f in extraction_failures
+            )
             raise ValueError(f"Every component failed property extraction: {detail}")
         raise ValueError("No properties extracted from any component.")
 
@@ -724,7 +740,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     # A component lost at extraction never reached the formalizer, so it is not in ``outcomes``
     # and the formalizer is not handed one it never saw. It still belongs in the report and the
     # verdict: a component that silently vanishes is the failure this reports on.
-    lost_at_extraction = [ComponentOutcome(u, [], e) for u, e in extraction_failures]
+    lost_at_extraction = [ComponentOutcome(f.unit, [], f.error) for f in extraction_failures]
 
     # 6. Report (shared, backend-agnostic). The driver assembles the per-component inputs.
     # Best-effort: a failure here never fails the run.
@@ -881,7 +897,7 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
     # ``Main``/``U`` (matching the caller's), so there's nothing to tie it to.
     ecosystem: Ecosystem[Any, Main, U],
     plugins: PluginPhaseManager[P, U],
-) -> tuple[list[_Batch[U]], list[tuple[U, BaseException]]]:
+) -> ExtractionResult[U]:
     prop_ctx = run.ctx.child(PROPERTIES_KEY(prop_key))
 
     async def _pre_plugin_inputs(feat: U) -> list[AnyPropertyGenerationInput]:
@@ -972,7 +988,7 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
 
 def _settle_extraction[U: FeatureUnit](
     units: list[U], settled: list[_Batch[U] | None | BaseException]
-) -> tuple[list[_Batch[U]], list[tuple[U, BaseException]]]:
+) -> ExtractionResult[U]:
     """Split a finished extraction fan-out into the batches it produced and the components
     that failed.
 
@@ -984,7 +1000,7 @@ def _settle_extraction[U: FeatureUnit](
     one against a single component would turn a deliberate halt into a quiet partial result.
     """
     batches: list[_Batch[U]] = []
-    failed: list[tuple[U, BaseException]] = []
+    failed: list[ExtractionFailure[U]] = []
     for unit, outcome in zip(units, settled):
         if isinstance(outcome, BaseException):
             if isinstance(
@@ -994,10 +1010,10 @@ def _settle_extraction[U: FeatureUnit](
             _log.warning(
                 "property extraction failed for %s", unit.display_name, exc_info=outcome
             )
-            failed.append((unit, outcome))
+            failed.append(ExtractionFailure(unit, outcome))
         elif outcome is not None:
             batches.append(outcome)
-    return batches, failed
+    return ExtractionResult(batches, failed)
 
 
 def _tally[FormT: BackendResult, U: FeatureUnit](
