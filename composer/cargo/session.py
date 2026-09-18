@@ -1,7 +1,7 @@
 """The warm workdir a Rust compile loop runs in, and the fast tier of the two-tier gate.
 
-``docs/cvlr-backend-plan.md`` §5.1 is the whole reason this is an object. CVL authoring gates every
-edit on a sub-second typecheck; CVLR's only equivalent is a Rust build, so the gate moves into the
+A compile in the authoring inner loop is the whole reason this is an object. CVL authoring gates
+every edit on a sub-second typecheck; CVLR's only equivalent is a Rust build, so the gate moves into the
 inner loop — and the sandbox recipe gives each *run* a private ``CARGO_HOME``
 (:func:`~composer.sandbox.recipes.sandbox_cargo_home`), deliberately, so that an untrusted
 ``build.rs`` cannot poison a later run. Those two facts collide: a per-compile workdir would re-fetch
@@ -15,8 +15,8 @@ needs are already present because the warm put them there.
 
 Nothing here is Solana-specific. The fast tier is a host-target ``cargo check``, which is the same
 question on any chain — "does this Rust say something the compiler understands" — and it is
-deliberately the *cheap* half: whether it is a faithful proxy for the chain build is
-``docs/cvlr-backend-plan.md``'s open question 1, answered by measurement rather than assumed here.
+deliberately the *cheap* half: whether it is a faithful proxy for the chain build is an open
+question, to be answered by measurement rather than assumed here.
 """
 
 import dataclasses
@@ -67,17 +67,18 @@ type CompileVerdict = Compiled | CompileFailed
 class CompileRun:
     """One invocation of one tier: what it decided, and what it cost.
 
-    The cost rides along on every run because ``docs/cvlr-backend-plan.md`` §7.2 makes measured
-    per-tier latency an exit criterion of this phase, and a number collected only when someone
-    remembers to instrument is a number nobody has.
+    The cost rides along on every run because measured per-tier latency is an exit criterion for
+    this work, and a number collected only when someone remembers to instrument is a number nobody
+    has.
     """
 
     tier: CompileTier
     duration_ms: int
     verdict: CompileVerdict
-    #: False when the command ran without confinement — the macOS development carve-out of §3 item
-    #: 3. Carried on the result so a verdict produced unconfined is never mistaken for a production
-    #: one; the operator-facing warning is emitted by :class:`CargoSession`.
+    #: False when the command ran without confinement — the development carve-out for hosts the
+    #: sandbox does not support. Carried on the result so a verdict produced unconfined is never
+    #: mistaken for a production one; the operator-facing warning is emitted by
+    #: :class:`CargoSession`.
     confined: bool
 
     @property

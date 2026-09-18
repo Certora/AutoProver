@@ -1,9 +1,8 @@
 """Solana's entry in the project-toolchain registry.
 
-:mod:`composer.rustapp.toolchain` declares the seam and, until now, had no entries — its docstring
-says so, and says why the two methods behave differently when nothing is registered. This is the
-first registrant, and ``docs/cvlr-backend-plan.md`` §4.3 is the argument for putting it here rather
-than inside the CVLR backend: the natural sharing axis of "read a Cargo manifest and build a Solana
+:mod:`composer.rustapp.toolchain` declares the seam, and says why its two methods behave
+differently for a chain with no entry. This is the first registrant, and it lives here rather than
+inside a backend because the natural sharing axis of "read a Cargo manifest and build a Solana
 program" is the *chain*, across products, and one of those products is not CVLR at all. Crucible's
 fuzz harness wants the same two answers.
 

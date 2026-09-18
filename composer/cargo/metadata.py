@@ -5,10 +5,10 @@ guessed by an agent:
 
 * **Which crate owns this source file** — the ``source_unit`` half of
   :mod:`composer.rustapp.toolchain`, and what a build command needs in order to name a package.
-* **Which version of a dependency does this build actually resolve** — ``docs/cvlr-backend-plan.md``
-  §5.5 mechanic 3. ``RUST_FORBIDDEN_READ`` hides ``Cargo.lock`` from the agents, deliberately, so
-  the resolved version is not something they *can* see; and reading a different CVLR's source than
-  the build compiles is worse than reading none, because it is confidently wrong.
+* **Which version of a dependency does this build actually resolve.** ``RUST_FORBIDDEN_READ`` hides
+  ``Cargo.lock`` from the agents, deliberately, so the resolved version is not something they *can*
+  see; and reading a different CVLR's source than the build compiles is worse than reading none,
+  because it is confidently wrong.
 
 ``cargo metadata`` runs no build scripts and no proc-macros, so it needs no confinement — unlike
 everything in :mod:`composer.cargo.session`. It does resolve the dependency graph, which wants
@@ -243,7 +243,7 @@ def read_workspace_sync(
     its CVLR crates ``optional = true`` behind the ``certora`` feature — which is what keeps them
     out of a release build — so a default-feature read reports them as absent. Discovered by
     scaffolding a real project: the version-gap report said ``cvlr-solana is not a dependency`` for a
-    project that had just been given one, and the source mount §5.5 depends on would have found
+    project that had just been given one, and a source mount reading those crates would have found
     nothing to mount. Features resolve against the package cargo considers current, so pass the
     *package* directory as ``project_root`` when naming one; ``workspace_root`` in the payload is
     the workspace either way.
