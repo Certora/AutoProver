@@ -258,11 +258,16 @@ def test_no_soroban_guidance_has_been_guessed():
 
 
 def _author_system_prompt() -> str:
-    """The author's system prompt, rendered.
+    """Everything the author is told: the CVLR knowledge bundle that goes in front of every CVLR
+    agent, plus this agent's own system prompt.
+
+    Both, because a fact moving between the two changes *which* agents can see it, not whether this
+    one can — and these tests are about what the author knows.
 
     Separate from :func:`_property_system_prompt`: that one is the *extraction* agent's, which
     decides which properties to state, and this one is the agent that writes the Rust.
     """
+    from composer.kb.kb_context import CVLR_BUNDLE, context_documents
     from composer.spec.cvlr.author import (
         CvlrAuthorSystemParams,
         _PropertyGenSysTemplate,
@@ -275,7 +280,10 @@ def _author_system_prompt() -> str:
         "example": None,
         "conf": dict(TEMPLATE_BASE),
     }
-    return _PropertyGenSysTemplate.bind(params).render_to(load_jinja_template)
+    return "\n".join([
+        *context_documents(CVLR_BUNDLE),
+        _PropertyGenSysTemplate.bind(params).render_to(load_jinja_template),
+    ])
 
 
 def test_the_author_is_told_which_prover_settings_are_its_own_and_which_are_not():

@@ -194,6 +194,15 @@ def test_the_struct_name_follows_anchors_convention() -> None:
 # -- rendering ----------------------------------------------------------------------------------
 
 
+def _told(example: WorkedExample | None, conf: dict | None = None) -> str:
+    """Everything the author is given: the CVLR knowledge bundle every CVLR agent gets, plus the
+    author's own prompt. Use this for what the author *knows*; use :func:`_render` for what its own
+    prompt renders, which is where the per-run material has to be."""
+    from composer.kb.kb_context import CVLR_BUNDLE, context_documents
+
+    return "\n".join([*context_documents(CVLR_BUNDLE), _render(example, conf)])
+
+
 def _render(example: WorkedExample | None, conf: dict | None = None) -> str:
     return env.get_template(TEMPLATE).render(
         module="exchange_rate",
@@ -275,7 +284,7 @@ def test_both_branches_keep_the_shared_mechanics() -> None:
 def test_the_prompt_connects_the_timeout_symptom_to_its_two_causes() -> None:
     """The run this was written for died twice on nonlinear arithmetic with nothing in the prompt
     naming the symptom, so the author had the remedy and no reason to reach for it."""
-    rendered = _render(None)
+    rendered = _told(None)
 
     assert "nonlinear" in rendered.lower()
     # The symptom as the job reports it.
@@ -288,7 +297,7 @@ def test_the_prompt_connects_the_timeout_symptom_to_its_two_causes() -> None:
 def test_the_prompt_does_not_claim_native_int_removes_nonlinearity() -> None:
     """`NativeInt` removes the bit width, not the multiplication — an author told otherwise would
     convert the rule and resubmit into the same timeout."""
-    rendered = _render(None)
+    rendered = _told(None)
 
     assert "`NativeInt` does not make a product linear" in rendered
 
@@ -296,7 +305,7 @@ def test_the_prompt_does_not_claim_native_int_removes_nonlinearity() -> None:
 def test_bounding_is_taught_as_soundness_rather_than_speed() -> None:
     """An author who reads it as a performance tip skips it under time pressure, and the run that
     did got a counterexample at ~2.7e62 that it could not tell from a real defect."""
-    rendered = _render(None)
+    rendered = _told(None)
 
     assert "soundness step, not a speed one" in rendered
     # And the trap is named where the widening is introduced, not only where it bites.
@@ -332,10 +341,10 @@ def test_the_author_is_shown_the_conf_rather_than_told_about_it() -> None:
 def test_a_conf_without_rule_sanity_is_not_described_as_having_it() -> None:
     """The paraphrase said "keep `rule_sanity` on (the conf does)" unconditionally. A project conf
     that omits it gets no vacuity report, and an author told otherwise trusts a green rule."""
-    rendered = _render(None, {"loop_iter": "2"})
+    rendered = _told(None, {"loop_iter": "2"})
 
     assert "(the conf does)" not in rendered
-    assert "check yours below" in rendered
+    assert "check the conf your run was given" in rendered
 
 
 def test_the_judge_is_told_a_rule_without_a_lemma_can_still_be_legitimate() -> None:
