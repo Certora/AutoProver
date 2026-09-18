@@ -14,9 +14,9 @@ fetched.
 The fast tier is a host-target ``cargo check``, not the chain build.
 """
 
-import dataclasses
 import logging
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -36,12 +36,12 @@ WARM_TIMEOUT_S = 900
 CHECK_TIMEOUT_S = 600
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class Compiled:
     pass
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class CompileFailed:
     """``diagnostics`` is rustc's human-format output, unparsed."""
 
@@ -52,7 +52,7 @@ class CompileFailed:
 type CompileVerdict = Compiled | CompileFailed
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class CompileRun:
     tier: CompileTier
     duration_ms: int
@@ -66,12 +66,12 @@ class CompileRun:
         return isinstance(self.verdict, Compiled)
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class Warmed:
     pass
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class WarmFailed:
     """Logged, not raised: a partial cache still compiles what it has, and the
     later build error names the missing crate."""
@@ -83,7 +83,7 @@ class WarmFailed:
 type WarmOutcome = Warmed | WarmFailed
 
 
-@dataclasses.dataclass
+@dataclass
 class CargoSession:
     """A workdir reused across an authoring session's compiles.
 
@@ -96,7 +96,7 @@ class CargoSession:
     sandbox: SandboxConfig
     #: Keyed by binary because two cargos do not share a git cache
     #: (see :func:`~composer.cargo.sbf.platform_tools_cargos`).
-    _warmed: set[str] = dataclasses.field(default_factory=set, repr=False, compare=False)
+    _warmed: set[str] = field(default_factory=set, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not self.sandbox.enabled:
