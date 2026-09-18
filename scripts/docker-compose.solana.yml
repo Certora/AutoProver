@@ -1,0 +1,52 @@
+# docker-compose.solana.yml — OVERLAY adding the Solana AutoProver container, `autoprove-solana`,
+# beside the EVM one. Its image (scripts/Dockerfile.solana) layers the Rust and Solana
+# platform-tools toolchain onto the base image, which must therefore be built first.
+#
+# All three files, always. The CVLR backend confines every cargo build and its sandbox provider is
+# fail-closed, so this service declares the launcher keys the sandbox overlay's volume and builder
+# satisfy — which means the project does not load without that overlay. Running unconfined is still
+# possible for development (COMPOSER_SANDBOX_PROVIDER=none), but it is a choice made per run, not
+# by leaving a -f off:
+#
+#   # one-time: the base image this one layers onto
+#   docker compose -f scripts/docker-compose.yml --profile autoprove build
+#   # the launcher and the Solana toolchain image
+#   docker compose -f scripts/docker-compose.yml \
+#                  -f scripts/docker-compose.sandbox.yml \
+#                  -f scripts/docker-compose.solana.yml \
+#       --profile solana --profile sandbox build
+#   # setup-db populates every corpus against the shared postgres; either container can run it
+#   docker compose -f scripts/docker-compose.yml \
+#                  -f scripts/docker-compose.sandbox.yml \
+#                  -f scripts/docker-compose.solana.yml \
+#       --profile solana --profile sandbox run --rm autoprove-solana setup-db
+#   export HOST_UID=$(id -u) HOST_GID=$(id -g) HOST_WORK_DIR=/path/to/projects
+#   docker compose -f scripts/docker-compose.yml \
+#                  -f scripts/docker-compose.sandbox.yml \
+#                  -f scripts/docker-compose.solana.yml \
+#       --profile solana --profile sandbox run --rm autoprove-solana \
+#       console-solana /work/<proj> programs/<pkg>/src/lib.rs:<program>
+
+services:
+  autoprove-solana:
+    extends:
+      file: docker-compose.common.yml
+      service: autoprove-common
+    profiles: ["solana"]
+    image: autoprover-solana:latest
+    build:
+      context: ..
+      dockerfile: scripts/Dockerfile.solana
+      args:
+        BASE_IMAGE: autoprover-local:latest
+    depends_on:
+      # The sandbox overlay's one-shot launcher publisher. Compose merges this with the postgres
+      # entry the template carries.
+      run-confined-build:
+        condition: service_completed_successfully
+    environment:
+      # Absolute path to the mounted launcher; the provider prefers this over PATH.
+      RUN_CONFINED_BIN: /sandbox/run-confined
+    volumes:
+      # Read-only: only run-confined-build (rw) writes the binary.
+      - run_confined:/sandbox:ro
