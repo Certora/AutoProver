@@ -1,0 +1,38 @@
+title: CVLR Situation Recipes — Trigger Index
+precedence: Where these recipes and the Solana/CVLR manual or other Certora materials diverge, the
+  recipes govern.
+usage: Match a trigger; retrieve the pointed file before acting. When the file is unavailable,
+  search_terms are literal identifiers findable in the manual or the CVLR corpus; entries without
+  search_terms have no external source — the file is authoritative.
+channels:
+  RULE: 'Actionable directly: write it in the harness module, through `put_harness`.'
+  MOCK: The fix is a `summarize_for_prover` stand-in. Unsound by construction, so it is for code the
+    properties do not depend on, and it invalidates the prover stamp.
+  EDIT: The fix is in the program''s own source. Describe the problem to `code_editor`; you do not
+    edit the program yourself.
+  CONF: 'The fix is a prover setting. Only two are yours: the loop bound and the nonlinear solver
+    portfolio. Anything else is a `record_skip` naming the setting and the evidence for it.'
+  SKIP: There is no fix in your action space. `record_skip` with a reason a reviewer can act on,
+    which is worth more than a rule that looks like the property and is not.
+recipes:
+- id: K1
+  name: Satisfy rules, and the one they must not replace
+  triggers:
+  - A harness whose setup you are not yet sure the prover can execute at all
+  - A branch or post-state you want shown to be reachable at least once
+  - An acceptance property ("the handler accepts X") you are tempted to state as a satisfy rule
+  channel: RULE
+  file: recipes/cvlr-k1-satisfy-for-reachability.md
+  search_terms:
+  - cvlr_satisfy
+  - cvlr_sanity_checked
+- id: K2
+  name: Log the value an assertion reads when it is an enum or a bitfield
+  triggers:
+  - Asserting over a status field, enum discriminant, or a chain of `is_x!(..) || is_y!(..)` tests
+  - A rule over such a value fails with a counterexample that looks arbitrary rather than wrong
+  channel: RULE
+  file: recipes/cvlr-k2-clog-before-enum-assert.md
+  search_terms:
+  - clog
+  - cvlr_assert
