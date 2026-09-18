@@ -78,6 +78,18 @@ tightenings ride along with them: `authoring/judge.py` and `spec/cvl_research.py
 ignored callback parameter `object` rather than `Any`. They belong to no CVLR PR and would
 otherwise be the only changed files on the branch that no row below accounts for.
 
+**S6** is new work rather than a slice of the branch, and it is here because it is shared code with
+no CVLR dependency. `composer/kb/kb_context.py` assembles CVL's four context documents behind a
+cache marker and hands them to eight agents; four things in it are CVL-specific (the channel
+literal, the tool name, the `ContextSpec` list, two resource filenames). S6 lifts those into a frozen
+`KnowledgeBundle` with `CVL_BUNDLE` as its only instance — no behavior change, `with_cvl_context`
+unedited at all seven call sites — so that a second bundle is an instance rather than a fork. See
+[cvlr-knowledge-bundle-plan.md](./cvlr-knowledge-bundle-plan.md) §2.
+
+| PR | Files | Size | What it is |
+|----|-------|------|------------|
+| **S6** A knowledge bundle is a record, not a module | ~5 | new work | `KnowledgeBundle`, a `KBRecipe` generic over its channel vocabulary, `@cache`s keyed by bundle, `kb_tools(bundle)`, and a `cvl_kb_index.j2` that does not name CVL in prose a second corpus would inherit. One new test: a second bundle with its own channels and resources renders — the executable spec for adding one. |
+
 ---
 
 ## Wave 2 — Rust and Solana machinery, still backend-agnostic
@@ -102,6 +114,7 @@ description.
 | PR | Files | Size | What it is |
 |----|-------|------|------------|
 | **C7a** The corpus, fed by the manual built here — [#244](https://github.com/Certora/AutoProver/pull/244), open | 7 | +210 | `composer/tools/cvlr_rag.py`'s three search tools, the `cvlr_rag_user` role and schema they read, and `CVLR_DEFAULT_CONNECTION` beside the three constants that already name a corpus's database. `gen_docs.sh` has always built `solana.html` and dropped it; `populate_cvlr_rag.sh` ingests it with the existing `ragbuild`, which gains only the `<blockquote>` case the Solana manual needs. No manifest and no producer (U6). Adds only — it deletes no line master has. |
+| **K1** The CVLR knowledge bundle | ~8 | new work | `CVLR_BUNDLE`, `with_cvlr_context`, `cvlr_kb_tools()` (`get_cvlr_recipe`), and `composer/kb/resources/cvlr_baseline_facts.md` — the ~530 lines of run-invariant CVLR and prover fact factored out of the author's 754-line system prompt. Imports nothing from `composer/spec/cvlr/`. Its only reader is a prompt that does not exist on master until C4a2, which is the point: **C3b and C4a2 then create their prompts already factored** instead of landing 754 lines and moving 530 of them out a wave later. |
 | **R1** Cargo, SBF and symbols — [#243](https://github.com/Certora/AutoProver/pull/243), open | 8 | +1242 | `composer/cargo/`: workspace metadata, a build session, the SBF build, dep-info parsing and the symbol reader. Nothing in it knows what CVLR is; it knows how to build and inspect a Solana crate. Eight new files and no change to an existing one — the `PROJECT_TOOLCHAINS` registration that would have made it nine went to *Deferred* below. |
 
 ---
@@ -123,9 +136,9 @@ all at once and works.
 | **C5a** Submission, tuning and the Anchor surface | 4 | +996 | `prover.py` `tuning.py` `anchor_surface.py`: the prover-side submission, the tuning directives and loop bounds, and the Anchor surface analysis. |
 | **C4a1** Rules, state and the harness module | 12 | +3034 −2 | `rules.py` `state.py` `harness.py`: rule extraction, the authoring state, and the generated harness module. Carries the `CvlrJudge` / `CvlrGeneration` cache markers in `spec/context.py`, which are CVLR-specific and have no business in a shared PR. The largest test set in the wave lands here, because this is the layer four earlier PRs' tests were waiting on. |
 | **C5b** Verification | 3 | +2179 | `verify.py`: the gate that decides what a run has proved, and what it means when it has not. |
-| **C3b** The munge editor | 5 | +2853 | `editor.py`: the agent that proposes and applies munges, and the review that accepts or rejects. |
+| **C3b** The munge editor | 5 | +2853 | `editor.py`: the agent that proposes and applies munges, and the review that accepts or rejects. Both prompts take `with_cvlr_context` (K1). |
 | **C4b** Guidance and the worked example | 4 | +1046 | `guidance.py` `example.py`: the static guidance and the worked example rendered against the analyzed program. |
-| **C4a2** The authoring loop | 9 | +3426 | `author.py` and the four prompt templates: the author, the feedback round, and the judge. The top of the DAG — it imports from seven of the PRs above. |
+| **C4a2** The authoring loop | 9 | ≈ +2900 | `author.py` and the four prompt templates: the author, the feedback round, and the judge. The top of the DAG — it imports from seven of the PRs above. The system prompt lands factored against K1: this agent's contract, its tool list, and the per-run material a cached prefix cannot carry (`{{ conf }}`, `{{ example }}`, `{{ module }}`). The judge stops restating vacuity and over-assumption policy, which is eleven lines of it today. |
 | **C6** Pipeline and entry | 12 | +3470 −7 | `CvlrBackend`, the CLI entry points, the artifact store, and the plumbing tests. The PR that makes the backend exist. Lands without the two pinned-run flags — see *Deferred: pinned runs* below — and opens the corpus the way the CVL backend does, not by tag; see *Dropped: naming the CVLR corpus by tag*. |
 | **R3** A Solana container | 8 | +400 −60 | `scripts/Dockerfile.solana` and `scripts/docker-compose.solana.yml`: a second AutoProver container, `autoprove-solana`, carrying the Rust toolchain and the platform-tools release, layered on the base image — which stays lean and loses nothing but its docs stage, where the one-element `for name in cvl` loop becomes `cvl solana` so the shared postgres gets the manual the backend is for. The shared service body moves to `scripts/docker-compose.common.yml`, which the EVM and Solana services both extend. |
 
@@ -181,6 +194,7 @@ themselves. No shared module reaches into the backend.
 | **C7c** The practice manifest | 4 *(hunks)* | ≈ +20 | Project-derived idioms, under the same tag and found by the same discovery C7b lands, so here it is almost only what an unreviewed entry has to make visible: an entry can be `proposed` rather than signed off, and `cvlr_manual_search`'s description says to treat an UNREVIEWED result as a lead worth compiling rather than as authority. Last, because the extraction design is the least settled of the three. |
 | **C8a** The end-to-end gate and its scenario | 10 | +2956 | `test_cvlr_gate.py` and the `solana_vault_idl` Anchor program it runs against. Real models, real cargo, real cloud jobs. Carries the change that makes `token_cost_budget` yield its counter instead of `None`: the gate is its only reader, and it reads it to report what the run cost rather than only to trip on the ceiling. |
 | **C8b** The replay tape | 7 | +52251 | The recorded run that lets the gate's shape be re-checked for the price of the builds and prover jobs alone. 51,000 of those lines are one generated file. |
+| **K2** CVLR recipes | ~10 | new work | `cvlr_recipes_index.yaml` and the recipe bodies, with channels taken from the author's tool list (`RULE` / `MOCK` / `EDIT` / `CONF` / `SKIP`) rather than from the capture taxonomy — a recipe naming an action the agent cannot take cannot be followed. Carries the two `cvlr-capture-plan.md` §7.2 corrections: that vocabulary, and triggers widened to symptom / code situation / verification goal, which is what the CVL recipes it cites as the format already do. Last, because its content is whatever survives triage against K1's document, and that triage is work in `certora-cvlr-kb`. |
 | **D** Documentation | 10 | +8153 | The backend plan, the capture plan, the upstream-defect record, the working-copy and VFS notes, and the to-do index. |
 
 ---
