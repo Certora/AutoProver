@@ -82,17 +82,26 @@ otherwise be the only changed files on the branch that no row below accounts for
 
 ## Wave 2 — Rust and Solana machinery, still backend-agnostic
 
-**C7** is here rather than in wave 4, where it sat until the wave-3 dependency map was drawn.
-`composer/tools/cvlr_rag.py` imports `composer.rag.db` and nothing else; no part of C7 reaches
-`composer/spec/cvlr/` or `composer/cargo/`, so it is the one CVLR-adjacent PR that could be written
-today. It is also *required* earlier than wave 4: `cvlr_property_generation_system_prompt.j2`
-carries an unguarded `{% include "cvlr_rag_tools.j2" %}`, so **C4a2 cannot render its prompts
-without C7's template**. Landing C7 whole before C6 also keeps the prompt from advertising corpus
-tools the backend has not yet been given.
+**C7a** is here rather than in wave 4, where the whole of C7 sat until the wave-3 dependency map
+was drawn. `composer/tools/cvlr_rag.py` imports `composer.rag.db` and nothing else; no part of it
+reaches `composer/spec/cvlr/` or `composer/cargo/`, so it is the one CVLR-adjacent PR that could be
+written today. It is also *required* earlier than wave 4:
+`cvlr_property_generation_system_prompt.j2` carries an unguarded
+`{% include "cvlr_rag_tools.j2" %}`, so **C4a2 cannot render its prompts without C7a's template**.
+
+The rest of the former C7 does not come with it. The corpus is fed from two directions — the Solana
+manual this repo already builds, and manifests produced in the private `certora-cvlr-kb` repo — and
+only the first of those is settled. C7a lands the corpus fed by the manual alone, which is a
+complete and useful one with no private dependency, and is everything the prompt's `{% include %}`
+needs. **C7b** (the CVLR crate reference) and **C7c** (the practice manifest) add ingestion for
+producers whose design is still moving, and wait in wave 4 for it to settle. Very little of either
+is code here: the search tools resolve by tag and never learn which manifests fed the database, so
+what the two add is manifest discovery in one shell script and the one thing an unreviewed entry
+makes visible in a tool description.
 
 | PR | Files | Size | What it is |
 |----|-------|------|------------|
-| **C7** Register the CVLR corpus, and build its documentation half here | 11 | +390 −30 | The `cvlr_kb` knowledge base: the tools module, both registry halves, the DB role, and the populate script — which ingests the Solana manual `gen_docs.sh` already builds, through `ragbuild --knowledge-base cvlr_kb`. No manifest and no second producer for that half (U6); the crate reference and practice manifests still come from the private repo. Carries the `PROVENANCE` stamp in `gen_docs.sh`, the `<blockquote>` case the Solana manual needs, and the `rag-import-format.md` revisions. |
+| **C7a** The `cvlr_kb` corpus, fed by the manual built here | 11 | ≈ +310 −30 | The knowledge base itself: `composer/tools/cvlr_rag.py`'s three search tools, both registry halves (`KNOWLEDGE_BASES` and `rag_env._FACTORIES`), the `cvlr_rag_user` role and schema, and one way in — `gen_docs.sh` has always built `solana.html` beside the CVL manual, and `ragbuild --knowledge-base cvlr_kb` now files it under its own tag. No manifest and no second producer (U6). Carries the `PROVENANCE` stamp in `gen_docs.sh`, the `<blockquote>` case the Solana manual needs, and the `rag-import-format.md` revisions that describe a registry with an entry in it. |
 | **R1** Cargo, SBF and symbols — [#243](https://github.com/Certora/AutoProver/pull/243), open | 8 | +1242 | `composer/cargo/`: workspace metadata, a build session, the SBF build, dep-info parsing and the symbol reader. Nothing in it knows what CVLR is; it knows how to build and inspect a Solana crate. Eight new files and no change to an existing one — the `PROJECT_TOOLCHAINS` registration that would have made it nine went to *Deferred* below. |
 
 ---
@@ -168,6 +177,8 @@ themselves. No shared module reaches into the backend.
 
 | PR | Files | Size | What it is |
 |----|-------|------|------------|
+| **C7b** The CVLR crate reference | 3 *(hunks)* | ≈ +80 | Manifest ingestion in `populate_cvlr_rag.sh`: paths given on the command line, else `$CVLR_KB_REPO`, else the installed `certora_cvlr_kb` package. The manifest itself — every public item of the pinned reference set, with compile-gated examples — is produced in the private repo, so what lands here is the discovery and the `rag_import` call. Held back from C7a because that producer is the part expected to be reworked, and this is the seam it would move. |
+| **C7c** The practice manifest | 4 *(hunks)* | ≈ +20 | Project-derived idioms, under the same tag and found by the same discovery C7b lands, so here it is almost only what an unreviewed entry has to make visible: an entry can be `proposed` rather than signed off, and `cvlr_manual_search`'s description says to treat an UNREVIEWED result as a lead worth compiling rather than as authority. Last, because the extraction design is the least settled of the three. |
 | **C8a** The end-to-end gate and its scenario | 10 | +2956 | `test_cvlr_gate.py` and the `solana_vault_idl` Anchor program it runs against. Real models, real cargo, real cloud jobs. Carries the change that makes `token_cost_budget` yield its counter instead of `None`: the gate is its only reader, and it reads it to report what the run cost rather than only to trip on the ceiling. |
 | **C8b** The replay tape | 7 | +52251 | The recorded run that lets the gate's shape be re-checked for the price of the builds and prover jobs alone. 51,000 of those lines are one generated file. |
 | **D** Documentation | 10 | +8153 | The backend plan, the capture plan, the upstream-defect record, the working-copy and VFS notes, and the to-do index. |
@@ -343,7 +354,9 @@ only by a caller that does not exist yet on master.
 What to hand `git checkout eric/solanaProver -- …` after branching from `origin/master`. Every file
 the branch changes appears below, except those carrying only the dropped build-environment field.
 A path under two PRs, and the shared pipeline files marked *(hunks)*, are the overlaps noted in
-wave 1 — take the feature's hunks there, not the whole file. Rows for merged PRs are kept as the
+wave 1 — take the feature's hunks there, not the whole file. The C7a/C7b/C7c rows overlap the same
+way for a different reason: four files describe what feeds the corpus, and each of the three
+revises that description to match what it lands. Rows for merged PRs are kept as the
 record of what went where; nothing is left to check out for those.
 
 | PR | Paths |
@@ -364,7 +377,9 @@ record of what went where; nothing is left to check out for those.
 | C4b | `composer/spec/cvlr/guidance.py` `composer/spec/cvlr/example.py` `tests/test_cvlr_worked_example.py` `tests/test_cvlr_anchor_surface.py` |
 | C4a2 | `composer/spec/cvlr/author.py` `composer/templates/cvlr_feedback_prompt.j2` `composer/templates/cvlr_property_judge_system_prompt.j2` `composer/templates/cvlr_property_generation_prompt.j2` `composer/templates/cvlr_property_generation_system_prompt.j2` `tests/test_cvlr_judge_input.py` `tests/test_cvlr_knowledge.py` `tests/data/cvlr_judge/` `template_manifest.json` |
 | C6 | `composer/spec/cvlr/pipeline.py` `composer/spec/cvlr/entry.py` `composer/spec/cvlr/__init__.py` `composer/cli/console_solana.py` `composer/cli/tui_solana.py` `tests/test_cvlr_entry.py` `tests/test_cvlr_findings.py` `tests/test_cvlr_author.py` `tests/test_cvlr_munge.py` `tests/test_cvlr_judge_round_cost.py` `tests/test_autoprove_integration.py` `.github/workflows/integration-tests.yml` |
-| C7 | `composer/tools/cvlr_rag.py` `composer/rag/db.py` `composer/tools/rag_env.py` `composer/scripts/init-db.sql` `scripts/populate_cvlr_rag.sh` `composer/templates/cvlr_rag_tools.j2` `tests/test_rag_env.py` `scripts/gen_docs.sh` `.gitignore` `composer/scripts/ragbuild.py` `docs/rag-import-format.md` |
+| C7a | `composer/tools/cvlr_rag.py` `composer/rag/db.py` `composer/tools/rag_env.py` `composer/scripts/init-db.sql` `composer/templates/cvlr_rag_tools.j2` `composer/scripts/ragbuild.py` `scripts/gen_docs.sh` `.gitignore` `tests/test_rag_env.py` `scripts/populate_cvlr_rag.sh` *(hunks: the manual half)* `docs/rag-import-format.md` *(hunks: §5, and the registry entry in §7)* |
+| C7b | `scripts/populate_cvlr_rag.sh` *(hunks: manifest discovery)* `composer/templates/cvlr_rag_tools.j2` *(hunks)* `docs/rag-import-format.md` *(hunks: the producer paragraph in §7)* |
+| C7c | `composer/tools/cvlr_rag.py` *(hunks: the unreviewed disclosure)* `scripts/populate_cvlr_rag.sh` *(hunks)* `composer/templates/cvlr_rag_tools.j2` *(hunks)* `docs/rag-import-format.md` *(hunks)* |
 | C8a | `tests/test_cvlr_gate.py` `test_scenarios/solana_vault_idl/` `composer/diagnostics/budget.py` |
 | C8b | `composer/testing/` `scripts/record_cvlr_tape.sh` `tests/test_cvlr_tape.py` `tests/test_tape_setup.py` |
-| D | `docs/` *(except `rag-import-format.md`, which goes with C7)* |
+| D | `docs/` *(except `rag-import-format.md`, which is split across C7a–C7c)* |
