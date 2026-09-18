@@ -81,7 +81,7 @@ time — the only part of the former S5 that master can use today.
 
 | PR | Files | Size | What it is |
 |----|-------|------|------------|
-| **R1** Cargo, SBF and symbols | 10 | +1552 | `composer/cargo/`: workspace metadata, a build session, dep-info parsing, the SBF toolchain and the symbol reader, plus the `SolanaToolchain` registration in `PROJECT_TOOLCHAINS`. Nothing in it knows what CVLR is; it knows how to build and inspect a Solana crate. |
+| **R1** Cargo, SBF and symbols — branched, `eric/cargo-sbf` | 8 | +1392 | `composer/cargo/`: workspace metadata, a build session, the SBF build, dep-info parsing and the symbol reader. Nothing in it knows what CVLR is; it knows how to build and inspect a Solana crate. Eight new files and no change to an existing one — the `PROJECT_TOOLCHAINS` registration that would have made it nine went to *Deferred* below. |
 | **R3** The image grows a Rust toolchain | 4 | +281 −32 | Dockerfile, entrypoint and compose changes for the Solana platform tools, and the test that asserts the image has them. Gated behind `SOLANA_TOOLCHAIN` so an EVM-only build does not pay for it. The docs stage's one-element `for name in cvl` loop becomes `cvl solana`, so the image's corpus has the manual the backend is for. |
 
 ---
@@ -104,7 +104,7 @@ code and land C6 last, after which the backend appears all at once and works.
 | **C4a** The authoring loop | 10 | +2642 | Author, state, rule extraction, the judge's prompts, and the feedback round. Carries the `CvlrJudge` / `CvlrGeneration` cache markers in `spec/context.py`, which are CVLR-specific and have no business in a shared PR. |
 | **C4b** The prompt corpus, and a mark for one-off measurements | 10 | +3186 | Guidance, the worked example rendered against the analyzed program, and the knowledge tests that pin what the prompts must and must not claim. Carries the `measurement` pytest mark and the CI selector `expensive and not measurement`, because `test_cvlr_judge_round_cost.py` — which lands here — is the only test that has it: a mark registered before its first user would deselect nothing and give a reviewer no way to judge the CI change. |
 | **C5** Verification and tuning | 10 | +3105 | Submission, the prover-side tuning directives, loop bounds, and the Anchor surface analysis. |
-| **C6** Pipeline and entry | 12 | +3083 −6 | `CvlrBackend`, the CLI entry points, the artifact store, and the plumbing tests. The PR that makes the backend exist. Lands without the two pinned-run flags — see *Deferred* below. |
+| **C6** Pipeline and entry | 12 | +3083 −6 | `CvlrBackend`, the CLI entry points, the artifact store, and the plumbing tests. The PR that makes the backend exist. Lands without the two pinned-run flags — see *Deferred: pinned runs* below. |
 
 Order inside the wave: **C1a** before **C1b** (the env refresher imports the scaffold's constants),
 and **C6** last. C3a/C3b, C4a/C4b and C5 are independent of each other.
@@ -148,6 +148,29 @@ What its dependents must do while it is deferred:
 * `tests/test_pinned_properties.py` and `tests/data/pins/` travel with the feature if it ever lands.
 
 If it is dropped instead, the same paths are what to delete from the branch.
+
+---
+
+## Deferred: Solana's entry in the project-toolchain registry
+
+`composer/cargo/toolchain.py` — `SolanaToolchain`, answering the two questions
+`composer.rustapp.toolchain` asks a chain (which crate owns a file, and prepare a workspace) — and
+the `PROJECT_TOOLCHAINS` entry binding it. R1 was assembled with both and they came back out.
+
+**It serves the Rust wheel path, not this branch.** The CVLR modules import `composer.cargo`'s
+`metadata`, `sbf`, `session`, `symbols` and `depinfo`, and never `toolchain`; the only reader of the
+registry is `composer/rustapp/adapter.py`, which is the wheel seam. `SolanaToolchain`'s one other
+mention anywhere is `tests/test_cvlr_plumbing.py`, which constructs it directly rather than through
+the registry, and which travels with C6 regardless.
+
+**And it is a refactor with an owner already.**
+[#98](https://github.com/Certora/AutoProver/pull/98) registers `{"solana": _Solana()}` — a lazy shim
+over a `SolanaToolchain` in `composer.spec.solana.project`. So this was Crucible's toolchain lifted
+into shared code, and landing it from here would put a second implementation on master with no
+caller, on the line of the file that PR changes. It belongs with whatever moves Crucible off its own
+copy; `d8ebccb7` on `eric/cargo-sbf` is the removal to revert for the text.
+
+Keeping it out also leaves R1 purely additive, which is most of what makes a 1,392-line PR readable.
 
 ---
 
@@ -280,7 +303,7 @@ record of what went where; nothing is left to check out for those.
 | S1 *(merged)* | `composer/layout.py` `composer/spec/gen_types.py` `composer/sandbox/recipes.py` `composer/pipeline/ecosystem.py` `composer/foundry/entry.py` `composer/spec/source/autoprove_common.py` `tests/test_fs_forbidden_read.py` `tests/test_sandbox_config.py` `scripts/docker-compose.sandbox.yml` `composer/pipeline/cli.py` *(hunks)* |
 | S3 *(merged)* | `composer/certora_env.py` `composer/prover/{certoraRunWrapper,core,ptypes,results}.py` `analyzer/analysis.py` `composer/tools/{prover,thinking}.py` `composer/authoring/buffer.py` `composer/core/context.py` `composer/cvl/tools.py` `composer/workflow/executor.py` `composer/spec/source/{autoprove_common,harness}.py` `composer/spec/source/munge/compile_check.py` `tests/conftest.py` `tests/test_prover_app.py` `tests/test_prover_options.py` `tests/test_wrapped_prover_runner.py` `tests/test_solana_cex_trace.py` `tests/data/solana_cex/` `tests/test_tree_parsing.py` `tests/test_cex_analysis_failure_isolation.py` `tests/test_autoprove_report.py` *(hunks: the `_violated` helper and its expectation)* |
 | S4 | `composer/spec/source/report/{schema,collect,build}.py` `composer/spec/source/report_prover.py` `tests/test_autoprove_report.py` `composer/pipeline/core.py` *(hunks)* |
-| R1 | `composer/cargo/` `composer/rustapp/toolchain.py` `tests/test_cvlr_symbols.py` `tests/data/vault_sbf_symbols.txt` |
+| R1 | `composer/cargo/` *(less `toolchain.py`)* `tests/test_cvlr_symbols.py` `tests/data/vault_sbf_symbols.txt` |
 | R3 | `scripts/Dockerfile` `scripts/autoprove-entrypoint.sh` `scripts/docker-compose.yml` `tests/test_cvlr_image.py` |
 | C1a | `composer/spec/cvlr/{preflight,scaffold,conf,crates}.py` `tests/test_cvlr_scaffold.py` |
 | C1b | `composer/spec/cvlr_reference.py` `composer/spec/cvlr/env_paths.py` `composer/spec/cvlr/envs/` `composer/scripts/refresh_cvlr_envs.py` `tests/test_cvlr_env_paths.py` `tests/test_cvlr_reference.py` |
