@@ -1,8 +1,8 @@
 """The warm workdir a Rust compile loop runs in, and the fast tier of the two-tier gate.
 
 A compile in the authoring inner loop is the whole reason this is an object. CVL authoring gates
-every edit on a sub-second typecheck; CVLR's only equivalent is a Rust build, so the gate moves into the
-inner loop — and the sandbox recipe gives each *run* a private ``CARGO_HOME``
+every edit on a sub-second typecheck; CVLR's only equivalent is a Rust build, so the gate moves
+into the inner loop — and the sandbox recipe gives each *run* a private ``CARGO_HOME``
 (:func:`~composer.sandbox.recipes.sandbox_cargo_home`), deliberately, so that an untrusted
 ``build.rs`` cannot poison a later run. Those two facts collide: a per-compile workdir would re-fetch
 the dependency graph on every edit. So the workdir is owned by a **session** and reused across every
@@ -31,8 +31,8 @@ from composer.sandbox.recipes import sandbox_cargo_home
 
 _log = logging.getLogger(__name__)
 
-#: Which gate produced a run. The vocabulary is the plan's: the ``fast`` tier runs per write, the
-#: ``slow`` tier only before a prover submission.
+#: Which gate produced a run: the ``fast`` tier runs per write, the ``slow`` tier only before a
+#: prover submission.
 type CompileTier = Literal["fast", "slow"]
 
 #: A fetch resolves and downloads a dependency graph; on a cold cache for a real program that is
@@ -219,7 +219,6 @@ class CargoSession:
         return Warmed()
 
     def already_warmed(self, cargo: Path | str) -> bool:
-        """Whether ``cargo`` has already fetched into this session's home."""
         return str(cargo) in self._warmed
 
     async def check(

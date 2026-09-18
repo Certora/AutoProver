@@ -16,4 +16,8 @@ The split inside is by *what varies*:
   per session, not once per compile.
 * :mod:`composer.cargo.sbf` — Solana's verification build (``cargo certora-sbf``). The one
   chain-specific piece; Soroban's wasm build is its peer, not its subclass.
+* :mod:`composer.cargo.depinfo` — which sources a build actually compiled. Chain-neutral: the
+  dep-info it reads is rustc's, and rustc writes it whatever the target.
+* :mod:`composer.cargo.symbols` — the functions a built program defines, spelled the way the
+  Solana Prover's tuning files spell them. Chain-specific, like the build that produced them.
 """
