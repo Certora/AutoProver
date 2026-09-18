@@ -1,7 +1,7 @@
 """Solana's verification build: ``cargo certora-sbf``, and the JSON it speaks.
 
-This is the **slow tier** of ``docs/cvlr-backend-plan.md`` §5.1 — the real chain build, run before a
-prover submission rather than per write — and it is also the one place where the backend and
+This is the **slow tier** of the two-tier compile gate (:mod:`composer.cargo.session` is the fast
+one) — the real chain build, run before a prover submission rather than per write — and it is also the one place where the backend and
 ``certoraSolanaProver`` have to agree on what was built.
 
 They agree through a JSON document that neither of them invents. ``cargo certora-sbf --json`` prints
@@ -22,9 +22,9 @@ result, not as a build error.
 Why a build script at all, rather than handing over the finished ``.so`` through the conf's ``files``
 key: ``set_rust_build_directory`` only collects the project's Rust sources into ``.certora_sources``
 on the build-script path (with ``files`` it copies the artifact and nothing else), and those sources
-are what the report renders and what a counterexample analyzer reads (§5.3). The other half of the
+are what the report renders and what a counterexample analyzer reads. The other half of the
 same answer is confinement: ``certoraSolanaProver``'s own from-sources path runs ``cargo certora-sbf``
-directly inside its process, unconfined, which §3 item 2 does not allow. Owning the build script is
+directly inside its process, unconfined, which our sandbox posture does not allow. Owning the build script is
 what lets the build stay inside the sandbox while the prover still sees a from-sources run.
 """
 
