@@ -702,7 +702,7 @@ code lives.
 the reversal went further than the producer: there is no documentation manifest at all now. The
 thing it was rebuilding was already being built here — `scripts/gen_docs.sh` has always produced
 `solana.html` beside `cvl.html` — and `ragbuild` already writes through the same two database calls
-`rag_import` does, so the manual is ingested directly with `--knowledge-base cvlr_kb`. No producer,
+`rag_import` does, so the manual is ingested directly with `--output`. No producer,
 no manifest, no shared parser, no `AUTOPROVER_REPO` reach-back. The provenance argument above is
 what that costs, and it is why the built HTML carries a `PROVENANCE` stamp naming the docs revision.
 The crate reference and the practice corpus are unaffected: they are expensive to build, for the

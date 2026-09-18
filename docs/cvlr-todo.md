@@ -72,8 +72,8 @@ writes the DB itself, and separately by [certorag](https://github.com/Certora/ce
 [gen_docs.sh](../scripts/gen_docs.sh) has always built `solana.html` alongside `cvl.html` — four
 manuals, of which one is published — so the documentation half of the corpus needs no producer
 anywhere else. `certora-cvlr-kb` drops `tools/docs_manifest.py` and `cvlr-docs.rag.json`, and the
-docs half is ingested in-tree by `ragbuild --knowledge-base cvlr_kb` — it and `rag_import` write
-through the same two database calls, so the registry lookup was the only code needed. The shared
+docs half is ingested in-tree by `ragbuild --output "$CVLR_DEFAULT_CONNECTION"` — it and
+`rag_import` write through the same two database calls, so no new code was needed at all. The shared
 HTML parser that existed to let a second repo do this is reverted with it.
 This reverses half of [the backend plan](./cvlr-backend-plan.md) §7.3.3, and the reason that section
 gave is the cost to watch: three manifests built in three places can be three vintages, and the
