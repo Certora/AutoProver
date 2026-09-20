@@ -331,6 +331,11 @@ class AutoProverReport(BaseModel):
     run_mode: str | None = None
     #: What a prioritized run set aside. Empty for a comprehensive run.
     deprioritized: list[DeprioritizedProperty] = Field(default_factory=list)
+    #: Plugins active for the run, as the manifest that feeds every per-component cache key.
+    #: Without it a finished run leaves no record of which plugins participated, and whether an
+    #: installed plugin was even loaded can only be inferred from the container image. Empty for
+    #: a run with no plugins, and on reports written before the field existed.
+    active_plugins: list[str] = Field(default_factory=list)
     contract_name: str
     run_timestamp_utc: str | None = None
     #: component name -> prover run link/path
