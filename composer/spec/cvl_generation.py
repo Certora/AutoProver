@@ -126,12 +126,10 @@ class GeneratedCVL(BaseModel):
 
     @property
     def covering_output_links(self) -> list[str]:
-        """``covering_links`` in ``/output/`` form, newest first, falling back to the last run
-        when the covering set is empty. What the report reads verdicts from."""
-        links = [l for link in self.covering_links if (l := _output_link(link)) is not None]
-        if links:
-            return links
-        return [self.output_link] if self.output_link is not None else []
+        """``covering_links`` in ``/output/`` form, newest first. What the report reads verdicts
+        from. Empty when no run accounts for this spec, which the publish gate does not admit:
+        completion needs a run against the published state."""
+        return [l for link in self.covering_links if (l := _output_link(link)) is not None]
 
 
 # ---------------------------------------------------------------------------

@@ -87,14 +87,16 @@ def _gen(mapping: dict[str, list[str]] | None = None,
          skipped: dict[str, str] | None = None,
          link: str | None = "L1") -> GeneratedCVL:
     """A successful generation result: ``mapping`` is property_title -> [rule names];
-    ``skipped`` is property_title -> reason."""
+    ``skipped`` is property_title -> reason. ``link`` is both the last run and the run that
+    accounts for the spec, as the author records them for a one-run generation."""
     return GeneratedCVL(
         commentary="", cvl="",
         property_rules=[PropertyRuleMapping(property_title=t, rules=rs)
                         for t, rs in (mapping or {}).items()],
         skipped=[SkippedProperty(property_title=t, reason=r)
                  for t, r in (skipped or {}).items()],
-        final_link=link
+        final_link=link,
+        covering_links=[link] if link is not None else [],
     )
 
 
@@ -286,6 +288,22 @@ async def test_collect_backfills_unknown_for_unproven_referenced_rule():
     assert [(r.name, r.outcome, r.spec_file) for r in rules] == [("r1", Outcome.UNKNOWN, "autospec_C.spec")]
     assert properties[0].rule_refs == [("autospec_C.spec", "r1")]
     assert dropped == 0
+
+
+@pytest.mark.asyncio
+async def test_collect_ignores_a_run_that_does_not_account_for_the_published_spec():
+    """A last run recorded against a different spec state contributes no verdicts: its results
+    describe other text. The rule renders UNKNOWN and the coverage warning names it."""
+    gen = _gen({"p1": ["r1"]}, link="L_stale").model_copy(update={"covering_links": []})
+    fetch = _fetcher({"L_stale": [_fake_check("r1", NodeStatus.VERIFIED, file="autospec_C.spec")]})
+
+    properties, rules, _s, _g, _c, _d = await collect(
+        [_input("C", "autospec_C.spec", [_prop("p1", "d1")], gen)], fetch_verdicts=fetch)
+
+    assert [(r.name, r.outcome, r.prover_link) for r in rules] == [("r1", Outcome.UNKNOWN, None)]
+    cov = validate(properties=properties, rules=rules, groups=[_pg("g", [("C", "p1")])],
+                   skipped=[], gave_up=[], curtailed=[], dropped_orphan_rules=0)
+    assert any("r1" in w for w in cov.warnings)
 
 
 @pytest.mark.asyncio
