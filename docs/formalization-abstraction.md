@@ -388,10 +388,11 @@ it:
   covers the skip declarations too, because "this property is left out, here is why" is part of what
   was accepted.
 - **A judge that must state a verdict.** `build_feedback_judge` compiles a sub-agent with the
-  session's tool belt, a rough-draft scratchpad, the run memory, and an enforced read-back of the
-  draft (`did_read` — reviewing the copy in its own prompt is not reviewing what was written). It
-  returns a structured `PropertyFeedback`, so there is no unparseable reply to interpret. The author
-  may answer a prior round with an evidence-typed `Rebuttal` rather than re-arguing it.
+  session's tool belt, a rough-draft scratchpad, the run memory, and an enforced rough draft of the
+  verdict (`drafted` — the write echoes the draft back as the tool result, so the next turn reviews
+  what was written rather than the copy in its own prompt). It returns a structured
+  `PropertyFeedback`, so there is no unparseable reply to interpret. The author may answer a prior
+  round with an evidence-typed `Rebuttal` rather than re-arguing it.
 - **Two honest exits.** `record_skip` excuses a property from the publish-time mapping with a
   justification; `give_up` ends the session with a reason that reaches the report. Both are better
   outcomes than a spec that only looks checked.

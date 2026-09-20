@@ -383,7 +383,7 @@ _SYSTEM_ANALYSIS_TAPE: list[BaseMessage] = [
     #   source_tools = list_files, get_file, grep_files, code_explorer,
     #                  code_document_ref.
     # Validator: validate_solidity_connectivity (graph wellformedness plus the
-    #   existence of every declared source path; no did_read requirement — we can
+    #   existence of every declared source path; no drafted requirement — we can
     #   hit `result` at any time once the application shape is correct).
 
     # P1.1 — exercise memory + list_files + get_file. Memory paths must sit
@@ -447,7 +447,7 @@ _SYSTEM_ANALYSIS_TAPE: list[BaseMessage] = [
         ),
     ),
 
-    # P1.4 — exercise rough_draft tools before result. No did_read validator
+    # P1.4 — exercise rough_draft tools before result. No drafted validator
     # in this phase, so the order is just for coverage.
     _ai(
         "Drafting a one-paragraph summary for self-reference.",
@@ -527,7 +527,7 @@ _HARNESS_TAPE: list[BaseMessage] = [
 
 _BUG_TAPE: list[BaseMessage] = [
 
-    # P3.1 — exercise source_tools + rough_draft. No did_read requirement,
+    # P3.1 — exercise source_tools + rough_draft. No drafted requirement,
     # kept for coverage.
     _ai(
         "Bug analysis: inspecting the entry point source.",
@@ -653,7 +653,7 @@ _CVL_TAPE: list[BaseMessage] = [
 
     # CR.1 — research sub-agent, turn 1. Tools: write_rough_draft,
     # read_rough_draft, base_rag_tools (cvl_manual_*, kb_*), result.
-    # Validator `_did_rough_draft_read` rejects result until did_read=True.
+    # Validator `_wrote_rough_draft` rejects result until drafted=True.
     _ai(
         "Researcher: sketching an answer + pulling the manual section.",
         _tc(
@@ -673,7 +673,7 @@ _CVL_TAPE: list[BaseMessage] = [
         ),
     ),
 
-    # CR.2 — research: read the draft so did_read flips true.
+    # CR.2 — research: read the draft so drafted flips true.
     _ai(
         "Researcher: reading the draft before answering.",
         _tc("read_rough_draft"),

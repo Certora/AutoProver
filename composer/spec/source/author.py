@@ -692,6 +692,7 @@ class WrappedProverRunner:
         callbacks: ProverCallbacks,
         tool_call_id: str,
         rules: list[str] | None = None,
+        exclude_rules: list[str] | None = None,
         **config,
     ) -> ProverReport | str:
         # The spec/conf staging only has to outlive the run itself, so one call
@@ -703,6 +704,7 @@ class WrappedProverRunner:
             spec_contents=curr_spec,
             config=self.config,
             rule=rules,
+            exclude_rule=exclude_rules,
             **config
         ) as (conf_path, _):
             return await run_prover(

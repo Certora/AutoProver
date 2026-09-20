@@ -425,7 +425,7 @@ def certora_prover(
     ))
 
     the_tool = get_prover_tool(
-        prover_opts=ProverOptions(),
+        prover_opts=ProverOptions(app="evm"),
         llm=fake_llm,
         main_contract="Dummy",
         project_directory=in_situ_project(str(tmp_path)),
