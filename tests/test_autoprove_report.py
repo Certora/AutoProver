@@ -6,9 +6,10 @@ translation is exercised), outcome aggregation, grouping + fallback, coverage's
 property-partition, HTML render — plus the build orchestrator. No DB / no real LLM /
 no real prover: POU is faked, the grouping LLM is a `BaseChatModel` stub whose
 structured output is preset (so the real `call_grouping_llm` — templates + parsing —
-still runs), and inputs are in-memory `GeneratedCVL` (or `None` for a give-up/crash,
+still runs), and inputs are in-memory `GeneratedCVL` (or `Abandoned` for a give-up/crash,
 which is how a caller hands a gap to the report layer).
 """
+import dataclasses
 from types import SimpleNamespace
 from typing import Any, cast
 import pathlib
@@ -42,8 +43,8 @@ from composer.spec.source.report.schema import (
     GaveUpComponent, GroupStatus, ImpactLevel, IssueContent, LikelihoodLevel, Outcome,
     PropertyGroup, RuleVerdict, SeverityTier, SkippedClaim,
 )
-from composer.spec.source.report_prover import make_prover_fetcher
-from composer.spec.source.report.collect import RuleEvidence
+from composer.spec.source.report_prover import job_input, make_prover_fetcher
+from composer.spec.source.report.collect import Abandoned, RuleEvidence
 from composer.spec.source.report.findings import FindingDraft, build_findings
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.diagnostics.timing import RunSummary
@@ -74,6 +75,16 @@ def _FakeAPI(by_link: dict[str, list]) -> ProverOutputAPI:
     return cast(ProverOutputAPI, _FakeAPI_Impl(by_link))
 
 
+@dataclasses.dataclass(frozen=True)
+class _NonCVLFormalized:
+    """A `Formalized` from no particular backend: the fetcher touches only ``run_link``, and the
+    rest is here to satisfy the protocol."""
+    run_link: str | None
+    result: Any = None
+    deliverable: pathlib.Path = pathlib.Path("unit")
+    unit_file: str = "unit"
+
+
 def _fetcher(by_link: dict[str, list]):
     """The real prover `VerdictFetcher` over a fake POU — exercises the NodeStatus->Outcome map."""
     return make_prover_fetcher(_FakeAPI(by_link))
@@ -102,10 +113,18 @@ def _input(
     name: str,
     unit_file: str,
     props: list[PropertyFormulation],
-    result: GeneratedCVL | None
+    result: GeneratedCVL | None,
+    gave_up_reason: str = "gave up",
 ) -> ReportComponentInput[GeneratedCVL]:
-    return ReportComponentInput(name=name, props=props,
-                                formalized=Delivered(result, pathlib.Path(unit_file)) if result is not None else None)
+    return ReportComponentInput(
+        name=name,
+        props=props,
+        formalized=(
+            Delivered(result, pathlib.Path(unit_file))
+            if result is not None
+            else Abandoned(gave_up_reason)
+        ),
+    )
 
 
 def _curtailed_input(
@@ -196,15 +215,18 @@ async def test_collect_splits_skipped_property_into_gap():
 
 
 @pytest.mark.asyncio
-async def test_collect_none_result_is_a_gap():
-    """A component with no result (the caller maps both give-up and crash to ``None``) is a
-    formalization gap — all its properties unimplemented, no per-property reason."""
+async def test_collect_abandoned_result_is_a_gap_that_says_why():
+    """A component that produced nothing (gave up, or crashed) is a formalization gap — all its
+    properties unimplemented, no per-property reason, but the component-level reason carried
+    through."""
     props = [_prop("p1", "d1")]
     properties, rules, skipped, gave_up, curtailed, dropped = await collect(
-        [_input("C", "autospec_C.spec", props, None)], fetch_verdicts=_fetcher({}))
+        [_input("C", "autospec_C.spec", props, None, gave_up_reason="[3308] on VaultError")],
+        fetch_verdicts=_fetcher({}))
     assert properties == [] and rules == [] and skipped == [] and curtailed == [] and dropped == 0
     assert [g.component for g in gave_up] == ["C"]
     assert [p.title for p in gave_up[0].properties] == ["p1"]
+    assert gave_up[0].reason == "[3308] on VaultError"
 
 
 @pytest.mark.asyncio
@@ -986,3 +1008,54 @@ async def test_parametric_instantiations_are_all_kept_and_purged_when_stale():
     await cb.on_prover_result({"r": _violated("r", "foo")})
     await cb.on_analysis_complete(_violated("r", "foo"), "foo still breaks")
     assert [(r.label, r.analysis) for r in await store.for_rule("r")] == [("foo", "foo still breaks")]
+
+
+# ---------------------------------------------------------------------------
+# Which link shapes reach POU
+#
+# The Solana Prover reports a job as `/jobStatus/<userId>/<jobHash>?anonymousKey=...`, which
+# `prover_output_utility` does not parse: it raises, `fetch_verdicts` swallows the raise and
+# returns {}, and every rule of that run silently lands in the report as UNKNOWN while the job
+# itself is green. Handing POU the job id instead sidesteps its URL parser entirely.
+#
+# These tests pin the link shapes rather than the extraction, because the extraction is somebody
+# else's regex.
+
+
+def test_the_solana_provers_link_yields_the_job_id():
+    assert job_input(
+        "https://prover.certora.com/jobStatus/37632/4e5cb4206b044212b2a15b09df996284"
+        "?anonymousKey=fe1aba47017d97a9be0483c7bac37030c8b5f1dc"
+    ) == "4e5cb4206b044212b2a15b09df996284"
+
+
+def test_the_anonymous_key_is_not_part_of_the_job_id():
+    """An anonymousKey carried into the id fetches nothing — the same symptom by another route."""
+    assert "anonymousKey" not in job_input(
+        "https://prover.certora.com/jobStatus/1/abc123?anonymousKey=deadbeef"
+    )
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        "https://prover.certora.com/output/37632/4e5cb420/?anonymousKey=fe1aba47",
+        "https://prover.certora.com/job/4e5cb420",
+        "4e5cb4206b044212b2a15b09df996284",
+        "/some/local/emv-1-certora/path",
+    ],
+)
+def test_a_shape_pou_already_handles_is_passed_through_untouched(link):
+    """Deliberately not a second implementation of POU's extraction: every shape it parses today —
+    including the local ``emv-`` path its offline mode wants — must reach it verbatim."""
+    assert job_input(link) == link
+
+
+@pytest.mark.asyncio
+async def test_the_fetcher_serves_any_reportable_result():
+    """The fetcher reads nothing off a result but ``run_link``, so it serves every backend with a
+    prover job behind it rather than only the CVL one its annotation used to name."""
+    fetcher = make_prover_fetcher(_FakeAPI({"L1": [_fake_check("r1", NodeStatus.VERIFIED)]}))
+    verdicts = await fetcher(_NonCVLFormalized("L1"))
+    assert verdicts["r1"].outcome == Outcome.GOOD
+    assert await fetcher(_NonCVLFormalized(None)) == {}
