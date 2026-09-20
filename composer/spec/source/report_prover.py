@@ -51,16 +51,25 @@ def _fetch(api: ProverOutputAPI, link: str) -> dict[RuleName, Verdict]:
     return verdicts
 
 
-def _fetch_covering(api: ProverOutputAPI, links: list[str]) -> dict[RuleName, Verdict]:
-    """rule_name -> `Verdict` across the runs that account for one spec, ``links`` newest first.
+def _fetch_covering(
+    api: ProverOutputAPI, newest_first: list[str]
+) -> dict[RuleName, Verdict]:
+    """rule_name -> `Verdict` across the runs that account for one spec.
 
-    Newest run wins per rule, rather than the most terminal outcome: a rule that timed out in
-    one run and verified in a later scoped re-run is verified. Within a single run the rollup
-    stays `Verdict.merge`'s — that is where "most terminal wins" is the right answer.
+    ``newest_first`` must be ordered newest run first, which is the order
+    `composer.spec.source.prover.covering_run_links` returns: it walks the author's history
+    backwards. The whole result rests on that order, because the first verdict found for a rule
+    is the one kept.
+
+    Newest run wins per rule, not the most terminal outcome: a rule that timed out in one run
+    and verified in a later scoped re-run is verified. Within a single run the rollup stays
+    `Verdict.merge`'s, which is where "most terminal wins" is the right answer.
     """
     verdicts: dict[RuleName, Verdict] = {}
-    for link in links:
+    for link in newest_first:
         for name, v in _fetch(api, link).items():
+            # First writer wins, and the newest run is read first, so a later run's verdict
+            # never overwrites it.
             verdicts.setdefault(name, v)
     return verdicts
 
@@ -73,9 +82,9 @@ def make_prover_fetcher(api: ProverOutputAPI | None = None) -> VerdictFetcher[Ge
     api = api or ProverOutputAPI()
 
     async def fetch(formalized: Formalized[GeneratedCVL]) -> dict[RuleName, Verdict]:
-        links = formalized.result.covering_output_links
-        if not links:
+        newest_first = formalized.result.covering_output_links
+        if not newest_first:
             return {}
-        return await asyncio.to_thread(_fetch_covering, api, links)
+        return await asyncio.to_thread(_fetch_covering, api, newest_first)
 
     return fetch

@@ -279,6 +279,9 @@ def covering_run_links(
 ) -> list[str]:
     """Job links of the runs whose results account for ``curr_digest``, newest first.
 
+    The order is part of the contract: the report keeps the first verdict it finds for a rule,
+    so newest first is what makes a later run's verdict win.
+
     The same stretch of history :func:`_iterate_history` walks, so the report attributes
     verdicts to exactly the runs completion was judged on — a scoped run that covered what a
     full run left unproved included. Runs recorded before the ``link`` field existed have
