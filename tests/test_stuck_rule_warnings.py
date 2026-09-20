@@ -183,17 +183,17 @@ def test_reminder_names_the_stuck_rule_and_the_two_standing_options():
 
 def test_reminder_names_contributed_tools_sorted():
     """Sorted, so the reminder reads the same whatever order plugins bound in."""
-    body = "\n".join(stuck_rule_reminder([R1], delegation_tools=["zz_search", "aa_search"]))
+    body = "\n".join(stuck_rule_reminder([R1], plugin_tools=["zz_search", "aa_search"]))
     assert "aa_search, zz_search" in body
 
 
-def test_reminder_says_nothing_about_handing_off_without_contributed_tools():
+def test_reminder_lists_no_tools_without_contributed_tools():
     body = "\n".join(stuck_rule_reminder([R1]))
-    assert "handing off" not in body
+    assert "Plugins have also given you" not in body
 
 
 def test_reminder_footnotes_compacted_history_last():
     lines = stuck_rule_reminder(
-        [R1], delegation_tools=["dz_search"], seen_post_compaction_history=True
+        [R1], plugin_tools=["some_search"], seen_post_compaction_history=True
     )
     assert "summarization" in lines[-1]
