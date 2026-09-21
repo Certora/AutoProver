@@ -1335,6 +1335,17 @@ class ImportSwap:
     def subject(self) -> str:
         return self.name
 
+    @property
+    def replacement(self) -> str:
+        """The declaration that binds :attr:`name` to the stand-in, without the ``use`` keyword.
+
+        ``as`` is omitted when the stand-in's own last segment is already the name: ``use x::y as y``
+        compiles, and it reads as though something was renamed when nothing was. A munge diff is
+        read by people.
+        """
+        tail = self.stand_in.rsplit("::", 1)[-1]
+        return self.stand_in if tail == self.name else f"{self.stand_in} as {self.name}"
+
     def describe(self) -> str:
         return f"`{self.name}` resolves to {self.stand_in} throughout this file"
 
@@ -1510,8 +1521,7 @@ def apply_import_swap(source: str, edit: ImportSwap) -> ImportSwapAttempt:
     """
     landed = re.compile(
         rf'#\[cfg\(feature = "{re.escape(edit.feature)}"\)\]\n[ \t]*'
-        rf"(?:pub(?:\s*\([^)]*\))?\s+)?use\s+{re.escape(edit.stand_in)}\s+as\s+"
-        rf"{re.escape(edit.name)}\s*;"
+        rf"(?:pub(?:\s*\([^)]*\))?\s+)?use\s+{re.escape(edit.replacement)}\s*;"
     )
     if (already := landed.search(source)) is not None:
         return AlreadyMunged(function=edit.name, line=source[: already.start()].count("\n") + 2)
@@ -1553,7 +1563,7 @@ def apply_import_swap(source: str, edit: ImportSwap) -> ImportSwapAttempt:
     lines = [gate_off, at.group(0)]
     if kept:
         lines += [gate_on, f'{indent}{keyword} {parsed.prefix}{{{", ".join(kept)}}};']
-    lines += [gate_on, f"{indent}{keyword} {edit.stand_in} as {edit.name};"]
+    lines += [gate_on, f"{indent}{keyword} {edit.replacement};"]
     return Munged(
         source=before + "\n".join(lines) + source[at.end() :],
         line=before.count("\n") + 1 + sum(line.count("\n") + 1 for line in lines[:-1]),

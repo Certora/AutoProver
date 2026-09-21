@@ -15,7 +15,9 @@ that performs a CPI and then updates its own state, which is most of them; it is
 also blocks**, for any function that multiplies in `i128` — narrower, and already filed as CERT-10103
 with a fix in flight, which makes it the only entry in this group with a known landing. **P8 blocks
 nothing today and blocks a change we wanted**: two shipped flags that defeat each other, measured
-rather than argued, and named by a TODO in the prover's own source.
+rather than argued, and named by a TODO in the prover's own source. **P9 blocks a whole shape of
+property** — anything that asserts a handler *succeeds* — and it is the uncomfortable one, because
+the mechanism it points at is the fork P1 says we depend on.
 
 **Group U — `prover_output_utility`.** The library the report stack reads verdicts through. One
 entry, and unlike the others it was corrupting our own output rather than merely obstructing us;
@@ -40,6 +42,7 @@ the write-up gives the line number rather than the name.
 | [P6](#p6) | A summarized CPI havocs the caller's *deserialized* `Account<T>`, not just the account buffer | **blocking** for any handler with a CPI |
 | [P7](#p7) | A checked `i128` multiply is rejected outright — `__muloti4` is not modelled | **major** — fix in flight (CERT-10103) |
 | [P8](#p8) | `-solanaTACSoundSignedMath` disables most of `-solanaTACMathInt`; together they turn a 7-minute green run into a 2-hour timeout | **major** — blocks adopting the flag (CERT-10061) |
+| [P9](#p9) | Binding a handler's `Result` makes the rule vacuous, so an *acceptance* property is unstatable | **major** |
 | [U1](#u1) | `extract_job_id_from_url` cannot parse a Solana Prover job link | **major**, worked around |
 | [T1](#t1) | Tuning files are spelled for pre-2.2 `solana-program` paths | major |
 | [T2](#t2) | A canonical tuning file names one specific on-chain program | hygiene |
@@ -645,6 +648,78 @@ this prover is not simply slow on nonlinear arithmetic, and the two-hour collaps
 specific to the flag combination rather than a property of the queries. It is also the reason the
 author's charter ranks the portfolio after the lemma on grounds of what each leaves behind for a
 reviewer, and not — as it first did — on cost.
+
+---
+
+## P9
+
+### Binding a handler's `Result` makes the rule vacuous, so an *acceptance* property is unstatable
+
+Found by a pinned run of `test_scenarios/solana_vault_idl` on 2026-09-21 (thread
+`cvlr_e924521c4199`, nine prover jobs), which is also the run that exercised the `swap_import` munge
+kind. Seven of nine properties verified; the three that did not are all this defect, and the author
+recorded the evidence as three skips rather than as findings.
+
+**The delta is a control group, not an anecdote.** Six rules share the same prologue, build the same
+`Deposit` accounts struct from the same unconstrained `AccountInfo`s, and call the same handler. The
+six that consume the result with `.unwrap()` all return `VERIFIED` and all pass `rule_sanity` on
+three consecutive builds. The one that instead binds it —
+
+```rust
+let res = crate::vault_program::deposit(ctx, amount);
+cvlr_assert!(res.is_ok());
+```
+
+— returns `SANITY_FAILED`: the rule is vacuous, so it proves nothing. The success path *is*
+reachable; the other six rules' own vacuity checks establish that. It is not reachable in a rule
+that looks at the `Result`.
+
+**Why that is worse than it sounds.** `.unwrap()` assumes the handler succeeded. An acceptance
+property — "a non-authority signer can deposit", "this input is not rejected" — is trying to
+*establish* that. So the only way to consume the value assumes the conclusion, and the property
+cannot be stated at all. Nor can it honestly be replaced by `deposit(..).unwrap();
+cvlr_satisfy!(true);`, which passes whether or not the property holds; the run's author identified
+that substitution and declined it, and the harness judge confirmed it would have rejected the draft
+had it been made.
+
+Four formulations were tried and are recorded in the run's skips: through Anchor's generated
+`try_accounts` and directly; with the validation half `.unwrap()`ed away; and with
+`core::mem::forget(res)` after reading the discriminant, on the theory that the drop glue was the
+problem. The last is worth repeating because it narrows the cause: **forgetting the value instead of
+dropping it did not help**, so this is about the encoding rather than the destructor.
+
+**The same boundary is unreliable in the other direction too.** Rules driving
+`crate::Deposit::try_accounts` — Anchor's generated account validation, which returns the same
+`Result` type — flip verdict under edits that cannot affect them. One rule went `VIOLATED` →
+`VERIFIED` → `VIOLATED` across three builds, the last transition on a byte-identical body (a
+diagnostic `clog!` was deleted and an `early_panic` landed on a function the rule never calls). Its
+final counterexample shows validation **accepting** an execution in which `depositor.is_signer = 0`
+*and* `depositor.is_writable = 0` — two independent constraints, `Signer::try_from`'s and
+`#[account(mut)]`'s, bypassed simultaneously, with the returned `Signer` confirmed to be the account
+in that slot. Nothing in `#[account(mut)] pub depositor: Signer<'info>` can disable either. What has
+failed is the ability to observe the validation's outcome, not the validation.
+
+**Suspected mechanism, and why it is uncomfortable.** `Result<T, anchor_lang::error::Error>` is
+niche-encoded, and this workspace depends on `Certora/anchor`, whose `Error` is **unboxed** — so the
+discriminant lives among the fields of an inlined `AnchorError`, which carries `String`s. Every
+`[3308] illegal dereference of an absolute address` this unit saw was the analysis losing exactly
+those `String` buffers, at the dangling `0x1` pointer `String::new()` starts from. The fork's
+unboxing is the remedy for [P1](#p1) and the reason an Anchor handler is analyzable at all; if it is
+also what makes the handler's `Result` unobservable, then the two entries are about one design
+choice with effects in both directions, and that is the shape of the question to put upstream.
+
+**What it costs us.** Every acceptance or reachability property, on every Anchor program — the class
+that answers "is this guard over-strict?", which is half of what an audit is for. Also every
+property enforced by Anchor's generated account validation rather than by the handler body: the
+signer check, `#[account(mut)]`, `seeds`/`bump`, `has_one`. On the vault those were properties 4, 5
+and 9 of nine.
+
+**Two lesser limits recorded alongside it**, both real and neither previously written down.
+`find_program_address` — the only way to speak of the *canonical* bump rather than the stored one —
+iterates up to 255 times, far past a `loop_iter` of 2, so a property worded in terms of the canonical
+PDA is out of reach and only the stored-bump form is statable. And that form re-invokes
+`Pubkey::create_program_address` inside the rule, which needs the Prover to relate two invocations of
+the `sol_create_program_address` syscall; the run's vacuity left that unconfirmed.
 
 ---
 
