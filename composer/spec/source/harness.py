@@ -702,7 +702,7 @@ def _autosetup_key(
     prover_opts: ProverOptions,
 ) -> str:
     return "autosetup-" + string_hash(
-        app.model_dump_json() + "\x00" + "\x00".join(prover_opts.extra_args)
+        app.model_dump_json() + "\x00" + "\x00".join(prover_opts.cli_args())
     )
 
 #: Cache key for the AutoSetup phase. Includes ``prover_opts`` so cloud and

@@ -10,6 +10,7 @@ the per-provider modules can import it without an import cycle.
 """
 
 from typing import Protocol, TYPE_CHECKING, Callable, Literal
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import cached_property
 from composer.input.files import FileUploader
@@ -45,6 +46,26 @@ class ProviderService(Protocol):
         every time). The harness assembles this into the run-wide retry
         policy (``composer.io.context.install_retry_policy``)."""
         ...
+
+def payload_error_type(body: object) -> str | None:
+    """The ``error.type`` discriminator of a provider error payload, or ``None`` for a
+    body of any other shape (an SDK leaves it as the raw text when the payload does not
+    parse).
+
+    An error the server reports part-way through a stream rides the already-open 200
+    response, and the SDK builds the exception from that response — so the status code
+    carries none of the meaning and the transient/deterministic split lives in the
+    payload. The ``{"error": {"type": ...}}`` shape is common to the Stainless SDKs;
+    which type values count as transient is each provider's own vocabulary.
+    """
+    if not isinstance(body, Mapping):
+        return None
+    error = body.get("error")
+    if not isinstance(error, Mapping):
+        return None
+    error_type = error.get("type")
+    return error_type if isinstance(error_type, str) else None
+
 
 class ProviderServiceBase(ABC):
     def __init__(self,

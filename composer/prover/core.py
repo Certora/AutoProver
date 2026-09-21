@@ -25,7 +25,7 @@ import sys
 import tempfile
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Protocol, cast, override, Awaitable
 from abc import ABC, abstractmethod
@@ -46,6 +46,7 @@ from graphcore.utils import ainvoke
 from prover_output_utility import cloud_server_for_env
 
 from composer.prover.analysis import analyze_cex_raw
+from composer.certora_env import ProverApp
 from composer.prover.cloud import CloudJobError, cloud_results
 from composer.prover.ptypes import RuleResult, RulePath, StatusCodes
 from composer.prover.results import read_and_format_run_result
@@ -55,23 +56,31 @@ from composer.prover.prover_protocol import ProverResult
 _logger = logging.getLogger(__name__)
 
 
-DEFAULT_GLOBAL_TIMEOUT: float = 7200.0
+DEFAULT_GLOBAL_TIMEOUT: int = 1500  # 25 minutes
 
 
-@dataclass
+@dataclass(frozen=True)
 class ProverOptions:
-    extra_args: list[str] = field(default_factory=list)
+    app: ProverApp
+    server: str | None = None
+    global_timeout: int | None = None
 
     @property
     def cloud(self) -> bool:
-        return "--server" in self.extra_args
+        return self.server is not None
 
     @property
-    def global_timeout(self) -> float:
-        if "--global_timeout" not in self.extra_args:
-            return DEFAULT_GLOBAL_TIMEOUT
-        idx = self.extra_args.index("--global_timeout")
-        return float(self.extra_args[idx + 1])
+    def runtime_bound(self) -> int:
+        return DEFAULT_GLOBAL_TIMEOUT if self.global_timeout is None else self.global_timeout
+
+    def cli_args(self) -> list[str]:
+        """The arguments these options contribute to the CLI invocation."""
+        args: list[str] = []
+        if self.global_timeout is not None:
+            args += ["--global_timeout", str(self.global_timeout)]
+        if self.server is not None:
+            args += ["--server", self.server]
+        return args
 
 
 GLOBAL_PROVER_TIMEOUT_ENV = "AUTOPROVER_GLOBAL_PROVER_TIMEOUT"
@@ -81,7 +90,7 @@ def _resolved_global_prover_timeout() -> int:
     """Global prover timeout in seconds: ``DEFAULT_GLOBAL_TIMEOUT``, or the integer value of
     ``AUTOPROVER_GLOBAL_PROVER_TIMEOUT`` when that env var is set. A non-integer env value is
     ignored with a warning."""
-    default = int(DEFAULT_GLOBAL_TIMEOUT)
+    default = DEFAULT_GLOBAL_TIMEOUT
     raw = os.environ.get(GLOBAL_PROVER_TIMEOUT_ENV)
     if raw is None:
         return default
@@ -92,16 +101,16 @@ def _resolved_global_prover_timeout() -> int:
         return default
 
 
-def make_prover_options(*, cloud: bool) -> ProverOptions:
+def make_prover_options(*, cloud: bool, app: ProverApp) -> ProverOptions:
     """Build prover options. Cloud runs get a global prover timeout and the
     certoraRun ``--server`` resolved from the deployment env."""
-    extras: list[str] = []
-    if cloud:
-        extras = [
-            "--global_timeout", str(_resolved_global_prover_timeout()),
-            "--server", cloud_server_for_env()
-        ]
-    return ProverOptions(extra_args=extras)
+    if not cloud:
+        return ProverOptions(app=app)
+    return ProverOptions(
+        app=app,
+        server=cloud_server_for_env(),
+        global_timeout=_resolved_global_prover_timeout(),
+    )
 
 
 @dataclass
@@ -473,6 +482,7 @@ async def run_prover_inner(
     on_err: Callable[[int | None, str, str], None],
     on_stdout: Callable[[str], Awaitable[None]],
     timeout: float,
+    app: ProverApp,
 ) -> tuple[ProverResult | str, str]:
     # 3-5. Spawn async subprocess, stream stdout, collect stderr
     wrapper_script = Path(__file__).parent / "certoraRunWrapper.py"
@@ -480,7 +490,7 @@ async def run_prover_inner(
     with tempfile.NamedTemporaryFile("rb", suffix=".json") as output_file:
         async with _bounded_subprocess(
             sys.executable,
-            str(wrapper_script), str(output_file.name), *args,
+            str(wrapper_script), str(output_file.name), app, *args,
             cwd=str(folder),
             timeout=timeout,
             stdout=asyncio.subprocess.PIPE,
@@ -616,8 +626,8 @@ async def run_prover(
         str — error message
     """
 
-    # 1. Build effective args. extra_args is already fully resolved by make_prover_options.
-    effective_args = args + prover_opts.extra_args
+    # 1. Build effective args.
+    effective_args = args + prover_opts.cli_args()
     # On the cloud path we poll for results ourselves (step 7), so certoraRun must submit and return
     # the link rather than block on the verdict. certoraRun force-enables wait_for_results when it
     # detects GITHUB_ACTION in the environment, which would deadlock against that polling — pin it off.
@@ -634,7 +644,7 @@ async def run_prover(
     # The same bound the result poller uses (step 7): whatever the run is allowed
     # to take, plus slack. It is a backstop against a wedged local phase, not a
     # budget -- a healthy cloud submit finishes in minutes.
-    subprocess_timeout = prover_opts.global_timeout + 5 * 60
+    subprocess_timeout = prover_opts.runtime_bound + 5 * 60
     try:
         run_result, stdout = await run_prover_inner(
             folder,
@@ -642,6 +652,7 @@ async def run_prover(
             lambda ret_code, stdout, stderr: _logger.error("Process failed %d\nstdout:%s\nstderr:%s", ret_code, stdout, stderr),
             callbacks.on_stdout_line,
             subprocess_timeout,
+            prover_opts.app,
         )
     except ProverSubprocessTimeout as e:
         # Returned rather than raised: the agent reads this as a tool result and
@@ -674,7 +685,7 @@ async def run_prover(
         results_cm = cloud_results(
             run_result["link"],
             poll_callback=callbacks.on_cloud_poll,
-            poll_timeout=prover_opts.global_timeout + 5 * 60,
+            poll_timeout=prover_opts.runtime_bound + 5 * 60,
         )
     else:
         if not run_result["is_local_link"]:
@@ -692,7 +703,7 @@ async def run_prover(
     # subprocess wall-clock).
     try:
         async with results_cm as (emv_path, runtime_ms):
-            parsed = read_and_format_run_result(emv_path)
+            parsed = read_and_format_run_result(emv_path, prover_opts.app)
 
             if isinstance(parsed, str):
                 return f"Failed to parse prover results: {parsed}"

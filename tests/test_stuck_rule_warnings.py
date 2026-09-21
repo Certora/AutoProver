@@ -16,7 +16,7 @@ The loop this covers used to be inline in ``verify_spec`` and carried three defe
 from composer.prover.ptypes import RulePath
 from composer.spec.source.prover import (
     NagMarker, ProverHistoryItem, ProverRunLog, RuleSelection, STUCK_RULE_NAG_THRESHOLD,
-    stuck_rule_warnings,
+    stuck_rule_reminder, stuck_rule_warnings,
 )
 
 R1 = RulePath(rule="r1")
@@ -167,3 +167,33 @@ def test_reports_history_older_than_the_last_compaction() -> None:
 
 def test_no_stuck_rules_is_a_no_op() -> None:
     assert _warn({}, [_run((R1, "TIMEOUT"))]) == (set(), False)
+
+
+# ---------------------------------------------------------------------------
+# stuck_rule_reminder: what the author is actually told
+# ---------------------------------------------------------------------------
+
+def test_reminder_names_the_stuck_rule_and_the_two_standing_options():
+    lines = stuck_rule_reminder([R1])
+    body = "\n".join(lines)
+    assert "identical failures on the last 3 runs" in body
+    assert R1.pprint() in body
+    assert "change your approach" in body and "skip the property" in body
+
+
+def test_reminder_names_contributed_tools_sorted():
+    """Sorted, so the reminder reads the same whatever order plugins bound in."""
+    body = "\n".join(stuck_rule_reminder([R1], plugin_tools=["zz_search", "aa_search"]))
+    assert "aa_search, zz_search" in body
+
+
+def test_reminder_lists_no_tools_without_contributed_tools():
+    body = "\n".join(stuck_rule_reminder([R1]))
+    assert "Plugins have also given you" not in body
+
+
+def test_reminder_footnotes_compacted_history_last():
+    lines = stuck_rule_reminder(
+        [R1], plugin_tools=["some_search"], seen_post_compaction_history=True
+    )
+    assert "summarization" in lines[-1]

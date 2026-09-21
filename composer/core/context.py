@@ -1,28 +1,10 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import hashlib
 
 from graphcore.tools.vfs import VFSAccessor
 
 from composer.core.state import AIComposerState
 from composer.core.validation import CodegenValidation
-from composer.prover.core import DEFAULT_GLOBAL_TIMEOUT
-
-@dataclass
-class ProverOptions:
-    capture_output: bool
-    keep_folder: bool
-    extra_args: list[str] = field(default_factory=list)
-
-    @property
-    def cloud(self) -> bool:
-        return "--server" in self.extra_args
-
-    @property
-    def global_timeout(self) -> float:
-        if "--global_timeout" not in self.extra_args:
-            return DEFAULT_GLOBAL_TIMEOUT
-        idx = self.extra_args.index("--global_timeout")
-        return float(self.extra_args[idx + 1])
 
 @dataclass
 class AIComposerContext:

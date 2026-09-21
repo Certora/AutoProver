@@ -19,6 +19,12 @@ from prover_output_utility.models import JobStatus as ProverJobStatus # type: ig
 from certora_autosetup.cache.cache_fs import cache_path, get_fs
 from .constants import DIR_CERTORA_INTERNAL, DIR_JOB_RESULT_CACHE
 from .enhanced_config_manager import ConfigManager, ProverJobSpec
+from .early_stop import (
+    EarlyStop,
+    EarlyStopChecker,
+    FirstViolationCheck,
+    PreprocessingCheck,
+)
 from .job_utils import extract_job_url_from_text
 from .prover_runner import (
     EarlyTerminationCallback,
@@ -50,6 +56,16 @@ class CloudProverRunner(ProverRunner):
     # Timeout for job completion including job queue time - 150 minutes
     JOB_TIMEOUT_SECONDS = 7200 + 1800
 
+    # Early-stop defaults (see early_stop.py).
+    #
+    # Preprocessing watchdog budget: time spent in RUNNING without the prover producing a
+    # treeview. Healthy jobs produce one within minutes; a preprocessing stall never does.
+    # Budget <= 0 disables the watchdog. Env-overridable via AUTOSETUP_PREPROCESSING_BUDGET_SECONDS.
+    PREPROCESSING_BUDGET_SECONDS = 1800
+    # How often a checker re-probes a running job (treeview / partial checks).
+    PREPROCESSING_PROBE_SECONDS = 90
+    VIOLATION_PROBE_SECONDS = 30
+
     def __init__(
         self,
         project_root: Path,
@@ -58,6 +74,7 @@ class CloudProverRunner(ProverRunner):
         cloud_server: str | None = None,
         disable_cache: bool = False,
         cancel_jobs_on_cleanup: bool = True,
+        stop_on_first_violation: bool = False,
     ):
         """
         Initialize cloud job manager.
@@ -72,6 +89,9 @@ class CloudProverRunner(ProverRunner):
                 Autosetup does not hardcode a server.
             disable_cache: If True, disable caching (useful for tests)
             cancel_jobs_on_cleanup: If True, actually cancel jobs on Certora's servers during cleanup (default: True)
+            stop_on_first_violation: If True, cancel a still-running job as soon as any rule is
+                VIOLATED (one violation is enough to revise results) instead of waiting for every
+                rule to finish. Off by default.
         """
         super().__init__(project_root, config_manager, use_local_api=False)
         self.component = "CloudRunner"
@@ -89,6 +109,14 @@ class CloudProverRunner(ProverRunner):
         self.disable_cache = disable_cache
         self.cancel_jobs_on_cleanup = cancel_jobs_on_cleanup
         self.job_wait_timeout = self.JOB_TIMEOUT_SECONDS
+
+        # Early-stop configuration (see _build_early_stop_checkers / early_stop.py). Only the
+        # preprocessing budget is env-overridable; the probe cadences are fixed constants.
+        self.stop_on_first_violation = stop_on_first_violation
+        self.preprocessing_budget = int(os.environ.get(
+            "AUTOSETUP_PREPROCESSING_BUDGET_SECONDS", self.PREPROCESSING_BUDGET_SECONDS))
+        self.preprocessing_probe_interval = self.PREPROCESSING_PROBE_SECONDS
+        self.violation_probe_interval = self.VIOLATION_PROBE_SECONDS
 
         # Progress tracking counters (read from spinner thread, written under asyncio lock)
         self._active_jobs = 0
@@ -821,21 +849,65 @@ class CloudProverRunner(ProverRunner):
 
             # Wait for job completion with configurable timeout
             job_wait_timeout = self.job_wait_timeout
-            success, prover_start_time, prover_finish_time = await self._wait_for_job_completion_with_api(
+            success, early_stop = await self._wait_for_job_completion_with_api(
                 prover_api, job_url, job_wait_timeout
             )
 
             duration = time.time() - start_time
 
-            # Fresh run (cache hits short-circuit before this method) — record the
-            # prover's server-reported runtime, computed from the job's start/finish
-            # timestamps (JobInfo.runtime). For a completed job this read is cheap
-            # (cache-served from polling). Best-effort; the exception path below has
-            # nothing to record anyway.
+            # Fresh run (cache hits short-circuit before this method) — record the prover's
+            # server-reported runtime and read its start/finish timestamps from the same
+            # JobInfo. Best-effort; the exception path below has nothing to record anyway.
+            prover_start_time = None
+            prover_finish_time = None
             try:
-                self._record_prover_runtime_seconds(prover_api.get_job_info(job_url).runtime)
+                job_info = prover_api.get_job_info(job_url)
+                self._record_prover_runtime_seconds(job_info.runtime)
+                prover_start_time = getattr(job_info, "start_time", None)
+                prover_finish_time = getattr(job_info, "finish_time", None)
             except Exception as e:
                 self.log(f"Could not record prover runtime for usage ledger: {e}", "DEBUG")
+
+            if early_stop is not None:
+                # A checker ended the wait before the job reached a terminal status (and the
+                # loop cancelled it if the checker asked). Not a failure — record it plainly.
+                job_handle.status = JobStatus.EARLY_STOPPED
+                msg = (
+                    f"Job stopped early ({early_stop.reason}): {early_stop.message}; "
+                    f"job {'cancelled' if early_stop.cancel else 'left running'} after {duration:.1f}s"
+                )
+                log_with_contract(self.component, "info", job_spec.contract_name, msg)
+
+                # Collect whatever rule results the job produced the standard way (empty for a
+                # preprocessing stall; the violation and any finished rules for a first violation).
+                rule_results = self.parse_rule_results_from_job(job_url)
+
+                # Drop the cached submission so a deliberate future run submits fresh instead
+                # of re-attaching to this job.
+                if early_stop.drop_submission_cache and not self.disable_cache:
+                    await self._remove_submission_cache(cache_key)
+
+                return ProverResult(
+                    job_handle=job_handle,
+                    success=False,
+                    report_path=None,
+                    output_data={
+                        "job_url": job_url,
+                        "output": submission_result.output if submission_result else "",
+                        "return_code": submission_result.return_code
+                        if submission_result
+                        else 0,
+                        "rule_count": len(rule_results),
+                        "prover_start_time": prover_start_time,
+                        "prover_finish_time": prover_finish_time,
+                    },
+                    job_spec=job_spec,
+                    stopped_early=True,
+                    early_stop_reason=early_stop.reason,
+                    rule_results=rule_results,
+                    duration=duration,
+                    transformed_result=None,
+                )
 
             if success:
                 # Job completed successfully, parse results
@@ -947,19 +1019,77 @@ class CloudProverRunner(ProverRunner):
                 transformed_result=None,
             )
 
+    def _build_early_stop_checkers(
+        self, prover_api: ProverOutputAPI, job_url: str
+    ) -> List[EarlyStopChecker]:
+        """Build the ordered list of early-stop conditions to consult while a job runs.
+
+        Order is precedence when two conditions somehow fire on the same tick; in practice they
+        are disjoint in time (the preprocessing check fires only while there are no rules yet,
+        the violation check only once rules exist). An empty list means the wait polls to the
+        job's terminal status with no early stop.
+        """
+        checkers: List[EarlyStopChecker] = []
+        if self.preprocessing_budget > 0:
+            checkers.append(PreprocessingCheck(
+                prover_api,
+                job_url,
+                budget_seconds=self.preprocessing_budget,
+                probe_interval_seconds=self.preprocessing_probe_interval,
+                log=self.log,
+            ))
+        if self.stop_on_first_violation:
+            checkers.append(FirstViolationCheck(
+                prover_api,
+                job_url,
+                probe_interval_seconds=self.violation_probe_interval,
+                log=self.log,
+            ))
+        return checkers
+
+    async def _run_early_stop_checkers(
+        self, checkers: List[EarlyStopChecker], job_info: Any
+    ) -> Optional[EarlyStop]:
+        """Consult each checker for the current poll tick; the first to return a decision wins.
+
+        Each checker's ``observe`` runs in the poll executor with a bounded timeout so a hung
+        probe cannot stall the wait loop — a timed-out or raising checker is treated as "no
+        decision this tick" and retried next tick.
+        """
+        for checker in checkers:
+            try:
+                decision = await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(None, checker.observe, job_info),
+                    timeout=60,
+                )
+            except asyncio.TimeoutError:
+                decision = None  # probe hung; try again next tick
+            except Exception as e:
+                self.log(f"Early-stop checker {type(checker).__name__} raised: {e}", "WARNING")
+                decision = None
+            if decision is not None:
+                return decision
+        return None
+
     async def _wait_for_job_completion_with_api(
         self, prover_api: ProverOutputAPI, job_url: str, timeout_seconds: int
-    ) -> tuple[bool, Optional[float], Optional[float]]:
+    ) -> tuple[bool, Optional[EarlyStop]]:
         """Wait for job completion using ProverOutputAPI.
 
         Returns:
-            Tuple of (success, prover_start_time, prover_finish_time).
-            Times may be None if unavailable.
+            Tuple of ``(success, early_stop)``. ``early_stop`` is None on a normal
+            completion/failure/timeout; when an early-stop checker fired it holds that
+            checker's decision (and ``success`` is False). The caller reads prover
+            start/finish timestamps from the job info it fetches separately.
         """
         import asyncio
 
         start_time = time.time()
         poll_interval = 10  # Poll every 10 seconds for faster completion detection
+
+        # Conditions that can end the wait before the job reaches a terminal status
+        # (preprocessing stall, first violation, ...). Empty ⇒ no early stop.
+        early_stop_checkers = self._build_early_stop_checkers(prover_api, job_url)
 
         while time.time() - start_time < timeout_seconds:
             try:
@@ -996,10 +1126,10 @@ class CloudProverRunner(ProverRunner):
                         # Note: HALTED jobs are treated as successful in PreAudit because they often contain
                         # partial results for some rules that can still be analyzed
                         self.log(f"Job completed successfully: {job_url}")
-                        return True, prover_start, prover_finish
+                        return True, None
                     elif job_info.status in [ProverJobStatus.FAILED, ProverJobStatus.CANCELED, ProverJobStatus.SERVICE_UNAVAILABLE, ProverJobStatus.UPLOAD_FAILED]:
                         self.log(f"Job failed with status {job_info.status}: {job_url}")
-                        return False, prover_start, prover_finish
+                        return False, None
                     # Check if job has completed but with an unrecognized status
                     elif hasattr(job_info, "is_completed") and job_info.is_completed:
                         self.log(
@@ -1007,8 +1137,20 @@ class CloudProverRunner(ProverRunner):
                             f"treating as failed: {job_url}",
                             "WARNING"
                         )
-                        return False, prover_start, prover_finish
-                    # If status is 'RUNNING', 'QUEUED', etc., continue waiting
+                        return False, None
+
+                    # Status is non-terminal ('RUNNING', 'QUEUED', ...). Consult the early-stop
+                    # checkers; if one fires, cancel the job (when it asked) and end the wait.
+                    early_stop = await self._run_early_stop_checkers(early_stop_checkers, job_info)
+                    if early_stop is not None:
+                        self.log(
+                            f"⏱ Early stop ({early_stop.reason}) for {job_url}: {early_stop.message}",
+                            "INFO",
+                        )
+                        if early_stop.cancel:
+                            if not await self._cancel_cloud_job(job_url):
+                                self.log(f"Could not cancel {job_url}; abandoning it anyway", "WARNING")
+                        return False, early_stop
                 else:
                     self.log(f"No job info returned for {job_url}")
 
@@ -1022,12 +1164,12 @@ class CloudProverRunner(ProverRunner):
                     self.log(
                         f"Authentication issue detected, assuming job completed: {job_url}"
                     )
-                    return True, None, None
+                    return True, None
                 await asyncio.sleep(poll_interval)
 
         # Timeout reached
         self.log(f"Job completion timeout after {timeout_seconds}s", "WARNING")
-        return False, None, None
+        return False, None
 
     def _create_failed_result(
         self, job_spec: ProverJobSpec, cache_key: str, error_msg: str
