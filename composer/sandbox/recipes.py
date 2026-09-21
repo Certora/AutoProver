@@ -16,6 +16,7 @@ import os
 import shutil
 from pathlib import Path
 
+from composer.layout import INTERNAL_DIR
 from composer.sandbox.policy import SandboxPolicy
 
 # Benign build vars passed through to the child (values read from the current env).
@@ -34,6 +35,15 @@ DEFAULT_ENV_PASSTHROUGH: tuple[str, ...] = (
     "SSL_CERT_FILE",
     "SSL_CERT_DIR",
 )
+
+#: The private, per-run scratch a sandboxed build gets *under the workdir* (see
+#: :func:`sandbox_cargo_home` and the ``TMPDIR`` redirect in :func:`rust_build_policy` for why each
+#: is private rather than shared). Placed under ``INTERNAL_DIR`` with every other generated
+#: non-deliverable, which is what keeps hundreds of MB of cargo registry out of both the source
+#: tools' view and the prover's upload — neither is source, so being skipped is the point.
+SANDBOX_INTERNAL_DIR = INTERNAL_DIR / "sandbox"
+SANDBOX_CARGO_DIR = SANDBOX_INTERNAL_DIR / "cargo"
+SANDBOX_TMP_DIR = SANDBOX_INTERNAL_DIR / "tmp"
 
 # Read-only system directories the toolchain + its dynamic linker need. ``/etc`` is
 # included because glibc NSS (``getpwuid`` via ``getuser``, CA-cert lookup) reads
@@ -73,7 +83,7 @@ def sandbox_cargo_home(workdir: str | Path) -> Path:
     a shared *read-only* index/cache to avoid re-download is a deferred optimization
     (command-sandbox.md §11 item 5).
     """
-    return Path(workdir).resolve() / ".sandbox_cargo"
+    return Path(workdir).resolve() / SANDBOX_CARGO_DIR
 
 
 def shared_cargo_ro_paths(cargo_home: str | Path) -> tuple[Path, ...]:
@@ -93,6 +103,41 @@ def shared_cargo_ro_paths(cargo_home: str | Path) -> tuple[Path, ...]:
     return (bin_dir,) if bin_dir.is_dir() else ()
 
 
+def git_config_ro_paths(home: str | Path) -> tuple[Path, ...]:
+    """Read-only paths of the global git config files a git-dependency build needs.
+
+    Cargo resolves a ``[patch.crates-io]`` git source through libgit2. libgit2
+    reads the global config before it will open the cached repository. If that
+    read is denied, it does not fall back to "no user config" — it reports the
+    source as unopenable, and cargo surfaces that as:
+
+        Unable to update https://…: can't checkout from '…': you are in the offline mode (--offline)
+
+    That looks like a network error even when the cache is fully warm, so
+    pre-fetching does not help. Any project that patches a dependency onto a
+    git repo hits this, including an Anchor fork.
+
+    Grant the files themselves, never ``$HOME`` and never ``~/.config``.
+    Landlock PathBeneath is hierarchical, so granting a directory would give
+    an untrusted ``build.rs`` the rest of the home directory. The remaining
+    exposure is the git config itself: it can name a credential helper, and a
+    badly configured checkout can put a token in ``url.*.insteadOf``. That is
+    the cost of building a git dependency at all.
+
+    Do not substitute a private ``$HOME``. That silently relocates rustup's
+    and ``cargo-build-sbf``'s toolchain lookups, and the build then fails much
+    later complaining about downloading Rust.
+    """
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    candidates = [
+        Path(home) / ".gitconfig",
+        Path(xdg) / "git" / "config" if xdg else Path(home) / ".config" / "git" / "config",
+    ]
+    if override := os.environ.get("GIT_CONFIG_GLOBAL"):
+        candidates.append(Path(override))
+    return tuple(p for p in candidates if p.exists())
+
+
 def rust_build_policy(
     workdir: str | Path,
     *,
@@ -109,8 +154,9 @@ def rust_build_policy(
 
     Grants: ``workdir`` + the device nodes (+ ``extra_rw``) read-write; the Rust
     toolchain (``RUSTUP_HOME``), the shared cargo **bin/** only (not the cargo-home
-    root — see :func:`shared_cargo_ro_paths`), Solana platform-tool directories, the
-    system dirs, and ``extra_ro`` read-only. Non-existent paths are dropped.
+    root — see :func:`shared_cargo_ro_paths`), the global git config files (see
+    :func:`git_config_ro_paths`), Solana platform-tool directories, the system dirs,
+    and ``extra_ro`` read-only. Non-existent paths are dropped.
 
     With ``offline`` (the default — the sandbox has no network, §5),
     ``CARGO_NET_OFFLINE=true`` is set in the child env. Spelled ``true`` because cargo parses
@@ -130,6 +176,8 @@ def rust_build_policy(
         rustup,
         # Shared cargo: bin/ only — never the home root (credentials.toml).
         *shared_cargo_ro_paths(cargo),
+        # The global git config, without which a git dependency cannot be opened at all.
+        *git_config_ro_paths(home),
         # cargo-build-sbf's downloaded sBPF platform-tools (layout varies by version).
         home / ".cache" / "solana",
         home / ".local" / "share" / "solana",
@@ -150,7 +198,7 @@ def rust_build_policy(
     # — notably the linker, which writes to $TMPDIR (default /tmp) during `cargo build` —
     # work without granting the shared /tmp (which may hold host/other-run secrets and
     # would defeat the escape test). Created here so $TMPDIR points at an existing dir.
-    sandbox_tmp = wd / ".sandbox_tmp"
+    sandbox_tmp = wd / SANDBOX_TMP_DIR
     sandbox_tmp.mkdir(parents=True, exist_ok=True)
     for var in ("TMPDIR", "TMP", "TEMP"):
         env[var] = str(sandbox_tmp)

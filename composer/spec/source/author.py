@@ -814,6 +814,7 @@ class WrappedProverRunner:
         callbacks: ProverCallbacks,
         tool_call_id: str,
         rules: list[str] | None = None,
+        exclude_rules: list[str] | None = None,
         **config,
     ) -> ProverReport | str:
         # The spec/conf staging only has to outlive the run itself, so one call
@@ -825,6 +826,7 @@ class WrappedProverRunner:
             spec_contents=curr_spec,
             config=self.config,
             rule=rules,
+            exclude_rule=exclude_rules,
             **config
         ) as (conf_path, _):
             return await run_prover(
@@ -1108,6 +1110,7 @@ async def batch_cvl_generation(
                 version_history=restored_history,
                 spec_stem=spec_stem,
                 buffers={},
+                plugin_tools=[t.name for inj in tools for t in inj.tools],
             )
         )
     except BudgetExceeded as e:

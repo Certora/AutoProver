@@ -139,6 +139,7 @@ async def run_autosetup(
             "--composer-setup", f.name,
             "--no-strip-contracts",
             "--skip-harnessing",
+            "--skip-test-run",
             "--run-source", "AUTO_PROVER",
             "--main-contract",
             main_contract_path,

@@ -337,6 +337,60 @@ async def test_collect_backfills_unknown_for_unproven_referenced_rule():
 
 
 @pytest.mark.asyncio
+async def test_collect_ignores_a_run_that_does_not_account_for_the_published_spec():
+    """A last run recorded against a different spec state contributes no verdicts: its results
+    describe other text. The rule renders UNKNOWN and the coverage warning names it."""
+    gen = _gen({"p1": ["r1"]}, link="L_stale").model_copy(update={"run_links": []})
+    fetch = _fetcher({"L_stale": [_fake_check("r1", NodeStatus.VERIFIED, file="autospec_C.spec")]})
+
+    properties, rules, _s, _g, _c, _d = await collect(
+        [_input("C", "autospec_C.spec", [_prop("p1", "d1")], gen)], fetch_verdicts=fetch)
+
+    assert [(r.name, r.outcome, r.prover_link) for r in rules] == [("r1", Outcome.UNKNOWN, None)]
+    cov = validate(properties=properties, rules=rules, groups=[_pg("g", [("C", "p1")])],
+                   skipped=[], gave_up=[], curtailed=[], dropped_orphan_rules=0)
+    assert any("r1" in w for w in cov.warnings)
+
+
+@pytest.mark.asyncio
+async def test_collect_reads_a_verdict_from_the_scoped_run_that_proved_it():
+    """Completion reached piecemeal: the full run left one rule unproved and a scoped re-run
+    proved it. Both rules carry a verdict, each linked to the run that produced it."""
+    gen = _gen({"p1": ["r_full", "r_scoped"]}, link="L_full")
+    gen = gen.model_copy(update={"run_links": ["L_full", "L_scoped"]})
+    fetch = _fetcher({
+        "L_full": [_fake_check("r_full", NodeStatus.VERIFIED, file="autospec_C.spec")],
+        "L_scoped": [_fake_check("r_scoped", NodeStatus.VERIFIED, file="autospec_C.spec")],
+    })
+
+    _p, rules, _s, _g, _c, _d = await collect(
+        [_input("C", "autospec_C.spec", [_prop("p1", "d1")], gen)], fetch_verdicts=fetch)
+
+    by_name = {r.name: r for r in rules}
+    assert by_name["r_full"].outcome == Outcome.GOOD
+    assert by_name["r_scoped"].outcome == Outcome.GOOD
+    assert by_name["r_full"].prover_link == "L_full"
+    assert by_name["r_scoped"].prover_link == "L_scoped"
+
+
+@pytest.mark.asyncio
+async def test_collect_prefers_the_newest_run_over_an_earlier_timeout():
+    """A rule that timed out and then verified in a later run is verified. Across runs the
+    newest wins; the most-terminal-wins rollup applies only within one run."""
+    gen = _gen({"p1": ["r1"]}, link="L_new")
+    gen = gen.model_copy(update={"run_links": ["L_new", "L_old"]})
+    fetch = _fetcher({
+        "L_new": [_fake_check("r1", NodeStatus.VERIFIED, file="autospec_C.spec")],
+        "L_old": [_fake_check("r1", NodeStatus.TIMEOUT, file="autospec_C.spec")],
+    })
+
+    _p, rules, _s, _g, _c, _d = await collect(
+        [_input("C", "autospec_C.spec", [_prop("p1", "d1")], gen)], fetch_verdicts=fetch)
+
+    assert [(r.name, r.outcome, r.prover_link) for r in rules] == [("r1", Outcome.GOOD, "L_new")]
+
+
+@pytest.mark.asyncio
 async def test_collect_falls_back_to_input_spec_when_verdict_has_no_source():
     """A verdict without a source location is attributed to the component's own spec
     (no raise — the report is best-effort and every input carries a unit_file)."""
@@ -485,6 +539,26 @@ def test_validate_carries_gap_counts():
     assert cov.curtailed_component_count == 1
     assert any("cut short by the run budget" in w for w in cov.warnings)
     assert cov.property_coverage_complete is True
+
+
+def test_validate_names_a_rule_no_run_reported():
+    """An UNKNOWN with no link means nothing ran the rule, which is not the same as a checker
+    that ran it and could not decide. Say which rules, so the row is not read as a failure."""
+    p1 = _fp("C", "p1", [("s.spec", "a"), ("s.spec", "b")])
+    ran = RuleVerdict(name="a", spec_file="s.spec", outcome=Outcome.UNKNOWN, prover_link="L1")
+    never_ran = RuleVerdict(name="b", spec_file="s.spec")
+    cov = validate(properties=[p1], rules=[ran, never_ran], groups=[_pg("g", [("C", "p1")])],
+                   skipped=[], gave_up=[], curtailed=[], dropped_orphan_rules=0)
+    assert any("no run reported a verdict for 1 rule(s)" in w.lower() for w in cov.warnings)
+    assert any("b" in w for w in cov.warnings)
+    assert not any("'a'" in w for w in cov.warnings)
+
+
+def test_validate_is_quiet_when_every_rule_has_a_verdict():
+    p1 = _fp("C", "p1", [("s.spec", "a")])
+    cov = validate(properties=[p1], rules=[_rv("s.spec", "a")], groups=[_pg("g", [("C", "p1")])],
+                   skipped=[], gave_up=[], curtailed=[], dropped_orphan_rules=0)
+    assert not any("no run reported" in w.lower() for w in cov.warnings)
 
 
 # ---------------------------------------------------------------------------
@@ -646,6 +720,39 @@ async def test_build_groups_properties(tmp_path):
     assert [g.slug for g in report.groups] == ["g"]
     assert {p.title for p in report.properties} == {"p1", "p2"}
     assert report.coverage.property_coverage_complete is True
+
+
+@pytest.mark.asyncio
+async def test_build_records_the_active_plugin_manifest():
+    """Which plugins were live is otherwise unrecoverable from a finished run."""
+    gen = _gen({"p1": ["r1"]})
+    fetch = _fetcher({"L1": [_fake_check("r1", NodeStatus.VERIFIED)]})
+    llm = _StructuredStubModel(output=GroupingResult(groups=[PropertyGroupDraft(
+        slug="g", title="G", description="d", members=[("C", "p1")])]))
+
+    report = await build.build_report(
+        contract_name="Counter", backend="prover",
+        components=[_input("C", "autospec_C.spec", [_prop("p1", "d1")], gen)],
+        llm=llm, fetch_verdicts=fetch, active_plugins=["some_plugin"],
+    )
+
+    assert report.active_plugins == ["some_plugin"]
+
+
+@pytest.mark.asyncio
+async def test_build_records_no_plugins_when_none_are_active():
+    gen = _gen({"p1": ["r1"]})
+    fetch = _fetcher({"L1": [_fake_check("r1", NodeStatus.VERIFIED)]})
+    llm = _StructuredStubModel(output=GroupingResult(groups=[PropertyGroupDraft(
+        slug="g", title="G", description="d", members=[("C", "p1")])]))
+
+    report = await build.build_report(
+        contract_name="Counter", backend="prover",
+        components=[_input("C", "autospec_C.spec", [_prop("p1", "d1")], gen)],
+        llm=llm, fetch_verdicts=fetch,
+    )
+
+    assert report.active_plugins == []
 
 
 class _FlakyStructuredModel(_StructuredStubModel):
@@ -993,8 +1100,12 @@ def _capture(events: list | None = None):
 
 
 def _violated(rule: str, method: str | None = None, cex: str = "<cex/>"):
-    from composer.prover.ptypes import RulePath, RuleResult
-    return RuleResult(path=RulePath(rule=rule, method=method), cex_dump=cex, status="VIOLATED")
+    from composer.prover.ptypes import Counterexample, RulePath, RuleResult
+    return RuleResult(
+        path=RulePath(rule=rule, method=method),
+        counterexample=Counterexample(trace=cex),
+        status="VIOLATED",
+    )
 
 
 @pytest.mark.asyncio
@@ -1007,7 +1118,7 @@ async def test_spec_callbacks_captures_cex_analysis():
 
     recs = await store.for_rule("no_reentrancy")
     assert [(r.label, r.analysis, r.counterexample) for r in recs] == [
-        ("withdraw", "root cause: CEI", "<cex/>")]
+        ("withdraw", "root cause: CEI", "<counterexample><cex/></counterexample>")]
     assert await store.for_rule("no_reentrancy for withdraw") == []   # not the pretty-printed form
     assert any(e.get("type") == "rule_analysis" for e in events)
 

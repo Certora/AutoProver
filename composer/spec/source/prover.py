@@ -146,8 +146,9 @@ class ProverRunLog(TypedDict):
     buffer: NotRequired[str]
     # The prover-run link (job URL / local dir) this run's results came from. With rule-striping a
     # buffer's rules are run across several jobs, so its verdicts are spread over several links
-    # (collected by completing_run_links), not carried by the last one alone.
-    link: NotRequired[str]
+    # (collected by completing_run_links), not carried by the last one alone. ``NotRequired`` because a
+    # thread checkpointed before the field existed replays without it; ``| None`` for a run with no link.
+    link: NotRequired[str | None]
 
 class NagMarker(TypedDict):
     nagged_rules: list[RulePath]
@@ -184,6 +185,38 @@ def declared_rules_at(
 #: How many consecutive runs must end in the identical failure before the author is nagged
 #: about a rule. Counts the run being processed, so 3 means "this run plus the two before it".
 STUCK_RULE_NAG_THRESHOLD = 3
+
+
+def stuck_rule_reminder(
+    to_warn: Iterable["RulePath"],
+    *,
+    plugin_tools: Sequence[str] = (),
+    seen_post_compaction_history: bool = False,
+) -> list[str]:
+    """The reminder read out to the author about rules stuck on the same failure.
+
+    ``plugin_tools`` are the tools plugins contributed, whatever they are for. They are listed
+    by name at the moment the author decides what to do about a stuck rule, because a system
+    prompt read hours earlier competes badly with a reminder arriving on the failure. What
+    each tool does, and whether it suits this failure, stays in its own description.
+    """
+    lines = [
+        "The following rule(s) have had identical failures on the last 3 runs of the prover:",
+        *(f"- {it.pprint()}" for it in to_warn),
+        "You may need to significantly change your approach, or skip the property if this is a persistent issue (you may need to use rebuttals to communicate"
+        " these failures to the feedback judge).",
+    ]
+    if plugin_tools:
+        lines.append(
+            "Plugins have also given you these tools: "
+            f"{', '.join(sorted(plugin_tools))}. Read their descriptions and use one if it "
+            "addresses this failure."
+        )
+    if seen_post_compaction_history:
+        lines.append(
+            "(NB: Some of these prover calls happened before your most recent task history summarization)"
+        )
+    return lines
 
 
 def stuck_rule_warnings(
@@ -270,6 +303,31 @@ def _iterate_history(
         if elem["state_digest"] != curr_digest:
             return
         yield elem["prover_results"]
+
+def covering_run_links(
+    l: list[ProverHistoryItem],
+    curr_digest: str,
+) -> list[str]:
+    """Job links of the runs whose results account for ``curr_digest``, newest first.
+
+    The order is part of the contract: the report keeps the first verdict it finds for a rule,
+    so newest first is what makes a later run's verdict win.
+
+    The same stretch of history :func:`_iterate_history` walks, so the report attributes
+    verdicts to exactly the runs completion was judged on — a scoped run that covered what a
+    full run left unproved included. Runs recorded before the ``link`` field existed have
+    nothing to contribute and are skipped.
+    """
+    links: list[str] = []
+    for elem in reversed(l):
+        if elem["sort"] != "run":
+            continue
+        if elem["state_digest"] != curr_digest:
+            break
+        if (link := elem.get("link")) is not None:
+            links.append(link)
+    return links
+
 
 def _is_completion_history(
     l: list[ProverHistoryItem],
@@ -367,6 +425,10 @@ class ProverStateExtra(TypedDict):
     spec_stem: NotRequired[str]
     prover_history: Annotated[list[ProverHistoryItem], _merge_prover_history]
     reminders_channel: list[str]
+    #: Names of the tools plugins contributed to this author, whatever each one is for, so the
+    #: stuck-rule nag can list them. Empty when no plugin contributed, and ``NotRequired`` for
+    #: injectors that set no plugin tools.
+    plugin_tools: NotRequired[list[str]]
 
     # The author's working copy of the source under verification; the prover runs
     # against its materialization when non-empty (see ProjectDirectory). Absent/empty
@@ -600,17 +662,11 @@ def stuck_rule_nag(
     if not to_warn:
         return []
     prover_update.append(NagMarker(sort="nag", nagged_rules=list(to_warn)))
-    reminders = [
-        "The following rule(s) have had identical failures on the last 3 runs of the prover:",
-        *(f"- {it.pprint()}" for it in to_warn),
-        "You may need to significantly change your approach, or skip the property if this is a persistent issue (you may need to use rebuttals to communicate"
-        " these failures to the feedback judge).",
-    ]
-    if seen_post_compaction_history:
-        reminders.append(
-            "(NB: Some of these prover calls happened before your most recent task history summarization)"
-        )
-    return reminders
+    return stuck_rule_reminder(
+        to_warn,
+        plugin_tools=state.get("plugin_tools") or (),
+        seen_post_compaction_history=seen_post_compaction_history,
+    )
 
 
 @contextmanager

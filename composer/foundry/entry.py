@@ -29,7 +29,6 @@ from composer.io.multi_job import HandlerFactory
 from composer.io.thread_logging import RunDataLogger
 from composer.rag.db import FOUNDRY_DEFAULT_CONNECTION, PostgreSQLRAGDatabase
 from composer.spec.context import SourceFields
-from composer.spec.util import fs_forbidden_read
 
 from composer.foundry.artifacts import FoundryArtifactStore
 from composer.foundry.env import build_foundry_env
@@ -170,6 +169,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
                   summary=summary,
                   task_handler=fact,
                   design_doc_phase=cast(FoundryPhase, FoundryPhase.DISCOVER_DESIGN_DOC),
+                  ecosystem=EVM,
                   at_exit=_usage_exit_logger(summary),
                   workflow="foundry"
             ) as (staged, cont),
@@ -180,7 +180,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
             env = build_foundry_env(
                 model_provider=staged.llm_models,
                 project_root=staged.source.project_root,
-                forbidden_read=fs_forbidden_read,
+                forbidden_read=staged.source.forbidden_read,
                 rag_db=foundry_rag_db,
                 store=staged.conns.indexed_store,
                 source_question_ns=source_question_ns,
@@ -192,6 +192,6 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
                 source_input=staged.source,
                 forge_concurrency=args.max_forge_runners
             )
-            return await cont(env, f_backend, EVM)
+            return await cont(env, f_backend)
 
     yield runner

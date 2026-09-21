@@ -55,10 +55,6 @@ class SpecBufferSet(TypedDict):
     curr_spec: str
 
 
-class SpecBufferWithDraft(SpecBuffer):
-    drafted: bool
-
-
 def apply_spec_update(
     *,
     tool_call_id: str,

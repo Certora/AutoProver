@@ -87,7 +87,7 @@ class Verdict:
     link: str | None = None
 
     def merge(self, other: "Verdict | None") -> "Verdict":
-        """Combine two results for one unit: higher-priority outcome wins,
+        """Combine two results for one unit within a run: higher-priority outcome wins,
         line/duration/unit_file/message/link kept from whichever side has them (link from the winner)."""
         if other is None:
             return self

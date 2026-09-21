@@ -52,6 +52,7 @@ async def build_report[R: ReportableResult](
     fetch_evidence: EvidenceFetcher | None = None,
     run_mode: str | None = None,
     deprioritized: list[DeprioritizedProperty] | None = None,
+    active_plugins: list[str] | None = None,
 ) -> AutoProverReport:
     """Build and return the in-memory `AutoProverReport`. Persistence is the caller's job.
 
@@ -138,6 +139,7 @@ async def build_report[R: ReportableResult](
         backend=backend,
         run_mode=run_mode,
         deprioritized=deprioritized or [],
+        active_plugins=active_plugins or [],
         contract_name=contract_name,
         run_timestamp_utc=datetime.now(timezone.utc).isoformat(),
         prover_links=prover_links,

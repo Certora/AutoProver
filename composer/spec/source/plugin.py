@@ -24,8 +24,10 @@ from composer.spec.source.spec_buffers import NamedBuffer, buffer_review_text
 
 class ProverRunner(Protocol):
     """One ad-hoc prover run: stages the spec/conf into ``working_dir`` for the
-    duration of the call and forwards to ``run_prover``. ``config`` entries
-    override the author's current prover config for this run only."""
+    duration of the call and forwards to ``run_prover``. ``rules`` and
+    ``exclude_rules`` scope the run the way ``verify_spec`` scopes its own runs
+    (at most one of them); ``config`` entries override the author's current
+    prover config for this run only."""
     async def __call__(
         self,
         *,
@@ -35,6 +37,7 @@ class ProverRunner(Protocol):
         callbacks: ProverCallbacks,
         tool_call_id: str,
         rules: list[str] | None = None,
+        exclude_rules: list[str] | None = None,
         **config,
     ) -> ProverReport | str:
         ...

@@ -140,6 +140,11 @@ def on_job_problem(
     """
     if result.success:
         return False
+    if result.stopped_early:
+        # The wait ended on a deliberate early-stop condition (preprocessing stall, first
+        # violation, ...), not a conf-fixable failure — re-running an identical job would
+        # just hit the same condition and burn another budget.
+        return False
     for workaround in _WORKAROUNDS:
         try:
             if workaround(result, config_manager, prover_api):
