@@ -9,9 +9,9 @@ Two kinds of entry appear below. Most are the plan's own items, restated in one 
 **Unfiled** ones are not in the plan at all — they were noticed while doing other work and have no
 section anywhere else, so this document is their only record until someone gives them one.
 
-If you want somewhere to start: **U11** is the cheapest — a kind that U10 just built and no author
-has yet reached for, with a pin that reproduces the skip it was built for. **U2** decides whether
-the smoke gate protects anything at all, and
+If you want somewhere to start: **U12** is a silent-staleness hole in two shipped munge kinds, and
+the one with a decision in it rather than a task. **U2** decides whether the smoke gate protects
+anything at all, and
 **U7** is a silent-data-loss risk on the same path whose loud half **U4** was; that half is
 fixed now, and the fix cannot reach U7. **U8** is the same shape one layer up, in the artifact a
 reader actually keeps.
@@ -310,16 +310,60 @@ The line the author now has to draw, and which the prompts, the reviewer and the
 to hold: a property about the program's recorded state is sound under a swap; a property about the
 lamports the CPI actually moved is **false** under one rather than unproven, and is a skip.
 
-**U11. `swap_import` has never been used by an author on a real run.**
-The kind is built, tested and taught in four prompts, and every word of that is a prediction. The
-skip it was built for is reproducible for about the cost of one formalization unit —
-[vault-deposits.pin.json](../tests/data/pins/vault-deposits.pin.json) is the nine properties of the
-component that gave up the handler, and the two it skipped name the CPI explicitly. What a run would
-establish is the part no test can: whether the author *diagnoses* the CPI as the obstruction and asks
-for the right kind, whether it writes a stand-in with the right signature on the first attempt, and
-whether it splits its batch on the line above rather than asserting a lamport property under the
-swap. A green run proves the plumbing; the interesting outcome is the third one, and it is the one
-the reviewer and judge text was written to catch.
+**~~U11. `swap_import` has never been used by an author on a real run.~~** — **run, 2026-09-21.**
+Thread `cvlr_e924521c4199` off [vault-deposits.pin.json](../tests/data/pins/vault-deposits.pin.json):
+1h36m, nine prover jobs, ~$118. **Seven of nine properties verified, three skipped, none faked** —
+including `deposit_credits_exactly_amount`, the property the 2026-09-18 run recorded as unstatable.
+[who-edits-the-program.md](./who-edits-the-program.md) §13.4 is the account.
+
+Every layer did its job, which is the part that could not be tested. The author reached the kind from
+the prompt *before* its first draft and described the effect it needed without naming the kind; the
+editor chose `swap_import` and argued it from the charter; the munge reviewer opened `lib.rs` and
+counted call sites instead of accepting the editor's scope claim; the judge blocked a draft of seven
+green rules on disclosure and was right to. The author also declined the one cheat available to it —
+`deposit(..).unwrap(); cvlr_satisfy!(true)` mapped to an acceptance property — and the judge recorded
+that it would have rejected the draft had it been there.
+
+Three things came out of it that are not about the kind, and each has its own home: the two stand-in
+constraints are now in the author prompt, the encoding defect the three skips share is **P9** in
+[upstream-defects.md](./upstream-defects.md), and the staleness hole the judge found is **U12**.
+
+**U12. A munge that points at an author-written stand-in can have a justification that is no longer
+true, and nothing detects it.**
+Found by the harness judge on the U11 run, blocking a draft: *"The `invoke` munge record materially
+misdescribes the stand-in it redirects to. … The redirect points at whatever the harness currently
+defines, so the record is stale."* The author had rewritten the stand-in twice after the munge was
+recorded and approved; read against the rules shipped beside it, the stale `why` would have made one
+assertion false and another double-count. The same judge found a second stale record in the same
+draft.
+
+`ModuleRedirect` and `FunctionExtraction` are immune by construction — their `edit_id` digests the
+code they carry, so re-authoring it is a different edit that inherits neither the review nor the
+prover stamp. `ImportSwap` and `MockFn` carry a *path* into the author's own harness, which the
+author may rewrite freely. **`mock_fn` has shipped with this since the beginning**, so this is not a
+regression from the new kind; it is a property of the design that the new kind made visible.
+
+It is a decision rather than a patch, and the options are not equivalent. Digesting the stand-in's
+source into `edit_id` invalidates a review on every unrelated edit to that harness file. Digesting
+only the named item needs a resolver `munge.py` does not have and would tie it to Rust parsing it has
+so far avoided. Prompting the author to `amend_munge` after rewriting a stand-in is what already
+happened — one judge round late, and only because that judge chose to reconcile the record against
+the artifact. A fourth option is to make the *report* state that a stand-in's description is the
+author's claim rather than a checked fact, which is cheap and honest and fixes nothing.
+[who-edits-the-program.md](./who-edits-the-program.md) §13.4 has the argument.
+
+**U13. The vault scenario's `withdraw` has an unexercised aliasing case, and the harness judge found
+it before we did.**
+Not a defect in the backend — a gap in the scenario and in what a rule about it covers. `withdraw`'s
+`fee_collector` is an `UncheckedAccount` with no constraint beyond `mut`, so passing the vault itself
+as the collector is a legal call and the classic aliasing shape a solvency invariant is asked about.
+The U11 run's rule assumed it away (`accts[0].key != accts[2].key`) and the judge flagged the
+exclusion as unexplained, noting it had checked the arithmetic and the invariant does still hold
+(`cushion' = cushion + fee`). The open question is whether `cvlr_deserialize_nondet_accounts` can
+model aliasing at all — it gives each slot its own lamport cell, so two equal keys may not share a
+balance — which decides whether the assumption is a narrowing to disclose or a modelling limit to
+record. Cheap to settle, and it generalizes: any rule over two accounts of one type has this
+question.
 
 ---
 
@@ -332,11 +376,22 @@ What ships is a scope reduction rather than a fix — the prompts teach descendi
 own accounting core — and that is only available to programs that have such a core. See
 [upstream-defects.md](./upstream-defects.md) P6.
 
-**2. Sixteen upstream defects are filed nowhere.**
+**2. An acceptance property cannot be stated at all.**
+Second only to item 1, and found the same way — by a run, not by reasoning. A rule that binds a
+handler's `Result` and asserts `is_ok()` comes back vacuous, while six rules with an identical
+prologue that `.unwrap()` it verify and pass their vacuity checks. So the only way to consume the
+result assumes success, which is what an acceptance property is trying to establish. It takes with it
+every property enforced by Anchor's generated account validation, whose outcome is unobservable in
+the same way and demonstrably unstable across builds. The suspected mechanism is the niche-encoded
+`Result<_, anchor_lang::error::Error>` with the Certora fork's unboxed `Error` — the same fork item 1
+of *Blocked on upstream* and P1 say we depend on. See [upstream-defects.md](./upstream-defects.md)
+P9.
+
+**3. Seventeen upstream defects are filed nowhere.**
 [upstream-defects.md](./upstream-defects.md) is a well-evidenced document that no upstream team has
 been asked to read. Until these are routed, every one of them is rediscovered by the next engagement.
 
-**3. `mock_fn` cannot reach an inherent method.**
+**4. `mock_fn` cannot reach an inherent method.**
 It replaces the item with a `use` statement, and a `use` inside an `impl` block is not a method, so
 the editor's sixth munge kind reaches free functions only — while much Solana state logic lives in
 `impl` blocks. Two normative projects work around it with a trait carrying the method's name, but

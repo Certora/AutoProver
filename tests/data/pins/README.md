@@ -118,3 +118,30 @@ for. U9 carries what the four rows mean.
 Submitted with `composer.certora_env.import_prover_entry("solana")` from the pinned run's own
 `.cvlr_work/build`, which already holds the compiled workspace and the generated summaries — no
 pipeline, no model calls, about 20 seconds of prover time each.
+
+### The `swap_import` run off `vault-deposits.pin.json`
+
+The second use of this pin, and the one it was kept for: the first end-to-end exercise of the
+`swap_import` munge kind ([cvlr-todo.md](../../../docs/cvlr-todo.md) U11,
+[who-edits-the-program.md](../../../docs/who-edits-the-program.md) §13.4). 2026-09-21, thread
+`cvlr_e924521c4199`, 1h36m, nine prover jobs, ~$118.
+
+| | |
+|---|---|
+| delivered | `programs/vault/src/certora/specs/deposits.rs`, 7 rules VERIFIED |
+| skipped | properties 4, 5 and 9 — all three [upstream-defects.md](../../../docs/upstream-defects.md) P9 |
+| munges | two `swap_import` (`invoke`, `system_instruction`), one `early_panic` (`apply_deposit`) |
+| final job | [f67e1f8a](https://prover.certora.com/jobStatus/37632/f67e1f8a2adf4378a2c89c071db9b8c3?anonymousKey=603baea49d65e69c152bc71395350aaee3a31ba9) |
+
+`deposit_credits_exactly_amount` is the row that matters: the pinned run of 2026-09-18 recorded it as
+unstatable — *"the program cannot be given one with the munge kinds available"* — and it verifies
+here against the real handler through the real `Context`.
+
+**Nine jobs is not what the kind costs.** Two went to rediscovering that a CPI stand-in may neither
+move lamports nor decode the instruction payload, and one to the `[3308]`/inlining detour; all three
+lessons are now in the author prompt. Two more were the judge's disclosure round. A repeat should
+reach the same place in three or four.
+
+The run used a copy of the scenario rather than the checked-in one, for the reason
+`test_cvlr_gate.py`'s `project` fixture exists: preflight scaffolds the workspace and each unit
+writes a workdir under it.

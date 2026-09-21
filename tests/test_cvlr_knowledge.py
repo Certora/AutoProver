@@ -653,6 +653,24 @@ def test_the_author_knows_the_charter_without_holding_the_tool():
     assert "does **not** help an acceptance property" in prompt
 
 
+def test_the_author_is_told_what_a_cpi_stand_in_cannot_do():
+    """Both constraints were measured, not reasoned about (`docs/who-edits-the-program.md` §13.4).
+
+    A stand-in that moves lamports or decodes the instruction payload does not work, and neither
+    failure names itself: the first is a `[3003]` through `AccountInfo::lamports`'s `Rc`, and the
+    second is not an error at all but a VIOLATED verdict whose counterexample no path in the program
+    can produce. The 2026-09-21 run paid two prover jobs to find them, which is the cost this text
+    exists to stop repeating.
+    """
+    prompt = _flat(_author_system_prompt())
+    assert "Move nothing." in prompt
+    assert "Decode nothing." in prompt
+    assert "[3003] dereference of a register with unknown provenance" in prompt
+    assert "Instruction::new_with_bincode" in prompt
+    # And the reason the second one needs a *second* swap: the kind redirects a name, not a function.
+    assert "swaps a whole module the same way" in prompt
+
+
 def test_every_kind_the_editor_offers_is_named_to_the_author():
     """A request is only as good as the author's sense of what is available, and the skip rate is
     the metric this backend watches — so a kind the author does not know about is a skip that never
