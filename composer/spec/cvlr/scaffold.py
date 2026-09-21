@@ -1,0 +1,1111 @@
+"""The preflight scaffold: the `certora/` shape a CVLR project needs before a rule can exist.
+
+``docs/cvlr-backend-plan.md`` §5.6 is the argument for this module being small. EVM's AutoSetup is a
+search problem because making arbitrary Solidity compile under the Prover genuinely is one. The
+Solana equivalent is not: a harness module behind a cargo feature, two tuning files, three
+``Cargo.toml`` stanzas. That is template work, and §7.4 asked for agent assistance "only where a
+template genuinely cannot decide" — the answer this module reports is **nowhere**. Every decision
+here is read from ``cargo metadata`` or from the reference set, and the two cases a template must
+not decide are refused (:class:`Blocked`) rather than guessed at.
+
+**The shape comes from the recommended starting point, not from a vote.** `Certora/solana-spec-template
+<https://github.com/Certora/solana-spec-template>`_ is what Certora tells a new project to clone,
+which makes it advice where the client survey is only evidence (``docs/cvlr-capture-plan.md``
+§4.7.4); the survey's twelve layouts across fourteen projects would have averaged into somebody's
+house style. Where the public examples repo and the template disagree, the template wins and the
+disagreement is recorded below.
+
+**Nothing is overwritten, ever.** A project may already be set up, half set up, or set up
+differently. Every file write is conditional on absence and every manifest change is computed from
+the *parsed* manifest, so a second run is a no-op rather than a duplicated stanza — which is the one
+thing the template's own ``certora-setup.py`` gets wrong: it appends to ``Cargo.toml`` blindly and
+leaves a ``.orig`` behind, so running it twice produces a manifest cargo will not parse.
+
+Four gaps in the upstream template are worked around here rather than reproduced, all recorded in
+``docs/cvlr-backend-plan.md`` §7.4.1:
+
+* its ``sources`` omits ``Cargo.toml``, which the examples include and ``.certora_sources`` wants;
+* its ``[workspace.dependencies]`` pins CVLR 0.4 by hand, where the reference set is the one place
+  that decides which release "current" means;
+* its ``mod.rs`` never declares ``utils.rs``, so that file ships and is never compiled;
+* its ``README`` names ``solana_inlining.txt`` / ``solana_summaries.txt`` where the shipped files
+  are ``cvlr_*``.
+"""
+
+import dataclasses
+import json
+import logging
+import re
+import tomllib
+from pathlib import Path
+from typing import Sequence
+
+from composer.cargo.metadata import CratePackage, Workspace
+from composer.spec.cvlr.conf import DEFAULT_FEATURE
+from composer.spec.cvlr.env_paths import PathDialect, dialect_for
+from composer.spec.cvlr import munge
+from composer.spec.cvlr_reference import ChainReference, CrateRelease
+
+_log = logging.getLogger(__name__)
+
+TEMPLATE_REPO = "https://github.com/Certora/solana-spec-template.git"
+
+#: The canonical tuning files the scaffold writes into a target. Product data rather than corpus
+#: data, hence in the wheel. Originally taken from :data:`TEMPLATE_REPO`'s ``envs/`` and maintained
+#: here since; edit them in place.
+ENV_DIR = Path(__file__).parent / "envs"
+
+#: Where the harness module goes in the target package. Inside ``src/`` because that is where the
+#: template is cloned to and what its ``[package.metadata.certora]`` paths name — unusual for
+#: non-Rust files, and not ours to change.
+HARNESS_DIR = Path("src") / "certora"
+SPECS_DIR = HARNESS_DIR / "specs"
+ENVS_DIR = HARNESS_DIR / "envs"
+#: Where a project keeps its own prover confs. Not written by the scaffold — the run emits its conf
+#: under ``certora/confs`` at the workspace root (``composer.spec.cvlr.prover.CONF_DIR``) — but read
+#: from, because a project that tuned its prover settings did it here
+#: (:func:`composer.spec.cvlr.conf.project_conf`).
+CONFS_DIR = HARNESS_DIR / "confs"
+
+#: Build output the prover leaves in the project, plus this backend's own per-unit workspaces
+#: (``composer.spec.cvlr.pipeline.WORK_DIR``). The first three are from the template's
+#: ``certora-setup.py``; the last is ours and is ignored for the same reason.
+GITIGNORE_LINES = (".certora", ".certora_internal", "certora_out", ".cvlr_work")
+
+#: The crate type a Solana program's library target must have. Without it cargo produces no
+#: loadable object and there is nothing for the prover to read.
+SHARED_OBJECT_TYPE = "cdylib"
+
+#: The feature that makes a package's own entrypoint disappear so the harness can call handlers
+#: directly. Enabled by ``certora`` when the package has it; not invented when it does not, because
+#: a package with no entrypoint to suppress does not need one (the examples' ``first_example`` has
+#: ``certora = []``).
+NO_ENTRYPOINT_FEATURE = "no-entrypoint"
+
+
+@dataclasses.dataclass(frozen=True)
+class EnvFamily:
+    """One tuning file, in the layers the template splits it into.
+
+    The split is the whole point: ``core`` and ``anchor`` are canonical content maintained upstream,
+    ``package`` starts empty and is the project's own, and the composite is generated from all
+    three. A project that needs its own inlining directive — the public examples' shipped file
+    carries one for a real program — edits ``package`` and nothing canonical.
+    """
+
+    stem: str
+
+    @property
+    def core(self) -> str:
+        return f"{self.stem}_core.txt"
+
+    @property
+    def anchor(self) -> str:
+        return f"{self.stem}_anchor.txt"
+
+    @property
+    def package(self) -> str:
+        return f"{self.stem}_package.txt"
+
+    @property
+    def composite(self) -> str:
+        """The file the *package* declares, generated from the three layers."""
+        return f"{self.stem}.txt"
+
+    def unit_layer(self, unit: str) -> str:
+        """One unit's own directives, which the authoring loop rewrites wholesale.
+
+        A fourth layer rather than more lines in ``package``: that file is the *project's*, and a
+        run that appended to it would leave one unit's directives applying to every other unit's
+        submission — the one cross-unit leak a cargo feature cannot close, because a summary is a
+        prover-side symbol pattern rather than anything the compiler sees
+        (``docs/single-working-tree.md`` §6).
+        """
+        return f"{self.stem}_{unit}_run.txt"
+
+    def unit_composite(self, unit: str) -> str:
+        """The file *one unit's conf* names, generated from all four layers."""
+        return f"{self.stem}_{unit}.txt"
+
+
+INLINING = EnvFamily("cvlr_inlining")
+SUMMARIES = EnvFamily("cvlr_summaries")
+ENV_FAMILIES = (INLINING, SUMMARIES)
+
+#: The shared halves — one content for every target, as against the per-package layer.
+CANONICAL_ENVS = tuple(name for f in ENV_FAMILIES for name in (f.core, f.anchor))
+
+
+@dataclasses.dataclass(frozen=True)
+class Deviation:
+    """One canonical line this backend deliberately does not ship as upstream wrote it.
+
+    Kept here rather than edited into ``envs/`` so that our change reads as ours: a file taken
+    wholesale from upstream and then edited in place reports every later diff against it as
+    upstream's. A deviation is applied at composition instead, and :func:`_deviated` raises when
+    :attr:`canonical` is not found exactly once, so rewriting that line in ``envs/`` fails loudly
+    and gets re-reviewed — the reason for deviating may have gone away.
+
+    Written in upstream's spelling, and applied before the dialect renders it, so an entry matches
+    the vendored bytes rather than whatever a given target's platform generation calls the symbol.
+    """
+
+    env: str
+    canonical: str
+    replacement: str
+    why: str
+
+
+#: Applied to the vendored layers on the way into a composite.
+#:
+#: The one entry is a soundness defect, not a preference. ``ProgramError`` is returned through an
+#: ``sret`` out-pointer, so a prover that treats its constructor as external havocs the write —
+#: including the ``Result`` discriminant. Every error a native program builds with ``SomeError
+#: .into()`` then has a nondeterministic ``is_err()``, and no rule asserting that a handler rejects
+#: bad input can be proved. Upstream marks the function ``inline(never)`` and ships no summary to
+#: stand in for it, which is what makes the pair unsound rather than merely slow.
+#:
+#: It is dormant upstream and ours to trip: the directive names ``solana_program::program_error::``,
+#: the post-split symbol is ``solana_program_error::``, and so upstream's line matches nothing on
+#: any modern generation. :mod:`composer.spec.cvlr.env_paths` rewrites it into the spelling that
+#: does match — correctly, and that is precisely what activates it. Measured on SPL stake-pool:
+#: identical rules verify with the line as ``#[inline]`` and with the un-rewritten spelling, and are
+#: violated with the rewritten ``#[inline(never)]``; ``#[inline(never)]`` on the callee and the
+#: harness's own shape were both ruled out first.
+DEVIATIONS: tuple[Deviation, ...] = (
+    Deviation(
+        env=INLINING.core,
+        canonical=(
+            "#[inline(never)] "
+            "^<solana_program::program_error::ProgramError as core::convert::From<u64>>::from$"
+        ),
+        replacement=(
+            "#[inline] "
+            "^<solana_program::program_error::ProgramError as core::convert::From<u64>>::from$"
+        ),
+        why="unsummarized inline(never) havocs every ProgramError a handler returns",
+    ),
+)
+
+_GENERATED_HEADER = """;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Generated — this is the file the build reports to the prover.
+;;; Composed, in order, from:
+;;;   {core}
+;;;   {anchor}
+;;;   {package}
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+"""
+
+_PACKAGE_ENV_HEADER = """; {kind} specific to this package. Empty to start with, and the one file
+; here that is yours: the other layers are maintained in {repo}.
+"""
+
+
+# ---------------------------------------------------------------------------------------------
+# what a scaffolding run would change
+
+
+@dataclasses.dataclass(frozen=True)
+class NewFile:
+    """A file to create. Never a file to replace — see the module docstring."""
+
+    path: Path
+    contents: str
+    why: str
+
+
+@dataclasses.dataclass(frozen=True)
+class AppendSection:
+    """Text to append to an existing file, in full, at the end."""
+
+    path: Path
+    contents: str
+    why: str
+
+
+@dataclasses.dataclass(frozen=True)
+class InsertInTable:
+    """Keys to add to a TOML table that already exists.
+
+    The one change append cannot make: re-opening ``[features]`` at the end of a manifest is a
+    duplicate-table error, so a package that already has features needs the key inserted into the
+    table it has. ``header`` is matched as a whole line and must appear exactly once, which
+    :func:`apply` checks — this is a text edit to a file we only parsed, and it should fail loudly
+    rather than land in the wrong table.
+    """
+
+    path: Path
+    header: str
+    contents: str
+    why: str
+
+
+type Change = NewFile | AppendSection | InsertInTable
+
+
+@dataclasses.dataclass(frozen=True)
+class Blocked:
+    """Something a template must not decide, stated with what would resolve it.
+
+    Not an error and not a warning: it is the boundary §7.4 asked about, and the answer landing on a
+    human rather than on an agent is the point. A plan with any of these applies nothing.
+    """
+
+    path: Path
+    problem: str
+    resolution: str
+
+
+@dataclasses.dataclass(frozen=True)
+class ScaffoldPlan:
+    """Everything a run would do to a project, computed without touching it."""
+
+    package: str
+    changes: tuple[Change, ...]
+    #: What was already in place, in words. Reported because "did nothing" and "found everything
+    #: already there" look identical in a diff and mean opposite things.
+    satisfied: tuple[str, ...]
+    blocked: tuple[Blocked, ...]
+    #: How platform paths must be spelled for this target's generation. Carried rather than
+    #: recomputed: the authoring loop rewrites a tuning file when it adds a summary
+    #: (:mod:`composer.spec.cvlr.tuning`), and it has to compose that file the same way this plan
+    #: did — a second derivation is a second chance to disagree.
+    dialect: PathDialect = PathDialect()
+
+    def describe(self) -> str:
+        lines = [f"CVLR scaffold for {self.package}:"]
+        for change in self.changes:
+            verb = {NewFile: "create", AppendSection: "extend", InsertInTable: "edit"}[
+                type(change)
+            ]
+            lines.append(f"  {verb} {change.path} — {change.why}")
+        lines += [f"  ok {note}" for note in self.satisfied]
+        lines += [f"  BLOCKED {b.path}: {b.problem} — {b.resolution}" for b in self.blocked]
+        return "\n".join(lines)
+
+
+class ScaffoldBlocked(RuntimeError):
+    """A plan with unresolved :class:`Blocked` entries was applied."""
+
+    def __init__(self, blocked: tuple[Blocked, ...]) -> None:
+        self.blocked = blocked
+        super().__init__(
+            "the project needs a decision no template can make:\n"
+            + "\n".join(f"  {b.path}: {b.problem}\n    {b.resolution}" for b in blocked)
+        )
+
+
+# ---------------------------------------------------------------------------------------------
+# the content
+
+
+def canonical_env(name: str, dialect: PathDialect = PathDialect()) -> str:
+    """One canonical tuning file, spelled for the target's platform generation.
+
+    Answers "what is stored", which is why the default dialect changes nothing and why
+    :data:`DEVIATIONS` are not applied here — a caller comparing against the file on disk must get
+    the file on disk.
+    """
+    return dialect.render((ENV_DIR / name).read_text())
+
+
+def deviations_for(name: str) -> tuple[Deviation, ...]:
+    """The deviations that apply to one vendored file."""
+    return tuple(d for d in DEVIATIONS if d.env == name)
+
+
+def _deviated(name: str, dialect: PathDialect) -> str:
+    """One vendored file with :data:`DEVIATIONS` applied, then spelled for the target.
+
+    Deliberately not part of :func:`canonical_env`: a deviation is a reviewable divergence from the
+    stored file, so something has to still answer "what is stored".
+    """
+    text = (ENV_DIR / name).read_text()
+    for deviation in deviations_for(name):
+        found = text.count(deviation.canonical)
+        if found != 1:
+            raise ValueError(
+                f"{name}: deviation matched {found} lines, expected 1 — upstream has changed it. "
+                f"Re-review whether it is still needed ({deviation.why}) and update DEVIATIONS."
+            )
+        text = text.replace(deviation.canonical, deviation.replacement)
+    return dialect.render(text)
+
+
+def compose_env(
+    family: EnvFamily,
+    *,
+    package_layer: str,
+    unit_layer: str = "",
+    dialect: PathDialect = PathDialect(),
+) -> str:
+    """The generated composite: header, then the layers, the way the template's justfile does.
+
+    ``package_layer`` is passed in rather than read from disk so recomposing after the authoring
+    loop has added a directive is the same function call, with no hidden state. It is the one layer
+    the dialect does not touch: it is the project's own file, written against the project's own
+    symbols, so its paths are already whatever the project resolves.
+
+    ``unit_layer`` is the fourth layer and is empty for the package-level composite, which is the
+    only kind the scaffold writes. A run composes it non-empty, per unit, so that one unit's
+    summaries are not applied to another unit's submission — see :meth:`EnvFamily.unit_layer`. It is
+    the project's symbols too, so the dialect leaves it alone for the same reason.
+    """
+    header = _GENERATED_HEADER.format(
+        core=family.core, anchor=family.anchor, package=family.package
+    )
+    parts = [header]
+    if dialect.aliases:
+        # Said in the file, because the alternative is a reader diffing it against upstream and
+        # concluding it was hand-edited. Which paths moved is the whole subject of §7.5.6.
+        parts.append(
+            f";;; Platform paths rewritten for this target's generation "
+            f"({len(dialect.aliases)} aliases) — see composer/spec/cvlr/env_paths.py\n"
+        )
+    applied = [d for d in DEVIATIONS if d.env in (family.core, family.anchor)]
+    if applied:
+        # Same reason as the note above: a reader diffing this against upstream must not conclude
+        # it was hand-edited. Each line says what it is and why, since one of these is a soundness
+        # fix and a reader deciding whether to keep it needs the reason, not just the fact.
+        parts.append(
+            "".join(f";;; Deviates from upstream: {d.why} — {d.replacement}\n" for d in applied)
+        )
+    parts += [
+        _deviated(family.core, dialect),
+        _deviated(family.anchor, dialect),
+        package_layer,
+    ]
+    if unit_layer.strip():
+        parts.append(unit_layer)
+    return "\n".join(p.rstrip("\n") for p in parts) + "\n"
+
+
+#: The harness module tree. ``specs/`` is where authored rules land (§7.5), which is why it exists
+#: empty rather than being created on first use — a module that has to be created is a module an
+#: authoring step can forget to declare.
+#:
+#: ``specs`` and ``mocks`` are ``pub`` and the other two are not, because only those two are reached
+#: *by path* and only from outside ``certora``: ``cvlr::mock_fn(with = crate::certora::…)`` expands
+#: at the munged function's site, which is the program's own file. ``log`` and ``nondet`` hold trait
+#: impls, which coherence makes visible without a path. ``certora`` itself stays private, so this
+#: adds nothing to the crate's public surface — and under the feature gate it exists at all only in
+#: a verification build.
+_HARNESS_FILES: dict[str, str] = {
+    "mod.rs": (
+        "//! Certora verification harness.\n"
+        "//!\n"
+        "//! Compiled only under the `certora` feature, which `lib.rs` gates this module on.\n"
+        "\n"
+        "mod log;\n"
+        "pub mod mocks;\n"
+        "mod nondet;\n"
+        "pub mod specs;\n"
+    ),
+    "nondet.rs": (
+        "//! Implementations of `cvlr::nondet::Nondet` for this program's own types.\n"
+        "//!\n"
+        "//! A rule needs a nondeterministic value of every type it quantifies over; the derives in\n"
+        "//! `cvlr` cover the primitives, and anything else is declared here.\n"
+    ),
+    "log.rs": (
+        "//! Implementations of `cvlr::log::CvlrLog` for this program's own types.\n"
+        "//!\n"
+        "//! A counterexample is only as legible as what `clog!` can print, so a type that appears\n"
+        "//! in a rule wants an implementation here before it appears in a failure.\n"
+    ),
+    "specs/mod.rs": (
+        "//! The rules. One module per property group; declare each one here.\n"
+    ),
+    "mocks/mod.rs": (
+        "//! Mocks that simplify functionality for verification.\n"
+        "//!\n"
+        "//! Mirror the original module hierarchy: a function `my_mod::fun` is mocked by\n"
+        "//! `certora::mocks::my_mod::fun`.\n"
+    ),
+}
+
+
+#: Why each harness file exists, for the plan's own output. Separate from the contents so a
+#: reader of a plan sees the intent and a reader of the file sees the code.
+_HARNESS_WHY: dict[str, str] = {
+    "mod.rs": "the harness module root",
+    "nondet.rs": "where this program's types become nondeterministic",
+    "log.rs": "where this program's types become printable in a counterexample",
+    "specs/mod.rs": "where authored rules land",
+    "mocks/mod.rs": "where a simplified stand-in for real code goes",
+}
+
+
+def _lib_declaration() -> str:
+    """The line that pulls the harness into the crate.
+
+    Gated at the declaration rather than inside the harness's own ``mod.rs`` — the template does the
+    latter, which needs a gate per submodule and gets one wrong every time a module is added. Both
+    public examples gate here, and one gate for one subtree is the whole feature's meaning.
+    """
+    return f'\n#[cfg(feature = "{DEFAULT_FEATURE}")]\nmod certora;\n'
+
+
+def _metadata_section(package_relative_envs: dict[str, str]) -> str:
+    inlining = package_relative_envs[INLINING.stem]
+    summaries = package_relative_envs[SUMMARIES.stem]
+    return (
+        "[package.metadata.certora]\n"
+        '# "Cargo.toml" is deliberately included: `.certora_sources` is what the report and the\n'
+        "# counterexample analyzer read, and a source tree with no manifest cannot be rebuilt.\n"
+        'sources = ["Cargo.toml", "src/**/*.rs"]\n'
+        f'solana_inlining = ["{inlining}"]\n'
+        f'solana_summaries = ["{summaries}"]\n'
+    )
+
+
+# ---------------------------------------------------------------------------------------------
+# planning
+
+
+class MalformedManifest(RuntimeError):
+    """A ``Cargo.toml`` could not be parsed, so nothing can be decided about it."""
+
+
+_MOD_CERTORA = re.compile(r"^[ \t]*(?:pub[ \t]+)?mod[ \t]+certora[ \t]*;", re.MULTILINE)
+
+
+def _section_banner() -> str:
+    return "\n\n# === Certora CVLR — added by AutoProver ===\n"
+
+
+def _read_toml(path: Path) -> dict:
+    try:
+        return tomllib.loads(path.read_text())
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise MalformedManifest(f"{path}: {exc}") from exc
+
+
+def _project_relative(path: Path, root: Path) -> Path:
+    """``path`` spelled against ``root``.
+
+    Raises rather than falling back: every path here comes from ``cargo metadata``, so one that is
+    not under the workspace root means the workspace was read from somewhere other than the project
+    being scaffolded, and writing anything at that point would be a guess."""
+    try:
+        return path.resolve().relative_to(root.resolve())
+    except ValueError:
+        raise ScaffoldOutsideProject(f"{path} is not under {root}") from None
+
+
+class ScaffoldOutsideProject(RuntimeError):
+    """A path the planner produced falls outside the project root."""
+
+
+def _toml_array(values: list[str]) -> str:
+    """A TOML array of strings. JSON's string syntax is TOML's, which is why this is not hand-rolled
+    quoting — and hand-rolled quoting is how a crate name with an odd character lands unquoted."""
+    return json.dumps(values)
+
+
+def _dependency_stanza(crate: str, *, inherit: bool, version: str) -> str:
+    """A ``[dependencies.<crate>]`` sub-table.
+
+    A sub-table rather than an inline entry because it can be *appended* to a manifest that already
+    has a ``[dependencies]`` table, where re-opening that table would be a duplicate-table error.
+    ``optional`` is what makes ``dep:`` usable in the feature, and what keeps CVLR out of a release
+    build entirely."""
+    pin = "workspace = true" if inherit else f'version = "={version}"'
+    return f"[dependencies.{crate}]\n{pin}\noptional = true\n"
+
+
+def _generation(version: str) -> str:
+    """The platform generation a version belongs to — its major component.
+
+    Coarse on purpose. ``solana-program`` 2.2 and 2.3 are the same generation and interchangeable;
+    1.18 and 2.2 are not, and each generation has its own ``AccountInfo`` type."""
+    return version.split(".", maxsplit=1)[0]
+
+
+def _check_platform(workspace: Workspace, reference: ChainReference) -> list[Blocked]:
+    """Refuse to pin a CVLR release the project's chain platform cannot be paired with.
+
+    Found by scaffolding a real project rather than reasoned about: a target on ``solana-program``
+    1.18 given ``cvlr-solana`` 0.5.0 does not warn, it fails to compile, because the two generations
+    have different ``AccountInfo`` types and the chain crate's helpers return the other one. The
+    reference set already says a chain crate *implies* a generation
+    (:class:`~composer.spec.cvlr_reference.PlatformGeneration`); this is the one place that can
+    notice the implication is false for a given project, and it can only notice before writing.
+
+    The first witness the project resolves decides, and no later one is consulted: the witnesses
+    are ordered most-specific-first precisely because a target on a newer generation resolves only
+    the specific one. Falling through to a broader witness after a specific one has answered would
+    re-introduce the hole the ordering exists to close.
+    """
+    for witness in reference.platform.witnesses:
+        resolved = workspace.resolved(witness.name)
+        if resolved is None:
+            continue
+        if _generation(resolved.version) == _generation(witness.line):
+            return []
+        return [
+            Blocked(
+                path=Path("Cargo.toml"),
+                problem=(
+                    f"this project builds {witness.name} {resolved.version}, but the CVLR "
+                    f"releases the reference set names are bound to {reference.platform.label} — "
+                    f"and each generation has its own AccountInfo type, so the pairing does not "
+                    f"compile rather than merely warning. The scaffold itself would still build; "
+                    f"what fails is the first authored rule that hands one of this project's "
+                    f"accounts to a CVLR helper"
+                ),
+                resolution=(
+                    f"either move the project to {witness.name} {witness.line}, or pin the "
+                    f"CVLR line that matches {resolved.version} by hand (the project's own pin is "
+                    f"always respected) — picking one of those is a decision about the project, "
+                    f"not about the scaffold"
+                ),
+            )
+        ]
+    return []
+
+
+def _plan_workspace_manifest(
+    workspace: Workspace, package: CratePackage, reference: ChainReference
+) -> tuple[list[Change], list[str]]:
+    """Pins in ``[workspace.dependencies]``, when the root manifest has a ``[workspace]``."""
+    parsed = _read_toml(workspace.root / "Cargo.toml")
+    if "workspace" not in parsed:
+        return [], []
+
+    declared = parsed.get("workspace", {}).get("dependencies", {})
+    stanzas, satisfied = [], []
+    for crate in _scaffold_pins(workspace, package, reference):
+        if crate.name in declared:
+            satisfied.append(
+                f"{crate.name} is already a workspace dependency — the project's pin wins, and a "
+                f"disagreement with the reference set is reported as a version gap rather than "
+                f"overridden here"
+            )
+            continue
+        stanzas.append(f'[workspace.dependencies.{crate.name}]\nversion = "={crate.version}"\n')
+    if not stanzas:
+        return [], satisfied
+    return [
+        AppendSection(
+            path=Path("Cargo.toml"),
+            contents=_section_banner() + "\n".join(stanzas),
+            why="pin the CVLR releases the reference set names, for the whole workspace",
+        )
+    ], satisfied
+
+
+def local_dependencies(workspace: Workspace, package: CratePackage) -> tuple[CratePackage, ...]:
+    """The workspace crates ``package`` depends on by path, in manifest order.
+
+    Read off the manifest's own ``path =`` entries rather than off the resolved graph, because the
+    question is which crates *this project* owns and can therefore be scaffolded — a registry crate
+    resolved to a workspace member by a patch table is still somebody else's code.
+    """
+    declared = _read_toml(package.root / "Cargo.toml").get("dependencies", {})
+    named = [
+        name for name, spec in declared.items() if isinstance(spec, dict) and "path" in spec
+    ]
+    return tuple(
+        found for name in named if (found := workspace.member(name)) is not None
+    )
+
+
+def _plan_feature_forwarding(
+    workspace: Workspace, package: CratePackage, reference: ChainReference
+) -> tuple[list[Change], list[str]]:
+    """Give every local dependency a ``certora`` feature, so a munge can gate code inside one.
+
+    **Why the shared feature and not the per-unit one.** A cross-crate munge has to be gated on
+    something the dependency declares, and forwarding *per-unit* features
+    (``unit_x = ["library/unit_x"]``) would give every dependency a distinct feature set per unit —
+    reinstating the per-unit dependency build the shared tree exists to remove
+    (``docs/single-working-tree.md`` §2.1, and :func:`declare_unit_features` on why unit features are
+    empty). Forwarding the one shared ``certora`` feature keeps the dependencies at a single
+    resolved feature set for the whole run.
+
+    The cost is real and is paid elsewhere: a munge inside a dependency is in force for **every**
+    unit, not just the one that asked for it, so
+    :mod:`composer.spec.cvlr.editor` records it as run-global and every unit's judge is shown it.
+    That is a reporting obligation rather than a build one, and it is the trade
+    ``docs/who-edits-the-program.md`` §11.3 sets out.
+
+    Declared for every local dependency up front rather than when a munge first needs one: the
+    alternative edits a second crate's manifest mid-run, after the tree is built and the feature set
+    a build resolved is already fixed.
+    """
+    changes: list[Change] = []
+    satisfied: list[str] = []
+    forwards: list[str] = []
+    for dep in local_dependencies(workspace, package):
+        forwards.append(f"{dep.name}/{DEFAULT_FEATURE}")
+        rel = dep.root.resolve().relative_to(workspace.root.resolve())
+        parsed = _read_toml(dep.root / "Cargo.toml")
+        features = parsed.get("features", {})
+        if DEFAULT_FEATURE in features:
+            satisfied.append(f"{dep.name} already declares a `{DEFAULT_FEATURE}` feature")
+            continue
+        wanted = _scaffold_pins(workspace, dep, reference)
+        declared = parsed.get("dependencies", {})
+        missing = [c for c in wanted if c.name not in declared]
+        enables = [f"dep:{c.name}" for c in wanted]
+        if NO_ENTRYPOINT_FEATURE in dep.features:
+            enables.insert(0, NO_ENTRYPOINT_FEATURE)
+        entry = f"{DEFAULT_FEATURE} = {_toml_array(enables)}\n"
+        why = (
+            f"so a verification-only edit inside {dep.name} can be gated — the program's "
+            f"`{DEFAULT_FEATURE}` forwards to it"
+        )
+        if features:
+            changes.append(
+                InsertInTable(
+                    path=rel / "Cargo.toml", header="[features]", contents=entry, why=why
+                )
+            )
+        else:
+            changes.append(
+                AppendSection(
+                    path=rel / "Cargo.toml",
+                    contents=_section_banner() + f"[features]\n{entry}",
+                    why=why,
+                )
+            )
+        if missing:
+            changes.append(
+                AppendSection(
+                    path=rel / "Cargo.toml",
+                    contents=_section_banner()
+                    + "\n".join(
+                        _dependency_stanza(c.name, inherit=False, version=c.version)
+                        for c in missing
+                    ),
+                    why=f"the CVLR crates {dep.name}'s `{DEFAULT_FEATURE}` feature enables",
+                )
+            )
+    return changes, satisfied
+
+
+def _plan_package_manifest(
+    workspace: Workspace,
+    package: CratePackage,
+    relative: Path,
+    reference: ChainReference,
+    *,
+    inherit: bool,
+) -> tuple[list[Change], list[str], list[Blocked]]:
+    manifest_rel = relative / "Cargo.toml"
+    parsed = _read_toml(package.root / "Cargo.toml")
+    changes: list[Change] = []
+    satisfied: list[str] = []
+    blocked: list[Blocked] = []
+    #: Appended to the manifest as one block, so the banner appears once whatever else happens.
+    appended: list[str] = []
+
+    if package.lib is None or not package.lib.builds_shared_object:
+        blocked.append(
+            Blocked(
+                path=manifest_rel,
+                problem=(
+                    f"{package.name} builds no {SHARED_OBJECT_TYPE}, so cargo produces no loadable "
+                    f"object and the prover has nothing to read"
+                ),
+                resolution=(
+                    f'add `[lib]` with `crate-type = ["{SHARED_OBJECT_TYPE}"]` if this package '
+                    f"really is the on-chain program, or scaffold the package that is — changing a "
+                    f"library's crate type changes how it builds everywhere, which is not a "
+                    f"scaffold's call"
+                ),
+            )
+        )
+
+    dependencies = parsed.get("dependencies", {})
+    wanted = _scaffold_pins(workspace, package, reference)
+    missing = [c for c in wanted if c.name not in dependencies]
+    satisfied += [
+        f"{c.name} is already a dependency of {package.name}" for c in wanted if c not in missing
+    ]
+
+    features = parsed.get("features", {})
+    if DEFAULT_FEATURE in features:
+        satisfied.append(
+            f"the `{DEFAULT_FEATURE}` feature already exists as {features[DEFAULT_FEATURE]!r}"
+        )
+        if len(missing) == len(wanted):
+            blocked.append(
+                Blocked(
+                    path=manifest_rel,
+                    problem=(
+                        f"`{DEFAULT_FEATURE}` is already a feature but no CVLR crate is a "
+                        f"dependency, so the name means something else in this package"
+                    ),
+                    resolution=(
+                        "rename that feature, or add the CVLR dependencies to it by hand and "
+                        "re-run — extending a feature that already has a meaning is not a "
+                        "scaffold's call"
+                    ),
+                )
+            )
+    else:
+        enables = [f"dep:{c.name}" for c in wanted]
+        if NO_ENTRYPOINT_FEATURE in package.features:
+            enables.insert(0, NO_ENTRYPOINT_FEATURE)
+        # Forwarded so a munge inside a local dependency has a feature to gate on; see
+        # :func:`_plan_feature_forwarding` for why this one and not the per-unit features.
+        enables += [
+            f"{dep.name}/{DEFAULT_FEATURE}" for dep in local_dependencies(workspace, package)
+        ]
+        entry = f"{DEFAULT_FEATURE} = {_toml_array(enables)}\n"
+        why = f"the feature that compiles the harness in ({', '.join(enables)})"
+        if features:
+            changes.append(
+                InsertInTable(path=manifest_rel, header="[features]", contents=entry, why=why)
+            )
+        else:
+            appended.append(f"[features]\n{entry}")
+
+    appended += [
+        _dependency_stanza(c.name, inherit=inherit, version=c.version) for c in missing
+    ]
+
+    if "certora" in parsed.get("package", {}).get("metadata", {}):
+        satisfied.append("[package.metadata.certora] already declares sources and tuning files")
+    else:
+        appended.append(_metadata_section({f.stem: str(ENVS_DIR / f.composite) for f in ENV_FAMILIES}))
+
+    if appended:
+        changes.append(
+            AppendSection(
+                path=manifest_rel,
+                contents=_section_banner() + "\n".join(appended),
+                why="the dependencies, feature and metadata a verification build reads",
+            )
+        )
+    return changes, satisfied, blocked
+
+
+def _plan_harness(package: CratePackage, relative: Path) -> tuple[list[Change], list[str]]:
+    changes: list[Change] = []
+    satisfied: list[str] = []
+    for name, contents in _HARNESS_FILES.items():
+        target = HARNESS_DIR / name
+        if (package.root / target).exists():
+            satisfied.append(f"{relative / target} already exists")
+            continue
+        changes.append(NewFile(path=relative / target, contents=contents, why=_HARNESS_WHY[name]))
+
+    if package.lib is not None:
+        lib_rel = _project_relative(package.lib.src_path, package.root)
+        source = package.lib.src_path.read_text() if package.lib.src_path.is_file() else ""
+        if _MOD_CERTORA.search(source):
+            satisfied.append(f"{relative / lib_rel} already declares the harness module")
+        else:
+            changes.append(
+                AppendSection(
+                    path=relative / lib_rel,
+                    contents=_lib_declaration(),
+                    why="pull the harness into the crate, gated on the feature",
+                )
+            )
+    return changes, satisfied
+
+
+def _plan_envs(
+    package: CratePackage, relative: Path, dialect: PathDialect
+) -> tuple[list[Change], list[str]]:
+    changes: list[Change] = []
+    satisfied: list[str] = []
+    for family in ENV_FAMILIES:
+        kind = "Inlining directives" if family is INLINING else "Points-to summaries"
+        layer_path = package.root / ENVS_DIR / family.package
+        package_layer = (
+            layer_path.read_text()
+            if layer_path.is_file()
+            else _PACKAGE_ENV_HEADER.format(kind=kind, repo=TEMPLATE_REPO)
+        )
+        planned = (
+            (
+                family.core,
+                canonical_env(family.core, dialect),
+                f"canonical {kind.lower()}, from upstream",
+            ),
+            (
+                family.anchor,
+                canonical_env(family.anchor, dialect),
+                f"Anchor {kind.lower()}, from upstream",
+            ),
+            (family.package, package_layer, f"this package's own {kind.lower()} — yours to edit"),
+            (
+                family.composite,
+                compose_env(family, package_layer=package_layer, dialect=dialect),
+                "the composite the build reports to the prover",
+            ),
+        )
+        for name, contents, why in planned:
+            target = ENVS_DIR / name
+            if (package.root / target).exists():
+                satisfied.append(f"{relative / target} already exists")
+                continue
+            changes.append(NewFile(path=relative / target, contents=contents, why=why))
+    return changes, satisfied
+
+
+def _plan_munge(workspace: Workspace) -> tuple[list[Change], list[str], list[Blocked]]:
+    """Point the target at the verification forks of its dependencies.
+
+    A workspace-manifest append rather than its own step, because ``[patch.crates-io]`` is a
+    workspace-level table and the scaffold already owns one review-then-apply cycle. Anchor is the
+    only case today, and it is not optional: without it a rule that reaches a handler cannot be
+    analyzed at all (:mod:`composer.spec.cvlr.munge`).
+
+    A version the fork does not cover becomes a :class:`Blocked` on the manifest, so the run stops
+    with a sentence about Anchor coverage instead of proceeding to a build that looks fine and then
+    reports a pointer-analysis error.
+
+    **Already-patched is read two ways, because one of them used to be wrong.** This searched
+    ``Cargo.toml`` for a ``[patch.crates-io.<crate>]`` header, which is not the spelling any real
+    project uses — all of them write the inline ``crate = { git = … }`` form under one shared
+    header. So the search found nothing, the append added a second entry for a key TOML already had,
+    and cargo failed outright, on exactly the projects that were already doing the right thing. Now
+    the patch table is *parsed* rather than searched, and the resolved graph — where a redirect
+    shows up as a git source — is consulted as well, since it is what cargo itself computed.
+    """
+    plan = munge.plan_munge(
+        workspace,
+        already_redirected=munge.already_patched((workspace.root / "Cargo.toml").read_text()),
+    )
+    blocked = [
+        Blocked(path=Path("Cargo.toml"), problem=b.problem, resolution=b.resolution)
+        for b in plan.blocked
+    ]
+    if blocked or not plan.overrides:
+        return [], [] if blocked else plan.notes(), blocked
+    return (
+        [
+            AppendSection(
+                path=Path("Cargo.toml"),
+                contents=munge.manifest_additions(plan),
+                why=(
+                    "verify against the forks that can be analyzed: "
+                    + ", ".join(f"{o.crate} {o.version} -> {o.branch}" for o in plan.overrides)
+                ),
+            )
+        ],
+        plan.notes(),
+        [],
+    )
+
+
+def _plan_gitignore(workspace: Workspace) -> tuple[list[Change], list[str]]:
+    path = workspace.root / ".gitignore"
+    header = "# Certora Prover build output\n"
+    lines = "".join(f"{line}\n" for line in GITIGNORE_LINES)
+    if not path.is_file():
+        return [
+            NewFile(
+                path=Path(".gitignore"),
+                contents=header + lines,
+                why="keep prover build output out of the project's history",
+            )
+        ], []
+    existing = {line.strip() for line in path.read_text().splitlines()}
+    absent = [line for line in GITIGNORE_LINES if line not in existing]
+    if not absent:
+        return [], ["prover build output is already gitignored"]
+    return [
+        AppendSection(
+            path=Path(".gitignore"),
+            contents="\n" + header + "".join(f"{line}\n" for line in absent),
+            why=f"ignore {', '.join(absent)}",
+        )
+    ], []
+
+
+def plan_scaffold(
+    workspace: Workspace, package: CratePackage, reference: ChainReference
+) -> ScaffoldPlan:
+    """What scaffolding ``package`` would change, without changing anything.
+
+    Every path is relative to ``workspace.root``, which is also what :func:`apply` writes under —
+    one origin, so a plan can be printed, reviewed and applied without a reader having to track
+    which of two roots each line is measured against.
+    """
+    relative = _project_relative(package.root, workspace.root)
+    inherit = "workspace" in _read_toml(workspace.root / "Cargo.toml")
+    dialect = dialect_for(workspace, reference)
+
+    changes: list[Change] = []
+    satisfied: list[str] = []
+    for planned, notes in (
+        _plan_workspace_manifest(workspace, package, reference),
+        _plan_harness(package, relative),
+        _plan_envs(package, relative, dialect),
+        _plan_gitignore(workspace),
+        _plan_feature_forwarding(workspace, package, reference),
+    ):
+        changes += planned
+        satisfied += notes
+
+    munge_changes, munge_notes, munge_blocked = _plan_munge(workspace)
+    changes += munge_changes
+    satisfied += munge_notes
+
+    manifest_changes, manifest_notes, blocked = _plan_package_manifest(
+        workspace, package, relative, reference, inherit=inherit
+    )
+    # Only when the scaffold would write a *reference-set* pin. A project that already pins CVLR
+    # has made its own pairing decision — the scaffold inherits that pin, so the reference set's
+    # platform says nothing about what will be built, and checking it here would refuse a project
+    # whose own pin is perfectly consistent.
+    if _introduced(workspace, package, reference):
+        blocked += _check_platform(workspace, reference)
+    blocked += munge_blocked
+
+    return ScaffoldPlan(
+        package=package.name,
+        changes=tuple(changes + manifest_changes),
+        satisfied=tuple(satisfied + manifest_notes),
+        blocked=tuple(blocked),
+        dialect=dialect,
+    )
+
+
+def _declared(workspace: Workspace, package: CratePackage) -> set[str]:
+    """Every crate this project already names, across both manifests that can name one.
+
+    A project may pin CVLR in ``[workspace.dependencies]`` without any member depending on it yet,
+    in which case the resolved graph does not mention it at all — so this reads the manifests rather
+    than the graph. Getting that wrong is how the platform gate refuses a project whose own pin is
+    consistent, which is what it did on the first project it was pointed at.
+    """
+    root = _read_toml(workspace.root / "Cargo.toml")
+    return set(root.get("workspace", {}).get("dependencies", {})) | set(
+        _read_toml(package.root / "Cargo.toml").get("dependencies", {})
+    )
+
+
+def _scaffold_pins(
+    workspace: Workspace, package: CratePackage, reference: ChainReference
+) -> tuple[CrateRelease, ...]:
+    """The reference-set crates this scaffold offers to pin.
+
+    Everything the reference set names, **except** that specializations are withheld from a project
+    that already declares the chain crate. That project has chosen its own CVLR line and the
+    scaffold inherits it; adding a reference-version specialization on top would pair, say, a 0.5.0
+    token model with the 0.4 line the project picked — two generations of ``AccountInfo``, and a
+    build that does not compile rather than a warning. So the scaffold sets the reference set up
+    whole, or leaves the project's choice alone; it never mixes lines.
+
+    Core and chain themselves are still offered per-crate, which is the behaviour that was here
+    before specializations were scaffolded at all: a project pinning one of them and not the other
+    has a half-configured manifest, and completing it is what the platform gate is then checked
+    against.
+    """
+    declared = _declared(workspace, package)
+    if reference.chain.name in declared:
+        return (reference.core, reference.chain)
+    return reference.scaffold_crates()
+
+
+def _introduced(
+    workspace: Workspace, package: CratePackage, reference: ChainReference
+) -> tuple[str, ...]:
+    """The crates this scaffold would pin *at the reference version* — the ones not already
+    declared. Empty means the project's own pins stand, which is what the platform gate keys on."""
+    declared = _declared(workspace, package)
+    return tuple(
+        c.name for c in _scaffold_pins(workspace, package, reference) if c.name not in declared
+    )
+
+
+# ---------------------------------------------------------------------------------------------
+# applying
+
+
+def _insert_in_table(text: str, header: str, addition: str) -> str:
+    """``addition`` placed immediately after ``header``'s line.
+
+    ``header`` must appear exactly once. This is a text edit to a file that was parsed, not
+    reserialized — the alternative is a style-preserving TOML writer, and reserializing somebody's
+    manifest would rewrite their comments and ordering to make one change."""
+    lines = text.splitlines(keepends=True)
+    at = [i for i, line in enumerate(lines) if line.strip() == header]
+    if len(at) != 1:
+        raise ScaffoldBlocked(
+            (
+                Blocked(
+                    path=Path("Cargo.toml"),
+                    problem=f"{header} appears {len(at)} times, so there is no one place to add to",
+                    resolution=f"add the entry to {header} by hand and re-run",
+                ),
+            )
+        )
+    index = at[0] + 1
+    return "".join(lines[:index]) + addition + "".join(lines[index:])
+
+
+def declare_unit_features(manifest: Path, features: Sequence[str]) -> tuple[str, ...]:
+    """Declare one empty cargo feature per unit, returning the ones this call added.
+
+    The counterpart to :meth:`composer.spec.cvlr.harness.CvlrArtifactStore.declare_modules`: that
+    writes ``#[cfg(feature = "unit_x")] pub mod x;`` and this makes ``unit_x`` a feature cargo will
+    accept. Without it ``--features certora,unit_x`` fails with *"Package does not contain this
+    feature"* — the same failure ``docs/command-sandbox.md`` §11 item 8 records the Rust wheel
+    hitting on a shared crate, and the reason both halves are written once, up front, by one writer.
+
+    **Every unit feature is empty, and that is load-bearing.** A feature that enabled a *dependency*
+    feature would change the deps' resolved feature set, give them separate fingerprints, and
+    reinstate the per-unit dependency build the shared tree exists to remove
+    (``docs/single-working-tree.md`` §2.1). Empty means the only compilation that varies with it is
+    the program crate's own — 4 of 519 artifacts by that document's §3.
+
+    Idempotent, like everything else that writes into somebody's manifest: a feature already
+    declared is left exactly as it is, whatever it says.
+    """
+    parsed = _read_toml(manifest)
+    declared = parsed.get("features", {})
+    wanted = [f for f in dict.fromkeys(features) if f not in declared]
+    if not wanted:
+        return ()
+    entries = "".join(f"{feature} = []\n" for feature in wanted)
+    text = manifest.read_text()
+    if declared:
+        manifest.write_text(_insert_in_table(text, "[features]", entries))
+    else:
+        manifest.write_text(text + _section_banner() + f"[features]\n{entries}")
+    return tuple(wanted)
+
+
+def apply(plan: ScaffoldPlan, root: Path) -> tuple[Path, ...]:
+    """Carry out ``plan`` under ``root``, returning the paths it touched, in order.
+
+    Refuses a plan with anything :class:`Blocked`: a partial scaffold is worse than none, because
+    the next step is a build whose failure would then have two candidate causes.
+    """
+    if plan.blocked:
+        raise ScaffoldBlocked(plan.blocked)
+
+    touched: list[Path] = []
+    for change in plan.changes:
+        target = root / change.path
+        # An assertion about this module, not a security boundary: every path in a plan is built
+        # from constants and from `cargo metadata`, never from a model. A plan that escaped the root
+        # would be a planner bug, and writing into somebody's home directory is the wrong way to
+        # find out about it.
+        if not target.resolve().is_relative_to(root.resolve()):
+            raise ScaffoldOutsideProject(f"{target} escapes {root}")
+        match change:
+            case NewFile(contents=contents):
+                if target.exists():
+                    # Re-planned against a project that changed underneath: still never overwrite.
+                    _log.info("scaffold: %s appeared since planning; left alone", change.path)
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(contents)
+            case AppendSection(contents=contents):
+                existing = target.read_text() if target.is_file() else ""
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(existing + contents)
+            case InsertInTable(header=header, contents=contents):
+                target.write_text(_insert_in_table(target.read_text(), header, contents))
+        touched.append(change.path)
+    return tuple(touched)
