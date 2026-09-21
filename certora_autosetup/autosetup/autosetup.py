@@ -861,25 +861,28 @@ class Autosetup:
                     contract_advanced = await autosetup.set_sanity_options(enhanced_config.path, contract_name)
                     autosetup._sanity_advanced_analysis.update(contract_advanced)
 
-                # Create test run config BEFORE building the warmup config, because the test flags
-                # need actual sanity rules to exercise. Lands in .certora_internal/confs/ so the
+                # Copies of the base conf live in .certora_internal/confs/ so the
                 # user-facing certora/confs/ stays a single-file directory.
                 internal_confs_dir = autosetup.config.project_root / DIR_INTERNAL_CONFS
-                test_config = autosetup.config_manager.create_copy_with_prover_args(
-                    enhanced_config.path,
-                    autosetup.TEST_RUN_PROVER_ARGS,
-                    "_test_run",
-                    target_dir=internal_confs_dir,
-                )
-                # The test run exercises the generated sanity rule; rule_sanity's own
-                # checks would duplicate it, so they are turned off for this invocation
-                # only (via extra_args, leaving the conf's rule_sanity untouched).
-                autosetup._test_run_specs.append(ProverJobSpec(
-                    config_file=test_config,
-                    contract_name=contract_name,
-                    phase=f"Sanity Test Run - {contract_name}",
-                    extra_args=[*autosetup.config.extra_args, "--rule_sanity", "none"],
-                ))
+
+                # The test run config is created BEFORE the warmup config, because the test
+                # flags need actual sanity rules to exercise.
+                if not autosetup.config.skip_test_run:
+                    test_config = autosetup.config_manager.create_copy_with_prover_args(
+                        enhanced_config.path,
+                        autosetup.TEST_RUN_PROVER_ARGS,
+                        "_test_run",
+                        target_dir=internal_confs_dir,
+                    )
+                    # The test run exercises the generated sanity rule; rule_sanity's own
+                    # checks would duplicate it, so they are turned off for this invocation
+                    # only (via extra_args, leaving the conf's rule_sanity untouched).
+                    autosetup._test_run_specs.append(ProverJobSpec(
+                        config_file=test_config,
+                        contract_name=contract_name,
+                        phase=f"Sanity Test Run - {contract_name}",
+                        extra_args=[*autosetup.config.extra_args, "--rule_sanity", "none"],
+                    ))
 
                 if skip_warmup:
                     return None
