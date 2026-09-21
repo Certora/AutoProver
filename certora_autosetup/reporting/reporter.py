@@ -54,6 +54,21 @@ class _SanityRow:
     optimistic_hashing: bool
     hashing_bounds: int | str
 
+    @staticmethod
+    def config_fields(config: dict[str, Any]) -> dict[str, Any]:
+        """The subset of `_SanityRow` fields read straight from the sanity conf.
+
+        Both row-construction paths (normal and preprocessing-timeout) derive these
+        identically; splat the result so the key names and defaults live in one place.
+        """
+        return {
+            "storage_extension": config.get("storage_extension_annotation", False),
+            "optimistic_loop": config.get("optimistic_loop", False),
+            "loop_iter": config.get("loop_iter", "N/A"),
+            "optimistic_hashing": config.get("optimistic_hashing", False),
+            "hashing_bounds": config.get("hashing_length_bound", "N/A"),
+        }
+
 
 
 
@@ -614,13 +629,9 @@ class Reporter:
                     ),
                     method_failures={},
                     unresolved_count=0,
-                    storage_extension=config.get("storage_extension_annotation", False),
                     global_warnings=0,
                     runtime="N/A",
-                    optimistic_loop=config.get("optimistic_loop", False),
-                    loop_iter=config.get("loop_iter", "N/A"),
-                    optimistic_hashing=config.get("optimistic_hashing", False),
-                    hashing_bounds=config.get("hashing_length_bound", "N/A"),
+                    **_SanityRow.config_fields(config),
                 ))
                 continue
 
@@ -651,13 +662,9 @@ class Reporter:
                 sanity_status=SanityAnalysis.from_job_report(jr).status_summary(),
                 method_failures=sanity_advanced.get(contract_name, {}) if sanity_advanced else {},
                 unresolved_count=len(jr.unresolved_calls),
-                storage_extension=config.get("storage_extension_annotation", False),
                 global_warnings=sum(len(a) for a in jr.alerts_by_type.values()),
                 runtime=runtime,
-                optimistic_loop=config.get("optimistic_loop", False),
-                loop_iter=config.get("loop_iter", "N/A"),
-                optimistic_hashing=config.get("optimistic_hashing", False),
-                hashing_bounds=config.get("hashing_length_bound", "N/A"),
+                **_SanityRow.config_fields(config),
             ))
         return rows
 
