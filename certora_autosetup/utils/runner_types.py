@@ -37,6 +37,12 @@ class RunnerType(Enum):
     CLOUD = "cloud"
 
 
+# EarlyStop.reason vocabulary (see utils/early_stop.py). Defined here so both the checkers and
+# ProverResult can reference the same tags without a circular import.
+REASON_PREPROCESSING_TIMEOUT = "preprocessing_timeout"
+REASON_FIRST_VIOLATION = "first_violation"
+
+
 class JobStatus(Enum):
     """Status of a cloud job."""
 
@@ -46,6 +52,9 @@ class JobStatus(Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    # An early-stop checker ended the wait before a terminal status (see utils/early_stop.py).
+    # The specific condition is in ProverResult.early_stop_reason.
+    EARLY_STOPPED = "early_stopped"
 
 
 @dataclass
@@ -146,6 +155,16 @@ class ProverResult:
     rule_results: List[RuleResult] = field(default_factory=list)
     alerts: List[ParsedAlert] = field(default_factory=list)
     transformed_result: Optional[Any] = None  # Generic transformed result
+    # Set when an early-stop checker ended the wait before a terminal status. `success` still
+    # means the prover ran to a normal completion (so an early stop has success=False); these
+    # let a consumer tell an early stop apart from a genuine failure.
+    stopped_early: bool = False
+    early_stop_reason: Optional[str] = None  # one of the REASON_* tags
+
+    @property
+    def is_preprocessing_timeout(self) -> bool:
+        """True when an early-stop checker stopped the job for a preprocessing stall."""
+        return self.early_stop_reason == REASON_PREPROCESSING_TIMEOUT
 
     @property
     def job_url(self) -> Optional[str]:
