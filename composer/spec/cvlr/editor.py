@@ -83,6 +83,9 @@ from composer.spec.cvlr.munge import (
     FunctionNotFound,
     HookOnEntry,
     HookOnExit,
+    ImportNotFound,
+    ImportNotIsolable,
+    ImportSwap,
     InlineNever,
     MockFn,
     ModuleNotFound,
@@ -98,6 +101,7 @@ from composer.spec.cvlr.munge import (
     apply_attribute,
     apply_derive_swap,
     apply_extraction,
+    apply_import_swap,
     apply_module_redirect,
     forwards_feature,
     function_item,
@@ -1138,6 +1142,165 @@ def _redirect_of(state: EditorStateExtra, path: str, module: str) -> ModuleRedir
     return None
 
 
+
+@tool_display(lambda p: f"Swapping import `{p['name']}`", "Import")
+class SwapImport(
+    WithInjectedState[EditorStateExtra],
+    WithInjectedId,
+    WithAsyncDependencies[Command | str, HarnessTarget],
+):
+    """Point a name the file *imports* at a stand-in, behind the unit's feature.
+
+    The kind for code the program calls but does not own. `munge_function` needs the function to be
+    the program's, because an attribute goes on a definition, and a munge may not touch a dependency.
+    A CPI is the case where neither holds: `invoke` belongs to `solana_program`, the call is an
+    expression rather than an item, and the optimizer has usually left no symbol to summarize. What
+    *is* the program's is the `use` line that puts the name in scope, and that is what this rewrites:
+
+    ```rust
+    #[cfg(not(feature = "unit_x"))]
+    use anchor_lang::solana_program::program::invoke;
+    #[cfg(feature = "unit_x")]
+    use crate::certora::specs::unit_x::invoke_transfer as invoke;
+    ```
+
+    With the feature off the declaration is exactly what the developer wrote. `mock_fn` replaces a
+    definition with a `use`; this replaces a `use` with a `use`.
+
+    Two things you own when you record one:
+
+    * **It is scoped to the file, not to the call.** Every mention of the name below the declaration
+      resolves to the stand-in, including calls the author's property says nothing about. If the file
+      calls `invoke` four times and the property is about one of them, the other three are mocked
+      too, and `why` has to say so.
+    * **A stand-in for a cross-program call drops the callee's effect.** That is the point of it — the
+      Prover's own replacement for a CPI havocs the caller's deserialized accounts, which is what
+      defeats a property about the program's bookkeeping *after* a transfer. A stand-in that returns
+      `Ok(())` keeps the caller analysable and the program's own accounting provable; it does not make
+      a property about the moved lamports provable, and one written against it would be false. Say
+      which of the two the batch holds.
+
+    You do not write the stand-in — the author does, in the harness, and passes you its path. If the
+    name is not imported at all, or the code calls it fully qualified, this cannot reach it: say so
+    and let the author ask for the import to be introduced first.
+    """
+
+    path: str = Field(
+        description="The file whose import to swap, relative to the workspace root. The file that "
+        "declares the `use`, which is usually the one making the calls."
+    )
+    name: str = Field(
+        description="The name as the code spells it at the call site — the binding, not the path it "
+        "came from. For `use a::b as c`, that is `c`."
+    )
+    stand_in: str = Field(
+        description="Path to the replacement the author has written, as the program's own file must "
+        "spell it — e.g. `crate::certora::specs::deposits::invoke_transfer`. It has to have the "
+        "signature the call sites use, or the build fails."
+    )
+    why: str = Field(
+        description="What the real item did that the stand-in does not, and what else in this file "
+        "resolves to the stand-in as a side effect. Both, because the swap is file-wide and a "
+        "reader of the report cannot work out either from the diff."
+    )
+
+    @override
+    async def run(self) -> Command | str:
+        if not self.why.strip():
+            return (
+                "A non-empty `why` is required. A swapped import changes what the program calls, so "
+                "a verdict obtained under it means nothing until somebody knows what it called "
+                "instead."
+            )
+        with self.tool_deps() as target:
+            match target.pristine_source(self.path):
+                case NotInWorkdir():
+                    return (
+                        f"{self.path} resolves outside this project. Swap an import in the "
+                        f"program's own source, with a path relative to the workspace root."
+                    )
+                case NotProjectSource(directory=directory):
+                    return (
+                        f"{self.path} is under `{directory}`, which is not this project's source. "
+                        f"Swapping an import there would redirect the name for every crate that "
+                        f"compiles that file, including the ones the author's property is about."
+                    )
+                case Path() as resolved:
+                    pass
+            if not resolved.is_file():
+                return f"{self.path} is not a file in this project."
+            record = ImportSwap(
+                path=self.path,
+                name=self.name,
+                stand_in=self.stand_in,
+                why=self.why,
+                feature=self.state["feature"],
+            )
+            if any(m.edit_id == record.edit_id for m in _held(self.state)):
+                return (
+                    f"`{self.name}` in {self.path} already resolves to {self.stand_in}. To correct "
+                    f"what the record says, `amend_munge`."
+                )
+            if (prior := _import_swap_of(self.state, self.path, self.name)) is not None:
+                return (
+                    f"This unit already points `{self.name}` in {self.path} at "
+                    f"{prior.stand_in} ({prior.edit_id}). Two stand-ins for one name is two "
+                    f"bindings of it and does not compile; `drop_munge` that one first."
+                )
+            match apply_import_swap(resolved.read_text(), record):
+                case ImportNotFound(nearby=nearby):
+                    listed = ", ".join(sorted(set(nearby))) if nearby else "nothing this tool reads"
+                    return (
+                        f"No `use` in {self.path} binds `{self.name}`. That file imports: {listed}. "
+                        f"If the code spells the call out in full, or reaches the name through a "
+                        f"glob, there is no declaration here to rewrite — say so rather than "
+                        f"swapping something else."
+                    )
+                case ImportNotIsolable(declaration=declaration):
+                    return (
+                        f"`{self.name}` comes from a nested `use` in {self.path} "
+                        f"(`{declaration}`), and taking one leaf out of a tree is not an edit this "
+                        f"tool makes. Flattening the developer's import to suit a munge is a change "
+                        f"to the deployed build; give up and say the declaration needs splitting."
+                    )
+                case FunctionAmbiguous(lines=lines):
+                    return (
+                        f"{self.path} binds `{self.name}` at {len(lines)} declarations (lines "
+                        f"{', '.join(str(n) for n in lines)}). Only one of them is in scope where "
+                        f"the calls are, and this tool cannot tell which; that is a file to give up "
+                        f"on rather than guess at."
+                    )
+                case AlreadyMunged(line=line):
+                    return f"{self.path}:{line} already gates that import in the program."
+                case Munged(line=line):
+                    pass
+        return Command(
+            update={
+                "proposed": [record],
+                "reviewed_digest": None,
+                "messages": [
+                    ToolMessage(
+                        tool_call_id=self.tool_call_id,
+                        content=(
+                            f"`{self.name}` resolves to {self.stand_in} throughout {self.path} "
+                            f"({self.path}:{line}), gated on `{record.feature}`. The deployed build "
+                            f"is unchanged. Tell the author in `how_to_apply` what the stand-in "
+                            f"does not do and what else in this file now calls it — the swap is "
+                            f"file-wide, and nothing downstream can work that out on its own."
+                        ),
+                    )
+                ],
+            }
+        )
+
+
+def _import_swap_of(state: EditorStateExtra, path: str, name: str) -> ImportSwap | None:
+    """This unit's existing swap of ``name`` in ``path``, if it has one."""
+    for m in _held(state):
+        if isinstance(m, ImportSwap) and m.path == path and m.name == name:
+            return m
+    return None
+
 @tool_display(lambda p: f"Dropping `{p['edit_id']}`", "Drop")
 @tool_display(lambda p: f"Amending `{p['edit_id']}`", "Amend")
 class AmendMunge(
@@ -1599,6 +1762,7 @@ def editor_tools(
                 ExtractFunction.bind(target).as_tool("extract_function"),
                 SwapDerive.bind(target).as_tool("swap_derive"),
                 RedirectModule.bind(target).as_tool("redirect_module"),
+                SwapImport.bind(target).as_tool("swap_import"),
                 DropMunge.as_tool("drop_munge"),
                 AmendMunge.as_tool("amend_munge"),
                 RequestReview.bind(

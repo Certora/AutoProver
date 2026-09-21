@@ -757,6 +757,32 @@ class ModuleOutsideCrateSource:
     path: str
 
 
+@dataclasses.dataclass(frozen=True)
+class ImportNotFound:
+    """No ``use`` declaration in the file binds that name.
+
+    ``nearby`` is every name the file's ``use`` lines do bind. A glob (``use foo::*;``) binds names
+    it does not spell, so a name reaching the file that way lands here with ``nearby`` unable to
+    show it — which is the honest report, since there is no declaration to rewrite either.
+    """
+
+    name: str
+    nearby: tuple[str, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class ImportNotIsolable:
+    """A declaration binds the name, and this module cannot rewrite it to leave the rest alone.
+
+    Nested braces, specifically: ``use a::{b::{c, d}, e}`` is a tree, and dropping one leaf from it
+    is a parse this module does not do. Refused rather than approximated, because the alternative
+    failure is a ``use`` line that silently stops importing something else in the group.
+    """
+
+    name: str
+    declaration: str
+
+
 #: What applying an attribute can come to. ``FunctionNotFound`` is here and not in
 #: :data:`ExtractionAttempt` because an attribute is located by name, where an extraction is located
 #: by the text it captured — a name that has gone takes the text with it, so the extraction reports
@@ -780,8 +806,16 @@ type ModuleRedirectAttempt = (
     Munged | ModuleNotFound | FunctionAmbiguous | AlreadyMunged | ModuleOutsideCrateSource
 )
 
+#: What applying an import swap can come to. Located by declaration like a module redirect, so no
+#: :class:`SourceDrifted`: the feature-on half is derived from whatever the ``use`` line says at
+#: replay time, so a line that has gained a name swaps correctly rather than drifting.
+type ImportSwapAttempt = (
+    Munged | ImportNotFound | ImportNotIsolable | FunctionAmbiguous | AlreadyMunged
+)
+
 type MungeAttempt = (
     AttributeAttempt | ExtractionAttempt | DeriveSwapAttempt | ModuleRedirectAttempt
+    | ImportSwapAttempt
 )
 
 
@@ -1165,7 +1199,7 @@ def forwards_feature(program_manifest: str, dependency: str, feature: str) -> bo
 class ModuleRedirect:
     """A whole module compiled from a different file behind the unit's feature.
 
-    The kind the other seven cannot express, and the one the corpus reaches for most. ``mock_fn``
+    The kind the other eight cannot express, and the one the corpus reaches for most. ``mock_fn``
     replaces an item with ``use <stand-in> as <name>;``, and a ``use`` inside an ``impl`` is not a
     method — so **no attribute munge can reach an inherent or trait method**, which is where a large
     share of Solana state logic lives. Every normative project answers that the same way, by
@@ -1181,7 +1215,7 @@ class ModuleRedirect:
     (``docs/cvlr-backend-plan.md`` §7.12 item 3).
 
     **The substitute is arbitrary code, and that makes this the most dangerous kind.** The other
-    seven are bounded — an attribute cannot change what a function computes, and an extraction and a
+    eight are bounded — an attribute cannot change what a function computes, and an extraction and a
     derive swap both reproduce the original text verbatim in the deployed half. A substitute module
     is written from scratch, so a rule proved against one is a rule about *the substitute* unless
     what it stands for is stated. :attr:`why` therefore carries a heavier burden here than elsewhere
@@ -1232,11 +1266,84 @@ class ModuleRedirect:
         return f"`{self.module}` is compiled from a stand-in module"
 
 
+# ---------------------------------------------------------------------------------------------
+# the import swap: the kind for code in a dependency the program only calls
+#
+# Every kind above edits the item it is about, which requires the item to be the program's. A CPI is
+# the case where it is not: ``invoke`` is ``solana_program``'s, a munge may not touch a dependency,
+# and the call the program makes to it is an expression rather than an item. What *is* the program's
+# is the ``use`` line that puts the name in scope.
+
+
+@dataclasses.dataclass(frozen=True)
+class ImportSwap:
+    """A name the file imports resolves to a stand-in behind the unit's feature.
+
+    ``mock_fn`` replaces a definition with ``use <stand-in> as <name>;``. This replaces a ``use``
+    with a ``use`` — the same mechanism, reached from the calling side, which is the only side
+    available when the definition belongs to a dependency:
+
+    .. code-block:: rust
+
+        #[cfg(not(feature = "unit_x"))]
+        use anchor_lang::solana_program::program::invoke;
+        #[cfg(feature = "unit_x")]
+        use crate::certora::specs::unit_x::invoke_transfer as invoke;
+
+    The corpus writes this by hand for exactly this purpose — ``solana-program-stake-pool-audit``
+    swaps ``solana_program::msg`` for its own, and it is how a CPI wrapper gets a boundary in a
+    program that did not factor one (``docs/cvlr-backend-plan.md`` §7.12, todo U10).
+
+    **Scope is the file, not the call.** Every mention of the name below the declaration resolves to
+    the stand-in, including calls this unit's property says nothing about. That is what :attr:`why`
+    has to be written against, and it is why the swap names an import rather than a call site: a
+    munge that changed one expression and not its neighbour would be a rewrite of the program's
+    behaviour wearing an edit's clothes.
+
+    **What a CPI stand-in may claim.** The Prover's own replacement for a cross-program call havocs
+    the caller's deserialized accounts (``docs/upstream-defects.md`` P6), which is what defeats a
+    property about the program's own bookkeeping after a transfer. A stand-in that returns ``Ok(())``
+    drops the *callee's* effect and keeps the caller analysable, so a property about the program's
+    accounting is provable and a property about the moved lamports is not. Which of those the batch
+    holds is the author's to know and :attr:`why` is where it is written down.
+
+    Creates no file, unlike :class:`ModuleRedirect`: the stand-in is an item in the harness, which is
+    reviewed as part of the harness.
+    """
+
+    path: str
+    #: The name as the code spells it at the call site — the binding, not the path it came from. An
+    #: aliased import (``use x::y as z``) binds ``z``, and ``z`` is what this names.
+    name: str
+    #: Path to the replacement, spelled as the munged file must spell it. Same constraint as
+    #: :attr:`MockFn.stand_in`: the file is the program's own, so it has to resolve from outside
+    #: ``certora``.
+    stand_in: str
+    why: str
+    feature: str = DEFAULT_FEATURE
+
+    @property
+    def edit_id(self) -> str:
+        return f"{self.feature}:import[{self.name}={self.stand_in}]@{self.path}"
+
+    @property
+    def created(self) -> dict[str, str]:
+        """No new files: this kind rewrites a file the developer already has."""
+        return {}
+
+    @property
+    def subject(self) -> str:
+        return self.name
+
+    def describe(self) -> str:
+        return f"`{self.name}` resolves to {self.stand_in} throughout this file"
+
+
 #: One edit to the program under verification: an attribute on a function, a function split in two,
-#: a type's derives moved, or a whole module compiled from elsewhere. All are gated on the recording
-#: unit's cargo feature and all replay onto the pristine project, which is the whole of what the
-#: rest of the backend needs to know about the difference.
-type Munge = FunctionMunge | FunctionExtraction | DeriveSwap | ModuleRedirect
+#: a type's derives moved, a whole module compiled from elsewhere, or an imported name pointed at a
+#: stand-in. All are gated on the recording unit's cargo feature and all replay onto the pristine
+#: project, which is the whole of what the rest of the backend needs to know about the difference.
+type Munge = FunctionMunge | FunctionExtraction | DeriveSwap | ModuleRedirect | ImportSwap
 
 
 def apply_munge(source: str, munge: Munge) -> MungeAttempt:
@@ -1257,6 +1364,8 @@ def apply_munge(source: str, munge: Munge) -> MungeAttempt:
             return apply_derive_swap(source, munge)
         case ModuleRedirect():
             return apply_module_redirect(source, munge)
+        case ImportSwap():
+            return apply_import_swap(source, munge)
 
 
 #: A ``mod`` **declaration** — the form ``#[path]`` can redirect. ``mod name { .. }`` is excluded by
@@ -1306,6 +1415,148 @@ def apply_module_redirect(source: str, edit: ModuleRedirect) -> ModuleRedirectAt
     indent = at.group(0)[: len(at.group(0)) - len(at.group(0).lstrip())]
     return Munged(
         source=f"{before}{indent}{attribute}\n{source[at.start():]}", line=line + 1
+    )
+
+
+_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+#: A ``use`` declaration, whole. ``[^;]*`` crosses newlines, which a braced group needs.
+_USE_DECLARATION = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<vis>pub(?:\s*\([^)]*\))?\s+)?use\s+(?P<tree>[^;]*);",
+    re.MULTILINE,
+)
+
+
+@dataclasses.dataclass(frozen=True)
+class _UseTree:
+    """A ``use`` declaration's payload, flattened far enough to take one leaf out of it."""
+
+    #: Everything before the brace group, ``::``-terminated. Empty for a declaration that imports
+    #: one path with no group.
+    prefix: str
+    #: ``(bound name, the item as written)``, in source order.
+    items: tuple[tuple[str, str], ...]
+
+
+def _bound_name(item: str, prefix: str) -> str | None:
+    """The name one item of a ``use`` puts in scope, or ``None`` if this reader cannot say."""
+    head, aliased, alias = item.partition(" as ")
+    if aliased:
+        name = alias.strip()
+    elif head.strip() == "self":
+        name = prefix.strip().rstrip(":").rsplit("::", 1)[-1]
+    else:
+        name = head.strip().rsplit("::", 1)[-1]
+    return name if _IDENT.fullmatch(name) else None
+
+
+def _parse_use(tree: str) -> _UseTree | None:
+    """The names a ``use`` binds, or ``None`` when this reader cannot say.
+
+    ``None`` is an answer rather than a failure, and the two cases it covers are reported
+    differently by the caller: a glob binds names it never spells, and a nested tree cannot have one
+    leaf removed from it by a split on commas.
+    """
+    flat = " ".join(tree.split())
+    if "*" in flat:
+        return None
+    if "{" not in flat:
+        name = _bound_name(flat, "")
+        return None if name is None else _UseTree(prefix="", items=((name, flat),))
+    prefix, _, rest = flat.partition("{")
+    if "{" in rest or not rest.endswith("}"):
+        return None
+    items: list[tuple[str, str]] = []
+    for raw in rest[:-1].split(","):
+        if not (item := raw.strip()):
+            continue
+        if (name := _bound_name(item, prefix)) is None:
+            return None
+        items.append((name, item))
+    return _UseTree(prefix=prefix, items=tuple(items)) if items else None
+
+
+#: A whole-attribute ``cfg`` on one cargo feature, as this module writes them and as a developer
+#: gating an import for verification writes them too. Anything richer — an ``all``, a target
+#: predicate — is not matched, and a declaration under one is read as being in force.
+_CFG_FEATURE = re.compile(
+    r'^[ \t]*#\[cfg\((?P<negated>not\()?feature\s*=\s*"(?P<feature>[^"]+)"\)?\)\][ \t]*$'
+)
+
+
+def _dormant_here(source: str, at: re.Match[str], feature: str) -> bool:
+    """Whether a declaration is gated *on* some other unit's feature, so this build never sees it.
+
+    The case is a second unit swapping an import a first unit already swapped: the shared tree
+    replays the union onto the pristine file, so the second swap meets the first one's output. Its
+    aliased line is dormant for everybody else and must not be mistaken for a second binding of the
+    name; the original under ``#[cfg(not(..))]`` is still in force here and is the one to gate.
+    """
+    preceding = source[: at.start()].rstrip("\n").rsplit("\n", 1)[-1]
+    gate = _CFG_FEATURE.match(preceding)
+    return gate is not None and not gate.group("negated") and gate.group("feature") != feature
+
+
+def apply_import_swap(source: str, edit: ImportSwap) -> ImportSwapAttempt:
+    """Gate the declaration that binds the name, and put an aliased one beside it.
+
+    The original is kept verbatim under ``#[cfg(not(..))]`` rather than rewritten, so the deployed
+    build imports exactly what the developer wrote. That is the property :class:`FunctionExtraction`
+    has to store its original text to get, and it is free here because the original stays on the
+    page.
+
+    ``line`` is where the aliased declaration lands in the returned source: the swapped name is what
+    a message about this munge is about, and it is the only one of the three lines that is new.
+    """
+    landed = re.compile(
+        rf'#\[cfg\(feature = "{re.escape(edit.feature)}"\)\]\n[ \t]*'
+        rf"(?:pub(?:\s*\([^)]*\))?\s+)?use\s+{re.escape(edit.stand_in)}\s+as\s+"
+        rf"{re.escape(edit.name)}\s*;"
+    )
+    if (already := landed.search(source)) is not None:
+        return AlreadyMunged(function=edit.name, line=source[: already.start()].count("\n") + 2)
+
+    mentions = re.compile(rf"\b{re.escape(edit.name)}\b")
+    bound: list[str] = []
+    found: list[tuple[re.Match[str], _UseTree]] = []
+    opaque: str | None = None
+    for at in _USE_DECLARATION.finditer(source):
+        parsed = _parse_use(at.group("tree"))
+        if parsed is None:
+            if opaque is None and mentions.search(at.group("tree")):
+                opaque = " ".join(at.group(0).split())
+            continue
+        bound.extend(name for name, _ in parsed.items)
+        if any(name == edit.name for name, _ in parsed.items) and not _dormant_here(
+            source, at, edit.feature
+        ):
+            found.append((at, parsed))
+
+    if not found:
+        if opaque is not None:
+            return ImportNotIsolable(name=edit.name, declaration=opaque)
+        return ImportNotFound(name=edit.name, nearby=tuple(bound))
+    if len(found) > 1:
+        return FunctionAmbiguous(
+            function=edit.name,
+            lines=tuple(source[: at.start()].count("\n") + 1 for at, _ in found),
+        )
+
+    at, parsed = found[0]
+    before = source[: at.start()]
+    indent = at.group("indent")
+    gate_off = f'{indent}#[cfg(not(feature = "{edit.feature}"))]'
+    gate_on = f'{indent}#[cfg(feature = "{edit.feature}")]'
+    vis = (at.group("vis") or "").strip()
+    keyword = f"{vis} use" if vis else "use"
+    kept = [text for name, text in parsed.items if name != edit.name]
+    lines = [gate_off, at.group(0)]
+    if kept:
+        lines += [gate_on, f'{indent}{keyword} {parsed.prefix}{{{", ".join(kept)}}};']
+    lines += [gate_on, f"{indent}{keyword} {edit.stand_in} as {edit.name};"]
+    return Munged(
+        source=before + "\n".join(lines) + source[at.end() :],
+        line=before.count("\n") + 1 + sum(line.count("\n") + 1 for line in lines[:-1]),
     )
 
 

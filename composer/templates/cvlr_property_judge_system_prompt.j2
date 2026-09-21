@@ -56,6 +56,20 @@ be stale; the tool is authoritative.
    that reproduces the arithmetic a rule asserts over means the rule verifies the stand-in, and that
    the rule reached the program's function by name changes nothing about that.
 
+   A **`swap_import`** is that same stand-in reached from the calling side, for a function the
+   program does not own, and it asks you one extra question: **what else in that file went through
+   the same name?** The swap is scoped to the file, so a `use` pointed at a stand-in mocks every
+   call below it, not the one the request was about. A rule that never mentions the mocked operation
+   can still be proved under it.
+
+   For a CPI — the common case — the trade is specific and worth knowing rather than re-deriving.
+   The Prover's own replacement for a cross-program call havocs the *caller's* deserialized
+   accounts, so a stand-in returning `Ok(())` is not a loss of fidelity but a recovery of it: the
+   program's own bookkeeping after the call becomes provable, which it otherwise is not. What the
+   stand-in does not do is move anything. So a property about the program's recorded state is sound
+   under one, and a property about the lamports or tokens the CPI actually moved is **false** under
+   one rather than merely unproven. That second kind is the one to hunt for and name.
+
    An **extraction** is the one munge that is behaviour-preserving by construction — a function
    split into a feature-gated pair, with the deployed half kept verbatim — so it does not hollow out
    a rule the way the two above can. What it does instead is narrow one: it manufactures a boundary

@@ -24,6 +24,7 @@ the stated problem, faithfully, within its charter.
 | `hook_on_entry` / `hook_on_exit` | an observing call at the function's first or last statement |
 | `extract_function` | the function is split into a feature-gated pair so a piece of it becomes a `pub fn` a rule can call |
 | `redirect_module` | a whole module is compiled from a stand-in file the editor wrote, behind the feature; the `mod` declaration itself is untouched |
+| `swap_import` | a name the file imports is aliased to a stand-in the author wrote, behind the feature; the original `use` survives under `#[cfg(not(..))]` |
 
 The first five are one attribute on a function that already exists. Extraction restructures code,
 and the diff shows the original function duplicated: one copy under `#[cfg(not(feature = ..))]`,
@@ -36,8 +37,8 @@ inherent or trait method. The diff shows one added `cfg_attr` line and a whole n
 is code the editor invented — nothing constrains it to resemble what it replaces — so it is the one
 kind where reading the substitute *is* the review.
 
-The editor may not touch a dependency, may not write a `mock_fn` stand-in itself, and may not
-improvise an eighth kind.
+The editor may not touch a dependency, may not write a `mock_fn` or `swap_import` stand-in itself,
+and may not improvise a tenth kind.
 
 ## What to check
 
@@ -72,7 +73,18 @@ is a verdict on prose.
    Fourth, **does `why` name the dropped behaviour?** Not the goal — the behaviour. That sentence is
    the only thing that reaches the judge, and a redirect whose justification says "so the CPI does
    not blow up" tells nobody what the verdicts now exclude.
-5. **On a `swap_derive`: does the deployed build still derive what it derived, and is the cascade
+5. **On a `swap_import`: is the stand-in the author's, and does the diff say what else it catches?**
+   Three things. First, the aliased name must point at an item in the *harness* — if the diff also
+   adds the stand-in, the editor wrote it and that is outside the charter. Second, the swap is
+   file-scoped: read the file for every other use of that name, and if the property is about one
+   call while three others are now mocked, `why` has to say so or it goes back. Third, and this is
+   the one that matters for a CPI, **`why` must separate what the stand-in drops from what it
+   keeps.** A stand-in for `invoke` that returns `Ok(())` keeps the caller analysable — which is the
+   whole point, since the Prover's own replacement havocs the caller's deserialized accounts — and
+   drops everything the callee did. "So the CPI stops havocing the vault" is the goal, not the
+   dropped behaviour; "the lamport transfer does not happen, so no property about account balances
+   holds under this" is the sentence the judge needs.
+6. **On a `swap_derive`: does the deployed build still derive what it derived, and is the cascade
    whole?** Two checks the tool cannot make. First, read the `cfg_attr(not(..))` line against the
    original derive list: every derive that left the ungated `derive` must reappear there, or a build
    without the feature has silently lost an impl. Second, `derive(Copy)` needs every field type to
@@ -81,21 +93,21 @@ is a verdict on prose.
    you are **not** ruling on is whether the rules still mean anything afterwards; that is the
    judge's, and for this kind it is a real question, because a type whose deserializer has gone can
    no longer reject a malformed account.
-6. **On an extraction: is it a pure refactoring?** This is the check that carries the kind, and it
+7. **On an extraction: is it a pure refactoring?** This is the check that carries the kind, and it
    is yours alone — the tool verifies that the enclosing function's signature is unchanged and that
    the original copy is preserved byte for byte, and it cannot verify that the *code moved* is the
    code that was there. Read the feature-on half against the feature-off half and confirm they do
    the same thing: same checks, same order, same arithmetic. A dropped guard or a "tidied" line is a
    silent approximation wearing a refactoring, and the untouched copy sitting beside it in the diff
    is what makes it easy to miss.
-7. **Is `why_sound` an argument?** It must say what the modified program does differently and why
+8. **Is `why_sound` an argument?** It must say what the modified program does differently and why
    that is acceptable here. A restatement of what the attribute does is not an argument, and neither
    is "it is a standard attribute".
-8. **Should it have refused?** If the request needed a rewrite, a missing stand-in, or a kind that
+9. **Should it have refused?** If the request needed a rewrite, a missing stand-in, or a kind that
    does not exist, the right answer was `give_up` naming that kind. An attribute chosen because it
    was the closest available — rather than because it is right — is worse than a refusal, because a
    refusal reaches a person and this does not.
-9. **Report fidelity.** The executive summary must cover every hunk in the diff. A change the
+10. **Report fidelity.** The executive summary must cover every hunk in the diff. A change the
    summary omits is a change nobody reviewed.
 
 Approving is not an endorsement that the change was wise — only that the editor did its job within

@@ -42,6 +42,7 @@ from graphcore.tools.vfs import DictBackend, DirBackend, PersistentMaterializer
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.munge import (
     DeriveSwap,
+    ImportSwap,
     FunctionExtraction,
     FunctionMunge,
     ModuleRedirect,
@@ -145,10 +146,10 @@ def replay(source: str, munges: tuple[Munge, ...]) -> tuple[str, tuple[Drifted, 
     one function each insert a line immediately above its signature, and bytes that depended on
     which unit happened to stage first would make the crate's fingerprint depend on scheduling.
 
-    Module redirects and derive swaps go on first and interact with nothing: one sits above a ``mod``
-    declaration and the other above a ``struct`` or ``enum``, where the remaining two address
-    functions. They are ordered anyway, because "does not interact today" is not a property worth
-    depending on for the crate's bytes.
+    Import swaps, module redirects and derive swaps go on first and interact with nothing: they sit
+    at a ``use``, a ``mod`` declaration and a ``struct`` or ``enum`` respectively, where the
+    remaining two address functions. They are ordered anyway, because "does not interact today" is
+    not a property worth depending on for the crate's bytes.
 
     Attributes go on before extractions, and that is the interesting half of the order. An
     extraction replaces a function with a gated pair, so an attribute applied afterwards would find
@@ -159,14 +160,16 @@ def replay(source: str, munges: tuple[Munge, ...]) -> tuple[str, tuple[Drifted, 
     """
     def _replay_rank(m: Munge) -> int:
         match m:
-            case ModuleRedirect():
+            case ImportSwap():
                 return 0
-            case DeriveSwap():
+            case ModuleRedirect():
                 return 1
-            case FunctionMunge():
+            case DeriveSwap():
                 return 2
-            case FunctionExtraction():
+            case FunctionMunge():
                 return 3
+            case FunctionExtraction():
+                return 4
 
     drifted: list[Drifted] = []
     for munge in sorted(munges, key=lambda m: (_replay_rank(m), m.edit_id)):
