@@ -873,3 +873,56 @@ liquidity-layer stand-in reimplements the accounting it wants and nothing else. 
 the question of whether a CPI stand-in is publishable before we asked it. What the backend adds is
 that the trade is written down in `why` and carried to the judge, which a hand-written harness has
 nowhere to put.
+
+### 13.4 What the first real run changed, and the hole it opened
+
+`swap_import` was exercised end to end on 2026-09-21 against the pinned `Deposits` unit of
+`test_scenarios/solana_vault_idl` — the component whose 2026-09-18 run gave up the handler with
+*"the program cannot be given one with the munge kinds available."* Nine prover jobs, 1h36m, seven
+of nine properties verified, three skipped. `deposit_credits_exactly_amount`, the property that skip
+was about, verified against the real handler through the real `Context`.
+
+The chain behaved: the author reached the kind from the prompt before its first draft and described
+the effect it needed without naming the kind; the editor chose `swap_import` and justified it from
+the charter; the reviewer opened `lib.rs` and counted call sites rather than accepting the editor's
+scope claim; the judge engaged with the CPI model instead of waving seven green rules through. Two
+things the run taught that no amount of prompt-writing would have:
+
+* **The kind redirects a name, so it redirects a module.** The load-bearing second swap was
+  `use anchor_lang::solana_program::system_instruction;` — a module, not a function. It was built
+  for functions and the module case falls out, which is fortunate rather than designed.
+* **A CPI stand-in must neither move lamports nor decode the instruction's payload.**
+  `AccountInfo::lamports` on a handler-built info is `[3003]` through the `Rc`; a bincode payload is
+  a heap buffer the Prover does not relate to the bytes read back, so every decoded field is
+  unconstrained and every rule downstream of one returns a nonsense counterexample. Both are now in
+  the author prompt; the run paid two prover jobs to find them.
+
+#### The hole: a stand-in's justification can go stale and nothing says so
+
+The judge blocked the first draft on this, and it is a defect in the design rather than in the run:
+
+> *The `invoke` munge record materially misdescribes the stand-in it redirects to. … The redirect
+> points at whatever the harness currently defines, so the record is stale.*
+
+The author rewrote `invoke` twice after the munge was recorded and approved. The `why` went on
+describing a stand-in that decoded the payload and moved the lamports — which, read against the
+rules shipped beside it, would have made one assertion false and another double-count.
+
+:class:`~composer.spec.cvlr.munge.ModuleRedirect` and
+:class:`~composer.spec.cvlr.munge.FunctionExtraction` cannot suffer this: their ``edit_id`` digests
+the code they carry, so re-authoring it is a different edit that inherits neither the review nor the
+prover stamp. :class:`~composer.spec.cvlr.munge.ImportSwap` and
+:class:`~composer.spec.cvlr.munge.MockFn` carry a *path*, and the item at the end of it belongs to
+the author's harness — which the author may rewrite freely, and does.
+
+So the two kinds that point at an author-owned stand-in have no mechanical link between the record
+and the thing recorded. `mock_fn` has shipped with this since the beginning. It was caught here by a
+judge choosing to reconcile the record against the artifact, which is diligence rather than
+architecture, and the same judge found a *second* stale record in the same draft — the `early_panic`
+one, describing the rule as it was when the munge was requested.
+
+What to do about it is a decision rather than a fix, which is why it is `docs/cvlr-todo.md` U12 and
+not a patch. The options are not equivalent: digesting the stand-in's *source* into `edit_id` would
+invalidate a review on every unrelated edit to the harness file; digesting only the named item needs
+a resolver this module does not have; and simply prompting the author to `amend_munge` after
+rewriting a stand-in is what already happened, one judge round late.

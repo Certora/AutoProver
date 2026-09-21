@@ -144,6 +144,20 @@ def test_a_visibility_is_carried_to_both_halves():
     assert f"pub(crate) use {STAND_IN} as invoke;" in body
 
 
+def test_a_stand_in_already_named_for_the_binding_is_not_aliased_to_itself():
+    """`use x::y as y` compiles and reads as a rename of something that was not renamed."""
+    body = _applied(stand_in="crate::certora::specs::unit_vault_deposits::invoke")
+    assert "use crate::certora::specs::unit_vault_deposits::invoke;" in body
+    assert " as invoke;" not in body
+
+
+def test_replaying_an_unaliased_swap_is_still_idempotent():
+    swap = _swap(stand_in="crate::certora::specs::unit_vault_deposits::invoke")
+    landed = apply_import_swap(VAULT, swap)
+    assert isinstance(landed, Munged), landed
+    assert isinstance(apply_import_swap(landed.source, swap), AlreadyMunged)
+
+
 def test_an_aliased_import_is_named_by_what_it_binds():
     body = _applied("use solana_program::program::invoke as cpi;\n", name="cpi")
     assert f"use {STAND_IN} as cpi;" in body
