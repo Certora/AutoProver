@@ -24,13 +24,24 @@ import pathlib
 from bs4 import BeautifulSoup, Tag
 from bs4.element import NavigableString
 import spacy
-from composer.rag.db import get_rag_db, DEFAULT_CONNECTION
+from composer.rag.db import (
+    get_rag_db, DEFAULT_CONNECTION, SANITY_DEFAULT_CONNECTION, CVLR_DEFAULT_CONNECTION,
+)
 from composer.rag.types import BlockChunk
 from composer.rag.text import get_code_refs
 from composer.rag.models import get_model
 from composer.scripts.text_processors import (
     BlockBuilder, BuilderConfig, TextCollector, TextStreamer,
 )
+
+#: Corpora this builder can ingest into, by the name the populate_*.sh scripts pass. The
+#: connections come from composer.rag.db so they follow CERTORA_AI_COMPOSER_PGHOST/PGPORT --
+#: a DSN spelled out at a call site would send a containerised ingest to the wrong host.
+NAMED_CORPORA: dict[str, str] = {
+    "cvl": DEFAULT_CONNECTION,
+    "extended": SANITY_DEFAULT_CONNECTION,
+    "cvlr": CVLR_DEFAULT_CONNECTION,
+}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -274,14 +285,17 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description='Build RAG database from HTML documentation')
     parser.add_argument('files', nargs='+', metavar='HTML_FILE',
                         help='One or more HTML files to process directly')
-    parser.add_argument('--output', '-o',
-        help='Output directory for ChromaDB, or PostgreSQL connection string. '
-             f'Defaults to PostgreSQL ({DEFAULT_CONNECTION})')
+    target = parser.add_mutually_exclusive_group()
+    target.add_argument('--corpus', choices=sorted(NAMED_CORPORA), default='cvl',
+        help='Named corpus to ingest into (default: cvl).')
+    target.add_argument('--output', '-o',
+        help='Ingest into this ChromaDB directory or PostgreSQL connection string '
+             'instead of a named corpus.')
     args = parser.parse_args()
 
     file_entries = [{"file": (path:=pathlib.Path(f)), "section": path.stem} for f in args.files]
 
-    output = args.output or DEFAULT_CONNECTION
+    output = args.output or NAMED_CORPORA[args.corpus]
     db = await get_rag_db(output, get_model())
 
     buffer: list[BlockChunk] = []
