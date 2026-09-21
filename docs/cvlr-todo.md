@@ -9,8 +9,8 @@ Two kinds of entry appear below. Most are the plan's own items, restated in one 
 **Unfiled** ones are not in the plan at all — they were noticed while doing other work and have no
 section anywhere else, so this document is their only record until someone gives them one.
 
-If you want somewhere to start: **U9** is the one with fresh evidence and an open design question;
-**U2** decides whether the smoke gate protects anything at all, and
+If you want somewhere to start: **U10** is the one U9 left behind, and the one with a decision in it
+rather than a task; **U2** decides whether the smoke gate protects anything at all, and
 **U7** is a silent-data-loss risk on the same path whose loud half **U4** was; that half is
 fixed now, and the fix cannot reach U7. **U8** is the same shape one layer up, in the artifact a
 reader actually keeps.
@@ -114,8 +114,8 @@ says nothing. The work is to carry the reason onto the schema and render it, whi
 `schema_version` bump, and to decide whether it belongs as a report-level field or as a mark on the
 fallback group itself. Kin to U7 — both are a degraded result that presents as a complete one.
 
-**U9. `optimistic_loop` is reachable but not default, and the author does not reach for it.**
-*Measured 2026-09-21: the rung works — it verifies a handler property no bound can reach — and the author skips instead of using it. The default is still false and the CVL divergence stands.*
+**~~U9. Should `optimistic_loop` be the default, as it is on the CVL side?~~** — **resolved: no.**
+*The escape hatch shipped; the default stays false. Settled 2026-09-21 on the normative stake-pool verification and two measurements, not on the survey. What is left over is **U10**.*
 [`conf.py`](../composer/spec/cvlr/conf.py)'s `TEMPLATE_BASE` sets `"optimistic_loop": False` and
 argues it well: the Solana spec template says false, and a survey of 354 confs across fifteen Solana
 projects finds it true in exactly one. It assumes a loop's halt conditions rather than proving them,
@@ -226,6 +226,42 @@ anyway. Given the probe above shows the rung would have worked, the gap is betwe
 authorizes and what the author does with it — the fourth rung is framed by what it costs, and an
 author weighing that against a skip takes the skip.
 
+**What settles it: the normative verification of stake-pool solves this without the flag.**
+`Certora/solana-program-stake-pool-audit` is the hand-written verification of a program whose
+properties genuinely do quantify over a list — *"`add_validator_to_pool` must abort if any entry
+already in the list carries the same `vote_account_address`"* — and whose `BigVec::find` is a
+`while current != len` scan over exactly that list. It is the case `conf.py`'s rationale describes,
+and every conf there that sets the key says `"optimistic_loop": false`, with `loop_iter` at 1 and 2.
+What it does instead is mock the scan (`program/src/certora/mocks/big_vec.rs`): the predicate is
+evaluated on the first element for real, and for the rest —
+
+```rust
+// if second element exists, assume it does not satisfy the predicate
+cvlr::cvlr_assume!(!predicate(slice));
+```
+
+That is the per-loop granularity the flag lacks, built by hand: one scan, one assumption, written
+where a reviewer reads it. It also explains the survey rather than contradicting it — those authors
+set the key false because for the case that motivates it they had something better, which is a
+different fact from a house preference and a stronger one.
+
+**And this backend already teaches that technique.** The bundle's pointer-analysis section tells the
+author, for a variable-length collection, to *"ask the editor to `mock_fn` its accessors — the find /
+find_mut / retain methods, not the handler that calls them"* — the same three methods the stake-pool
+harness mocks.
+
+So the two cases separate cleanly, and the answer differs by case:
+
+* **A loop the property is about** — a list scan, an accumulation. `mock_fn` is the remedy, it is
+  already taught, and it keeps the assumption local and legible. `optimistic_loop` would be a blunt
+  substitute for a sharp tool, and applied to the whole submission rather than the loop.
+* **A loop no mock can reach** — the vault's, inlined into the handler from
+  `system_instruction::transfer` with no nameable symbol. Here the flag is the only remedy, and the
+  probe above shows it recovers a real proof of a real property.
+
+Which is an argument for the escape hatch and against the default, on both halves. No spl-stake-pool
+run is needed to close this; the artifact answers it.
+
 **Done so far: the third shape, the one that needed code.** `adjust_prover_config` takes a
 `SetOptimisticLoop` edit, so the author has the rung and the ladder in the bundle has a fourth step
 saying when it is the honest one. The tool's charter no longer claims every setting on it is sound;
@@ -233,6 +269,28 @@ it says two are and one is not, and why the unsound one is there. **The default 
 `TEMPLATE_BASE` still says false, which is what a test now pins — so this closes the "no rung"
 half and leaves the "default or not" half open. The comparison run above is still what decides it,
 and `conf.py`'s survey argument still needs the revision described above either way.
+
+**U10. There is no munge kind that puts a boundary around a CPI, and the author spends two editor
+rounds finding that out.**
+The leftover from U9. On the vault re-run the author asked the code editor twice for a substitutable
+boundary around `vault_program::deposit`'s inline `invoke`, was refused both times, and recorded the
+reason in its own skip: *"Unstatable without a model of the System Program transfer CPI, and the
+program cannot be given one with the munge kinds available."* Two properties are skipped for it, and
+the whole handler is given up.
+
+The shape it wanted is the one `program/src/certora/mocks/big_vec.rs` demonstrates for a different
+obstruction: a stand-in that keeps the caller analysable and states its own assumption. For a CPI the
+stand-in would have to express what the transfer did to two lamport balances, which is precisely what
+the Prover's unconstrained replacement drops (*Blocked on upstream* item 1, `upstream-defects.md`
+P6). So this is not simply a missing munge kind — a mock that claims the CPI moved the lamports is
+asserting something the Prover cannot check, and whether that trade is one the backend should offer
+at all is the open question rather than an implementation detail.
+
+Two things are worth separating when it is picked up: whether `mock_fn` could name an inline
+`invoke` at all (the author's directives matched no symbol, LTO having inlined the chain), and
+whether a CPI stand-in is sound enough to publish behind. The first is a tooling question with a
+yes/no answer; the second is the one that decides whether U10 is work or a *won't-do* with a
+recorded reason.
 
 ---
 
