@@ -1085,7 +1085,7 @@ def call_arg(name: str, ty: str) -> str:
 def fn_decl(name: str, params: list[tuple[str, str]], ret: Optional[str]) -> str:
     param_str = ', '.join(f'{n}: {t}' for n, t in params)
     ret_str = f' -> {ret}' if ret else ''
-    return f'#[inline(never)]\npub fn {name}({param_str}){ret_str}'
+    return f'#[inline(never)]\n#[no_mangle]\npub fn {name}({param_str}){ret_str}'
 
 
 def fn_call(contract: str, method: str, params: list[tuple[str, str]], ret: Optional[str]) -> str:
