@@ -1,5 +1,5 @@
 {
-  "files": "../target/wasm32v1-none/release/{{ crate | replace("-", "_") }}.wasm",
+  "files": "../target/wasm32v1-none/release-with-logs/{{ crate | replace("-", "_") }}.wasm",
   "rule": [
 {% for c in functions %}    "{{ c.name }}_{{ name|lower }}_sanity_test"{% if not loop.last %},{% endif %}
 {% endfor %}  ]

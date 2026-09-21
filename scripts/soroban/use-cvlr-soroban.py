@@ -24,7 +24,8 @@ def fix_profile(t):
 
   t["profile"]["release"]["opt-level"] = 2
   t["profile"]["release"]["debug"] = 2
-  t["profile"]["release"]["strip"] = "none"
+  t["profile"]["release"]["strip"] = False
+  t["profile"]["release"]["lto"] = True
 
 
 def fix_soroban_sdk(t):

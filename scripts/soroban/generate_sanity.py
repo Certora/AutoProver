@@ -1085,7 +1085,7 @@ def call_arg(name: str, ty: str) -> str:
 def fn_decl(name: str, params: list[tuple[str, str]], ret: Optional[str]) -> str:
     param_str = ', '.join(f'{n}: {t}' for n, t in params)
     ret_str = f' -> {ret}' if ret else ''
-    return f'pub fn {name}({param_str}){ret_str}'
+    return f'#[inline(never)]\npub fn {name}({param_str}){ret_str}'
 
 
 def fn_call(contract: str, method: str, params: list[tuple[str, str]], ret: Optional[str]) -> str:
@@ -1202,7 +1202,7 @@ def generate_contract_sanity(contract: dict) -> tuple[str, list[dict]]:
     lines.append(struct_import)
     lines.append('')
 
-    # Direct impl methods → add _sanity suffix
+    # All impl methods → add _sanity suffix
     for fns in [direct_fns, trait_fns]:
         for fn in fns:
             suffix = '_' + struct_name + '_sanity'

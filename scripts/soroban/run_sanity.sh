@@ -14,7 +14,7 @@ cd $MY_TMP_DIR/`basename $1`
 
 cargo update
 
-stellar contract build
+stellar contract build --profile release-with-logs
 
 cd conf
 
