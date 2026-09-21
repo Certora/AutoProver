@@ -7,9 +7,8 @@
   parametric?").
 * `cvlr_keyword_search(query, ...)` -- full-text search over the same corpus. Prefer it when you
   already know the identifier you want; it returns section titles to feed to `cvlr_get_section`.
-* `cvlr_get_section(section_names)` -- fetch a section in full when you need its signature,
-  examples or caveats.
+* `cvlr_get_section(section_names)` -- fetch a section when you need its full contents.
 
 The corpus is advice and reference. It is **not** the authority on what exists: it was written
 against particular CVLR releases, and this project may resolve different ones. When the two
-disagree, the crate source wins — see below.
+disagree, the crate source wins.
