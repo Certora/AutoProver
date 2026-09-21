@@ -76,3 +76,45 @@ components — one of them `Vault Lifecycle & Deposits` — where the pinned run
 pin is a different decomposition over different properties, so a comparison against one measures the
 re-decomposition as much as the thing under test. This is the concrete form of the warning at the top
 of this file, and it is why these are checked in rather than treated as reproducible.
+
+### The `optimistic_loop` probe run off this pin
+
+Four submissions of **one** rule, to answer [cvlr-todo.md](../../../docs/cvlr-todo.md) U9 without
+paying for a pipeline run. The harness is the one the pinned `Deposits` run delivered; the rule is
+the handler rule that run could not state, appended by hand:
+
+```rust
+#[rule]
+pub fn rule_probe_deposit_handler_credits_exactly_amount() {
+    deposit_env!(accounts, ix, bumps);          // the harness's own validated-Deposit macro
+    let amount: u64 = nondet();
+    cvlr_assume!(cvlr::is_u64(amount));
+    let before = ix.vault.balance;
+    clog!(before, amount);
+
+    let ctx = Context::new(&crate::ID, &mut ix, &[], bumps);
+    crate::vault_program::deposit(ctx, amount).unwrap();
+
+    let after = ix.vault.balance;
+    clog!(after);
+    cvlr_assert!(NativeInt::from(after) == NativeInt::from(before) + NativeInt::from(amount));
+}
+```
+
+Everything else — the summaries file, `rule_sanity`, the solver flags, the build script — is the
+delivered conf unchanged. Only `loop_iter` and `optimistic_loop` move, plus `rule`.
+
+| `loop_iter` | `optimistic_loop` | rule | verdict | job |
+|---|---|---|---|---|
+| 2 | false | assertion | VIOLATED — *Unwinding condition in a loop* | [e189209b](https://prover.certora.com/output/37632/e189209b18574daf8e43b76379d07152?anonymousKey=60bdeadf32512dfed0512ebea8f9f826bffd252d) |
+| 8 | false | assertion | VIOLATED — identical trace, advice now says "higher than 8" | [8becab60](https://prover.certora.com/output/37632/8becab609cad469fbf4d1e5f9862717c?anonymousKey=3147ecd6da20f3a496332663f4d48aa25b02a8ee) |
+| 2 | **true** | assertion | **VERIFIED** | [4675b617](https://prover.certora.com/output/37632/4675b617bdb74f8bbc71fca2032ab706?anonymousKey=8845c4958ed2dc876bdd5a26cf0e62f5a81c5caf) |
+| 2 | true | `cvlr_satisfy!(true)` in place of the assertion | VERIFIED — the path is live, so the row above is not a vacuity | [662f673b](https://prover.certora.com/output/37632/662f673b62f54a7cb9b649297f28217c?anonymousKey=65990366cd7d52f0fb88dc83d1cf89482fa740c9) |
+
+The satisfy row is the one not to drop if this is ever re-run: without it the VERIFIED above is
+indistinguishable from a dead path, and a dead path is the likelier explanation a reader will reach
+for. U9 carries what the four rows mean.
+
+Submitted with `composer.certora_env.import_prover_entry("solana")` from the pinned run's own
+`.cvlr_work/build`, which already holds the compiled workspace and the generated summaries — no
+pipeline, no model calls, about 20 seconds of prover time each.
