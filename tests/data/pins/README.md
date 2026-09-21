@@ -42,3 +42,37 @@ for reasons that are not our fault, which is the opposite of what a gate is for.
 
 `Admin_Fee_Configuration` is the better target: it covers `set_fee`, which the normative
 verification does cover, so its rules have a known-good counterpart to be read against.
+
+## `vault.pin.json` and `vault-deposits.pin.json`
+
+| | |
+|---|---|
+| target | `test_scenarios/solana_vault_idl`, in this repo |
+| taken from | run of 2026-09-18, thread `cvlr_d71e0ec8c99f` |
+| contents | `vault.pin.json`: 3 components, 30 properties. `vault-deposits.pin.json`: the `Deposits` component alone, 9 properties |
+
+They exist for one experiment: whether `optimistic_loop` earns its place as a default
+([cvlr-todo.md](../../../docs/cvlr-todo.md) U9). That run's `Deposits` unit could not discharge an
+unwinding condition at any bound and gave up the handler, so the comparison is the same nine
+properties formalized twice, with the assumption off and on. The trimmed pin is the cheap half of
+it: the two components it drops took 1h09 and 1h24 of formalization between them.
+
+Trimmed by deleting a key from `properties`, which is all a narrower pin is. Narrowing *within* a
+component is possible the same way and was deliberately not done — the author's strategy responds to
+the whole batch it is given, and a unit handed two properties may never attempt the handler at all,
+which is the thing being measured.
+
+### Why these cannot be regenerated, only recovered
+
+Recovered from the run's checkpoints after the original file was lost, by the method above, with the
+same two guards: the digest→component mapping is `composer.pipeline.keys.component_digest`'s, and
+every pinned property is accounted for by what the unit did with it — 9 = 6 published + 3 skipped,
+9 = 4 + 5, 12 = 10 + 2, against the `property_rules` and `skipped` the three formalization threads
+recorded. The rebuilt file also came out at the byte size of the original.
+
+**Re-running `--pin-to` does not reproduce a pin, and the attempt is what established it.** The same
+scenario, the same document, the same flags, three days later: the analysis returned **two**
+components — one of them `Vault Lifecycle & Deposits` — where the pinned run returned three. A fresh
+pin is a different decomposition over different properties, so a comparison against one measures the
+re-decomposition as much as the thing under test. This is the concrete form of the warning at the top
+of this file, and it is why these are checked in rather than treated as reproducible.
