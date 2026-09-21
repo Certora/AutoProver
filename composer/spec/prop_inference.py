@@ -59,11 +59,9 @@ class _AgentRoundResult(_BugAnalysisCache):
     """
     The results of your analysis from this round.
     """
-    reasoning: str = Field(description="What you considered this round, what you rejected and why, "
-        "and how the properties you extracted capture parts of the bug surface "
-        "prior rounds missed. Future rounds (and the user, in interactive "
-        "mode) will read this -- not your message history -- to "
-        "understand your reasoning. Be specific."
+    reasoning: str = Field(description="A short summary of the properties added this round and the "
+        "coverage they provide, for later rounds and a human reviewer. Later rounds read this to "
+        "avoid re-proposing the same properties, so be specific about what these properties cover."
     )
 
 class PropertySystemPromptParams(TypedDict):
