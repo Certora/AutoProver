@@ -144,11 +144,9 @@ class ProverRunLog(TypedDict):
     # The spec buffer this run belongs to; absent for a single-curr_spec run. Each buffer has its own
     # spec/digest, so completion is evaluated per buffer over its own runs (see _history_for_buffer).
     buffer: NotRequired[str]
-    # The prover-run link (job URL / local dir) this run's results came from. With rule-striping a
-    # buffer's rules are run across several jobs, so its verdicts are spread over several links
-    # (collected by completing_run_links), not carried by the last one alone. ``NotRequired`` because a
-    # thread checkpointed before the field existed replays without it; ``| None`` for a run with no link.
-    link: NotRequired[str | None]
+    # This run's prover-run link: the job URL (cloud) or local results dir the run wrote its output
+    # to; None for a run that produced no link.
+    link: str | None
 
 class NagMarker(TypedDict):
     nagged_rules: list[RulePath]

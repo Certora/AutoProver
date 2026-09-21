@@ -57,8 +57,8 @@ Summaries — your main lever for tractability:
 - For each run-target buffer, **summarize now**, in its `methods{}`, the hotspot functions its
   properties do not need exact (leave the cheap functions alone) — a sound over-approximation that
   *weakens* the real body, written before the first `submit_buffer`. For which summary constructs are
-  sound for a given function and how to write them, consult the **CVL Summarization and Linking Guide**
-  in your context.
+  sound for a given function and how to write them, consult the **"CVL Summarization — Knowledge Base"**
+  context document (its triage ladder for an unresolved-call HAVOC is in section B3).
 - **Soundness rule: an over-approximating summary is sound for `assert` rules but UNSOUND for `satisfy`
   rules.** An over-approximation *adds* behaviors: an `assert` that holds over the larger behavior set
   still holds over the real one (sound), whereas a `satisfy` may be witnessed only by an added, non-real
@@ -70,8 +70,8 @@ Summaries — your main lever for tractability:
   single-buffer summary parked in a shared buffer that others import makes every later edit re-verify all
   of them — wasted work on buffers that never use it.
 - **Refine on a spurious counterexample.** When a buffer returns VIOLATED, check whether the cex is
-  *spurious* — reachable only because your summary is too coarse (the **CVL Summarization and Linking
-  Guide** in your context covers how over-approximations produce spurious cexes). If so, tighten that
+  *spurious* — reachable only because your summary is too coarse (the **"CVL Summarization — Knowledge
+  Base"** context document covers how over-approximations produce spurious cexes). If so, tighten that
   summary or drop the over-approximation for that function with `edit_buffer`, then re-`submit_buffer`.
   Start from the simplest sound over-approximation and tighten only as spurious cexes force you to.
 
