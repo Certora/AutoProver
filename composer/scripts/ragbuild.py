@@ -200,7 +200,7 @@ def translate_block(streamer: TextStreamer, s: Tag, headers: list[str]) -> Gener
                 quote = " ".join(ch.get_text(" ").split())
                 if quote:
                     streamer.stream_text(quote)
-                    builder.append_text(quote, is_structured_boundary=False, unbreakable=False)
+                    builder.append_text(quote, is_structured_boundary=True, unbreakable=False)
             case Tag(name="table"):
                 tbl = convert_table(ch)
                 if tbl:
