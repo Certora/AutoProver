@@ -42,6 +42,7 @@ class AutosetupConfig:
     skip_call_resolution: bool = False
     skip_proxy_detection: bool = False
     skip_harnessing: bool = False
+    skip_test_run: bool = False
     no_strip_contracts: bool = False
     keep_intermediate_typechecker_files: bool = False
     dummy_erc20: int | None = None
