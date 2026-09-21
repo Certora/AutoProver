@@ -114,8 +114,8 @@ says nothing. The work is to carry the reason onto the schema and render it, whi
 `schema_version` bump, and to decide whether it belongs as a report-level field or as a mark on the
 fallback group itself. Kin to U7 — both are a degraded result that presents as a complete one.
 
-**U9. `optimistic_loop` is false here and unconditionally true on the CVL side, and today's run
-found the case where neither of our two answers works.**
+**U9. `optimistic_loop` is reachable but not default; whether it should be the default is open.**
+*Partly done — the author can now reach it; the default is still false and the CVL divergence stands.*
 [`conf.py`](../composer/spec/cvlr/conf.py)'s `TEMPLATE_BASE` sets `"optimistic_loop": False` and
 argues it well: the Solana spec template says false, and a survey of 354 confs across fifteen Solana
 projects finds it true in exactly one. It assumes a loop's halt conditions rather than proving them,
@@ -179,6 +179,14 @@ do: the vault pin re-entered with `optimistic_loop` true, against the same 30 pr
 two things — whether the Deposits rules reach their own assertions, and whether any rule that
 verifies under it would have failed at a higher bound. Evidence so far in
 [cvlr-backend-plan.md](./cvlr-backend-plan.md) §7.6.2 and in `conf.py`'s own commentary.
+
+**Done so far: the third shape, the one that needed code.** `adjust_prover_config` takes a
+`SetOptimisticLoop` edit, so the author has the rung and the ladder in the bundle has a fourth step
+saying when it is the honest one. The tool's charter no longer claims every setting on it is sound;
+it says two are and one is not, and why the unsound one is there. **The default is unchanged** —
+`TEMPLATE_BASE` still says false, which is what a test now pins — so this closes the "no rung"
+half and leaves the "default or not" half open. The comparison run above is still what decides it,
+and `conf.py`'s survey argument still needs the revision described above either way.
 
 ---
 
