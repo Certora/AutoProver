@@ -114,8 +114,8 @@ says nothing. The work is to carry the reason onto the schema and render it, whi
 `schema_version` bump, and to decide whether it belongs as a report-level field or as a mark on the
 fallback group itself. Kin to U7 — both are a degraded result that presents as a complete one.
 
-**U9. `optimistic_loop` is reachable but not default; whether it should be the default is open.**
-*Partly done — the author can now reach it; the default is still false and the CVL divergence stands.*
+**U9. `optimistic_loop` is reachable but not default, and the author does not reach for it.**
+*Measured 2026-09-21: the rung works — it verifies a handler property no bound can reach — and the author skips instead of using it. The default is still false and the CVL divergence stands.*
 [`conf.py`](../composer/spec/cvlr/conf.py)'s `TEMPLATE_BASE` sets `"optimistic_loop": False` and
 argues it well: the Solana spec template says false, and a survey of 354 confs across fifteen Solana
 projects finds it true in exactly one. It assumes a loop's halt conditions rather than proving them,
@@ -179,6 +179,52 @@ do: the vault pin re-entered with `optimistic_loop` true, against the same 30 pr
 two things — whether the Deposits rules reach their own assertions, and whether any rule that
 verifies under it would have failed at a higher bound. Evidence so far in
 [cvlr-backend-plan.md](./cvlr-backend-plan.md) §7.6.2 and in `conf.py`'s own commentary.
+
+**Measured, 2026-09-21, and it reverses the expected answer.** One rule — the real `deposit`
+handler, `balance_post == balance_pre + amount` over `NativeInt` — submitted four times against the
+delivered `Deposits` harness, changing nothing but the conf:
+
+| conf | verdict |
+|---|---|
+| `loop_iter 2`, `optimistic_loop` off | VIOLATED — *Unwinding condition in a loop* |
+| `loop_iter 8`, `optimistic_loop` off | VIOLATED — identical trace; the Prover's advice just says "higher than 8" |
+| `loop_iter 2`, `optimistic_loop` **on** | **VERIFIED** |
+| the same, with `cvlr_satisfy!(true)` in place of the assertion | VERIFIED — so the path is live and the proof above is not vacuous |
+
+The prediction this was run to test was the opposite: that the assumption would clear the unwinding
+condition and land on a rule whose post-state upstream defect P6 had havoced, turning a correctly
+excluded non-result into a counterexample against a correct program. It does not. The property is
+proved, and the reachability probe rules out the vacuity that would have explained it away.
+
+**What the two sound-looking arguments against it both miss is which loop this is.** The trace names
+it `unknown loop source code` inside `vault_program::deposit`: it is `system_instruction::transfer`'s
+own bincode/`Vec` construction, serializing a fixed-size payload. It terminates in reality and the
+analysis cannot fix the count — which is why no bound discharges it and why assuming it finishes is
+assuming something *true*. `conf.py`'s rationale ("hides any violation reachable only after more
+iterations") describes a risk that attaches to loops **in the program under verification**. This one
+is library plumbing no property here mentions, and without the assumption the handler cannot be
+verified at all: both runs of this component descended to `vault_accounting::apply_deposit` and gave
+up the handler, which is a real loss of coverage traded for nothing.
+
+So the setting's defect is not that it is unsound in principle — it is that it is **per submission,
+not per loop**. There is no way to say "assume the serialization loop terminates, keep asserting the
+program's own". That is a good argument for it being an escape hatch rather than a default, which is
+what shipped, and a poor one for withholding it, which is what the code used to do.
+
+Two limits on this evidence, both real: it is one property on one target, and it says nothing about
+a program whose *own* loops bound its properties — which is the case the survey's authors are most
+likely to have had in mind, and the case the spl-stake-pool pin exists to reach.
+
+**Also measured: making the rung reachable is not enough.** Re-running the pinned `Deposits`
+component on the shipped code (1h 40m, $45), the author met the unwinding condition, worked the
+lower rungs — three `summarize_for_prover` directives, two `code_editor` requests for a substitutable
+boundary around the `invoke` — and when those were refused it **skipped rather than climbing the last
+rung**: `adjust_prover_config` was called zero times. Its harness header records the diagnosis the
+ladder asks for ("a measured result, not a guess: every rule that called the handler came back on the
+Prover's own *Unwinding condition in a loop* assertion") and then descends to the accounting core
+anyway. Given the probe above shows the rung would have worked, the gap is between what the ladder
+authorizes and what the author does with it — the fourth rung is framed by what it costs, and an
+author weighing that against a skip takes the skip.
 
 **Done so far: the third shape, the one that needed code.** `adjust_prover_config` takes a
 `SetOptimisticLoop` edit, so the author has the rung and the ladder in the bundle has a fourth step
