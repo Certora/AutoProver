@@ -647,7 +647,7 @@ def test_the_author_knows_the_charter_without_holding_the_tool():
     prompt = _flat(_author_system_prompt())
     assert "code_editor(request)" in prompt
     assert "You do not make it" in prompt
-    assert "charter is eight kinds" in prompt
+    assert "charter is nine kinds" in prompt
     assert "The editor can refuse, and a refusal is information" in prompt
     # early_panic must not be sold as the answer to the one thing it cannot do.
     assert "does **not** help an acceptance property" in prompt
@@ -660,7 +660,7 @@ def test_every_kind_the_editor_offers_is_named_to_the_author():
     prompt = _flat(_author_system_prompt())
     for kind in (
         "early_panic", "mock_fn", "inline_never", "hook_on_entry", "hook_on_exit",
-        "redirect_module",
+        "redirect_module", "swap_import",
     ):
         assert kind in prompt, kind
     assert "an extraction" in prompt

@@ -779,3 +779,97 @@ neither leaves evidence.
 
 The list stays closed. What this adds is that a refusal naming a missing *operation* — as distinct
 from a missing *edit* — is a design signal and should be read as one.
+
+---
+
+## 13. The import swap, built
+
+The ninth kind, and the one that answers a question the other eight share a blind spot on: **how
+does a munge reach a function the program does not own?** Every kind above edits the item it is
+about — an attribute on it, a split of it, a redirect of the module holding it — so the item has to
+be the program's, and [§8.2](#82-the-decision-that-determines-everything-what-the-editor-edits) is
+where that was decided and why it stays decided. A cross-program invocation is the case where it
+does not hold. `invoke` belongs to `solana_program`; a munge of a dependency changes its behaviour
+for every crate in the graph, including the ones the property is about.
+
+It is not an academic gap. The pinned vault run asked the editor twice for a boundary around
+`vault_program::deposit`'s inline `invoke`, was refused both times, and recorded the reason in its
+own skip — *"Unstatable without a model of the System Program transfer CPI, and the program cannot
+be given one with the munge kinds available."* Two properties were skipped and the handler was given
+up. `docs/cvlr-todo.md` U10 is that report.
+
+### 13.1 The seam is the `use` line
+
+What the program *does* own is the declaration that puts the name in scope. So:
+
+```rust
+#[cfg(not(feature = "unit_x"))]
+use anchor_lang::solana_program::program::invoke;
+#[cfg(feature = "unit_x")]
+use crate::certora::specs::unit_x::invoke_transfer as invoke;
+```
+
+`mock_fn` replaces a definition with a `use`. This replaces a `use` with a `use` — the same
+mechanism, reached from the calling side, which is the only side available. The deployed build
+compiles the developer's declaration verbatim, because it is still on the page rather than retyped;
+that is the property [§10](#10-extraction-built) had to store an `original` to get.
+
+The corpus writes this edit by hand and has for longer than the backend has existed.
+`solana-program-stake-pool-audit`'s `processor.rs` opens with exactly this pair for
+`solana_program::msg`, and its CPI wrappers get their boundary the same way one layer up — a trait
+named for the methods, imported by a `use crate::certora::mocks::*` that is itself gated. So the
+kind is not an invention; it is the fifth idiom a corpus survey found, arriving late because the
+first four were all about items.
+
+### 13.2 What it is bounded by, and what it is not
+
+Narrower than a module redirect in the way that matters: **it creates no file.** The stand-in is an
+item in the harness, written by the author and reviewed as part of the harness, exactly as a
+`mock_fn` stand-in is. The editor never authors it. So the one kind where the reviewer has to read
+invented code stays the one kind.
+
+Wider than any of them in a different direction, and this is the thing to keep saying: **the swap is
+scoped to the file, not to the call.** Every mention of the name below the declaration resolves to
+the stand-in, including calls the request said nothing about. A call-site-scoped alternative was
+considered and rejected — rewriting one expression and not its neighbour is a change to what the
+program does, wearing an edit's clothes, and it would put the editor back in the business of
+authoring Rust that the deployed build never sees a counterpart of.
+
+Three refusals carry the rest. A name the file never imports — spelled out in full at the call site,
+or arriving through a glob — has no declaration to rewrite, and is reported as such rather than
+half-matched. A nested `use` tree cannot have one leaf taken out of it by a split on commas, and
+flattening a developer's import to suit a munge is a change to the deployed build. And a file with
+two declarations binding the name is refused rather than guessed at, for the reason every ambiguity
+in this module is.
+
+The union replay needed one thing the other kinds did not: a declaration gated *on* another unit's
+feature is dormant for this build and must not be read as a second binding, or the second unit to
+swap an import would report drift against the first unit's output. `_dormant_here` is that, and it
+is the only place in this module where one munge has to recognise another's work.
+
+### 13.3 What a CPI stand-in may claim
+
+The kind that made this necessary is also the one where the soundness question is live, so it is
+worth stating rather than leaving to each `why`.
+
+The Prover's own replacement for a cross-program call havocs the **caller's** deserialized
+`Account<T>`, not merely the account bytes the callee could reach (`docs/upstream-defects.md` P6).
+That is what defeats a property about what the program recorded *after* a transfer. A stand-in that
+returns `Ok(())` is therefore not a loss of fidelity but a recovery of one: the caller stays
+analysable, and the handler's own bookkeeping becomes provable with real account validation and the
+real `Context` — which is precisely what the shipped P6 remedy, descending to the accounting core,
+gives up.
+
+What it does not do is move anything. So the two halves of a batch separate cleanly, and the
+separation is the author's to make:
+
+* a property about **the program's recorded state** is sound under the swap;
+* a property about **the lamports or tokens the CPI actually moved** is *false* under it rather than
+  merely unproven, which is worse, and is a skip.
+
+Nothing about this is novel to us. Every CPI mock in the corpus drops the callee's effect —
+`stake-pool`'s `create_stake_account` assumes the account's shape and returns `Ok(())`, and Fluid's
+liquidity-layer stand-in reimplements the accounting it wants and nothing else. The corpus settled
+the question of whether a CPI stand-in is publishable before we asked it. What the backend adds is
+that the trade is written down in `why` and carried to the judge, which a hand-written harness has
+nowhere to put.

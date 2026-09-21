@@ -111,7 +111,7 @@ failed, which rule, and which code you believe is in the way. Do not prescribe a
 the diagnosis, the editor owns what to do about it, and a request that dictates the edit is one it has
 to re-derive anyway.
 
-The editor's charter is eight kinds, and knowing them tells you what is worth asking for:
+The editor's charter is nine kinds, and knowing them tells you what is worth asking for:
 
 * **`early_panic`** rewrites every `?` in a function to `.unwrap()`. The same choice as
   `.unwrap()`-versus-`.is_ok()` above, applied where a rule cannot reach: a `?` *inside* the program,
@@ -137,6 +137,12 @@ The editor's charter is eight kinds, and knowing them tells you what is worth as
   reproducing the arithmetic a rule asserts over is the mirror problem with an attribute in front of
   it. Mocking a
   hash, a clock, or a CPI the property does not speak about is the case this is for.
+* **`swap_import`** is `mock_fn` reached from the calling side, for a function the program
+  does not own. An attribute goes on a definition, and `invoke` is `solana_program`'s — but
+  the `use` line that puts it in scope is the program's, and the editor can point that at a
+  stand-in you wrote. **You write the stand-in**, the same way as for `mock_fn`, with the
+  signature the call sites use. It is scoped to the file rather than to the call, so every
+  use of the name in that file is mocked; say which file and what the stand-in must do.
 * **`inline_never`** keeps a function's own symbol. Ask for it when something needs to name the
   function — a summary, an inlining directive, a counterexample's stack — and it has been folded away.
 * **`hook_on_entry` / `hook_on_exit`** insert an observing call at a function's first or last
@@ -185,8 +191,10 @@ comparing state across the call fails against a correct program. If you see a co
 field the handler does not touch has changed across a CPI, that is this, and no assumption you add
 will fix it.
 
-When that happens, the move is to descend to **the program's own state-transition function** — the
-accounting core the handler wraps — and drive it with `nondet()` domain structs rather than accounts:
+When that happens you have two moves, and they trade fidelity against reach.
+
+The first is to descend to **the program's own state-transition function** — the accounting core the
+handler wraps — and drive it with `nondet()` domain structs rather than accounts:
 
 ```rust
 // The accounting core, driven directly. Only the fields this transition reads need to be
@@ -212,6 +220,19 @@ Three conditions on it, and they are what separate this from the failure it rese
 * **Say what it costs, in the commentary.** Account validation, the CPI's effects and Anchor's
   dispatch are outside a rule written this way. A bug in the handler's own glue is out of scope, and
   a reader has to be told that rather than left to assume instruction-level coverage.
+
+The second is to keep the handler and take the CPI out from under it, by asking the editor for a
+`swap_import` on the name the call goes through. You write a stand-in with `invoke`'s signature and
+return `Ok(())` from it; the editor points the program's `use` at it behind your feature. The
+unconstrained stand-in is gone, so the caller's `Account<T>` is no longer havoced and the handler's
+own bookkeeping is provable — with real account validation and the real `Context`, which is what
+descending gives up.
+
+What it costs is the other half: your stand-in does not move the lamports, so a property about what
+the transfer *did* is false under it rather than unprovable, which is worse. Split the batch on that
+line. "The vault's recorded balance rises by exactly `amount`" is the handler's own bookkeeping and
+belongs here; "the depositor's lamports fall by exactly `amount`" is the CPI's effect and belongs in
+neither — it is a skip, and saying so is the right outcome.
 
 If the handler has no such core to descend to — the accounting *is* the handler — then the property
 is not reachable today. Skip it and say so.
