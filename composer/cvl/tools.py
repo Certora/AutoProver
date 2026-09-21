@@ -18,7 +18,7 @@ from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from composer.authoring.buffer import (
-    DRAFT_KEY, SPEC_KEY, SpecBuffer, SpecBufferSet, SpecBufferWithDraft,
+    DRAFT_KEY, SPEC_KEY, SpecBuffer, SpecBufferSet,
     apply_spec_update, edit_spec_tool, get_spec_tool,
 )
 from composer.certora_env import typechecker_jar
@@ -174,7 +174,6 @@ def put_cvl_raw(
 
 #: The CVL flows' names for the shared buffer state shapes.
 WithCurrSpec = SpecBuffer
-WithCurrSpecAndDrafted = SpecBufferWithDraft
 WithCurrSpecNonNull = SpecBufferSet
 
 _GET_CVL_DESCRIPTION = """

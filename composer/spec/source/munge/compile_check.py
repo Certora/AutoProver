@@ -123,6 +123,8 @@ async def check_edits_compile(
             _noop_err,
             _noop_stdout,
             BUILD_TIMEOUT_S,
+            # Munging edits Solidity, so the build under check is the EVM one.
+            "evm",
         )
 
         # run_prover_inner surfaces a hard subprocess failure as a str; the

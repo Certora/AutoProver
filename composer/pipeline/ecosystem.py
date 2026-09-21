@@ -14,12 +14,14 @@ not the language the AutoProver backend is implemented in (see :class:`Language`
 Solana model + prompts and reuses the shared ``RUST`` language facet. See ``docs/ecosystem-abstraction.md``.
 """
 
+import re
 from dataclasses import dataclass
 from pathlib import Path, PurePath
 from typing import Any, Callable, Collection, Literal, Mapping, TypedDict
 
 from graphcore.tools.vfs import GlobalExcludeArg
 
+from composer.layout import INTERNAL_DIR
 from composer.spec.context import SourceCode
 from composer.spec.code_explorer import CodeExplorerPromptParams
 from composer.spec.gen_types import TypedTemplate
@@ -254,16 +256,38 @@ EVM: EvmEcosystem = Ecosystem(
 # The RUST language facet (shared by Solana, Soroban)
 # ---------------------------------------------------------------------------
 
+
+def _withheld_tree(directory: str) -> str:
+    """Match *directory* wherever it sits under the project root, and everything below it.
+
+    The directory entry itself has to match, not just its contents: graphcore prunes a subtree by
+    testing the bare entry name (``DirBackend.dump_to``), so a contents-only pattern walks the
+    whole tree to reject it file by file.
+
+    Nested occurrences count. A backend that builds in a working copy under the project root puts
+    that build's scratch inside the copy, so the tree to withhold is not at a fixed depth.
+    """
+    d = re.escape(directory)
+    return rf"((.*/)?{d}(/.*)?)"
+
+
 #: Cargo/Anchor project layout: hide build output, VCS, lockfiles, and the JS side; keep the
 #: crate sources and `tests/`. A pattern suffices here — unlike the Foundry-shaped
 #: ``fs_forbidden_read``, nothing needs carving back out of an excluded directory.
-RUST_FORBIDDEN_READ = r"(^target/.*)|(^\.git.*)|(^node_modules/.*)|(.*\.lock$)"
-# NOTE: the confined-build scratch dirs (``.sandbox_cargo`` / ``.sandbox_rustup`` /
-# ``.sandbox_tmp`` and nested ``target/``) also have to be excluded — a build fills them with
-# hundreds of MB the source tools' file-listing would pull into the model's context — but that
-# extension lives with the *backend* that runs confined Rust builds inside the workdir. Nothing in
-# the front half, and nothing in the Rust application framework itself, creates them: a Rust
-# backend need not build a crate to validate the program, nor use the sandbox at all.
+#:
+#: ``INTERNAL_DIR`` is withheld whole, as :mod:`composer.layout` describes and as
+#: ``fs_forbidden_read`` does for Solidity: a confined Rust build fills it with hundreds of MB —
+#: a private ``CARGO_HOME`` holds an entire cargo registry — which a file listing would otherwise
+#: pull into the model's context.
+RUST_FORBIDDEN_READ = "|".join(
+    (
+        r"(^\.git.*)",
+        r"(^node_modules/.*)",
+        r"(.*\.lock$)",
+        _withheld_tree(INTERNAL_DIR.as_posix()),
+        _withheld_tree("target"),
+    )
+)
 
 RUST = Language(
     name="rust",

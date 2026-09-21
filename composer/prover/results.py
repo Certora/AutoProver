@@ -1,12 +1,28 @@
+"""Parsing a prover run's treeView reports into per-rule results.
+
+Chain-neutral: every Prover CLI emits the same treeView shape, so one parser serves them all. What
+differs per chain is which frames of a counterexample's call trace are worth showing — a trace is
+mostly runtime the property is not about, and each chain buries the counterexample under its own
+scaffolding. That is what :class:`TraceShape` is for.
+"""
+
 from typing import Optional, Callable, TypeVar
 from typing_extensions import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 import re
 import json
 
 from pydantic import Field, BaseModel, ValidationError
 
-from composer.prover.ptypes import RuleResult, StatusCodes, RulePath
+from composer.certora_env import ProverApp
+from composer.prover.ptypes import (
+    Counterexample,
+    RulePath,
+    RuleResult,
+    SourceSpan,
+    StatusCodes,
+)
 
 T = TypeVar('T')
 R = TypeVar('R')
@@ -34,14 +50,88 @@ class SarifArgs(BaseModel):
     # ignoring the other fields
 
 
+#: The prover writes a frame's message as a format template: literal text with ``'{n}'`` standing in
+#: for the n-th of ``arguments`` (``report/calltrace/sarif/Sarif.kt`` in EVMVerifier, whose
+#: ``toString`` emits exactly this quoted, zero-based form).
+_PLACEHOLDER = re.compile(r"'\{(\d+)\}'")
+
+
 class MessageModel(BaseModel):
     text: str
     arguments: list[SarifArgs]
+
+    @property
+    def frame(self) -> str:
+        """This message's identity, shared by every frame the prover emits from the same site.
+
+        A counterexample's values live in ``arguments``, never in ``text``, so the template already
+        *is* the identity: all 33 ``__rust_alloc`` frames of one measured trace carry the same
+        ``text`` and differ only in the argument they took."""
+        return _PLACEHOLDER.sub("{}", self.text)
+
+    def render(self) -> str:
+        """The template with this counterexample's values substituted for its placeholders."""
+        return _PLACEHOLDER.sub(
+            lambda placeholder: f"'{self.arguments[int(placeholder.group(1))].value}'", self.text
+        )
 
 
 class CallTraceModel(BaseModel):
     message: MessageModel
     childrenList: list["CallTraceModel"]
+
+
+@dataclass(frozen=True)
+class TraceShape:
+    """Which call-trace frames a chain's counterexamples are worth rendering.
+
+    Frames are named by :attr:`MessageModel.frame`, so a value-bearing frame is written the way the
+    prover's format string writes it, with ``{}`` where its value goes. ``dropped`` removes a frame
+    *and everything under it*, which is only safe where nothing interesting can nest inside it — a
+    per-chain fact, see :data:`SOLANA_TRACE`. ``elided`` keeps the frame and replaces its subtree
+    with a count.
+    """
+
+    dropped: frozenset[str] = frozenset()
+    elided: frozenset[str] = frozenset()
+
+
+#: Frames the prover emits on every chain and no counterexample needs.
+_GENERIC_NOISE = frozenset({"Setup", "Global State"})
+
+#: Nothing chain-specific claimed. What a chain's own setup frame is called is a thing to measure
+#: from one of its counterexamples rather than guess, so a chain gets this until one exists.
+GENERIC_TRACE = TraceShape(dropped=_GENERIC_NOISE)
+
+EVM_TRACE = TraceShape(
+    dropped=_GENERIC_NOISE | {"Evaluate branch condition", "unknown loop source code"},
+)
+
+#: Solana's traces are dominated by account materialization: on one measured counterexample, 128 of
+#: 135 frames were the allocator and nondet-size choices under ``cvlr_deserialize_nondet_accounts``.
+#: That subtree is elided rather than dropped, so a reader can tell setup happened and how much of
+#: it was hidden.
+#:
+#: Does not take EVM's two extra drops. A Solana loop-unwinding violation nests both its
+#: ``Assert 'loop has terminated' failed`` and the per-iteration structure that says how far the
+#: loop got under ``unknown loop source code``, so dropping that frame renders a trace that states
+#: no failure at all.
+SOLANA_TRACE = TraceShape(
+    dropped=_GENERIC_NOISE | {"__rust_alloc: {}", "CVT_alloc_slice: {}"},
+    elided=frozenset({"cvlr_solana::layout::cvlr_deserialize_nondet_accounts(...)"}),
+)
+
+
+def trace_shape(app: ProverApp) -> TraceShape:
+    """The rendering shape for a chain's traces. Exhaustive over :data:`ProverApp` on purpose: a new
+    chain should have to state what its traces look like rather than inherit another chain's."""
+    match app:
+        case "evm":
+            return EVM_TRACE
+        case "solana":
+            return SOLANA_TRACE
+        case "soroban":
+            return GENERIC_TRACE
 
 
 def _flat_yield(curr: Iterable[T], gen: Callable[[T], Iterable[R]]) -> Iterable[R]:
@@ -59,9 +149,11 @@ def _to_status_string(s: str | None) -> StatusCodes:
             return "ERROR"
 
 
-def flatten_tree_view_root(context: Path, r: RuleNodeModel) -> Iterable[RuleResult]:
+def flatten_tree_view_root(
+    context: Path, r: RuleNodeModel, shape: TraceShape
+) -> Iterable[RuleResult]:
     assert r.nodeType == "ROOT"
-    return flatten_tree_view(context, r, RulePath(rule=r.name), None)
+    return flatten_tree_view(context, r, RulePath(rule=r.name), shape, None)
 
 def _collect_child_errors(
     r: RuleNodeModel, err_messages: set[str], sev_filter: Callable[[str], bool]
@@ -75,7 +167,13 @@ def _collect_child_errors(
     for c in r.children:
         _collect_child_errors(c, err_messages, sev_filter)
 
-def flatten_tree_view(context: Path, r: RuleNodeModel, path: RulePath, parent_type: str | None = None) -> Iterable[RuleResult]:
+def flatten_tree_view(
+    context: Path,
+    r: RuleNodeModel,
+    path: RulePath,
+    shape: TraceShape,
+    parent_type: str | None = None,
+) -> Iterable[RuleResult]:
     stat = _to_status_string(r.status)
     effective_path = path
     if r.nodeType == "METHOD_INSTANTIATION":
@@ -105,7 +203,7 @@ def flatten_tree_view(context: Path, r: RuleNodeModel, path: RulePath, parent_ty
         else:
             return [RuleResult(
                 path=effective_path,
-                cex_dump=None,
+                counterexample=None,
                 status=stat,
                 error_messages=list(messages)
             )]
@@ -116,7 +214,7 @@ def flatten_tree_view(context: Path, r: RuleNodeModel, path: RulePath, parent_ty
         return [
             RuleResult(
                 path=effective_path,
-                cex_dump=None,
+                counterexample=None,
                 status=stat,
                 error_messages=warning_message
             )
@@ -124,41 +222,42 @@ def flatten_tree_view(context: Path, r: RuleNodeModel, path: RulePath, parent_ty
     if stat == "VERIFIED":
         non_sanity_children = any([ c.nodeType != "SANITY" for c in r.children ])
         if non_sanity_children:
-            return _flat_yield(r.children, lambda c: flatten_tree_view(context, c, effective_path, r.nodeType))
+            return _flat_yield(
+                r.children,
+                lambda c: flatten_tree_view(context, c, effective_path, shape, r.nodeType),
+            )
         else:
             return [RuleResult(
                 path=effective_path,
-                cex_dump=None,
+                counterexample=None,
                 status=stat
             )]
 
     if stat == "TIMEOUT":
         if all(tc.nodeType == "SANITY" for tc in r.children):
-            return [RuleResult(path=effective_path, cex_dump=None,status=stat, live_check_info=r.LiveCheckInfo)]
+            return [RuleResult(path=effective_path, counterexample=None,status=stat, live_check_info=r.LiveCheckInfo)]
     assert stat == "TIMEOUT" or stat == "VIOLATED" or stat == "SANITY_FAILED"
     violated_assert_children = any([ c.nodeType == "VIOLATED_ASSERT" for c in r.children])
     if violated_assert_children:
         assert stat == "VIOLATED" and len(r.output) > 0
         output_file = r.output[0]
         dump_model = json.loads((context / output_file).read_text())
-        cex_dump : None | str = None
         assert isinstance(dump_model, dict)
-        if "callTrace" in dump_model:
-            cex_node = CallTraceModel.model_validate(dump_model["callTrace"])
-            cex_dump = "<counterexample>" + calltrace_to_xml(cex_node) + "</counterexample>"
         return [RuleResult(
             path = effective_path,
-            cex_dump=cex_dump,
+            counterexample=counterexample(dump_model, shape),
             status=stat
         )]
     if r.nodeType == "SANITY":
         assert stat == "SANITY_FAILED"
         return [RuleResult(
             path=effective_path,
-            cex_dump=None,
+            counterexample=None,
             status=stat
         )]
-    return _flat_yield(r.children, lambda c: flatten_tree_view(context, c, effective_path, r.nodeType))
+    return _flat_yield(
+        r.children, lambda c: flatten_tree_view(context, c, effective_path, shape, r.nodeType)
+    )
 
 class NoTreeViewResultError(RuntimeError):
     def __init__(self, where: Path):
@@ -201,7 +300,11 @@ def get_final_treeview(s: Path) -> tuple[TreeViewStatus, Path]:
         raise MalformedTreeVew(e)
 
 
-def read_and_format_run_result(s: Path) -> dict[str, RuleResult] | str:
+def read_and_format_run_result(s: Path, app: ProverApp) -> dict[str, RuleResult] | str:
+    """Every rule in a finished run's final treeView, keyed by rule name.
+
+    ``app`` decides only how counterexample traces are rendered (:func:`trace_shape`); everything
+    else about the parse is shared."""
     loaded_data : TreeViewStatus
     tree_view_dir: Path
     try:
@@ -211,41 +314,65 @@ def read_and_format_run_result(s: Path) -> dict[str, RuleResult] | str:
     except MalformedTreeVew:
         return "Certora prover returned malformed tree view data: this is likely a bug"
 
+    shape = trace_shape(app)
     to_ret: dict[str, RuleResult] = {}
-    for r in _flat_yield(loaded_data.rules, lambda r: flatten_tree_view_root(tree_view_dir, r)):
+    for r in _flat_yield(
+        loaded_data.rules, lambda r: flatten_tree_view_root(tree_view_dir, r, shape)
+    ):
         to_ret[r.name] = r
     return to_ret
 
-def calltrace_to_xml(node: CallTraceModel) -> str:
-    """
-    Convert a tree-like JSON node to XML format.
 
-    Args:
-        node: A dictionary with 'message' field and optional 'childrenList' field
+def _descendants(node: CallTraceModel) -> int:
+    return sum(1 + _descendants(c) for c in node.childrenList)
 
-    Returns:
-        String representation of the XML
-    """
-    # Extract and format the message
 
-    # Replace placeholders with argument values
-    formatted_message = node.message.text
-    for i, arg in enumerate(node.message.arguments):
-        placeholder = f"{{{i}}}"
-        formatted_message = formatted_message.replace(placeholder, arg.value)
+def calltrace_to_xml(node: CallTraceModel, shape: TraceShape) -> str:
+    """Render one counterexample's call trace as the XML an analyzer reads.
 
-    # Start building XML
-    xml_parts = [f"<message>{formatted_message}</message>"]
+    ``shape`` is deliberately not defaulted: a default silently renders a trace with the wrong
+    chain's shape."""
+    xml_parts = [f"<message>{node.message.render()}</message>"]
 
-    # Process children if they exist
     for child in node.childrenList:
-        # skip this, avoid confusing the llm
-        if child.message.text == "Setup" or \
-            child.message.text == "Global State" or \
-            child.message.text == "Evaluate branch condition" or \
-            child.message.text == "unknown loop source code":
+        frame = child.message.frame
+        if frame in shape.dropped:
             continue
-        child_xml = calltrace_to_xml(child)
-        xml_parts.append(f"<child>{child_xml}</child>")
+        if frame in shape.elided:
+            xml_parts.append(
+                f"<child><message>{child.message.render()}</message>"
+                f"<elided>{_descendants(child)} frames of setup</elided></child>"
+            )
+            continue
+        xml_parts.append(f"<child>{calltrace_to_xml(child, shape)}</child>")
 
     return "".join(xml_parts)
+
+
+def counterexample(dump: dict[str, object], shape: TraceShape) -> Counterexample | None:
+    """One violated rule's counterexample, or None when its output carries no call trace.
+
+    ``assertMessage`` matters twice over: on a Solana loop-unwinding violation it is the only
+    statement of what failed — the trace just shows the loop getting two iterations in and stopping
+    — and it is what separates a violation that found a bug from one that ran into an analysis
+    bound (:func:`~composer.prover.ptypes.classify_violation`).
+    """
+    if "callTrace" not in dump:
+        return None
+    assertion: str | None = None
+    match dump.get("assertMessage"):
+        case str(message) if message:
+            assertion = message
+        case _:
+            pass
+    source: SourceSpan | None = None
+    match dump.get("jumpToDefinition"):
+        case {"file": str(file), "start": {"line": int(line)}}:
+            source = SourceSpan(file=file, line=line)
+        case _:
+            pass
+    return Counterexample(
+        trace=calltrace_to_xml(CallTraceModel.model_validate(dump["callTrace"]), shape),
+        assertion=assertion,
+        source=source,
+    )

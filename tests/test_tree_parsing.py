@@ -31,6 +31,7 @@ async def _run_test_prover_job(
             "--wait_for_results", "none",
             *extra_args
         ],
+        app="evm",
         on_err=lambda _ret, _out, _err: None,
         on_stdout=swallow,
         timeout=BUILD_TIMEOUT_S,
@@ -41,7 +42,7 @@ async def _run_test_prover_job(
     async with cloud_results(
         prover_res["link"], poll_timeout=600
     ) as (dir, _runtime_ms):
-        res = read_and_format_run_result(dir)
+        res = read_and_format_run_result(dir, "evm")
     assert not isinstance(res, str), "Parse failed"
     return res
 

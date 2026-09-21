@@ -10,21 +10,25 @@
 #      RUN_CONFINED_BIN at it. The launcher provider resolves $RUN_CONFINED_BIN
 #      first (composer/sandbox/launcher.py), so it need not be on PATH.
 #
-# Usage (add -f for this overlay to any base invocation):
+# Usage (add -f for this overlay, and its profile, to any base invocation):
 #   docker compose -f scripts/docker-compose.yml -f scripts/docker-compose.sandbox.yml \
-#       --profile autoprove build
+#       --profile autoprove --profile sandbox build
 #   docker compose -f scripts/docker-compose.yml -f scripts/docker-compose.sandbox.yml \
-#       --profile autoprove run --rm autoprove console-autoprove --cloud /work/<proj> ...
+#       --profile autoprove --profile sandbox run --rm autoprove \
+#       console-autoprove --cloud /work/<proj> ...
+#
+# `--profile sandbox` is not optional: a `depends_on` does not enable the target's profile. Omit
+# it and compose refuses with "service autoprove depends on undefined service
+# run-confined-build", which names neither this file nor the profile it wants.
 #
 # Adding the sandbox to a FUTURE service: mirror the three keys added to
 # `autoprove` below (the `depends_on` completion gate, the `run_confined` mount,
-# and RUN_CONFINED_BIN). `depends_on` pulls the builder in even when its profile
-# is not explicitly enabled, so the one-shot publish always runs first.
+# and RUN_CONFINED_BIN).
 
 services:
   run-confined-build:
-    # Gated so a bare `docker compose up` never starts it; consumers pull it in
-    # via depends_on regardless of which profile they run under.
+    # Gated so a bare `docker compose up` never starts it; enable the profile alongside the
+    # consuming service's, as the header shows.
     profiles: ["sandbox"]
     image: autoprover-run-confined:latest
     build:

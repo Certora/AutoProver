@@ -37,7 +37,7 @@ from composer.spec.source.plugin import CertoraProverTools, CVLAuthorState
 from composer.spec.system_model import ContractComponentInstance, SolidityIdentifier, component_context
 from composer.spec.source.prover import (
     OVERLAY_OWNED_KEYS, ProverStateExtra, DELETE_SKIP, VALIDATION_KEY as PROVER_VALIDATION_KEY,
-    declared_rules_at, materializing_project,
+    covering_run_links, declared_rules_at, materializing_project,
 )
 from langgraph.graph import MessagesState
 from pathlib import Path
@@ -692,6 +692,7 @@ class WrappedProverRunner:
         callbacks: ProverCallbacks,
         tool_call_id: str,
         rules: list[str] | None = None,
+        exclude_rules: list[str] | None = None,
         **config,
     ) -> ProverReport | str:
         # The spec/conf staging only has to outlive the run itself, so one call
@@ -703,6 +704,7 @@ class WrappedProverRunner:
             spec_contents=curr_spec,
             config=self.config,
             rule=rules,
+            exclude_rule=exclude_rules,
             **config
         ) as (conf_path, _):
             return await run_prover(
@@ -966,7 +968,8 @@ async def batch_cvl_generation(
                 reminders_channel=[],
                 vfs=restored_vfs,
                 version_history=restored_history,
-                spec_stem=spec_stem
+                spec_stem=spec_stem,
+                plugin_tools=[t.name for inj in tools for t in inj.tools],
             )
         )
     except BudgetExceeded as e:
@@ -1015,6 +1018,10 @@ async def batch_cvl_generation(
         final_link=res_state.get("prover_link"),
         vfs=res_state["vfs"],
         applied_edits=applied_edits,
+        covering_links=covering_run_links(
+            res_state["prover_history"],
+            spec_digest(d, res_state["skipped"], res_state["version_history"]),
+        ),
     )
     if res_state["budget_curtailed"]:
         # Published under lifted gates: hand it back as an explicitly unreliable partial.

@@ -53,18 +53,95 @@ class RulePath:
 
 
 
+@dataclass(frozen=True)
+class SourceSpan:
+    file: str
+    line: int
+
+    def pprint(self) -> str:
+        return f"{self.file}:{self.line}"
+
+
+@dataclass(frozen=True)
+class Counterexample:
+    """One violated rule's counterexample: the failing execution, what it broke, and where.
+
+    ``trace`` arrives already rendered, because how much of a call trace is worth showing is a
+    per-chain question the parser answers (:class:`composer.prover.results.TraceShape`). The
+    assertion stays a field of its own because :func:`classify_violation` decides from it whether
+    the violation says anything about the *program* at all.
+    """
+
+    trace: str
+    assertion: str | None = None
+    source: SourceSpan | None = None
+
+    def render(self) -> str:
+        """The counterexample as an analyzer prompt reads it."""
+        parts: list[str] = []
+        if self.assertion:
+            parts.append(f"<assert>{self.assertion}</assert>")
+        if self.source is not None:
+            parts.append(f"<source>{self.source.pprint()}</source>")
+        parts.append(self.trace)
+        return "<counterexample>" + "".join(parts) + "</counterexample>"
+
+
+@dataclass(frozen=True)
+class PropertyViolation:
+    """The rule's own assertion failed, so the counterexample describes the program."""
+
+
+@dataclass(frozen=True)
+class IncompleteCheck:
+    """The prover reported an assertion *it* generated, not the rule's.
+
+    The check did not finish, so nothing about the program follows from it — an unwound loop bound
+    is the prover saying it stopped, not the program misbehaving. Still worth showing an author,
+    who can raise the bound or constrain the loop; not worth writing up as a finding.
+    ``assertion`` is the prover's own message, which carries its own recommendation.
+    """
+
+    assertion: str
+
+
+type ViolationKind = PropertyViolation | IncompleteCheck
+
+#: Assertions the prover generates for itself when an analysis bound is reached rather than a
+#: property broken, matched by prefix — the tail carries advice that changes between versions.
+#:
+#: The list fails safe: an assertion it does not recognize is treated as the rule's own, so a stale
+#: entry costs a spuriously reported finding and can never suppress a real one.
+#:
+#: ``Cannot overflow`` is the Solana Prover's sound-signed-math pass. Under
+#: ``-solanaTACSoundSignedMath`` it annotates pointer arithmetic it believes cannot exceed 64 bits
+#: and then asserts that belief (``sbf/tac/TACModSimplifier.kt``, ``removeNoOverflow``); the
+#: assertion fails where a pointer is computed from a value the analysis could not pin down,
+#: typically an account's ``data_len`` that no rule bounded. An author can act on it — pin the
+#: length, or fall back to ``-solanaTACOptimisticOverflowOptimization`` — but a findings synthesizer
+#: handed it writes the prover's limitation up as a defect in the program under verification.
+_GENERATED_ASSERTIONS = ("Unwinding condition in a loop", "Cannot overflow")
+
+
+def classify_violation(cex: Counterexample | None) -> ViolationKind:
+    """Whether a violated rule found a bug or ran into the prover's own limits."""
+    if cex is not None and cex.assertion is not None:
+        if cex.assertion.startswith(_GENERATED_ASSERTIONS):
+            return IncompleteCheck(cex.assertion)
+    return PropertyViolation()
+
+
 @dataclass
 class RuleResult:
     """
     Rule result parsed out of SandboxedRunResult.
     name is the name of the rule, status is the status of the rule.
-    If status == VIOLATED, then cex_dump is non-null, and will contain the XML representation
-    of the CEX
+    If status == VIOLATED, then counterexample is non-null.
 
     If status == ERROR, error_msg is non-none
     """
     path: RulePath
-    cex_dump: str | None
+    counterexample: Counterexample | None
     status: StatusCodes
 
     error_messages: list[str] = field(default_factory=list)
@@ -74,6 +151,11 @@ class RuleResult:
     @property
     def name(self) -> str:
         return self.path.pprint()
+
+    @property
+    def cex_dump(self) -> str | None:
+        """The counterexample as analysis prompts and report captures read it."""
+        return None if self.counterexample is None else self.counterexample.render()
 
 
 class AnalyzedDiagnosis(BaseModel):

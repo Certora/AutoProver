@@ -26,9 +26,9 @@ from composer.workflow.factories import get_vfs_tools, get_memory_ns
 from composer.workflow.services import standard_connections, IndexedConnections
 from composer.workflow.types import PromptParams, WorkflowSuccess, WorkflowFailure, WorkflowCrash, WorkflowResult
 from composer.workflow.meta import create_resume_commentary
-from composer.core.context import AIComposerContext, ProverOptions
+from composer.core.context import AIComposerContext
 from composer.core.state import AIComposerState
-from composer.prover.core import make_prover_options, CexHandler
+from composer.prover.core import make_prover_options
 from composer.core.validation import ProverValidation, CodegenValidation, ReqsValidation
 from composer.rag.db import rag_context, ComposerRAGDB
 from composer.rag.models import get_model as get_rag_model
@@ -393,14 +393,6 @@ async def _run_codegen(
     vfs_tooling, materializer = get_vfs_tools(fs_layer=fs_layer, immutable=False)
     immut_vfs_tools, _ = get_vfs_tools(fs_layer=fs_layer, immutable=True)
 
-    # Prover options, built here so the prover tool's ProverDeps can bind them.
-    resolved = make_prover_options(cloud=not workflow_options.local_prover)
-    prover_opts = ProverOptions(
-        capture_output=workflow_options.prover_capture_output,
-        keep_folder=workflow_options.prover_keep_folders,
-        extra_args=resolved.extra_args,
-    )
-
     cex_remediation_tools = _remediation_tools(
         cvl_knowledge.remediation_builder,
         conn,
@@ -419,7 +411,14 @@ async def _run_codegen(
         recursion_limit=workflow_options.recursion_limit
     )
 
-    crypto_tools = _codegen_author_tools(cex_handler, prover_opts, rag_db, vfs_tooling)
+    # The prover tool's per-run deps, built here so _codegen_author_tools can bind them.
+    prover_deps = ProverDeps(
+        cex_handler=cex_handler,
+        prover_opts=make_prover_options(cloud=not workflow_options.local_prover, app="evm"),
+        keep_folder=workflow_options.prover_keep_folders,
+    )
+
+    crypto_tools = _codegen_author_tools(prover_deps, rag_db, vfs_tooling)
     workflow_builder = _codegen_builder(llm, crypto_tools)
 
     workflow_graph = workflow_builder.with_tools(extra_tools).with_sys_prompt_template(
@@ -600,8 +599,7 @@ def _remediation_tools(
 
 
 def _codegen_author_tools(
-    cex_handler: CexHandler,
-    prover_opts: ProverOptions,
+    prover_deps: ProverDeps,
     rag_db: ComposerRAGDB,
     vfs_tooling: list[BaseTool],
 ) -> list[BaseTool]:
@@ -609,9 +607,7 @@ def _codegen_author_tools(
     crypto_tools). The prover tool is bound with its per-run deps here;
     the manual tools take the rag_db instance directly."""
     return [
-        CertoraProverTool.bind(
-            ProverDeps(cex_handler=cex_handler, prover_opts=prover_opts)
-        ).as_tool("certora_prover"),
+        CertoraProverTool.bind(prover_deps).as_tool("certora_prover"),
         propose_spec_change,
         human_in_the_loop,
         code_result,

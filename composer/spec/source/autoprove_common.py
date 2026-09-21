@@ -36,7 +36,6 @@ from composer.spec.cvl_research import DEFAULT_CVL_AGENT_INDEX_NS
 from composer.ui.autoprove_app import AutoProvePhase
 from composer.io.thread_logging import RunDataLogger
 
-from composer.spec.util import fs_forbidden_read
 from composer.io.multi_job import HandlerFactory
 
 _logger = logging.getLogger(__name__)
@@ -152,6 +151,7 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
                 summary=summary,
                 thread_id=thread_id,
                 task_handler=handler,
+                ecosystem=EVM,
                 at_exit=exit_logger,
                 run_mode=run_mode,
                 workflow="autoprove"
@@ -164,7 +164,7 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
             source_env = build_source_env(
                 models=staged.llm_models,
                 db=rag_db,
-                forbidden_read=fs_forbidden_read,
+                forbidden_read=staged.source.forbidden_read,
                 root=staged.source.project_root,
                 store=staged.conns.indexed_store,
                 source_question_ns=source_data_ns,
@@ -199,9 +199,9 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
             )
             backend = ProverBackend(
                 ProverArtifactStore(staged.source.project_root, staged.source.contract_name),
-                make_prover_options(cloud=args.cloud),
+                make_prover_options(cloud=args.cloud, app=EVM.name),
                 editing,
                 CexAnalysisStore(store=staged.conns.store, namespace=("cex_analyses", thread_id)),
             )
-            return await cont(source_env, backend, EVM)
+            return await cont(source_env, backend)
     yield callback
