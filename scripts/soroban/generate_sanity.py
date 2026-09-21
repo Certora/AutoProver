@@ -1008,7 +1008,7 @@ def scan_file(filepath: Path) -> tuple[list[dict], list[dict]]:
     return contracts, traits
 
 
-def is_test_file(path: Path) -> bool:
+def is_test_file(path: Path, root: Optional[Path] = None) -> bool:
     """Return True if a .rs file is test-only and should be skipped by default."""
     stem = path.stem
     # Skip files by name pattern
@@ -1016,8 +1016,16 @@ def is_test_file(path: Path) -> bool:
         return True
     if stem.startswith('test_') or stem.startswith('mock_'):
         return True
-    # Skip files inside a test/ tests/ testutils/ directory segment
-    if any(part in ('test', 'tests', 'testutils', 'test_utils') for part in path.parts):
+    # Skip files inside a test/ tests/ testutils/ directory segment.
+    # Only check path components *relative to the project root* so that a
+    # project stored under e.g. /tmp/stellar/test/my-project/ is not
+    # mistakenly treated as test-only because "test" appears in the absolute
+    # path outside the project directory.
+    try:
+        rel_parts = path.relative_to(root).parts if root is not None else path.parts
+    except ValueError:
+        rel_parts = path.parts
+    if any(part in ('test', 'tests', 'testutils', 'test_utils') for part in rel_parts):
         return True
     # Skip files whose first 400 chars open with #[cfg(test)]
     try:
@@ -1045,7 +1053,7 @@ def scan_project(root: Path, include_tests: bool = False) -> tuple[list[dict], l
             if not filename.endswith('.rs'):
                 continue
             rs = Path(dirpath) / filename
-            if not include_tests and is_test_file(rs):
+            if not include_tests and is_test_file(rs, root):
                 continue
             try:
                 c, t = scan_file(rs)

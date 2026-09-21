@@ -2,7 +2,7 @@
 impl Nondet for {{ elt.name }} {
     fn nondet() -> Self { {% for v in elt.variants %}
         {% if not loop.first %}} else {% endif %}{% if not loop.last %}if bool::nondet() {% endif %}{
-            {{ elt.name }}::{{ v.variant }}{% if v.fields %}({% for a in v.fields %}{{ nondet.nondet(a.type) }}{% if not loop.last %}, {% endif %}{% endfor %}){% endif %}{% endfor %}
+            {{ elt.name }}::{{ v.variant }}{% if v.fields %}({% for a in v.fields %}{{ nondet.nondet(a.type, true) }}{% if not loop.last %}, {% endif %}{% endfor %}){% endif %}{% endfor %}
 	}
     }
 }

@@ -28,11 +28,17 @@ def fix_profile(t):
 
 
 def fix_soroban_sdk(t):
-  dstl = { "version": sdk_version_string, "default-features": False, "features": ["alloc", "experimental_spec_shaking_v2", "hazmat-address"] }  
+  features = ["alloc"]
+  if (sdk_version >= (23, 0, 0)):
+    features.append("hazmat-address")
+  if (sdk_version >= (25, 2, 0)):
+    features.append("experimental_spec_shaking_v2")
+  dstl = { "version": sdk_version_string,
+           "default-features": False,
+           "features": features}
   if "dependencies" in t:
     x = t["dependencies"]
-    if "soroban-sdk" not in x:
-      x["soroban-sdk"] = put_stuff(dstl)
+    x["soroban-sdk"] = put_stuff(dstl)
   else:
     t["dependencies"] = tomlkit.inline_table()
     t["dependencies"]["soroban-sdk"] = put_stuff(dstl)
