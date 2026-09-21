@@ -352,6 +352,17 @@ the artifact. A fourth option is to make the *report* state that a stand-in's de
 author's claim rather than a checked fact, which is cheap and honest and fixes nothing.
 [who-edits-the-program.md](./who-edits-the-program.md) §13.4 has the argument.
 
+**U14. A stand-in munge's gate says something weaker than what it needs.**
+The munge reviewer's non-blocking nit on the U11 run, and it is right: a `swap_import`'s aliased
+`use` is gated on the requesting unit's feature alone, while the `mod certora` declaration holding
+the stand-in is gated on `certora`, so `--features unit_x` without `certora` would compile a `use`
+of a module that is not there. It cannot happen today — `declare_unit_features` makes every unit
+feature empty and the build always passes `--features certora,unit_x` together — and `mock_fn`'s
+`stand_in` has exactly the same shape, so this is one decision for both kinds rather than a patch to
+the new one. Either gate on both features, or write down that the pairing is guaranteed by
+`declare_unit_features` and the build invocation, so the next person to add a way of building does
+not quietly break it. Worth an hour, and cheaper before something else depends on it.
+
 **U13. The vault scenario's `withdraw` has an unexercised aliasing case, and the harness judge found
 it before we did.**
 Not a defect in the backend — a gap in the scenario and in what a rule about it covers. `withdraw`'s
