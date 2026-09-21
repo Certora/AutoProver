@@ -287,15 +287,18 @@ def _author_system_prompt() -> str:
 
 
 def test_the_author_is_told_which_prover_settings_are_its_own_and_which_are_not():
-    """The tool exists for two settings and the prompt has to draw the line, because the ones it
-    withholds are exactly the ones that look like the obvious remedy: `optimistic_loop` for a loop
-    that will not close, a `rule_sanity` downgrade for a rule that keeps coming back vacuous."""
+    """The tool covers three settings and the prompt has to draw two lines, not one: between what
+    the author may move and what it may not, and — inside what it may — between the two that are
+    sound and the one that is not. A `rule_sanity` downgrade is the withheld one that most looks
+    like the obvious remedy, for a rule that keeps coming back vacuous."""
     prompt = _flat(_author_system_prompt())
 
     assert "adjust_prover_config" in prompt
     assert "optimistic_loop" in prompt and "rule_sanity" in prompt
-    # And what it may change is named as sound rather than merely permitted.
+    # The sound pair is named as sound rather than merely permitted ...
     assert "never what a green verdict means" in prompt
+    # ... and the one that is not is not quietly filed alongside them.
+    assert "conditional on an assumption nothing checked" in prompt
 
 
 def test_both_new_settings_are_placed_last_on_their_ladders():

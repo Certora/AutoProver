@@ -412,6 +412,36 @@ def with_loop_iter(conf: dict, iterations: int) -> dict:
     return {**conf, "loop_iter": str(iterations)}
 
 
+def has_optimistic_loop(conf: dict) -> bool:
+    """Whether ``conf`` assumes loops finish.
+
+    Read tolerantly because the key arrives from two directions: :data:`TEMPLATE_BASE` writes a JSON
+    bool, and a project conf written by hand may spell it as a string the way ``loop_iter`` is
+    spelled. Anything else — absent, or a value that is neither — is false, which is both the
+    template's position and what the Prover does with a key it was not given.
+    """
+    match conf.get("optimistic_loop"):
+        case bool(b):
+            return b
+        case str(s):
+            return s.strip().lower() == "true"
+        case _:
+            return False
+
+
+def with_optimistic_loop(conf: dict, enabled: bool) -> dict:
+    """``conf`` with the loop-halt assumption on or off.
+
+    Unlike its two siblings this changes what a verdict *means*, not how the prover spends its time:
+    every loop is assumed to finish within ``loop_iter``, so a violation reachable only on a later
+    iteration is not found and the rule still reports VERIFIED. It is here because the ladder
+    above it has a rung missing — a trip count the analysis cannot fix is not answered by bounding
+    the inputs, by munging the loop, or by raising the bound, and the alternative to assuming it is
+    abandoning the handler (``docs/cvlr-todo.md`` U9). Written as a JSON bool, matching the template.
+    """
+    return {**conf, "optimistic_loop": enabled}
+
+
 def with_sanity_floor(conf: dict) -> dict:
     """``conf`` with vacuity checking guaranteed on, at ``basic`` unless it already asks for more.
 

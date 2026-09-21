@@ -70,9 +70,11 @@ from composer.spec.cvlr.conf import (
     OVERLAY_OWNED_KEYS,
     SelectRules,
     dump_conf,
+    has_optimistic_loop,
     has_solver_portfolio,
     tools_version,
     with_loop_iter,
+    with_optimistic_loop,
     with_solver_portfolio,
 )
 from composer.spec.cvlr.munge import (
@@ -774,9 +776,10 @@ class SetLoopIter(BaseModel):
     type: Literal["loop_iter"]
     iterations: int = Field(
         description="The new bound. The Prover unrolls an unbounded loop this many times and then "
-        "*asserts* the loop has finished — `optimistic_loop` is off, so a rule that verifies at "
-        "this bound is verified, and one that cannot comes back VIOLATED on \"Unwinding condition "
-        "in a loop\" rather than passing quietly. Set it as low as the property allows: cost grows "
+        "*asserts* the loop has finished — while `optimistic_loop` is off, which is the default, a "
+        "rule that verifies at this bound is verified, and one that cannot comes back VIOLATED on "
+        "\"Unwinding condition in a loop\" rather than passing quietly. Set it as low as the "
+        "property allows: cost grows "
         "exponentially, and above 3 or 4 it grows faster than the answer is usually worth. Raising "
         "it is the last of the three remedies, after bounding whatever determines the trip count "
         "and after asking whether the loop is in your property's way at all."
@@ -802,15 +805,38 @@ class SetNonlinearSolverPortfolio(BaseModel):
     )
 
 
+class SetOptimisticLoop(BaseModel):
+    """Assume every loop finishes within the bound, instead of asserting that it does."""
+
+    type: Literal["optimistic_loop"]
+    enabled: bool = Field(
+        description="True to assume loops finish, false to go back to asserting it. **This is the "
+        "one setting here that changes what a verdict means.** With it on, the Prover stops "
+        "checking that the unroll bound was enough, so a violation reachable only on a later "
+        "iteration is never found and the rule reports VERIFIED anyway. Every rule in the "
+        "submission is affected, not the one you were fighting. "
+        "It is for exactly one situation: a loop whose trip count the analysis cannot fix, where "
+        "raising the bound provably does not terminate — the bound goes up and the reported "
+        "iteration goes up with it — and where the loop is somewhere no summary directive can name, "
+        "so it cannot be constrained or munged either. Establish that first, by moving the bound and "
+        "reading what comes back; a loop that discharges at 3 is not this case. The honest "
+        "alternative when it is this case is `record_skip` naming the loop, and that is the better "
+        "answer when the property is about the loop itself. What this buys is the properties that "
+        "are not: with it on, the rest of the handler is reachable again. Say in `why` which "
+        "bounds you tried and what they reported — a reader has to weigh every verdict in the unit "
+        "against it."
+    )
+
+
 type CvlrConfigEdit = Annotated[
-    SetLoopIter | SetNonlinearSolverPortfolio, Discriminator("type")
+    SetLoopIter | SetNonlinearSolverPortfolio | SetOptimisticLoop, Discriminator("type")
 ]
 
 #: Conf keys the edits above write. The run overlay forces its own keys onto the base conf
 #: (:data:`~composer.spec.cvlr.conf.OVERLAY_OWNED_KEYS`), so an "accepted" edit to one of them would
 #: be reported as applied and then silently dropped before submission — the two sets must stay
 #: disjoint. Same assertion, for the same reason, as the CVL backend's ``author._FLAG_KEYS``.
-_CONF_EDIT_KEYS = frozenset({"loop_iter", "prover_args"})
+_CONF_EDIT_KEYS = frozenset({"loop_iter", "prover_args", "optimistic_loop"})
 assert not (_shadowed := _CONF_EDIT_KEYS & OVERLAY_OWNED_KEYS), \
     f"conf edits shadowed by the run overlay: {', '.join(sorted(_shadowed))}"
 
@@ -821,11 +847,17 @@ class AdjustProverConfig(
 ):
     """Change a prover setting for this unit's submissions.
 
-    The conf is in your system prompt; this changes it. Every setting here is **sound** — it decides
-    how the prover spends its time, never what a green verdict means — which is why the list is
-    short and closed. Everything that *would* change what a verdict means stays out of your hands:
-    `optimistic_loop` assumes loops finish, a `rule_sanity` downgrade stops vacuity being reported,
-    and the memory-model flags are unsound by name.
+    The conf is in your system prompt; this changes it. The list is short and closed, and two of the
+    three settings on it are **sound** — the loop bound and the solver portfolio decide how the
+    prover spends its time, never what a green verdict means.
+
+    `optimistic_loop` is the exception, and it is here because the sound ladder has a gap rather
+    than because the rule was relaxed: a trip count the analysis cannot fix is answered by none of
+    bounding the inputs, munging the loop, or raising the bound. Turning it on makes every verdict
+    in this unit conditional on an assumption nothing checked, so it is the last thing to reach for
+    and the first thing a reader of the deliverable will want explained. What stays out of your
+    hands entirely is a `rule_sanity` downgrade, which stops vacuity being reported, and the
+    memory-model flags, which are unsound by name and measurably fix nothing.
 
     **Reach for this after your own remedies, not before them** — and not because it is expensive,
     which the solver portfolio measurably is not. A timeout is usually telling you something about
@@ -871,6 +903,14 @@ class AdjustProverConfig(
                             + " in this conf."
                         )
                     conf = with_solver_portfolio(conf, on)
+                case SetOptimisticLoop(enabled=on):
+                    if has_optimistic_loop(conf) == on:
+                        return (
+                            "`optimistic_loop` is already "
+                            + ("on" if on else "off")
+                            + " in this conf."
+                        )
+                    conf = with_optimistic_loop(conf, on)
         return tool_state_update(
             self.tool_call_id,
             "Prover config updated; the prover stamp is invalidated, so re-run `verify_rules`.\n\n"

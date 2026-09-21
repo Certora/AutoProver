@@ -364,11 +364,13 @@ def _verify_state(draft: str) -> dict:
 
 
 # ---------------------------------------------------------------------------------------------
-# The two prover settings the author may move
+# The three prover settings the author may move
 #
-# The closed list is the point. Every setting here decides how the prover spends its time and none
-# decides what a green verdict means, which is why `optimistic_loop` and a `rule_sanity` downgrade
-# are not in it — and why the flag list is a named recipe rather than free text (P8).
+# The closed list is the point, and so is the line drawn inside it. The loop bound and the solver
+# portfolio decide how the prover spends its time; `optimistic_loop` decides what a green verdict
+# means and is on the list anyway, because the sound remedies for a loop run out before the problem
+# does (`docs/cvlr-todo.md` U9). A `rule_sanity` downgrade and the memory-model flags stay off it —
+# and the flag list is a named recipe rather than free text (P8).
 
 
 def _adjust(state: dict, edits: list, why: str = "tried bounding the operands first"):
@@ -421,6 +423,48 @@ def test_a_setting_that_is_already_what_you_asked_for_is_refused():
     out = _adjust({**_verify_state(DRAFT), "conf": {"loop_iter": "2"}},
                   [SetLoopIter(type="loop_iter", iterations=2)])
     assert isinstance(out, str) and "already 2" in out
+
+
+def test_optimistic_loop_goes_on_and_the_whole_conf_comes_back():
+    """The one edit here that changes what a verdict means. It is reachable because the sound
+    ladder runs out before the problem does — a trip count the analysis cannot fix is answered by
+    none of bounding the inputs, summarizing the loop, or unrolling further (`docs/cvlr-todo.md`
+    U9)."""
+    from composer.spec.cvlr.verify import SetOptimisticLoop
+
+    state = {**_verify_state(DRAFT), "conf": {"loop_iter": "2", "optimistic_loop": False}}
+    out = _adjust(state, [SetOptimisticLoop(type="optimistic_loop", enabled=True)])
+    assert not isinstance(out, str), out
+    assert out.update["conf"]["optimistic_loop"] is True
+    # Unchanged, because the two are answers to different halves of the same symptom.
+    assert out.update["conf"]["loop_iter"] == "2"
+
+
+def test_optimistic_loop_already_on_is_refused():
+    """Including when the project's own conf spelled it as a string, which is how a hand-written
+    conf spells `loop_iter` and so is a spelling one may well arrive in."""
+    from composer.spec.cvlr.verify import SetOptimisticLoop
+
+    for spelling in (True, "true"):
+        out = _adjust({**_verify_state(DRAFT), "conf": {"optimistic_loop": spelling}},
+                      [SetOptimisticLoop(type="optimistic_loop", enabled=True)])
+        assert isinstance(out, str) and "already on" in out, spelling
+
+
+def test_the_edits_apply_together_or_not_at_all():
+    """`why` is required for the same reason it is on a summary: the conf ships with the
+    deliverable, and with this key in it every verdict in the unit is conditional."""
+    from composer.spec.cvlr.verify import SetLoopIter, SetOptimisticLoop
+
+    state = {**_verify_state(DRAFT), "conf": {"loop_iter": "2"}}
+    out = _adjust(
+        state,
+        [SetLoopIter(type="loop_iter", iterations=4),
+         SetOptimisticLoop(type="optimistic_loop", enabled=True)],
+    )
+    assert not isinstance(out, str), out
+    assert out.update["conf"]["loop_iter"] == "4"
+    assert out.update["conf"]["optimistic_loop"] is True
 
 
 def test_an_unexplained_config_change_is_refused():

@@ -332,6 +332,29 @@ def test_turning_it_off_leaves_everything_that_was_not_the_portfolio():
     assert roundtrip["prover_args"] == ["-solanaTACMathInt true"]
 
 
+def test_the_loop_assumption_reads_both_spellings_and_defaults_off():
+    """Absent means off — which is what the Prover does with a key it was not given, and what the
+    Solana spec template intends. A hand-written conf may spell the bool as a string, the way one
+    spells `loop_iter`, so both are read."""
+    from composer.spec.cvlr.conf import has_optimistic_loop, with_optimistic_loop
+
+    assert not has_optimistic_loop({})
+    assert not has_optimistic_loop({"optimistic_loop": False})
+    assert not has_optimistic_loop({"optimistic_loop": "false"})
+    assert has_optimistic_loop({"optimistic_loop": True})
+    assert has_optimistic_loop({"optimistic_loop": "true"})
+    assert has_optimistic_loop(with_optimistic_loop({"loop_iter": "2"}, True))
+    assert not has_optimistic_loop(with_optimistic_loop({"optimistic_loop": True}, False))
+
+
+def test_the_loop_assumption_is_off_in_the_default_base():
+    """Reachable is not the same as default. The template's position and the corpus's is off, and
+    what changed is that the author has a rung to reach, not that the run starts on it."""
+    from composer.spec.cvlr.conf import TEMPLATE_BASE, has_optimistic_loop
+
+    assert not has_optimistic_loop(dict(TEMPLATE_BASE))
+
+
 def test_a_project_that_already_wrote_the_portfolio_by_hand_is_recognized():
     """The reference project's own conf carries these settings. Recognizing them by flag rather
     than by a marker is what stops the author being told to turn on what is already on."""
