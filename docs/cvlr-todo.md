@@ -9,8 +9,9 @@ Two kinds of entry appear below. Most are the plan's own items, restated in one 
 **Unfiled** ones are not in the plan at all — they were noticed while doing other work and have no
 section anywhere else, so this document is their only record until someone gives them one.
 
-If you want somewhere to start: **U10** is the one U9 left behind, and the one with a decision in it
-rather than a task; **U2** decides whether the smoke gate protects anything at all, and
+If you want somewhere to start: **U11** is the cheapest — a kind that U10 just built and no author
+has yet reached for, with a pin that reproduces the skip it was built for. **U2** decides whether
+the smoke gate protects anything at all, and
 **U7** is a silent-data-loss risk on the same path whose loud half **U4** was; that half is
 fixed now, and the fix cannot reach U7. **U8** is the same shape one layer up, in the artifact a
 reader actually keeps.
@@ -270,27 +271,55 @@ it says two are and one is not, and why the unsound one is there. **The default 
 half and leaves the "default or not" half open. The comparison run above is still what decides it,
 and `conf.py`'s survey argument still needs the revision described above either way.
 
-**U10. There is no munge kind that puts a boundary around a CPI, and the author spends two editor
-rounds finding that out.**
-The leftover from U9. On the vault re-run the author asked the code editor twice for a substitutable
-boundary around `vault_program::deposit`'s inline `invoke`, was refused both times, and recorded the
-reason in its own skip: *"Unstatable without a model of the System Program transfer CPI, and the
-program cannot be given one with the munge kinds available."* Two properties are skipped for it, and
-the whole handler is given up.
+**~~U10. There is no munge kind that puts a boundary around a CPI, and the author spends two editor
+rounds finding that out.~~** — **built.** The ninth kind is `swap_import`
+([munge.py](../composer/spec/cvlr/munge.py), [editor.py](../composer/spec/cvlr/editor.py),
+[test_cvlr_import_swap.py](../tests/test_cvlr_import_swap.py)), and
+[who-edits-the-program.md](./who-edits-the-program.md) §13 is the design record. What is left over
+is **U11**.
 
-The shape it wanted is the one `program/src/certora/mocks/big_vec.rs` demonstrates for a different
-obstruction: a stand-in that keeps the caller analysable and states its own assumption. For a CPI the
-stand-in would have to express what the transfer did to two lamport balances, which is precisely what
-the Prover's unconstrained replacement drops (*Blocked on upstream* item 1, `upstream-defects.md`
-P6). So this is not simply a missing munge kind — a mock that claims the CPI moved the lamports is
-asserting something the Prover cannot check, and whether that trade is one the backend should offer
-at all is the open question rather than an implementation detail.
+The report this came from: on the vault re-run the author asked the code editor twice for a
+substitutable boundary around `vault_program::deposit`'s inline `invoke`, was refused both times,
+and recorded the reason in its own skip — *"Unstatable without a model of the System Program
+transfer CPI, and the program cannot be given one with the munge kinds available."* Two properties
+skipped, and the handler given up.
 
-Two things are worth separating when it is picked up: whether `mock_fn` could name an inline
-`invoke` at all (the author's directives matched no symbol, LTO having inlined the chain), and
-whether a CPI stand-in is sound enough to publish behind. The first is a tooling question with a
-yes/no answer; the second is the one that decides whether U10 is work or a *won't-do* with a
-recorded reason.
+**Both of the separated questions came back yes, and the corpus answered them, not a run.**
+
+*Can a munge name an inline `invoke` at all?* Not by its definition — that is `solana_program`'s,
+and LTO had left no symbol to summarize either. But the `use` line that puts the name in scope is
+the program's, and swapping it is an item-level edit with a compile gate behind it. `mock_fn`
+replaces a definition with a `use`; this replaces a `use` with a `use`.
+`solana-program-stake-pool-audit`'s `processor.rs` has written exactly that pair by hand for
+`solana_program::msg` since before this backend existed, so the kind was the fifth corpus idiom
+rather than an invention — it arrived late because the first four were all about *items*, and this
+one is about a call site's view of one.
+
+*Is a CPI stand-in sound enough to publish behind?* Yes, and the framing in the original report was
+wrong in a way worth recording. It assumed the stand-in would have to **claim** what the transfer
+did to two lamport balances. It does not: it returns `Ok(())` and claims nothing. The value is
+entirely in what stops happening — the Prover's unconstrained replacement havocs the *caller's*
+deserialized `Account<T>` (`upstream-defects.md` P6), and a stand-in removes that, so the handler's
+own bookkeeping becomes provable with real account validation and the real `Context`. That is the
+fidelity the shipped P6 remedy gives up by descending to the accounting core. Every CPI mock in the
+corpus works this way — `stake-pool`'s `create_stake_account` assumes a shape and returns `Ok(())`;
+Fluid's liquidity-layer stand-in reimplements the accounting it wants and nothing else — so the
+question of publishability was settled by practice before it was asked here.
+
+The line the author now has to draw, and which the prompts, the reviewer and the judge are all told
+to hold: a property about the program's recorded state is sound under a swap; a property about the
+lamports the CPI actually moved is **false** under one rather than unproven, and is a skip.
+
+**U11. `swap_import` has never been used by an author on a real run.**
+The kind is built, tested and taught in four prompts, and every word of that is a prediction. The
+skip it was built for is reproducible for about the cost of one formalization unit —
+[vault-deposits.pin.json](../tests/data/pins/vault-deposits.pin.json) is the nine properties of the
+component that gave up the handler, and the two it skipped name the CPI explicitly. What a run would
+establish is the part no test can: whether the author *diagnoses* the CPI as the obstruction and asks
+for the right kind, whether it writes a stand-in with the right signature on the first attempt, and
+whether it splits its batch on the line above rather than asserting a lamport property under the
+swap. A green run proves the plumbing; the interesting outcome is the third one, and it is the one
+the reviewer and judge text was written to catch.
 
 ---
 
