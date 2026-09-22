@@ -137,6 +137,8 @@ it is not.
 `composer/spec/cvlr/{conf,crates,env_paths,scaffold,preflight}.py` with the checked-in inlining and
 summary env files and the script that refreshes them.
 
+It also carries the first 409 lines of `munge.py` — see **P3a**, where the rest of that file lands.
+
 This is the whole of the old **C1a** and **C1c**, plus the half of **R1** they call. Nothing in it
 is there for a later reader: `crates` and `env_paths` exist to consume `cargo metadata`, `scaffold`
 consumes `conf`, `env_paths` and `cvlr_reference`, and `preflight` consumes all of them. A reviewer
@@ -183,6 +185,21 @@ is the per-unit working copy that *applies* a munge. They land together because 
 the usage: the old **C3a** landed the vocabulary with no applier, two PRs before the test that
 exercised it. Carries the graphcore pin bump `85be3db` → `9f4e9fc` (graphcore #39), whose only
 caller anywhere is `tree.py`.
+
+**`munge.py` arrives here already half-written, and the cut is the file's own.** It is two subjects
+under one name, separated in the source by the divider comment at line 413: above it, pointing a
+target at the verification fork of a dependency; below it, the vocabulary of edits to the program's
+own functions. Nothing below the divider uses anything above it, and `scaffold.py` — **P1** — calls
+`plan_munge`, `already_patched` and `manifest_additions`, which are all above it. So P1 lands lines
+1–409 and P3a *appends* the rest, rather than adding the file. The same divider cuts
+`tests/test_cvlr_munge.py`, whose fork cases are its first 305 lines.
+
+That is a *(split)* in the appendix sense, applied to a code file rather than a test file, and it is
+the only one. The alternative was to extract the fork half into a module of its own, which is a real
+improvement and the wrong PR to make it in: it would put a rename in front of a reviewer who is
+being asked about something else, and the file that results from the two PRs together would no
+longer be the file on the branch. Worth doing afterwards, on master, where it is a two-file diff
+nobody has to hold a partition in their head for.
 
 The old plan's worst test placement disappears here. It had `munge.py` landing in C3a and
 `tests/test_cvlr_munge.py` landing in **C6**, four PRs and a wave later, on the grounds that the
@@ -586,19 +603,21 @@ A path under two PRs, and the shared pipeline files marked *(hunks)*, are the ov
 wave 1 — take the feature's hunks there, not the whole file. Rows for merged PRs are kept as the
 record of what went where; nothing is left to check out for those.
 
-Rows marked *(split)* are test files whose imports straddle a slice boundary and have to be cut
-rather than moved. That is the bill rule 5 runs up, and it is paid in tests rather than in code
-because the code was already cut this way. It is a small bill: four files, and in three of them the
-straddling imports are already local to the functions that need them.
+Rows marked *(split)* are files whose contents straddle a slice boundary and have to be cut rather
+than moved. That is the bill rule 5 runs up, and it is paid almost entirely in tests, because the
+code was already cut this way — the exception is `munge.py`, which is two subjects under one name
+and is cut along the divider comment it already carries (see **P3a**). It is a small bill: five
+files, and in three of them the straddling imports are already local to the functions that need
+them.
 
 | PR | Paths |
 |----|-------|
 | S1 *(merged)* | `composer/layout.py` `composer/spec/gen_types.py` `composer/sandbox/recipes.py` `composer/pipeline/ecosystem.py` `composer/foundry/entry.py` `composer/spec/source/autoprove_common.py` `tests/test_fs_forbidden_read.py` `tests/test_sandbox_config.py` `scripts/docker-compose.sandbox.yml` `composer/pipeline/cli.py` *(hunks)* |
 | S3 *(merged)* | `composer/certora_env.py` `composer/prover/{certoraRunWrapper,core,ptypes,results}.py` `analyzer/analysis.py` `composer/tools/{prover,thinking}.py` `composer/authoring/buffer.py` `composer/core/context.py` `composer/cvl/tools.py` `composer/workflow/executor.py` `composer/spec/source/{autoprove_common,harness}.py` `composer/spec/source/munge/compile_check.py` `tests/conftest.py` `tests/test_prover_app.py` `tests/test_prover_options.py` `tests/test_wrapped_prover_runner.py` `tests/test_solana_cex_trace.py` `tests/data/solana_cex/` `tests/test_tree_parsing.py` `tests/test_cex_analysis_failure_isolation.py` `tests/test_autoprove_report.py` *(hunks)* |
 | S4 | `composer/spec/source/report/{schema,collect,build}.py` `composer/spec/source/report_prover.py` `tests/test_autoprove_report.py` `composer/pipeline/core.py` *(hunks)* |
-| P1 | `composer/cargo/{__init__,metadata,session}.py` `composer/spec/cvlr_reference.py` `composer/spec/cvlr/{__init__,conf,crates,env_paths,scaffold,preflight}.py` `composer/spec/cvlr/envs/` `composer/scripts/refresh_cvlr_envs.py` `composer/spec/cvlr/entry.py` *(hunks: the parser, `parse_main_program`, confinement)* `tests/test_cvlr_reference.py` `tests/test_cvlr_env_paths.py` `tests/test_cvlr_scaffold.py` *(split: everything that does not reach `harness`)* `tests/test_cvlr_plumbing.py` *(split: the `cargo metadata` and conf halves)* — plus the `cvlr-preflight` console script and its `pyproject.toml` entry, new work |
+| P1 | `composer/cargo/{__init__,metadata,session}.py` `composer/spec/cvlr_reference.py` `composer/spec/cvlr/{__init__,conf,crates,env_paths,scaffold,preflight}.py` `composer/spec/cvlr/munge.py` *(split: the fork half, lines 1–409)* `composer/spec/cvlr/envs/` `composer/scripts/refresh_cvlr_envs.py` `composer/spec/cvlr/entry.py` *(hunks: the parser, `parse_main_program`, confinement)* `tests/test_cvlr_reference.py` `tests/test_cvlr_env_paths.py` `tests/test_cvlr_scaffold.py` *(split: everything that does not reach `harness`)* `tests/test_cvlr_plumbing.py` *(split: the `cargo metadata` and conf halves)* — plus the `cvlr-preflight` console script and its `pyproject.toml` entry, new work |
 | P2 | `composer/cargo/sbf.py` `composer/spec/cvlr/{prover,rules}.py` `tests/test_cvlr_end_to_end.py` `tests/test_cvlr_rules.py` `tests/test_cvlr_loop_bound.py` `tests/data/loop_bound_probe.rs` `tests/test_cvlr_plumbing.py` *(split: `sbf_argv`, the build script, `write_submission`)* |
-| P3a | `composer/spec/cvlr/{rust_source,munge,tree}.py` `graphcore` `pyproject.toml` `tests/test_cvlr_munge.py` *(split: less the three `CvlrFormalizer` cases)* `tests/test_cvlr_module_redirect.py` `tests/test_cvlr_import_swap.py` `tests/test_cvlr_anchor_reach.py` `tests/data/anchor_reach_probe.rs` |
+| P3a | `composer/spec/cvlr/{rust_source,tree}.py` `composer/spec/cvlr/munge.py` *(split: the source half, appended to what P1 landed)* `graphcore` `pyproject.toml` `tests/test_cvlr_munge.py` *(split: the source half, less the three `CvlrFormalizer` cases)* `tests/test_cvlr_module_redirect.py` `tests/test_cvlr_import_swap.py` `tests/test_cvlr_anchor_reach.py` `tests/data/anchor_reach_probe.rs` |
 | P3b | `composer/spec/cvlr/{tuning,state,harness,verify}.py` `composer/cargo/symbols.py` `tests/test_cvlr_symbols.py` `tests/data/vault_sbf_symbols.txt` `tests/test_cvlr_tuning.py` `tests/test_cvlr_tree.py` `tests/test_cvlr_scaffold.py` *(split: the `harness` cases)* `tests/test_cvlr_plumbing.py` *(split: `_CaptureCallbacks`, `_RunAccounting`)* |
 | P4 | `composer/spec/cvlr/{anchor_surface,example,guidance}.py` `tests/test_cvlr_anchor_surface.py` `tests/test_cvlr_worked_example.py` |
 | K1 | `composer/kb/kb_context.py` `composer/kb/knowledge_base.py` `composer/kb/resources/cvlr_baseline_facts.md` `composer/templates/kb_index.j2` `composer/templates/cvl_kb_index.j2` `tests/test_kb_bundle.py` `tests/test_cvlr_bundle.py` |
@@ -626,7 +645,7 @@ The first draft's names appear in commit messages, in two open PR bodies and in
 | **R1** | P1 *(metadata, session)*, P2 *(sbf)*, P3b *(symbols)*, P5 *(depinfo)* | One directory, four unrelated consumers. The PR the feedback was about. |
 | **C1a** | P1 | The conf vocabulary lands with the preflight that writes it. |
 | **C1c** | P1 | Scaffold and preflight were already one thing; C1a was their only missing input. |
-| **C3a** | P3a | The munge vocabulary lands with `tree`, which applies it. |
+| **C3a** | P3a, less the fork half to P1 | The munge vocabulary lands with `tree`, which applies it; the dependency-fork half lands with the `scaffold` that calls it. |
 | **C2** | P3a *(tree, the graphcore pin)*, P6 *(crate_mount, source_tools)* | The working copy and the agents' view of the crates are two subjects, not one. |
 | **C5a** | P2 *(prover)*, P3b *(tuning)*, P4 *(anchor_surface)* | Three modules with three different first callers. |
 | **C4a1** | P2 *(rules)*, P3b *(state, harness)* | `rules` belongs with submission; `state` and `harness` belong with the `verify` that reads them. |
