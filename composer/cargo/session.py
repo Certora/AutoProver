@@ -94,8 +94,8 @@ class CargoSession:
 
     workdir: Path
     sandbox: SandboxConfig
-    #: Keyed by binary because two cargos do not share a git cache
-    #: (see :func:`~composer.cargo.sbf.platform_tools_cargos`).
+    #: Keyed by the cargo binary. Two cargos do not share a git cache, so a
+    #: cache filled by one is not warm for the other.
     _warmed: set[str] = field(default_factory=set, repr=False, compare=False)
 
     def __post_init__(self) -> None:

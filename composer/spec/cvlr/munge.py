@@ -1,37 +1,20 @@
-"""Replacing a dependency with the verification-oriented fork of it that Certora maintains.
+"""Redirect a dependency at a Certora-maintained fork when the crates.io crate cannot be analyzed.
 
-"Munge" is Certora's word for a modified copy of the code under verification. For Anchor the modified
-copy already exists and is maintained: `Certora/anchor <https://github.com/Certora/anchor>`_ carries a
-branch per upstream release — ``certora-v0.26.0`` through ``certora-v0.32.1`` — and a verification
-project depends on that instead of the crates.io crate. This module is the wiring for that, and
-nothing more.
+Upstream ``anchor_lang::error::Error`` boxes its payload. The Solana Prover rejects the
+``Box::new`` of that stack-built struct as [3006], "illegal store of a stack pointer", on Anchor
+dispatch and on handlers that use ``?``. The fork's ``Error`` is unboxed. The same fork simplifies
+``require!``, silences ``emit!``, and adds public constructors. ``anchor-spl`` there adds
+``new_unchecked`` for ``TokenAccount`` and ``Mint``, whose fields upstream keeps private.
 
-**Why it is needed at all.** Upstream ``anchor_lang::error::Error`` boxes its payload, and the Solana
-Prover rejects the resulting ``Box::new`` of a stack-built struct as
-**[3006] "illegal store of a stack pointer"** — on every path through Anchor dispatch and every
-handler that uses ``?``. The fork's ``Error`` is unboxed, which is what makes an Anchor handler
-analyzable. Measured both ways against a real program: with the crates.io crate a rule that calls a
-handler cannot be analyzed at all; with the fork the same rule is analyzed and returns a
-counterexample.
+``Certora/anchor`` has a branch per upstream release it covers. ``Certora/fixed`` is the same kind
+of fork for the ``fixed`` crate: it adds conversions upstream does not provide, such as
+``From<u64>`` for ``FixedU64``.
 
-**Why the fork rather than a patch of our own.** An earlier version of this module derived the unboxing
-as a set of textual edits applied to a copy of the registry source. It worked, and it was the wrong
-thing: the fork already does it, carries several other verification-oriented changes we had not
-derived (a simplified ``require!``, a silenced ``emit!``, public constructors), and is kept current
-with upstream releases by people who own it. `docs/cvlr-backend-plan.md` §7.6 records that detour and
-what it cost. A locally-derived patch would be a second answer to a solved question, drifting.
+Branches are an explicit list, not a pattern. A version with no branch blocks the plan. A derived
+name would send cargo after a branch that does not exist, and the error would be about git.
 
-**Why a target needs this written for it.** The recommended starting template does not mention the
-fork, so a project scaffolded from it depends on crates.io Anchor and hits [3006] with no indication
-that a fork exists. That is the actual gap this fills — see `docs/upstream-defects.md` T7.
-
-**Anchor is not the only one, and the list is read rather than reasoned about.** A survey of the nine
-verification projects that carry a ``[patch.crates-io]`` table found ``anchor-spl`` patched alongside
-``anchor-lang`` everywhere ``anchor-lang`` was, and a second maintained fork nobody here knew about
-(``Certora/fixed``). Both are declared below. ``docs/cvlr-backend-plan.md`` §7.6.5 has what each was
-worth and §7.6.3 has the wider charter that survey produced; §7.6.7 has the standing rule, which is
-that an error reproduced in a scaffold this backend wrote is evidence about the scaffold until
-somebody checks it against a project the scaffold did not create.
+The recommended starting template does not mention these forks. A project scaffolded from it stays
+on the crates.io crates and hits [3006] with nothing pointing at a fork.
 """
 
 import logging
@@ -47,19 +30,17 @@ _log = logging.getLogger(__name__)
 class ForkOverride:
     """A repository of verification-oriented forks, and the crates in it a target may need.
 
-    ``crates`` is a tuple rather than one name because a fork is a *workspace*: ``Certora/anchor``
-    publishes both ``anchor-lang`` and ``anchor-spl`` off one branch, and a target that uses both
-    needs both redirected. Patching only ``anchor-lang`` does clear [3006] — the boxing is in
-    ``anchor_lang::error`` — but leaves ``anchor-spl`` as the upstream crate, whose ``TokenAccount``
-    and ``Mint`` are newtypes with a private field. The fork adds ``new_unchecked`` constructors for
-    exactly those, so without it a harness cannot build a token account at all. Both projects in the
-    corpus that verify an Anchor program patch both crates.
+    ``crates`` is more than one name because a fork is a workspace. ``Certora/anchor`` publishes
+    ``anchor-lang`` and ``anchor-spl`` from one branch, and a target that uses both needs both
+    redirected. Patching only ``anchor-lang`` clears [3006] (the boxing is in
+    ``anchor_lang::error``) and leaves ``anchor-spl`` upstream. Its ``TokenAccount`` and ``Mint``
+    are newtypes with a private field. The fork adds ``new_unchecked`` for those, so a harness can
+    build a token account.
 
-    ``branches`` maps an exact resolved version to a branch name rather than deriving one from a
-    pattern. The names do follow a pattern today, but a version with no branch is the case that
-    matters: deriving would produce a plausible name, cargo would fail to fetch it, and the error a
-    caller sees would be about git rather than about the fork not covering their Anchor. Naming the
-    versions that exist means that case blocks with a sentence somebody can act on.
+    ``branches`` maps an exact resolved version to a branch name. The names follow a pattern, but a
+    missing branch is the case that matters: deriving one would produce a plausible name, cargo
+    would fail to fetch it, and the error would be about git. Listing the versions that exist
+    makes that case a message about coverage.
     """
 
     repo: str
@@ -76,7 +57,7 @@ class ForkOverride:
 
 @dataclass(frozen=True)
 class Blocked:
-    """A reason the override cannot be applied, phrased for whoever has to resolve it."""
+    """Why an override cannot be applied, and what would resolve it."""
 
     crate: str
     problem: str
@@ -87,17 +68,15 @@ class Blocked:
 class AlreadySourced:
     """The target already decides where this crate comes from, so nothing was changed.
 
-    Reported rather than dropped, and reported with the source in it, because the two cases read
-    identically from the outside and only one of them is fine. A project already pointing at the
-    fork needs nothing. A project pointing at some *other* fork of the same crate has made a
-    deliberate choice this module will not override — and if a handler then refuses to analyze, this
-    line is where somebody should look first.
+    The source is part of the report. A project already on this fork needs nothing. A project on
+    some other fork is left alone, and if a handler then will not analyze, this is the first place
+    to look.
     """
 
     crate: str
     source: str
-    #: The repository the override would have used, so ``points_at_fork`` can be derived rather
-    #: than stored as a flag alongside it.
+    #: The repository the override would have used. ``points_at_fork`` is derived from this
+    #: and ``source``.
     fork_repo: str
 
     @property
@@ -116,11 +95,10 @@ class AlreadySourced:
 
 @dataclass(frozen=True)
 class AlreadyRedirected:
-    """This workspace's own ``[patch.crates-io]`` table already names the crate.
+    """This workspace's ``[patch.crates-io]`` table already names the crate.
 
-    A separate case from :class:`AlreadySourced` rather than one with a stand-in URL in it, because
-    there is genuinely less to say: the table names a redirect, and whether it points at the fork is
-    a question about text this module did not resolve. The graph answers that on the next run.
+    Separate from :class:`AlreadySourced` because the table entry has not been resolved to a
+    source URL. The next graph read is what says whether it points at the fork.
     """
 
     crate: str
@@ -137,11 +115,11 @@ type LeftAlone = AlreadySourced | AlreadyRedirected
 
 
 def _repo_key(url: str) -> str:
-    """A git URL reduced to what two spellings of the same repository share.
+    """A git URL reduced to the part two spellings of one repository share.
 
     ``cargo metadata`` reports a patched dependency as
-    ``git+https://github.com/Certora/anchor.git?branch=certora-v0.31.1#<sha>``, so a comparison
-    against the declared repo has to survive the scheme prefix, the query and the fragment.
+    ``git+https://github.com/Certora/anchor.git?branch=certora-v0.31.1#<sha>``. The comparison
+    drops the scheme prefix, the query, and the fragment.
     """
     return url.removeprefix("git+").split("?")[0].split("#")[0].removesuffix(".git").lower()
 
@@ -159,9 +137,8 @@ class Override:
     def manifest_addition(self) -> str:
         """The ``[patch.crates-io]`` entry that redirects the graph at the fork.
 
-        A branch rather than a pinned commit, which is what the reference project does: the lockfile
-        records the commit, so the build is reproducible without this file having to be edited every
-        time the fork picks up a fix.
+        A branch, not a commit. The lockfile records the commit, so the build stays reproducible
+        without editing this file every time the fork moves.
         """
         return (
             f"\n[patch.crates-io.{self.crate}]\n"
@@ -172,12 +149,12 @@ class Override:
 
 @dataclass(frozen=True)
 class MungePlan:
-    """What munging this target would do. Empty when nothing needs it, which is the common case."""
+    """What munging this target would change. Empty when nothing needs it."""
 
     overrides: tuple[Override, ...] = ()
     blocked: tuple[Blocked, ...] = ()
-    #: Crates the target does not resolve at all. Reported rather than dropped: "Anchor was not
-    #: replaced" is a fact a reader of a [3006] failure needs, and silence looks like success.
+    #: Crates the target does not resolve. Kept in the plan: "Anchor was not replaced" is what a
+    #: reader of a [3006] failure needs, and omitting it looks like success.
     inapplicable: tuple[str, ...] = ()
     #: Crates left alone because the target already decides where they come from. See
     #: :data:`LeftAlone`.
@@ -187,7 +164,7 @@ class MungePlan:
         return bool(self.overrides)
 
     def notes(self) -> list[str]:
-        """Everything the plan decided not to change, in words, for the scaffold's review output."""
+        """What the plan left unchanged, for the scaffold's review output."""
         return [f"{crate} is not a dependency of this project" for crate in self.inapplicable] + [
             a.describe() for a in self.already
         ]
@@ -205,11 +182,9 @@ class MungeBlocked(RuntimeError):
 # the overrides
 
 
-#: Anchor. Branch names read off the fork; the list is what exists rather than what a pattern would
-#: generate, so a project on a release the fork has not been updated for gets told that.
-#:
-#: Note the gaps, because they are the point of listing versions instead of deriving them: the fork
-#: covers 0.30.1 but not 0.30.0, and 0.32.1 but not — as far as this list knows — anything later.
+#: Anchor. Branch names taken from the fork. Listed, not derived, so a release the fork has not
+#: been updated for is reported as uncovered. The fork has 0.30.1 and not 0.30.0, and nothing
+#: after 0.32.1.
 ANCHOR_FORK = ForkOverride(
     repo="https://github.com/Certora/anchor.git",
     crates=("anchor-lang", "anchor-spl"),
@@ -228,18 +203,13 @@ ANCHOR_FORK = ForkOverride(
         "resulting Box::new of a stack-built struct as [3006] 'illegal store of a stack pointer' — "
         "on every path through Anchor dispatch. The fork's Error is unboxed, and carries other "
         "verification-oriented changes besides: anchor-spl gains public new_unchecked constructors "
-        "for TokenAccount and Mint, whose upstream newtypes a harness cannot otherwise build. "
-        "See docs/upstream-defects.md P1."
+        "for TokenAccount and Mint, whose upstream newtypes a harness cannot otherwise build."
     ),
 )
 
-#: The fixed-point arithmetic crate, forked for the same class of reason as Anchor: the fork adds
-#: conversions verification code needs and upstream does not provide.
-#:
-#: One branch, because one is what there is evidence for — two corpus projects resolve ``fixed``
-#: 1.23.1 to ``certora-v1.23.1``, at the same commit. Anything else blocks, which is the design:
-#: a project on a `fixed` release nobody has forked should be told so rather than have a plausible
-#: branch name invented for it.
+#: The fixed-point crate. The fork adds conversions verification code needs and upstream does not
+#: provide. One branch is listed, ``certora-v1.23.1`` for 1.23.1, because that is the release the
+#: fork is known to cover. Any other version blocks instead of inventing a branch name.
 FIXED_FORK = ForkOverride(
     repo="https://github.com/Certora/fixed.git",
     crates=("fixed",),
@@ -251,9 +221,7 @@ FIXED_FORK = ForkOverride(
     ),
 )
 
-#: The overrides the Solana backend writes. Both were read off real verification projects rather
-#: than reasoned about — see ``docs/cvlr-backend-plan.md`` §7.6.5, and the rule in §7.6.4 about
-#: errors reproduced in a scaffold this backend wrote.
+#: The forks written into a Solana project's workspace manifest.
 SOLANA_OVERRIDES: tuple[ForkOverride, ...] = (ANCHOR_FORK, FIXED_FORK)
 
 
@@ -264,21 +232,19 @@ SOLANA_OVERRIDES: tuple[ForkOverride, ...] = (ANCHOR_FORK, FIXED_FORK)
 def already_patched(manifest_text: str) -> frozenset[str]:
     """The crates a workspace manifest's ``[patch.crates-io]`` table already redirects.
 
-    Parsed rather than searched for, because the two spellings are the same TOML and look nothing
-    alike as text: a shared ``[patch.crates-io]`` header with one inline table per crate, which is
-    what every project in the corpus writes, and a ``[patch.crates-io.<crate>]`` sub-table per
-    crate, which is what this module writes. A search for either misses the other, and appending a
-    second entry for a key TOML already has is a manifest cargo refuses outright.
+    Parsed, not searched. Projects write one ``[patch.crates-io]`` header with an inline table
+    per crate. This module writes a ``[patch.crates-io.<crate>]`` sub-table. The two are the same
+    TOML and share no text, so a search for either misses the other. A second entry for a key
+    TOML already has is a manifest cargo refuses.
 
-    The resolved graph is the better source for this — it is what cargo actually computed — and
-    :func:`plan_munge` uses it. This covers the case the graph cannot: a ``Workspace`` snapshot
-    taken before the patch table was applied.
+    :func:`plan_munge` also checks the resolved graph, which is what cargo computed. This covers
+    the case the graph cannot: a snapshot taken before the patch table was applied.
     """
     try:
         parsed = tomllib.loads(manifest_text)
     except tomllib.TOMLDecodeError:
-        # cargo parsed this manifest to produce the graph, so failing here means this reader
-        # disagrees with cargo's. Worth a line; not worth refusing to scaffold over.
+        # cargo parsed this manifest to produce the graph. A failure here means this reader
+        # disagrees with cargo. Log it and continue; the graph still shows the redirect.
         _log.warning("could not parse the workspace manifest to look for existing patches")
         return frozenset()
     patch = parsed.get("patch")
@@ -295,17 +261,16 @@ def plan_munge(
 ) -> MungePlan:
     """What munging ``workspace`` would change, without changing anything.
 
-    Four outcomes per crate, and the distinctions all cost something to get wrong:
+    Each crate lands in one of four outcomes:
 
-    * **inapplicable** — not in the resolved graph. Most targets are not Anchor programs.
-    * **already sourced** — a workspace member, a path dependency, a git dependency, or a crate
-      named in ``already_redirected``. Somebody decided where this crate comes from; overriding it
-      would replace a choice, quite possibly *this same fork*. Read from the resolved graph, which
-      is what cargo itself computed; ``already_redirected`` (see :func:`already_patched`) covers the
-      one case the graph cannot, a snapshot taken before the patch table was applied.
-    * **blocked** — resolves at a version the fork has no branch for. Blocked rather than skipped,
-      because the alternative is a build that silently keeps the boxing.
-    * **overridden** — the case this module exists for.
+    * inapplicable — not in the resolved graph.
+    * already sourced — a workspace member, a path dependency, a git dependency, or a crate named
+      in ``already_redirected``. Overriding it would replace a choice, which may already be this
+      fork. The graph is what cargo computed. ``already_redirected``
+      (:func:`already_patched`) covers a snapshot taken before the patch table was applied.
+    * blocked — a version the fork has no branch for. Skipping it would leave the boxed error
+      in the build.
+    * overridden — redirected at the fork.
     """
     resolved_overrides: list[Override] = []
     blocked: list[Blocked] = []
@@ -361,8 +326,8 @@ def plan_munge(
 def manifest_additions(plan: MungePlan) -> str:
     """The ``[patch.crates-io]`` section this plan needs in the workspace manifest.
 
-    Raises on a blocked plan rather than emitting a partial section: a manifest that replaces one of
-    two crates is a build whose failure has two candidate causes.
+    A blocked plan raises instead of emitting a partial section. Replacing one of two crates
+    leaves a build whose failure has two causes.
     """
     if plan.blocked:
         raise MungeBlocked(plan.blocked)
@@ -374,8 +339,8 @@ def manifest_additions(plan: MungePlan) -> str:
         "# dependencies: a property proved against a fork is a property of the fork, and whether it\n"
         "# carries over is a judgement about the specific difference.\n"
     )
-    # Grouped by reason, because two crates from one fork share one: repeating a paragraph verbatim
-    # under each of them reads like two unrelated changes that happen to say the same thing.
+    # Crates from one fork share one reason. Repeating the paragraph under each of them
+    # reads like two unrelated edits.
     reasons = ""
     for why in dict.fromkeys(o.why for o in plan.overrides):
         redirects = [o for o in plan.overrides if o.why == why]

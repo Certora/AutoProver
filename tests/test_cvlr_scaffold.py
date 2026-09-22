@@ -1,20 +1,12 @@
-"""The preflight scaffold: what it writes, what it refuses, and what it leaves alone.
+"""What the scaffold writes, what it refuses, and what it leaves alone.
 
-``docs/cvlr-backend-plan.md`` §7.4. Three properties carry most of the risk, and each is a way a
-scaffold quietly ruins a project rather than failing:
+Three failures are quiet. A second run that appends to ``Cargo.toml`` again leaves a manifest
+cargo will not parse, and a scaffold gets re-run when nobody is sure it ran. A text edit of a
+parsed manifest has to stay valid TOML, because reserializing would rewrite the project's
+comments, so every case that touches a manifest re-parses it. A blocked plan has to apply
+nothing: a half-scaffolded project makes the next build failure have two causes.
 
-* **Idempotence.** A second run must be a no-op. The upstream ``certora-setup.py`` appends to
-  ``Cargo.toml`` unconditionally, so running it twice leaves a manifest cargo will not parse — and
-  a scaffold gets re-run whenever anybody is unsure whether it ran.
-* **The manifest still parses.** Every manifest change here is a *text* edit to a file that was only
-  read, because reserializing somebody's TOML would rewrite their comments to make one change. That
-  trade is only worth it if the result is valid, so every case that touches a manifest re-parses it.
-* **Refusing beats guessing.** The two decisions a template must not make are refusals, and a plan
-  carrying one must apply *nothing*: a half-scaffolded project turns the next build failure into a
-  question with two candidate answers.
-
-No cargo and no network here — the workspace objects are built directly, the way
-``test_cvlr_knowledge.py`` does, so these run in the routine env.
+No cargo and no network. The workspace objects are built in the test.
 """
 
 import tomllib
@@ -193,18 +185,10 @@ def test_the_manifest_a_fresh_project_ends_up_with_still_parses(tmp_path):
 
 
 def test_the_path_a_mock_names_resolves_from_the_programs_own_file(tmp_path):
-    """`cvlr::mock_fn(with = crate::certora::specs::<unit>::<fn>)` expands where the *munged*
-    function is — the program's own source, which is outside `certora`. So every segment between
-    there and the stand-in has to be `pub`, and the segments are written by two different modules:
-    `certora/mod.rs` by the scaffold, `specs/mod.rs` by `declare_modules`.
-
-    Both shipped as bare `mod`, which compiles and is invisible until a munge names a path through
-    them: E0603, from a generated file that neither the author nor the judge ever reads, on the one
-    tool whose whole purpose is to get past a rejected function. Verified against rustc that `pub`
-    inside a private `mod certora;` is what makes the path resolve without widening the crate.
-
-    This is the scaffold's half of the pair. The other segment — `specs/mod.rs`, written by
-    `declare_modules` — is asserted where that code is.
+    """``cvlr::mock_fn(with = crate::certora::specs::...)`` expands in the program's own source,
+    outside ``certora``. The path from there has to be ``pub``. ``pub`` inside a private
+    ``mod certora`` resolves it without adding to the crate's public API. This checks the
+    scaffold's ``certora/mod.rs``.
     """
     plan, workspace = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
     apply(plan, workspace.root)
@@ -300,12 +284,11 @@ def test_a_platform_generation_the_reference_set_cannot_be_paired_with_is_refuse
 
 
 def test_a_platform_newer_than_the_reference_set_is_refused_though_it_deleted_the_probe(tmp_path):
-    # The regression that motivated the witness list. Solana's v3 split moved `AccountInfo` into
-    # `solana-account-info` and stopped publishing `solana-program`, so a v3 target resolves *no*
-    # `solana-program` at all — and a gate that asked only about that crate read the absence as
-    # "this project has no opinion" and pinned CVLR 0.5 against it. The scaffold then compiles,
-    # because it contains nothing that bridges the two; the failure surfaces on the first authored
-    # rule, as `expected AccountInfo, found AccountInfo`. Observed on a real Anchor 1.x program.
+    # Solana v3 moved AccountInfo into solana-account-info and stopped publishing solana-program,
+    # so a v3 target resolves no solana-program. A gate that only asked about that crate would
+    # treat the absence as no opinion and pin CVLR 0.5 against it. The scaffold would still
+    # compile. The mismatch shows up on the first rule that passes an account to a CVLR helper,
+    # as two different AccountInfo types.
     plan, _ = _plan(
         tmp_path,
         manifest=STANDALONE,
@@ -317,9 +300,8 @@ def test_a_platform_newer_than_the_reference_set_is_refused_though_it_deleted_th
 
 
 def test_a_project_on_the_reference_generation_passes_on_the_specific_witness(tmp_path):
-    # The other side of the ordering: a 2.x target resolves `solana-account-info` too, and the
-    # specific witness is consulted first. It has to *accept* on a match rather than merely not
-    # blocking, or the fix above would refuse every project it was written to admit.
+    # A 2.x target resolves solana-account-info too, and that witness is first. A match stops
+    # the check. Continuing on to the next witness would judge the project by a broader crate.
     plan, _ = _plan(
         tmp_path,
         manifest=STANDALONE,
@@ -331,9 +313,8 @@ def test_a_project_on_the_reference_generation_passes_on_the_specific_witness(tm
 
 
 def test_the_platform_is_not_second_guessed_when_the_project_pins_cvlr_itself(tmp_path):
-    # The scaffold inherits the project's pins, so the reference set's platform says nothing about
-    # what will be built. Refusing here would reject a project whose own pairing is consistent —
-    # which is what the gate did on the first real project it was pointed at.
+    # The scaffold keeps the project's pins, so the reference set's platform says nothing about
+    # what will be built. Refusing here would reject a project whose own pairing is consistent.
     manifest = STANDALONE.replace(
         "[dependencies]\nsolana-program",
         '[dependencies]\ncvlr = "0.4"\ncvlr-solana = "0.4"\nsolana-program',
@@ -349,12 +330,12 @@ def test_the_platform_is_not_second_guessed_when_the_project_pins_cvlr_itself(tm
 
 
 def test_specializations_are_withheld_from_a_project_that_chose_its_own_cvlr_line(tmp_path):
-    """The scaffold sets the reference set up whole, or leaves the project's choice alone.
+    """The scaffold pins the whole reference set, or leaves the project's pins alone.
 
-    Mixing is the failure this prevents: a project on the 0.4 line given a 0.5.0 specialization gets
-    two generations of ``AccountInfo`` in one graph — not a warning, a build that does not compile.
-    It also keeps the exemption above meaningful, since anything introduced re-arms the platform
-    gate.
+    A project on the 0.4 line given a 0.5.0 specialization gets two generations of ``AccountInfo``
+    in one graph, and the build does not compile. Adding any reference-set crate also turns the
+    platform check back on, which is why a project that already pins the chain crate is left alone
+    above.
     """
     manifest = STANDALONE.replace(
         "[dependencies]\nsolana-program",
@@ -498,10 +479,10 @@ def test_the_lib_target_reports_where_cargo_says_its_source_is(tmp_path):
 
 
 class _FakeCargo:
-    """Stands in for ``cargo metadata``, recording how it was asked.
+    """Stands in for ``cargo metadata`` and records each call.
 
-    The recording is the point of two of the tests below: *which* graph preflight resolves is a
-    correctness question, not an implementation detail, and it is invisible in the result.
+    Two tests below check which directory and which features were requested. The result does
+    not show that.
     """
 
     def __init__(self, workspace: Workspace) -> None:
@@ -527,9 +508,9 @@ def fake_cargo(monkeypatch):
 async def test_preflight_resolves_the_verification_graph_from_the_packages_own_directory(
     tmp_path, fake_cargo
 ):
-    # The scaffold declares CVLR `optional = true`, so a default-feature read reports it absent —
-    # which silently empties the version-gap report and the source mount §5.5 depends on. And
-    # features resolve against the package cargo considers current, so the directory matters too.
+    # CVLR is optional, so a default-feature read reports it absent and the resolved versions
+    # come back empty. Features also resolve against the package cargo considers current, so
+    # the directory matters.
     workspace, package = _project(
         tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE, package_dir="programs/prog"
     )
@@ -568,8 +549,8 @@ async def test_preflight_names_the_members_when_asked_for_one_that_is_not_there(
 async def test_a_blocked_plan_stops_preflight_with_the_resolution_in_the_message(
     tmp_path, fake_cargo
 ):
-    # Preflight shares the driver's task group, so raising here cancels system analysis — the whole
-    # value of the gate. What it raises has to carry the fix, since that message is all anyone sees.
+    # Preflight runs in the same task group as system analysis, so this exception cancels that
+    # work. The message has to carry the fix. It is what the caller sees.
     workspace, _ = _project(
         tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE, crate_types=("lib",)
     )
@@ -598,9 +579,9 @@ anchor-lang = "0.31.1"
 
 
 def test_an_anchor_target_is_redirected_at_the_verification_fork(tmp_path):
-    """Not a refinement: without it a rule that reaches an Anchor handler cannot be analyzed at all,
-    because upstream's boxed `Error` trips [3006]. The scaffold is the only place that knows the
-    resolved version, so it is the only place that can pick the branch."""
+    """Without the fork, a rule that reaches an Anchor handler cannot be analyzed. Upstream's
+    boxed ``Error`` trips [3006]. The scaffold is what knows the resolved version, so it is what
+    picks the branch."""
     workspace, package = _project(
         tmp_path,
         manifest=ANCHOR_MANIFEST,
@@ -623,9 +604,8 @@ def test_an_anchor_target_is_redirected_at_the_verification_fork(tmp_path):
 
 
 def test_redirecting_twice_is_a_no_op(tmp_path):
-    """The scaffold's central property, applied to the one change that is a manifest *append*: a
-    second run must not add the table again, because two `[patch.crates-io.anchor-lang]` entries is a
-    manifest cargo will not parse."""
+    """A second run must not append the patch table again. Two
+    ``[patch.crates-io.anchor-lang]`` entries is a manifest cargo will not parse."""
     kwargs = dict(
         manifest=ANCHOR_MANIFEST,
         workspace_manifest='[workspace]\nmembers = ["."]\n',
@@ -643,9 +623,8 @@ def test_redirecting_twice_is_a_no_op(tmp_path):
 
 
 def test_an_anchor_version_the_fork_does_not_cover_blocks_the_whole_plan(tmp_path):
-    """0.30.0 is the real gap — the fork has a branch for 0.30.1 and not 0.30.0. Blocking beats
-    scaffolding a project that builds, submits, and then reports a pointer-analysis error with
-    nothing connecting it to Anchor."""
+    """The fork has a branch for 0.30.1 and not 0.30.0. The plan blocks instead of scaffolding a
+    project that builds and then reports a pointer-analysis error with nothing about Anchor."""
     workspace, package = _project(
         tmp_path,
         manifest=ANCHOR_MANIFEST.replace("0.31.1", "0.30.0"),

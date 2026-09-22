@@ -1,10 +1,9 @@
 """The CVLR reference set (``composer.spec.cvlr_reference``).
 
-The data itself is verified by *compiling* it — a probe crate per chain, which is the acceptance
-gate in ``docs/cvlr-capture-plan.md`` §9 and needs cargo and a network, so it is not run here.
-What these tests hold is everything a wrong edit could break without cargo noticing: the chain
-vocabulary matching the pipeline's, exact pinning, and the platform generation travelling with the
-chain crate that requires it.
+Compiling a probe crate per chain is what checks that the versions resolve. That needs cargo and
+a network, so it is not run here. These tests cover what a wrong edit can break without cargo
+noticing: the chain names matching the pipeline's, exact pinning, and the platform generation
+that travels with the chain crate.
 """
 
 import pytest
@@ -13,9 +12,8 @@ from composer.spec import cvlr_reference as ref
 
 
 def test_the_chains_are_exactly_the_pipelines_rust_chains():
-    """The module repeats the chain vocabulary as plain strings to stay import-cheap (its docstring
-    says why), so this is the guard that the repetition stays true. EVM is excluded on purpose:
-    CVLR is the Rust-side language."""
+    """The module repeats the chain names as plain strings so it does not import the pipeline.
+    This checks that the repetition still matches. EVM is excluded: CVLR is the Rust-side language."""
     from typing import get_args
 
     from composer.pipeline.ecosystem import ChainTag
@@ -33,8 +31,8 @@ def test_every_cvlr_crate_is_pinned_to_an_exact_release():
 
 
 def test_the_platform_is_a_line_not_a_release():
-    # The platform generation is a compatibility statement about the *target*; claiming an exact
-    # release there would assert a patch level we never compiled and do not care about.
+    # The platform generation is about the target. An exact pin would claim a patch level that
+    # was never compiled.
     for chain, r in ref.REFERENCE_SET.items():
         assert r.platform.crates, chain
         for crate in r.platform.crates:
@@ -53,27 +51,21 @@ def test_the_dependency_block_carries_the_platform_too():
 
 def test_the_solana_choice_records_the_platform_it_implies():
     # cvlr-solana 0.5.0 requires solana-program 2.2, and each Solana generation has its own
-    # AccountInfo type — so this pairing is the decision, not an incidental detail. Changing the
-    # chain crate without changing this label is the mistake worth catching.
+    # AccountInfo. Changing the chain crate without changing this label pairs the wrong types.
     assert ref.SOLANA.chain == ref.CrateRelease("cvlr-solana", "0.5.0")
     assert "2.x" in ref.SOLANA.platform.label
 
 
 def test_the_spl_token_model_is_part_of_the_reference_set():
-    # It was recorded as an *unpublished* capability — "published under neither name, so entries
-    # needing it must model the token account themselves" — on the strength of a real project
-    # reaching it through a git redirect. That project's own comment says the redirect was a
-    # stopgap until release, and the release happened: it is on crates.io at the same version as
-    # the chain crate it was factored out of. A reference set that still called it unavailable
-    # would have the scaffold withhold it and the corpus teach hand-rolling what exists.
+    # On crates.io at 0.5.0, the same version as the chain crate it was split from. Leaving it
+    # off the reference set would keep the scaffold from pinning it.
     assert ref.CrateRelease("cvlr-spl-token", "0.5.0") in ref.SOLANA.specializations
     assert ref.SOLANA.unpublished == ()
 
 
 def test_a_fresh_project_is_pinned_the_whole_reference_set():
-    # Specializations used to be declared and never scaffolded. Nothing downstream can add one: the
-    # author has no manifest tool and the munge editor edits program source, so a specialization the
-    # scaffold omits is a capability the run cannot reach at all.
+    # The scaffold is what writes dependencies, and it does not add one later. A specialization
+    # left out of this list is a crate the project cannot name.
     assert ref.SOLANA.scaffold_crates() == ref.SOLANA.crates()
     assert {c.name for c in ref.SOLANA.scaffold_crates()} == {
         "cvlr", "cvlr-solana", "cvlr-solana-stake", "cvlr-spl-token",

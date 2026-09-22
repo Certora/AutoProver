@@ -1,14 +1,12 @@
-"""Spelling the canonical tuning files for the platform generation a target is on.
+"""Spelling the vendored tuning files for the platform generation a target is on.
 
-``docs/cvlr-backend-plan.md`` §7.5.6. The defect these guard against does not raise, log, or fail a
-build: a directive whose path was renamed out from under it simply matches nothing, and the prover
-proceeds with a different configuration than the file appears to describe. So the tests here are
-mostly about *silence* — that a rewrite happens where it must, and that it does not happen where it
-must not.
+A directive whose path was renamed matches nothing. It does not raise, log, or fail the build,
+and the prover runs with a different configuration than the file appears to describe. The tests
+check that a rewrite happens where it must, and does not happen where it must not.
 
-The riskiest of them is :func:`test_every_declared_alias_still_names_something_in_the_vendored_files`.
-An alias is written against a canonical file; when that file is edited, an alias whose canonical
-path no longer appears is dead weight that looks like coverage.
+:func:`test_every_declared_alias_still_names_something_in_the_vendored_files` is the one that
+goes stale quietly. An alias is written against a vendored file. After that file changes, an
+alias whose path no longer appears still looks like coverage.
 """
 
 from pathlib import Path
@@ -28,8 +26,7 @@ from composer.spec.cvlr.scaffold import (
 )
 from composer.spec.cvlr_reference import SOLANA, SOROBAN, NamespacePattern, PathAlias
 
-#: Every crate the post-split Solana platform layer is spread across, as a real target resolves them.
-#: Verified against ``test_scenarios/solana_vault_idl``'s ``Cargo.lock``.
+#: Every crate the post-split Solana platform layer is spread across, as a target resolves them.
 SPLIT_CRATES = (
     "solana-account-info",
     "solana-pubkey",
@@ -71,7 +68,7 @@ def _workspace(*resolved: str) -> Workspace:
 
 @pytest.fixture
 def split() -> PathDialect:
-    """The dialect a post-split target gets — the case every real Solana target is now in."""
+    """The dialect a post-split target gets."""
     return dialect_for(_workspace("solana-program", *SPLIT_CRATES), SOLANA)
 
 
@@ -118,10 +115,9 @@ def test_a_renamed_concept_is_spelled_as_the_defining_crate(
 
 
 def test_a_symbol_that_survived_the_split_is_left_alone(split: PathDialect) -> None:
-    """``solana-program`` is a *partial* facade, and reading the module rather than the symbol got
-    this wrong twice: ``invoke``, ``invoke_signed``, ``set_return_data`` and ``get_stack_height`` are
-    real functions there on the split generation, and appear in a real target's symbol table under
-    the canonical spelling."""
+    """``solana-program`` is a partial facade. ``invoke``, ``invoke_signed``,
+    ``set_return_data``, and ``get_stack_height`` are still real functions there, and a target's
+    symbol table lists them under the canonical spelling."""
     for pattern in (
         "^solana_program::program::invoke$",
         "^solana_program::program::invoke_signed$",
@@ -134,9 +130,8 @@ def test_a_symbol_that_survived_the_split_is_left_alone(split: PathDialect) -> N
 def test_a_concept_on_both_sides_of_the_split_is_emitted_under_both_spellings(
     split: PathDialect,
 ) -> None:
-    """``solana-program`` kept a real ``invoke_signed_unchecked`` while the one that ends up on the
-    call path is ``solana-cpi``'s. A summary that covered only one of them would leave the other
-    fully analyzed, which is the state that made this whole investigation necessary."""
+    """``solana-program`` kept its own ``invoke_signed_unchecked``. The one on the call path is
+    ``solana-cpi``'s. A summary of only one of them leaves the other fully analyzed."""
     assert split.spellings("^solana_program::program::invoke_signed_unchecked$") == (
         "^solana_program::program::invoke_signed_unchecked$",
         "^solana_cpi::invoke_signed_unchecked$",
@@ -144,9 +139,9 @@ def test_a_concept_on_both_sides_of_the_split_is_emitted_under_both_spellings(
 
 
 def test_a_symbol_level_alias_beats_the_module_it_sits_inside() -> None:
-    """Longest canonical wins, which is what lets a partial facade be described at all: the module
-    gets one answer and the one symbol that disagrees with it gets another. Shortest-first would
-    apply the module's answer and leave the specific alias with nothing to match."""
+    """Longest canonical wins. The module gets one answer, and the symbol that disagrees with it
+    gets another. Shortest-first would apply the module's answer and leave the specific alias
+    with nothing to match."""
     dialect = PathDialect(
         (
             PathAlias("solana_program::program", ("wholesale",)),
@@ -164,9 +159,9 @@ def test_a_symbol_level_alias_beats_the_module_it_sits_inside() -> None:
 
 
 def test_the_namespace_blanket_widens_to_the_whole_family(split: PathDialect) -> None:
-    """The single most consequential directive in the files: ``^solana_program::.*$`` sets the
-    never-inline *default* for the platform layer, and on a real post-split target it matched two
-    symbols. The widened form has to cover both the split crates and the monolith that remains."""
+    """``^solana_program::.*$`` sets the never-inline default for the platform layer. On a
+    post-split target it matches almost nothing that moved out. The widened form has to cover
+    the split crates and the monolith that remains."""
     import re
 
     (widened,) = split.spellings("^solana_program::.*$")
@@ -182,9 +177,9 @@ def test_the_namespace_blanket_widens_to_the_whole_family(split: PathDialect) ->
 def test_the_blanket_is_widened_even_on_a_target_that_predates_the_split(
     monolithic: PathDialect,
 ) -> None:
-    """Unlike a :class:`PathAlias`, the widened blanket is a *superset* of what it replaces, so it
-    is correct on either generation and needs no version condition. That is the whole reason it is
-    expressed as a pattern over crate names rather than as a list of crates."""
+    """Unlike a :class:`PathAlias`, the widened blanket is a superset of what it replaces, so it
+    is correct on either generation and needs no version check. It is a pattern over crate
+    names, not a list of crates."""
     import re
 
     (widened,) = monolithic.spellings("^solana_program::.*$")
@@ -264,14 +259,13 @@ def test_a_fanned_out_summary_carries_its_whole_annotation_block(split: PathDial
 
 
 def test_rendering_twice_is_not_claimed_and_is_not_reachable(split: PathDialect) -> None:
-    """Rendering rendered output is *not* the identity, by construction: the alias that covers a
-    symbol living on both sides of the split names the canonical spelling among its own
-    replacements, so a second pass fans that copy out again.
+    """Rendering rendered output is not the identity. The alias for a symbol that exists on both
+    sides of the split lists the canonical spelling as one of its own replacements, so a second
+    pass fans that copy out again.
 
-    That is safe only because it cannot happen. Every caller renders from the vendored original —
-    :func:`canonical_env` re-reads ``envs/`` on each call — so this pins the reachability rather than
-    pretending the function is idempotent, and it fails loudly if a caller ever starts feeding
-    rendered text back in.
+    Callers render from the vendored original. :func:`canonical_env` re-reads ``envs/`` on each
+    call. This checks that a second pass would duplicate the line, so a caller that starts
+    feeding rendered text back in fails here.
     """
     summaries = canonical_env("cvlr_summaries_core.txt", split)
     assert summaries.count("^solana_cpi::invoke_signed_unchecked$") == 1
@@ -279,9 +273,8 @@ def test_rendering_twice_is_not_claimed_and_is_not_reachable(split: PathDialect)
 
 
 def test_recomposing_a_composite_is_stable(split: PathDialect) -> None:
-    """The invariant that makes the above a non-issue: the composite is built from the vendored
-    layers every time, so composing twice — which the authoring loop does whenever it adds a
-    package-layer directive — gives the same file."""
+    """The composite is built from the vendored layers every time, so composing twice gives the
+    same file."""
     once = compose_env(INLINING, package_layer="; mine\n", dialect=split)
     assert compose_env(INLINING, package_layer="; mine\n", dialect=split) == once
 
@@ -347,12 +340,11 @@ def _measured_symbols() -> tuple[str, ...]:
 
 
 def test_every_alias_rewrites_to_a_path_the_binary_actually_defines(split: PathDialect) -> None:
-    """The alias table was read off this symbol table, so this is the test that keeps the two
-    honest. ``solana-program`` is a partial facade — some symbols moved and some did not — and
-    deciding per *module* rather than per symbol got the answer wrong twice before this existed.
+    """The alias table was read off this symbol table. ``solana-program`` is a partial facade:
+    some symbols moved and some did not, so an alias is per symbol.
 
-    Aliases are skipped only when the fixture has no symbol under either spelling, which means the
-    program does not exercise that concept; those are pinned by the vendored-file test above.
+    An alias is skipped when the fixture has no symbol under either spelling. The program does
+    not exercise that concept. Those are checked by the vendored-file test above.
     """
     symbols = _measured_symbols()
     unexercised: list[str] = []
@@ -379,17 +371,13 @@ def test_every_alias_rewrites_to_a_path_the_binary_actually_defines(split: PathD
 
 
 def test_the_dialect_measurably_restores_coverage_and_costs_none(split: PathDialect) -> None:
-    """The bug and the fix, as numbers against a real binary.
+    """Two counts against a real binary, because each misses what the other catches.
 
-    Two counts, because each misses what the other catches. *Directives that match something*
-    catches a revived directive whose effect is invisible in symbol coverage — the Anchor error
-    conversion is already inside the blanket ``^.*anchor_lang.*$``, so reviving its ``#[inline]``
-    changes that symbol's treatment without changing whether anything reaches it. *Symbols reached*
-    catches the reverse: a rewrite that doubled a directive without addressing any more of the
-    binary.
-
-    The regression half is the important one. A rewrite that revived fifteen directives while
-    quietly orphaning one symbol would still be a bad trade, and only the symbol set can see it.
+    Directives that match something: the Anchor error conversion is already inside
+    ``^.*anchor_lang.*$``, so changing its ``#[inline]`` changes how that symbol is treated
+    without changing whether anything reaches it. Symbols reached: a rewrite can double a
+    directive and address no more of the binary, or revive directives while dropping a symbol.
+    Only the symbol set shows a dropped symbol.
     """
     import re
 
@@ -424,11 +412,11 @@ def test_the_dialect_measurably_restores_coverage_and_costs_none(split: PathDial
 
 
 def test_the_deviation_reaches_the_composite() -> None:
-    """The point of the whole mechanism: what a target's build reads is the corrected line.
+    """The composite a target's build reads carries the corrected line.
 
-    Measured on SPL stake-pool — with upstream's ``inline(never)`` in force, an unsummarized
-    ``ProgramError::from`` is treated as external, which havocs the ``Result`` discriminant every
-    handler returns and makes ``res.is_err()`` unprovable.
+    With upstream's ``inline(never)``, an unsummarized ``ProgramError::from`` is treated as
+    external. That havocs the ``Result`` discriminant a handler returns, and ``res.is_err()``
+    cannot be proved.
     """
     composite = compose_env(INLINING, package_layer="")
     from_u64 = [ln for ln in composite.splitlines() if "From<u64>>::from$" in ln and ln.startswith("#[")]
@@ -438,9 +426,9 @@ def test_the_deviation_reaches_the_composite() -> None:
 
 
 def test_the_deviation_survives_the_dialect(split: PathDialect) -> None:
-    """It has to hold in the spelling that actually matches: upstream's line names
-    ``solana_program::program_error::`` and is inert on a post-split target, and the rewrite into
-    ``solana_program_error::`` is exactly what makes the directive bite."""
+    """It has to hold in the spelling that matches. Upstream's line names
+    ``solana_program::program_error::`` and matches nothing on a post-split target. Rewriting it
+    to ``solana_program_error::`` is what makes the directive apply."""
     composite = compose_env(INLINING, package_layer="", dialect=split)
     assert (
         "#[inline] ^<solana_program_error::ProgramError as core::convert::From<u64>>::from$"
@@ -451,17 +439,17 @@ def test_the_deviation_survives_the_dialect(split: PathDialect) -> None:
 
 def test_the_vendored_copy_is_untouched_by_deviations() -> None:
     """A deviation is applied on the way into a composite, never to ``envs/``. Otherwise the next
-    refresh reports our change as upstream's — the same contract
-    :func:`test_the_vendored_files_are_returned_verbatim_without_a_dialect` pins."""
+    refresh reports our change as upstream's.
+    :func:`test_the_canonical_files_are_returned_verbatim_without_a_dialect` checks the stored
+    file too."""
     for deviation in DEVIATIONS:
         assert deviation.canonical in (ENV_DIR / deviation.env).read_text()
         assert deviation.replacement not in (ENV_DIR / deviation.env).read_text()
 
 
 def test_a_deviation_upstream_has_rewritten_fails_loudly(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The refresh-safety property. If upstream edits the line we deviate from, composing must
-    raise rather than silently ship upstream's version — the reason for deviating may be gone, and
-    that is a judgement for a person."""
+    """If upstream edits the line we deviate from, composing raises instead of shipping upstream's
+    version. The reason for the deviation may be gone, and that has to be looked at."""
     stale = Deviation(
         env=INLINING.core,
         canonical="#[inline(never)] ^this::line::is::not::in::the::file$",

@@ -1,42 +1,31 @@
-"""The Solana prover configuration: reading a project's, and layering a run onto it.
+"""Read a Solana prover conf and layer one run's settings onto it.
 
-A prover conf is **JSON**, read with a JSON5-tolerant parser — real ones carry trailing commas and
-comments, and both the recommended starting point's ``confs/run.conf`` and the public examples'
-``Default.conf`` would fail a strict ``json.loads``. Integers come back as *strings*, which looks
-wrong until you notice the confs in the wild say ``"loop_iter": "1"``: that is
-``Shared/certoraUtils.read_conf_file``'s own ``parse_int=str``, and matching it is what keeps a
-round-trip from silently rewriting a project's file.
+Confs are JSON5. Real ones have trailing commas and comments, and both the recommended starting
+point's ``confs/run.conf`` and the public examples' ``Default.conf`` fail ``json.loads``. Integers
+stay strings. Real confs write ``"loop_iter": "1"``, and retyping them on a round-trip would
+rewrite the project's file. ``certoraRun`` parses them the same way.
 
-The layering follows the CVL backend's :func:`~composer.spec.source.prover.prover_config_overlay`:
-the project's conf is the base, the run owns a small set of keys, and
-:data:`OVERLAY_OWNED_KEYS` says which ones so nothing downstream has to guess whether a base entry
-survived. The Solana-specific part of that set is ``build_script``, ``files`` and ``server``. The
-first two are owned for a reason spelled out in :mod:`composer.cargo.sbf`: the backend builds inside
-the sandbox and hands the prover a script that reruns that same build, so a base conf naming its own
-build script — which 15 of 16 surveyed projects do — must not win.
+The project's conf is the base, as in
+:func:`composer.spec.source.prover.prover_config_overlay`. The run owns the keys in
+:data:`OVERLAY_OWNED_KEYS`. ``build_script`` comes from the overlay, so a base conf's own script
+does not win. ``files`` is dropped: the prover refuses a build script that sets files when the
+conf already names some, and a prebuilt ``.so`` cannot sit next to a from-sources build.
+``server`` is owned because the deployment decides which cloud a run reaches.
 
-*Which* project conf is the base is :func:`project_conf`, and everything else about the project's
-settings is honored rather than second-guessed — its loop bound, its solver flags, its
-``prover_version``. The one exception is a floor rather than an override: :func:`with_sanity_floor`
-guarantees vacuity checking is on, because the recommended starting point and two of the five corpus
-base confs never mention ``rule_sanity`` and adopting one wholesale would turn off the only check
-that catches a blocked author assuming the conclusion.
+:func:`project_conf` chooses the base. Everything else in the project's conf is kept: the loop
+bound, the solver flags, ``prover_version``. :func:`with_sanity_floor` is the exception. It turns
+vacuity checking on when the base never mentions ``rule_sanity``. A rule that assumes its
+conclusion still verifies, and vacuity checking is what catches that.
 
-What the run *does not* own is as deliberate. ``solana_inlining`` is left unset, because
-``cargo certora-sbf`` reads it out of the package's own ``[package.metadata.certora]`` and reports it
-through the build manifest, and ``certoraParseBuildScript.add_solana_files_to_context`` applies that
-only when the context has none. Setting it here would override the project's own declaration with our
-guess at it, and nothing in the authoring loop writes an inlining directive anyway.
+``solana_inlining`` is left unset. ``cargo certora-sbf`` reads it from the package's
+``[package.metadata.certora]`` and reports it through the build manifest. The prover applies that
+declaration only when the conf has none. Setting the key here would replace the project's file.
 
-``solana_summaries`` **is** owned, and that reverses the position above. Every unit of a run now
-shares one working tree (``docs/single-working-tree.md``), and a summary is the one thing a cargo
-feature cannot scope: it is a regex over symbols that the prover applies to the whole build, so a
-single package-level file would apply one unit's summaries to every other unit's submission — and a
-wrongly-scoped summary produces a green rule that checked less than it appears to
-(:mod:`composer.spec.cvlr.tuning`). The run therefore names a *per-unit* composite, which is composed
-from the same canonical layers plus the project's own ``_package`` layer, so nothing the project
-declared is lost. Anything the base conf named is kept alongside it rather than replaced, because a
-project that names its own file knows something this code does not.
+``solana_summaries`` is set when the run passes summary files. A summary is a regex over symbols
+and applies to the whole build, so one package-level file would apply one unit's summaries to
+every other unit. The run names a per-unit file, composed from the canonical layers plus the
+project's ``_package`` layer. Anything the base conf already named is kept beside it. Naming any
+value stops the prover from also applying the package's own declaration.
 """
 
 import hashlib
@@ -52,53 +41,35 @@ import json5
 
 _log = logging.getLogger(__name__)
 
-#: Conf keys the run always decides, whatever the base says. ``files`` is in the set because it is
-#: *removed*: ``certoraParseBuildScript.run_rust_build`` asserts the context has no files before a
-#: build script may set them, so a base conf naming a prebuilt ``.so`` and a run building from
-#: sources cannot both be honored.
+#: Conf keys the run always decides, whatever the base says. ``files`` is in the set because it
+#: is removed. The prover refuses a build script that sets files when the conf already names
+#: some, so a base conf naming a prebuilt ``.so`` and a run building from sources cannot both
+#: be kept.
 #:
-#: ``rule`` is deliberately **not** here — see :data:`RuleSelection`, where inheriting the base's
-#: selection is one of three distinct intents rather than the absence of one.
+#: ``rule`` is not here. :data:`RuleSelection` has three answers, and inheriting the base's
+#: selection is one of them.
 #:
-#: ``server`` is owned for a related reason: which cloud a run reaches is decided by the deployment
-#: environment and passed on the CLI (``composer.prover.core.make_prover_options``), and the corpus
-#: confs that name one all say ``"production"``. Dropping it keeps one answer to "which server"
-#: rather than two that agree until they do not.
+#: ``server`` is owned because the deployment decides which cloud a run reaches and passes it on
+#: the CLI (:func:`composer.prover.core.make_prover_options`). Project confs that name a server
+#: say ``"production"``. Dropping the key keeps a single answer.
 OVERLAY_OWNED_KEYS: frozenset[str] = frozenset({"build_script", "files", "msg", "server"})
 
-#: The default base, from `Certora/solana-spec-template <https://github.com/Certora/solana-spec-template>`_
-#: — the repository Certora recommends cloning to start a new Solana spec, and therefore the only
-#: project-shaped source here that is *advice* rather than evidence of what somebody once did.
+#: The default base, from Certora's solana-spec-template
+#: (https://github.com/Certora/solana-spec-template), the repository Certora recommends cloning
+#: to start a new Solana spec.
 #:
-#: ``optimistic_loop`` stays **false**, which is both the template's position and the corpus's.
-#: A survey of 354 confs across fifteen Solana projects finds it set true in exactly **one**: 69 set
-#: it false explicitly and 285 omit it, which is false for this app (``true_by_default_attributes``
-#: covers ``OPTIMISTIC_LOOP`` only for Ranger, not for ``SolanaProverAttributes``). An earlier
-#: revision of this file set it true and justified that with "twelve of sixteen surveyed projects set
-#: it true" — a figure the survey above contradicts and that no recorded survey supports.
+#: ``optimistic_loop`` is false, which is the template's setting. Turning it on assumes loop halt
+#: conditions instead of proving them, so a violation that needs more iterations is not found.
+#: Bound the inputs that set the trip count, or edit the loop, before raising ``loop_iter``.
 #:
-#: It is a last resort, not a default, because it assumes the loop halt conditions hold rather than
-#: proving them, which hides any violation reachable only after more iterations. The preferred
-#: remedies are to constrain the loop intentionally — bound the inputs that determine the trip count,
-#: or munge the loop — and only then to raise ``loop_iter``.
+#: ``loop_iter`` is 2, not the template's 1. A bound of 1 fails inside a handler's own
+#: serialization before the rule's property is reached: an Anchor deposit handler comes back
+#: violated on "Unwinding condition in a loop" against a loop in its borsh path.
 #:
-#: ``loop_iter`` is **2** rather than the template's 1 for the same reason the earlier revision
-#: reached for ``optimistic_loop``: with a bound of 1, *any* loop inside a handler fails before the
-#: rule's own property is reached, measured as a rule calling an Anchor deposit handler coming back
-#: VIOLATED on *"Unwinding condition in a loop"* against a loop in the handler's own borsh path
-#: (``docs/cvlr-backend-plan.md`` §7.6.2). Raising the bound answers that without assuming anything
-#: away. 2 is the corpus's own answer: of the confs that set both, the largest project uses 2 in 37
-#: of 39 and the next uses 3 in 54 of 54, and none pairs a bound of 1 with an unsound assumption.
-#:
-#: The five ``-solanaOptimistic*`` memory-model flags remain absent, and unlike ``optimistic_loop``
-#: this *is* a departure from the corpus: engagements carry them almost universally — 39 of 39 confs
-#: in one project, plus another's ``base.conf`` — alongside ``-solanaAggressiveGlobalDetection``,
-#: ``-solanaRemoveCFGDiamonds`` and ``-solanaSlicerIter``. They are absent here because the one thing
-#: they were wanted for, they do not do: a matched pair of submissions differing in nothing but those
-#: ten flags produced **byte-identical** [3308] errors (``docs/upstream-defects.md`` P4). They are
-#: also unsound by name, so adopting a block of them to fix nothing would be the worst of both.
-#: ``-solanaOptimisticJoinWithStackPtr`` was measured separately and does nothing for the error it
-#: looks like it should address (P3).
+#: The ``-solanaOptimistic*`` flags are absent. They are unsound, and a pair of submissions that
+#: differed only in those flags (plus ``-solanaAggressiveGlobalDetection``,
+#: ``-solanaRemoveCFGDiamonds``, and ``-solanaSlicerIter``) produced the same [3308] errors.
+#: ``-solanaOptimisticJoinWithStackPtr`` does not fix the error its name suggests either.
 TEMPLATE_BASE: dict[str, object] = {
     "msg": "Certora Verification Rules",
     "loop_iter": "2",
@@ -113,14 +84,11 @@ TEMPLATE_BASE: dict[str, object] = {
     ],
     "smt_timeout": "6000",
     "cargo_tools_version": "v1.43",
-    # Vacuity checking, which both public examples enable and this default had omitted. It is the
-    # only thing that catches the rule a *blocked* author writes: when the properties in a batch
-    # turn out to be unprovable — an un-inlined serialization path, a summarized helper — the way
-    # forward that always works is to assume the conclusion. Such a rule VERIFIES, maps cleanly to
-    # its property, and passes both halves of the publish gate, because "accounted for, not all
-    # green" (§7.5) is designed to avoid *rewarding* weakened rules and cannot *detect* one.
-    # Observed doing exactly that: a rule that assumed `vault.key == expected_pda` and then
-    # asserted it. A sanity failure is not VERIFIED, so it reaches the author as unaccounted work.
+    # Vacuity checking. Both public examples enable it. It is what catches a rule that assumes
+    # its conclusion: when a property cannot be proved (an un-inlined serialization path, a
+    # summarized helper), assuming the conclusion makes the rule verify. A sanity failure is not
+    # a verified result. With the check off, a [3308] raised inside the generated vacuity rule
+    # is reported as VERIFIED.
     "rule_sanity": "basic",
 }
 
@@ -130,10 +98,10 @@ class MalformedConf(ValueError):
 
 
 def parse_conf(text: str) -> dict:
-    """Parse conf text the way ``certoraRun`` does — JSON5, integers as strings.
+    """Parse conf text the way ``certoraRun`` does: JSON5, integers as strings.
 
-    Duplicate keys are rejected, as they are there: a conf that sets ``loop_iter`` twice has two
-    different intentions in it and neither the prover nor a reader can tell which one was meant.
+    Duplicate keys are rejected, as they are there. A conf that sets ``loop_iter`` twice has two
+    values, and neither the prover nor a reader can tell which was meant.
     """
     try:
         parsed = json5.load(io.StringIO(text), allow_duplicate_keys=False, parse_int=str)
@@ -148,24 +116,21 @@ def read_conf(path: Path) -> dict:
     return parse_conf(path.read_text())
 
 
-#: The conf a project means as its *base*, in the order a run should prefer them, inside the
-#: harness's ``confs/`` directory.
+#: The project's base conf, in the order a run prefers them, inside the harness's ``confs/``
+#: directory.
 #:
-#: Read off the corpus rather than chosen. ``base.conf`` is first because it is named for the job:
-#: in every project that has one the siblings reach it through ``override_base_config``, so it is
-#: the file that carries the project's settings and nothing else. ``run.conf`` is the recommended
-#: starting point's single conf, and the name three engagements kept when they never grew a second.
+#: ``base.conf`` is first. In a project that has one, the other confs reach it through
+#: ``override_base_config``, so it carries the project's settings and nothing else. ``run.conf``
+#: is the recommended starting point's single conf.
 #:
-#: Deliberately a closed list rather than "any conf in the directory". The other files there are
-#: per-rule-set confs, and every one of them carries a ``rule`` list — which
-#: :class:`InheritRules` would then adopt, silently grading this run on somebody else's rule
-#: selection. A project whose base is named something else gets :data:`TEMPLATE_BASE` and a log
-#: line, which is wrong in a way somebody can see.
+#: A closed list. The other files in that directory are per-rule-set confs, and each carries a
+#: ``rule`` list. :class:`InheritRules` would adopt it and check somebody else's selection.
+#: A project whose base has another name gets :data:`TEMPLATE_BASE` and a log line.
 PROJECT_CONF_NAMES: tuple[str, ...] = ("base.conf", "run.conf")
 
 
 def project_conf(confs_dir: Path) -> Path | None:
-    """The project's own base conf, or ``None`` if it does not keep one where they are kept."""
+    """The project's base conf, or ``None`` when neither known name is present."""
     return next(
         (c for name in PROJECT_CONF_NAMES if (c := confs_dir / name).is_file()),
         None,
@@ -173,14 +138,11 @@ def project_conf(confs_dir: Path) -> Path | None:
 
 
 def conf_history(conf: dict) -> tuple[str, ...]:
-    """The conf as a ``version_history`` token, so a stamp predating a change goes stale with it.
+    """The conf as a ``version_history`` token, so a stamp from before a change goes stale.
 
-    The same trade as :func:`~composer.spec.cvlr.tuning.summary_history` and
-    :func:`~composer.spec.cvlr.munge.munge_history`, and the reason is sharper here: a conf decides
-    the loop bound, the solver flags and whether vacuity is checked, so a verdict earned under one
-    conf says nothing about another. Keyed on the whole conf rather than on a field list, because
-    the set of editable keys is not this function's business and a key it had not heard of is
-    exactly the one that would slip through.
+    A conf decides the loop bound, the solver flags, and whether vacuity is checked. A verdict
+    under one conf does not apply to another. The token is a hash of the whole conf. A list of
+    known keys would miss a key this function had not heard of.
     """
     digest = hashlib.sha256(dump_conf(conf).encode()).hexdigest()[:16]
     return (f"conf:{digest}",)
@@ -189,12 +151,9 @@ def conf_history(conf: dict) -> tuple[str, ...]:
 def load_base(path: Path | None) -> dict:
     """The base conf for a run: the project's, or the recommended starting point's.
 
-    The fallback is stated rather than empty because an empty conf is not a neutral one — it is a
-    conf with no loop bound, no SMT timeout and no prover flags, which verifies differently. When
-    the project has no opinion, the recommendation is the honest stand-in for one.
-
-    Logged either way. A project that tuned its prover settings and is being verified under ours is
-    the case this whole path exists to stop, and it used to be silent.
+    The fallback is :data:`TEMPLATE_BASE`, not an empty conf. An empty conf has no loop bound, no
+    SMT timeout, and no prover flags, and that verifies differently. Logged either way, so a run
+    that is not using the project's settings says so.
     """
     if path is None:
         _log.info("cvlr: no project conf found; using the recommended starting point's settings")
@@ -204,11 +163,11 @@ def load_base(path: Path | None) -> dict:
 
 
 def _flag(arg: str) -> str:
-    """The flag a ``prover_args`` entry sets — its first token.
+    """The flag a ``prover_args`` entry sets: its first token.
 
-    Entries are shell-ish strings (``"-solanaTACOptimize 2"``), so the same flag at two different
-    values is two entries that differ only after the space. Merging on the whole string keeps both
-    and lets the prover pick; merging on the flag is what makes an overlay an override."""
+    Entries are strings like ``"-solanaTACOptimize 2"``. The same flag at two values differs only
+    after the space. Merging on the whole string keeps both and lets the prover pick. Merging on
+    the flag is what makes an overlay replace the base value."""
     return arg.split(maxsplit=1)[0]
 
 
@@ -220,9 +179,9 @@ def merge_prover_args(base: list[str], overlay: list[str]) -> list[str]:
 
 
 def _str_list(value: object) -> list[str]:
-    """A conf field the CLI declares as a list, when a conf wrote one string instead.
+    """A conf field the CLI declares as a list, when a conf wrote one string.
 
-    Both spellings are accepted by ``certoraRun``'s own validators, so both appear in real confs."""
+    ``certoraRun`` accepts both spellings, and both appear in real confs."""
     if value is None:
         return []
     if isinstance(value, str):
@@ -235,9 +194,9 @@ def _str_list(value: object) -> list[str]:
 def tools_version(conf: dict) -> str | None:
     """The platform-tools version this conf asks for.
 
-    Read rather than obeyed by the prover: ``cargo_tools_version`` only reaches ``cargo certora-sbf``
-    on the CLI's *own* build path, and this backend owns the build. Honoring it here is what keeps
-    the project's declaration meaningful instead of inert."""
+    The prover does not apply ``cargo_tools_version`` itself. It reaches ``cargo certora-sbf``
+    only on the CLI's own build path, and this backend owns the build. Reading it here is what
+    keeps the project's declaration in effect."""
     raw = conf.get("cargo_tools_version")
     return str(raw) if isinstance(raw, (str, int)) else None
 
@@ -247,14 +206,10 @@ def sbf_arch(conf: dict) -> str | None:
     return str(raw) if isinstance(raw, str) else None
 
 
-#: The cargo feature that compiles the verification module into the program. Every surveyed project
-#: and the recommended starting point agree on the name (``certora = ["no-entrypoint", "dep:cvlr",
-#: …]``); it is a default rather than a constant because a project is free to call it something else
-#: and ``cargo_features`` below is where a conf would say so.
-#:
-#: Here rather than beside the submission that uses it, because the scaffold that *creates* the
-#: feature and the submission that *enables* it must agree on the name, and this module is the one
-#: they both already read.
+#: The cargo feature that compiles the verification module into the program. The scaffold writes
+#: this name (``certora = ["no-entrypoint", "dep:cvlr", …]``), and preflight passes it to
+#: ``cargo check``. A project can call the feature something else; :func:`cargo_features` is
+#: where a conf would say so.
 DEFAULT_FEATURE = "certora"
 
 
@@ -264,27 +219,26 @@ def cargo_features(conf: dict) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class InheritRules:
-    """Check whatever the base conf selects — its ``rule`` entry, or everything when it has none.
+    """Check whatever the base conf selects: its ``rule`` entry, or every rule when it has none.
 
-    The right default for a submission that did not come from an authoring loop: a project's conf
-    names the rules its authors meant to run, and a run with no opinion has no business replacing
-    that with a different set."""
+    The default when a run has not named rules of its own. The project's conf already says which
+    rules to run."""
 
 
 @dataclass(frozen=True)
 class SelectRules:
-    """Check exactly these. Names are globs, which is how a parametric rule's instances are named."""
+    """Check these rules. Names are globs, which is how a parametric rule's instances are named."""
 
     names: tuple[str, ...]
 
 
 @dataclass(frozen=True)
 class AllRules:
-    """Check every rule the artifact declares, overriding a narrower selection in the base.
+    """Check every rule the artifact declares, dropping a narrower ``rule`` list in the base.
 
-    Distinct from :class:`InheritRules` precisely where it matters: against a base conf that names
-    three of thirty rules, one of these runs three and the other runs thirty. Collapsing them into
-    "no rules given" is how a run silently checks a different set than it reports."""
+    Against a base that names three of thirty rules, :class:`InheritRules` runs three and this
+    runs thirty. Treating "no rules given" as either one would check a different set than the
+    run reports."""
 
 
 type RuleSelection = InheritRules | SelectRules | AllRules
@@ -294,70 +248,62 @@ type RuleSelection = InheritRules | SelectRules | AllRules
 class RunOverlay:
     """What one submission adds to the base conf.
 
-    ``build_script`` is a path as the prover will read it — relative to the directory
+    ``build_script`` is a path as the prover reads it: relative to the directory
     ``certoraSolanaProver`` runs in, which is the session's workdir.
     """
 
     build_script: str
     rules: RuleSelection = field(default_factory=InheritRules)
     msg: str = ""
-    #: Points-to summary files, as the prover will read them — same relative-to-the-workdir spelling
-    #: as ``build_script``. Added to whatever the base conf already names rather than replacing it;
-    #: empty leaves the key unset, so the package's ``[package.metadata.certora]`` declaration still
-    #: answers, which is what a submission that came from no authoring loop wants.
+    #: Points-to summary files, in the same relative-to-the-workdir spelling as ``build_script``.
+    #: Added to whatever the base conf already names. Empty leaves the key unset, so the package's
+    #: ``[package.metadata.certora]`` declaration still applies.
     summaries: tuple[str, ...] = ()
-    #: Extra keys, applied last. For the run-shaped settings that are not a conf *policy* —
-    #: ``multi_assert_check`` for a variant run, ``rule_sanity`` when a caller wants to force it.
+    #: Extra keys, applied last. For settings that are not one of the fields above, such as
+    #: ``multi_assert_check`` or a caller forcing ``rule_sanity``.
     extra: dict[str, object] = field(default_factory=dict)
 
 
-#: Characters ``certoraRun`` accepts in ``msg`` — a deliberate subset of what its own
-#: ``certoraValidateFuncs.validate_msg`` permits, so that if the CLI ever narrows its set this stays
-#: valid without an edit. The CLI *raises* on anything outside it, before a single rule is
-#: processed, which is why this is a hard gate and not a nicety.
+#: Characters ``certoraRun`` accepts in ``msg``. A subset of what the CLI permits today, so a
+#: narrower CLI set still accepts these. The CLI raises on anything outside its set before any
+#: rule is processed.
 _MSG_SAFE = set(string.ascii_letters) | set(string.digits) | set(" ,.:_-()[]'/")
 
 
 def safe_msg(msg: str) -> str:
-    """``msg`` reduced to what the prover will accept.
+    """``msg`` reduced to what the prover accepts.
 
-    The ``msg`` a run sends is built from a component's display name, and a display name is prose
-    written by a model — so it carries whatever prose carries. An ampersand is enough:
-    ``"Deposit & Balance Tracking"`` made ``certoraRun`` raise
-    ``{'&'} not allowed in 'msg'`` and every submission for that unit failed before any rule was
-    read. The author cannot fix it, because the name is not in the harness; two units in one run
-    spent 6 and 13+ submissions on it, one of them holding a finished ten-rule harness.
+    The message is built from a component's display name, which is prose. ``certoraRun`` rejects
+    characters outside :data:`_MSG_SAFE` before any rule is read. An ampersand is enough:
+    ``"Deposit & Balance Tracking"`` raises ``{'&'} not allowed in 'msg'``. The name is not in
+    the harness, so it cannot be fixed there.
 
-    Offending characters become spaces rather than being dropped, so words do not run together, and
-    runs of whitespace collapse. Length is left to the CLI, which truncates with a warning rather
-    than raising.
+    Characters outside the set become spaces, so words do not run together, and runs of whitespace
+    collapse. Length is left to the CLI, which truncates with a warning.
     """
     return re.sub(r"\s+", " ", "".join(c if c in _MSG_SAFE else " " for c in msg)).strip()
 
 
-#: The vacuity-check settings that count as one. ``"none"`` is the documented way to turn the check
-#: off and is treated here as absence, because that is what it is.
+#: Vacuity-check settings that count as on. ``"none"`` is the documented way to turn the check
+#: off, and is treated here as absent.
 _SANITY_ON = frozenset({"basic", "advanced"})
 
 
-#: The solver settings a nonlinear-arithmetic query needs, as one named recipe.
+#: Solver settings for a nonlinear-arithmetic query, as one recipe.
 #:
-#: Not invented here. This is what the reference project's own conf carries, with its own comment
-#: explaining the seeds ("more random seeds help NL solver"), and it is aimed at the failure this
-#: backend measures more than any other: a rule that splits heavily, sits at a low completion
-#: percentage and HALTs on the global timeout. ``-smt_useLIA`` earns its place on the same conf's
-#: note that linear arithmetic gives a perf boost inside checked-arithmetic helpers.
+#: Taken from the reference project's conf. The extra seeds are there because more random seeds
+#: help the nonlinear solver, on rules that split heavily and halt on the global timeout.
+#: ``-smt_useLIA`` is in that conf because linear arithmetic is faster inside checked-arithmetic
+#: helpers.
 #:
-#: **One named recipe rather than an editable flag list**, and ``docs/upstream-defects.md`` P8 is the
-#: argument. A prover flag can look harmless, be recommended, and still be catastrophic in
-#: combination with another: enabling ``-solanaTACSoundSignedMath`` alongside the
-#: ``-solanaTACMathInt`` this backend already sets turned a seven-minute, eighteen-rule green run
-#: into a two-hour timeout with thirteen rules unverified. An author composing prover args from
-#: recall has no way to know that. A recipe has one expansion, which can be measured once and
-#: changed in one place.
+#: One recipe, not a list a caller edits flag by flag. ``-solanaTACSoundSignedMath`` next to
+#: ``-solanaTACMathInt`` (which :data:`TEMPLATE_BASE` already sets) turned a seven-minute,
+#: eighteen-rule run into a two-hour timeout with thirteen rules unverified. The expansion is
+#: fixed so that combination is not assembled by hand.
 #:
-#: Every entry here is **sound**: solver strategy, theory selection and random seeds change how long
-#: an answer takes and not what a green verdict means. That is the line this list may not cross.
+#: Every flag here changes how long an answer takes, not what a verified result means. Solver
+#: strategy, theory selection, and random seeds. The list does not include flags that change the
+#: meaning of a result.
 NONLINEAR_SOLVER_PORTFOLIO: tuple[str, ...] = (
     "-backendStrategy adaptive",
     "-smt_useLIA true",
@@ -370,32 +316,30 @@ NONLINEAR_SOLVER_PORTFOLIO: tuple[str, ...] = (
 
 
 def has_solver_portfolio(conf: dict) -> bool:
-    """Whether ``conf`` already carries the portfolio, by the flags it sets rather than by a marker.
+    """Whether ``conf`` already carries the portfolio, by the flags it sets.
 
-    Read off the conf itself so a project that wrote these settings by hand — the reference project
-    does — is recognized as already having them, and the author is told there is nothing to turn on
-    rather than being allowed to append a duplicate set.
+    A project that wrote these settings by hand, as the reference project does, is recognized as
+    already having them. Appending the recipe again would duplicate the set.
     """
     present = {_flag(a) for a in _str_list(conf.get("prover_args"))}
     return all(_flag(a) in present for a in NONLINEAR_SOLVER_PORTFOLIO)
 
 
-#: The one prover flag in the portfolio that is **repeatable**: each ``-solvers`` entry adds a
-#: parallel solver configuration rather than replacing the last. That makes it the exception to
-#: :func:`merge_prover_args`, which dedupes on the flag so that ``-solanaTACOptimize 2`` overrides
-#: ``-solanaTACOptimize 0``. Merging the portfolio's four ``-solvers`` lines the ordinary way
-#: collapses twelve solver instances into three, which is most of the recipe thrown away, silently.
+#: The one portfolio flag that repeats. Each ``-solvers`` entry adds a solver configuration
+#: instead of replacing the last. :func:`merge_prover_args` dedupes on the flag, so
+#: ``-solanaTACOptimize 2`` overrides ``-solanaTACOptimize 0``. Merging the four ``-solvers``
+#: lines that way would collapse twelve solver instances into three.
 _REPEATABLE_FLAG = "-solvers"
 
 
 def with_solver_portfolio(conf: dict, enabled: bool) -> dict:
     """``conf`` with the nonlinear portfolio added or removed.
 
-    The non-repeatable flags go through :func:`merge_prover_args`, so a project that already sets
-    ``-backendStrategy`` has it *replaced* rather than named twice — a conf with one flag at two
-    values has two intentions in it and the prover picks. ``-solvers`` is handled separately for the
-    reason above: the project's own lines are dropped and the portfolio's four replace them as a
-    set, because a solver portfolio is one decision rather than a flag whose last value wins.
+    The other flags go through :func:`merge_prover_args`, so a project that already sets
+    ``-backendStrategy`` has that value replaced. A conf with one flag at two values leaves the
+    prover to pick. ``-solvers`` is separate, as :data:`_REPEATABLE_FLAG` says: the project's
+    lines are dropped and the portfolio's four replace them. A portfolio is one set, not a flag
+    whose last value wins.
     """
     args = _str_list(conf.get("prover_args"))
     if not enabled:
@@ -408,17 +352,16 @@ def with_solver_portfolio(conf: dict, enabled: bool) -> dict:
 
 
 def with_loop_iter(conf: dict, iterations: int) -> dict:
-    """``conf`` with a new loop bound. Stringified, because that is how a conf spells an integer."""
+    """``conf`` with a new loop bound, written as a string, which is how a conf spells an integer."""
     return {**conf, "loop_iter": str(iterations)}
 
 
 def has_optimistic_loop(conf: dict) -> bool:
     """Whether ``conf`` assumes loops finish.
 
-    Read tolerantly because the key arrives from two directions: :data:`TEMPLATE_BASE` writes a JSON
-    bool, and a project conf written by hand may spell it as a string the way ``loop_iter`` is
-    spelled. Anything else — absent, or a value that is neither — is false, which is both the
-    template's position and what the Prover does with a key it was not given.
+    :data:`TEMPLATE_BASE` writes a JSON bool. A hand-written conf may spell it as a string, the
+    way ``loop_iter`` is spelled. Absent, or any other value, is false. That is the template's
+    setting, and what the prover does with a key it was not given.
     """
     match conf.get("optimistic_loop"):
         case bool(b):
@@ -432,32 +375,20 @@ def has_optimistic_loop(conf: dict) -> bool:
 def with_optimistic_loop(conf: dict, enabled: bool) -> dict:
     """``conf`` with the loop-halt assumption on or off.
 
-    Unlike its two siblings this changes what a verdict *means*, not how the prover spends its time:
-    every loop is assumed to finish within ``loop_iter``, so a violation reachable only on a later
-    iteration is not found and the rule still reports VERIFIED. It is here because the ladder
-    above it has a rung missing — a trip count the analysis cannot fix is not answered by bounding
-    the inputs, by munging the loop, or by raising the bound, and the alternative to assuming it is
-    abandoning the handler (``docs/cvlr-todo.md`` U9). Written as a JSON bool, matching the template.
+    This changes what a verified result means. Every loop is assumed to finish within
+    ``loop_iter``, so a violation reachable only on a later iteration is not found and the rule
+    still reports verified. Written as a JSON bool, matching the template.
     """
     return {**conf, "optimistic_loop": enabled}
 
 
 def with_sanity_floor(conf: dict) -> dict:
-    """``conf`` with vacuity checking guaranteed on, at ``basic`` unless it already asks for more.
+    """``conf`` with vacuity checking on, at ``basic`` unless the conf already asks for more.
 
-    A **floor**, not an owned key, and the difference is the point. A project asking for
-    ``advanced`` knows something this code does not and keeps it; a project that never mentioned
-    ``rule_sanity`` — the recommended starting point and two of the five corpus base confs — gets
-    ``basic`` rather than nothing.
-
-    This is what makes reading the project's conf safe. Vacuity is the only thing that catches the
-    rule a *blocked* author writes: when the properties in a batch turn out to be unprovable, the
-    way forward that always works is to assume the conclusion, and such a rule VERIFIES, maps
-    cleanly to its property and passes both halves of the publish gate. It is also what the author's
-    prompt tells the author is happening. Adopting a base conf that omits the key would have made
-    both silently false, and ``docs/upstream-defects.md`` P5 is the same hazard from the other side:
-    with the check off, a [3308] raised inside the generated vacuity rule is reported as a clean
-    ``VERIFIED``.
+    A floor, not an owned key. ``advanced`` is kept. A conf that never mentions ``rule_sanity``,
+    including the recommended starting point, gets ``basic``. ``"none"`` is treated as off: with
+    the check off, a [3308] inside the generated vacuity rule is reported as verified, and a rule
+    that assumes its conclusion verifies too.
     """
     if str(conf.get("rule_sanity", "")) in _SANITY_ON:
         return conf
@@ -467,18 +398,18 @@ def with_sanity_floor(conf: dict) -> dict:
 def solana_conf(base: dict, overlay: RunOverlay) -> dict:
     """The conf for one ``certoraSolanaProver`` submission.
 
-    ``base`` is never mutated. Every key in :data:`OVERLAY_OWNED_KEYS` is decided here — including
-    ``files``, which is *dropped*, since a from-sources run and a prebuilt artifact are mutually
-    exclusive inputs and keeping both would fail inside the prover rather than here. ``rule`` is
-    decided by :data:`RuleSelection`, which is the one key where "the base wins" is a real answer.
+    ``base`` is not mutated. Every key in :data:`OVERLAY_OWNED_KEYS` is decided here. ``files``
+    is dropped: a from-sources run and a prebuilt artifact cannot both be set, and keeping both
+    fails inside the prover. ``rule`` follows :data:`RuleSelection`, which is where keeping the
+    base value is a real answer.
     """
     conf = {k: v for k, v in base.items() if k not in OVERLAY_OWNED_KEYS}
     conf["build_script"] = overlay.build_script
     conf["msg"] = safe_msg(overlay.msg)
     if overlay.summaries:
-        # Kept alongside the base's, not in place of them. Naming *any* value here stops
-        # `add_solana_files_to_context` from applying the package's declaration, so dropping the
-        # base's entries would silently narrow what the prover reads.
+        # Kept beside the base's entries. Naming any value stops the prover from also applying
+        # the package's [package.metadata.certora] declaration, so dropping the base's entries
+        # would narrow what it reads.
         conf["solana_summaries"] = list(
             dict.fromkeys([*_str_list(base.get("solana_summaries")), *overlay.summaries])
         )
@@ -498,5 +429,5 @@ def solana_conf(base: dict, overlay: RunOverlay) -> dict:
 
 
 def dump_conf(conf: dict) -> str:
-    """Serialize a conf for writing. Plain JSON: JSON5 is what we *accept*, not what we emit."""
+    """Serialize a conf for writing. Plain JSON. JSON5 is accepted on read and not written."""
     return json.dumps(conf, indent=4) + "\n"

@@ -1,34 +1,24 @@
-"""The CVLR reference set — which crate releases "current CVLR" resolves to.
+"""Which published CVLR releases count as current, for each chain.
 
-Three things need one answer to that question and would otherwise each invent their own: the
-acceptance gate that compiles every code-bearing corpus entry, the generated crate reference, and
-the scaffold the backend writes into a target's ``Cargo.toml``. See
-``docs/cvlr-capture-plan.md`` §4.7.2 for the survey this encodes.
+Exact versions, not ranges. The core and the chain crates are versioned separately, so "latest"
+can pair a new core with an old chain crate. A bump is an edit here.
 
-**Published releases only, pinned exactly, never resolved as "latest".** The CVLR lines version
-independently — the core is published well ahead of the chain crates — so "latest" would pair a
-current core with a stale chain crate and still look right. Recording exact releases means a bump
-is a visible edit here, with the compile gate as its test.
+A chain crate is bound to one platform generation, and each generation has its own ``AccountInfo``.
+``cvlr-solana`` 0.4.x goes with ``solana-program`` 1.18, 0.5.0 with 2.2, and the unreleased 0.6
+line with the ``solana-*`` v3 crates. A helper from one generation cannot be passed an account
+from another, so :attr:`ChainReference.platform` is part of the reference, not a detail of one
+target.
 
-**A chain crate implies a platform generation.** ``cvlr-solana`` is pinned to one Solana platform
-line (0.4.x → ``solana-program`` 1.18, 0.5.0 → 2.2, the unreleased 0.6 line → the ``solana-*`` v3
-crates), and each generation has its *own* ``AccountInfo`` type. Two crates that disagree do not
-merely warn — a helper from one cannot be passed to a handler from the other, so
-:attr:`ChainReference.platform` is part of the reference set rather than a detail of the target.
+``solana-program`` stopped defining the platform types at 2.2, not at 3.0. 1.17 and 1.18 have a
+real ``account_info`` module. 2.2.1, 2.3.0, and 3.0.0 re-export ``solana-account-info``. A path
+written ``solana_program::account_info::AccountInfo`` then names a re-export. The path a demangled
+symbol carries is ``solana_account_info::AccountInfo``. :class:`PathAlias` is that difference, for
+the tuning files.
 
-**The split is not where the major version is.** ``solana-program`` stopped *defining* the platform
-types at **2.2**, not at 3.0: 1.17 and 1.18 carry a real ``account_info`` module, while 2.2.1, 2.3.0
-and 3.0.0 all re-export ``solana-account-info``. So the generation pinned above is already
-post-split, and a path written as ``solana_program::account_info::AccountInfo`` names a re-export
-whose *defining* path — the one a demangled symbol carries — is ``solana_account_info::AccountInfo``.
-:class:`PathAlias` is how that difference reaches the tuning files; ``docs/cvlr-backend-plan.md``
-§7.5.6 is what it cost to find out.
-
-This module deliberately imports nothing: a script that only needs to know which version to write
-into a probe crate should not pay for the pipeline (importing ``ChainTag``'s home costs ~2.5s and
-pulls the whole model layer). It therefore repeats the chain vocabulary as plain strings, the same
-trade ``composer.rustapp.descriptor`` makes for the same reason, and
-``tests/test_cvlr_reference.py`` pins the two against each other so they cannot drift apart.
+This module imports nothing. Importing ``composer.pipeline.ecosystem`` pulls in the model layer
+(about 2.5s). The chain names are plain strings, the same split
+``composer.rustapp.descriptor`` makes, and ``tests/test_cvlr_reference.py`` checks the two lists
+against each other.
 """
 
 from dataclasses import dataclass
@@ -36,24 +26,26 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class CrateRelease:
-    """One crate at one exact published version."""
+    """One crate at one published version."""
 
     name: str
     version: str
 
     def dependency_line(self) -> str:
-        """The ``Cargo.toml`` line for this crate — an exact version, not a caret range: the
-        reference set is a statement about what was compiled, not a compatibility claim."""
+        """A ``Cargo.toml`` dependency line. Exact (``=version``), not a caret range.
+
+        The reference set says what was compiled, not which later releases are compatible.
+        """
         return f'{self.name} = "={self.version}"'
 
 
 @dataclass(frozen=True)
 class CrateRequirement:
-    """A crate at a version *line* rather than a release — how the platform is named.
+    """A crate at a version line, which is how a platform generation is named.
 
-    Distinct from :class:`CrateRelease` because the two say different things: a CVLR release is
-    the exact thing we compiled, while the platform is a generation whose patch level is the
-    target's business. Rendering both the same way would claim a precision we do not have."""
+    A CVLR release is the exact crate that was compiled. The platform is a generation, and the
+    patch level belongs to the target. An exact pin here would claim a patch that was never compiled.
+    """
 
     name: str
     line: str
@@ -69,11 +61,10 @@ class PathAlias:
     Matched as a literal substring of a directive's pattern, so a concept is renamed wherever it
     appears — several upstream directives name two or three of them in one regex.
 
-    ``actual`` is a tuple because a platform split is not always a rename. ``solana-program`` kept a
-    real ``invoke_signed_unchecked`` of its own while the one that ends up on the call path is
-    ``solana-cpi``'s, so a summary that must cover the concept has to be emitted under both
-    spellings. A spelling whose crate the target does not resolve is dropped, which is what keeps
-    these safe to declare against a target that predates the split.
+    ``actual`` is a tuple because a split is not always a rename. ``solana-program`` kept its own
+    ``invoke_signed_unchecked``, and the one on the call path is ``solana-cpi``'s, so a summary of
+    the concept is emitted under both spellings. A spelling whose crate the target does not
+    resolve is dropped, which is what makes these safe on a target that predates the split.
     """
 
     canonical: str
@@ -84,23 +75,22 @@ class PathAlias:
 class NamespacePattern:
     """A blanket over one crate's whole namespace, widened to the family that replaced that crate.
 
-    The canonical spelling is ``<crate>::.*`` — the pattern upstream writes to set a default for a
-    whole layer, as in ``#[inline(never)] ^solana_program::.*$``. On a generation that split the
-    monolith into a family, that blanket covers almost nothing: the layer moved to
-    ``solana_account_info``, ``solana_pubkey``, ``solana_cpi`` and a dozen more, so the default it was
-    setting silently stopped applying to them.
+    The canonical spelling is ``<crate>::.*``, the pattern upstream writes for a whole layer, as in
+    ``#[inline(never)] ^solana_program::.*$``. After the monolith split, that layer lives in
+    ``solana_account_info``, ``solana_pubkey``, ``solana_cpi``, and others, so the blanket matches
+    almost nothing and the default stops applying.
 
-    Two things make this its own type rather than a :class:`PathAlias`.
+    This is not a :class:`PathAlias`, for two reasons.
 
-    It must not touch a path that merely *starts* with the crate:
-    ``solana_program::instruction::get_stack_height`` names a function that still lives in the
-    monolith, and rewriting it would point a directive at a symbol that does not exist. The literal
-    ``.*`` in the canonical spelling is what separates the blanket from every other directive.
+    It must not rewrite a path that merely starts with the crate.
+    ``solana_program::instruction::get_stack_height`` is still a function in the monolith, and
+    rewriting it would name a symbol that does not exist. The literal ``.*`` is what marks a
+    blanket.
 
-    And it is unconditional, where a :class:`PathAlias` is dropped unless the target resolves the
-    crate it names. The replacement matches crate *names* rather than naming one crate, so it is a
-    superset of the canonical spelling and stays correct on a target that predates the split — which
-    is also why it cannot go stale when the next crate is split out.
+    It is also unconditional. A :class:`PathAlias` is dropped unless the target resolves the crate
+    it names. This replacement matches crate names, so it covers the canonical spelling and stays
+    correct on a target that predates the split, and it does not go stale when another crate is
+    split out.
     """
 
     canonical: str
@@ -111,29 +101,24 @@ class NamespacePattern:
 class PlatformGeneration:
     """The chain-platform release line a CVLR chain crate is bound to.
 
-    ``label`` is for humans and for corpus provenance; ``crates`` is what a probe crate must
-    declare to name the platform types (``AccountInfo`` and friends) the chain crate expects."""
+    ``label`` is for people and for corpus provenance. ``crates`` is what a probe crate declares
+    so it can name the platform types (``AccountInfo`` and the rest) the chain crate uses."""
 
     label: str
     crates: tuple[CrateRequirement, ...]
-    #: The crates whose presence in a *target's* graph reveals which generation it is already on,
-    #: most specific first — the scaffold's platform gate resolves the first one it finds and
-    #: compares generations.
+    #: Crates whose presence in a target's graph says which generation it is on, most specific
+    #: first. The scaffold's platform gate uses the first one the target resolves.
     #:
-    #: A separate list from :attr:`crates` because the two roles disagree at exactly the moment
-    #: that matters. :attr:`crates` names what *this* generation declares, so it can only ever
-    #: mention crates this generation has; but a target on a *newer* generation is detected
-    #: precisely by the crate this one lacks. Solana's v3 split moved ``AccountInfo`` out of
-    #: ``solana-program`` and stopped publishing that crate, so a v3 target resolves no
-    #: ``solana-program`` at all — and a gate that only asked about ``solana-program`` read that
-    #: absence as "the project has no opinion" and waved the target through. Naming the crate that
-    #: actually carries the type, and that survived the split, is what makes the answer legible
-    #: across it.
+    #: Separate from :attr:`crates`. That list is what this generation declares, so it can only
+    #: name crates this generation has. A newer generation is recognized by a crate this one
+    #: lacks. Solana v3 moved ``AccountInfo`` out of ``solana-program`` and stopped publishing
+    #: that crate, so a v3 target resolves no ``solana-program``. A gate that only asked about
+    #: ``solana-program`` would read the absence as "no opinion" and pin this generation's CVLR
+    #: against it. The witness is the crate that still defines the type.
     witnesses: tuple[CrateRequirement, ...]
-    #: How this generation spells the paths the canonical tuning files name, for
-    #: :mod:`composer.spec.cvlr.env_paths` to emit. Empty for a generation whose spelling *is* the
-    #: canonical one — the files are vendored verbatim from upstream and upstream writes them in the
-    #: monolith's spelling, so "no aliases" means "upstream's paths are already right here".
+    #: How this generation spells the paths in the vendored tuning files.
+    #: :mod:`composer.spec.cvlr.env_paths` applies these. Empty when this generation's spelling
+    #: is already the one upstream wrote, which is the monolith's.
     path_aliases: tuple[PathAlias | NamespacePattern, ...] = ()
 
 
@@ -141,71 +126,62 @@ class PlatformGeneration:
 class UnpublishedCapability:
     """Something current practice uses that no published crate provides.
 
-    Recorded rather than silently omitted: the corpus has to be able to say "this is not covered,
-    and here is why", and a reader who meets the capability in a real project needs to know it is
-    outside the reference set instead of concluding the corpus is merely incomplete."""
+    Recorded so the corpus can say it is uncovered, and why. A reader who meets the capability
+    in a project should see that it is outside the reference set.
+    """
 
-    #: Every name the capability has gone by. A rename is exactly the case where searching for one
-    #: name and finding nothing reads as "does not exist".
+    #: Every name the capability has gone by. A rename is the case where searching for one
+    #: name and finding nothing looks like absence.
     names: tuple[str, ...]
-    #: What is therefore missing from the corpus.
+    #: What the corpus therefore does not cover.
     missing: str
 
 
 @dataclass(frozen=True)
 class ChainReference:
-    """What "current CVLR" means for one chain."""
+    """What current CVLR means for one chain."""
 
     core: CrateRelease
     #: The chain crate every project on this chain declares.
     chain: CrateRelease
     platform: PlatformGeneration
-    #: Chain crates that model one specific on-chain program rather than the chain itself — the SPL
-    #: token account model, the stake program's state. Separate from :attr:`chain` because they
-    #: answer a narrower question, not because a project gets fewer of them: :meth:`scaffold_crates`
-    #: declares all of them.
+    #: Chain crates that model one on-chain program rather than the chain itself: the SPL token
+    #: account model, the stake program's state. Narrower than :attr:`chain`, and still declared.
+    #: :meth:`scaffold_crates` includes them.
     #:
-    #: **That is the reverse of what this said, and the reason is that nothing can add one later.**
-    #: The original argument was that scaffolding every specialization "would add a dependency
-    #: nobody uses" — true, and the cost is one compile of a small optional crate behind the
-    #: ``certora`` feature. What it weighed that against was wrong: the alternative is not
-    #: declaring it on demand, because there is no demand-time. The author writes spec code and has
-    #: no manifest-editing tool (deliberately — a dependency changes how the project builds for
-    #: everyone, which the scaffold refuses to guess at), and the munge editor's vocabulary is
-    #: attributes on program source. So a specialization the scaffold omits is a capability the run
-    #: cannot reach at all, and the first target that needed one — a stake pool, whose invariants
-    #: are pool-token supply against staked lamports — would have been handed neither of the two
-    #: libraries that model what it does.
+    #: They are optional crates behind the ``certora`` feature, so a project that never calls them
+    #: pays one extra compile. They are still pinned here. The scaffold is what writes
+    #: dependencies, and it does not add one later. A dependency changes how the project builds
+    #: for everyone, which the scaffold does not guess at. A specialization left out of this list
+    #: is a crate the project cannot name.
     specializations: tuple[CrateRelease, ...] = ()
     unpublished: tuple[UnpublishedCapability, ...] = ()
 
     def crates(self) -> tuple[CrateRelease, ...]:
-        """Every CVLR crate in the reference set — what the corpus was written against."""
+        """Every CVLR crate in the reference set. This is what the corpus was written against."""
         return (self.core, self.chain, *self.specializations)
 
     def scaffold_crates(self) -> tuple[CrateRelease, ...]:
-        """What a fresh project declares in its ``Cargo.toml`` — every crate in the reference set.
+        """What a fresh project declares in its ``Cargo.toml``.
 
-        Identical to :meth:`crates` today. Kept as its own method because the two are asking
-        different questions — "what was the corpus compiled against" and "what does this project
-        pin" — and a future reference set that names a crate no project should declare would need
-        them to differ again.
+        The same crates as :meth:`crates`. The two names are the two questions: what the corpus
+        was compiled against, and what this project pins.
         """
         return self.crates()
 
     def cargo_dependencies(self) -> str:
         """A ``[dependencies]`` body pinning this reference set, for a probe or scaffold crate.
 
-        The platform crates are included because the CVLR chain crate's public types come from
-        them: omitting them leaves a probe unable to *name* what the helpers return."""
+        The platform crates are included because the chain crate's public types come from them.
+        Without them a probe cannot name what the helpers return."""
         lines = [c.dependency_line() for c in self.crates()]
         lines += [c.dependency_line() for c in self.platform.crates]
         return "\n".join(lines)
 
 
-#: The core line, shared by every chain. ``cvlr-spec`` (the ``cvlr_spec!`` / ``cvlr_rules!`` /
-#: ``cvlr_lemma!`` machinery) is a dependency of ``cvlr`` rather than a separate declaration, so a
-#: target names one crate and gets the parametric-rule layer with it.
+#: The core line, shared by every chain. ``cvlr-spec`` (``cvlr_spec!``, ``cvlr_rules!``,
+#: ``cvlr_lemma!``) is a dependency of ``cvlr``, so a target names one crate and gets the
+#: parametric-rule layer with it.
 _CORE = CrateRelease("cvlr", "0.6.1")
 
 SOLANA = ChainReference(
@@ -213,27 +189,22 @@ SOLANA = ChainReference(
     chain=CrateRelease("cvlr-solana", "0.5.0"),
     specializations=(
         CrateRelease("cvlr-solana-stake", "0.5.0"),
-        # The SPL token account model — nondet token accounts and mints, and the token instruction
-        # summaries. This was recorded as an *unpublished* capability, on the strength of a real
-        # project reaching it through a `[patch.crates-io]` git redirect. That project's own comment
-        # says why ("use git dependency until v0.5 ... is released"), and the release happened: it
-        # is on crates.io at 0.5.0, the same version as the chain crate it was factored out of.
+        # The SPL token account model: nondet token accounts and mints, and the token instruction
+        # summaries. On crates.io at 0.5.0, the same version as the chain crate it was split from.
         CrateRelease("cvlr-spl-token", "0.5.0"),
     ),
     platform=PlatformGeneration(
         label="solana-program 2.x (the last monolithic line)",
         crates=(CrateRequirement("solana-program", "2.2"),),
-        # ``solana-account-info`` first: it defines ``AccountInfo`` itself and exists on both 2.x
-        # and 3.x, so it answers the question across the split that ``solana-program`` cannot.
-        # ``solana-program`` remains as the fallback for the 1.18 line, which predates the split
-        # and defines the type inside the monolith.
+        # ``solana-account-info`` first: it defines ``AccountInfo`` and exists on both 2.x and 3.x.
+        # ``solana-program`` is the fallback for 1.18, which predates the split and defines the
+        # type inside the monolith.
         witnesses=(
             CrateRequirement("solana-account-info", "2.3"),
             CrateRequirement("solana-program", "2.2"),
         ),
-        # Every entry here was checked against a demangled symbol table, not against the crates'
-        # documentation: `solana-program` is a *partial* facade, so which side of the split a symbol
-        # lives on is a per-symbol fact and reading it off the module was wrong twice.
+        # Checked against a demangled symbol table. ``solana-program`` is a partial facade, so
+        # which side of the split a symbol lives on is per symbol, not per module.
         path_aliases=(
             # Modules that became whole-crate aliases (`pub use solana_x as x`), so every path
             # under them moved together.
@@ -248,11 +219,10 @@ SOLANA = ChainReference(
             # These two went to one crate that is not named after either of them.
             PathAlias("solana_program::system_program", ("solana_sdk_ids::system_program",)),
             PathAlias("solana_program::incinerator", ("solana_sdk_ids::incinerator",)),
-            # `program` is the partial facade. `invoke`, `invoke_signed` and `set_return_data` are
-            # real functions there and keep the canonical spelling — they are in the symbol table
-            # under it — so only the symbol that moved is aliased, and it is aliased to *both*:
-            # `solana-program` still defines one of that name, and the one that ends up on the call
-            # path is `solana-cpi`'s.
+            # `program` is the partial facade. `invoke`, `invoke_signed`, and `set_return_data`
+            # are real functions there and stay under the canonical spelling. Only the symbol
+            # that moved is aliased, and it is aliased to both: `solana-program` still defines
+            # one of that name, and the one on the call path is `solana-cpi`'s.
             PathAlias(
                 "solana_program::program::invoke_signed_unchecked",
                 (
@@ -260,14 +230,12 @@ SOLANA = ChainReference(
                     "solana_cpi::invoke_signed_unchecked",
                 ),
             ),
-            # Deliberately absent: `solana_program::instruction::get_stack_height`, a real function
-            # in the monolith on this generation, and `solana_program::poseidon`, which the
-            # generation does not have under any spelling — no rewrite makes an absent symbol
-            # present, and pretending otherwise would hide that the directive is inapplicable.
+            # Not aliased: `solana_program::instruction::get_stack_height` is still a function in
+            # the monolith on this generation, and `solana_program::poseidon` does not exist here
+            # under any spelling. Rewriting either would hide a directive that does not apply.
             #
-            # Last, and the one that matters most: the blanket that gives the whole platform layer
-            # its never-inline default. It matched two symbols on the first real target this backend
-            # was pointed at, because the layer had moved out from under it.
+            # The blanket that sets the platform layer's never-inline default. ``solana_program::.*``
+            # only matches what stayed in the monolith. The replacement covers the split crates too.
             NamespacePattern("solana_program::.*", "solana_[a-z0-9_]*::.*"),
         ),
     ),
@@ -276,29 +244,29 @@ SOLANA = ChainReference(
 SOROBAN = ChainReference(
     core=_CORE,
     chain=CrateRelease("cvlr-soroban", "0.4.0"),
-    # The derive crate is a companion rather than a specialization, but it is declared the same
-    # way: a target reaches for it only when it writes the attribute macros.
+    # The derive crate is a companion of the chain crate. A target uses it when it writes the
+    # attribute macros. It is declared the same way as a specialization.
     specializations=(CrateRelease("cvlr-soroban-derive", "0.4.0"),),
     platform=PlatformGeneration(
         label="soroban-sdk 22.x",
         crates=(CrateRequirement("soroban-sdk", "22"),),
-        # Soroban ships one SDK crate rather than a family, so declaring it and witnessing it are
-        # the same crate. Spelled out rather than defaulted: they coincide here as a fact about
-        # this platform, not as a rule, and Solana is the proof that the two can diverge.
+        # Soroban has one SDK crate, so the declared crate and the witness are the same. Spelled
+        # out because that is a fact about this platform. On Solana the witness list names a crate
+        # this generation does not declare.
         witnesses=(CrateRequirement("soroban-sdk", "22"),),
     ),
 )
 
-#: Keyed by the chain vocabulary of ``composer.pipeline.ecosystem.ChainTag``, minus ``evm`` — CVLR
-#: is the Rust-side specification language and has no EVM line.
+#: Keyed by ``composer.pipeline.ecosystem.ChainTag``, minus ``evm``. CVLR is the Rust-side
+#: specification language and has no EVM line.
 REFERENCE_SET: dict[str, ChainReference] = {"solana": SOLANA, "soroban": SOROBAN}
 
 
 def reference_for(chain: str) -> ChainReference:
-    """The reference set for ``chain``, or a message naming the chains that have one.
+    """The reference set for ``chain``.
 
-    Raises rather than returning ``None``: every caller (compile gate, crate reference, scaffold)
-    needs an answer to proceed, and a missing chain is a registration bug, not a runtime state."""
+    Raises when ``chain`` has none. Callers need an answer to proceed, and a missing chain is a
+    registration bug. The error names the chains that have a set. CVLR has no EVM line."""
     try:
         return REFERENCE_SET[chain]
     except KeyError:
