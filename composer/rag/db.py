@@ -51,6 +51,7 @@ _RAG_PORT = os.environ.get("CERTORA_AI_COMPOSER_PGPORT", "5432")
 DEFAULT_CONNECTION: str = f"postgresql://rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
 SANITY_DEFAULT_CONNECTION: str = f"postgresql://extended_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
 FOUNDRY_DEFAULT_CONNECTION: str = f"postgresql://foundry_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
+CVLR_DEFAULT_CONNECTION: str = f"postgresql://cvlr_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
 
 # Logical knowledge-base tag -> default DB connection, for corpora ingested by the generic importer
 # (`composer.scripts.rag_import`). The tag is the one the manifest carries (== a wheel's
