@@ -135,7 +135,7 @@ not.
 | Authoring loop, edit + compile gate, prover submission, verdict parsing, munge loop, CEX analysis | **Doesn't** | Written once, chain-neutral, in `composer/spec/cvlr/` |
 | Build the verification artifact; fast-check command | `cargo certora-sbf` → `.so` vs. a wasm build | The **existing** `project_toolchain` registry (§4.3) |
 | Prover CLI + conf fields | `certoraSolanaProver` (`solana_inlining`, `solana_summaries`, `process: sbf`) vs. `certoraSorobanProver` | Ordinary per-chain module in `composer/spec/cvlr/`; a value passed to the submission code, not an interface it calls back into |
-| Project scaffold templates | `certora/{confs,mocks,specs}`, `certora = ["no-entrypoint", "dep:cvlr", "dep:cvlr-solana"]`, `#[cfg(feature="certora")] pub mod certora;`, `cvlr_inlining.txt`/`cvlr_summaries.txt` vs. the Soroban equivalent | A template directory per chain — the same split the front half already uses for [templates/solana/](../composer/templates/solana/) vs. [templates/soroban/](../composer/templates/soroban/) |
+| Project scaffold templates | `src/certora/{mod.rs,specs/,envs/}`, `certora = ["no-entrypoint", "dep:cvlr", "dep:cvlr-solana"]`, `#[cfg(feature="certora")] mod certora;`, `cvlr_inlining.txt`/`cvlr_summaries.txt` vs. the Soroban equivalent | A template directory per chain — the same split the front half already uses for [templates/solana/](../composer/templates/solana/) vs. [templates/soroban/](../composer/templates/soroban/) |
 | `backend_guidance` (property prompt) | Solana vs. Soroban CVLR idioms | A module-level string constant, exactly as `CERTORA_BACKEND_GUIDANCE`, `FOUNDRY_BACKEND_GUIDANCE` and `SOLANA_NULL_GUIDANCE` are today. No mechanism required |
 | Munge charter | mocks, feature gates, CPI stubs, SDK nondet vs. host-env and storage stubs | A template, as [munge_charter.j2](../composer/templates/munge_charter.j2) is for EVM |
 | Knowledge corpus | `cvlr-solana` vs. Soroban helper sections | One `cvlr` corpus with chain-tagged sections (§5.4) |
@@ -736,9 +736,9 @@ not as candidates for what it should emit.
 
 | Piece | State |
 |---|---|
-| Templated project shape | **Done** — [scaffold.py](../composer/spec/cvlr/scaffold.py): the harness module tree, the cargo feature, the three `Cargo.toml` stanzas, `.gitignore` |
+| Templated project shape | **Done** — [scaffold.py](../composer/spec/cvlr/scaffold.py): the harness module (`mod.rs`, `specs/mod.rs`), the cargo feature, the three `Cargo.toml` stanzas, `.gitignore` |
 | Cargo feature wiring | **Done** — `certora = ["no-entrypoint", "dep:cvlr", "dep:cvlr-solana"]`, with `no-entrypoint` included only when the package has it and the CVLR deps `optional` so a release build never sees them |
-| Env (inlining / summaries) files | **Done** — the template's three-layer split, vendored with a provenance stamp; [refresh_cvlr_envs.py](../composer/scripts/refresh_cvlr_envs.py) re-vendors and records the upstream commit |
+| Env (inlining / summaries) files | **Done** — [tuning.py](../composer/spec/cvlr/tuning.py): two starting layers per family, maintained in [envs/](../composer/spec/cvlr/envs/) and never copied into a target; the scaffold writes the package composite and rewrites it whenever it differs, and a unit's own summaries go in its `_run` layer. Started as a vendored copy of the template's files, which is no longer maintained against upstream |
 | Conf | **Already done in phase 1b** — the run owns its conf ([conf.py](../composer/spec/cvlr/conf.py)); the scaffold writes none, so there is no second opinion about prover flags |
 | Preflight step and its gate | **Done** — [preflight.py](../composer/spec/cvlr/preflight.py), split into `prepare_workspace` and `gate_workspace` so only the compile lands on the run's CPU budget |
 | Validated against a non-reference project | **Done** — the public examples' `vault_application`, stripped back to plain program code and scaffolded from nothing: it compiles with the harness in, and vanishes cleanly without the feature |
@@ -756,8 +756,12 @@ Both are `Blocked`, and a plan carrying either applies *nothing* — a half-scaf
 the next build failure into a question with two candidate answers.
 
 **Idempotence is the property that mattered most**, because a scaffold gets re-run whenever anyone
-is unsure whether it ran. Nothing is ever overwritten, and every manifest change is computed from
-the *parsed* manifest, so a second run is a no-op. That is also the one thing the template's own
+is unsure whether it ran. The project's own files are only added to, and every manifest change is
+computed from the *parsed* manifest, so a second run is a no-op. The files under `src/certora/` are
+AutoProver's and are rewritten whenever they differ from what the scaffold would write, as CVL
+AutoSetup does with the conf it owns, so a second run leaves those alone too. (Until 2026-09-22 the
+scaffold overwrote nothing at all, and a project kept the composites and starting layers its first
+run wrote: [cvlr-todo.md](./cvlr-todo.md) U15.) That is also the one thing the template's own
 `certora-setup.py` gets wrong: it appends to `Cargo.toml` unconditionally, so running it twice
 leaves a manifest cargo will not parse. One change cannot be an append — re-opening `[features]` at
 the end of a manifest is a duplicate-table error — so that key is inserted into the table the
@@ -1243,8 +1247,9 @@ directives keyed on *concepts* and emit the paths for the target's generation. T
 built, because the first is wrong again at the next split and this is already the second defect in two
 phases traceable to this one.
 
-So the vendored files stay byte-identical to upstream and become the **concept keys**, and the
-platform generation says how to spell those concepts:
+So the starting layers become the **concept keys**, written in one spelling, and the platform
+generation says how to spell those concepts. (They were a byte-identical copy of upstream's files at
+the time; they are maintained here now, §7.4.1.)
 
 * [`cvlr_reference.py`](../composer/spec/cvlr_reference.py) gains `PathAlias` — a canonical path
   prefix and this generation's spellings of it — and `NamespacePattern` for the one directive that is
@@ -1252,9 +1257,9 @@ platform generation says how to spell those concepts:
   declared.
 * [`env_paths.py`](../composer/spec/cvlr/env_paths.py) is the seam: `dialect_for(workspace,
   reference)` resolves the declarations against the target's own graph, and `PathDialect.render`
-  rewrites a tuning file line by line. The scaffold threads a dialect into `canonical_env` and
+  rewrites a tuning file line by line. The scaffold threads a dialect into `starting_env` and
   `compose_env`, and the composite says in its header that paths were rewritten — the alternative is
-  a reader diffing it against upstream and concluding somebody hand-edited it.
+  a reader diffing it against the starting layers and concluding somebody hand-edited it.
 
 Four properties of the design are load-bearing, and each of them is something a naive substitution
 gets wrong:
@@ -1289,8 +1294,8 @@ treated without changing whether anything reaches it.
 
 The tests are [`test_cvlr_env_paths.py`](../tests/test_cvlr_env_paths.py), and two of them exist
 because of how this defect fails. One asserts every declared alias still names a directive that
-appears in the vendored files, so an upstream refresh that removes one turns dead weight into a
-failure instead of leaving it looking like coverage. The other pins the alias table against
+appears in the starting layers, so an edit that removes one turns dead weight into a failure instead
+of leaving it looking like coverage. The other pins the alias table against
 [`tests/data/vault_sbf_symbols.txt`](../tests/data/vault_sbf_symbols.txt), 70 demangled symbols from a
 real Anchor program built for SBF — the only test here that can catch an alias being *wrong* rather
 than merely stale, which matters because both failures are equally silent.
@@ -1395,9 +1400,10 @@ invented.
 
 #### 7.6.1 What is built
 
-[munge.py](../composer/spec/cvlr/munge.py). `plan_munge(workspace)` resolves which dependencies a
-target needs replaced and `manifest_additions(plan)` emits the `[patch.crates-io]` that does it. That
-is the whole module — no source copying, no patch table.
+[forks.py](../composer/spec/cvlr/forks.py). `plan_overrides(workspace)` resolves which dependencies
+a target needs replaced and `manifest_additions(plan)` emits the `[patch.crates-io]` that does it.
+That is the whole module — no source copying, no patch table. (It was the first half of `munge.py`
+until 2026-09-22; `munge.py` is now only the source-edit vocabulary.)
 
 Two declared overrides, both read off real projects (§7.6.5): `ANCHOR_FORK` sends `anchor-lang` *and*
 `anchor-spl` to `Certora/anchor` at the branch matching the resolved version — **this is what clears
@@ -2849,8 +2855,8 @@ for the first three, [the-tree-is-a-vfs.md](./the-tree-is-a-vfs.md) §6 for the 
 | Workdir lifetime | **One tree for the run**, with each unit's module behind its own cargo feature — which is what makes the compile gate per-unit and undoes §7.5.2's "forced" ([single-working-tree.md](./single-working-tree.md)) |
 | Working-tree instrument | **A graphcore VFS the author reads through**, not a directory beside the project: one `fs_tools_layered` call yields a unit's read tools *and* the materializer that feeds its build, over a stack of `[this unit's draft] / [the run's munges] / [the pristine checkout]`. Built ([the-tree-is-a-vfs.md](./the-tree-is-a-vfs.md)); it replaced `SharedTree`'s bespoke materialization and kept its typed path refusals as the munge boundary |
 | Scaffold shape | From `Certora/solana-spec-template`, the recommended starting point, not from a vote over client layouts; the public examples break ties about what actually runs |
-| Scaffold safety | Never overwrite, compute every manifest change from the parsed manifest, and refuse rather than guess where a decision changes how the project builds for everyone |
-| Env (inlining/summaries) files | Vendored with a provenance stamp naming the upstream commit, in the template's three-layer split so the project's own layer is never a canonical file |
+| Scaffold safety | Never replace the project's own files, compute every manifest change from the parsed manifest, and refuse rather than guess where a decision changes how the project builds for everyone; the harness under `src/certora/` is AutoProver's and is rewritten when it differs (§7.4.1) |
+| Env (inlining/summaries) files | Two starting layers maintained in AutoProver and composed into each composite, never copied into the target; per-unit summaries in a `_run` layer; no package layer ([cvlr-todo.md](./cvlr-todo.md) U15) |
 | RAG | A single `cvlr_kb` corpus with chain-tagged sections, fed by three manifests — published docs, generated crate reference, project-derived practice — all produced in and shipped from a separate private repo, because *build cost* rather than confidentiality is what decides where a producer lives ([capture plan](./cvlr-capture-plan.md) §8.2) |
 | CVLR source | Mounted read-only as its own tool set (not a project-VFS layer), version resolved by the host from `cargo metadata`, available to the code explorer and the author, and named as authoritative in the prompt |
 | Ship order | Solana end-to-end first; Soroban pack after |
