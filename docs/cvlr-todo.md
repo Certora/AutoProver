@@ -376,6 +376,39 @@ balance — which decides whether the assumption is a narrowing to disclose or a
 record. Cheap to settle, and it generalizes: any rule over two accounts of one type has this
 question.
 
+**U15. A project's summaries are rebuilt from the installed wheel's layers; its inlining is frozen
+at first scaffold. Both cannot be right.**
+§7.4.1 states the scaffold's contract as *never overwrite* — nothing in a project is rewritten after
+the first run, which is why a re-run is a no-op and why the template's own `certora-setup.py`
+corrupting a manifest on second use is the failure it was written against. The inlining family obeys
+that: `_plan_envs` skips every file that exists, so `cvlr_inlining.txt` and the two canonical layers
+beside it keep whatever the first run wrote, and a later AutoProver carrying refreshed upstream
+tuning never reaches that project. Verified by adding a directive to the vendored
+`cvlr_inlining_core.txt` and re-running preflight against an already-scaffolded workspace:
+`applied: ()`, and the directive is in neither the project's copy of the layer nor the composite.
+The summaries family does not obey it. [tuning.py](../composer/spec/cvlr/tuning.py) recomposes a
+unit's summaries composite on every build, and `compose_env` reads the canonical layers from
+`ENV_DIR`, which is `Path(__file__).parent / "envs"` — the *wheel's* copy, not the project's. So a
+file inside the project is rebuilt from content the project does not own and cannot see, and two
+files in one `envs/` directory are two different vintages with nothing recording either.
+
+Which of the two is wrong depends on a question §7.4 does not answer: whether the canonical layers
+are the project's after setup or AutoProver's forever. If they are the project's, the summaries path
+should compose from the project's copies and the freeze is correct. If they are AutoProver's, the
+scaffold should refresh them and recompose when they drift, and *never overwrite* needs qualifying
+to mean *never overwrite what the project wrote*, which is what it is actually protecting. A third
+answer is that the canonical layers stop being copied into the project at all and only
+`_package.txt` lives in the repo — smallest surface, largest change to what a scaffolded project
+looks like.
+
+Two smaller things fall out of whichever answer wins. `cvlr_inlining_package.txt` is documented as
+the project's place to add a directive, and nothing ever folds it into the composite the build
+reports: the composite exists, so the scaffold skips it, and no inlining counterpart to `tuning.py`
+exists. And the package layer's header says the other layers are "maintained in `<repo>`", which is
+true of the repo and misleading about the copy on disk. The generated composite's `DO NOT EDIT`
+banner and its instruction to "recompose" — an action that exists only in the upstream template's
+justfile, never in AutoProver — were removed with P1.
+
 ---
 
 ## Blocked on upstream
