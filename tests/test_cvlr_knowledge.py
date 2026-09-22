@@ -287,37 +287,25 @@ def _author_system_prompt() -> str:
 
 
 def test_the_author_is_told_which_prover_settings_are_its_own_and_which_are_not():
-    """The tool covers three settings and the prompt has to draw two lines, not one: between what
-    the author may move and what it may not, and — inside what it may — between the two that are
+    """The tool covers two settings and the prompt has to draw two lines, not one: between what
+    the author may move and what it may not, and — inside what it may — between the one that is
     sound and the one that is not. A `rule_sanity` downgrade is the withheld one that most looks
     like the obvious remedy, for a rule that keeps coming back vacuous."""
     prompt = _flat(_author_system_prompt())
 
     assert "adjust_prover_config" in prompt
     assert "optimistic_loop" in prompt and "rule_sanity" in prompt
-    # The sound pair is named as sound rather than merely permitted ...
+    # The sound one is named as sound rather than merely permitted ...
     assert "never what a green verdict means" in prompt
     # ... and the one that is not is not quietly filed alongside them.
     assert "conditional on an assumption nothing checked" in prompt
 
 
-def test_both_new_settings_are_placed_last_on_their_ladders():
-    """Ordering, and the *reason* for it. The portfolio was measured and it is not slow — a
-    pre-lemma harness the plain conf could not finish in an hour verified with it in 4.6 minutes —
-    so "expensive" is not the argument and the prompt must not make it. What the lemma leaves
-    behind that a solver seed does not is a proof a reviewer can check, and that is the argument."""
+def test_raising_the_loop_bound_is_placed_last_on_its_ladder():
     prompt = _flat(_author_system_prompt())
 
     loop_rung = prompt.index("Raise the bound, having tried the first two")
     assert prompt.index("Constrain what determines the trip count") < loop_rung
-
-    portfolio = prompt.index("the solver portfolio is")
-    assert prompt.index("Bound the operands") < portfolio
-    assert prompt.index("Then lift the algebra into a lemma") < portfolio
-
-    # The ordering is justified by what a lemma leaves behind, not by cost.
-    assert "the reason is not cost" in prompt
-    assert "a reviewer can read and check" in prompt
 
 
 def test_the_author_is_told_to_call_the_handler_not_anchors_dispatch():

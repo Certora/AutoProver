@@ -340,16 +340,13 @@ def test_the_author_is_shown_the_conf_rather_than_told_about_it() -> None:
 
 def test_the_judge_is_told_a_rule_without_a_lemma_can_still_be_legitimate() -> None:
     """The judge's lemma check treats a discharged lemma as the mark of rigour, which would make it
-    read a portfolio-verified rule — no lemma, hard arithmetic asserted directly — as a corner cut.
-    Measured: a rule set that could not be discharged in an hour without the portfolio verified in
-    4.6 minutes with it and no lemma at all. That shape is weaker as an artifact and not unsound,
-    and the judge has to be able to tell those apart."""
+    read a rule with no lemma, its hard arithmetic asserted directly, as a corner cut. That shape is
+    weaker as an artifact and not unsound, and the judge has to be able to tell those apart."""
     rendered = env.get_template("cvlr_property_judge_system_prompt.j2").render(
         cvlr_versions="cvlr 0.6.1"
     )
 
     assert "The absence of a lemma is not itself a finding" in rendered
-    assert "solver portfolio" in rendered
     # And what it does cost is still named, so this is not a blanket permission.
     assert "not an unsound one" in rendered and "weaker" in rendered
 

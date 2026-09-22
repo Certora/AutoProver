@@ -43,10 +43,9 @@ The module is held in a buffer reached through `get_harness` / `put_harness`. A 
   with an unconstrained stand-in rather than analyze it. The remedy for a rule that comes back with
   no verdict because the pointer analysis refused something on one of its paths. Unsound by
   construction, so it is for code your properties do not depend on; it invalidates the prover stamp.
-* `adjust_prover_config(edits, why)` — change the loop bound, turn the nonlinear solver portfolio
-  on, or assume loops finish. The three prover settings you can move; the first two are sound and
-  the third is not. Each sits at the end of a ladder below, and any of them invalidates the prover
-  stamp.
+* `adjust_prover_config(edits, why)` — change the loop bound, or assume loops finish. The two
+  prover settings you can move; the first is sound and the second is not. Each sits at the end of
+  the loop ladder below, and either invalidates the prover stamp.
 * `code_editor(request)` — ask a dedicated editor to change the *program's* own source. You do not
   edit the program yourself. Describe the problem you hit, not the edit you want; what comes back is
   already compiled, reviewed and part of your build. Every change is carried into the report with
@@ -76,10 +75,9 @@ Read it rather than assuming a default. `loop_iter` is the loop bound the next s
 `rule_sanity` decides whether vacuity is reported, `smt_timeout` is how long a single query gets, and
 `prover_args` carries the solver and memory-model flags.
 
-`adjust_prover_config` changes three of these and nothing else: the **loop bound**, a **nonlinear
-solver portfolio** (an adaptive backend, the arithmetic theories, and twelve solvers on different
-seeds), and **`optimistic_loop`**. The first two are sound — they decide how the prover spends its
-time, never what a green verdict means.
+`adjust_prover_config` changes two of these and nothing else: the **loop bound** and
+**`optimistic_loop`**. The loop bound is sound — it decides how the prover spends its time, never
+what a green verdict means.
 
 `optimistic_loop` is not, and it is on the list for one reason: the sound remedies for a loop run
 out before the problem does. A trip count the analysis cannot fix is answered by none of them, and
@@ -90,13 +88,13 @@ it.
 
 Still not yours, and for these say which setting is in your way and why — a `record_skip` with
 something actionable in it, not a workaround: a `rule_sanity` downgrade stops vacuity being
-reported, and the memory-model flags are unsound by name and measurably fix nothing.
+reported, the memory-model flags are unsound by name and measurably fix nothing, and no other
+prover flag is yours to set.
 
-**All three come at the end of a ladder, and the ladders below say so.** Not because they are expensive
-— the portfolio is measured below and it is not — but because a rule that will not finish is usually
-telling you something about the rule, and a setting that makes the symptom go away leaves you
-shipping a proof you understand less well. The conf you change ships with the deliverable, so the
-`why` you give is what a reader gets.
+**Both come at the end of the loop ladder, and the ladder below says so.** A rule that will not
+finish is usually telling you something about the rule, and a setting that makes the symptom go
+away leaves you shipping a proof you understand less well. The conf you change ships with the
+deliverable, so the `why` you give is what a reader gets.
 
 ## When the program itself is in the way, ask the editor
 
