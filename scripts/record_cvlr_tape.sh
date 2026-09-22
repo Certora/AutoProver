@@ -44,14 +44,14 @@ command -v cargo >/dev/null || fail "cargo is not on PATH"
 cargo certora-sbf --version >/dev/null 2>&1 \
   || fail "\`cargo certora-sbf\` is not installed (cargo install cargo-certora-sbf)"
 
-# The platform-tools release the scenario's conf asks for. A confined build cannot fetch it.
+# The platform-tools release every build uses. A confined build cannot fetch it.
 uv run --no-sync python - <<'PY' || exit 1
 import sys
 from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, platform_tools_installed
-from composer.spec.cvlr.conf import TEMPLATE_BASE, tools_version
+from composer.spec.cvlr.conf import PLATFORM_TOOLS_VERSION
 
-wanted = tools_version(dict(TEMPLATE_BASE))
-if wanted is not None and not platform_tools_installed(wanted):
+wanted = PLATFORM_TOOLS_VERSION
+if not platform_tools_installed(wanted):
     sys.exit(
         f"record_cvlr_tape: Solana platform tools {wanted} are not installed under "
         f"{PLATFORM_TOOLS_ROOT}. Install once, unconfined: "

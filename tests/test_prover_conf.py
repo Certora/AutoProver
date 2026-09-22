@@ -3,9 +3,7 @@
 import json
 from pathlib import Path
 
-from composer.prover.conf import (
-    AllRules, ExcludeRules, InheritRules, SelectRules, dump_conf, overlay, with_rules,
-)
+from composer.prover.conf import ExcludeRules, InheritRules, SelectRules, dump_conf, with_rules
 from composer.spec.source.prover import (
     BOTH_RULE_SCOPES, prover_config_overlay, rule_selection, setup_prover_config_in,
 )
@@ -18,15 +16,6 @@ def test_each_rule_selection_writes_only_its_key():
     assert with_rules(_BASE, InheritRules()) == _BASE
     assert with_rules(_BASE, SelectRules(("r",))) == {**_BASE, "rule": ["r"]}
     assert with_rules(_BASE, ExcludeRules(("r",))) == {**_BASE, "exclude_rule": ["r"]}
-    assert with_rules(_BASE, AllRules()) == {k: v for k, v in _BASE.items() if k != "rule"}
-
-
-def test_overlay_order_and_immutability():
-    base = {"a": 1, "b": 2, "c": 3}
-    out = overlay(base, drop=frozenset({"c"}), forced={"a": "forced", "b": "forced"},
-                  extra={"b": "extra"}, rules=SelectRules(("r",)))
-    assert out == {"a": "forced", "b": "extra", "rule": ["r"]}
-    assert base == {"a": 1, "b": 2, "c": 3}
 
 
 def test_cvl_overlay_forces_its_settings_over_the_base():

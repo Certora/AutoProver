@@ -509,7 +509,7 @@ only what speaks to the Prover is CVLR's:
 | [cargo/session.py](../composer/cargo/session.py) | The warm workdir + the fast tier. Confined `cargo check`, unconfined `cargo fetch` |
 | [cargo/sbf.py](../composer/cargo/sbf.py) | The slow tier (`cargo certora-sbf`), its build manifest, and the build script handed to the prover |
 | [cargo/toolchain.py](../composer/cargo/toolchain.py) | `PROJECT_TOOLCHAINS["solana"]` — the registry's first entry |
-| [spec/cvlr/conf.py](../composer/spec/cvlr/conf.py) | Reading a project's conf (JSON5) and layering a run onto it |
+| [spec/cvlr/conf.py](../composer/spec/cvlr/conf.py) | Building every conf: fixed settings, the `ProverSettings` the author may change, and one run's keys. A project's own conf is not read |
 | [spec/cvlr/crates.py](../composer/spec/cvlr/crates.py) | §5.5: which CVLR the build resolves, and where it disagrees with the corpus's reference set |
 | [spec/cvlr/prover.py](../composer/spec/cvlr/prover.py) | Build → configure → submit, on the shared `run_prover` |
 
@@ -2070,10 +2070,9 @@ The container had no Rust at all — `console-autoprove` and `console-foundry` n
 rustup with a pinned stable, `cargo install cargo-certora-sbf`, and the platform-tools release
 unpacked at build time. The last of those is the one that is not an optimization. §3 item 3 runs
 every build confined, and a confined build has no network and a read-only tools cache, so **a
-version the image lacks cannot be fetched at run time — it is a rebuild.** A project pinning its own
-`cargo_tools_version` is exactly that case, and [test_cvlr_image.py](../tests/test_cvlr_image.py)
-ties the image's default to `TEMPLATE_BASE`'s so the *default* can never be a version the image does
-not hold.
+version the image lacks cannot be fetched at run time — it is a rebuild.** Every build uses
+`PLATFORM_TOOLS_VERSION`, and [test_cvlr_image.py](../tests/test_cvlr_image.py) ties the image's
+version to it so that can never be a version the image does not hold.
 
 Three things the confined case needs that no earlier caller did, all of them silent when absent:
 

@@ -30,6 +30,7 @@ Marked ``expensive``: it submits a real cloud job, and it needs a Rust and Solan
 It skips — naming the missing piece — rather than failing when one is absent.
 """
 
+import json
 import os
 import shutil
 from pathlib import Path
@@ -41,14 +42,15 @@ from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, Built, platform_tools_instal
 from composer.cargo.session import CargoSession, Warmed
 from composer.prover.core import make_prover_options
 from composer.sandbox.config import SandboxConfig
-from composer.prover.conf import SelectRules
-from composer.spec.cvlr.conf import load_base, tools_version
+from composer.prover.conf import SelectRules, dump_conf
+from composer.spec.cvlr.conf import PLATFORM_TOOLS_VERSION
 from composer.spec.cvlr.prover import (
     BuildRejected,
     Checked,
     Submission,
     SubmissionFailed,
-    submit,
+    prepare_submission,
+    run_submission,
 )
 from composer.spec.cvlr.rules import rule_names
 from composer.spec.cvlr.scaffold import SPECS_DIR, apply, plan_scaffold
@@ -115,14 +117,8 @@ async def test_a_rule_that_reaches_an_anchor_program_can_be_analyzed(project, ca
     declared = rule_names(PROBE.read_text())
     assert set(declared) == set(TIERS), declared
 
-    base = load_base(None)
-    # Sanity off. It doubles the work per rule and answers a different question: this run asks
-    # whether the prover can analyze an Anchor call graph at all, and the weakest tier asserts a
-    # tautology on purpose so that a [3006] on it would be unambiguous.
-    base = {**base, "rule_sanity": "none"}
-
-    wanted = tools_version(base)
-    if wanted is not None and not platform_tools_installed(wanted):
+    wanted = PLATFORM_TOOLS_VERSION
+    if not platform_tools_installed(wanted):
         pytest.skip(f"Solana platform tools {wanted} are not installed under {PLATFORM_TOOLS_ROOT}")
 
     session = CargoSession(workdir=project, sandbox=SandboxConfig.from_env())
@@ -133,17 +129,27 @@ async def test_a_rule_that_reaches_an_anchor_program_can_be_analyzed(project, ca
     fast = await session.check(package=PACKAGE, features=("certora",))
     assert fast.ok, fast.verdict
 
-    outcome = await submit(
+    prepared = await prepare_submission(
         session,
         Submission(
             manifest_path=package.root / "Cargo.toml",
-            base_conf=base,
             rules=SelectRules(TIERS),
             stem="anchor_reach",
             msg="AutoProver Anchor reach probe",
         ),
-        prover_opts=make_prover_options(cloud=True, app="solana"),
     )
+    if isinstance(prepared, BuildRejected):
+        outcome = prepared
+    else:
+        # Sanity off. It doubles the work per rule and answers a different question: this run asks
+        # whether the prover can analyze an Anchor call graph at all, and the weakest tier asserts a
+        # tautology on purpose so that a [3006] on it would be unambiguous. No setting turns it
+        # off, so the probe edits the file it is about to submit.
+        conf = {**json.loads(prepared.conf_path.read_text()), "rule_sanity": "none"}
+        prepared.conf_path.write_text(dump_conf(conf))
+        outcome = await run_submission(
+            session, prepared, prover_opts=make_prover_options(cloud=True, app="solana")
+        )
 
     match outcome:
         case BuildRejected(build=build):

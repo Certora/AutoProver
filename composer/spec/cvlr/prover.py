@@ -36,14 +36,13 @@ from composer.prover.core import (
     UnanalyzedCexHandler,
     run_prover,
 )
-from composer.prover.conf import Conf, InheritRules, RuleSelection, dump_conf
+from composer.prover.conf import InheritRules, RuleSelection, dump_conf
 from composer.spec.cvlr.conf import (
     DEFAULT_FEATURE,
+    PLATFORM_TOOLS_VERSION,
+    ProverSettings,
     RunOverlay,
-    cargo_features,
-    sbf_arch,
     solana_conf,
-    tools_version,
 )
 
 _log = logging.getLogger(__name__)
@@ -94,20 +93,18 @@ class Submission:
     """Everything one submission needs that is not the session it runs in.
 
     ``manifest_path`` names the crate to build — the program's ``Cargo.toml``, not the workspace's,
-    since ``cargo certora-sbf`` builds one package's library. ``base_conf`` is the project's own
-    prover configuration, already parsed; the run-owned keys on top of it are
-    :data:`~composer.spec.cvlr.conf.OVERLAY_OWNED_KEYS` and nothing else.
+    since ``cargo certora-sbf`` builds one package's library.
     """
 
     manifest_path: Path
-    base_conf: Conf
+    settings: ProverSettings = ProverSettings()
     rules: RuleSelection = dataclasses.field(default_factory=InheritRules)
     msg: str = ""
     #: Conf file stem, which is also this submission's identity on disk.
     stem: str = "cvlr"
-    #: Cargo features for the build. Empty means "whatever the base conf's ``cargo_features`` says,
-    #: or ``certora``" — resolved in :func:`prepare_submission` so the gate build and the prover's
-    #: rerun cannot end up with different feature sets. An authoring run always names two: the
+    #: Cargo features for the build. Empty means ``certora`` — resolved in
+    #: :func:`prepare_submission` so the gate build and the prover's rerun cannot end up with
+    #: different feature sets. An authoring run always names two: the
     #: harness feature and the unit's own, which is what selects one unit's rules out of a shared
     #: crate (``docs/single-working-tree.md`` §2.1).
     features: tuple[str, ...] = ()
@@ -116,24 +113,18 @@ class Submission:
     summaries: tuple[Path, ...] = ()
 
     def resolved_features(self) -> tuple[str, ...]:
-        return self.features or cargo_features(self.base_conf) or (DEFAULT_FEATURE,)
+        return self.features or (DEFAULT_FEATURE,)
 
 
 async def build_for_submission(
     session: CargoSession, submission: Submission, *, timeout_s: int = BUILD_TIMEOUT_S
 ) -> SbfRun:
-    """The slow tier, configured from the conf.
-
-    The conf's ``cargo_tools_version`` and ``solana_sbf_arch`` reach the build from here rather than
-    from the prover. On the CLI's own from-sources path they are its build's settings; since this
-    backend owns the build, honoring them here is what keeps a project's declaration meaningful
-    instead of silently inert."""
+    """The slow tier."""
     return await sbf_build(
         session,
         manifest_path=submission.manifest_path,
         features=submission.resolved_features(),
-        tools_version=tools_version(submission.base_conf),
-        arch=sbf_arch(submission.base_conf),
+        tools_version=PLATFORM_TOOLS_VERSION,
         timeout_s=timeout_s,
     )
 
@@ -150,12 +141,11 @@ async def write_submission(
         session,
         manifest_path=submission.manifest_path,
         features=submission.resolved_features(),
-        tools_version=tools_version(submission.base_conf),
-        arch=sbf_arch(submission.base_conf),
+        tools_version=PLATFORM_TOOLS_VERSION,
         timeout_s=timeout_s,
     )
     conf = solana_conf(
-        submission.base_conf,
+        submission.settings,
         RunOverlay(
             build_script=script,
             rules=submission.rules,

@@ -174,7 +174,6 @@ def sbf_argv(
     manifest_path: Path,
     features: tuple[str, ...] = (),
     tools_version: str | None = None,
-    arch: str | None = None,
 ) -> list[str]:
     """``cargo certora-sbf`` arguments, shared by the direct build and the build script.
 
@@ -201,8 +200,6 @@ def sbf_argv(
     ]
     if tools_version is not None:
         args += ["--tools-version", tools_version]
-    if arch is not None:
-        args += ["--arch", arch]
     if features:
         args += ["--features", " ".join(features)]
     return args
@@ -258,7 +255,6 @@ async def sbf_build(
     manifest_path: Path,
     features: tuple[str, ...] = (),
     tools_version: str | None = None,
-    arch: str | None = None,
     timeout_s: int = BUILD_TIMEOUT_S,
 ) -> SbfRun:
     """Run the slow tier in ``session``'s workdir, confined.
@@ -271,9 +267,7 @@ async def sbf_build(
         raise PlatformToolsMissing(tools_version, PLATFORM_TOOLS_ROOT)
     if tools_version is not None and session.confined:
         await _warm_for_the_build_cargo(session, tools_version, manifest_path)
-    argv = sbf_argv(
-        manifest_path=manifest_path, features=features, tools_version=tools_version, arch=arch
-    )
+    argv = sbf_argv(manifest_path=manifest_path, features=features, tools_version=tools_version)
     started = time.perf_counter()
     built = await session.run_confined("cargo", argv, timeout_s=timeout_s)
     elapsed = int((time.perf_counter() - started) * 1000)
@@ -330,7 +324,6 @@ async def write_build_script(
     manifest_path: Path,
     features: tuple[str, ...] = (),
     tools_version: str | None = None,
-    arch: str | None = None,
     timeout_s: int = BUILD_TIMEOUT_S,
 ) -> Path:
     """Write the ``build_script`` the conf points at, and return its path.
@@ -353,7 +346,6 @@ async def write_build_script(
                         manifest_path=manifest_path,
                         features=features,
                         tools_version=tools_version,
-                        arch=arch,
                     ),
                 ],
             },

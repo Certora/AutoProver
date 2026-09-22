@@ -24,7 +24,7 @@ import pytest
 
 from composer.authoring.state import SkippedProperty, make_validation_stamper, spec_digest
 from composer.prover.conf import SelectRules
-from composer.spec.cvlr.conf import RunOverlay, solana_conf
+from composer.spec.cvlr.conf import ProverSettings, RunOverlay, solana_conf
 from composer.spec.cvlr.prover import Submission as CvlrSubmission
 from composer.spec.cvlr.harness import (
     DELIVERABLE_DIR,
@@ -356,7 +356,7 @@ def _verify_state(draft: str) -> dict:
         "rule_subjects": [],
         "summaries": [],
         "munges": [],
-        "conf": {},
+        "prover_settings": ProverSettings(),
         "required_validations": [],
         "validations": {},
         "failed": None,
@@ -379,13 +379,12 @@ def _adjust(state: dict, edits: list, why: str = "tried bounding the operands fi
     return tool.run()
 
 
-def test_raising_the_loop_bound_writes_it_as_a_conf_spells_an_integer():
+def test_raising_the_loop_bound_sets_it():
     from composer.spec.cvlr.verify import SetLoopIter
 
-    state = {**_verify_state(DRAFT), "conf": {"loop_iter": "2"}}
-    out = _adjust(state, [SetLoopIter(type="loop_iter", iterations=4)])
+    out = _adjust(_verify_state(DRAFT), [SetLoopIter(type="loop_iter", iterations=4)])
     assert not isinstance(out, str), out
-    assert out.update["conf"]["loop_iter"] == "4"
+    assert out.update["prover_settings"].loop_iter == 4
 
 
 def test_the_loop_bound_is_not_capped_following_the_cvl_backends_precedent():
@@ -394,26 +393,27 @@ def test_the_loop_bound_is_not_capped_following_the_cvl_backends_precedent():
     a bound the author cannot exceed would turn a cost trade into a refusal."""
     from composer.spec.cvlr.verify import SetLoopIter
 
-    out = _adjust({**_verify_state(DRAFT), "conf": {}}, [SetLoopIter(type="loop_iter", iterations=9)])
+    out = _adjust(_verify_state(DRAFT), [SetLoopIter(type="loop_iter", iterations=9)])
     assert not isinstance(out, str), out
-    assert out.update["conf"]["loop_iter"] == "9"
+    assert out.update["prover_settings"].loop_iter == 9
 
 
 def test_a_loop_bound_below_one_is_refused():
     from composer.spec.cvlr.verify import SetLoopIter
 
-    out = _adjust({**_verify_state(DRAFT), "conf": {}}, [SetLoopIter(type="loop_iter", iterations=0)])
+    out = _adjust(_verify_state(DRAFT), [SetLoopIter(type="loop_iter", iterations=0)])
     assert isinstance(out, str) and "not a bound" in out
 
 
 def test_the_solver_portfolio_goes_on_and_reports_the_whole_conf_back():
     from composer.spec.cvlr.verify import SetNonlinearSolverPortfolio
 
-    state = {**_verify_state(DRAFT), "conf": {"prover_args": ["-solanaTACMathInt true"]}}
-    out = _adjust(state, [SetNonlinearSolverPortfolio(type="nonlinear_solver_portfolio", enabled=True)])
+    out = _adjust(
+        _verify_state(DRAFT),
+        [SetNonlinearSolverPortfolio(type="nonlinear_solver_portfolio", enabled=True)],
+    )
     assert not isinstance(out, str), out
-    args = out.update["conf"]["prover_args"]
-    assert "-smt_useNIA true" in args and "-solanaTACMathInt true" in args
+    assert out.update["prover_settings"].solver_portfolio
     # The author is shown what it now is, not told that something changed.
     assert "smt_useNIA" in out.update["messages"][0].content
 
@@ -421,8 +421,7 @@ def test_the_solver_portfolio_goes_on_and_reports_the_whole_conf_back():
 def test_a_setting_that_is_already_what_you_asked_for_is_refused():
     from composer.spec.cvlr.verify import SetLoopIter
 
-    out = _adjust({**_verify_state(DRAFT), "conf": {"loop_iter": "2"}},
-                  [SetLoopIter(type="loop_iter", iterations=2)])
+    out = _adjust(_verify_state(DRAFT), [SetLoopIter(type="loop_iter", iterations=2)])
     assert isinstance(out, str) and "already 2" in out
 
 
@@ -433,23 +432,20 @@ def test_optimistic_loop_goes_on_and_the_whole_conf_comes_back():
     U9)."""
     from composer.spec.cvlr.verify import SetOptimisticLoop
 
-    state = {**_verify_state(DRAFT), "conf": {"loop_iter": "2", "optimistic_loop": False}}
-    out = _adjust(state, [SetOptimisticLoop(type="optimistic_loop", enabled=True)])
+    out = _adjust(_verify_state(DRAFT), [SetOptimisticLoop(type="optimistic_loop", enabled=True)])
     assert not isinstance(out, str), out
-    assert out.update["conf"]["optimistic_loop"] is True
+    assert out.update["prover_settings"].optimistic_loop
     # Unchanged, because the two are answers to different halves of the same symptom.
-    assert out.update["conf"]["loop_iter"] == "2"
+    assert out.update["prover_settings"].loop_iter == 2
+    assert '"optimistic_loop": true' in out.update["messages"][0].content
 
 
 def test_optimistic_loop_already_on_is_refused():
-    """Including when the project's own conf spelled it as a string, which is how a hand-written
-    conf spells `loop_iter` and so is a spelling one may well arrive in."""
     from composer.spec.cvlr.verify import SetOptimisticLoop
 
-    for spelling in (True, "true"):
-        out = _adjust({**_verify_state(DRAFT), "conf": {"optimistic_loop": spelling}},
-                      [SetOptimisticLoop(type="optimistic_loop", enabled=True)])
-        assert isinstance(out, str) and "already on" in out, spelling
+    state = {**_verify_state(DRAFT), "prover_settings": ProverSettings(optimistic_loop=True)}
+    out = _adjust(state, [SetOptimisticLoop(type="optimistic_loop", enabled=True)])
+    assert isinstance(out, str) and "already on" in out
 
 
 def test_the_edits_apply_together_or_not_at_all():
@@ -457,15 +453,13 @@ def test_the_edits_apply_together_or_not_at_all():
     deliverable, and with this key in it every verdict in the unit is conditional."""
     from composer.spec.cvlr.verify import SetLoopIter, SetOptimisticLoop
 
-    state = {**_verify_state(DRAFT), "conf": {"loop_iter": "2"}}
     out = _adjust(
-        state,
+        _verify_state(DRAFT),
         [SetLoopIter(type="loop_iter", iterations=4),
          SetOptimisticLoop(type="optimistic_loop", enabled=True)],
     )
     assert not isinstance(out, str), out
-    assert out.update["conf"]["loop_iter"] == "4"
-    assert out.update["conf"]["optimistic_loop"] is True
+    assert out.update["prover_settings"] == ProverSettings(loop_iter=4, optimistic_loop=True)
 
 
 def test_an_unexplained_config_change_is_refused():
@@ -473,8 +467,7 @@ def test_an_unexplained_config_change_is_refused():
     weigh — the same trade `summarize_for_prover` and every munge make."""
     from composer.spec.cvlr.verify import SetLoopIter
 
-    out = _adjust({**_verify_state(DRAFT), "conf": {}},
-                  [SetLoopIter(type="loop_iter", iterations=3)], why="  ")
+    out = _adjust(_verify_state(DRAFT), [SetLoopIter(type="loop_iter", iterations=3)], why="  ")
     assert isinstance(out, str) and "non-empty `why`" in out
 
 
@@ -482,22 +475,13 @@ def test_edits_apply_together_or_not_at_all():
     """The second edit is a no-op refusal, and the first must not have landed."""
     from composer.spec.cvlr.verify import SetLoopIter, SetNonlinearSolverPortfolio
 
-    state = {**_verify_state(DRAFT), "conf": {"loop_iter": "2", "prover_args": []}}
+    state = _verify_state(DRAFT)
     out = _adjust(state, [
         SetLoopIter(type="loop_iter", iterations=4),
         SetNonlinearSolverPortfolio(type="nonlinear_solver_portfolio", enabled=False),
     ])
     assert isinstance(out, str) and "already off" in out
-    assert state["conf"]["loop_iter"] == "2"
-
-
-def test_the_editable_keys_cannot_be_shadowed_by_the_run_overlay():
-    """An accepted edit to an overlay-owned key would be reported as applied and then dropped before
-    submission. The module-level assertion is the guard; this states what it guards."""
-    from composer.spec.cvlr.conf import OVERLAY_OWNED_KEYS
-    from composer.spec.cvlr.verify import _CONF_EDIT_KEYS
-
-    assert not (_CONF_EDIT_KEYS & OVERLAY_OWNED_KEYS)
+    assert state["prover_settings"] == ProverSettings()
 
 
 def test_a_config_change_invalidates_the_prover_stamp():
@@ -505,10 +489,10 @@ def test_a_config_change_invalidates_the_prover_stamp():
     another, which is what `tuning_history` carrying the conf buys."""
     from composer.spec.cvlr.verify import SetLoopIter
 
-    before = {**_verify_state(DRAFT), "conf": {"loop_iter": "2"}}
+    before = _verify_state(DRAFT)
     out = _adjust(before, [SetLoopIter(type="loop_iter", iterations=4)])
     assert not isinstance(out, str), out
-    after = {**before, "conf": out.update["conf"]}
+    after = {**before, "prover_settings": out.update["prover_settings"]}
     assert tuning_history(before) != tuning_history(after)
 
 
@@ -524,7 +508,7 @@ async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeyp
     conf machinery is correct, the build is correct, and the bug lives entirely in what is handed
     across.
 
-    Also pins *which* selection. ``AllRules`` would look right and be wrong — the artifact declares
+    Also pins *which* selection. Every rule would look right and be wrong — the artifact declares
     every unit's rules, so it would grade this unit on its siblings' drafts.
     """
     import contextlib
@@ -539,7 +523,7 @@ async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeyp
 
     async def fake_prepare(session, submission, **kwargs):
         captured["rules"] = submission.rules
-        captured["conf"] = submission.base_conf
+        captured["settings"] = submission.settings
         raise _StopProbe
 
     monkeypatch.setattr(verify_mod, "prepare_submission", fake_prepare)
@@ -551,16 +535,16 @@ async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeyp
             stage=_stubbed_stage,
             build_slot=contextlib.nullcontext,
         ),
-        # What the run started from. The state below carries a different conf, which is what a
-        # conf edit would have produced and what the submission must actually use.
-        submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), base_conf={}),
+        # What the run started from. The state below carries different settings, which is what a
+        # settings edit would have produced and what the submission must actually use.
+        submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml")),
         prover_opts=None,
         analysis=None,
         stamper=None,
     )
     token = verify_mod.VerifyRules._dep_ctx.set(deps)
     try:
-        state = {**_verify_state(_DRAFT_TWO_RULES), "conf": {"loop_iter": "5"}}
+        state = {**_verify_state(_DRAFT_TWO_RULES), "prover_settings": ProverSettings(loop_iter=5)}
         tool = verify_mod.VerifyRules(state=state, tool_call_id="tc")
         with pytest.raises(_StopProbe):
             await tool.run()
@@ -570,12 +554,14 @@ async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeyp
     assert captured["rules"] == SelectRules(
         ("rule_balance_conserved", "rule_only_authority_withdraws")
     )
-    # The conf comes from state, not from the deps the run was constructed with: it is the author's
-    # to change, and a submission built from the starting copy would send the old settings while
-    # `version_history` had already recorded the new ones.
-    assert captured["conf"] == {"loop_iter": "5"}
+    # The settings come from state, not from the deps the run was constructed with: they are the
+    # author's to change, and a submission built from the starting copy would send the old settings
+    # while `version_history` had already recorded the new ones.
+    assert captured["settings"] == ProverSettings(loop_iter=5)
     # And the selection actually reaches the conf as a `rule` entry.
-    conf = solana_conf({}, RunOverlay(build_script="/w/b.py", rules=captured["rules"]))
+    conf = solana_conf(
+        ProverSettings(), RunOverlay(build_script=Path("/w/b.py"), rules=captured["rules"])
+    )
     assert conf["rule"] == ["rule_balance_conserved", "rule_only_authority_withdraws"]
 
 
@@ -610,11 +596,7 @@ def test_the_default_conf_enables_vacuity_checking():
     not be smoothed away, and the same choice means the gate has no notion of rule *strength*.
     Vacuity checking is what supplies it, both public examples enable it, and this default had not.
     """
-    from composer.spec.cvlr.conf import TEMPLATE_BASE, solana_conf, RunOverlay
-
-    assert TEMPLATE_BASE["rule_sanity"] == "basic"
-    # And it survives into a submission's conf rather than being dropped as run-owned.
-    conf = solana_conf(dict(TEMPLATE_BASE), RunOverlay(build_script="/w/b.py"))
+    conf = solana_conf(ProverSettings(), RunOverlay(build_script=Path("/w/b.py")))
     assert conf["rule_sanity"] == "basic"
 
 

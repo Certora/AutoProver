@@ -48,7 +48,7 @@ from composer.authoring.state import (
     validate_check_mapping,
 )
 from composer.spec.context import CacheKey, CvlrGeneration, CvlrJudge
-from composer.spec.cvlr.conf import DEFAULT_FEATURE, conf_history
+from composer.spec.cvlr.conf import DEFAULT_FEATURE, ProverSettings, conf_history
 from composer.spec.cvlr.munge import Munge, merge_munges, munge_history
 from composer.spec.cvlr.rules import rule_names
 from composer.spec.cvlr.tree import munge_diff
@@ -174,8 +174,8 @@ def validate_rule_subjects(subjects: list[RuleSubject], draft: str) -> str | Non
     return "\n".join(errors) if errors else None
 
 
-def _latest_conf(_current: dict, update: dict) -> dict:
-    """Last write wins. The conf edit tool is whole-document, so there is nothing to merge."""
+def _latest_settings(_current: ProverSettings, update: ProverSettings) -> ProverSettings:
+    """Last write wins. The settings edit tool writes every field, so there is nothing to merge."""
     return update
 
 
@@ -189,15 +189,14 @@ class CvlrGenerationExtra(AuthoringExtra):
     #: Verification-only edits the editor made to the program's own source on this unit's behalf,
     #: in the order applied. Reduced for the same reason ``summaries`` is.
     munges: Annotated[list[Munge], merge_munges]
-    #: The prover conf this unit submits under — the project's own where it keeps one, else the
-    #: recommended starting point's (:func:`~composer.spec.cvlr.conf.load_base`). Per-unit rather
-    #: than per-run because the author can change it, and a change one unit makes to answer its own
-    #: timeout has no business reaching a sibling's verdicts.
+    #: The prover settings this unit submits under. Every unit starts from the defaults. Per-unit
+    #: rather than per-run because the author can change them, and a change one unit makes to answer
+    #: its own timeout has no business reaching a sibling's verdicts.
     #:
     #: Reduced last-wins rather than plain: ``adjust_prover_config`` applies every edit in one call
-    #: and writes the whole conf, so two writes in one graph step are two complete confs and the
-    #: later is the live one. Without a reducer that step dies with ``InvalidUpdateError``.
-    conf: Annotated[dict, _latest_conf]
+    #: and writes the whole settings, so two writes in one graph step are two complete settings and
+    #: the later is the live one. Without a reducer that step dies with ``InvalidUpdateError``.
+    prover_settings: Annotated[ProverSettings, _latest_settings]
     expected_failures: Annotated[dict[CheckName, str], merge_expected_failures]
     #: The job link from the most recent prover run that produced results, whether or not it was
     #: all green — a link to a failing run is still the most useful thing a report can offer.
@@ -231,7 +230,7 @@ def tuning_history(state: CvlrGenerationExtra) -> tuple[str, ...]:
     return (
         summary_history(tuple(state["summaries"]))
         + munge_history(tuple(state["munges"]))
-        + conf_history(state["conf"])
+        + conf_history(state["prover_settings"])
     )
 
 

@@ -67,6 +67,7 @@ from composer.diagnostics.budget import (
 )
 from composer.spec.context import CvlrGeneration, CvlrJudge, WorkflowContext
 from composer.spec.cvlr.anchor_surface import read_surface
+from composer.spec.cvlr.conf import settings_conf
 from composer.spec.cvlr.editor import editor_tools
 from composer.spec.cvlr.example import WorkedExample, worked_example
 from composer.spec.cvlr.harness import GeneratedHarness
@@ -615,7 +616,7 @@ async def batch_cvlr_generation(
                     if component
                     else None
                 ),
-                "conf": verify.submission.base_conf,
+                "conf": settings_conf(verify.submission.settings),
             }
         ).render_to
     ]
@@ -681,7 +682,7 @@ async def batch_cvlr_generation(
         rule_subjects=[],
         summaries=[],
         munges=[],
-        conf=verify.submission.base_conf,
+        prover_settings=verify.submission.settings,
         validations={},
         expected_failures={},
         failed=None,

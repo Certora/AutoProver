@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from composer.spec.cvlr.conf import TEMPLATE_BASE, tools_version
+from composer.spec.cvlr.conf import PLATFORM_TOOLS_VERSION
 
 _SCRIPTS = Path(__file__).parent.parent / "scripts"
 _BASE_DOCKERFILE = _SCRIPTS / "Dockerfile"
@@ -34,12 +34,11 @@ def _arg(name: str) -> str:
     return match[1]
 
 
-def test_the_image_bakes_the_tools_version_the_conf_template_asks_for():
+def test_the_image_bakes_the_tools_version_every_build_uses():
     """A confined build cannot fetch platform tools — no network, and the cache is granted
-    read-only — so the version the image holds is the version a run can use. A project that pins a
-    different one in its own base conf is a rebuild, and ``PlatformToolsMissing`` says so; a
-    *default* the image does not hold is nobody's decision and fails every run."""
-    assert _arg("SOLANA_TOOLS_VERSION") == tools_version(dict(TEMPLATE_BASE))
+    read-only — so the version the image holds is the version a run can use. A version the image
+    does not hold fails every run."""
+    assert _arg("SOLANA_TOOLS_VERSION") == PLATFORM_TOOLS_VERSION
 
 
 def test_the_base_image_carries_no_rust_toolchain():

@@ -22,14 +22,21 @@ import os
 import shutil
 from pathlib import Path
 
+import json5
 import pytest
 
 from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, Built, platform_tools_installed
 from composer.cargo.session import CargoSession, Warmed
 from composer.prover.core import make_prover_options
-from composer.prover.conf import read_conf
-from composer.spec.cvlr.conf import tools_version
-from composer.spec.cvlr.prover import BuildRejected, Checked, Submission, submit
+from composer.prover.conf import dump_conf
+from composer.spec.cvlr.conf import PLATFORM_TOOLS_VERSION
+from composer.spec.cvlr.prover import (
+    BuildRejected,
+    Checked,
+    Submission,
+    prepare_submission,
+    run_submission,
+)
 
 pytestmark = [pytest.mark.expensive, pytest.mark.asyncio]
 
@@ -99,13 +106,17 @@ def workdir(tmp_path: Path) -> Path:
 async def test_the_examples_project_verifies_exactly_as_its_authors_expect(
     workdir, cvlr_confinement, capsys
 ):
-    base_conf = read_conf(workdir / EXAMPLE / "certora" / "conf" / "Default.conf")
+    # The authors' own conf, since their expectations were recorded under it. JSON5: it has comments
+    # and trailing commas.
+    authors_conf = json5.loads(
+        (workdir / EXAMPLE / "certora" / "conf" / "Default.conf").read_text()
+    )
     expected = json.loads(
         (workdir / EXAMPLE / "certora" / "conf" / "expectedDefault.json").read_text()
     )["rules"]
 
-    wanted_tools = tools_version(base_conf)
-    if wanted_tools is not None and not platform_tools_installed(wanted_tools):
+    wanted_tools = PLATFORM_TOOLS_VERSION
+    if not platform_tools_installed(wanted_tools):
         pytest.skip(
             f"Solana platform tools {wanted_tools} are not installed under {PLATFORM_TOOLS_ROOT}"
         )
@@ -120,14 +131,23 @@ async def test_the_examples_project_verifies_exactly_as_its_authors_expect(
 
     submission = Submission(
         manifest_path=workdir / EXAMPLE / "Cargo.toml",
-        base_conf=base_conf,
         stem="first_example",
         msg="AutoProver CVLR plumbing gate",
     )
-    outcome = await submit(
-        session, submission, prover_opts=make_prover_options(cloud=True, app="solana")
+    prepared = await prepare_submission(session, submission)
+    assert not isinstance(prepared, BuildRejected), prepared
+    # Our build script and message on the authors' settings. `files` names their prebuilt `.so`,
+    # which the prover refuses beside a build script.
+    ours = json.loads(prepared.conf_path.read_text())
+    conf = {
+        **{k: v for k, v in authors_conf.items() if k != "files"},
+        "build_script": ours["build_script"],
+        "msg": ours["msg"],
+    }
+    prepared.conf_path.write_text(dump_conf(conf))
+    outcome = await run_submission(
+        session, prepared, prover_opts=make_prover_options(cloud=True, app="solana")
     )
-    assert not isinstance(outcome, BuildRejected), outcome
     assert isinstance(outcome, Checked), outcome
     assert isinstance(outcome.build.verdict, Built)
 

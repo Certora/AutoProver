@@ -53,7 +53,7 @@ from composer.prover.core import make_prover_options
 from composer.rag.models import DefaultEmbedder
 from composer.rustapp.frontend import GenericRustConsoleHandler
 from composer.spec.context import SourceCode, WorkflowContext
-from composer.spec.cvlr.conf import TEMPLATE_BASE, tools_version
+from composer.spec.cvlr.conf import PLATFORM_TOOLS_VERSION
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness
 from composer.spec.cvlr.pipeline import CvlrBackend
 from composer.pipeline.ptypes import Curtailed, Delivered
@@ -99,8 +99,8 @@ def project(tmp_path: Path) -> Path:
     _shipped_cli_only()
     if shutil.which("cargo") is None:
         pytest.skip("cargo is not on PATH")
-    wanted = tools_version(dict(TEMPLATE_BASE))
-    if wanted is not None and not platform_tools_installed(wanted):
+    wanted = PLATFORM_TOOLS_VERSION
+    if not platform_tools_installed(wanted):
         pytest.skip(f"Solana platform tools {wanted} are not installed under {PLATFORM_TOOLS_ROOT}")
     destination = tmp_path / _SCENARIO.name
     shutil.copytree(_SCENARIO, destination)

@@ -9,7 +9,7 @@ component.
 import pytest
 
 from composer.spec.cvlr.anchor_surface import Param, read_surface
-from composer.spec.cvlr.conf import TEMPLATE_BASE
+from composer.spec.cvlr.conf import ProverSettings, settings_conf
 from composer.spec.cvlr.example import (
     ExampleAccount,
     WorkedExample,
@@ -208,7 +208,7 @@ def _render(example: WorkedExample | None, conf: dict | None = None) -> str:
         module="exchange_rate",
         cvlr_versions="cvlr 0.6.1",
         example=example,
-        conf=dict(TEMPLATE_BASE) if conf is None else conf,
+        conf=settings_conf(ProverSettings()) if conf is None else conf,
     )
 
 
@@ -336,15 +336,6 @@ def test_the_author_is_shown_the_conf_rather_than_told_about_it() -> None:
     assert "-solanaTACMathInt true" in rendered
     # And the old paraphrase, which asserted a bound the conf may not carry, is gone.
     assert "unrolls loops a fixed number of times" not in rendered
-
-
-def test_a_conf_without_rule_sanity_is_not_described_as_having_it() -> None:
-    """The paraphrase said "keep `rule_sanity` on (the conf does)" unconditionally. A project conf
-    that omits it gets no vacuity report, and an author told otherwise trusts a green rule."""
-    rendered = _told(None, {"loop_iter": "2"})
-
-    assert "(the conf does)" not in rendered
-    assert "check the conf your run was given" in rendered
 
 
 def test_the_judge_is_told_a_rule_without_a_lemma_can_still_be_legitimate() -> None:

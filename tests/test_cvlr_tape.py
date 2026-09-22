@@ -37,7 +37,7 @@ from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, platform_tools_installed
 from composer.diagnostics.timing import RunSummary
 from composer.pipeline.ptypes import Curtailed, Delivered
 from composer.rustapp.frontend import GenericRustConsoleHandler
-from composer.spec.cvlr.conf import TEMPLATE_BASE, tools_version
+from composer.spec.cvlr.conf import PLATFORM_TOOLS_VERSION
 from composer.spec.cvlr.harness import DELIVERABLE_DIR
 from composer.spec.cvlr.rules import rule_names
 from composer.testing.cvlr_tape import TAPE_NAME, run_scenario, stage_scenario
@@ -73,8 +73,8 @@ def project(tmp_path: Path) -> Path:
         pytest.skip(f"no tape at {_TAPE_MODULE} — record one with scripts/record_cvlr_tape.sh")
     if shutil.which("cargo") is None:
         pytest.skip("cargo is not on PATH")
-    wanted = tools_version(dict(TEMPLATE_BASE))
-    if wanted is not None and not platform_tools_installed(wanted):
+    wanted = PLATFORM_TOOLS_VERSION
+    if not platform_tools_installed(wanted):
         pytest.skip(f"Solana platform tools {wanted} are not installed under {PLATFORM_TOOLS_ROOT}")
     return stage_scenario(tmp_path)
 

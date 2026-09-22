@@ -272,13 +272,13 @@ def _author_system_prompt() -> str:
         CvlrAuthorSystemParams,
         _PropertyGenSysTemplate,
     )
-    from composer.spec.cvlr.conf import TEMPLATE_BASE
+    from composer.spec.cvlr.conf import ProverSettings, settings_conf
 
     params: CvlrAuthorSystemParams = {
         "cvlr_versions": "cvlr 0.6.1",
         "module": "spec",
         "example": None,
-        "conf": dict(TEMPLATE_BASE),
+        "conf": settings_conf(ProverSettings()),
     }
     return "\n".join([
         *context_documents(CVLR_BUNDLE),
