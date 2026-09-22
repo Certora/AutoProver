@@ -34,7 +34,6 @@ that an error reproduced in a scaffold this backend wrote is evidence about the 
 somebody checks it against a project the scaffold did not create.
 """
 
-import dataclasses
 import difflib
 import hashlib
 import logging
@@ -43,6 +42,7 @@ import re
 import textwrap
 import tomllib
 from collections.abc import Iterable, Iterator
+from dataclasses import dataclass, replace
 from pathlib import PurePosixPath
 
 from composer.cargo.metadata import Workspace
@@ -53,7 +53,7 @@ from composer.spec.cvlr.rust_source import DERIVE_LIST, body_span, code_position
 _log = logging.getLogger(__name__)
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class ForkOverride:
     """A repository of verification-oriented forks, and the crates in it a target may need.
 
@@ -84,7 +84,7 @@ class ForkOverride:
         return ", ".join(v for v, _ in self.branches)
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class Blocked:
     """A reason the override cannot be applied, phrased for whoever has to resolve it."""
 
@@ -93,7 +93,7 @@ class Blocked:
     resolution: str
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class AlreadySourced:
     """The target already decides where this crate comes from, so nothing was changed.
 
@@ -124,7 +124,7 @@ class AlreadySourced:
         )
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class AlreadyRedirected:
     """This workspace's own ``[patch.crates-io]`` table already names the crate.
 
@@ -156,7 +156,7 @@ def _repo_key(url: str) -> str:
     return url.removeprefix("git+").split("?")[0].split("#")[0].removesuffix(".git").lower()
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class Override:
     """One dependency's replacement, resolved against a particular target."""
 
@@ -180,7 +180,7 @@ class Override:
         )
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class MungePlan:
     """What munging this target would do. Empty when nothing needs it, which is the common case."""
 
@@ -417,7 +417,7 @@ def _wrapped(text: str, width: int = 88) -> list[str]:
 # mechanical edit with a compile gate behind it instead of an agent editing a program.
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class EarlyPanic:
     """Every ``?`` in the function becomes ``.unwrap()``.
 
@@ -437,7 +437,7 @@ class EarlyPanic:
         return "`?` rewritten to `.unwrap()` throughout, so error paths panic and are pruned"
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class MockFn:
     """The function is replaced by a named stand-in.
 
@@ -459,7 +459,7 @@ class MockFn:
         return f"replaced by {self.stand_in}"
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class InlineNever:
     """The function is kept as its own frame rather than being inlined into its callers.
 
@@ -477,7 +477,7 @@ class InlineNever:
         return "kept out of line, so it keeps a symbol the prover can name"
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class HookOnEntry:
     """A call inserted as the function's first statement.
 
@@ -500,7 +500,7 @@ class HookOnEntry:
         return f"calls {self.call} on entry"
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class HookOnExit:
     """A call inserted before the function returns. The exit half of :class:`HookOnEntry`."""
 
@@ -528,7 +528,7 @@ class HookOnExit:
 type MungeKind = EarlyPanic | MockFn | InlineNever | HookOnEntry | HookOnExit
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class FunctionMunge:
     """One verification-only attribute on one of the program's functions, and what turns it on.
 
@@ -623,7 +623,7 @@ def is_project_source(relative: PurePosixPath | str) -> bool:
     return bool(parts) and parts[0] not in NOT_PROJECT_SOURCE
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class NotProjectSource:
     """The path is inside the working tree but is not the project's source.
 
@@ -639,7 +639,7 @@ class NotProjectSource:
         return f"{self.path} is under {self.directory}, which is not the project's source"
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class Munged:
     """The attribute was inserted.
 
@@ -651,7 +651,7 @@ class Munged:
     line: int
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class FunctionNotFound:
     """No function of that name in the file. ``nearby`` is what the file does define."""
 
@@ -659,7 +659,7 @@ class FunctionNotFound:
     nearby: tuple[str, ...]
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class FunctionAmbiguous:
     """Several functions of that name — a trait impl and an inherent one, or two impl blocks.
 
@@ -671,7 +671,7 @@ class FunctionAmbiguous:
     lines: tuple[int, ...]
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class AlreadyMunged:
     """The edit is already in the file, so it is unchanged."""
 
@@ -679,7 +679,7 @@ class AlreadyMunged:
     line: int
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class SourceDrifted:
     """The exact text an extraction was recorded against is no longer in the file.
 
@@ -693,7 +693,7 @@ class SourceDrifted:
     function: str
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class NoFunctionBody:
     """The signature has no body — a trait method declaration, or an ``extern`` block entry.
 
@@ -704,7 +704,7 @@ class NoFunctionBody:
     function: str
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class DeriveNotFound:
     """A derive the swap names is not on the type, so the swap would be a silent no-op.
 
@@ -718,7 +718,7 @@ class DeriveNotFound:
     present: tuple[str, ...]
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class DeriveAttributeUnreadable:
     """The captured text has no single ``#[derive(..)]`` list to rewrite.
 
@@ -731,7 +731,7 @@ class DeriveAttributeUnreadable:
     why: str
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class ModuleNotFound:
     """No ``mod <name>;`` declaration in the file. ``nearby`` is what the file does declare.
 
@@ -745,7 +745,7 @@ class ModuleNotFound:
     nearby: tuple[str, ...]
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class ModuleOutsideCrateSource:
     """The declaring file is not under a crate's ``src/``, so the substitute has nowhere to go.
 
@@ -757,7 +757,7 @@ class ModuleOutsideCrateSource:
     path: str
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class ImportNotFound:
     """No ``use`` declaration in the file binds that name.
 
@@ -770,7 +770,7 @@ class ImportNotFound:
     nearby: tuple[str, ...]
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class ImportNotIsolable:
     """A declaration binds the name, and this module cannot rewrite it to leave the rest alone.
 
@@ -864,7 +864,7 @@ def function_names(source: str) -> tuple[str, ...]:
 # the target's Anchor surface.
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class FunctionItem:
     """A whole function definition as it stands in some source.
 
@@ -917,7 +917,7 @@ def _reindent(text: str, indent: str) -> str:
     return textwrap.indent(textwrap.dedent(text).strip("\n"), indent)
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class FunctionExtraction:
     """A function split into a feature-gated pair so a rule can drive a piece of it.
 
@@ -1020,7 +1020,7 @@ class FunctionExtraction:
 
 #: A ``derive`` list, captured from ``#[derive(A, B, C)]``. Nested generics do not occur in derive
 #: lists, so splitting on commas is exact rather than approximate.
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class SwappedDerive:
     """One type's derives, as they read before and as they should read under the feature."""
 
@@ -1088,7 +1088,7 @@ class SwappedDerive:
         return f"`{self.type_name}` " + " and ".join(parts or ["is unchanged"])
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class DeriveSwap:
     """Derives moved behind the unit's feature so the harness can supply the impls instead.
 
@@ -1195,7 +1195,7 @@ def forwards_feature(program_manifest: str, dependency: str, feature: str) -> bo
     return isinstance(enables, list) and f"{dependency}/{feature}" in enables
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class ModuleRedirect:
     """A whole module compiled from a different file behind the unit's feature.
 
@@ -1275,7 +1275,7 @@ class ModuleRedirect:
 # is the ``use`` line that puts the name in scope.
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class ImportSwap:
     """A name the file imports resolves to a stand-in behind the unit's feature.
 
@@ -1438,7 +1438,7 @@ _USE_DECLARATION = re.compile(
 )
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class _UseTree:
     """A ``use`` declaration's payload, flattened far enough to take one leaf out of it."""
 
@@ -1712,7 +1712,7 @@ def munge_history(munges: tuple[Munge, ...]) -> tuple[str, ...]:
     return tuple(f"munge:{m.edit_id}" for m in munges)
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class DropMunges:
     """A write that *removes* munges rather than adding them.
 
@@ -1738,7 +1738,7 @@ def amended(munge: Munge, why: str) -> Munge:
     is invalidated. It is also what made the correction impossible before this existed, since
     re-recording the munge with better prose was indistinguishable from re-recording it unchanged.
     """
-    return dataclasses.replace(munge, why=why)
+    return replace(munge, why=why)
 
 
 def latest(munges: Iterable[Munge]) -> list[Munge]:
