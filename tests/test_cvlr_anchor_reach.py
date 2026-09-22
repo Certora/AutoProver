@@ -23,7 +23,7 @@ happening:
   is carried as a tripwire for that error being fixed rather than as a requirement.
 
 The configuration is no longer a variable: the scaffold points the target at the Anchor fork
-(:mod:`composer.spec.cvlr.munge`), which is what production does, so this test exercises the same
+(:mod:`composer.spec.cvlr.forks`), which is what production does, so this test exercises the same
 dependency graph a real project verifies against.
 
 Marked ``expensive``: it submits a real cloud job, and it needs a Rust and Solana platform toolchain.
