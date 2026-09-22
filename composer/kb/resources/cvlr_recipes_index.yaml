@@ -10,8 +10,9 @@ channels:
     properties do not depend on, and it invalidates the prover stamp.
   EDIT: The fix is in the program''s own source. Describe the problem to `code_editor`; you do not
     edit the program yourself.
-  CONF: 'The fix is a prover setting. Only two are yours: the loop bound and the nonlinear solver
-    portfolio. Anything else is a `record_skip` naming the setting and the evidence for it.'
+  CONF: 'The fix is a prover setting. Only two are yours: the loop bound and `optimistic_loop`, and
+    the second changes what a verdict means. Anything else is a `record_skip` naming the setting and
+    the evidence for it.'
   SKIP: There is no fix in your action space. `record_skip` with a reason a reviewer can act on,
     which is worth more than a rule that looks like the property and is not.
 recipes:

@@ -1,8 +1,8 @@
 """A Solana submission's prover conf: fixed settings, the ones the author may change, and one run's.
 
-Every conf is built here, never read from the project. :data:`BASE_CONF` and
-:data:`BASE_PROVER_ARGS` are fixed. :class:`ProverSettings` holds what the author may change, and
-:func:`settings_conf` renders it onto the fixed part. :func:`solana_conf` adds one submission's
+Every conf is built here, never read from the project. :data:`BASE_CONF` is fixed.
+:class:`ProverSettings` holds what the author may change, and :func:`settings_conf` renders it onto
+the fixed part. :func:`solana_conf` adds one submission's
 keys: the build script, the message, the rule selection, and the summary files.
 
 ``solana_inlining`` is left unset. ``cargo certora-sbf`` reads it from the package's
@@ -21,48 +21,27 @@ from pathlib import Path
 
 from composer.prover.conf import Conf, InheritRules, RuleSelection, dump_conf, safe_msg, with_rules
 
-#: Prover flags every conf carries. None of the ``-solanaOptimistic*`` flags: they are unsound, and
-#: they do not fix the [3308] they were meant to.
-BASE_PROVER_ARGS: tuple[str, ...] = (
-    "-unsatCoresForAllAsserts true",
-    "-solanaSkipCallRegInst true",
-    "-solanaTACOptimize 2",
-    "-solanaStackSize 8192",
-    "-solanaTACMathInt true",
-)
-
 #: Conf keys no author or run changes.
 #:
 #: ``rule_sanity`` is ``basic``. With the check off, a [3308] inside the generated vacuity rule is
 #: reported as verified.
+#:
+#: ``prover_args`` has none of the ``-solanaOptimistic*`` flags: they are unsound, and they do not
+#: fix the [3308] they were meant to. Nor ``-solanaTACSoundSignedMath``: next to
+#: ``-solanaTACMathInt`` it turned a seven-minute, eighteen-rule run into a two-hour timeout with
+#: thirteen rules unverified.
 BASE_CONF: Conf = {
     "java_args": ["-Dlevel.sbf=info"],
     "smt_timeout": "6000",
     "rule_sanity": "basic",
+    "prover_args": [
+        "-unsatCoresForAllAsserts true",
+        "-solanaSkipCallRegInst true",
+        "-solanaTACOptimize 2",
+        "-solanaStackSize 8192",
+        "-solanaTACMathInt true",
+    ],
 }
-
-
-#: Solver settings for a nonlinear-arithmetic query, as one recipe.
-#:
-#: Taken from the reference project's conf, where it serves rules that split heavily and halt on
-#: the global timeout.
-#:
-#: One recipe, not a list a caller edits flag by flag. ``-solanaTACSoundSignedMath`` next to
-#: ``-solanaTACMathInt`` (which :data:`BASE_PROVER_ARGS` already sets) turned a seven-minute,
-#: eighteen-rule run into a two-hour timeout with thirteen rules unverified. The expansion is
-#: fixed so that combination is not assembled by hand.
-#:
-#: Every flag here must leave the meaning of a verified result unchanged. A flag that changes it
-#: does not belong in the recipe.
-NONLINEAR_SOLVER_PORTFOLIO: tuple[str, ...] = (
-    "-backendStrategy adaptive",
-    "-smt_useLIA true",
-    "-smt_useNIA true",
-    "-solvers [z3:def{randomSeed=21},z3:def{randomSeed=22},z3:def{randomSeed=23}]",
-    "-solvers [z3:def{randomSeed=24},z3:def{randomSeed=25},z3:def{randomSeed=26}]",
-    "-solvers [z3:def{randomSeed=27},z3:def{randomSeed=28},z3:def{randomSeed=29}]",
-    "-solvers [z3:def{randomSeed=30},z3:def{randomSeed=31},z3:def{randomSeed=32}]",
-)
 
 
 @dataclass(frozen=True)
@@ -78,16 +57,12 @@ class ProverSettings:
     #: and finally turn it on only for a trip count that no bound discharges. Once it is on, every
     #: rule in the submission is verified under that assumption.
     optimistic_loop: bool = False
-    #: Whether the conf carries :data:`NONLINEAR_SOLVER_PORTFOLIO`.
-    solver_portfolio: bool = False
 
 
 def settings_conf(settings: ProverSettings) -> Conf:
     """The conf ``settings`` describe, before any one submission's keys are added."""
-    portfolio = NONLINEAR_SOLVER_PORTFOLIO if settings.solver_portfolio else ()
     return {
         **BASE_CONF,
-        "prover_args": [*BASE_PROVER_ARGS, *portfolio],
         "loop_iter": str(settings.loop_iter),
         "optimistic_loop": settings.optimistic_loop,
     }

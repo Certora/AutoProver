@@ -414,6 +414,24 @@ true of the repo and misleading about the copy on disk. The generated composite'
 banner and its instruction to "recompose" — an action that exists only in the upstream template's
 justfile, never in AutoProver — were removed with P1.
 
+**U16. Timeout-cracker support, in place of the nonlinear solver portfolio.**
+*The portfolio was dropped on eric/cvlr-preflight on 2026-09-22 and back-ported.*
+`adjust_prover_config` has lost `SetNonlinearSolverPortfolio`, so the author has no solver-side
+remedy for a rule that halts on the global timeout. The candidate replacement is the
+Prover's own `-timeoutCracker true`, which the CVL codegen tool already passes
+([prover.py](../composer/tools/prover.py)). It is not a flag that composes with others: on entry it
+resets the backend strategy, `-smt_useLIA`/`-smt_useNIA`, `-solvers`, the solver timeout and the
+splitting options, then runs its own recipe — a z3 first pass split to depth 5 under a hard-coded
+3600s budget, then five configurations per unsolved split, two of which are z3 and cvc5
+random-seed races much like the portfolio was (`verifier/TimeoutCracker.kt`). So it is a choice
+between recipes, and belongs in `ProverSettings` as one variant of a solver strategy rather than as
+a boolean beside another. Two things are unestablished: that a Solana rule reaches it (it is invoked
+from `TACVerifier`, which Solana rules share, but no Solana run has set it), and whether it does as
+well as the portfolio did on the P8 rig — 109.3 minutes with the hardest rule unresolved without
+the portfolio, 4.6 minutes with every rule verified with it
+([upstream-defects.md](./upstream-defects.md) P8, postscript). That rig is the measurement to
+repeat.
+
 ---
 
 ## Blocked on upstream

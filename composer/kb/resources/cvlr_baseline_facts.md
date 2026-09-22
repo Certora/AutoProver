@@ -383,26 +383,6 @@ in a cheap rule with a readable counterexample instead of a two-hour timeout wit
 cause is a missing slack term: the naive inequality ignores a rounding direction or a price movement,
 and the counterexample shows you which.
 
-**And if the decomposition is not available, the solver portfolio is.** `adjust_prover_config` turns
-on twelve solver instances with different random seeds and both arithmetic theories enabled, which
-is what the practitioners who hit this wall reach for: on a nonlinear query the seed genuinely
-decides whether an answer arrives.
-
-It works, and it is worth knowing how well. Measured on this backend's hardest real harness, with
-the lemma decomposition *removed* so that four solvency rules had to find the whole ring
-rearrangement inline with a live Anchor handler in the query. Without the portfolio: **109 minutes**,
-nine rules verified and one — the hardest — timed out with no verdict at all. With it: **4.6
-minutes**, all ten verified. So it is worth reaching for on both counts, and it is not slow —
-twelve solvers run in parallel, so it buys wall-clock with compute we own.
-
-It still comes after the lemma, and the reason is not cost. The lemma verifies at about the same
-speed, and it leaves behind something the portfolio does not: the algebra proved once, in isolation,
-in a rule a reviewer can read and check. A rule that verifies because a solver found a good seed is
-a weaker artifact than one whose hard step was discharged separately, even when both are green. Use
-the portfolio when the property will not decompose, or when the decomposition did not land — not
-instead of trying.
-
-It does nothing for a rule whose difficulty is an operand you did not bound. If it does not finish
-the rule either, `record_skip`
-naming the timeout, what you bounded, and what you lifted. A rule with no verdict is not a
-verification, and reporting it as one is worse than skipping it.
+If the rule still does not finish, `record_skip` naming the timeout, what you bounded, and what you
+lifted. A rule with no verdict is not a verification, and reporting it as one is worse than skipping
+it.

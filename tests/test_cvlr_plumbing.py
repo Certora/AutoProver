@@ -204,7 +204,8 @@ def test_loops_are_bounded_soundly_and_the_bound_is_raised_instead():
 def test_the_base_enables_no_optimistic_solana_flags():
     """None of the ``-solanaOptimistic*`` flags. They are unsound, and they do not fix the [3308]
     they were meant to."""
-    assert not [f for f in cvlr_conf.BASE_PROVER_ARGS if f.startswith("-solanaOptimistic")]
+    flags = cvlr_conf.settings_conf(cvlr_conf.ProverSettings())["prover_args"]
+    assert not [f for f in flags if f.startswith("-solanaOptimistic")]
 
 
 def test_every_conf_checks_vacuity():
@@ -212,7 +213,7 @@ def test_every_conf_checks_vacuity():
     verified. No setting turns it off."""
     for settings in (
         cvlr_conf.ProverSettings(),
-        cvlr_conf.ProverSettings(loop_iter=5, optimistic_loop=True, solver_portfolio=True),
+        cvlr_conf.ProverSettings(loop_iter=5, optimistic_loop=True),
     ):
         assert cvlr_conf.settings_conf(settings)["rule_sanity"] == "basic"
 
@@ -221,40 +222,12 @@ def test_the_loop_bound_is_written_the_way_a_conf_spells_an_integer():
     assert cvlr_conf.settings_conf(cvlr_conf.ProverSettings(loop_iter=4))["loop_iter"] == "4"
 
 
-# ---------------------------------------------------------------------------------------------
-# The solver portfolio
-#
-# It changes how long the prover spends, not what a verified result means. The portfolio is one
-# recipe. ``-solanaTACSoundSignedMath`` next to ``-solanaTACMathInt`` turned an eighteen-rule run
-# from 6.7 minutes, all verified, into a two-hour timeout with thirteen rules unverified.
-
-
-def test_the_portfolio_is_the_recipe_the_corpus_uses_and_only_sound_flags():
-    flags = cvlr_conf.NONLINEAR_SOLVER_PORTFOLIO
-    assert any(f.startswith("-backendStrategy") for f in flags)
-    assert "-smt_useNIA true" in flags and "-smt_useLIA true" in flags
-    assert sum(f.startswith("-solvers ") for f in flags) >= 3
-    # Nothing that changes what a verdict means may be smuggled in here.
-    banned = ("optimistic_loop", "-solanaOptimistic", "rule_sanity", "-solanaTACSoundSignedMath")
-    assert not [f for f in flags for b in banned if b in f]
-
-
-def test_the_portfolio_adds_its_flags_to_the_base_and_turning_it_off_removes_them():
-    """``-solvers`` repeats: each entry adds a solver configuration, so all four lines must reach
-    the conf for all twelve instances to run."""
-    on = cvlr_conf.settings_conf(cvlr_conf.ProverSettings(solver_portfolio=True))
-    assert on["prover_args"] == [
-        *cvlr_conf.BASE_PROVER_ARGS, *cvlr_conf.NONLINEAR_SOLVER_PORTFOLIO
-    ]
-    off = cvlr_conf.settings_conf(cvlr_conf.ProverSettings(solver_portfolio=False))
-    assert off["prover_args"] == list(cvlr_conf.BASE_PROVER_ARGS)
-
-
 def test_a_conf_change_invalidates_a_stamp_earned_before_it():
-    """A verdict under one loop bound or one solver portfolio is not a verdict under another."""
+    """A verdict under one loop bound, or with loops assumed to finish, is not a verdict under
+    another."""
     default = cvlr_conf.conf_history(cvlr_conf.ProverSettings())
     assert default != cvlr_conf.conf_history(cvlr_conf.ProverSettings(loop_iter=3))
-    assert default != cvlr_conf.conf_history(cvlr_conf.ProverSettings(solver_portfolio=True))
+    assert default != cvlr_conf.conf_history(cvlr_conf.ProverSettings(optimistic_loop=True))
     assert default == cvlr_conf.conf_history(cvlr_conf.ProverSettings())
 
 
@@ -451,9 +424,8 @@ async def test_the_build_script_is_executable(tmp_path):
 # the conf on disk
 #
 # Everything above pins what the conf functions *compute*. These pin what `write_submission` *writes*,
-# which is the only artifact the prover ever sees. The two came apart once already: the solver
-# portfolio was merged the ordinary way, four `-solvers` lines became one, nine of twelve solver
-# instances were dropped, and nothing failed — because every test on that path stopped at a dict.
+# which is the only artifact the prover ever sees. The two have come apart before, with nothing
+# failing, because every test on that path stopped at a dict.
 # --------------------------------------------------------------------------------------------
 
 
@@ -466,7 +438,7 @@ def _unconfined(tmp_path: Path) -> CargoSession:
 @pytest.mark.asyncio
 async def test_an_authors_conf_edits_reach_the_file_the_prover_is_handed(tmp_path):
     """What `adjust_prover_config` is for, checked at the far end of the wire."""
-    edited = cvlr_conf.ProverSettings(loop_iter=4, solver_portfolio=True)
+    edited = cvlr_conf.ProverSettings(loop_iter=4, optimistic_loop=True)
     conf_path = await write_submission(
         _unconfined(tmp_path),
         Submission(manifest_path=tmp_path / "Cargo.toml", settings=edited, stem="unit"),
@@ -474,7 +446,7 @@ async def test_an_authors_conf_edits_reach_the_file_the_prover_is_handed(tmp_pat
 
     written = json.loads(conf_path.read_text())
     assert written["loop_iter"] == "4"
-    assert sum(a.startswith("-solvers ") for a in written["prover_args"]) == 4
+    assert written["optimistic_loop"] is True
 
 
 @pytest.mark.asyncio

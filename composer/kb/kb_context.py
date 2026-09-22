@@ -197,7 +197,7 @@ def with_cvl_context(prompt: "PromptInput") -> "PromptInput":
 #: Where a CVLR recipe's action lies. Taken from the author's tool list rather than from the shape
 #: of the artifact, because a channel's job is to tell a stuck agent whether the fix is in its
 #: action space: RULE is ``put_harness``, MOCK is ``summarize_for_prover``, EDIT is ``code_editor``,
-#: CONF is ``adjust_prover_config`` (the loop bound and the solver portfolio, and nothing else), and
+#: CONF is ``adjust_prover_config`` (the loop bound and ``optimistic_loop``, and nothing else), and
 #: SKIP is ``record_skip`` — the honest terminal channel, which CVL has no peer for.
 type CvlrChannel = Literal["RULE", "MOCK", "EDIT", "CONF", "SKIP"]
 
