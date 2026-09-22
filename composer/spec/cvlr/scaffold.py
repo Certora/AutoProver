@@ -7,6 +7,33 @@ from the reference set. Two cases are refused (:class:`Blocked`) instead of gues
 that builds no loadable object, and a CVLR pin that does not match the platform generation the
 project is already on.
 
+The result, for a program package inside a workspace. Files marked ``*`` already exist and are
+edited. Without a ``[workspace]`` the package is the root, and the root manifest gets no
+``[workspace.dependencies]`` pins::
+
+    <workspace>/
+    ├── Cargo.toml *                  [workspace.dependencies] pins, [patch.crates-io] forks
+    ├── .gitignore *                  prover build output (written if absent)
+    ├── <local path dependency>/
+    │   └── Cargo.toml *              a `certora` feature the program's forwards to
+    └── <package>/
+        ├── Cargo.toml *              `certora` feature, CVLR dependencies,
+        │                             [package.metadata.certora]
+        └── src/
+            ├── lib.rs *              #[cfg(feature = "certora")] mod certora;
+            └── certora/
+                ├── mod.rs
+                ├── nondet.rs
+                ├── log.rs
+                ├── specs/mod.rs      where authored rules land
+                ├── mocks/mod.rs
+                └── envs/
+                    ├── cvlr_inlining_core.txt       vendored
+                    ├── cvlr_inlining_anchor.txt     vendored
+                    ├── cvlr_inlining_package.txt    the project's own, empty to start
+                    ├── cvlr_inlining.txt            generated from the three above
+                    └── cvlr_summaries_*.txt         the same four layers
+
 Nothing is overwritten. A file is written only when it is absent, and manifest edits are text
 insertions into the parsed file, so a second run changes nothing. Reserializing the manifest
 would rewrite the project's comments to make one edit. Re-opening an existing table is a
@@ -28,7 +55,7 @@ from typing import Sequence
 from composer.cargo.metadata import CratePackage, Workspace
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.env_paths import PathDialect, dialect_for
-from composer.spec.cvlr import munge
+from composer.spec.cvlr import forks
 from composer.spec.cvlr_reference import ChainReference, CrateRelease
 
 _log = logging.getLogger(__name__)
@@ -807,22 +834,22 @@ def _plan_envs(
     return changes, satisfied
 
 
-def _plan_munge(workspace: Workspace) -> tuple[list[Change], list[str], list[Blocked]]:
+def _plan_forks(workspace: Workspace) -> tuple[list[Change], list[str], list[Blocked]]:
     """Append ``[patch.crates-io]`` entries for the verification forks.
 
     The table is workspace-level, so it goes on the workspace manifest with the rest of the plan.
     Without the Anchor fork, a rule that reaches a handler cannot be analyzed
-    (:mod:`composer.spec.cvlr.munge`). A version the fork does not cover becomes a
+    (:mod:`composer.spec.cvlr.forks`). A version the fork does not cover becomes a
     :class:`Blocked` on that manifest. The run stops instead of building a project that later
     fails with a pointer-analysis error.
 
-    Crates the manifest already redirects are left alone. :func:`munge.already_patched` reads the
+    Crates the manifest already redirects are left alone. :func:`forks.already_patched` reads the
     patch table. The resolved graph is checked too, because a redirect shows up there as a git
     source.
     """
-    plan = munge.plan_munge(
+    plan = forks.plan_overrides(
         workspace,
-        already_redirected=munge.already_patched((workspace.root / "Cargo.toml").read_text()),
+        already_redirected=forks.already_patched((workspace.root / "Cargo.toml").read_text()),
     )
     blocked = [
         Blocked(path=Path("Cargo.toml"), problem=b.problem, resolution=b.resolution)
@@ -834,7 +861,7 @@ def _plan_munge(workspace: Workspace) -> tuple[list[Change], list[str], list[Blo
         [
             AppendSection(
                 path=Path("Cargo.toml"),
-                contents=munge.manifest_additions(plan),
+                contents=forks.manifest_additions(plan),
                 why=(
                     "verify against the forks that can be analyzed: "
                     + ", ".join(f"{o.crate} {o.version} -> {o.branch}" for o in plan.overrides)
@@ -894,9 +921,9 @@ def plan_scaffold(
         changes += planned
         satisfied += notes
 
-    munge_changes, munge_notes, munge_blocked = _plan_munge(workspace)
-    changes += munge_changes
-    satisfied += munge_notes
+    fork_changes, fork_notes, fork_blocked = _plan_forks(workspace)
+    changes += fork_changes
+    satisfied += fork_notes
 
     manifest_changes, manifest_notes, blocked = _plan_package_manifest(
         workspace, package, relative, reference, inherit=inherit
@@ -906,7 +933,7 @@ def plan_scaffold(
     # Checking it here would refuse a project whose own pairing is consistent.
     if _introduced(workspace, package, reference):
         blocked += _check_platform(workspace, reference)
-    blocked += munge_blocked
+    blocked += fork_blocked
 
     return ScaffoldPlan(
         package=package.name,
