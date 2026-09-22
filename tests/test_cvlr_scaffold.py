@@ -15,7 +15,13 @@ from pathlib import Path
 
 import pytest
 
-from composer.cargo.metadata import CratePackage, LibTarget, Workspace, parse_metadata
+from composer.cargo.metadata import (
+    CratePackage,
+    LibTarget,
+    RegistrySource,
+    Workspace,
+    parse_metadata,
+)
 from composer.spec.cvlr import preflight, scaffold
 from composer.spec.cvlr.scaffold import (
     HARNESS_DIR,
@@ -89,7 +95,7 @@ def _project(
                 manifest_path=root / "vendor" / platform_crate / "Cargo.toml",
                 lib=None,
                 features=(),
-                source="registry+https://github.com/rust-lang/crates.io-index",
+                source=RegistrySource("registry+https://github.com/rust-lang/crates.io-index"),
             )
         )
     for name, version in (cvlr_resolved or {}).items():
@@ -100,7 +106,7 @@ def _project(
                 manifest_path=root / "vendor" / name / "Cargo.toml",
                 lib=None,
                 features=(),
-                source="registry+https://github.com/rust-lang/crates.io-index",
+                source=RegistrySource("registry+https://github.com/rust-lang/crates.io-index"),
             )
         )
     workspace = Workspace(
