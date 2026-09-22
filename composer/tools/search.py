@@ -5,7 +5,7 @@ from typing import Annotated, Protocol, ClassVar, Any, Callable, overload
 from langchain_core.tools import tool, InjectedToolCallId, BaseTool
 from langgraph.runtime import get_runtime
 from composer.rag.db import ComposerRAGDB
-from composer.rag.types import ManualRef
+from composer.rag.render import no_such_section, render_refs, render_section_hits
 from dataclasses import Field as DField
 from composer.ui.tool_display import tool_display_of, CommonTools
 
@@ -35,19 +35,6 @@ class CVLManualSearchSchema(WithToolCallId):
         Field(default=[], description="A list of manual sections to search. "
               "If specified, at least one section heading must match at least one of the values provided here")
 
-def _format_results(refs: list[ManualRef]) -> str:
-    """Render CVL search hits as a plain pretty-printed string."""
-    if not refs:
-        return "No matching sections found."
-    blocks: list[str] = []
-    for t in refs:
-        title = " / ".join(t.headers)
-        blocks.append(
-            f"## {title}\n\n{t.content}\n\n— similarity: {t.similarity:.4f}"
-        )
-    return "\n\n---\n\n".join(blocks)
-
-
 def _cvl_manual_search_factory(
     db_provider: Callable[[], ComposerRAGDB],
 ) -> BaseTool:
@@ -64,13 +51,12 @@ def _cvl_manual_search_factory(
         rag_db = db_provider()
 
         try:
-            refs = await rag_db.find_refs(
+            return render_refs(await rag_db.find_refs(
                 query=question,
                 similarity_cutoff=similarity_cutoff,
                 top_k=max_results,
                 manual_section=manual_section,
-            )
-            return _format_results(refs)
+            ))
         except Exception as e:
             return f"Failed to search CVL manual: {str(e)}"
     return _cvl_manual_search
@@ -112,14 +98,9 @@ def _cvl_keyword_search_factory(
         """Search the CVL manual for sections matching keywords."""
         rag_db = db_provider()
         try:
-            hits = await rag_db.search_manual_keywords(query, min_depth=min_depth, limit=limit)
-            if not hits:
-                return "No matching sections found."
-            lines = []
-            for h in hits:
-                section_path = " > ".join(h.headers)
-                lines.append(f"[{h.relevance:.4f}] {section_path}")
-            return "\n".join(lines)
+            return render_section_hits(
+                await rag_db.search_manual_keywords(query, min_depth=min_depth, limit=limit)
+            )
         except Exception as e:
             return f"Failed to search CVL manual: {str(e)}"
     return _cvl_keyword_search
@@ -137,7 +118,7 @@ def _cvl_get_section_factory(
         try:
             content = await rag_db.get_manual_section(headers)
             if content is None:
-                return f"No section found matching headers: {headers}"
+                return no_such_section(headers)
             return content
         except Exception as e:
             return f"Failed to retrieve section: {str(e)}"
