@@ -1143,7 +1143,7 @@ vocabulary:
 | `RULE` | `put_harness` | Fix it in the harness module — assertions, assumptions, nondet |
 | `MOCK` | `summarize_for_prover` | An unconstrained stand-in; unsound by construction, and it invalidates the prover stamp |
 | `EDIT` | `code_editor` | The program's own source. Describe the problem, not the edit |
-| `CONF` | `adjust_prover_config` | The loop bound and the solver portfolio, and nothing else |
+| `CONF` | `adjust_prover_config` | The loop bound and `optimistic_loop`, and nothing else |
 | `SKIP` | `record_skip` | No fix in the action space. The honest terminal channel, which CVL has no peer for |
 
 **Corrected: the vocabulary comes from the tool list, not from the artifact taxonomy.** This table

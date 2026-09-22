@@ -775,25 +775,6 @@ class SetLoopIter(BaseModel):
     )
 
 
-class SetNonlinearSolverPortfolio(BaseModel):
-    """Turn the nonlinear-arithmetic solver portfolio on or off."""
-
-    type: Literal["nonlinear_solver_portfolio"]
-    enabled: bool = Field(
-        description="True to add the portfolio, false to remove it. It sets an adaptive backend "
-        "strategy, enables the linear and nonlinear arithmetic theories, and runs twelve solver "
-        "instances on different random seeds. This is for the symptom the charter describes — a "
-        "rule at a low completion percentage after heavy splitting, HALTing on the global timeout. "
-        "It works: on this backend's hardest harness with the lemma decomposition removed, the "
-        "hardest rule timed out with no verdict after 109 minutes without it, and every rule "
-        "verified in 4.6 minutes with it. "
-        "The solvers run in parallel, so it buys wall-clock with compute rather than costing it. "
-        "Reach for it after `NativeInt`, after bounding the operands, and after trying to lift the "
-        "algebra into a lemma — not because it is expensive, but because a lemma leaves behind a "
-        "proof a reviewer can check and a lucky seed does not."
-    )
-
-
 class SetOptimisticLoop(BaseModel):
     """Assume every loop finishes within the bound, instead of asserting that it does."""
 
@@ -818,7 +799,7 @@ class SetOptimisticLoop(BaseModel):
 
 
 type CvlrConfigEdit = Annotated[
-    SetLoopIter | SetNonlinearSolverPortfolio | SetOptimisticLoop, Discriminator("type")
+    SetLoopIter | SetOptimisticLoop, Discriminator("type")
 ]
 
 
@@ -828,9 +809,8 @@ class AdjustProverConfig(
 ):
     """Change a prover setting for this unit's submissions.
 
-    The conf is in your system prompt; this changes it. The list is short and closed, and two of the
-    three settings on it are **sound** — the loop bound and the solver portfolio decide how the
-    prover spends its time, never what a green verdict means.
+    The conf is in your system prompt; this changes it. The list is short and closed. The loop bound
+    is **sound**: it decides how the prover spends its time, never what a green verdict means.
 
     `optimistic_loop` is the exception, and it is here because the sound ladder has a gap rather
     than because the rule was relaxed: a trip count the analysis cannot fix is answered by none of
@@ -840,11 +820,11 @@ class AdjustProverConfig(
     hands entirely is a `rule_sanity` downgrade, which stops vacuity being reported, and the
     memory-model flags, which are unsound by name and measurably fix nothing.
 
-    **Reach for this after your own remedies, not before them** — and not because it is expensive,
-    which the solver portfolio measurably is not. A timeout is usually telling you something about
-    the rule: an unbounded operand, an algebraic step that belongs in a lemma, a loop whose trip
-    count nothing constrains. A setting that makes the symptom go away without answering that
-    leaves a proof nobody understands as well, which is a worse thing to ship than a slow one.
+    **Reach for this after your own remedies, not before them.** A timeout is usually telling you
+    something about the rule: an unbounded operand, an algebraic step that belongs in a lemma, a
+    loop whose trip count nothing constrains. A setting that makes the symptom go away without
+    answering that leaves a proof nobody understands as well, which is a worse thing to ship than a
+    slow one.
 
     Edits apply together or not at all, and the result is the full conf. Changing it invalidates the
     prover stamp, because the previous run's verdicts were obtained under different settings: re-run
@@ -876,14 +856,6 @@ class AdjustProverConfig(
                     if settings.loop_iter == n:
                         return f"`loop_iter` is already {n}."
                     settings = dataclasses.replace(settings, loop_iter=n)
-                case SetNonlinearSolverPortfolio(enabled=on):
-                    if settings.solver_portfolio == on:
-                        return (
-                            "The solver portfolio is already "
-                            + ("on" if on else "off")
-                            + " in this conf."
-                        )
-                    settings = dataclasses.replace(settings, solver_portfolio=on)
                 case SetOptimisticLoop(enabled=on):
                     if settings.optimistic_loop == on:
                         return (

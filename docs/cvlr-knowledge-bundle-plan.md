@@ -109,7 +109,7 @@ to surface rather than act on.
 
 Channels come from the author's tool list, not from the capture taxonomy:
 `RULE` (`put_harness`), `MOCK` (`summarize_for_prover`), `EDIT` (`code_editor`), `CONF`
-(`adjust_prover_config` — the loop bound and the solver portfolio, nothing else), `SKIP`
+(`adjust_prover_config` — the loop bound and `optimistic_loop`, nothing else), `SKIP`
 (`record_skip`). `ENVFILE` and `SCAFFOLD` are not channels: env files are vendored data rendered by
 `env_paths.py`, and scaffolding is a different phase. A recipe naming an action this agent cannot
 take is a recipe that cannot be followed.

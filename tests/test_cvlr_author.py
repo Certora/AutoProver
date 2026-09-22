@@ -365,13 +365,12 @@ def _verify_state(draft: str) -> dict:
 
 
 # ---------------------------------------------------------------------------------------------
-# The three prover settings the author may move
+# The two prover settings the author may move
 #
-# The closed list is the point, and so is the line drawn inside it. The loop bound and the solver
-# portfolio decide how the prover spends its time; `optimistic_loop` decides what a green verdict
-# means and is on the list anyway, because the sound remedies for a loop run out before the problem
-# does (`docs/cvlr-todo.md` U9). A `rule_sanity` downgrade and the memory-model flags stay off it —
-# and the flag list is a named recipe rather than free text (P8).
+# The closed list is the point, and so is the line drawn inside it. The loop bound decides how the
+# prover spends its time; `optimistic_loop` decides what a green verdict means and is on the list
+# anyway, because the sound remedies for a loop run out before the problem does
+# (`docs/cvlr-todo.md` U9). A `rule_sanity` downgrade and the prover flags stay off it.
 
 
 def _adjust(state: dict, edits: list, why: str = "tried bounding the operands first"):
@@ -403,19 +402,6 @@ def test_a_loop_bound_below_one_is_refused():
 
     out = _adjust(_verify_state(DRAFT), [SetLoopIter(type="loop_iter", iterations=0)])
     assert isinstance(out, str) and "not a bound" in out
-
-
-def test_the_solver_portfolio_goes_on_and_reports_the_whole_conf_back():
-    from composer.spec.cvlr.verify import SetNonlinearSolverPortfolio
-
-    out = _adjust(
-        _verify_state(DRAFT),
-        [SetNonlinearSolverPortfolio(type="nonlinear_solver_portfolio", enabled=True)],
-    )
-    assert not isinstance(out, str), out
-    assert out.update["prover_settings"].solver_portfolio
-    # The author is shown what it now is, not told that something changed.
-    assert "smt_useNIA" in out.update["messages"][0].content
 
 
 def test_a_setting_that_is_already_what_you_asked_for_is_refused():
@@ -473,20 +459,20 @@ def test_an_unexplained_config_change_is_refused():
 
 def test_edits_apply_together_or_not_at_all():
     """The second edit is a no-op refusal, and the first must not have landed."""
-    from composer.spec.cvlr.verify import SetLoopIter, SetNonlinearSolverPortfolio
+    from composer.spec.cvlr.verify import SetLoopIter, SetOptimisticLoop
 
     state = _verify_state(DRAFT)
     out = _adjust(state, [
         SetLoopIter(type="loop_iter", iterations=4),
-        SetNonlinearSolverPortfolio(type="nonlinear_solver_portfolio", enabled=False),
+        SetOptimisticLoop(type="optimistic_loop", enabled=False),
     ])
     assert isinstance(out, str) and "already off" in out
     assert state["prover_settings"] == ProverSettings()
 
 
 def test_a_config_change_invalidates_the_prover_stamp():
-    """A verdict earned under one loop bound or one solver portfolio is not a verdict under
-    another, which is what `tuning_history` carrying the conf buys."""
+    """A verdict earned under one loop bound is not a verdict under another, which is what
+    `tuning_history` carrying the conf buys."""
     from composer.spec.cvlr.verify import SetLoopIter
 
     before = _verify_state(DRAFT)
