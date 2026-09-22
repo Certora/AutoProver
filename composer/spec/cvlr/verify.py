@@ -65,20 +65,8 @@ from composer.prover.ptypes import (
     RuleResult,
     classify_violation,
 )
-from composer.prover.conf import (
-    SelectRules,
-    dump_conf,
-    has_optimistic_loop,
-    with_loop_iter,
-    with_optimistic_loop,
-)
-from composer.spec.cvlr.conf import (
-    DEFAULT_FEATURE,
-    OVERLAY_OWNED_KEYS,
-    has_solver_portfolio,
-    tools_version,
-    with_solver_portfolio,
-)
+from composer.prover.conf import SelectRules, dump_conf
+from composer.spec.cvlr.conf import DEFAULT_FEATURE, PLATFORM_TOOLS_VERSION, settings_conf
 from composer.spec.cvlr.munge import (
     AlreadyMunged,
     EarlyPanic,
@@ -498,7 +486,7 @@ class VerifyRules(
                         # Name exactly the rules this draft declares. Not a refinement: a conf with
                         # no `rule` entry makes the cloud job end in FAILED, with no report and
                         # nothing on disk to read, so *every* submission this backend made failed
-                        # until this line named them. Not `AllRules` either — a build compiles this
+                        # until this line named them. Not every rule either — a build compiles this
                         # unit's module and the artifact declares every unit's rules, so this unit
                         # would be graded on its siblings' drafts.
                         dataclasses.replace(
@@ -507,7 +495,7 @@ class VerifyRules(
                             # From state, not from `deps`: the conf is the author's to change, and
                             # a submission built from the run's starting copy would send the old
                             # settings while `version_history` recorded the new ones.
-                            base_conf=self.state["conf"],
+                            settings=self.state["prover_settings"],
                         ),
                     )
                 if isinstance(prepared, BuildRejected):
@@ -558,7 +546,7 @@ class VerifyRules(
                 validations=deps.stamper(self.state, tuning_history(self.state)),
             )
 
-    def _inert_summaries(self, build: SbfRun, submission: Submission) -> str | None:
+    def _inert_summaries(self, build: SbfRun) -> str | None:
         """A note naming the summary directives this build's symbols do not match.
 
         The failure it reports is total silence. A summary is a regex over demangled symbol names, so
@@ -574,11 +562,10 @@ class VerifyRules(
         directives = tuple(d.pattern for d in self.state["summaries"])
         if not directives or not isinstance(build.verdict, Built):
             return None
-        version = tools_version(submission.base_conf)
-        if version is None:
-            return None
         try:
-            symbols = defined_functions(build.verdict.manifest.artifact, tools_version=version)
+            symbols = defined_functions(
+                build.verdict.manifest.artifact, tools_version=PLATFORM_TOOLS_VERSION
+            )
         except (PlatformToolsMissing, OSError):
             _log.warning("could not read symbols to check summary directives", exc_info=True)
             return None
@@ -632,7 +619,7 @@ class VerifyRules(
                 )
             case SubmissionFailed(build=build, reason=reason):
                 said = [f"The prover run did not produce results: {reason}"]
-                if (inert := self._inert_summaries(build, deps.submission)) is not None:
+                if (inert := self._inert_summaries(build)) is not None:
                     said.append(inert)
                 return tool_return(self.tool_call_id, "\n\n".join(said) + drift)
             case Checked(build=build, report=report):
@@ -640,7 +627,7 @@ class VerifyRules(
                 unaccounted = _unaccounted(status, expected, incomplete)
                 surprising = _wrongly_expected(status, expected)
                 lines = [report.result_str]
-                if (inert := self._inert_summaries(build, deps.submission)) is not None:
+                if (inert := self._inert_summaries(build)) is not None:
                     lines.append(inert)
                 if surprising:
                     lines.append(
@@ -834,14 +821,6 @@ type CvlrConfigEdit = Annotated[
     SetLoopIter | SetNonlinearSolverPortfolio | SetOptimisticLoop, Discriminator("type")
 ]
 
-#: Conf keys the edits above write. The run overlay forces its own keys onto the base conf
-#: (:data:`~composer.spec.cvlr.conf.OVERLAY_OWNED_KEYS`), so an "accepted" edit to one of them would
-#: be reported as applied and then silently dropped before submission — the two sets must stay
-#: disjoint. Same assertion, for the same reason, as the CVL backend's ``author._FLAG_KEYS``.
-_CONF_EDIT_KEYS = frozenset({"loop_iter", "prover_args", "optimistic_loop"})
-assert not (_shadowed := _CONF_EDIT_KEYS & OVERLAY_OWNED_KEYS), \
-    f"conf edits shadowed by the run overlay: {', '.join(sorted(_shadowed))}"
-
 
 @tool_display(lambda p: f"Adjusting the prover config ({len(p['edits'])} edit(s))", "Config")
 class AdjustProverConfig(
@@ -876,7 +855,7 @@ class AdjustProverConfig(
     why: str = Field(
         description="What you tried first and why this setting is the remedy. The conf is written "
         "into the deliverable, so this is the account a reader gets of why it differs from the "
-        "project's own."
+        "starting one."
     )
 
     @override
@@ -888,36 +867,36 @@ class AdjustProverConfig(
             )
         if not self.edits:
             return "No edits given."
-        conf = dict(self.state["conf"])
+        settings = self.state["prover_settings"]
         for edit in self.edits:
             match edit:
                 case SetLoopIter(iterations=n):
                     if n < 1:
                         return f"A loop bound of {n} is not a bound; it has to be at least 1."
-                    if str(conf.get("loop_iter", "")) == str(n):
+                    if settings.loop_iter == n:
                         return f"`loop_iter` is already {n}."
-                    conf = with_loop_iter(conf, n)
+                    settings = dataclasses.replace(settings, loop_iter=n)
                 case SetNonlinearSolverPortfolio(enabled=on):
-                    if has_solver_portfolio(conf) == on:
+                    if settings.solver_portfolio == on:
                         return (
                             "The solver portfolio is already "
                             + ("on" if on else "off")
                             + " in this conf."
                         )
-                    conf = with_solver_portfolio(conf, on)
+                    settings = dataclasses.replace(settings, solver_portfolio=on)
                 case SetOptimisticLoop(enabled=on):
-                    if has_optimistic_loop(conf) == on:
+                    if settings.optimistic_loop == on:
                         return (
                             "`optimistic_loop` is already "
                             + ("on" if on else "off")
                             + " in this conf."
                         )
-                    conf = with_optimistic_loop(conf, on)
+                    settings = dataclasses.replace(settings, optimistic_loop=on)
         return tool_state_update(
             self.tool_call_id,
             "Prover config updated; the prover stamp is invalidated, so re-run `verify_rules`.\n\n"
-            f"```json\n{dump_conf(conf)}```",
-            conf=conf,
+            f"```json\n{dump_conf(settings_conf(settings))}```",
+            prover_settings=settings,
         )
 
 

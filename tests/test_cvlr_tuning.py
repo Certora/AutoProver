@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from composer.authoring.state import SkippedProperty, make_validation_stamper, spec_digest
+from composer.spec.cvlr.conf import ProverSettings
 from composer.spec.cvlr.env_paths import PathDialect
 from composer.spec.cvlr.state import PROVER_VALIDATION_KEY, tuning_history
 from composer.spec.cvlr.tuning import (
@@ -183,7 +184,7 @@ def test_a_summary_invalidates_a_stamp_earned_before_it():
         "skipped": [],
         "summaries": [],
         "munges": [],
-        "conf": {},
+        "prover_settings": ProverSettings(),
         "validations": {},
         "required_validations": [PROVER_VALIDATION_KEY],
     }
@@ -199,23 +200,23 @@ def test_rewording_a_justification_does_not_cost_a_submission():
     six-minute run for it would teach the author to leave justifications alone."""
     one = (SummaryDirective(pattern=_DISPLAY, why="first wording"),)
     two = (dataclasses.replace(one[0], why="a clearer second wording"),)
-    assert tuning_history({"summaries": list(one), "munges": [], "conf": {}}) == tuning_history({"summaries": list(two), "munges": [], "conf": {}})  # type: ignore[arg-type]
+    assert tuning_history({"summaries": list(one), "munges": [], "prover_settings": ProverSettings()}) == tuning_history({"summaries": list(two), "munges": [], "prover_settings": ProverSettings()})  # type: ignore[arg-type]
 
 
 def test_changing_the_return_shape_does_cost_one():
     one = (SummaryDirective(pattern="^f$", why="w"),)
     two = (SummaryDirective(pattern="^f$", why="w", returns="(*i32)(r1+0):num"),)
-    assert tuning_history({"summaries": list(one), "munges": [], "conf": {}}) != tuning_history({"summaries": list(two), "munges": [], "conf": {}})  # type: ignore[arg-type]
+    assert tuning_history({"summaries": list(one), "munges": [], "prover_settings": ProverSettings()}) != tuning_history({"summaries": list(two), "munges": [], "prover_settings": ProverSettings()})  # type: ignore[arg-type]
 
 
 def test_the_conf_is_always_in_the_history_and_the_tuning_files_only_when_used():
     """A run that never touches a tuning file contributes nothing from one — but it always
     contributes its conf, because there is no such thing as submitting without one and a verdict
     earned under a different loop bound or a different `rule_sanity` is not this run's verdict."""
-    empty = tuning_history({"summaries": [], "munges": [], "conf": {}})  # type: ignore[arg-type]
+    empty = tuning_history({"summaries": [], "munges": [], "prover_settings": ProverSettings()})  # type: ignore[arg-type]
     assert len(empty) == 1 and empty[0].startswith("conf:")
 
-    changed = tuning_history({"summaries": [], "munges": [], "conf": {"loop_iter": "3"}})  # type: ignore[arg-type]
+    changed = tuning_history({"summaries": [], "munges": [], "prover_settings": ProverSettings(loop_iter=3)})  # type: ignore[arg-type]
     assert changed != empty
 
 
