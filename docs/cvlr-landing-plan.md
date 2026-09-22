@@ -139,8 +139,8 @@ and summary layers under `envs/`. It also carries the env half of `tuning.py` �
 and `compose_env`, which the scaffold writes composites with — and **P3b** appends the summaries the
 authoring loop adds.
 
-And `composer/prover/conf.py`: reading, writing and layering a prover conf, shared with the CVL side
-rather than written a second time in `cvlr/conf.py`. Its CVL callers (`source/prover.py`,
+And `composer/prover/conf.py`: writing a prover conf and scoping it to a rule selection, shared with
+the CVL side rather than written a second time in `cvlr/conf.py`. Its CVL callers (`source/prover.py`,
 `source/author.py`, `source/artifacts.py`, `natspec/task_description.py`) move onto it in the same PR.
 That is the one part of P1 that edits existing files; the settings a CVL conf carries are unchanged.
 
@@ -337,7 +337,7 @@ four times over.
 | **D** Documentation | ~6 | ≈ +4,000 | What is left after each slice carries its own section: the capture plan, the upstream-defect record, this document, and the to-do index. |
 
 **R3 still goes after P7.** `tests/test_cvlr_image.py` imports `composer.spec.cvlr.conf` to check that
-the image bakes the platform-tools version the conf template asks for, which makes P1 the hard floor.
+the image bakes `PLATFORM_TOOLS_VERSION`, which makes P1 the hard floor.
 But the container exists to run `console-solana`, which is not a console script until P7, and nothing
 builds the image in CI — so landing it earlier would ship an entrypoint guarding a command that does
 not exist and would not even buy a build-breakage signal in exchange.

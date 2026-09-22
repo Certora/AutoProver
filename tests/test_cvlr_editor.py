@@ -19,6 +19,7 @@ from composer.sandbox.recipes import SANDBOX_CARGO_DIR
 
 from composer.cargo.depinfo import compiled_sources
 from composer.spec.cvlr import editor as editor_mod
+from composer.spec.cvlr.conf import ProverSettings
 from composer.spec.cvlr.editor import (
     AmendMunge,
     ApplyEarlyPanic,
@@ -91,7 +92,7 @@ def _author_state(**over):
         "rule_subjects": [],
         "summaries": [],
         "munges": [],
-        "conf": {},
+        "prover_settings": ProverSettings(),
         "expected_failures": {},
         "prover_link": None,
         "failed": None,

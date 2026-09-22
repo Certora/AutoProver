@@ -117,7 +117,7 @@ fallback group itself. Kin to U7 — both are a degraded result that presents as
 
 **~~U9. Should `optimistic_loop` be the default, as it is on the CVL side?~~** — **resolved: no.**
 *The escape hatch shipped; the default stays false. Settled 2026-09-21 on the normative stake-pool verification and two measurements, not on the survey. What is left over is **U10**.*
-[`conf.py`](../composer/spec/cvlr/conf.py)'s `TEMPLATE_BASE` sets `"optimistic_loop": False` and
+[`conf.py`](../composer/spec/cvlr/conf.py)'s `ProverSettings` defaults `optimistic_loop` to false and
 argues it well: the Solana spec template says false, and a survey of 354 confs across fifteen Solana
 projects finds it true in exactly one. It assumes a loop's halt conditions rather than proving them,
 so it hides any violation reachable only after more iterations. The stated remedies, in order, are
@@ -267,7 +267,7 @@ run is needed to close this; the artifact answers it.
 `SetOptimisticLoop` edit, so the author has the rung and the ladder in the bundle has a fourth step
 saying when it is the honest one. The tool's charter no longer claims every setting on it is sound;
 it says two are and one is not, and why the unsound one is there. **The default is unchanged** —
-`TEMPLATE_BASE` still says false, which is what a test now pins — so this closes the "no rung"
+`ProverSettings` still defaults it to false, which is what a test now pins — so this closes the "no rung"
 half and leaves the "default or not" half open. The comparison run above is still what decides it,
 and `conf.py`'s survey argument still needs the revision described above either way.
 

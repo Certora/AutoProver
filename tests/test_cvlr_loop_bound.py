@@ -11,9 +11,8 @@ The circuit it closes, in the order the authoring loop walks it:
    and reports :class:`~composer.prover.ptypes.IncompleteCheck` — so it is explained to the author
    and kept out of the findings evidence, which is the split ``tests/test_cvlr_findings.py`` pins
    against recorded fixtures and this one pins against the prover.
-3. ``adjust_prover_config``'s edit, applied through the same
-   :func:`~composer.spec.cvlr.conf.with_loop_iter` the tool applies it with, turns that into a
-   verdict.
+3. ``adjust_prover_config``'s edit, a :class:`~composer.spec.cvlr.conf.ProverSettings` with a
+   raised ``loop_iter``, turns that into a verdict.
 
 Both arms verify **one artifact**: the program is built once and the two confs are written over it,
 so the only variable is a single conf key — asserted, not assumed, before either job is submitted.
@@ -30,6 +29,8 @@ Marked ``expensive``: two real cloud jobs, and a Rust + Solana platform toolchai
 the missing piece — rather than failing when one is absent.
 """
 
+import dataclasses
+import json
 import os
 import shutil
 import subprocess
@@ -48,8 +49,8 @@ from composer.prover.core import (
 )
 from composer.prover.ptypes import IncompleteCheck, RuleResult, classify_violation
 from composer.sandbox.config import SandboxConfig
-from composer.prover.conf import SelectRules, read_conf, with_loop_iter
-from composer.spec.cvlr.conf import load_base, tools_version
+from composer.prover.conf import SelectRules, dump_conf
+from composer.spec.cvlr.conf import PLATFORM_TOOLS_VERSION, ProverSettings
 from composer.spec.cvlr.prover import (
     BuildRejected,
     Checked,
@@ -103,6 +104,13 @@ def _objdump(version: str) -> Path | None:
         if candidate.is_file():
             return candidate
     return None
+
+
+def _without_sanity(conf_path: Path) -> dict:
+    """Rewrite the conf at ``conf_path`` with vacuity checking off, and return it."""
+    conf = {**json.loads(conf_path.read_text()), "rule_sanity": "none"}
+    conf_path.write_text(dump_conf(conf))
+    return conf
 
 
 def _has_a_loop(artifact: Path, objdump: Path) -> bool:
@@ -185,19 +193,15 @@ async def test_raising_the_loop_bound_is_what_turns_the_rule_green(project, caps
     declared = rule_names(PROBE.read_text())
     assert set(declared) == set(RULES), declared
 
-    # Sanity off, as `tests/test_cvlr_anchor_reach.py` does and for the same reason: it doubles the
-    # work per rule and answers a different question. Both properties here are tautologies by
-    # design, which is exactly what a vacuity check is entitled to complain about.
-    default = {**load_base(None), "rule_sanity": "none"}
-    assert int(default["loop_iter"]) < 5, (
+    default = ProverSettings()
+    assert default.loop_iter < 5, (
         f"the probe's measured loop takes five iterations to outrun the default bound, which is "
-        f"now "
-        f"{default['loop_iter']}. Raise the probe's trip count or this measures nothing."
+        f"now {default.loop_iter}. Raise the probe's trip count or this measures nothing."
     )
-    raised = with_loop_iter(default, RAISED)
+    raised = dataclasses.replace(default, loop_iter=RAISED)
 
-    wanted = tools_version(default)
-    if wanted is not None and not platform_tools_installed(wanted):
+    wanted = PLATFORM_TOOLS_VERSION
+    if not platform_tools_installed(wanted):
         pytest.skip(f"Solana platform tools {wanted} are not installed under {PLATFORM_TOOLS_ROOT}")
 
     session = CargoSession(workdir=project, sandbox=SandboxConfig.from_env())
@@ -207,10 +211,10 @@ async def test_raising_the_loop_bound_is_what_turns_the_rule_green(project, caps
     fast = await session.check(package=PACKAGE, features=("certora",))
     assert fast.ok, fast.verdict
 
-    def _submission(conf: dict, stem: str) -> Submission:
+    def _submission(settings: ProverSettings, stem: str) -> Submission:
         return Submission(
             manifest_path=package.root / "Cargo.toml",
-            base_conf=conf,
+            settings=settings,
             rules=SelectRules(RULES),
             stem=stem,
             msg=f"AutoProver loop bound probe: {stem}",
@@ -223,7 +227,7 @@ async def test_raising_the_loop_bound_is_what_turns_the_rule_green(project, caps
     # The probe's premise, checked against the artifact rather than against the source, and before
     # anything is submitted: a loop the compiler deleted costs two cloud jobs to discover and looks
     # exactly like a passing run while it does it.
-    objdump = _objdump(wanted) if wanted is not None else None
+    objdump = _objdump(wanted)
     if objdump is None:
         with capsys.disabled():
             print(
@@ -239,10 +243,14 @@ async def test_raising_the_loop_bound_is_what_turns_the_rule_green(project, caps
         )
 
     confs = {
-        arm: await write_submission(session, _submission(conf, f"loop_bound_{arm}"))
-        for arm, conf in (("default", default), ("raised", raised))
+        arm: await write_submission(session, _submission(settings, f"loop_bound_{arm}"))
+        for arm, settings in (("default", default), ("raised", raised))
     }
-    written = {arm: read_conf(path) for arm, path in confs.items()}
+    # Sanity off, as `tests/test_cvlr_anchor_reach.py` does and for the same reason: it doubles the
+    # work per rule and answers a different question. Both properties here are tautologies by
+    # design, which is exactly what a vacuity check is entitled to complain about. No setting turns
+    # it off, so the probe edits the files it is about to submit.
+    written = {arm: _without_sanity(path) for arm, path in confs.items()}
     differing = {
         key: value
         for key, value in written["raised"].items()
@@ -291,7 +299,7 @@ async def test_raising_the_loop_bound_is_what_turns_the_rule_green(project, caps
     )
     with capsys.disabled():
         print(
-            f"\nloop bound {default['loop_iter']} (default): {verdicts['default']}"
+            f"\nloop bound {default.loop_iter} (default): {verdicts['default']}"
             f"\n{links['default']}"
             f"\nloop bound {RAISED} (raised):   {verdicts['raised']}\n{links['raised']}"
             f"\nfull reports saved to {saved}"
@@ -301,7 +309,7 @@ async def test_raising_the_loop_bound_is_what_turns_the_rule_green(project, caps
     for arm in confs:
         assert not verdicts[arm][UNBOUNDED], (
             f"an unbounded loop verified under bound "
-            f"{default['loop_iter'] if arm == 'default' else RAISED}, so the prover is not "
+            f"{default.loop_iter if arm == 'default' else RAISED}, so the prover is not "
             f"modelling "
             f"this program's loops and no verdict here means what it says. Report: {links[arm]}"
         )
