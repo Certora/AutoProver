@@ -376,8 +376,12 @@ balance — which decides whether the assumption is a narrowing to disclose or a
 record. Cheap to settle, and it generalizes: any rule over two accounts of one type has this
 question.
 
-**U15. A project's summaries are rebuilt from the installed wheel's layers; its inlining is frozen
-at first scaffold. Both cannot be right.**
+**~~U15. A project's summaries are rebuilt from the installed wheel's layers; its inlining is frozen
+at first scaffold. Both cannot be right.~~** — **resolved: the starting layers are AutoProver's.**
+*Settled 2026-09-22 on eric/cvlr-preflight and back-ported. The starting layers are no longer copied
+into a project. Both families compose from the wheel's `envs/`, and the scaffold rewrites a package
+composite whenever it differs from what the starting layers and `_package.txt` compose to, so an
+edit to `_package.txt` or a newer starting configuration reaches the build.*
 §7.4.1 states the scaffold's contract as *never overwrite* — nothing in a project is rewritten after
 the first run, which is why a re-run is a no-op and why the template's own `certora-setup.py`
 corrupting a manifest on second use is the failure it was written against. The inlining family obeys
