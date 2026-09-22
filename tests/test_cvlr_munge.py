@@ -1,16 +1,13 @@
 """Pointing a target at the Anchor fork Certora maintains, and refusing when it cannot.
 
-``docs/cvlr-backend-plan.md`` §7.6. Upstream ``anchor_lang::error::Error`` boxes its payload and the
-Solana Prover rejects that as [3006], so on an Anchor target the difference between the fork and
-crates.io is the difference between a rule that can be analyzed and one that cannot.
+Upstream ``anchor_lang::error::Error`` boxes its payload and the Solana Prover rejects that as
+[3006]. On an Anchor target the fork is what makes a handler analyzable.
 
-Which fixes what these tests are for. The failure mode is silence: a target left on the crates.io
-crate builds fine, submits fine, and then reports [3006] — a message about pointer analysis, with no
-hint that a fork exists. So the cases worth pinning are the ones where nothing would otherwise
-complain: a version the fork does not cover must **block** rather than fall through, and a project
-that already sources Anchor itself must be left alone rather than overridden.
+The failure is quiet. A target left on the crates.io crate builds, submits, and then reports
+[3006], a pointer-analysis message with nothing about a fork. A version the fork does not cover
+has to block. A project that already chooses where Anchor comes from has to be left alone.
 
-No cargo and no network — ``Workspace`` objects are built directly. The fork actually building is
+No cargo and no network. ``Workspace`` objects are built in the test. That the fork builds is
 covered by ``tests/test_cvlr_anchor_reach.py``, which is expensive.
 """
 
@@ -88,17 +85,16 @@ def test_the_manifest_addition_redirects_the_graph_at_the_fork(tmp_path):
 
 
 def test_the_manifest_says_these_are_not_the_deployed_dependencies(tmp_path):
-    """The one thing a reader of that manifest must not have to infer. A property proved against a
-    fork is a property of the fork, and the section that swaps the dependency is where somebody will
-    be standing when the question occurs to them."""
+    """A property proved against a fork is a property of the fork. The patch section says so,
+    next to the dependency it replaces."""
     addition = manifest_additions(plan_munge(_workspace(tmp_path, _package("anchor-lang", "0.31.1"))))
     assert "NOT the deployed program's" in addition
     assert "[3006]" in addition
 
 
 def test_a_branch_is_named_rather_than_a_commit_pinned(tmp_path):
-    """What the reference project does: the lockfile records the commit, so the build is
-    reproducible without this manifest needing an edit every time the fork picks up a fix."""
+    """The lockfile records the commit, so the build stays reproducible without editing this
+    manifest every time the fork moves."""
     addition = manifest_additions(plan_munge(_workspace(tmp_path, _package("anchor-lang", "0.31.1"))))
     assert "rev =" not in addition
 
@@ -114,10 +110,8 @@ def test_every_declared_version_maps_to_a_branch(tmp_path, version):
 
 
 def test_an_uncovered_version_blocks_rather_than_leaving_the_boxing_in(tmp_path):
-    """The case that would otherwise be silent. 0.30.0 is deliberate: the fork covers 0.30.1 and not
-    0.30.0, which is exactly why the versions are listed rather than derived from a pattern — a
-    derived name would send cargo looking for a branch that does not exist, and the error would be
-    about git rather than about Anchor coverage."""
+    """The fork covers 0.30.1 and not 0.30.0, which is why versions are listed. A derived name
+    would send cargo after a branch that does not exist, and the error would be about git."""
     plan = plan_munge(_workspace(tmp_path, _package("anchor-lang", "0.30.0")))
     assert plan.overrides == ()
     assert len(plan.blocked) == 1
@@ -128,8 +122,8 @@ def test_an_uncovered_version_blocks_rather_than_leaving_the_boxing_in(tmp_path)
 
 
 def test_a_project_that_already_sources_anchor_itself_is_left_alone(tmp_path):
-    """A path dependency means somebody already decided where Anchor comes from. Overriding that
-    would replace a deliberate choice with a guess."""
+    """A path dependency means the project already decided where Anchor comes from. Overriding
+    it would replace that choice."""
     plan = plan_munge(_workspace(tmp_path, _package("anchor-lang", "0.31.1", source=None)))
     assert plan.overrides == ()
     assert plan.blocked == ()
@@ -138,14 +132,11 @@ def test_a_project_that_already_sources_anchor_itself_is_left_alone(tmp_path):
 
 
 def test_a_project_already_patched_to_the_fork_is_recognized_as_such(tmp_path):
-    """The bug this replaced. Detection used to search Cargo.toml for a
-    ``[patch.crates-io.anchor-lang]`` header, and no real project writes that spelling — every one
-    of them uses the inline ``anchor-lang = {{ git = … }}`` form under a shared header. So the search
-    found nothing, the scaffold appended a second entry for a key TOML already had, and cargo failed
-    outright: the projects already doing the right thing were the ones it broke.
-
-    Seen from the resolved graph instead, which is what cargo itself computed after applying the
-    patch table."""
+    """A project already on the fork is recognized from the resolved graph. ``cargo metadata``
+    reports the patch as a git source, not as the ``[patch.crates-io.<crate>]`` header this
+    module writes. Projects write ``anchor-lang = { git = … }`` under one shared header. Searching
+    for either spelling misses the other, and a second entry for a key TOML already has is a
+    manifest cargo refuses."""
     patched = _package(
         "anchor-lang",
         "0.31.1",
@@ -187,9 +178,8 @@ def test_a_target_that_is_not_an_anchor_program_needs_nothing(tmp_path):
 
 
 def test_the_branch_list_matches_what_the_fork_publishes():
-    """The list is a claim about another repository, so it is worth stating what it was checked
-    against. Read from `Certora/anchor` on 2026-09-01; the fork also carries `-pad-error` and
-    `-reduce-error` variants of 0.29.0, deliberately excluded as experiments."""
+    """Read from ``Certora/anchor`` on 2026-09-01. The fork also has ``-pad-error`` and
+    ``-reduce-error`` branches of 0.29.0. Those are experiments and are not in this list."""
     versions = [v for v, _ in ANCHOR_FORK.branches]
     assert versions == sorted(versions), "keep the list ordered so a gap is visible"
     assert len(set(versions)) == len(versions)
@@ -210,11 +200,10 @@ def test_every_override_says_why_it_exists_and_covers_at_least_one_version():
 
 
 def test_the_anchor_fork_covers_both_crates_it_publishes(tmp_path):
-    """Patching only anchor-lang clears [3006], because the boxing is in ``anchor_lang::error``, and
-    then leaves anchor-spl as the upstream crate — whose ``TokenAccount`` and ``Mint`` are newtypes
-    with a private field. The fork adds ``new_unchecked`` for exactly those, so a harness over a
-    token program cannot build an account without it. Both corpus projects that verify an Anchor
-    program patch both crates, to the same branch."""
+    """Patching only ``anchor-lang`` clears [3006], because the boxing is in
+    ``anchor_lang::error``, and leaves ``anchor-spl`` upstream. Its ``TokenAccount`` and ``Mint``
+    are newtypes with a private field. The fork adds ``new_unchecked`` for those, so a harness
+    can build a token account. Both crates are redirected to the same branch."""
     assert set(ANCHOR_FORK.crates) == {"anchor-lang", "anchor-spl"}
     plan = plan_munge(
         _workspace(
@@ -228,8 +217,8 @@ def test_the_anchor_fork_covers_both_crates_it_publishes(tmp_path):
 
 
 def test_one_forks_two_crates_share_one_reason_in_the_manifest(tmp_path):
-    """Repeating a paragraph verbatim under each crate reads like two unrelated changes that happen
-    to say the same thing."""
+    """Two crates from one fork share one explanation. Repeating it under each reads like two
+    unrelated edits."""
     addition = manifest_additions(
         plan_munge(
             _workspace(
@@ -243,8 +232,8 @@ def test_one_forks_two_crates_share_one_reason_in_the_manifest(tmp_path):
 
 
 def test_the_fixed_fork_is_planned_from_the_version_the_corpus_pins(tmp_path):
-    """Both corpus projects that use it resolve ``fixed`` 1.23.1 to ``certora-v1.23.1``, at the same
-    commit. One branch is listed because one is what there is evidence for."""
+    """The known release is ``fixed`` 1.23.1 on ``certora-v1.23.1``. One branch is listed because
+    that is the release the fork is known to cover."""
     plan = plan_munge(_workspace(tmp_path, _package("fixed", "1.23.1")))
     (override,) = plan.overrides
     assert override.repo == "https://github.com/Certora/fixed.git"
@@ -256,10 +245,9 @@ def test_the_fixed_fork_is_planned_from_the_version_the_corpus_pins(tmp_path):
 
 
 def test_the_inline_spelling_every_real_project_uses_is_recognized():
-    """The spelling that mattered. Nine corpus projects carry a patch table; all nine write one
-    shared ``[patch.crates-io]`` header with an inline table per crate, and none writes the
-    per-crate sub-table form this module emits. They are the same TOML and share no text, so a
-    search for either misses the other."""
+    """Projects write one ``[patch.crates-io]`` header with an inline table per crate. This
+    module writes a ``[patch.crates-io.<crate>]`` sub-table. They are the same TOML and share no
+    text, so a search for either misses the other."""
     inline = """
 [patch.crates-io]
 anchor-lang = { git = "https://github.com/Certora/anchor.git", branch = "certora-v0.29.0" }
@@ -293,9 +281,9 @@ def test_an_unparseable_manifest_is_not_a_reason_to_refuse_to_scaffold():
 
 
 def test_a_crate_the_table_already_names_is_left_alone(tmp_path):
-    """Belt to the graph's braces. The graph is the better source — it is what cargo computed — but
-    it is a snapshot, and a snapshot taken before the patch table was applied still shows the
-    registry. Appending a second entry for a key TOML already has is a manifest cargo refuses."""
+    """The graph is what cargo computed, but a snapshot taken before the patch table was applied
+    still shows the registry. A second entry for a key TOML already has is a manifest cargo
+    refuses."""
     plan = plan_munge(
         _workspace(tmp_path, _package("anchor-lang", "0.31.1")),
         already_redirected=frozenset({"anchor-lang"}),

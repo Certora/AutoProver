@@ -1,25 +1,21 @@
-"""Rendering the canonical tuning files in the path spelling a target's platform speaks.
+"""Spell the vendored tuning files the way a target's platform generation does.
 
-The four files under ``envs/`` are vendored verbatim from upstream and written in the *monolith's*
-spelling: ``solana_program::account_info::AccountInfo``, ``solana_program::pubkey::Pubkey``. On
-``solana-program`` 2.2 and later those are re-export aliases, and a demangled Rust symbol carries the
-path of the crate that *defines* a thing — ``solana_account_info::AccountInfo`` — so a directive
-written in the canonical spelling matches nothing at all. It does not fail; it silently does not
-apply, which is how fourteen directives and one blanket stopped taking effect on the first real
-target this backend was pointed at. ``docs/cvlr-backend-plan.md`` §7.5.6 is that investigation.
+The files under ``envs/`` are copied from upstream and written with ``solana_program::`` paths
+(``solana_program::account_info::AccountInfo``). From ``solana-program`` 2.2 on those are
+re-exports. A demangled symbol carries the path of the crate that defines the item
+(``solana_account_info::AccountInfo``), so a directive in the old spelling matches nothing. It
+does not fail. It does not apply.
 
-So the canonical files are the **concept keys**, written in one spelling, and the platform
-generation says how to spell those concepts for a given target
-(:class:`~composer.spec.cvlr_reference.PathAlias`). This module is the seam between them.
+:class:`~composer.spec.cvlr_reference.PathAlias` pairs a canonical spelling with this generation's
+spellings. This module applies those pairs.
 
-Two properties are worth stating because they are the reason this is not a string substitution:
+One concept can have more than one spelling. ``solana-program`` kept its own
+``invoke_signed_unchecked``, and the one on the call path is ``solana-cpi``'s, so one directive
+becomes two.
 
-* **A concept can have more than one spelling.** ``solana-program`` kept a real
-  ``invoke_signed_unchecked`` while the one on the call path is ``solana-cpi``'s, so one canonical
-  directive becomes two.
-* **A spelling only counts if the target resolves the crate.** Aliases are declared against the
-  post-split generation; dropping the ones whose crate is absent is what makes them safe to apply to
-  a 1.18 target, whose paths are already the canonical ones.
+An alias is used only when the target resolves the crate it names. The aliases are declared for
+the post-split generation. Dropping the ones whose crate is absent keeps them safe on a 1.18
+target, whose paths are already the canonical ones.
 """
 
 import logging
@@ -41,26 +37,24 @@ _TYPE_LINE = re.compile(r"^#\[type\(.*\)\]\s*$")
 
 
 def _crate_of(path: str) -> str:
-    """The cargo crate name a Rust path's first segment belongs to."""
     return path.split("::", 1)[0].replace("_", "-")
 
 
 @dataclass(frozen=True)
 class PathDialect:
-    """How one target spells the concepts the canonical tuning files name.
+    """How one target spells the paths in the vendored tuning files.
 
-    Constructed by :func:`dialect_for` rather than declared, because a declared alias is only usable
-    once the target's resolved graph has confirmed the crate it names.
+    Built by :func:`dialect_for` from the aliases whose crates this target resolves.
     """
 
     aliases: tuple[PathAlias, ...] = ()
 
     def spellings(self, pattern: str) -> tuple[str, ...]:
-        """``pattern`` in this dialect — itself unchanged when it names nothing that moved.
+        """``pattern`` in this dialect. Unchanged when it names nothing that moved.
 
-        Longest canonical first, so that a symbol-level alias beats the module-level one it sits
-        inside: ``solana_program::program::invoke_signed_unchecked`` must not be decided by an alias
-        for ``solana_program::program``.
+        Longest canonical first, so a symbol alias wins over the module alias it sits inside.
+        ``solana_program::program::invoke_signed_unchecked`` must not be rewritten by an alias for
+        ``solana_program::program``.
         """
         rendered = [pattern]
         for alias in sorted(self.aliases, key=lambda a: -len(a.canonical)):
@@ -74,9 +68,8 @@ class PathDialect:
     def render(self, text: str) -> str:
         """One tuning file with every directive spelled for this target.
 
-        Line-oriented and order-preserving, because the files are read by people as well as by the
-        prover: comments, blank lines and grouping survive, and a directive that gains a second
-        spelling gains it immediately below the first.
+        Comments, blank lines, and grouping are kept. A second spelling is inserted directly
+        under the first.
         """
         out: list[str] = []
         annotations: list[str] = []
@@ -88,9 +81,8 @@ class PathDialect:
             inline = _INLINE_LINE.match(stripped)
             if inline is not None:
                 spellings = self.spellings(inline["pattern"])
-                # Unchanged lines are emitted as they arrived, trailing whitespace and all. The
-                # vendored files are a copy of upstream's, and a render that reflowed the lines it
-                # did not change would make the next refresh report a diff that is ours.
+                # Unchanged lines are copied as they arrived, including trailing whitespace.
+                # Reflowing them would show up as our diff the next time the upstream file is refreshed.
                 out += (
                     [line]
                     if spellings == (inline["pattern"],)
@@ -104,16 +96,15 @@ class PathDialect:
                     annotations = []
                     continue
                 for n, pattern in enumerate(spellings):
-                    # Upstream separates annotated summary blocks with a blank line, and the two
-                    # blocks it hand-duplicated for the split follow that. Emitting a repeat without
-                    # one runs two summaries together into something that reads like one.
+                    # Upstream separates annotated summary blocks with a blank line. Without one,
+                    # two summaries read as a single block.
                     if n and annotations:
                         out.append("")
                     out += [*annotations, pattern]
                 annotations = []
                 continue
-            # A comment or a blank line: any annotations buffered before it belonged to nothing, so
-            # they pass through as written rather than being silently attached to a later pattern.
+            # A comment or a blank line ends the annotation block. Flush it as written
+            # instead of attaching it to a later pattern.
             out += annotations
             annotations = []
             out.append(line)
@@ -121,10 +112,10 @@ class PathDialect:
 
 
 def _unique(patterns: Iterable[str]) -> list[str]:
-    """``patterns`` with duplicates dropped, first occurrence winning.
+    """``patterns`` with duplicates dropped, first occurrence kept.
 
-    An alias whose canonical spelling is one of its own ``actual`` entries — how a symbol that exists
-    on *both* sides of a split is declared — would otherwise emit the same directive twice.
+    An alias can list its canonical spelling as one of its own replacements, for a symbol that
+    exists on both sides of a split. Without this that directive would be emitted twice.
     """
     seen: dict[str, None] = {}
     for p in patterns:
@@ -133,10 +124,10 @@ def _unique(patterns: Iterable[str]) -> list[str]:
 
 
 def dialect_for(workspace: Workspace, reference: ChainReference) -> PathDialect:
-    """The spelling ``workspace`` speaks, for the platform generation ``reference`` names.
+    """The spelling ``workspace`` uses for the platform generation ``reference`` names.
 
-    Aliases naming a crate the target does not resolve are dropped, so this is safe to call for a
-    target on an older generation: it returns a dialect that changes nothing.
+    Aliases whose crate the target does not resolve are dropped. On an older generation this
+    returns a dialect that changes nothing.
     """
     aliases: list[PathAlias] = []
     for alias in reference.platform.path_aliases:

@@ -1,22 +1,20 @@
 """Resolving a real Cargo project with real cargo, from a bare workspace to one that compiles.
 
-Everything else about preflight is checked against a hand-built ``Workspace`` with
-``read_workspace`` monkeypatched out, which is the right way to pin what the planner *decides*. It
-cannot pin what this does, because the three things most likely to be wrong here are all facts about
-cargo rather than about us:
+The other preflight tests build a ``Workspace`` by hand and patch out ``read_workspace``. That
+pins what the planner decides. It cannot pin what cargo decides:
 
-* which member owns a source file — cargo's answer, not a prefix match of ours;
-* that the CVLR crates a run resolves are only visible *after* the scaffold has been applied and the
-  graph re-read under the verification feature, from the package's own directory. Both halves of
-  that were found by running it, and a fake graph answers whatever it was built to answer;
-* that the result compiles at all.
+* which member owns a source file, which is cargo's answer, not a prefix match;
+* that the CVLR crates are visible only after the scaffold is applied and the graph is re-read
+  under the verification feature, from the package directory. A fake graph answers whatever it
+  was built to answer;
+* that the result compiles.
 
-So this is the one test that installs nothing of its own. The workspace has two members with library
-targets, which is a workspace :func:`_pick_package` refuses on its own — so the selection can only
-come from cargo's view of who owns ``main_source``, and a regression to a prefix match fails here.
+The workspace has two members with library targets. :func:`_pick_package` refuses that on its
+own, so the selection has to come from cargo's view of who owns ``main_source``. A prefix match
+fails here.
 
 Marked ``expensive``: it resolves and compiles a real dependency graph off the network. It skips,
-naming what is missing, rather than failing when cargo is absent.
+naming what is missing, when cargo is absent.
 """
 
 import shutil
@@ -68,12 +66,10 @@ def project(tmp_path: Path) -> Path:
 
 
 async def test_a_bare_cargo_workspace_becomes_one_that_compiles_with_a_harness_in(project):
-    """The whole of what this slice can do, in the order a run does it.
+    """Select a package, scaffold it, and compile it, in the order a run does.
 
-    The compile gate is the assertion that matters: everything before it is a plan, and a plan that
-    produces a project which does not build is worth nothing. It is also the only check that the
-    scaffold's feature wiring, its manifest edits and the crate versions it pins are consistent with
-    each other, since each of those is separately plausible and only rustc reads all three.
+    The compile is the check that the feature wiring, the manifest edits, and the pinned crate
+    versions agree. Each of those can look right on its own. Only rustc reads all three.
     """
     main_source = project / "programs" / "vault" / "src" / "lib.rs"
 
@@ -92,8 +88,8 @@ async def test_a_bare_cargo_workspace_becomes_one_that_compiles_with_a_harness_i
 
 
 async def test_pointing_it_at_a_project_it_already_scaffolded_is_a_read(project):
-    """The scaffold never overwrites, which is what makes it safe to run against a project somebody
-    else maintains — and what lets a run re-enter one it prepared earlier without a diff."""
+    """The scaffold does not overwrite. A second run against a project it already prepared
+    leaves an edited harness file alone."""
     main_source = project / "programs" / "vault" / "src" / "lib.rs"
     selected = await select_package(project, None, main_source=main_source)
 

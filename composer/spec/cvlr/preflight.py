@@ -1,25 +1,17 @@
-"""Preflight for a CVLR run: scaffold the project, then prove the scaffold builds.
+"""Scaffold a CVLR project, then check that the scaffold compiles.
 
-The seam is ``docs/formalization-abstraction.md`` §2: ``PipelineBackend.preflight`` runs in the same
-task group as system analysis, so whichever side fails first cancels the other. That is what makes
-a *gate* here worth more than the same check later — a project that cannot compile with the harness
-in stops the run having spent at most one partial analysis agent, instead of surfacing as
-unfixable compiler errors in the first authored draft after the whole extraction phase.
+:meth:`composer.pipeline.core.PipelineBackend.preflight` runs in the same task group as system
+analysis (``docs/formalization-abstraction.md`` §2), so a failure here cancels the analysis. A
+project that cannot compile with the harness in is not handed on.
 
-Two halves, split the way :mod:`composer.rustapp.adapter` splits its own preflight, and for the same
-reason: :func:`prepare_workspace` is bookkeeping and file writes, while :func:`gate_workspace` is a
-compile. A compile belongs to the run's CPU budget rather than its agent budget, so the backend
-wraps only the second in ``run.cpu_runner`` — and a function that did both could not be placed on
-either side of that line.
+:func:`prepare_workspace` writes files. :func:`gate_workspace` compiles. The compile sits on the
+run's CPU budget (``PipelineRun.cpu_runner``), the same split as
+:mod:`composer.rustapp.adapter`. One function that did both could not be placed on either side
+of that line.
 
-Nothing here is LLM-shaped, which is the finding §7.4 was asking about. The phase was scoped as
-"agent-assisted only where a template genuinely cannot decide", and the two places a template must
-not decide turn out to be refusals rather than judgements: a package that builds no loadable object,
-and a CVLR pin that contradicts the platform generation the project is already on. Both are
-:class:`~composer.spec.cvlr.scaffold.Blocked`, and both want a human rather than a model.
-
-There is no ``CvlrBackend`` yet — that is §7.5, with the authoring loop. These functions are
-complete and tested without one, the same way phase 1b's submission plumbing was.
+Two outcomes are refusals, both :class:`~composer.spec.cvlr.scaffold.Blocked`: a package that
+builds no loadable object, and a CVLR pin that does not match the platform generation the
+project is already on.
 """
 
 import logging
@@ -43,39 +35,35 @@ _log = logging.getLogger(__name__)
 
 
 class PreflightFailed(RuntimeError):
-    """The project cannot be prepared for verification, so the run should stop.
+    """The project cannot be prepared for verification, so the run stops.
 
-    Distinct from :class:`composer.rustapp.adapter.PreflightFailed`, which says the same thing for
-    the Rust wheel backend. Two types rather than one shared one because the message is the only
-    thing a reader gets and knowing *which* backend gave up on the workspace is part of it.
+    Separate from :class:`composer.rustapp.adapter.PreflightFailed`, which says the same thing
+    for the Rust wheel. The message is what a reader sees, and it names this backend.
     """
 
 
 @dataclass(frozen=True)
 class CvlrPreflight:
-    """What preflight learned, carried to ``prepare_system`` as the pipeline's opaque ``Pre``.
+    """What preflight learned. The pipeline carries this to ``prepare_system`` as ``Pre``.
 
-    The scaffold plan is kept, not just its outcome. A run that reports "verified" against a project
-    it silently edited is not reproducible, and the plan is the record of what changed — including
-    the case where it changed nothing because the project was already set up.
+    The scaffold plan is kept with the outcome. It records what was written, including a run
+    that wrote nothing because the project was already set up.
     """
 
     workspace_root: Path
     package: str
-    #: The package's directory relative to the workspace root — where the harness module goes, and
-    #: which crate the build names. Carried rather than recomputed: the scaffold already resolved it
-    #: against this same workspace, and a second derivation is a second chance to disagree.
+    #: The package directory relative to the workspace root. The harness module is written here,
+    #: and the build names this crate. Taken from the workspace the scaffold already used.
     package_dir: Path
-    #: The library target's file stem, which is what the built ``.so`` is named after.
+    #: The library target's file stem. The built ``.so`` is named after it.
     artifact_stem: str
     scaffold: ScaffoldPlan
     applied: tuple[Path, ...]
-    #: The CVLR crates the *scaffolded* graph resolves — read after applying, because before it the
-    #: project may not depend on CVLR at all and the answer would be "none".
+    #: The CVLR crates the scaffolded graph resolves. Read after applying. Before that the
+    #: project may not depend on CVLR at all.
     sources: CvlrSources
-    #: Where the resolved crates and the knowledge corpus's reference set disagree. Reported rather
-    #: than corrected: the project's own pin wins (see the scaffold), and recall from the corpus is
-    #: what has to be qualified.
+    #: Where the resolved crates and the reference set disagree. Reported, not corrected. The
+    #: project's own pin wins, and corpus recall has to be read against that version.
     gaps: tuple[VersionGap, ...]
 
     def describe(self) -> str:
@@ -89,9 +77,8 @@ class CvlrPreflight:
 def _pick_package(workspace: Workspace, requested: str | None) -> CratePackage:
     """The package to verify.
 
-    Named explicitly whenever there is a choice. Guessing among members is exactly the decision
-    §5.6 says belongs outside a template: which program is under verification is a fact about the
-    engagement, not about the repository layout."""
+    An explicit name is required when more than one member has a library target. Which program
+    is under verification is not something the repository layout decides."""
     if requested is not None:
         member = workspace.member(requested)
         if member is None:
@@ -111,19 +98,16 @@ def _pick_package(workspace: Workspace, requested: str | None) -> CratePackage:
 
 @dataclass(frozen=True)
 class SelectedPackage:
-    """Which package a run will verify, resolved before the run starts.
+    """Which package will be verified, resolved before any files are written.
 
-    :func:`prepare_workspace` reaches the same answer, but only once the run is under way — and two
-    things a caller has to build first need it: the artifact store, which writes the harness into
-    *that* crate's directory, and the ``--package`` a scaffolded workspace is then gated on. So the
-    selection is available on its own, and a workspace that needs one named fails while it is still
-    a usage error rather than a run that has spent an analysis agent.
+    :func:`prepare_workspace` reaches the same package and then scaffolds. This only reads the
+    workspace, so a workspace that needs a package named fails before anything is written.
     """
 
     workspace_root: Path
     name: str
-    #: The package's directory relative to the workspace root — the same relation
-    #: :attr:`CvlrPreflight.package_dir` carries, since they are computed from one workspace read.
+    #: The package directory relative to the workspace root, the same relation as
+    #: :attr:`CvlrPreflight.package_dir`. Both come from one workspace read.
     package_dir: Path
 
 
@@ -132,11 +116,11 @@ async def select_package(
 ) -> SelectedPackage:
     """Resolve ``package`` against the workspace at ``project_root``.
 
-    An explicit name wins. Failing that, the crate that *owns* the main program's source file is
-    the answer — cargo's own view of which member a path belongs to, so a multi-program workspace
-    (which :func:`_pick_package` refuses on its own) needs no second flag to say what the main
-    program already said. Only when neither is available does this fall back to the single-library
-    rule, and its refusal message.
+    An explicit name wins. Otherwise the member that owns the main program's source file wins,
+    which is cargo's own view of which member a path belongs to. A workspace with several
+    library crates, which :func:`_pick_package` refuses on its own, needs no second flag.
+    When neither a name nor a source file is available, the single-library rule applies,
+    including its refusal.
     """
     workspace = await _workspace_at(project_root)
     owner = workspace.owning(main_source) if main_source is not None else None
@@ -172,8 +156,8 @@ async def prepare_workspace(
 ) -> CvlrPreflight:
     """Scaffold ``project_root`` and report what a run needs to know about it.
 
-    Writes into the project it is given, which for a pipeline run is the copy the run owns. The
-    scaffold never overwrites, so pointing this at an already-verified project is a read.
+    Writes into the project it is given. For a pipeline run that is the copy the run owns. The
+    scaffold never overwrites, so an already-scaffolded project is only read.
     """
     reference = reference_for(chain)
     workspace = await _workspace_at(project_root)
@@ -186,11 +170,11 @@ async def prepare_workspace(
     except ScaffoldBlocked as exc:
         raise PreflightFailed(str(exc)) from exc
 
-    # Re-read against the *verification* feature, from the package's own directory. Two reasons,
-    # and both were found by running this: applying the scaffold adds CVLR to the manifests, so the
-    # graph read before it does not contain the crates every later step resolves versions from; and
-    # the scaffold declares them `optional = true`, so even afterwards a default-feature read
-    # reports them absent (:func:`composer.cargo.metadata.read_workspace_sync`).
+    # Re-read with the verification feature, from the package directory. The scaffold adds CVLR
+    # to the manifests, so the graph from before that does not contain those crates. They are
+    # optional, so a default-feature read still reports them absent
+    # (:func:`composer.cargo.metadata.read_workspace_sync`). Features resolve against the package
+    # cargo considers current.
     resolved_in = await _workspace_at(member.root, features=(DEFAULT_FEATURE,))
     fresh = resolved_in.member(member.name) or member
     if fresh.lib is None:
@@ -215,12 +199,11 @@ async def gate_workspace(
     sandbox: SandboxConfig,
     features: tuple[str, ...] = (DEFAULT_FEATURE,),
 ) -> None:
-    """Prove the scaffolded project compiles with the harness in, or fail the run.
+    """Check that the scaffolded project compiles with the harness in, or fail the run.
 
-    The fast tier only (``cargo check`` on the host target). The slow SBF build is the
-    pre-submission gate and belongs there: what this has to catch is a scaffold that does not
-    compile, and paying for a chain build to learn that would make the gate cost more than the
-    phase it protects.
+    Host-target ``cargo check`` only. What this has to catch is a scaffold that does not compile.
+    The SBF build is a later gate, and running it here would cost more than the failure it would
+    be catching.
     """
     session = CargoSession(workdir=pre.workspace_root, sandbox=sandbox)
     warmed = await session.warm()

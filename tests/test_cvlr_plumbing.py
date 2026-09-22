@@ -1,13 +1,9 @@
-"""The deterministic half of the CVLR backend, tested without a toolchain, a network or an LLM.
+"""CVLR metadata, conf parsing, and conf layering, with no toolchain, network, or LLM.
 
-``docs/cvlr-backend-plan.md`` §6 puts "deterministic first" ahead of everything else, and the claim
-that phase 1b is unit-testable is only worth making if these tests need nothing installed. So
-nothing here shells out to cargo and nothing submits: what is checked is the reading and the
-layering — the parse of ``cargo metadata``, the parse of a conf, which conf keys a run owns, the
-argument vector a build is given, and the shape of the build script handed to the prover.
-
-The end-to-end counterpart — a real build submitted to the real Prover and compared against a
-checked-in expected-verdict file — is ``tests/test_cvlr_end_to_end.py``, marked ``expensive``.
+Nothing here shells out to cargo or submits a job. What is checked is the parse of
+``cargo metadata``, the parse of a conf, which conf keys a run owns, the argument vector a build is
+given, and the build script handed to the prover. ``tests/test_cvlr_end_to_end.py`` submits a real
+build and compares the verdicts against a checked-in file. It is ``expensive``.
 """
 
 import json
@@ -159,7 +155,7 @@ def test_a_published_dependency_is_distinguished_from_a_workspace_member():
 
 
 # --------------------------------------------------------------------------------------------
-# CVLR source resolution (§5.5)
+# CVLR source resolution
 # --------------------------------------------------------------------------------------------
 
 
@@ -193,7 +189,7 @@ def test_an_older_cvlr_than_the_corpus_was_written_against_is_reported():
 # the conf
 # --------------------------------------------------------------------------------------------
 
-#: The public examples' ``Default.conf``, abridged. Both of its JSON5-isms are load-bearing here:
+#: The public examples' ``Default.conf``, abridged. The comment and the trailing comma are why
 #: it would not survive ``json.loads``.
 _REAL_CONF = """\
 {
@@ -216,8 +212,8 @@ def test_a_real_conf_parses_despite_comments_and_trailing_commas():
 
 
 def test_an_integer_conf_value_stays_a_string():
-    """``certoraUtils.read_conf_file`` reads ints as strings, which is why confs in the wild say
-    ``"loop_iter": "1"``. Round-tripping a project's conf must not silently retype its values."""
+    """``certoraRun`` reads conf integers as strings, which is why real confs say
+    ``"loop_iter": "1"``. Round-tripping a project's conf must not retype its values."""
     assert cvlr_conf.parse_conf(_REAL_CONF)["loop_iter"] == "3"
 
 
@@ -234,14 +230,7 @@ def test_the_recommended_starting_point_is_the_base_when_a_project_has_no_conf()
 
 
 # ---------------------------------------------------------------------------------------------
-# Whose conf a run submits under
-#
-# The layering this module describes — project conf as the base, the run owning a small set of keys
-# — was built and then never wired: the one production call site passed `load_base(None)`, so every
-# run used the recommended starting point's settings and a project that had tuned its own prover
-# flags was verified without them. The reference project keeps a `run.conf` carrying a twelve-seed
-# solver portfolio and LIA/NIA hints aimed squarely at nonlinear arithmetic; a run against it used
-# none of that and never said so.
+# Which conf a run submits under
 
 
 def test_a_project_that_keeps_a_base_conf_is_verified_under_it(tmp_path):
@@ -277,13 +266,11 @@ def test_a_per_rule_set_conf_is_not_adopted_as_the_base(tmp_path):
 
 
 # ---------------------------------------------------------------------------------------------
-# The two settings the author may move
+# The two settings a caller may change
 #
-# Both are sound — they decide how the prover spends its time, never what a green verdict means —
-# which is the line the editable set may not cross. The portfolio is one named recipe rather than an
-# editable flag list because `docs/upstream-defects.md` P8 measured what a plausible-looking flag
-# does in the wrong combination: an eighteen-rule harness went from 6.7 minutes green to a two-hour
-# timeout with thirteen rules unverified, on one argument.
+# Both change how long the prover spends, not what a verified result means. The portfolio is one
+# recipe. ``-solanaTACSoundSignedMath`` next to ``-solanaTACMathInt`` turned an eighteen-rule run
+# from 6.7 minutes, all verified, into a two-hour timeout with thirteen rules unverified.
 
 
 def test_the_portfolio_is_the_recipe_the_corpus_uses_and_only_sound_flags():
@@ -308,11 +295,10 @@ def test_turning_the_portfolio_on_replaces_a_projects_own_solver_settings():
 
 
 def test_all_twelve_solver_instances_survive_being_applied():
-    """`-solvers` is repeatable — each entry adds a parallel solver configuration — so it is the
-    exception to `merge_prover_args`, which dedupes on the flag so `-solanaTACOptimize 2` overrides
-    `-solanaTACOptimize 0`. Merging the portfolio the ordinary way collapses four `-solvers` lines
-    into one and throws away nine of the twelve instances, silently, which is most of the recipe.
-    Caught by building a real conf through this function rather than by hand."""
+    """``-solvers`` repeats. Each entry adds a solver configuration. ``merge_prover_args`` dedupes
+    on the flag, so ``-solanaTACOptimize 2`` overrides ``-solanaTACOptimize 0``. Merging the
+    portfolio that way collapses four ``-solvers`` lines into one and drops nine of the twelve
+    instances."""
     out = cvlr_conf.with_solver_portfolio({"prover_args": ["-solanaTACMathInt true"]}, True)
     assert sum(a.startswith("-solvers ") for a in out["prover_args"]) == 4
 
@@ -348,8 +334,8 @@ def test_the_loop_assumption_reads_both_spellings_and_defaults_off():
 
 
 def test_the_loop_assumption_is_off_in_the_default_base():
-    """Reachable is not the same as default. The template's position and the corpus's is off, and
-    what changed is that the author has a rung to reach, not that the run starts on it."""
+    """The template leaves the assumption off. A caller can turn it on. A run does not start with
+    it on."""
     from composer.spec.cvlr.conf import TEMPLATE_BASE, has_optimistic_loop
 
     assert not has_optimistic_loop(dict(TEMPLATE_BASE))
@@ -370,10 +356,8 @@ def test_the_loop_bound_is_written_the_way_a_conf_spells_an_integer():
 
 
 def test_a_project_conf_that_never_mentions_rule_sanity_still_gets_vacuity_checking():
-    """The hazard reading the project's conf introduces, and the reason it is closed here rather
-    than hoped about. The recommended starting point and two of the five corpus base confs omit the
-    key entirely, so adopting one wholesale would turn vacuity checking off — silently, while the
-    author's prompt goes on saying it is on."""
+    """The recommended starting point omits ``rule_sanity``. Copying that conf unchanged would
+    turn vacuity checking off."""
     conf = cvlr_conf.solana_conf({"loop_iter": "3"}, cvlr_conf.RunOverlay(build_script="/w/o.py"))
     assert conf["rule_sanity"] == "basic"
 
@@ -387,9 +371,8 @@ def test_a_project_asking_for_more_vacuity_checking_keeps_it():
 
 
 def test_turning_vacuity_checking_off_is_not_a_setting_a_run_honors():
-    """`"none"` is the documented way to disable it and is exactly the configuration
-    `docs/upstream-defects.md` P5 shows to be unsafe: with the check off, a [3308] raised inside
-    the generated vacuity rule is reported as a clean VERIFIED."""
+    """``"none"`` is the documented way to turn the check off. With it off, a [3308] inside the
+    generated vacuity rule is reported as verified. A run does not honor that setting."""
     base = {"rule_sanity": "none"}
     conf = cvlr_conf.solana_conf(base, cvlr_conf.RunOverlay(build_script="/w/o.py"))
     assert conf["rule_sanity"] == "basic"
@@ -403,9 +386,8 @@ def test_the_run_decides_which_server_whatever_the_base_says():
 
 
 def test_a_conf_change_invalidates_a_stamp_earned_before_it():
-    """A verdict earned under one loop bound, one `rule_sanity` or one solver portfolio is not a
-    verdict under another, so the conf belongs in `version_history` beside the summaries and the
-    munges."""
+    """A verdict under one loop bound, one ``rule_sanity``, or one solver portfolio is not a
+    verdict under another. The stamp covers the whole conf."""
     one = cvlr_conf.conf_history(dict(cvlr_conf.TEMPLATE_BASE))
     two = cvlr_conf.conf_history({**cvlr_conf.TEMPLATE_BASE, "loop_iter": "3"})
     assert one != two
@@ -413,21 +395,13 @@ def test_a_conf_change_invalidates_a_stamp_earned_before_it():
 
 
 def test_loops_are_bounded_soundly_and_the_bound_is_raised_instead():
-    """A soundness-relevant pair of defaults, so it gets its own test rather than a line in another.
+    """``optimistic_loop`` assumes loops halt instead of proving it, so a violation that needs
+    more iterations is not found. Bound the inputs that set the trip count, or edit the loop,
+    before raising ``loop_iter``.
 
-    ``optimistic_loop`` assumes the loop halt conditions hold rather than proving them, so it hides
-    any violation reachable only after more iterations. It is a last resort: the intended remedies are
-    to bound whatever determines the trip count, or to munge the loop, and only then to raise
-    ``loop_iter``. The corpus agrees — of 354 confs across fifteen Solana projects, exactly one sets
-    it true.
-
-    The bound is 2, not the template's 1, because 1 is what made an earlier revision reach for
-    ``optimistic_loop`` in the first place: with a bound of 1 *any* loop inside a handler fails before
-    the rule's own property is reached, measured as VIOLATED on "Unwinding condition in a loop"
-    against a loop in an Anchor handler's own borsh path (``docs/cvlr-backend-plan.md`` §7.6.2).
-    Raising the bound answers that without assuming anything away.
-
-    A future edit that flips this back should have to delete this test and say why.
+    The bound is 2, not the template's 1. With a bound of 1, a loop inside a handler fails before
+    the rule's property is reached: an Anchor handler comes back violated on "Unwinding condition
+    in a loop" against a loop in its borsh path.
     """
     base = cvlr_conf.load_base(None)
     assert base["optimistic_loop"] is False
@@ -435,8 +409,8 @@ def test_loops_are_bounded_soundly_and_the_bound_is_raised_instead():
 
 
 def test_the_recommended_starting_point_enables_no_optimistic_solana_flags():
-    """The five ``-solanaOptimistic*`` flags are the most-attested block in the whole survey and the
-    template sets none of them. A future edit that "restores" them should have to delete this."""
+    """The template sets none of the ``-solanaOptimistic*`` flags. They are unsound, and they do
+    not fix the [3308] they were meant to."""
     flags = cvlr_conf.TEMPLATE_BASE["prover_args"]
     assert isinstance(flags, list)
     assert not [f for f in flags if f.startswith("-solanaOptimistic")]
@@ -462,8 +436,8 @@ def _overlay(**kwargs) -> dict:
 
 
 def test_the_run_owns_the_build_script_whatever_the_base_says():
-    """Fifteen of sixteen surveyed projects name their own build script, and every one of them runs
-    the build unconfined inside the prover's process."""
+    """The run's build script wins. A project conf that names its own would build unconfined
+    inside the prover's process."""
     base = {**cvlr_conf.parse_conf(_REAL_CONF), "build_script": "scripts/certora_build.py"}
     conf = cvlr_conf.solana_conf(base, cvlr_conf.RunOverlay(build_script="/w/ours.py"))
     assert conf["build_script"] == "/w/ours.py"
@@ -491,9 +465,9 @@ def test_asking_for_all_rules_removes_the_selection_entirely():
 
 
 def test_the_env_files_are_left_for_the_build_manifest_to_supply():
-    """``cargo certora-sbf`` reads them from ``[package.metadata.certora]`` and
-    ``certoraParseBuildScript`` applies them only when the conf has none; setting them here would
-    override the project's own declaration with a guess at it."""
+    """``cargo certora-sbf`` reads them from ``[package.metadata.certora]``, and the prover
+    applies that only when the conf has none. Setting them here would replace the project's
+    declaration."""
     conf = _overlay()
     assert "solana_inlining" not in conf and "solana_summaries" not in conf
 
