@@ -156,8 +156,8 @@ class Override:
 
 
 @dataclass(frozen=True)
-class MungePlan:
-    """What munging this target would change. Empty when nothing needs it."""
+class ForkPlan:
+    """What redirecting this target at the forks would change. Empty when nothing needs it."""
 
     overrides: tuple[Override, ...] = ()
     blocked: tuple[Blocked, ...] = ()
@@ -178,8 +178,8 @@ class MungePlan:
         ]
 
 
-class MungeBlocked(RuntimeError):
-    """A munge was applied that could not be. Carries every reason, not the first."""
+class ForkBlocked(RuntimeError):
+    """A blocked plan was applied. Carries every reason, not the first."""
 
     def __init__(self, blocked: tuple[Blocked, ...]) -> None:
         self.blocked = blocked
@@ -245,7 +245,7 @@ def already_patched(manifest_text: str) -> frozenset[str]:
     TOML and share no text, so a search for either misses the other. A second entry for a key
     TOML already has is a manifest cargo refuses.
 
-    :func:`plan_munge` also checks the resolved graph, which is what cargo computed. This covers
+    :func:`plan_overrides` also checks the resolved graph, which is what cargo computed. This covers
     the case the graph cannot: a snapshot taken before the patch table was applied.
     """
     try:
@@ -262,12 +262,12 @@ def already_patched(manifest_text: str) -> frozenset[str]:
     return frozenset(crates_io) if isinstance(crates_io, dict) else frozenset()
 
 
-def plan_munge(
+def plan_overrides(
     workspace: Workspace,
     overrides: tuple[ForkOverride, ...] = SOLANA_OVERRIDES,
     already_redirected: frozenset[str] = frozenset(),
-) -> MungePlan:
-    """What munging ``workspace`` would change, without changing anything.
+) -> ForkPlan:
+    """What redirecting ``workspace`` at the forks would change, without changing anything.
 
     Each crate lands in one of four outcomes:
 
@@ -326,19 +326,19 @@ def plan_munge(
                 )
             )
 
-    return MungePlan(
+    return ForkPlan(
         tuple(resolved_overrides), tuple(blocked), tuple(inapplicable), tuple(already)
     )
 
 
-def manifest_additions(plan: MungePlan) -> str:
+def manifest_additions(plan: ForkPlan) -> str:
     """The ``[patch.crates-io]`` section this plan needs in the workspace manifest.
 
     A blocked plan raises instead of emitting a partial section. Replacing one of two crates
     leaves a build whose failure has two causes.
     """
     if plan.blocked:
-        raise MungeBlocked(plan.blocked)
+        raise ForkBlocked(plan.blocked)
     if not plan.overrides:
         return ""
     header = (
