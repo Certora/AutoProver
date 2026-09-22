@@ -358,7 +358,9 @@ def test_the_loop_bound_is_written_the_way_a_conf_spells_an_integer():
 def test_a_project_conf_that_never_mentions_rule_sanity_still_gets_vacuity_checking():
     """The recommended starting point omits ``rule_sanity``. Copying that conf unchanged would
     turn vacuity checking off."""
-    conf = cvlr_conf.solana_conf({"loop_iter": "3"}, cvlr_conf.RunOverlay(build_script="/w/o.py"))
+    conf = cvlr_conf.solana_conf(
+        {"loop_iter": "3"}, cvlr_conf.RunOverlay(build_script=Path("/w/o.py"))
+    )
     assert conf["rule_sanity"] == "basic"
 
 
@@ -366,7 +368,7 @@ def test_a_project_asking_for_more_vacuity_checking_keeps_it():
     """A floor, not an owned key: `advanced` is stronger and the project asking for it knows
     something this code does not."""
     base = {"rule_sanity": "advanced"}
-    conf = cvlr_conf.solana_conf(base, cvlr_conf.RunOverlay(build_script="/w/o.py"))
+    conf = cvlr_conf.solana_conf(base, cvlr_conf.RunOverlay(build_script=Path("/w/o.py")))
     assert conf["rule_sanity"] == "advanced"
 
 
@@ -374,7 +376,7 @@ def test_turning_vacuity_checking_off_is_not_a_setting_a_run_honors():
     """``"none"`` is the documented way to turn the check off. With it off, a [3308] inside the
     generated vacuity rule is reported as verified. A run does not honor that setting."""
     base = {"rule_sanity": "none"}
-    conf = cvlr_conf.solana_conf(base, cvlr_conf.RunOverlay(build_script="/w/o.py"))
+    conf = cvlr_conf.solana_conf(base, cvlr_conf.RunOverlay(build_script=Path("/w/o.py")))
     assert conf["rule_sanity"] == "basic"
 
 
@@ -382,7 +384,8 @@ def test_the_run_decides_which_server_whatever_the_base_says():
     """Corpus confs that name a server all say "production", and the run passes `--server` from the
     deployment environment. Two answers that agree until they do not."""
     base = {**cvlr_conf.parse_conf(_REAL_CONF), "server": "production"}
-    assert "server" not in cvlr_conf.solana_conf(base, cvlr_conf.RunOverlay(build_script="/w/o.py"))
+    overlay = cvlr_conf.RunOverlay(build_script=Path("/w/o.py"))
+    assert "server" not in cvlr_conf.solana_conf(base, overlay)
 
 
 def test_a_conf_change_invalidates_a_stamp_earned_before_it():
@@ -431,7 +434,7 @@ def test_a_new_overlay_flag_is_appended_rather_than_replacing_anything():
 def _overlay(**kwargs) -> dict:
     return cvlr_conf.solana_conf(
         cvlr_conf.parse_conf(_REAL_CONF),
-        cvlr_conf.RunOverlay(build_script="/w/.certora_build/confined_build.py", **kwargs),
+        cvlr_conf.RunOverlay(build_script=Path("/w/.certora_build/confined_build.py"), **kwargs),
     )
 
 
@@ -439,7 +442,7 @@ def test_the_run_owns_the_build_script_whatever_the_base_says():
     """The run's build script wins. A project conf that names its own would build unconfined
     inside the prover's process."""
     base = {**cvlr_conf.parse_conf(_REAL_CONF), "build_script": "scripts/certora_build.py"}
-    conf = cvlr_conf.solana_conf(base, cvlr_conf.RunOverlay(build_script="/w/ours.py"))
+    conf = cvlr_conf.solana_conf(base, cvlr_conf.RunOverlay(build_script=Path("/w/ours.py")))
     assert conf["build_script"] == "/w/ours.py"
 
 
@@ -447,7 +450,8 @@ def test_a_prebuilt_artifact_in_the_base_is_dropped():
     """``run_rust_build`` asserts the context has no ``files`` before a build script may set them,
     so keeping both would fail inside the prover instead of here."""
     base = {**cvlr_conf.parse_conf(_REAL_CONF), "files": ["target/deploy/x.so"]}
-    assert "files" not in cvlr_conf.solana_conf(base, cvlr_conf.RunOverlay(build_script="/w/o.py"))
+    overlay = cvlr_conf.RunOverlay(build_script=Path("/w/o.py"))
+    assert "files" not in cvlr_conf.solana_conf(base, overlay)
 
 
 def test_inheriting_rules_keeps_the_projects_own_selection():

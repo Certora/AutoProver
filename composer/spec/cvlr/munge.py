@@ -24,11 +24,11 @@ import posixpath
 import re
 import textwrap
 import tomllib
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from pathlib import PurePosixPath
 
-from composer.cargo.metadata import Workspace
+from composer.cargo.metadata import GitSource, OtherSource, RegistrySource, Workspace
 from composer.layout import INTERNAL_DIR
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.rust_source import DERIVE_LIST, body_span, code_positions
@@ -55,14 +55,14 @@ class ForkOverride:
 
     repo: str
     crates: tuple[str, ...]
-    branches: tuple[tuple[str, str], ...]
+    branches: Mapping[str, str]
     why: str
 
     def branch_for(self, version: str) -> str | None:
-        return next((branch for v, branch in self.branches if v == version), None)
+        return self.branches.get(version)
 
     def covered(self) -> str:
-        return ", ".join(v for v, _ in self.branches)
+        return ", ".join(self.branches)
 
 
 @dataclass(frozen=True)
@@ -84,20 +84,27 @@ class AlreadySourced:
     """
 
     crate: str
-    source: str
+    #: ``None`` for a path in this workspace.
+    source: GitSource | OtherSource | None
     #: The repository the override would have used. ``points_at_fork`` is derived from this
     #: and ``source``.
     fork_repo: str
 
     @property
     def points_at_fork(self) -> bool:
-        return _repo_key(self.fork_repo) in _repo_key(self.source)
+        return isinstance(self.source, GitSource) and _repo_key(self.fork_repo) in _repo_key(
+            self.source.spelling
+        )
+
+    @property
+    def origin(self) -> str:
+        return self.source.spelling if self.source is not None else "a path in this workspace"
 
     def describe(self) -> str:
         if self.points_at_fork:
             return f"{self.crate} already comes from {self.fork_repo}; nothing to do"
         return (
-            f"{self.crate} already comes from {self.source} rather than {self.fork_repo}, so it "
+            f"{self.crate} already comes from {self.origin} rather than {self.fork_repo}, so it "
             f"was left alone — a source in the manifest is somebody's decision. If a handler will "
             f"not analyze, this is the first thing to check."
         )
@@ -198,16 +205,16 @@ class MungeBlocked(RuntimeError):
 ANCHOR_FORK = ForkOverride(
     repo="https://github.com/Certora/anchor.git",
     crates=("anchor-lang", "anchor-spl"),
-    branches=(
-        ("0.26.0", "certora-v0.26.0"),
-        ("0.27.0", "certora-v0.27.0"),
-        ("0.28.0", "certora-v0.28.0"),
-        ("0.29.0", "certora-v0.29.0"),
-        ("0.30.1", "certora-v0.30.1"),
-        ("0.31.1", "certora-v0.31.1"),
-        ("0.32.0", "certora-v0.32.0"),
-        ("0.32.1", "certora-v0.32.1"),
-    ),
+    branches={
+        "0.26.0": "certora-v0.26.0",
+        "0.27.0": "certora-v0.27.0",
+        "0.28.0": "certora-v0.28.0",
+        "0.29.0": "certora-v0.29.0",
+        "0.30.1": "certora-v0.30.1",
+        "0.31.1": "certora-v0.31.1",
+        "0.32.0": "certora-v0.32.0",
+        "0.32.1": "certora-v0.32.1",
+    },
     why=(
         "Upstream anchor_lang::error::Error boxes its payload, and the Solana Prover rejects the "
         "resulting Box::new of a stack-built struct as [3006] 'illegal store of a stack pointer' — "
@@ -223,7 +230,7 @@ ANCHOR_FORK = ForkOverride(
 FIXED_FORK = ForkOverride(
     repo="https://github.com/Certora/fixed.git",
     crates=("fixed",),
-    branches=(("1.23.1", "certora-v1.23.1"),),
+    branches={"1.23.1": "certora-v1.23.1"},
     why=(
         "The Certora-maintained fork of `fixed` carries conversions verification code needs (e.g. "
         "From<u64> for FixedU64) that upstream does not provide, so a harness over a program using "
@@ -296,10 +303,10 @@ def plan_munge(
             if crate in already_redirected:
                 already.append(AlreadyRedirected(crate=crate))
                 continue
-            if resolved.source is None or not resolved.source.startswith("registry+"):
-                source = resolved.source or "a path in this workspace"
-                already.append(AlreadySourced(crate=crate, source=source, fork_repo=fork.repo))
-                _log.info("%s already comes from %s; leaving it alone", crate, source)
+            if not isinstance(resolved.source, RegistrySource):
+                left = AlreadySourced(crate=crate, source=resolved.source, fork_repo=fork.repo)
+                already.append(left)
+                _log.info("%s already comes from %s; leaving it alone", crate, left.origin)
                 continue
             branch = fork.branch_for(resolved.version)
             if branch is None:

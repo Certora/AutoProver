@@ -21,6 +21,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NotRequired, TypedDict
 
 _log = logging.getLogger(__name__)
 
@@ -34,6 +35,33 @@ METADATA_TIMEOUT_S = 300
 
 class CargoUnavailable(RuntimeError):
     """``cargo`` is not on ``PATH``."""
+
+
+class CargoTargetJson(TypedDict):
+    name: str
+    src_path: str
+    #: Older cargos report only ``kind``.
+    crate_types: NotRequired[list[str]]
+    kind: NotRequired[list[str]]
+
+
+class CargoPackageJson(TypedDict):
+    id: str
+    name: str
+    version: str
+    manifest_path: str
+    targets: NotRequired[list[CargoTargetJson]]
+    features: NotRequired[dict[str, list[str]]]
+    source: NotRequired[str | None]
+
+
+class CargoMetadataJson(TypedDict):
+    """The parts of ``cargo metadata --format-version 1`` output this module reads."""
+
+    packages: list[CargoPackageJson]
+    workspace_root: str
+    workspace_members: NotRequired[list[str]]
+    target_directory: NotRequired[str]
 
 
 @dataclass(frozen=True)
@@ -63,15 +91,50 @@ class LibTarget:
 
 
 @dataclass(frozen=True)
+class RegistrySource:
+    """A package from a ``registry+`` index. ``spelling`` is cargo's, verbatim."""
+
+    spelling: str
+
+
+@dataclass(frozen=True)
+class GitSource:
+    """A package from a git repository, spelled
+    ``git+<url>?branch=<branch>#<commit>`` by cargo."""
+
+    spelling: str
+
+
+@dataclass(frozen=True)
+class OtherSource:
+    """A source kind not distinguished here, such as an alternative registry's
+    ``sparse+`` index."""
+
+    spelling: str
+
+
+type PackageSource = RegistrySource | GitSource | OtherSource
+
+
+def _package_source(spelling: str | None) -> PackageSource | None:
+    if spelling is None:
+        return None
+    if spelling.startswith("registry+"):
+        return RegistrySource(spelling)
+    if spelling.startswith("git+"):
+        return GitSource(spelling)
+    return OtherSource(spelling)
+
+
+@dataclass(frozen=True)
 class CratePackage:
     name: str
     version: str
     manifest_path: Path
     lib: LibTarget | None
     features: tuple[str, ...]
-    #: ``None`` for a workspace member or a path dependency; the registry/git
-    #: URL for a fetched package.
-    source: str | None
+    #: ``None`` for a workspace member or a path dependency.
+    source: PackageSource | None
 
     @property
     def root(self) -> Path:
@@ -118,7 +181,7 @@ class Workspace:
         )
 
 
-def _lib_target(raw: dict) -> LibTarget | None:
+def _lib_target(raw: CargoPackageJson) -> LibTarget | None:
     for target in raw.get("targets", ()):
         kinds = tuple(target.get("crate_types") or target.get("kind") or ())
         if _LIB_CRATE_TYPES.intersection(kinds):
@@ -128,18 +191,18 @@ def _lib_target(raw: dict) -> LibTarget | None:
     return None
 
 
-def _package(raw: dict) -> CratePackage:
+def _package(raw: CargoPackageJson) -> CratePackage:
     return CratePackage(
         name=raw["name"],
         version=raw["version"],
         manifest_path=Path(raw["manifest_path"]),
         lib=_lib_target(raw),
         features=tuple(sorted(raw.get("features") or {})),
-        source=raw.get("source"),
+        source=_package_source(raw.get("source")),
     )
 
 
-def parse_metadata(payload: dict) -> Workspace:
+def parse_metadata(payload: CargoMetadataJson) -> Workspace:
     """Build a :class:`Workspace` from ``cargo metadata --format-version 1`` output."""
     by_id = {raw["id"]: _package(raw) for raw in payload["packages"]}
     member_ids = payload.get("workspace_members") or ()
@@ -154,7 +217,7 @@ def parse_metadata(payload: dict) -> Workspace:
 
 def _cargo_metadata(
     project_root: Path, *, offline: bool, features: tuple[str, ...], timeout_s: int
-) -> dict | None:
+) -> CargoMetadataJson | None:
     if shutil.which("cargo") is None:
         raise CargoUnavailable(
             "cargo is not on PATH; a Rust chain's toolchain cannot be resolved without it"

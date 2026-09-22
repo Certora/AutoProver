@@ -41,6 +41,9 @@ import json5
 
 _log = logging.getLogger(__name__)
 
+#: A parsed conf: the top-level JSON object, with integers kept as strings.
+type Conf = dict[str, object]
+
 #: Conf keys the run always decides, whatever the base says. ``files`` is in the set because it
 #: is removed. The prover refuses a build script that sets files when the conf already names
 #: some, so a base conf naming a prebuilt ``.so`` and a run building from sources cannot both
@@ -70,7 +73,7 @@ OVERLAY_OWNED_KEYS: frozenset[str] = frozenset({"build_script", "files", "msg", 
 #: differed only in those flags (plus ``-solanaAggressiveGlobalDetection``,
 #: ``-solanaRemoveCFGDiamonds``, and ``-solanaSlicerIter``) produced the same [3308] errors.
 #: ``-solanaOptimisticJoinWithStackPtr`` does not fix the error its name suggests either.
-TEMPLATE_BASE: dict[str, object] = {
+TEMPLATE_BASE: Conf = {
     "msg": "Certora Verification Rules",
     "loop_iter": "2",
     "optimistic_loop": False,
@@ -97,7 +100,7 @@ class MalformedConf(ValueError):
     """A conf file could not be read as JSON5."""
 
 
-def parse_conf(text: str) -> dict:
+def parse_conf(text: str) -> Conf:
     """Parse conf text the way ``certoraRun`` does: JSON5, integers as strings.
 
     Duplicate keys are rejected, as they are there. A conf that sets ``loop_iter`` twice has two
@@ -112,7 +115,7 @@ def parse_conf(text: str) -> dict:
     return parsed
 
 
-def read_conf(path: Path) -> dict:
+def read_conf(path: Path) -> Conf:
     return parse_conf(path.read_text())
 
 
@@ -137,7 +140,7 @@ def project_conf(confs_dir: Path) -> Path | None:
     )
 
 
-def conf_history(conf: dict) -> tuple[str, ...]:
+def conf_history(conf: Conf) -> tuple[str, ...]:
     """The conf as a ``version_history`` token, so a stamp from before a change goes stale.
 
     A conf decides the loop bound, the solver flags, and whether vacuity is checked. A verdict
@@ -148,7 +151,7 @@ def conf_history(conf: dict) -> tuple[str, ...]:
     return (f"conf:{digest}",)
 
 
-def load_base(path: Path | None) -> dict:
+def load_base(path: Path | None) -> Conf:
     """The base conf for a run: the project's, or the recommended starting point's.
 
     The fallback is :data:`TEMPLATE_BASE`, not an empty conf. An empty conf has no loop bound, no
@@ -191,7 +194,7 @@ def _str_list(value: object) -> list[str]:
     return []
 
 
-def tools_version(conf: dict) -> str | None:
+def tools_version(conf: Conf) -> str | None:
     """The platform-tools version this conf asks for.
 
     The prover does not apply ``cargo_tools_version`` itself. It reaches ``cargo certora-sbf``
@@ -201,7 +204,7 @@ def tools_version(conf: dict) -> str | None:
     return str(raw) if isinstance(raw, (str, int)) else None
 
 
-def sbf_arch(conf: dict) -> str | None:
+def sbf_arch(conf: Conf) -> str | None:
     raw = conf.get("solana_sbf_arch")
     return str(raw) if isinstance(raw, str) else None
 
@@ -213,7 +216,7 @@ def sbf_arch(conf: dict) -> str | None:
 DEFAULT_FEATURE = "certora"
 
 
-def cargo_features(conf: dict) -> tuple[str, ...]:
+def cargo_features(conf: Conf) -> tuple[str, ...]:
     return tuple(_str_list(conf.get("cargo_features")))
 
 
@@ -252,16 +255,16 @@ class RunOverlay:
     ``certoraSolanaProver`` runs in, which is the session's workdir.
     """
 
-    build_script: str
+    build_script: Path
     rules: RuleSelection = field(default_factory=InheritRules)
     msg: str = ""
     #: Points-to summary files, in the same relative-to-the-workdir spelling as ``build_script``.
     #: Added to whatever the base conf already names. Empty leaves the key unset, so the package's
     #: ``[package.metadata.certora]`` declaration still applies.
-    summaries: tuple[str, ...] = ()
+    summaries: tuple[Path, ...] = ()
     #: Extra keys, applied last. For settings that are not one of the fields above, such as
     #: ``multi_assert_check`` or a caller forcing ``rule_sanity``.
-    extra: dict[str, object] = field(default_factory=dict)
+    extra: Conf = field(default_factory=dict)
 
 
 #: Characters ``certoraRun`` accepts in ``msg``. A subset of what the CLI permits today, so a
@@ -315,7 +318,7 @@ NONLINEAR_SOLVER_PORTFOLIO: tuple[str, ...] = (
 )
 
 
-def has_solver_portfolio(conf: dict) -> bool:
+def has_solver_portfolio(conf: Conf) -> bool:
     """Whether ``conf`` already carries the portfolio, by the flags it sets.
 
     A project that wrote these settings by hand, as the reference project does, is recognized as
@@ -332,7 +335,7 @@ def has_solver_portfolio(conf: dict) -> bool:
 _REPEATABLE_FLAG = "-solvers"
 
 
-def with_solver_portfolio(conf: dict, enabled: bool) -> dict:
+def with_solver_portfolio(conf: Conf, enabled: bool) -> Conf:
     """``conf`` with the nonlinear portfolio added or removed.
 
     The other flags go through :func:`merge_prover_args`, so a project that already sets
@@ -351,12 +354,12 @@ def with_solver_portfolio(conf: dict, enabled: bool) -> dict:
     return {**conf, "prover_args": merge_prover_args(kept, rest) + solvers}
 
 
-def with_loop_iter(conf: dict, iterations: int) -> dict:
+def with_loop_iter(conf: Conf, iterations: int) -> Conf:
     """``conf`` with a new loop bound, written as a string, which is how a conf spells an integer."""
     return {**conf, "loop_iter": str(iterations)}
 
 
-def has_optimistic_loop(conf: dict) -> bool:
+def has_optimistic_loop(conf: Conf) -> bool:
     """Whether ``conf`` assumes loops finish.
 
     :data:`TEMPLATE_BASE` writes a JSON bool. A hand-written conf may spell it as a string, the
@@ -372,7 +375,7 @@ def has_optimistic_loop(conf: dict) -> bool:
             return False
 
 
-def with_optimistic_loop(conf: dict, enabled: bool) -> dict:
+def with_optimistic_loop(conf: Conf, enabled: bool) -> Conf:
     """``conf`` with the loop-halt assumption on or off.
 
     This changes what a verified result means. Every loop is assumed to finish within
@@ -382,7 +385,7 @@ def with_optimistic_loop(conf: dict, enabled: bool) -> dict:
     return {**conf, "optimistic_loop": enabled}
 
 
-def with_sanity_floor(conf: dict) -> dict:
+def with_sanity_floor(conf: Conf) -> Conf:
     """``conf`` with vacuity checking on, at ``basic`` unless the conf already asks for more.
 
     A floor, not an owned key. ``advanced`` is kept. A conf that never mentions ``rule_sanity``,
@@ -395,7 +398,7 @@ def with_sanity_floor(conf: dict) -> dict:
     return {**conf, "rule_sanity": "basic"}
 
 
-def solana_conf(base: dict, overlay: RunOverlay) -> dict:
+def solana_conf(base: Conf, overlay: RunOverlay) -> Conf:
     """The conf for one ``certoraSolanaProver`` submission.
 
     ``base`` is not mutated. Every key in :data:`OVERLAY_OWNED_KEYS` is decided here. ``files``
@@ -404,14 +407,16 @@ def solana_conf(base: dict, overlay: RunOverlay) -> dict:
     base value is a real answer.
     """
     conf = {k: v for k, v in base.items() if k not in OVERLAY_OWNED_KEYS}
-    conf["build_script"] = overlay.build_script
+    conf["build_script"] = str(overlay.build_script)
     conf["msg"] = safe_msg(overlay.msg)
     if overlay.summaries:
         # Kept beside the base's entries. Naming any value stops the prover from also applying
         # the package's [package.metadata.certora] declaration, so dropping the base's entries
         # would narrow what it reads.
         conf["solana_summaries"] = list(
-            dict.fromkeys([*_str_list(base.get("solana_summaries")), *overlay.summaries])
+            dict.fromkeys(
+                [*_str_list(base.get("solana_summaries")), *(str(s) for s in overlay.summaries)]
+            )
         )
     match overlay.rules:
         case SelectRules(names):
@@ -428,6 +433,6 @@ def solana_conf(base: dict, overlay: RunOverlay) -> dict:
     return with_sanity_floor(conf)
 
 
-def dump_conf(conf: dict) -> str:
+def dump_conf(conf: Conf) -> str:
     """Serialize a conf for writing. Plain JSON. JSON5 is accepted on read and not written."""
     return json.dumps(conf, indent=4) + "\n"

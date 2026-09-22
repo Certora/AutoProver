@@ -38,6 +38,7 @@ from composer.prover.core import (
 )
 from composer.spec.cvlr.conf import (
     DEFAULT_FEATURE,
+    Conf,
     InheritRules,
     RuleSelection,
     RunOverlay,
@@ -102,7 +103,7 @@ class Submission:
     """
 
     manifest_path: Path
-    base_conf: dict
+    base_conf: Conf
     rules: RuleSelection = dataclasses.field(default_factory=InheritRules)
     msg: str = ""
     #: Conf file stem, which is also this submission's identity on disk.
@@ -115,7 +116,7 @@ class Submission:
     features: tuple[str, ...] = ()
     #: Points-to summary files this submission reads, workdir-relative. One per unit; see
     #: :class:`~composer.spec.cvlr.conf.RunOverlay`.
-    summaries: tuple[str, ...] = ()
+    summaries: tuple[Path, ...] = ()
 
     def resolved_features(self) -> tuple[str, ...]:
         return self.features or cargo_features(self.base_conf) or (DEFAULT_FEATURE,)
@@ -159,7 +160,7 @@ async def write_submission(
     conf = solana_conf(
         submission.base_conf,
         RunOverlay(
-            build_script=str(script),
+            build_script=script,
             rules=submission.rules,
             msg=submission.msg,
             summaries=submission.summaries,

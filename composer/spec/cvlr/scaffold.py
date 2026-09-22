@@ -408,9 +408,8 @@ def _lib_declaration() -> str:
     return f'\n#[cfg(feature = "{DEFAULT_FEATURE}")]\nmod certora;\n'
 
 
-def _metadata_section(package_relative_envs: dict[str, str]) -> str:
-    inlining = package_relative_envs[INLINING.stem]
-    summaries = package_relative_envs[SUMMARIES.stem]
+def _metadata_section(*, inlining: Path, summaries: Path) -> str:
+    """Tuning-file paths are relative to the package root."""
     return (
         "[package.metadata.certora]\n"
         '# "Cargo.toml" is included: `.certora_sources` is what the report and the\n'
@@ -725,7 +724,11 @@ def _plan_package_manifest(
     if "certora" in parsed.get("package", {}).get("metadata", {}):
         satisfied.append("[package.metadata.certora] already declares sources and tuning files")
     else:
-        appended.append(_metadata_section({f.stem: str(ENVS_DIR / f.composite) for f in ENV_FAMILIES}))
+        appended.append(
+            _metadata_section(
+                inlining=ENVS_DIR / INLINING.composite, summaries=ENVS_DIR / SUMMARIES.composite
+            )
+        )
 
     if appended:
         changes.append(

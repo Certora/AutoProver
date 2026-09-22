@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from composer.cargo.metadata import CratePackage, Workspace
+from composer.cargo.metadata import CratePackage, RegistrySource, Workspace
 from composer.spec.cvlr.env_paths import PathDialect, dialect_for
 from composer.spec.cvlr.scaffold import (
     CANONICAL_ENVS,
@@ -54,7 +54,7 @@ def _workspace(*resolved: str) -> Workspace:
             manifest_path=Path("/nonexistent") / name / "Cargo.toml",
             lib=None,
             features=(),
-            source="registry+https://github.com/rust-lang/crates.io-index",
+            source=RegistrySource("registry+https://github.com/rust-lang/crates.io-index"),
         )
         for name in resolved
     )
