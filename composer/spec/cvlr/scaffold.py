@@ -32,11 +32,11 @@ Four gaps in the upstream template are worked around here rather than reproduced
   are ``cvlr_*``.
 """
 
-import dataclasses
 import json
 import logging
 import re
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
@@ -83,7 +83,7 @@ SHARED_OBJECT_TYPE = "cdylib"
 NO_ENTRYPOINT_FEATURE = "no-entrypoint"
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class EnvFamily:
     """One tuning file, in the layers the template splits it into.
 
@@ -136,7 +136,7 @@ ENV_FAMILIES = (INLINING, SUMMARIES)
 CANONICAL_ENVS = tuple(name for f in ENV_FAMILIES for name in (f.core, f.anchor))
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class Deviation:
     """One canonical line this backend deliberately does not ship as upstream wrote it.
 
@@ -205,7 +205,7 @@ _PACKAGE_ENV_HEADER = """; {kind} specific to this package. Empty to start with,
 # what a scaffolding run would change
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class NewFile:
     """A file to create. Never a file to replace — see the module docstring."""
 
@@ -214,7 +214,7 @@ class NewFile:
     why: str
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class AppendSection:
     """Text to append to an existing file, in full, at the end."""
 
@@ -223,7 +223,7 @@ class AppendSection:
     why: str
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class InsertInTable:
     """Keys to add to a TOML table that already exists.
 
@@ -243,7 +243,7 @@ class InsertInTable:
 type Change = NewFile | AppendSection | InsertInTable
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class Blocked:
     """Something a template must not decide, stated with what would resolve it.
 
@@ -256,7 +256,7 @@ class Blocked:
     resolution: str
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class ScaffoldPlan:
     """Everything a run would do to a project, computed without touching it."""
 

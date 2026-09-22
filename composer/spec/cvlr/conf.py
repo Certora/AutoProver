@@ -39,13 +39,13 @@ declared is lost. Anything the base conf named is kept alongside it rather than 
 project that names its own file knows something this code does not.
 """
 
-import dataclasses
 import hashlib
 import io
 import json
 import logging
 import re
 import string
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import json5
@@ -262,7 +262,7 @@ def cargo_features(conf: dict) -> tuple[str, ...]:
     return tuple(_str_list(conf.get("cargo_features")))
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class InheritRules:
     """Check whatever the base conf selects — its ``rule`` entry, or everything when it has none.
 
@@ -271,14 +271,14 @@ class InheritRules:
     that with a different set."""
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class SelectRules:
     """Check exactly these. Names are globs, which is how a parametric rule's instances are named."""
 
     names: tuple[str, ...]
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class AllRules:
     """Check every rule the artifact declares, overriding a narrower selection in the base.
 
@@ -290,7 +290,7 @@ class AllRules:
 type RuleSelection = InheritRules | SelectRules | AllRules
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class RunOverlay:
     """What one submission adds to the base conf.
 
@@ -299,7 +299,7 @@ class RunOverlay:
     """
 
     build_script: str
-    rules: RuleSelection = dataclasses.field(default_factory=InheritRules)
+    rules: RuleSelection = field(default_factory=InheritRules)
     msg: str = ""
     #: Points-to summary files, as the prover will read them — same relative-to-the-workdir spelling
     #: as ``build_script``. Added to whatever the base conf already names rather than replacing it;
@@ -308,7 +308,7 @@ class RunOverlay:
     summaries: tuple[str, ...] = ()
     #: Extra keys, applied last. For the run-shaped settings that are not a conf *policy* —
     #: ``multi_assert_check`` for a variant run, ``rule_sanity`` when a caller wants to force it.
-    extra: dict[str, object] = dataclasses.field(default_factory=dict)
+    extra: dict[str, object] = field(default_factory=dict)
 
 
 #: Characters ``certoraRun`` accepts in ``msg`` — a deliberate subset of what its own

@@ -31,10 +31,10 @@ trade ``composer.rustapp.descriptor`` makes for the same reason, and
 ``tests/test_cvlr_reference.py`` pins the two against each other so they cannot drift apart.
 """
 
-import dataclasses
+from dataclasses import dataclass
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class CrateRelease:
     """One crate at one exact published version."""
 
@@ -47,7 +47,7 @@ class CrateRelease:
         return f'{self.name} = "={self.version}"'
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class CrateRequirement:
     """A crate at a version *line* rather than a release — how the platform is named.
 
@@ -62,7 +62,7 @@ class CrateRequirement:
         return f'{self.name} = "{self.line}"'
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class PathAlias:
     """A path prefix as the canonical tuning files spell it, and this generation's spellings of it.
 
@@ -80,7 +80,7 @@ class PathAlias:
     actual: tuple[str, ...]
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class NamespacePattern:
     """A blanket over one crate's whole namespace, widened to the family that replaced that crate.
 
@@ -107,7 +107,7 @@ class NamespacePattern:
     actual: str
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class PlatformGeneration:
     """The chain-platform release line a CVLR chain crate is bound to.
 
@@ -137,7 +137,7 @@ class PlatformGeneration:
     path_aliases: tuple[PathAlias | NamespacePattern, ...] = ()
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class UnpublishedCapability:
     """Something current practice uses that no published crate provides.
 
@@ -152,7 +152,7 @@ class UnpublishedCapability:
     missing: str
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class ChainReference:
     """What "current CVLR" means for one chain."""
 

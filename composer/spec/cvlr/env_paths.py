@@ -22,9 +22,9 @@ Two properties are worth stating because they are the reason this is not a strin
   a 1.18 target, whose paths are already the canonical ones.
 """
 
-import dataclasses
 import logging
 import re
+from dataclasses import dataclass
 from collections.abc import Iterable
 
 from composer.cargo.metadata import Workspace
@@ -45,7 +45,7 @@ def _crate_of(path: str) -> str:
     return path.split("::", 1)[0].replace("_", "-")
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class PathDialect:
     """How one target spells the concepts the canonical tuning files name.
 
