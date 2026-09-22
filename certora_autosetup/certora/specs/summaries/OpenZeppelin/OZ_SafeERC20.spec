@@ -1,5 +1,11 @@
 // Summarization of OpenZeppelin's SafeERC20 library functions
-// Maps safeTransfer and safeTransferFrom to direct token calls
+// Maps safeTransfer and safeTransferFrom to direct token calls.
+//
+// The receivers are wildcards, so the same CVL also covers Solady's
+// SafeTransferLib: its safeTransfer/safeTransferFrom carry identical signatures
+// and the same revert-on-failure contract (Solady raises TransferFailed() where
+// OpenZeppelin raises SafeERC20FailedOperation). Both libraries are listed in the
+// registry entries that import this file.
 
 methods {
     // SafeERC20 internal functions summarized as direct token calls

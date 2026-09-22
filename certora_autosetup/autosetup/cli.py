@@ -236,6 +236,7 @@ def main():
             skip_call_resolution=args.skip_call_resolution,
             skip_proxy_detection=args.skip_proxy_detection,
             skip_harnessing=args.skip_harnessing,
+            skip_test_run=args.skip_test_run,
             composer_output=getattr(args, 'composer_setup', None),
             dummy_erc20=args.dummy_erc20,
             keep_intermediate_typechecker_files=args.keep_intermediate_typechecker_files,

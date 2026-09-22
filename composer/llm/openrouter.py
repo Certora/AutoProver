@@ -32,10 +32,10 @@ from composer.input.files import (
 )
 from composer.input.types import ModelConfiguration
 from .provider import (
-    ProviderServiceBase, ProviderSpec, compaction_threshold, reasoning_effort,
-    standard_callbacks
+    ProviderServiceBase, ProviderSpec, compaction_threshold, payload_error_type,
+    reasoning_effort, standard_callbacks
 )
-from .openai import OpenAIRenderer
+from .openai import RETRYABLE_ERROR_TYPES, OpenAIRenderer
 from .pricing import PriceProvider, PriceTier, price_provider_for
 from .types import CacheLevel
 
@@ -464,11 +464,15 @@ class OpenRouterService(ProviderServiceBase):
         Both surface while the SSE body is being read, when the request has already
         succeeded, so the SDK's own ``max_retries`` never sees them: a dropped
         connection (``httpx.TransportError``) and a content stall (langchain's
-        ``StreamChunkTimeoutError``, a ``TimeoutError`` subclass)."""
+        ``StreamChunkTimeoutError``, a ``TimeoutError`` subclass). An error the
+        server reports inside the stream arrives on the already-open 200, so the
+        payload's ``error.type`` decides when the status code cannot."""
         if isinstance(exc, (httpx.TransportError, TimeoutError, openai.APIConnectionError)):
             return True
         if isinstance(exc, openai.APIStatusError):
-            return exc.status_code in (408, 409, 429) or exc.status_code >= 500
+            if exc.status_code in (408, 409, 429) or exc.status_code >= 500:
+                return True
+            return payload_error_type(exc.body) in RETRYABLE_ERROR_TYPES
         return False
 
 

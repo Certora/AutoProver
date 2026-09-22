@@ -79,3 +79,51 @@ def test_shipped_registry_getCollectionId_entry_is_library_scoped():
     entry = reg["ctHelpers_getCollectionId"]
     assert entry["library_names"] == ["CTHelpers"]
     assert "getCollectionId" in entry["names"]
+
+
+def test_shipped_registry_safe_transfer_covers_solady_safetransferlib():
+    """Solady's SafeTransferLib.safeTransfer/safeTransferFrom carry the same signatures and
+    the same revert-on-failure contract as OpenZeppelin's SafeERC20, and the CVL in
+    OZ_SafeERC20.spec already matches them through a wildcard receiver. Only the registry's
+    library scoping kept the file from being imported for Solady scenes."""
+    reg = json.loads((Path(setup_summaries.__file__).parent / "function_summaries.json").read_text())
+    for key in ("safeTransfer", "safeTransferFrom"):
+        entry = reg[key]
+        assert set(entry["library_names"]) == {"SafeERC20", "SafeTransferLib"}, key
+        # Both libraries must resolve to the one shared spec: two copies of the same
+        # wildcard summary imported into one scene would be a duplicate declaration.
+        assert entry["summary_file"] == "specs/summaries/OpenZeppelin/OZ_SafeERC20.spec", key
+
+
+def test_shipped_registry_canCallWithDelay_entry_is_library_scoped():
+    reg = json.loads((Path(setup_summaries.__file__).parent / "function_summaries.json").read_text())
+    entry = reg["canCallWithDelay"]
+    assert entry["library_names"] == ["AuthorityUtils"]
+    assert entry["names"] == ["canCallWithDelay"]
+
+
+def test_every_registry_summary_file_exists():
+    """A registry entry naming a spec that is not shipped matches methods and then imports
+    nothing, so the summary silently never applies."""
+    setup_dir = Path(setup_summaries.__file__).parent
+    reg = json.loads((setup_dir / "function_summaries.json").read_text())
+    certora_root = setup_dir.parent / "certora"
+    missing = sorted({e["summary_file"] for e in reg.values()
+                      if not (certora_root / e["summary_file"]).exists()})
+    assert not missing, f"registry entries point at absent spec files: {missing}"
+
+
+def test_solady_safetransferlib_matches_for_its_own_unit(tmp_path, monkeypatch):
+    """End-to-end through the matcher, with the shipped registry rather than the stub."""
+    setup_dir = Path(setup_summaries.__file__).parent
+    reg = json.loads((setup_dir / "function_summaries.json").read_text())
+    all_methods = tmp_path / "all_methods.json"
+    methods = [_method("safeTransfer", "SafeTransferLib", ["Main"])]
+    all_methods.write_text(json.dumps(methods))
+    monkeypatch.setattr(setup_summaries, "PATH_ALL_METHODS_JSON", all_methods)
+    obj = SummarySetup.__new__(SummarySetup)
+    obj.methods_parser = MethodParser(str(all_methods))
+    obj.function_summaries = reg
+    obj.log = lambda *a, **k: None
+    matched, _ = obj.match_summaries_from_all_methods("Main")
+    assert "safeTransfer" in matched
