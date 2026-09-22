@@ -1,8 +1,11 @@
 ## Splitting the spec into verification buffers
 
-Instead of one spec, you author several named CVL **buffers**, each a self-contained spec verified and
-reviewed on its own. Use `put_buffer` / `edit_buffer` / `get_buffer` / `list_buffers` / `delete_buffer`
-to author them, and `submit_buffer` / `collect_results` to verify them.
+Instead of one spec, you author several named CVL **buffers**, of two kinds. A **run-target** buffer
+(`is_run_target=true`, the default) is a self-contained spec the prover checks and that is reviewed on its
+own. A **shared** buffer (`is_run_target=false`) is never run or reviewed; it only supplies shared imports
+(ghosts, models, helper CVL, common summaries) that run-target buffers `import`. Use `put_buffer` /
+`edit_buffer` / `get_buffer` / `list_buffers` / `delete_buffer` to author them, and `submit_buffer` /
+`collect_results` to verify them.
 
 **Strongly prefer splitting, and add over-approximating performance summaries preemptively.** Each
 buffer has its own `methods{}`, so it keeps precise only the expensive functions ITS properties need
@@ -27,8 +30,8 @@ start with one monolithic buffer and wait for a timeout to force the split.
 
 When to split:
 - Properties have **conflicting precision needs** — one buffer can summarize a hotspot that another
-  keeps exact (each buffer has its own `methods{}`), with no global-methods-block conflict. This is
-  the primary axis: group the properties by the set of hotspots they genuinely need exact.
+  keeps exact, with no global-methods-block conflict. This is the primary axis: group the properties by
+  the set of hotspots they genuinely need exact.
 - Separate **`assert`-only** properties (which can share aggressive over-approximations) from
   **`satisfy`** properties (which need those functions exact) — see the soundness rule below.
 - To **isolate the hard/slow properties**: put the many easy properties in one buffer that verifies and
@@ -42,21 +45,20 @@ Structuring buffers:
   `is_run_target=false`, and `import "<shared>.spec"` it from **each run-target that uses it**. A shared
   buffer is pulled in only by the buffers that import it, so
   editing it re-verifies only those — you can make one shared buffer for a subset of groups and another
-  for a different subset. **Import the shared buffer where you need it; never restate its contents in a
-  run-target** (a duplicate `methods{}` entry or ghost is a compile error).
-- **A `requireInvariant`'d invariant must be declared in the run-target buffer whose rule cites it** —
-  NOT in a shared (`is_run_target=false`) buffer. A shared buffer is never run, and importing an
-  invariant does not verify it in the importing run, so citing an unproven invariant is an unsound
-  assumption and is refused at publish. If two run-target buffers each need the same invariant, declare
-  it in each of them.
+  for a different subset. **Import the shared buffer where you need it; do not copy-paste its contents
+  into a run-target.** And do not re-declare anything a shared buffer already provides — a `methods{}`
+  entry, ghost, CVL function, and so on, redeclared in a run-target that imports it, is a compile error.
+- **A `requireInvariant`'d invariant must be declared in the run-target buffer whose rule cites it**, not
+  in a shared buffer — the one exception to putting shared infrastructure in a shared buffer. If two
+  run-target buffers each cite the same invariant, declare it in each.
 - Each **run-target** buffer declares its `property_rules` (the properties it verifies + their rule
   names). Across all run-target buffers, every non-skipped property must appear in **exactly one**
   buffer, and each rule lives in exactly one buffer.
 
 Summaries — your main lever for tractability:
-- For each run-target buffer, **summarize now**, in its `methods{}`, the hotspot functions its
+- For each run-target buffer, **summarize up front**, in its `methods{}`, the hotspot functions its
   properties do not need exact (leave the cheap functions alone) — a sound over-approximation that
-  *weakens* the real body, written before the first `submit_buffer`. For which summary constructs are
+  *weakens* the real body. For which summary constructs are
   sound for a given function and how to write them, consult the **"CVL Summarization — Knowledge Base"**
   context document (its triage ladder for an unresolved-call HAVOC is in section B3).
 - **Soundness rule: an over-approximating summary is sound for `assert` rules but UNSOUND for `satisfy`
@@ -98,12 +100,10 @@ one):
 - Work this priority order, and only ever block at the last step:
   1. A finished result not yet processed (a counterexample, but also a timeout, sanity failure, or
      error) → handle it. Diagnose whether the fix belongs in this buffer or in a **shared** buffer it
-     imports (e.g. an under-approximation in shared infra). Once you edit a shared buffer, every buffer
-     importing it goes stale, so the board then lists them (including ones already verified) under `needs
-     (re)submission` — re-submit each. The board reflects that staleness only after your edit; it does
-     not infer that a result needs a shared fix.
+     imports (e.g. an under-approximation in shared infra). Editing a shared buffer invalidates the
+     results of every already-verified buffer that imports it, and of any in-flight jobs that depend on
+     it; a **future** `collect_results` status board marks those affected jobs under `needs
+     (re)submission` — re-submit each.
   2. Else a buffer still to author/submit → author it and `submit_buffer` it.
   3. Else everything is submitted and running with nothing finished to process → call
      `collect_results(wait=true)` to sleep until the next job finishes.
-- Editing a buffer (or a shared buffer it imports) makes its prior verification stale; re-submit it. A
-  buffer already verified at its current content is not re-run.

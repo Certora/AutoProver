@@ -9,6 +9,7 @@ Provides get_prover_tool(), whose submit_buffer / collect_results tools:
 """
 
 import asyncio
+import functools
 import json
 import logging
 import os
@@ -979,11 +980,9 @@ def get_prover_tool(
 
             # Current digest per buffer is stable within this call (buffers/skips/edit-history are fixed);
             # memoize it — each is a content hash over the import closure, read at several points below.
-            _digests: dict[str, str] = {}
+            @functools.lru_cache(maxsize=None)
             def cur_digest(nm: str) -> str:
-                if nm not in _digests:
-                    _digests[nm] = _cur_digest(state, buffers, nm)
-                return _digests[nm]
+                return _cur_digest(state, buffers, nm)
 
             drained: list[_BufDone] = []
             while not done_queue.empty():
@@ -1064,8 +1063,8 @@ def get_prover_tool(
                 nag_channel["reminders_channel"] = reminders
             if not needs_submit and not running:
                 nag_channel.setdefault("reminders_channel", []).append(
-                    "Every run-target buffer is verified at its current content. Once each also has "
-                    "feedback, you can publish."
+                    f"Buffers {', '.join(sorted(complete))} are verified at their current content. Once "
+                    "each also has feedback, you can publish."
                 )
 
             return tool_state_update(

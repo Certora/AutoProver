@@ -30,6 +30,7 @@ from certora_autosetup.parsers.spec_imports import imports_in_cvl
 from certora_autosetup.setup.summary_resolver import extract_cvl_ast
 from composer.spec.cvl_generation import FEEDBACK_VALIDATION_KEY
 from composer.spec.gen_types import SPECS_DIR
+from composer.spec.types import RuleName
 
 
 MAX_SPEC_BUFFERS_ENV = "AUTOPROVER_MAX_SPEC_BUFFERS"
@@ -57,7 +58,8 @@ class NamedBuffer(BaseModel):
 
     model_config = {"frozen": True}
 
-    #: Stable identifier, and the key this buffer is stored under: ``buffers[nm].name == nm`` holds.
+    #: Stable identifier, and the key this buffer is stored under: ``buffers[nm].name == nm`` holds. It is
+    #: also the on-disk spec stem (``SPECS_DIR/<name>.spec``), so it must be a valid path component.
     name: str
     #: The buffer's own CVL text — its rules, its ``methods{}`` block, and its ``import`` statements.
     cvl: str
@@ -357,7 +359,7 @@ def validate_declared_rules_mapped(
 _ASSUME_INVARIANT_CMD = "AssumeCmd.AssumeInvariant"
 
 
-def requireinvariant_citations(cvl: str) -> set[str]:
+def requireinvariant_citations(cvl: str) -> set[RuleName]:
     """The invariant names cited with ``requireInvariant`` in ``cvl``, read from the parsed CVL AST
     (``ASTExtraction.jar`` via :func:`extract_cvl_ast`) rather than by scanning text. Each citation is
     an ``AssumeInvariant`` command whose ``id`` is the invariant name. Empty when the source has no
@@ -365,14 +367,14 @@ def requireinvariant_citations(cvl: str) -> set[str]:
     ast = extract_cvl_ast(cvl)
     if ast is None:
         return set()
-    cited: set[str] = set()
+    cited: set[RuleName] = set()
 
     def walk(node: object) -> None:
         if isinstance(node, dict):
             if str(node.get("cmd_type", "")).endswith(_ASSUME_INVARIANT_CMD):
                 name = node.get("id")
                 if isinstance(name, str):
-                    cited.add(name)
+                    cited.add(RuleName(name))
             for v in node.values():
                 walk(v)
         elif isinstance(node, list):
@@ -389,30 +391,40 @@ def requireinvariant_citations(cvl: str) -> set[str]:
 # resolution here plus a coverage model for an invariant-only (property-less) run-target buffer.
 def validate_requireinvariant_proved(
     buffers: Mapping[str, NamedBuffer],
-    cited_by_buffer: Mapping[str, set[str]],
+    cited_by_buffer: Mapping[str, set[RuleName]],
     declared_by_buffer: Mapping[str, set[str] | None],
+    expected_to_fail: set[str],
 ) -> str | None:
     """Every invariant a run-target buffer cites with ``requireInvariant`` must be declared in THAT
-    buffer, so it is proved in the same run under the same summaries. An invariant declared only in
-    another buffer — including an unproven shared buffer it imports — is not re-verified in this run, so
-    citing it would assume it unproven (unsound). Refuses, naming the offending citations.
+    buffer, so it is proved in the same run under the same summaries, and must not be marked
+    expected-to-fail. An invariant declared only in another buffer — including an unproven shared buffer
+    it imports — is not re-verified in this run, and an expected-to-fail invariant is not proved at all,
+    so citing either would assume something unproven (unsound). Refuses, naming the offending citations.
     ``declared_by_buffer[name]`` is None when no run covered the buffer (a lifted publish gate) — then
-    there is nothing to cross-check."""
-    problems: list[str] = []
+    there is nothing to cross-check against declarations."""
+    unproved_by_buffer: list[str] = []
+    failing_by_buffer: list[str] = []
     for b in run_targets(buffers):
+        cited = cited_by_buffer.get(b.name, set())
+        if failing := cited & expected_to_fail:
+            failing_by_buffer.append(f"{b.name!r}: {', '.join(sorted(failing))}")
         declared = declared_by_buffer.get(b.name)
-        if declared is None:
-            continue
-        if unproved := cited_by_buffer.get(b.name, set()) - declared:
-            problems.append(f"{b.name!r}: {', '.join(sorted(unproved))}")
-    if not problems:
-        return None
-    return (
-        "these invariants are cited with requireInvariant but not declared (so not proved) in the "
-        "citing buffer — an imported invariant is not re-verified in the importing run, so the citation "
-        "would be an unproven assumption. Declare each invariant in the buffer whose rule cites it: "
-        + "; ".join(problems)
-    )
+        if declared is not None and (unproved := cited.difference(declared)):
+            unproved_by_buffer.append(f"{b.name!r}: {', '.join(sorted(unproved))}")
+    problems: list[str] = []
+    if unproved_by_buffer:
+        problems.append(
+            "these invariants are cited with requireInvariant but not declared (so not proved) in the "
+            "citing buffer — an imported invariant is not re-verified in the importing run, so the citation "
+            "would be an unproven assumption. Declare each invariant in the buffer whose rule cites it: "
+            + "; ".join(unproved_by_buffer)
+        )
+    if failing_by_buffer:
+        problems.append(
+            "these invariants are cited with requireInvariant but marked expected-to-fail, so the citation "
+            "would assume an invariant that is not expected to hold: " + "; ".join(failing_by_buffer)
+        )
+    return " | ".join(problems) if problems else None
 
 
 _METHODS_BLOCK = re.compile(r"methods\s*\{([^}]*)\}", re.DOTALL)

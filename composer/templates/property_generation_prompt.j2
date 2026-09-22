@@ -130,7 +130,7 @@ Like the prover tool, any changes to your state (include the spec, skip declarat
 the positive feedback result, and will necessitate "restamping".
 
 Each run-target buffer declares its own property->rules mapping on `put_buffer`, so the `result` tool derives
-the published mapping from your buffers — you do not restate it. For each property, name every rule and
+the published mapping from your buffers. For each property, name every rule and
 invariant it rests on, including anything supporting — an invariant cited with `requireInvariant`, a
 justification rule behind a `require`: a rule or invariant that no property names is dropped from the report
 as an orphan. `result` is rejected unless every non-skipped property is owned by exactly one run-target buffer

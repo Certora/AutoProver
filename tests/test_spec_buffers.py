@@ -389,14 +389,29 @@ def test_requireinvariant_must_be_declared_in_citing_buffer():
     b = _buffers()  # easy, hard are run-targets
     declared = {"easy": {"r_easy", "inv_local"}, "hard": {"r_hard"}}
     # easy cites inv_local, which it declares -> OK
-    assert validate_requireinvariant_proved(b, {"easy": {"inv_local"}, "hard": set()}, declared) is None
+    assert validate_requireinvariant_proved(
+        b, {"easy": {"inv_local"}, "hard": set()}, declared, expected_to_fail=set()
+    ) is None
     # easy cites inv_shared, not in its own declared set (would be an imported/unproven invariant) -> refused
-    err = validate_requireinvariant_proved(b, {"easy": {"inv_shared"}, "hard": set()}, declared)
+    err = validate_requireinvariant_proved(
+        b, {"easy": {"inv_shared"}, "hard": set()}, declared, expected_to_fail=set()
+    )
     assert err is not None and "inv_shared" in err and "easy" in err
     # a buffer with no run (None declared) is skipped, not faulted
     assert validate_requireinvariant_proved(
-        b, {"easy": {"inv_shared"}}, {"easy": None, "hard": {"r_hard"}}
+        b, {"easy": {"inv_shared"}}, {"easy": None, "hard": {"r_hard"}}, expected_to_fail=set()
     ) is None
+
+
+def test_requireinvariant_citing_expected_to_fail_is_refused():
+    # An invariant cited with requireInvariant that is marked expected-to-fail is not proved, so the
+    # citation is an unsound assumption -> refused, even when it is declared in the citing buffer.
+    b = _buffers()  # easy, hard are run-targets
+    declared = {"easy": {"r_easy", "inv_local"}, "hard": {"r_hard"}}
+    err = validate_requireinvariant_proved(
+        b, {"easy": {"inv_local"}, "hard": set()}, declared, expected_to_fail={"inv_local"}
+    )
+    assert err is not None and "inv_local" in err and "easy" in err
 
 
 def test_skips_review_digest_changes_on_skip_and_on_buffer_edit():

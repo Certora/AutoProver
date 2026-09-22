@@ -534,7 +534,7 @@ class TestBufferCoverage:
         ).turns(
             _submit("b1"), _submit("b2"), _collect(wait=True), _collect(wait=True),
         ).map_run(lambda st: st["reminders_channel"])
-        assert any("verified at its current content" in r for r in reminders)
+        assert any("verified at their current content" in r for r in reminders)
 
     async def test_no_completion_reminder_while_coverage_is_partial(self, certora_prover: ProverMock):
         reminders = await _scenario(
@@ -543,7 +543,7 @@ class TestBufferCoverage:
         ).turns(
             _submit("b1"), _collect(wait=True),
         ).map_run(lambda st: st["reminders_channel"])
-        assert not any("verified at its current content" in r for r in reminders)
+        assert not any("verified at their current content" in r for r in reminders)
 
 
 # =========================================================================

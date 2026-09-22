@@ -69,7 +69,9 @@ class PutBuffer[S: WithBuffers](WithImplementation[str | Command], WithInjectedS
         default_factory=dict,
         description="The properties this buffer verifies and, for each (by its snake_case title), the "
         "rule/invariant names in this buffer's CVL that verify it. Across all run-target buffers every "
-        "non-skipped property must appear in exactly one buffer. Omit for a shared buffer.",
+        "non-skipped property must appear in exactly one buffer. Omit for a shared buffer. Re-putting an "
+        "existing buffer with this empty (or omitted) keeps its previously-declared mapping; pass a "
+        "non-empty dict to replace it.",
     )
     is_run_target: bool = Field(
         default=True, description="False for a shared, imported-only buffer that runs no rules."
@@ -91,6 +93,11 @@ class PutBuffer[S: WithBuffers](WithImplementation[str | Command], WithInjectedS
         existing = buffers_now.get(self.name)
         # Keep the prior property->rule mapping when the agent re-puts text without restating it.
         prop_rules = self.property_rules or (dict(existing.property_rules) if existing else {})
+        if not self.is_run_target and prop_rules:
+            return (
+                f"Buffer {self.name!r} is shared (is_run_target=false) but carries a property->rule "
+                f"mapping {sorted(prop_rules)}; a shared buffer declares no properties."
+            )
         buf = NamedBuffer(
             name=self.name, cvl=self.cvl,
             is_run_target=self.is_run_target, property_rules=prop_rules,

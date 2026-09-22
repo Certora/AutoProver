@@ -200,7 +200,8 @@ class PublishResultTool(
         # lives only in another buffer — e.g. an unproven shared buffer — is an unproven assumption.
         cited_by_buffer = {b.name: requireinvariant_citations(b.cvl) for b in run_targets(buffers)}
         if (err := validate_requireinvariant_proved(
-            buffers, cited_by_buffer, declared_by_buffer
+            buffers, cited_by_buffer, declared_by_buffer,
+            expected_to_fail=set(self.state["rule_skips"]),
         )) is not None:
             return f"Completion REJECTED: {err}"
         pr = [
@@ -679,13 +680,23 @@ class _PerBufferJudge[J]:
     build: Callable[[str, list[PropertyFormulation]], J]
     properties: list[PropertyFormulation]
     _cache: dict[str, tuple[tuple[str, ...], J]] = field(default_factory=dict)
+    _skips_judge: J | None = field(default=None)
 
     def for_buffer(self, name: str, claimed: list[PropertyFormulation]) -> J:
         sig = tuple(sorted(str(p.title) for p in claimed))
         cached = self._cache.get(name)
         if cached is None or cached[0] != sig:
-            self._cache[name] = (sig, self.build(name, claimed))
+            # Namespaced under "buffer:<name>", disjoint from the skips judge's SKIPS_VALIDATION_KEY.
+            self._cache[name] = (sig, self.build(f"buffer:{name}", claimed))
         return self._cache[name][1]
+
+    def for_skips(self) -> J:
+        """The judge for the whole-spec skip review, on its own slot so it never shares an instance or
+        memory namespace with a buffer that happens to be named the skip-review key."""
+        judge = self._skips_judge
+        if judge is None:
+            judge = self._skips_judge = self.build(SKIPS_VALIDATION_KEY, [])
+        return judge
 
 
 @tool_display("Getting feedback", "Feedback")
@@ -725,7 +736,7 @@ class EditorAwareFeedbackTool(
 
         for b in [b for b in targets if validations.get(f"feedback:{b.name}") != digest(b.name)]:
             claimed = [p for p in all_props if str(p.title) in b.property_rules]
-            verdict = await self._review(b.name, buffer_review_text(buffers, b.name), [], claimed)
+            verdict = await self._review_buffer(b.name, buffer_review_text(buffers, b.name), claimed)
             blocks.append(f"=== buffer {b.name} ===\nGood? {verdict.good}\nFeedback {verdict.feedback}")
             if verdict.good:
                 new_stamps[f"feedback:{b.name}"] = digest(b.name)
@@ -736,7 +747,7 @@ class EditorAwareFeedbackTool(
         # the skips, with no per-buffer claim to cover.
         skips_digest = skips_review_digest(buffers, skipped=skipped_pairs, version_history=vh)
         if skipped and validations.get(SKIPS_VALIDATION_KEY) != skips_digest:
-            verdict = await self._review(SKIPS_VALIDATION_KEY, combined_buffers_view(buffers), skipped, [])
+            verdict = await self._review_skips(combined_buffers_view(buffers), skipped)
             blocks.append(f"=== skipped properties ===\nGood? {verdict.good}\nFeedback {verdict.feedback}")
             if verdict.good:
                 new_stamps[SKIPS_VALIDATION_KEY] = skips_digest
@@ -747,23 +758,30 @@ class EditorAwareFeedbackTool(
             )
         return tool_state_update(self.tool_call_id, "\n\n".join(blocks), validations=new_stamps)
 
-    async def _review(
-        self, name: str, spec: str, skipped: list[SkippedProperty],
-        properties: list[PropertyFormulation],
+    async def _run_judge(
+        self, judge: ContextualFeedbackToolImpl[SourceSnapshot], name: str, spec: str,
+        skipped: list[SkippedProperty],
     ) -> PropertyFeedbackProtocol:
-        # Review one unit — a buffer's text, or the whole spec for the skip review — with that unit's
-        # cached judge, scored against `properties` (the unit's claimed subset; empty for the skip review).
+        assert "vfs" in self.state
+        snap = SourceSnapshot(
+            vfs=self.state["vfs"],
+            version_history=self.state["version_history"],
+        )
+        # A unit's judge sees only the rebuttals filed against its own feedback.
+        rebuttals = [r for r in self.rebuttals if r.buffer == name]
+        return await judge(snap, spec, skipped, rebuttals, self.tool_call_id)
+
+    async def _review_buffer(
+        self, name: str, spec: str, claimed: list[PropertyFormulation],
+    ) -> PropertyFeedbackProtocol:
         with self.tool_deps() as judges:
-            assert "vfs" in self.state
-            snap = SourceSnapshot(
-                vfs=self.state["vfs"],
-                version_history=self.state["version_history"],
-            )
-            # Each unit's judge sees only the rebuttals filed against its own feedback.
-            rebuttals = [r for r in self.rebuttals if r.buffer == name]
-            return await judges.for_buffer(name, properties)(
-                snap, spec, skipped, rebuttals, self.tool_call_id
-            )
+            return await self._run_judge(judges.for_buffer(name, claimed), name, spec, [])
+
+    async def _review_skips(
+        self, spec: str, skipped: list[SkippedProperty],
+    ) -> PropertyFeedbackProtocol:
+        with self.tool_deps() as judges:
+            return await self._run_judge(judges.for_skips(), SKIPS_VALIDATION_KEY, spec, skipped)
 
     def _all_properties(self) -> list[PropertyFormulation]:
         # The batch's full property set, for resolving a unit's claimed subset.
@@ -917,7 +935,7 @@ async def batch_cvl_generation(
     sys_prompt : list[RawPromptInput | type[CacheMarker]] = [
         lambda load: load("property_generation_system_prompt.j2"),
         f"\nCreate at most {max_spec_buffers()} run-target buffers; fold further properties into "
-        f"existing ones. A single run-target buffer is the one-spec case.",
+        f"existing ones.",
     ]
 
     added_tools : list[BaseTool] = []
