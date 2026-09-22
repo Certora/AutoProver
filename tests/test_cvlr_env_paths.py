@@ -1,11 +1,11 @@
-"""Spelling the vendored tuning files for the platform generation a target is on.
+"""Spelling the starting tuning files for the platform generation a target is on.
 
 A directive whose path was renamed matches nothing. It does not raise, log, or fail the build,
 and the prover runs with a different configuration than the file appears to describe. The tests
 check that a rewrite happens where it must, and does not happen where it must not.
 
-:func:`test_every_declared_alias_still_names_something_in_the_vendored_files` is the one that
-goes stale quietly. An alias is written against a vendored file. After that file changes, an
+:func:`test_every_declared_alias_still_names_something_in_the_starting_files` is the one that
+goes stale quietly. An alias is written against a starting layer. After that file changes, an
 alias whose path no longer appears still looks like coverage.
 """
 
@@ -15,14 +15,12 @@ import pytest
 
 from composer.cargo.metadata import CratePackage, RegistrySource, Workspace
 from composer.spec.cvlr.env_paths import PathDialect, dialect_for
-from composer.spec.cvlr.scaffold import (
-    CANONICAL_ENVS,
-    DEVIATIONS,
+from composer.spec.cvlr.tuning import (
     ENV_DIR,
     INLINING,
-    Deviation,
-    canonical_env,
+    STARTING_ENVS,
     compose_env,
+    starting_env,
 )
 from composer.spec.cvlr_reference import SOLANA, SOROBAN, NamespacePattern, PathAlias
 
@@ -263,54 +261,53 @@ def test_rendering_twice_is_not_claimed_and_is_not_reachable(split: PathDialect)
     sides of the split lists the canonical spelling as one of its own replacements, so a second
     pass fans that copy out again.
 
-    Callers render from the vendored original. :func:`canonical_env` re-reads ``envs/`` on each
+    Callers render from the starting layer. :func:`starting_env` re-reads ``envs/`` on each
     call. This checks that a second pass would duplicate the line, so a caller that starts
     feeding rendered text back in fails here.
     """
-    summaries = canonical_env("cvlr_summaries_core.txt", split)
+    summaries = starting_env("cvlr_summaries_core.txt", split)
     assert summaries.count("^solana_cpi::invoke_signed_unchecked$") == 1
     assert split.render(summaries).count("^solana_cpi::invoke_signed_unchecked$") == 2
 
 
 def test_recomposing_a_composite_is_stable(split: PathDialect) -> None:
-    """The composite is built from the vendored layers every time, so composing twice gives the
+    """The composite is built from the starting layers every time, so composing twice gives the
     same file."""
     once = compose_env(INLINING, package_layer="; mine\n", dialect=split)
     assert compose_env(INLINING, package_layer="; mine\n", dialect=split) == once
 
 
-def test_the_canonical_files_are_returned_verbatim_without_a_dialect() -> None:
-    """`canonical_env` answers "what is stored", so it applies neither a dialect nor a deviation.
-    Fold `DEVIATIONS` into it and this fails: one of them rewrites a line in a canonical file."""
-    for name in CANONICAL_ENVS:
-        assert canonical_env(name) == (ENV_DIR / name).read_text()
+def test_the_starting_files_are_returned_verbatim_without_a_dialect() -> None:
+    """`starting_env` answers "what is stored", so without a dialect it changes nothing."""
+    for name in STARTING_ENVS:
+        assert starting_env(name) == (ENV_DIR / name).read_text()
 
 
 def test_an_empty_dialect_is_the_identity() -> None:
-    for name in CANONICAL_ENVS:
+    for name in STARTING_ENVS:
         assert PathDialect().render((ENV_DIR / name).read_text()) == (ENV_DIR / name).read_text()
 
 
 # ---------------------------------------------------------------------------------------------
-# keeping the aliases honest across an upstream refresh
+# keeping the aliases honest as the starting layers change
 
 
-def test_every_declared_alias_still_names_something_in_the_vendored_files() -> None:
-    """An alias is written against a file upstream owns. After a refresh, one whose canonical path
-    no longer appears anywhere is dead weight that reads like coverage — and the failure mode it is
+def test_every_declared_alias_still_names_something_in_the_starting_files() -> None:
+    """An alias is written against a starting layer. After that layer changes, one whose canonical
+    path no longer appears anywhere is dead weight that reads like coverage — and the failure mode it is
     supposed to prevent is itself silent, so nothing else would notice."""
-    vendored = "\n".join((ENV_DIR / name).read_text() for name in CANONICAL_ENVS)
+    starting = "\n".join((ENV_DIR / name).read_text() for name in STARTING_ENVS)
     for alias in SOLANA.platform.path_aliases:
         canonical = alias.canonical
-        assert canonical in vendored, (
-            f"{canonical} is aliased but appears in none of the vendored tuning files; either "
-            f"upstream removed the directive or the alias was written against a stale file"
+        assert canonical in starting, (
+            f"{canonical} is aliased but appears in none of the starting tuning files; either "
+            f"the directive was removed or the alias was written against a stale file"
         )
 
 
 def test_the_namespace_blanket_is_declared_for_a_directive_that_exists() -> None:
     """Specifically the blanket, because it is the one whose canonical spelling contains a regex
-    fragment: an upstream reword from ``^solana_program::.*$`` to anything else leaves it matching
+    fragment: rewording ``^solana_program::.*$`` to anything else leaves it matching
     nothing, and the platform layer loses its default with no other symptom."""
     blankets = [
         a for a in SOLANA.platform.path_aliases if isinstance(a, NamespacePattern)
@@ -344,7 +341,7 @@ def test_every_alias_rewrites_to_a_path_the_binary_actually_defines(split: PathD
     some symbols moved and some did not, so an alias is per symbol.
 
     An alias is skipped when the fixture has no symbol under either spelling. The program does
-    not exercise that concept. Those are checked by the vendored-file test above.
+    not exercise that concept. Those are checked by the starting-file test above.
     """
     symbols = _measured_symbols()
     unexercised: list[str] = []
@@ -401,22 +398,19 @@ def test_the_dialect_measurably_restores_coverage_and_costs_none(split: PathDial
         ("cvlr_inlining_anchor.txt", (6, 7), (26, 26)),
         ("cvlr_summaries_core.txt", (2, 6), (2, 4)),
     ):
-        (lb, cb), (la, ca) = stats(canonical_env(name)), stats(canonical_env(name, split))
+        (lb, cb), (la, ca) = stats(starting_env(name)), stats(starting_env(name, split))
         assert (lb, la) == directives, f"{name} directives: {lb} -> {la}"
         assert (len(cb), len(ca)) == coverage, f"{name} symbols: {len(cb)} -> {len(ca)}"
         assert cb <= ca, f"{name} lost coverage of {sorted(cb - ca)}"
 
 
 # ---------------------------------------------------------------------------------------------
-# deviations from upstream
+# ProgramError::from is inlined
 
 
-def test_the_deviation_reaches_the_composite() -> None:
-    """The composite a target's build reads carries the corrected line.
-
-    With upstream's ``inline(never)``, an unsummarized ``ProgramError::from`` is treated as
-    external. That havocs the ``Result`` discriminant a handler returns, and ``res.is_err()``
-    cannot be proved.
+def test_program_error_from_is_inlined_in_the_composite() -> None:
+    """Left opaque with no summary, ``ProgramError::from`` havocs the ``Result`` discriminant a
+    handler returns, and ``res.is_err()`` cannot be proved.
     """
     composite = compose_env(INLINING, package_layer="")
     from_u64 = [ln for ln in composite.splitlines() if "From<u64>>::from$" in ln and ln.startswith("#[")]
@@ -425,37 +419,14 @@ def test_the_deviation_reaches_the_composite() -> None:
     ]
 
 
-def test_the_deviation_survives_the_dialect(split: PathDialect) -> None:
-    """It has to hold in the spelling that matches. Upstream's line names
-    ``solana_program::program_error::`` and matches nothing on a post-split target. Rewriting it
-    to ``solana_program_error::`` is what makes the directive apply."""
+def test_program_error_from_is_inlined_under_the_dialect(split: PathDialect) -> None:
+    """It has to hold in the spelling that matches. The starting layer names
+    ``solana_program::program_error::``, which matches nothing on a post-split target. The rewrite
+    to ``solana_program_error::`` is what makes the directive apply, so an ``inline(never)`` there
+    would take effect."""
     composite = compose_env(INLINING, package_layer="", dialect=split)
     assert (
         "#[inline] ^<solana_program_error::ProgramError as core::convert::From<u64>>::from$"
         in composite
     )
     assert "#[inline(never)] ^<solana_program_error::ProgramError" not in composite
-
-
-def test_the_vendored_copy_is_untouched_by_deviations() -> None:
-    """A deviation is applied on the way into a composite, never to ``envs/``. Otherwise the next
-    refresh reports our change as upstream's.
-    :func:`test_the_canonical_files_are_returned_verbatim_without_a_dialect` checks the stored
-    file too."""
-    for deviation in DEVIATIONS:
-        assert deviation.canonical in (ENV_DIR / deviation.env).read_text()
-        assert deviation.replacement not in (ENV_DIR / deviation.env).read_text()
-
-
-def test_a_deviation_upstream_has_rewritten_fails_loudly(monkeypatch: pytest.MonkeyPatch) -> None:
-    """If upstream edits the line we deviate from, composing raises instead of shipping upstream's
-    version. The reason for the deviation may be gone, and that has to be looked at."""
-    stale = Deviation(
-        env=INLINING.core,
-        canonical="#[inline(never)] ^this::line::is::not::in::the::file$",
-        replacement="#[inline] ^this::line::is::not::in::the::file$",
-        why="test",
-    )
-    monkeypatch.setattr("composer.spec.cvlr.scaffold.DEVIATIONS", (stale,))
-    with pytest.raises(ValueError, match="upstream has changed it"):
-        compose_env(INLINING, package_layer="")

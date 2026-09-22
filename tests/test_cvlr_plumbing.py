@@ -320,9 +320,8 @@ def test_turning_it_off_leaves_everything_that_was_not_the_portfolio():
 
 
 def test_the_loop_assumption_reads_both_spellings_and_defaults_off():
-    """Absent means off — which is what the Prover does with a key it was not given, and what the
-    Solana spec template intends. A hand-written conf may spell the bool as a string, the way one
-    spells `loop_iter`, so both are read."""
+    """Absent means off, which is what the Prover does with a key it was not given. A hand-written
+    conf may spell the bool as a string, the way one spells `loop_iter`, so both are read."""
     from composer.prover.conf import has_optimistic_loop, with_optimistic_loop
 
     assert not has_optimistic_loop({})
@@ -335,7 +334,7 @@ def test_the_loop_assumption_reads_both_spellings_and_defaults_off():
 
 
 def test_the_loop_assumption_is_off_in_the_default_base():
-    """The template leaves the assumption off. A caller can turn it on. A run does not start with
+    """The default base leaves the assumption off. A caller can turn it on. A run does not start with
     it on."""
     from composer.prover.conf import has_optimistic_loop
     from composer.spec.cvlr.conf import TEMPLATE_BASE
@@ -404,7 +403,7 @@ def test_loops_are_bounded_soundly_and_the_bound_is_raised_instead():
     more iterations is not found. Bound the inputs that set the trip count, or edit the loop,
     before raising ``loop_iter``.
 
-    The bound is 2, not the template's 1. With a bound of 1, a loop inside a handler fails before
+    The bound is 2. With a bound of 1, a loop inside a handler fails before
     the rule's property is reached: an Anchor handler comes back violated on "Unwinding condition
     in a loop" against a loop in its borsh path.
     """
@@ -414,7 +413,7 @@ def test_loops_are_bounded_soundly_and_the_bound_is_raised_instead():
 
 
 def test_the_recommended_starting_point_enables_no_optimistic_solana_flags():
-    """The template sets none of the ``-solanaOptimistic*`` flags. They are unsound, and they do
+    """The default base sets none of the ``-solanaOptimistic*`` flags. They are unsound, and they do
     not fix the [3308] they were meant to."""
     flags = cvlr_conf.TEMPLATE_BASE["prover_args"]
     assert isinstance(flags, list)

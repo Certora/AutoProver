@@ -1,11 +1,9 @@
 """The ``certora/`` tree a CVLR project needs before a rule can be written.
 
-The shape follows Certora's solana-spec-template
-(https://github.com/Certora/solana-spec-template): a harness module behind a cargo feature, two
-tuning files, and a few ``Cargo.toml`` stanzas. What to write is read from ``cargo metadata`` and
-from the reference set. Two cases are refused (:class:`Blocked`) instead of guessed: a package
-that builds no loadable object, and a CVLR pin that does not match the platform generation the
-project is already on.
+The shape is a harness module behind a cargo feature, two tuning files, and a few ``Cargo.toml``
+stanzas. What to write is read from ``cargo metadata`` and from the reference set. Two cases are
+refused (:class:`Blocked`) instead of guessed: a package that builds no loadable object, and a
+CVLR pin that does not match the platform generation the project is already on.
 
 The result, for a program package inside a workspace. Files marked ``*`` already exist and are
 edited. Without a ``[workspace]`` the package is the root, and the root manifest gets no
@@ -25,20 +23,25 @@ edited. Without a ``[workspace]`` the package is the root, and the root manifest
                 ├── mod.rs
                 ├── specs/mod.rs      where authored rules land
                 └── envs/
-                    ├── cvlr_inlining_core.txt       vendored
-                    ├── cvlr_inlining_anchor.txt     vendored
                     ├── cvlr_inlining_package.txt    the project's own, empty to start
-                    ├── cvlr_inlining.txt            generated from the three above
-                    └── cvlr_summaries_*.txt         the same four layers
+                    ├── cvlr_inlining.txt            regenerated: starting configuration + package
+                    └── cvlr_summaries_*.txt         the same two files
 
-Nothing is overwritten. A file is written only when it is absent, and manifest edits are text
-insertions into the parsed file, so a second run changes nothing. Reserializing the manifest
-would rewrite the project's comments to make one edit. Re-opening an existing table is a
+What the files under ``envs/`` mean, and which of them a project edits, is
+:mod:`composer.spec.cvlr.tuning`.
+
+Nothing the project owns is overwritten. A file is written only when it is absent, and manifest
+edits are text insertions into the parsed file, so a second run changes nothing. Reserializing the
+manifest would rewrite the project's comments to make one edit. Re-opening an existing table is a
 duplicate-table error, so an existing ``[features]`` table is edited in place.
+
+The two generated tuning files are the exception (:class:`Regenerate`). They are rewritten whenever
+they differ from what the starting configuration and the package layer compose to, so an edit to
+the package layer, or a newer starting configuration, reaches the build.
 
 ``sources`` includes ``Cargo.toml``. ``.certora_sources`` is what the report and the counterexample
 analyzer read, and a source tree with no manifest cannot be rebuilt. CVLR versions come from the
-reference set, not from a pin copied out of the template.
+reference set.
 """
 
 import json
@@ -53,18 +56,12 @@ from composer.cargo.metadata import CratePackage, Workspace
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.env_paths import PathDialect, dialect_for
 from composer.spec.cvlr import forks
+from composer.spec.cvlr.tuning import ENV_FAMILIES, INLINING, SUMMARIES, compose_env
 from composer.spec.cvlr_reference import ChainReference, CrateRelease
 
 _log = logging.getLogger(__name__)
 
-TEMPLATE_REPO = "https://github.com/Certora/solana-spec-template.git"
-
-#: The vendored tuning files the scaffold writes into a target. Shipped in the wheel. Edit them
-#: here.
-ENV_DIR = Path(__file__).parent / "envs"
-
-#: Where the harness module goes in the target package. Inside ``src/`` because that is where the
-#: template puts it and what its ``[package.metadata.certora]`` paths name.
+#: Where the harness module goes in the target package.
 HARNESS_DIR = Path("src") / "certora"
 SPECS_DIR = HARNESS_DIR / "specs"
 ENVS_DIR = HARNESS_DIR / "envs"
@@ -72,8 +69,8 @@ ENVS_DIR = HARNESS_DIR / "envs"
 #: tuned its prover settings did it here, and :func:`composer.spec.cvlr.conf.project_conf` reads it.
 CONFS_DIR = HARNESS_DIR / "confs"
 
-#: Build output the prover leaves in the project. The first three match the template's
-#: ``certora-setup.py``. ``.cvlr_work`` is this backend's per-unit work directory.
+#: Build output the prover leaves in the project, and ``.cvlr_work``, this backend's per-unit work
+#: directory.
 GITIGNORE_LINES = (".certora", ".certora_internal", "certora_out", ".cvlr_work")
 
 #: The crate type a Solana program's library target must have. Without it cargo produces no
@@ -85,117 +82,6 @@ SHARED_OBJECT_TYPE = "cdylib"
 #: with no entrypoint to suppress does not need one. The examples' ``first_example`` has
 #: ``certora = []``.
 NO_ENTRYPOINT_FEATURE = "no-entrypoint"
-
-
-@dataclass(frozen=True)
-class EnvFamily:
-    """One tuning file, in the layers the template splits it into.
-
-    ``core`` and ``anchor`` are the vendored layers. ``package`` starts empty and belongs to the
-    project. The composite is generated from the three. A project that needs its own directive
-    edits ``package``.
-    """
-
-    stem: str
-
-    @property
-    def core(self) -> str:
-        return f"{self.stem}_core.txt"
-
-    @property
-    def anchor(self) -> str:
-        return f"{self.stem}_anchor.txt"
-
-    @property
-    def package(self) -> str:
-        return f"{self.stem}_package.txt"
-
-    @property
-    def composite(self) -> str:
-        """The file the package declares. Generated from the three layers."""
-        return f"{self.stem}.txt"
-
-    def unit_layer(self, unit: str) -> str:
-        """The file name for one unit's own directives.
-
-        Separate from ``package``, which belongs to the project. A summary is a symbol pattern
-        the prover applies to the whole build, not something a cargo feature can scope. Lines
-        added to the shared package file would apply to every unit's submission.
-        """
-        return f"{self.stem}_{unit}_run.txt"
-
-    def unit_composite(self, unit: str) -> str:
-        """The file one unit's conf names. Generated from all four layers."""
-        return f"{self.stem}_{unit}.txt"
-
-
-INLINING = EnvFamily("cvlr_inlining")
-SUMMARIES = EnvFamily("cvlr_summaries")
-ENV_FAMILIES = (INLINING, SUMMARIES)
-
-#: The shared halves — one content for every target, as against the per-package layer.
-CANONICAL_ENVS = tuple(name for f in ENV_FAMILIES for name in (f.core, f.anchor))
-
-
-@dataclass(frozen=True)
-class Deviation:
-    """One vendored line this backend does not ship as upstream wrote it.
-
-    Kept here instead of edited into ``envs/``. A vendored file that was edited in place would
-    report the next upstream diff as ours. The deviation is applied when the composite is built,
-    and :func:`_deviated` raises when :attr:`canonical` is not found exactly once. If upstream
-    rewrites the line, composition fails and the deviation has to be looked at again.
-
-    Written in upstream's spelling, and applied before the dialect renders it, so the entry
-    matches the vendored bytes.
-    """
-
-    env: str
-    canonical: str
-    replacement: str
-    why: str
-
-
-#: Applied to the vendored layers on the way into a composite.
-#:
-#: The one entry is a soundness fix. ``ProgramError`` is returned through an ``sret`` out-pointer,
-#: so treating its constructor as external havocs the write, including the ``Result`` discriminant.
-#: An error built with ``SomeError.into()`` then has a nondeterministic ``is_err()``, and a rule
-#: that a handler rejects bad input cannot be proved. Upstream marks the function
-#: ``inline(never)`` and ships no summary for it.
-#:
-#: Upstream's directive names ``solana_program::program_error::``. After the platform split the
-#: symbol is ``solana_program_error::``, so the line matches nothing until
-#: :mod:`composer.spec.cvlr.env_paths` rewrites the path. That rewrite is what makes the unsound
-#: directive apply. The replacement is ``#[inline]``. With that spelling, or with the path left
-#: unrewritten, the same rules verify. With the rewritten ``#[inline(never)]`` they are violated.
-DEVIATIONS: tuple[Deviation, ...] = (
-    Deviation(
-        env=INLINING.core,
-        canonical=(
-            "#[inline(never)] "
-            "^<solana_program::program_error::ProgramError as core::convert::From<u64>>::from$"
-        ),
-        replacement=(
-            "#[inline] "
-            "^<solana_program::program_error::ProgramError as core::convert::From<u64>>::from$"
-        ),
-        why="unsummarized inline(never) havocs every ProgramError a handler returns",
-    ),
-)
-
-_GENERATED_HEADER = """;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Generated — this is the file the build reports to the prover.
-;;; Composed, in order, from:
-;;;   {core}
-;;;   {anchor}
-;;;   {package}
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-"""
-
-_PACKAGE_ENV_HEADER = """; {kind} specific to this package. Empty to start with, and the one file
-; here that is yours: the other layers are maintained in {repo}.
-"""
 
 
 # ---------------------------------------------------------------------------------------------
@@ -237,7 +123,20 @@ class InsertInTable:
     why: str
 
 
-type Change = NewFile | AppendSection | InsertInTable
+@dataclass(frozen=True)
+class Regenerate:
+    """A generated file, written whenever it differs from ``contents``.
+
+    The one change that replaces a file. Only for files composed from sources that are not
+    edited in the target, so there is nothing of the project's in them to lose.
+    """
+
+    path: Path
+    contents: str
+    why: str
+
+
+type Change = NewFile | AppendSection | InsertInTable | Regenerate
 
 
 @dataclass(frozen=True)
@@ -269,9 +168,12 @@ class ScaffoldPlan:
     def describe(self) -> str:
         lines = [f"CVLR scaffold for {self.package}:"]
         for change in self.changes:
-            verb = {NewFile: "create", AppendSection: "extend", InsertInTable: "edit"}[
-                type(change)
-            ]
+            verb = {
+                NewFile: "create",
+                AppendSection: "extend",
+                InsertInTable: "edit",
+                Regenerate: "regenerate",
+            }[type(change)]
             lines.append(f"  {verb} {change.path} — {change.why}")
         lines += [f"  ok {note}" for note in self.satisfied]
         lines += [f"  BLOCKED {b.path}: {b.problem} — {b.resolution}" for b in self.blocked]
@@ -291,83 +193,6 @@ class ScaffoldBlocked(RuntimeError):
 
 # ---------------------------------------------------------------------------------------------
 # the content
-
-
-def canonical_env(name: str, dialect: PathDialect = PathDialect()) -> str:
-    """One vendored tuning file, spelled for the target's platform generation.
-
-    The default dialect changes nothing, and :data:`DEVIATIONS` are not applied. A caller
-    comparing against the file on disk gets that file.
-    """
-    return dialect.render((ENV_DIR / name).read_text())
-
-
-def deviations_for(name: str) -> tuple[Deviation, ...]:
-    """Deviations whose ``env`` is ``name``."""
-    return tuple(d for d in DEVIATIONS if d.env == name)
-
-
-def _deviated(name: str, dialect: PathDialect) -> str:
-    """One vendored file with :data:`DEVIATIONS` applied, then spelled for the target.
-
-    Separate from :func:`canonical_env`, which returns the stored file unchanged.
-    """
-    text = (ENV_DIR / name).read_text()
-    for deviation in deviations_for(name):
-        found = text.count(deviation.canonical)
-        if found != 1:
-            raise ValueError(
-                f"{name}: deviation matched {found} lines, expected 1 — upstream has changed it. "
-                f"Re-review whether it is still needed ({deviation.why}) and update DEVIATIONS."
-            )
-        text = text.replace(deviation.canonical, deviation.replacement)
-    return dialect.render(text)
-
-
-def compose_env(
-    family: EnvFamily,
-    *,
-    package_layer: str,
-    unit_layer: str = "",
-    dialect: PathDialect = PathDialect(),
-) -> str:
-    """The generated composite: header, then the layers, in the template's order.
-
-    ``package_layer`` is passed in rather than read, so recomposing after that layer changes is
-    the same call. The dialect does not touch it. It is the project's file, written against the
-    project's own symbols.
-
-    ``unit_layer`` is the fourth layer. The scaffold writes the package-level composite, where
-    this is empty. A non-empty layer is one unit's directives, so they are not applied to another
-    unit's submission (see :meth:`EnvFamily.unit_layer`). Those are the project's symbols too, so
-    the dialect leaves them alone.
-    """
-    header = _GENERATED_HEADER.format(
-        core=family.core, anchor=family.anchor, package=family.package
-    )
-    parts = [header]
-    if dialect.aliases:
-        # Said in the file, so a reader diffing it against upstream can see that paths were
-        # rewritten.
-        parts.append(
-            f";;; Platform paths rewritten for this target's generation "
-            f"({len(dialect.aliases)} aliases) — see composer/spec/cvlr/env_paths.py\n"
-        )
-    applied = [d for d in DEVIATIONS if d.env in (family.core, family.anchor)]
-    if applied:
-        # Same reason as the note above. Each line says what differs from upstream and why.
-        # One of these is a soundness fix.
-        parts.append(
-            "".join(f";;; Deviates from upstream: {d.why} — {d.replacement}\n" for d in applied)
-        )
-    parts += [
-        _deviated(family.core, dialect),
-        _deviated(family.anchor, dialect),
-        package_layer,
-    ]
-    if unit_layer.strip():
-        parts.append(unit_layer)
-    return "\n".join(p.rstrip("\n") for p in parts) + "\n"
 
 
 #: The harness module tree. ``specs/`` is created empty so the module exists before any rule file
@@ -401,8 +226,7 @@ _HARNESS_WHY: dict[str, str] = {
 def _lib_declaration() -> str:
     """The line that pulls the harness into the crate.
 
-    The ``cfg`` is on this declaration. The template gates inside the harness's ``mod.rs``, which
-    needs a gate on every submodule.
+    The ``cfg`` is on this declaration, so the harness's submodules need no gate of their own.
     """
     return f'\n#[cfg(feature = "{DEFAULT_FEATURE}")]\nmod certora;\n'
 
@@ -772,37 +596,35 @@ def _plan_envs(
     changes: list[Change] = []
     satisfied: list[str] = []
     for family in ENV_FAMILIES:
-        kind = "Inlining directives" if family is INLINING else "Points-to summaries"
+        kind = family.kind.lower()
         layer_path = package.root / ENVS_DIR / family.package
-        package_layer = (
-            layer_path.read_text()
-            if layer_path.is_file()
-            else _PACKAGE_ENV_HEADER.format(kind=kind, repo=TEMPLATE_REPO)
-        )
-        planned = (
-            (
-                family.core,
-                canonical_env(family.core, dialect),
-                f"canonical {kind.lower()}, from upstream",
-            ),
-            (
-                family.anchor,
-                canonical_env(family.anchor, dialect),
-                f"Anchor {kind.lower()}, from upstream",
-            ),
-            (family.package, package_layer, f"this package's own {kind.lower()} — yours to edit"),
-            (
-                family.composite,
-                compose_env(family, package_layer=package_layer, dialect=dialect),
-                "the composite the build reports to the prover",
-            ),
-        )
-        for name, contents, why in planned:
-            target = ENVS_DIR / name
-            if (package.root / target).exists():
-                satisfied.append(f"{relative / target} already exists")
-                continue
-            changes.append(NewFile(path=relative / target, contents=contents, why=why))
+        layer_target = relative / ENVS_DIR / family.package
+        if layer_path.is_file():
+            package_layer = layer_path.read_text()
+            satisfied.append(f"{layer_target} already exists")
+        else:
+            package_layer = family.initial_package_layer()
+            changes.append(
+                NewFile(
+                    path=layer_target,
+                    contents=package_layer,
+                    why=f"this package's own {kind} — yours to edit",
+                )
+            )
+
+        composite_path = package.root / ENVS_DIR / family.composite
+        composite_target = relative / ENVS_DIR / family.composite
+        composite = compose_env(family, package_layer=package_layer, dialect=dialect)
+        if composite_path.is_file() and composite_path.read_text() == composite:
+            satisfied.append(f"{composite_target} is current")
+        else:
+            changes.append(
+                Regenerate(
+                    path=composite_target,
+                    contents=composite,
+                    why=f"the {kind} the build reports to the prover",
+                )
+            )
     return changes, satisfied
 
 
@@ -1039,6 +861,9 @@ def apply(plan: ScaffoldPlan, root: Path) -> tuple[Path, ...]:
                 existing = target.read_text() if target.is_file() else ""
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(existing + contents)
+            case Regenerate(contents=contents):
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(contents)
             case InsertInTable(header=header, contents=contents):
                 target.write_text(_insert_in_table(target.read_text(), header, contents))
         touched.append(change.path)

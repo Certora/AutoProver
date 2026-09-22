@@ -20,9 +20,11 @@ import pytest
 
 from composer.authoring.state import SkippedProperty, make_validation_stamper, spec_digest
 from composer.spec.cvlr.env_paths import PathDialect
-from composer.spec.cvlr.scaffold import ENV_FAMILIES, INLINING, SUMMARIES
 from composer.spec.cvlr.state import PROVER_VALIDATION_KEY, tuning_history
 from composer.spec.cvlr.tuning import (
+    ENV_FAMILIES,
+    INLINING,
+    SUMMARIES,
     SummaryDirective,
     TuningFiles,
     merge_summaries,

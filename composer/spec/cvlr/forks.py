@@ -13,8 +13,8 @@ of fork for the ``fixed`` crate: it adds conversions upstream does not provide, 
 Branches are an explicit list, not a pattern. A version with no branch blocks the plan. A derived
 name would send cargo after a branch that does not exist, and the error would be about git.
 
-The recommended starting template does not mention these forks. A project scaffolded from it stays
-on the crates.io crates and hits [3006] with nothing pointing at a fork.
+A project set up by hand usually stays on the crates.io crates, and hits [3006] with nothing
+pointing at a fork.
 """
 
 import logging

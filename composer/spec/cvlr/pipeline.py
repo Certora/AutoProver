@@ -64,15 +64,9 @@ from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness, HarnessModule
 from composer.spec.cvlr.preflight import CvlrPreflight, gate_workspace, prepare_workspace
 from composer.spec.cvlr.prover import Submission
-from composer.spec.cvlr.scaffold import (
-    CONFS_DIR,
-    ENVS_DIR,
-    SPECS_DIR,
-    SUMMARIES,
-    declare_unit_features,
-)
+from composer.spec.cvlr.scaffold import CONFS_DIR, ENVS_DIR, SPECS_DIR, declare_unit_features
 from composer.spec.cvlr.tree import SharedTree, munge_diff
-from composer.spec.cvlr.tuning import TuningFiles
+from composer.spec.cvlr.tuning import SUMMARIES, TuningFiles
 from composer.spec.cvlr.source_tools import cvlr_source_tools, mount
 from composer.spec.cvlr.state import PROVER_VALIDATION_KEY
 from composer.spec.cvlr.verify import (
