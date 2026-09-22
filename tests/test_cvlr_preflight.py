@@ -87,19 +87,21 @@ async def test_a_bare_cargo_workspace_becomes_one_that_compiles_with_a_harness_i
     await gate_workspace(pre, sandbox=SandboxConfig(provider="none"))
 
 
-async def test_pointing_it_at_a_project_it_already_scaffolded_is_a_read(project):
-    """The scaffold does not overwrite. A second run against a project it already prepared
-    leaves an edited harness file alone."""
+async def test_pointing_it_at_a_project_it_already_scaffolded_replaces_only_the_edited_harness(
+    project,
+):
+    """The harness files are AutoProver's. A second run puts an edited one back and changes
+    nothing else, so the manifests it already extended are not extended again."""
     main_source = project / "programs" / "vault" / "src" / "lib.rs"
     selected = await select_package(project, None, main_source=main_source)
 
     first = await prepare_workspace(selected.workspace_root, package=selected.name)
     assert first.applied != ()
-    authored = main_source.parent / "certora" / "specs" / "mod.rs"
-    authored.write_text(f"{authored.read_text()}\n// an author's work\n")
+    specs = main_source.parent / "certora" / "specs" / "mod.rs"
+    scaffolded = specs.read_text()
+    specs.write_text(f"{scaffolded}\n// an author's work\n")
 
     again = await prepare_workspace(selected.workspace_root, package=selected.name)
 
-    assert again.applied == ()
-    assert again.scaffold.changes == ()
-    assert "an author's work" in authored.read_text()
+    assert again.applied == (specs.relative_to(selected.workspace_root),)
+    assert specs.read_text() == scaffolded

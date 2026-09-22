@@ -32,10 +32,9 @@ rest are in the target's ``envs/`` directory::
 
     <stem>_core.txt           starting configuration: the Rust runtime and the Solana platform
     <stem>_anchor.txt         starting configuration: the Anchor framework
-    <stem>_package.txt        the project's own, empty to start
     <stem>_<unit>_run.txt     one unit's own directives
-    <stem>.txt                generated from the first three, named by the package
-    <stem>_<unit>.txt         generated from all four, named by one unit's conf
+    <stem>.txt                generated from the first two, named by the package
+    <stem>_<unit>.txt         generated from all three, named by one unit's conf
 
 When to change which layer:
 
@@ -44,14 +43,12 @@ When to change which layer:
   written with pre-split ``solana_program::`` paths, and :mod:`composer.spec.cvlr.env_paths`
   rewrites those into the target's platform generation when a composite is built. They are not
   copied into the target. A composite carries their content, spelled for that target.
-- **The package layer** holds the project's own directives. A rule may need to see through a
-  library function the starting layers leave opaque (``#[inline]``). A function may be too
-  expensive or impossible to analyze, and a rule does better leaving it opaque
+- **The unit layer** holds the directives one unit's submission needs. A rule may need to see
+  through a library function the starting layers leave opaque (``#[inline]``). A function may be
+  too expensive or impossible to analyze, and a rule does better leaving it opaque
   (``#[inline(never)]``). An opaque call that the pointer analysis cannot type needs a summary.
-  The layer is written against the project's own symbols, so paths in it are not rewritten.
-- **The unit layer** holds a directive only one unit's submission needs. A pattern applies to the
-  whole build, and no cargo feature can scope it. A line in the package layer would apply to
-  every unit.
+  The layer is per unit because a pattern applies to the whole build, and no cargo feature can
+  scope it. It is written against the project's own symbols, so paths in it are not rewritten.
 - **The composites are not edited.** :func:`compose_env` builds them from the layers, and the
   scaffold rewrites the package composite whenever it differs from that. A directive written into
   a composite is not in any layer, and the next composition drops it.
@@ -70,13 +67,11 @@ ENV_DIR = Path(__file__).parent / "envs"
 class EnvFamily:
     """One tuning file, split into layers.
 
-    ``core`` and ``anchor`` are the starting layers. ``package`` starts empty and belongs to the
-    project. The composite is generated from the three. A project that needs its own directive
-    edits ``package``.
+    ``core`` and ``anchor`` are the starting layers. The composite is generated from the two.
     """
 
     stem: str
-    #: What the file's directives are, as prose: the heading of an empty package layer.
+    #: What the file's directives are, as prose.
     kind: str
 
     @property
@@ -88,30 +83,22 @@ class EnvFamily:
         return f"{self.stem}_anchor.txt"
 
     @property
-    def package(self) -> str:
-        return f"{self.stem}_package.txt"
-
-    @property
     def composite(self) -> str:
-        """The file the package declares. Generated from the three layers."""
+        """The file the package declares. Generated from the starting layers."""
         return f"{self.stem}.txt"
 
     def unit_layer(self, unit: str) -> str:
         """The file name for one unit's own directives.
 
-        Separate from ``package``, which belongs to the project. A summary is a symbol pattern
-        the prover applies to the whole build, not something a cargo feature can scope. Lines
-        added to the shared package file would apply to every unit's submission.
+        A summary is a symbol pattern the prover applies to the whole build, not something a cargo
+        feature can scope. Lines added to a file every unit's conf names would apply to every
+        unit's submission.
         """
         return f"{self.stem}_{unit}_run.txt"
 
     def unit_composite(self, unit: str) -> str:
-        """The file one unit's conf names. Generated from all four layers."""
+        """The file one unit's conf names. Generated from all three layers."""
         return f"{self.stem}_{unit}.txt"
-
-    def initial_package_layer(self) -> str:
-        """The package layer a scaffold writes: a heading and no directives."""
-        return _PACKAGE_ENV_HEADER.format(kind=self.kind, composite=self.composite)
 
 
 #: Which calls the Prover analyzes through their bodies. Declared as ``solana_inlining``.
@@ -121,22 +108,17 @@ INLINING = EnvFamily("cvlr_inlining", kind="Inlining directives")
 SUMMARIES = EnvFamily("cvlr_summaries", kind="Points-to summaries")
 ENV_FAMILIES = (INLINING, SUMMARIES)
 
-#: The starting layers — one content for every target, as against the per-package layer.
+#: The starting layers — one content for every target, as against the per-unit layer.
 STARTING_ENVS = tuple(name for f in ENV_FAMILIES for name in (f.core, f.anchor))
 
 
 _GENERATED_HEADER = """;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Generated — this is the file the build reports to the prover.
-;;; Rewritten on every run, so edit {package} instead.
-;;; Composed, in order, from:
-;;;   {core}      (AutoProver's starting configuration)
-;;;   {anchor}    (AutoProver's starting configuration)
-;;;   {package}
+;;; Rewritten on every run. Composed, in order, from AutoProver's
+;;; starting configuration:
+;;;   {core}
+;;;   {anchor}
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-"""
-
-_PACKAGE_ENV_HEADER = """; {kind} specific to this package. Empty to start with. {composite} is
-; generated from AutoProver's starting configuration and this file on every run.
 """
 
 
@@ -150,26 +132,16 @@ def starting_env(name: str, dialect: PathDialect = PathDialect()) -> str:
 
 
 def compose_env(
-    family: EnvFamily,
-    *,
-    package_layer: str,
-    unit_layer: str = "",
-    dialect: PathDialect = PathDialect(),
+    family: EnvFamily, *, unit_layer: str = "", dialect: PathDialect = PathDialect()
 ) -> str:
     """The generated composite: header, then the layers, in order.
 
-    ``package_layer`` is passed in rather than read, so recomposing after that layer changes is
-    the same call. The dialect does not touch it. It is the project's file, written against the
-    project's own symbols.
-
-    ``unit_layer`` is the fourth layer. The scaffold writes the package-level composite, where
-    this is empty. A non-empty layer is one unit's directives, so they are not applied to another
-    unit's submission (see :meth:`EnvFamily.unit_layer`). Those are the project's symbols too, so
-    the dialect leaves them alone.
+    The scaffold writes the package-level composite, where ``unit_layer`` is empty. A non-empty
+    layer is one unit's directives, so they are not applied to another unit's submission (see
+    :meth:`EnvFamily.unit_layer`). Those are the project's own symbols, so the dialect leaves them
+    alone.
     """
-    header = _GENERATED_HEADER.format(
-        core=family.core, anchor=family.anchor, package=family.package
-    )
+    header = _GENERATED_HEADER.format(core=family.core, anchor=family.anchor)
     parts = [header]
     if dialect.aliases:
         # Said in the file, so a reader comparing it with the starting layers can see that paths
@@ -181,7 +153,6 @@ def compose_env(
     parts += [
         starting_env(family.core, dialect),
         starting_env(family.anchor, dialect),
-        package_layer,
     ]
     if unit_layer.strip():
         parts.append(unit_layer)

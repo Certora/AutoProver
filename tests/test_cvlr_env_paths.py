@@ -273,8 +273,8 @@ def test_rendering_twice_is_not_claimed_and_is_not_reachable(split: PathDialect)
 def test_recomposing_a_composite_is_stable(split: PathDialect) -> None:
     """The composite is built from the starting layers every time, so composing twice gives the
     same file."""
-    once = compose_env(INLINING, package_layer="; mine\n", dialect=split)
-    assert compose_env(INLINING, package_layer="; mine\n", dialect=split) == once
+    once = compose_env(INLINING, dialect=split)
+    assert compose_env(INLINING, dialect=split) == once
 
 
 def test_the_starting_files_are_returned_verbatim_without_a_dialect() -> None:
@@ -412,7 +412,7 @@ def test_program_error_from_is_inlined_in_the_composite() -> None:
     """Left opaque with no summary, ``ProgramError::from`` havocs the ``Result`` discriminant a
     handler returns, and ``res.is_err()`` cannot be proved.
     """
-    composite = compose_env(INLINING, package_layer="")
+    composite = compose_env(INLINING)
     from_u64 = [ln for ln in composite.splitlines() if "From<u64>>::from$" in ln and ln.startswith("#[")]
     assert from_u64 == [
         "#[inline] ^<solana_program::program_error::ProgramError as core::convert::From<u64>>::from$"
@@ -424,7 +424,7 @@ def test_program_error_from_is_inlined_under_the_dialect(split: PathDialect) -> 
     ``solana_program::program_error::``, which matches nothing on a post-split target. The rewrite
     to ``solana_program_error::`` is what makes the directive apply, so an ``inline(never)`` there
     would take effect."""
-    composite = compose_env(INLINING, package_layer="", dialect=split)
+    composite = compose_env(INLINING, dialect=split)
     assert (
         "#[inline] ^<solana_program_error::ProgramError as core::convert::From<u64>>::from$"
         in composite
