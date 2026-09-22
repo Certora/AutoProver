@@ -1,5 +1,16 @@
 """Which published CVLR releases count as current, for each chain.
 
+CVLR is published as several crates, in layers. The core crate, ``cvlr``, is the part that does
+not depend on any chain: the specification language, plus the parametric-rule macros it gets from
+``cvlr-spec``. A chain crate (``cvlr-solana``, ``cvlr-soroban``) binds the core to one chain and
+supplies the helpers that work with that chain's platform types. Specializations are narrower
+crates that go with one chain crate. Most of them model a single on-chain program rather than the
+whole chain: ``cvlr-spl-token`` models SPL token accounts and ``cvlr-solana-stake`` models the
+stake program. Soroban's derive-macro crate is counted here as well. A project declares the core,
+its chain's crate, and that chain's specializations. A platform generation is the release line of
+the chain's own SDK that a chain crate is built against, such as ``solana-program`` 2.x or
+``soroban-sdk`` 22.x.
+
 Exact versions, not ranges. The core and the chain crates are versioned separately, so "latest"
 can pair a new core with an old chain crate. A bump is an edit here.
 
@@ -14,11 +25,6 @@ real ``account_info`` module. 2.2.1, 2.3.0, and 3.0.0 re-export ``solana-account
 written ``solana_program::account_info::AccountInfo`` then names a re-export. The path a demangled
 symbol carries is ``solana_account_info::AccountInfo``. :class:`PathAlias` is that difference, for
 the tuning files.
-
-This module imports nothing. Importing ``composer.pipeline.ecosystem`` pulls in the model layer
-(about 2.5s). The chain names are plain strings, the same split
-``composer.rustapp.descriptor`` makes, and ``tests/test_cvlr_reference.py`` checks the two lists
-against each other.
 """
 
 from dataclasses import dataclass
