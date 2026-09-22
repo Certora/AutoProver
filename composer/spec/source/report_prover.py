@@ -12,8 +12,21 @@ from prover_output_utility import ProverOutputAPI
 from prover_output_utility.models import CheckResult, NodeStatus
 
 from composer.spec.cvl_generation import GeneratedCVL, _output_link
+from composer.spec.gen_types import SPECS_DIR
 from composer.spec.source.report.collect import Formalized, Verdict, VerdictFetcher
 from composer.spec.source.report.schema import Outcome, RuleName
+
+
+def _spec_id(loc_file: str) -> str:
+    """The report's ``spec_file`` for a rule: the buffer's path under ``certora/specs/`` —
+    ``<slug>/<buffer>.spec`` — since each buffer is proved at ``certora/specs/<slug>/<buffer>.spec``. The
+    ``<slug>`` segment keeps two components' same-named buffers (e.g. two ``base.spec``) distinct in the
+    report's ``(spec_file, name)`` key. Falls back to the basename when the path is not under
+    ``certora/specs/`` (e.g. a single-file spec whose stem already carries the slug)."""
+    marker = SPECS_DIR.as_posix() + "/"
+    p = loc_file.replace("\\", "/")
+    idx = p.rfind(marker)
+    return p[idx + len(marker):] if idx != -1 else Path(loc_file).name
 
 _log = logging.getLogger(__name__)
 
@@ -48,7 +61,7 @@ def _fetch(api: ProverOutputAPI, link: str) -> dict[RuleName, Verdict]:
             _NODE_TO_OUTCOME.get(c.status, Outcome.UNKNOWN),
             loc.line if loc else None,
             c.duration or None,
-            Path(loc.file).name if (loc and loc.file) else None,
+            _spec_id(loc.file) if (loc and loc.file) else None,
             link=link,
         )
         name = RuleName(c.rule_name)

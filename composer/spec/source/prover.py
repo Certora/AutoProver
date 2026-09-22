@@ -554,16 +554,16 @@ def tmp_spec(
     root: str,
     content: str,
     name: str | None = None,
+    dest_dir: Path = SPECS_DIR,
 ) -> Iterator[str]:
-    # Materialize under the canonical specs dir -- the same directory the spec is
-    # ultimately persisted to -- so the prover resolves the spec's CVL imports
-    # (e.g. ``summaries/X.spec``) identically at verify-time and after dumping.
+    # Materialize under the same directory the spec is ultimately persisted to, so the prover resolves
+    # the spec's CVL imports (e.g. ``../summaries/X.spec``) identically at verify-time and after dumping.
     with temp_certora_file(
         root=root,
         ext="spec",
         content=content,
         name=name,
-        dest_dir=SPECS_DIR,
+        dest_dir=dest_dir,
     ) as tmp:
         yield tmp
 
@@ -670,15 +670,19 @@ def stuck_rule_nag(
 
 @contextmanager
 def materialize_buffers(
-    working_dir: str, buffers: Mapping[str, NamedBuffer]
+    working_dir: str, buffers: Mapping[str, NamedBuffer], slug: str
 ) -> Iterator[dict[str, str]]:
-    """Write every buffer as ``{name}.spec`` into the specs dir (all at once, so any buffer's
-    ``import "<sibling>.spec"`` resolves to its sibling), and yield ``name -> on-disk spec path``;
-    every file is removed on exit. The run owns its materialized project folder, so the deterministic
-    filenames never collide with a concurrent job's."""
+    """Write every buffer as ``{name}.spec`` into the component's spec dir ``certora/specs/<slug>/`` (all
+    at once, so any buffer's ``import "<sibling>.spec"`` resolves to its sibling, while
+    ``import "../summaries/X.spec"`` resolves to the shared summaries a level up), and yield
+    ``name -> on-disk spec path``; every file is removed on exit. The run owns its materialized project
+    folder, so the deterministic filenames never collide with a concurrent job's."""
+    dest_dir = SPECS_DIR / slug
     with ExitStack() as stack:
         yield {
-            name: stack.enter_context(tmp_spec(root=working_dir, content=buf.cvl, name=name))
+            name: stack.enter_context(
+                tmp_spec(root=working_dir, content=buf.cvl, name=name, dest_dir=dest_dir)
+            )
             for name, buf in buffers.items()
         }
 
@@ -847,7 +851,7 @@ def get_prover_tool(
             conf_dir = CERTORA_DIR / "confs"
             try:
                 async with sem, project_directory(vfs) as run_root:
-                    with materialize_buffers(run_root, buffers) as paths:
+                    with materialize_buffers(run_root, buffers, component_of(cex_state)) as paths:
                         spec_path = paths[name]
                         with buffer_conf(
                             working_dir=run_root, config=conf, main_contract=main_contract,

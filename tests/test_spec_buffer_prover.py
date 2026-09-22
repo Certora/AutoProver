@@ -12,7 +12,7 @@ from composer.prover.core import ProverReport
 from composer.prover.ptypes import RulePath
 from composer.spec.source.buffer_tools import put_buffer
 from composer.spec.source.prover import (
-    StateWithSkips, VALIDATION_KEY, ProverRunLog, completing_run_links,
+    StateWithSkips, VALIDATION_KEY, ProverRunLog, completing_run_links, materialize_buffers,
 )
 from composer.prover.ptypes import RulePath
 from composer.spec.source.spec_buffers import (
@@ -23,6 +23,24 @@ from .conftest import ProverMock
 
 
 SHARED = "ghost g(uint) returns uint;\n"
+
+
+def test_materialize_buffers_writes_under_the_component_slug_dir(tmp_path):
+    # Every buffer is materialized at certora/specs/<slug>/<name>.spec, so a buffer's ``../summaries/``
+    # import resolves to the shared summaries a level up and the on-disk names match the delivered tree.
+    buffers = {
+        "base": NamedBuffer(name="base", cvl='import "../summaries/x.spec";\nrule r { assert true; }\n'),
+        "inv": NamedBuffer(name="inv", cvl="rule i { assert true; }\n", is_run_target=False),
+    }
+    with materialize_buffers(str(tmp_path), buffers, "myslug") as paths:
+        assert paths == {
+            "base": "certora/specs/myslug/base.spec",
+            "inv": "certora/specs/myslug/inv.spec",
+        }
+        assert (tmp_path / "certora/specs/myslug/base.spec").read_text().startswith('import "../summaries')
+        assert (tmp_path / "certora/specs/myslug/inv.spec").is_file()
+    # the whole set is removed on exit
+    assert not (tmp_path / "certora/specs/myslug/base.spec").exists()
 
 
 def _runlog(tc, digest, link, rule, selector):

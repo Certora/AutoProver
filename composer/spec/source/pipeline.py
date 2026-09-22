@@ -112,7 +112,7 @@ class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
             env=run.env,
             description=label,
             source=run.source,
-            spec_dir=SPECS_DIR,
+            spec_dir=SPECS_DIR / feat.slugified_name,
             spec_stem=ComponentSpec(feat.slugified_name).stem,
             editing_tools=EditingTools(
                 editing=self._deps.editing, tool_provider=extra_tools

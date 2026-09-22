@@ -120,6 +120,14 @@ class GeneratedCVL(BaseModel):
     # the last link alone does not account for every rule. Empty for a cache entry written
     # before the field existed, or when no run produced a link.
     covering_links: list[str] = Field(default_factory=list)
+    # The per-buffer specs the run proved (buffer name -> its CVL text), so the deliverable emits each
+    # buffer as its own .spec (under ``certora/specs/<slug>/``) rather than one concatenated document
+    # (``cvl``). A name may contain "/" (a subdir under the component's spec dir) — that is its file-path
+    # stem. Empty for a cache entry written before the field existed.
+    spec_files: dict[str, str] = Field(default_factory=dict)
+    # The run-target buffers among ``spec_files`` — a conf is emitted per run-target; shared buffers are
+    # imports-only and get none.
+    run_target_buffers: list[str] = Field(default_factory=list)
 
     def property_checks(self) -> list[tuple[PropertyTitle, list[RuleName]]]:
         """Property title -> the CVL rule names that verify it (the report's `ReportableResult`

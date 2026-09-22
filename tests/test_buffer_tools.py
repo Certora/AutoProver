@@ -97,6 +97,30 @@ def test_edit_buffer_warns_when_edit_introduces_duplicate(monkeypatch):
     assert "NOTE" in msg and "easy" in msg
 
 
+def test_put_buffer_rejects_names_that_escape_the_component_dir(monkeypatch):
+    # A buffer's name is its on-disk stem under certora/specs/<component>/; a name that climbs out with
+    # '..' or is absolute is rejected, keeping the shared summaries and other components untouchable. A
+    # plain subdir stays inside the component dir and is accepted.
+    monkeypatch.setattr("composer.spec.source.buffer_tools.cvl_syntax_error", lambda *a, **k: None)
+    tool = put_buffer(WithBuffers)
+
+    def put_msg(name: str) -> str:
+        res = tool.invoke({"name": "put_buffer",
+                           "args": {"state": {"buffers": {}}, "name": name,
+                                    "cvl": "rule r { assert true; }\n"},
+                           "id": "t", "type": "tool_call"})
+        if hasattr(res, "content"):
+            return str(res.content)
+        msgs = res.update.get("messages", []) if hasattr(res, "update") else []
+        return str(msgs[0].content) if msgs else ""
+
+    assert "must stay within" in put_msg("../summaries/custom_summaries")
+    assert "must stay within" in put_msg("../other_component/base")
+    assert "must stay within" in put_msg("/etc/passwd")
+    assert put_msg("sub/helper") == "Accepted"
+    assert put_msg("base") == "Accepted"
+
+
 def test_put_buffer_enforces_run_target_cap(monkeypatch):
     # put_buffer validates via the CVL typechecker jar (absent in CI) before the cap check; bypass it.
     monkeypatch.setattr("composer.spec.source.buffer_tools.cvl_syntax_error", lambda *a, **k: None)

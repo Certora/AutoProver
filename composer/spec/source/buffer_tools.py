@@ -8,6 +8,8 @@ edit to one buffer leaves the others untouched. Each tool is a pydantic model ge
 concrete graph state; the factory subscribes it to that state and mints the tool.
 """
 
+import posixpath
+
 from langchain_core.tools import BaseTool
 from langgraph.types import Command
 from pydantic import Field
@@ -26,6 +28,15 @@ from composer.ui.tool_display import ToolDisplay, suppress_ack, tool_display_of
 
 class WithBuffers(TypedDict):
     buffers: dict[str, NamedBuffer]
+
+
+def _escapes_component_dir(name: str) -> bool:
+    """True if ``name`` — the buffer's on-disk stem under ``certora/specs/<component>/`` — resolves
+    outside that dir. A leading ``/`` or a ``..`` that climbs out escapes; a plain subdir does not. This
+    is what confines every buffer to its own component, keeping the shared ``summaries/`` and other
+    components' spec dirs immutable to the agent."""
+    n = posixpath.normpath(name)
+    return n.startswith("/") or n == ".." or n.startswith("../")
 
 
 def _dup_note(buffers: dict[str, NamedBuffer], name: str) -> str:
@@ -78,6 +89,11 @@ class PutBuffer[S: WithBuffers](WithImplementation[str | Command], WithInjectedS
     )
 
     def run(self) -> str | Command:
+        if _escapes_component_dir(self.name):
+            return (
+                f"Buffer name {self.name!r} must stay within the component's spec dir "
+                f"(certora/specs/<component>/): '..' and absolute paths are rejected."
+            )
         if (err := cvl_syntax_error(self.cvl)) is not None:
             return err
         buffers_now = self.state.get("buffers") or {}

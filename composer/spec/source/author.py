@@ -1153,8 +1153,8 @@ async def batch_cvl_generation(
             # unformalizable" judgment — it's the budget talking. Keep the agent's account.
             return Curtailed(None, detail=res_state["result"])
         return GaveUp(reason=res_state["result"])
-    # The published artifact is the buffers combined into one document (empty when every property
-    # was skipped, i.e. there are no buffers to combine).
+    # ``cvl`` is the buffers combined into one reviewable document (empty when every property was
+    # skipped, i.e. there are no buffers to combine); the delivered specs are per-buffer (``spec_files``).
     _buffers = res_state.get("buffers") or {}
     d = combined_buffers_view(_buffers)
     applied_edits: list[AppliedEdit] = []
@@ -1186,6 +1186,8 @@ async def batch_cvl_generation(
         run_links=run_links,
         vfs=res_state["vfs"],
         applied_edits=applied_edits,
+        spec_files={name: b.cvl for name, b in _buffers.items()},
+        run_target_buffers=[b.name for b in run_targets(_buffers)],
     )
     if res_state["budget_curtailed"]:
         # Published under lifted gates: hand it back as an explicitly unreliable partial.

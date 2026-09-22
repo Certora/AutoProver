@@ -42,7 +42,7 @@ from composer.spec.source.report.schema import (
     GaveUpComponent, GroupStatus, ImpactLevel, IssueContent, LikelihoodLevel, Outcome,
     PropertyGroup, RuleVerdict, SeverityTier, SkippedClaim,
 )
-from composer.spec.source.report_prover import make_prover_fetcher
+from composer.spec.source.report_prover import _spec_id, make_prover_fetcher
 from composer.spec.source.report.collect import RuleEvidence
 from composer.spec.source.report.findings import FindingDraft, build_findings
 from composer.spec.source.cex_capture import CexAnalysisStore
@@ -439,6 +439,33 @@ async def test_collect_same_name_different_spec_stays_distinct():
     assert [(r.spec_file, r.outcome) for r in safe] == [
         ("autospec_A.spec", Outcome.GOOD),
         ("autospec_B.spec", Outcome.BAD),
+    ]
+
+
+def test_spec_id_is_the_path_under_certora_specs():
+    # Each buffer is proved at certora/specs/<slug>/<buffer>.spec; the report key is that
+    # <slug>/<buffer>.spec, taken from the run's absolute path. A flat name (no certora/specs/) —
+    # e.g. a single-file spec whose stem already carries the slug — falls back to its basename.
+    assert _spec_id("/run/abc123/certora/specs/increment/base.spec") == "increment/base.spec"
+    assert _spec_id("certora/specs/vault/invariants/supply.spec") == "vault/invariants/supply.spec"
+    assert _spec_id("autospec_Increment.spec") == "autospec_Increment.spec"
+
+
+@pytest.mark.asyncio
+async def test_collect_same_buffer_name_different_component_stays_distinct():
+    # Two components each author a ``base.spec`` buffer, proved under their own certora/specs/<slug>/.
+    # The <slug> segment keeps the report keys distinct, so neither verdict silently drops the other's.
+    a = _input("compA", "certora/specs/compA", [_prop("pa", "a")], _gen({"pa": ["invariantHolds"]}, link="La"))
+    b = _input("compB", "certora/specs/compB", [_prop("pb", "b")], _gen({"pb": ["invariantHolds"]}, link="Lb"))
+    fetch = _fetcher({
+        "La": [_fake_check("invariantHolds", NodeStatus.VERIFIED, file="/run/x/certora/specs/compA/base.spec")],
+        "Lb": [_fake_check("invariantHolds", NodeStatus.VIOLATED, file="/run/y/certora/specs/compB/base.spec")],
+    })
+    _props, rules, *_ = await collect([a, b], fetch_verdicts=fetch)
+    got = sorted((r for r in rules if r.name == "invariantHolds"), key=lambda r: r.spec_file)
+    assert [(r.spec_file, r.outcome) for r in got] == [
+        ("compA/base.spec", Outcome.GOOD),
+        ("compB/base.spec", Outcome.BAD),
     ]
 
 
