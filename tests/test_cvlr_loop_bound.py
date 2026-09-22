@@ -48,13 +48,8 @@ from composer.prover.core import (
 )
 from composer.prover.ptypes import IncompleteCheck, RuleResult, classify_violation
 from composer.sandbox.config import SandboxConfig
-from composer.spec.cvlr.conf import (
-    SelectRules,
-    load_base,
-    read_conf,
-    tools_version,
-    with_loop_iter,
-)
+from composer.prover.conf import SelectRules, read_conf, with_loop_iter
+from composer.spec.cvlr.conf import load_base, tools_version
 from composer.spec.cvlr.prover import (
     BuildRejected,
     Checked,
