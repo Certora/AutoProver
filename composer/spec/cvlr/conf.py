@@ -14,8 +14,7 @@ conf already names some, and a prebuilt ``.so`` cannot sit next to a from-source
 
 :func:`project_conf` chooses the base. Everything else in the project's conf is kept: the loop
 bound, the solver flags, ``prover_version``. :func:`with_sanity_floor` is the exception. It turns
-vacuity checking on when the base never mentions ``rule_sanity``. A rule that assumes its
-conclusion still verifies, and vacuity checking is what catches that.
+vacuity checking on when the base never mentions ``rule_sanity``.
 
 ``solana_inlining`` is left unset. ``cargo certora-sbf`` reads it from the package's
 ``[package.metadata.certora]`` and reports it through the build manifest. The prover applies that
@@ -57,22 +56,12 @@ type Conf = dict[str, object]
 #: say ``"production"``. Dropping the key keeps a single answer.
 OVERLAY_OWNED_KEYS: frozenset[str] = frozenset({"build_script", "files", "msg", "server"})
 
-#: The default base, from Certora's solana-spec-template
-#: (https://github.com/Certora/solana-spec-template), the repository Certora recommends cloning
-#: to start a new Solana spec.
+#: The base conf for a project that has none of :data:`PROJECT_CONF_NAMES`.
 #:
-#: ``optimistic_loop`` is false, which is the template's setting. Turning it on assumes loop halt
-#: conditions instead of proving them, so a violation that needs more iterations is not found.
-#: Bound the inputs that set the trip count, or edit the loop, before raising ``loop_iter``.
-#:
-#: ``loop_iter`` is 2, not the template's 1. A bound of 1 fails inside a handler's own
-#: serialization before the rule's property is reached: an Anchor deposit handler comes back
-#: violated on "Unwinding condition in a loop" against a loop in its borsh path.
-#:
-#: The ``-solanaOptimistic*`` flags are absent. They are unsound, and a pair of submissions that
-#: differed only in those flags (plus ``-solanaAggressiveGlobalDetection``,
-#: ``-solanaRemoveCFGDiamonds``, and ``-solanaSlicerIter``) produced the same [3308] errors.
-#: ``-solanaOptimisticJoinWithStackPtr`` does not fix the error its name suggests either.
+#: ``optimistic_loop`` is false.  The author agent treats optimistic_loop as a last resort, preferring 
+#: to bound the inputs that set the trip count first, then summarize or munge the code that holds the 
+#: loop, then raise ``loop_iter``, and finally turn it on only for a trip count that no bound discharges. 
+#: Once it is on, every rule in the submission is verified under that assumption.
 TEMPLATE_BASE: Conf = {
     "msg": "Certora Verification Rules",
     "loop_iter": "2",
@@ -87,11 +76,6 @@ TEMPLATE_BASE: Conf = {
     ],
     "smt_timeout": "6000",
     "cargo_tools_version": "v1.43",
-    # Vacuity checking. Both public examples enable it. It is what catches a rule that assumes
-    # its conclusion: when a property cannot be proved (an un-inlined serialization path, a
-    # summarized helper), assuming the conclusion makes the rule verify. A sanity failure is not
-    # a verified result. With the check off, a [3308] raised inside the generated vacuity rule
-    # is reported as VERIFIED.
     "rule_sanity": "basic",
 }
 
@@ -152,14 +136,14 @@ def conf_history(conf: Conf) -> tuple[str, ...]:
 
 
 def load_base(path: Path | None) -> Conf:
-    """The base conf for a run: the project's, or the recommended starting point's.
+    """The base conf for a run: the project's, or :data:`TEMPLATE_BASE`.
 
     The fallback is :data:`TEMPLATE_BASE`, not an empty conf. An empty conf has no loop bound, no
     SMT timeout, and no prover flags, and that verifies differently. Logged either way, so a run
     that is not using the project's settings says so.
     """
     if path is None:
-        _log.info("cvlr: no project conf found; using the recommended starting point's settings")
+        _log.info("cvlr: no project conf found; using the default settings")
         return dict(TEMPLATE_BASE)
     _log.info("cvlr: prover conf from %s", path)
     return read_conf(path)
@@ -294,19 +278,16 @@ _SANITY_ON = frozenset({"basic", "advanced"})
 
 #: Solver settings for a nonlinear-arithmetic query, as one recipe.
 #:
-#: Taken from the reference project's conf. The extra seeds are there because more random seeds
-#: help the nonlinear solver, on rules that split heavily and halt on the global timeout.
-#: ``-smt_useLIA`` is in that conf because linear arithmetic is faster inside checked-arithmetic
-#: helpers.
+#: Taken from the reference project's conf, where it serves rules that split heavily and halt on
+#: the global timeout.
 #:
 #: One recipe, not a list a caller edits flag by flag. ``-solanaTACSoundSignedMath`` next to
 #: ``-solanaTACMathInt`` (which :data:`TEMPLATE_BASE` already sets) turned a seven-minute,
 #: eighteen-rule run into a two-hour timeout with thirteen rules unverified. The expansion is
 #: fixed so that combination is not assembled by hand.
 #:
-#: Every flag here changes how long an answer takes, not what a verified result means. Solver
-#: strategy, theory selection, and random seeds. The list does not include flags that change the
-#: meaning of a result.
+#: Every flag here must leave the meaning of a verified result unchanged. A flag that changes it
+#: does not belong in the recipe.
 NONLINEAR_SOLVER_PORTFOLIO: tuple[str, ...] = (
     "-backendStrategy adaptive",
     "-smt_useLIA true",
@@ -363,8 +344,7 @@ def has_optimistic_loop(conf: Conf) -> bool:
     """Whether ``conf`` assumes loops finish.
 
     :data:`TEMPLATE_BASE` writes a JSON bool. A hand-written conf may spell it as a string, the
-    way ``loop_iter`` is spelled. Absent, or any other value, is false. That is the template's
-    setting, and what the prover does with a key it was not given.
+    way ``loop_iter`` is spelled. Absent, or any other value, is false, the prover's default.
     """
     match conf.get("optimistic_loop"):
         case bool(b):
@@ -376,11 +356,9 @@ def has_optimistic_loop(conf: Conf) -> bool:
 
 
 def with_optimistic_loop(conf: Conf, enabled: bool) -> Conf:
-    """``conf`` with the loop-halt assumption on or off.
+    """``conf`` with the loop-halt assumption on or off, written as a JSON bool.
 
-    This changes what a verified result means. Every loop is assumed to finish within
-    ``loop_iter``, so a violation reachable only on a later iteration is not found and the rule
-    still reports verified. Written as a JSON bool, matching the template.
+    :data:`TEMPLATE_BASE` says when turning it on is warranted.
     """
     return {**conf, "optimistic_loop": enabled}
 
@@ -388,10 +366,9 @@ def with_optimistic_loop(conf: Conf, enabled: bool) -> Conf:
 def with_sanity_floor(conf: Conf) -> Conf:
     """``conf`` with vacuity checking on, at ``basic`` unless the conf already asks for more.
 
-    A floor, not an owned key. ``advanced`` is kept. A conf that never mentions ``rule_sanity``,
-    including the recommended starting point, gets ``basic``. ``"none"`` is treated as off: with
-    the check off, a [3308] inside the generated vacuity rule is reported as verified, and a rule
-    that assumes its conclusion verifies too.
+    A floor, not an owned key. ``advanced`` is kept. A conf that never mentions ``rule_sanity``
+    gets ``basic``, and so does one that says ``"none"``: with the check off, a [3308] inside the
+    generated vacuity rule is reported as verified.
     """
     if str(conf.get("rule_sanity", "")) in _SANITY_ON:
         return conf
