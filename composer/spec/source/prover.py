@@ -39,7 +39,7 @@ from composer.prover.core import (
 )
 from composer.prover.callbacks import ProverEventCallbacks
 from composer.prover.conf import (
-    Conf, ExcludeRules, InheritRules, RuleSelection, SelectRules, dump_conf, overlay,
+    Conf, ExcludeRules, InheritRules, RuleSelection, SelectRules, dump_conf, with_rules,
 )
 from composer.prover.ptypes import StatusCodes
 from composer.ui.tool_display import tool_display
@@ -86,17 +86,15 @@ def prover_config_overlay(
     Shared by the live ``verify_spec`` run and the persisted ``certora/confs`` dump so the
     two can't drift. ``verify_target`` is the ``<contract>:<spec path>`` the run verifies.
     """
-    return overlay(
-        base_config,
-        forced={
-            "verify": verify_target,
-            "parametric_contracts": main_contract,
-            "optimistic_loop": True,
-            "rule_sanity": "basic",
-        },
-        extra=extra,
-        rules=rules,
-    )
+    conf = {
+        **base_config,
+        "verify": verify_target,
+        "parametric_contracts": main_contract,
+        "optimistic_loop": True,
+        "rule_sanity": "basic",
+        **(extra or {}),
+    }
+    return with_rules(conf, rules)
 
 
 BOTH_RULE_SCOPES = "Cannot invoke the prover with both `rules` and `exclude_rules` set to non-none"

@@ -60,9 +60,6 @@ from composer.spec.cvlr_reference import ChainReference, CrateRelease
 HARNESS_DIR = Path("src") / "certora"
 SPECS_DIR = HARNESS_DIR / "specs"
 ENVS_DIR = HARNESS_DIR / "envs"
-#: Where a project keeps its own prover confs. The scaffold does not write these. A project that
-#: tuned its prover settings did it here, and :func:`composer.spec.cvlr.conf.project_conf` reads it.
-CONFS_DIR = HARNESS_DIR / "confs"
 
 #: Build output the prover leaves in the project, and ``.cvlr_work``, this backend's per-unit work
 #: directory.

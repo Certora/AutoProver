@@ -1,13 +1,11 @@
-"""CVLR metadata, conf parsing, and conf layering, with no toolchain, network, or LLM.
+"""CVLR metadata and the prover conf, with no toolchain, network, or LLM.
 
 Nothing here shells out to cargo or submits a job. What is checked is the parse of
-``cargo metadata``, the parse of a conf, and which conf keys a run owns.
+``cargo metadata``, the conf the prover settings render to, and the keys one submission adds.
 """
 
 import json
 from pathlib import Path
-
-import pytest
 
 from composer.cargo.metadata import parse_metadata
 from composer.prover import conf as prover_conf
@@ -162,86 +160,40 @@ def test_an_older_cvlr_than_the_corpus_was_written_against_is_reported():
 # the conf
 # --------------------------------------------------------------------------------------------
 
-#: The public examples' ``Default.conf``, abridged. The comment and the trailing comma are why
-#: it would not survive ``json.loads``.
-_REAL_CONF = """\
-{
-    // the rules this project means to check
-    "rule": ["rule_correct_add", "rule_vacuous"],
-    "prover_args": [
-        "-solanaTACOptimize 0",
-        "-unsatCoresForAllAsserts true",
-    ],
-    "loop_iter": 3,
-    "rule_sanity": "basic",
-}
-"""
+
+def test_loops_are_bounded_soundly_and_the_bound_is_raised_instead():
+    """``optimistic_loop`` assumes loops halt instead of proving it, so a violation that needs
+    more iterations is not found. Bound the inputs that set the trip count, or edit the loop,
+    before raising ``loop_iter``."""
+    conf = cvlr_conf.settings_conf(cvlr_conf.ProverSettings())
+    assert conf["optimistic_loop"] is False
+    assert conf["loop_iter"] == "2"
 
 
-def test_a_real_conf_parses_despite_comments_and_trailing_commas():
-    parsed = prover_conf.parse_conf(_REAL_CONF)
-    assert parsed["rule"] == ["rule_correct_add", "rule_vacuous"]
-    assert parsed["rule_sanity"] == "basic"
+def test_the_base_enables_no_optimistic_solana_flags():
+    """None of the ``-solanaOptimistic*`` flags. They are unsound, and they do not fix the [3308]
+    they were meant to."""
+    assert not [f for f in cvlr_conf.BASE_PROVER_ARGS if f.startswith("-solanaOptimistic")]
 
 
-def test_an_integer_conf_value_stays_a_string():
-    """``certoraRun`` reads conf integers as strings, which is why real confs say
-    ``"loop_iter": "1"``. Round-tripping a project's conf must not retype its values."""
-    assert prover_conf.parse_conf(_REAL_CONF)["loop_iter"] == "3"
+def test_every_conf_checks_vacuity():
+    """With ``rule_sanity`` off, a [3308] inside the generated vacuity rule is reported as
+    verified. No setting turns it off."""
+    for settings in (
+        cvlr_conf.ProverSettings(),
+        cvlr_conf.ProverSettings(loop_iter=5, optimistic_loop=True, solver_portfolio=True),
+    ):
+        assert cvlr_conf.settings_conf(settings)["rule_sanity"] == "basic"
 
 
-def test_a_conf_that_sets_a_key_twice_is_rejected():
-    with pytest.raises(prover_conf.MalformedConf):
-        prover_conf.parse_conf('{"loop_iter": "1", "loop_iter": "2"}')
-
-
-def test_the_recommended_starting_point_is_the_base_when_a_project_has_no_conf():
-    """Not an empty conf: an empty one has no loop bound, no SMT timeout and no prover flags, which
-    verifies differently rather than neutrally."""
-    base = cvlr_conf.load_base(None)
-    assert base["loop_iter"] == "2"
+def test_the_loop_bound_is_written_the_way_a_conf_spells_an_integer():
+    assert cvlr_conf.settings_conf(cvlr_conf.ProverSettings(loop_iter=4))["loop_iter"] == "4"
 
 
 # ---------------------------------------------------------------------------------------------
-# Which conf a run submits under
-
-
-def test_a_project_that_keeps_a_base_conf_is_verified_under_it(tmp_path):
-    confs = tmp_path / "src" / "certora" / "confs"
-    confs.mkdir(parents=True)
-    (confs / "base.conf").write_text('{"loop_iter": "3", "prover_args": ["-smt_useNIA true"]}')
-
-    base = cvlr_conf.load_base(cvlr_conf.project_conf(confs))
-
-    assert base["loop_iter"] == "3"
-    assert base["prover_args"] == ["-smt_useNIA true"]
-
-
-def test_base_conf_wins_over_run_conf():
-    """Both names appear in the corpus and three projects carry both. `base.conf` is named for the
-    job — its siblings reach it through `override_base_config` — so it is the one that means "the
-    project's settings", where `run.conf` may be one particular run's."""
-    assert cvlr_conf.PROJECT_CONF_NAMES.index("base.conf") < cvlr_conf.PROJECT_CONF_NAMES.index(
-        "run.conf"
-    )
-
-
-def test_a_per_rule_set_conf_is_not_adopted_as_the_base(tmp_path):
-    """The reason discovery is a closed list rather than "any conf in the directory". Every other
-    file there carries a `rule` list, and `InheritRules` would adopt it — grading this run on
-    somebody else's rule selection, silently."""
-    confs = tmp_path / "src" / "certora" / "confs"
-    confs.mkdir(parents=True)
-    (confs / "accounting_solvency_p2.conf").write_text('{"rule": ["their_rule"], "loop_iter": "9"}')
-
-    assert cvlr_conf.project_conf(confs) is None
-    assert "rule" not in cvlr_conf.load_base(None)
-
-
-# ---------------------------------------------------------------------------------------------
-# The two settings a caller may change
+# The solver portfolio
 #
-# Both change how long the prover spends, not what a verified result means. The portfolio is one
+# It changes how long the prover spends, not what a verified result means. The portfolio is one
 # recipe. ``-solanaTACSoundSignedMath`` next to ``-solanaTACMathInt`` turned an eighteen-rule run
 # from 6.7 minutes, all verified, into a two-hour timeout with thirteen rules unverified.
 
@@ -256,201 +208,59 @@ def test_the_portfolio_is_the_recipe_the_corpus_uses_and_only_sound_flags():
     assert not [f for f in flags for b in banned if b in f]
 
 
-def test_turning_the_portfolio_on_replaces_a_projects_own_solver_settings():
-    """Through `merge_prover_args`: a project that already sets `-backendStrategy` or its own
-    `-solvers` line gets those replaced, not duplicated. A conf naming one flag twice has two
-    intentions in it and the prover picks."""
-    base = {"prover_args": ["-solanaTACMathInt true", "-backendStrategy singleRace"]}
-    on = cvlr_conf.with_solver_portfolio(base, True)
-    assert on["prover_args"].count("-backendStrategy singleRace") == 0
-    assert "-backendStrategy adaptive" in on["prover_args"]
-    assert "-solanaTACMathInt true" in on["prover_args"]
-
-
-def test_all_twelve_solver_instances_survive_being_applied():
-    """``-solvers`` repeats. Each entry adds a solver configuration. ``merge_prover_args`` dedupes
-    on the flag, so ``-solanaTACOptimize 2`` overrides ``-solanaTACOptimize 0``. Merging the
-    portfolio that way collapses four ``-solvers`` lines into one and drops nine of the twelve
-    instances."""
-    out = cvlr_conf.with_solver_portfolio({"prover_args": ["-solanaTACMathInt true"]}, True)
-    assert sum(a.startswith("-solvers ") for a in out["prover_args"]) == 4
-
-
-def test_a_projects_own_solver_lines_are_replaced_as_a_set_not_appended_to():
-    """A portfolio is one decision. Keeping the project's lines beside ours would run a mixture
-    neither side chose."""
-    base = {"prover_args": ["-solvers [z3:def{randomSeed=1}]", "-solvers [z3:def{randomSeed=2}]"]}
-    out = cvlr_conf.with_solver_portfolio(base, True)
-    assert sum(a.startswith("-solvers ") for a in out["prover_args"]) == 4
-    assert "randomSeed=1" not in " ".join(out["prover_args"])
-
-
-def test_turning_it_off_leaves_everything_that_was_not_the_portfolio():
-    base = {"prover_args": ["-solanaTACMathInt true"]}
-    roundtrip = cvlr_conf.with_solver_portfolio(cvlr_conf.with_solver_portfolio(base, True), False)
-    assert roundtrip["prover_args"] == ["-solanaTACMathInt true"]
-
-
-def test_the_loop_assumption_reads_both_spellings_and_defaults_off():
-    """Absent means off, which is what the Prover does with a key it was not given. A hand-written
-    conf may spell the bool as a string, the way one spells `loop_iter`, so both are read."""
-    from composer.prover.conf import has_optimistic_loop, with_optimistic_loop
-
-    assert not has_optimistic_loop({})
-    assert not has_optimistic_loop({"optimistic_loop": False})
-    assert not has_optimistic_loop({"optimistic_loop": "false"})
-    assert has_optimistic_loop({"optimistic_loop": True})
-    assert has_optimistic_loop({"optimistic_loop": "true"})
-    assert has_optimistic_loop(with_optimistic_loop({"loop_iter": "2"}, True))
-    assert not has_optimistic_loop(with_optimistic_loop({"optimistic_loop": True}, False))
-
-
-def test_the_loop_assumption_is_off_in_the_default_base():
-    """The default base leaves the assumption off. A caller can turn it on. A run does not start with
-    it on."""
-    from composer.prover.conf import has_optimistic_loop
-    from composer.spec.cvlr.conf import TEMPLATE_BASE
-
-    assert not has_optimistic_loop(dict(TEMPLATE_BASE))
-
-
-def test_a_project_that_already_wrote_the_portfolio_by_hand_is_recognized():
-    """The reference project's own conf carries these settings. Recognizing them by flag rather
-    than by a marker is what stops the author being told to turn on what is already on."""
-    assert not cvlr_conf.has_solver_portfolio({"prover_args": ["-solanaTACMathInt true"]})
-    assert cvlr_conf.has_solver_portfolio(
-        cvlr_conf.with_solver_portfolio({"prover_args": []}, True)
-    )
-
-
-def test_the_loop_bound_is_written_the_way_a_conf_spells_an_integer():
-    """Confs in the wild say `"loop_iter": "1"`, which is `read_conf`'s own `parse_int=str`."""
-    assert prover_conf.with_loop_iter({}, 4)["loop_iter"] == "4"
-
-
-def test_a_project_conf_that_never_mentions_rule_sanity_still_gets_vacuity_checking():
-    """The recommended starting point omits ``rule_sanity``. Copying that conf unchanged would
-    turn vacuity checking off."""
-    conf = cvlr_conf.solana_conf(
-        {"loop_iter": "3"}, cvlr_conf.RunOverlay(build_script=Path("/w/o.py"))
-    )
-    assert conf["rule_sanity"] == "basic"
-
-
-def test_a_project_asking_for_more_vacuity_checking_keeps_it():
-    """A floor, not an owned key: `advanced` is stronger and the project asking for it knows
-    something this code does not."""
-    base = {"rule_sanity": "advanced"}
-    conf = cvlr_conf.solana_conf(base, cvlr_conf.RunOverlay(build_script=Path("/w/o.py")))
-    assert conf["rule_sanity"] == "advanced"
-
-
-def test_turning_vacuity_checking_off_is_not_a_setting_a_run_honors():
-    """``"none"`` is the documented way to turn the check off. With it off, a [3308] inside the
-    generated vacuity rule is reported as verified. A run does not honor that setting."""
-    base = {"rule_sanity": "none"}
-    conf = cvlr_conf.solana_conf(base, cvlr_conf.RunOverlay(build_script=Path("/w/o.py")))
-    assert conf["rule_sanity"] == "basic"
-
-
-def test_the_run_decides_which_server_whatever_the_base_says():
-    """Corpus confs that name a server all say "production", and the run passes `--server` from the
-    deployment environment. Two answers that agree until they do not."""
-    base = {**prover_conf.parse_conf(_REAL_CONF), "server": "production"}
-    overlay = cvlr_conf.RunOverlay(build_script=Path("/w/o.py"))
-    assert "server" not in cvlr_conf.solana_conf(base, overlay)
+def test_the_portfolio_adds_its_flags_to_the_base_and_turning_it_off_removes_them():
+    """``-solvers`` repeats: each entry adds a solver configuration, so all four lines must reach
+    the conf for all twelve instances to run."""
+    on = cvlr_conf.settings_conf(cvlr_conf.ProverSettings(solver_portfolio=True))
+    assert on["prover_args"] == [
+        *cvlr_conf.BASE_PROVER_ARGS, *cvlr_conf.NONLINEAR_SOLVER_PORTFOLIO
+    ]
+    off = cvlr_conf.settings_conf(cvlr_conf.ProverSettings(solver_portfolio=False))
+    assert off["prover_args"] == list(cvlr_conf.BASE_PROVER_ARGS)
 
 
 def test_a_conf_change_invalidates_a_stamp_earned_before_it():
-    """A verdict under one loop bound, one ``rule_sanity``, or one solver portfolio is not a
-    verdict under another. The stamp covers the whole conf."""
-    one = cvlr_conf.conf_history(dict(cvlr_conf.TEMPLATE_BASE))
-    two = cvlr_conf.conf_history({**cvlr_conf.TEMPLATE_BASE, "loop_iter": "3"})
-    assert one != two
-    assert cvlr_conf.conf_history(dict(cvlr_conf.TEMPLATE_BASE)) == one
+    """A verdict under one loop bound or one solver portfolio is not a verdict under another."""
+    default = cvlr_conf.conf_history(cvlr_conf.ProverSettings())
+    assert default != cvlr_conf.conf_history(cvlr_conf.ProverSettings(loop_iter=3))
+    assert default != cvlr_conf.conf_history(cvlr_conf.ProverSettings(solver_portfolio=True))
+    assert default == cvlr_conf.conf_history(cvlr_conf.ProverSettings())
 
 
-def test_loops_are_bounded_soundly_and_the_bound_is_raised_instead():
-    """``optimistic_loop`` assumes loops halt instead of proving it, so a violation that needs
-    more iterations is not found. Bound the inputs that set the trip count, or edit the loop,
-    before raising ``loop_iter``.
-
-    The bound is 2. With a bound of 1, a loop inside a handler fails before
-    the rule's property is reached: an Anchor handler comes back violated on "Unwinding condition
-    in a loop" against a loop in its borsh path.
-    """
-    base = cvlr_conf.load_base(None)
-    assert base["optimistic_loop"] is False
-    assert int(base["loop_iter"]) > 1
+# ---------------------------------------------------------------------------------------------
+# One submission's keys
 
 
-def test_the_recommended_starting_point_enables_no_optimistic_solana_flags():
-    """The default base sets none of the ``-solanaOptimistic*`` flags. They are unsound, and they do
-    not fix the [3308] they were meant to."""
-    flags = cvlr_conf.TEMPLATE_BASE["prover_args"]
-    assert isinstance(flags, list)
-    assert not [f for f in flags if f.startswith("-solanaOptimistic")]
-
-
-def test_an_overlay_prover_arg_replaces_the_base_setting_of_the_same_flag():
-    merged = prover_conf.merge_prover_args(
-        ["-solanaTACOptimize 0", "-solanaStackSize 8192"], ["-solanaTACOptimize 2"]
-    )
-    assert merged == ["-solanaTACOptimize 2", "-solanaStackSize 8192"]
-
-
-def test_a_new_overlay_flag_is_appended_rather_than_replacing_anything():
-    merged = prover_conf.merge_prover_args(["-solanaTACOptimize 0"], ["-solanaTACMathInt true"])
-    assert merged == ["-solanaTACOptimize 0", "-solanaTACMathInt true"]
-
-
-def _overlay(**kwargs) -> dict:
+def _submission(**kwargs) -> dict:
     return cvlr_conf.solana_conf(
-        prover_conf.parse_conf(_REAL_CONF),
+        cvlr_conf.ProverSettings(),
         cvlr_conf.RunOverlay(build_script=Path("/w/.certora_build/confined_build.py"), **kwargs),
     )
 
 
-def test_the_run_owns_the_build_script_whatever_the_base_says():
-    """The run's build script wins. A project conf that names its own would build unconfined
-    inside the prover's process."""
-    base = {**prover_conf.parse_conf(_REAL_CONF), "build_script": "scripts/certora_build.py"}
-    conf = cvlr_conf.solana_conf(base, cvlr_conf.RunOverlay(build_script=Path("/w/ours.py")))
-    assert conf["build_script"] == "/w/ours.py"
+def test_the_run_names_the_build_script():
+    assert _submission()["build_script"] == "/w/.certora_build/confined_build.py"
 
 
-def test_a_prebuilt_artifact_in_the_base_is_dropped():
-    """``run_rust_build`` asserts the context has no ``files`` before a build script may set them,
-    so keeping both would fail inside the prover instead of here."""
-    base = {**prover_conf.parse_conf(_REAL_CONF), "files": ["target/deploy/x.so"]}
-    overlay = cvlr_conf.RunOverlay(build_script=Path("/w/o.py"))
-    assert "files" not in cvlr_conf.solana_conf(base, overlay)
+def test_the_message_is_reduced_to_what_the_prover_accepts():
+    assert _submission(msg="Deposit & Balance")["msg"] == "Deposit Balance"
 
 
-def test_inheriting_rules_keeps_the_projects_own_selection():
-    assert _overlay()["rule"] == ["rule_correct_add", "rule_vacuous"]
+def test_selecting_rules_names_them():
+    assert _submission(rules=prover_conf.SelectRules(("rule_vacuous",)))["rule"] == ["rule_vacuous"]
 
 
-def test_selecting_rules_replaces_the_projects_selection():
-    assert _overlay(rules=prover_conf.SelectRules(("rule_vacuous",)))["rule"] == ["rule_vacuous"]
-
-
-def test_asking_for_all_rules_removes_the_selection_entirely():
-    """Distinct from inheriting: against a base naming two of thirty rules, one runs two and the
-    other runs thirty."""
-    assert "rule" not in _overlay(rules=prover_conf.AllRules())
+def test_inheriting_rules_checks_every_rule():
+    assert "rule" not in _submission()
 
 
 def test_the_env_files_are_left_for_the_build_manifest_to_supply():
     """``cargo certora-sbf`` reads them from ``[package.metadata.certora]``, and the prover
-    applies that only when the conf has none. Setting them here would replace the project's
-    declaration."""
-    conf = _overlay()
+    applies that only when the conf has none."""
+    conf = _submission()
     assert "solana_inlining" not in conf and "solana_summaries" not in conf
 
 
-def test_the_conf_is_emitted_as_plain_json():
-    """JSON5 is what a conf may be written in, not what this writes: a file we emit and re-read is
-    the one place a trailing comma buys nothing."""
-    assert json.loads(prover_conf.dump_conf(_overlay()))["msg"] == ""
-
+def test_a_units_summary_file_is_named_when_the_run_passes_one():
+    conf = _submission(summaries=(Path("envs/cvlr_summaries_vault.txt"),))
+    assert conf["solana_summaries"] == ["envs/cvlr_summaries_vault.txt"]
