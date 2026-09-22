@@ -65,7 +65,7 @@ class PathAlias:
     """A path prefix as the canonical tuning files spell it, and this generation's spellings of it.
 
     Matched as a literal substring of a directive's pattern, so a concept is renamed wherever it
-    appears — several upstream directives name two or three of them in one regex.
+    appears — several starting directives name two or three of them in one regex.
 
     ``actual`` is a tuple because a split is not always a rename. ``solana-program`` kept its own
     ``invoke_signed_unchecked``, and the one on the call path is ``solana-cpi``'s, so a summary of
@@ -81,10 +81,10 @@ class PathAlias:
 class NamespacePattern:
     """A blanket over one crate's whole namespace, widened to the family that replaced that crate.
 
-    The canonical spelling is ``<crate>::.*``, the pattern upstream writes for a whole layer, as in
-    ``#[inline(never)] ^solana_program::.*$``. After the monolith split, that layer lives in
-    ``solana_account_info``, ``solana_pubkey``, ``solana_cpi``, and others, so the blanket matches
-    almost nothing and the default stops applying.
+    The canonical spelling is ``<crate>::.*``, the pattern the starting layers use for a whole
+    layer, as in ``#[inline(never)] ^solana_program::.*$``. After the monolith split, that layer
+    lives in ``solana_account_info``, ``solana_pubkey``, ``solana_cpi``, and others, so the blanket
+    matches almost nothing and the default stops applying.
 
     This is not a :class:`PathAlias`, for two reasons.
 
@@ -122,9 +122,9 @@ class PlatformGeneration:
     #: ``solana-program`` would read the absence as "no opinion" and pin this generation's CVLR
     #: against it. The witness is the crate that still defines the type.
     witnesses: tuple[CrateRequirement, ...]
-    #: How this generation spells the paths in the vendored tuning files.
+    #: How this generation spells the paths in the starting tuning files.
     #: :mod:`composer.spec.cvlr.env_paths` applies these. Empty when this generation's spelling
-    #: is already the one upstream wrote, which is the monolith's.
+    #: is already the one the starting layers use, which is the monolith's.
     path_aliases: tuple[PathAlias | NamespacePattern, ...] = ()
 
 

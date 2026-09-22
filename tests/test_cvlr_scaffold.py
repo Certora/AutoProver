@@ -22,17 +22,18 @@ from composer.cargo.metadata import (
     Workspace,
     parse_metadata,
 )
-from composer.spec.cvlr import preflight, scaffold
+from composer.spec.cvlr import preflight, scaffold, tuning
 from composer.spec.cvlr.scaffold import (
     HARNESS_DIR,
-    INLINING,
     AppendSection,
     InsertInTable,
     NewFile,
+    Regenerate,
     ScaffoldBlocked,
     apply,
     plan_scaffold,
 )
+from composer.spec.cvlr.tuning import ENV_FAMILIES, INLINING, SUMMARIES
 from composer.spec.cvlr_reference import SOLANA
 
 PROGRAM = """\
@@ -402,19 +403,53 @@ def test_the_composite_env_file_carries_both_canonical_layers_and_names_them(tmp
     for layer in (INLINING.core, INLINING.anchor, INLINING.package):
         assert layer in composite
     for layer in (INLINING.core, INLINING.anchor):
-        marker = scaffold.canonical_env(layer).strip().splitlines()[-1]
+        marker = tuning.starting_env(layer).strip().splitlines()[-1]
         assert marker in composite
 
 
-def test_the_package_layer_ships_empty_and_composes_into_the_generated_file(tmp_path):
+def test_only_the_package_layers_and_the_generated_files_land_in_the_target(tmp_path):
+    """The starting layers stay in AutoProver. A copy in the target would be one nothing reads."""
     plan, workspace = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
     apply(plan, workspace.root)
-    layer = tmp_path / "src" / "certora" / "envs" / INLINING.package
-    assert "yours" in layer.read_text()
+    envs = tmp_path / "src" / "certora" / "envs"
+    assert {p.name for p in envs.iterdir()} == {
+        name for family in ENV_FAMILIES for name in (family.package, family.composite)
+    }
 
-    layer.write_text("#[inline] ^my_program::helper$\n")
-    composed = scaffold.compose_env(INLINING, package_layer=layer.read_text())
-    assert "^my_program::helper$" in composed
+
+def test_an_edit_to_the_package_layer_reaches_the_generated_file(tmp_path):
+    plan, workspace = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
+    apply(plan, workspace.root)
+    envs = tmp_path / "src" / "certora" / "envs"
+    layer = envs / INLINING.package
+    layer.write_text(layer.read_text() + "#[inline] ^my_program::helper$\n")
+
+    again, _ = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
+    assert [(type(c), c.path) for c in again.changes] == [
+        (Regenerate, HARNESS_DIR / "envs" / INLINING.composite)
+    ]
+    apply(again, workspace.root)
+    assert (envs / INLINING.composite).read_text() == tuning.compose_env(
+        INLINING, package_layer=layer.read_text(), dialect=again.dialect
+    )
+    assert _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)[0].changes == ()
+
+
+def test_a_generated_file_that_differs_from_the_starting_configuration_is_rewritten(tmp_path):
+    """What a project scaffolded by an older AutoProver looks like: the composite on disk is not
+    what today's starting configuration composes to."""
+    plan, workspace = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
+    apply(plan, workspace.root)
+    composite = tmp_path / "src" / "certora" / "envs" / SUMMARIES.composite
+    composite.write_text(";;; composed by an older starting configuration\n")
+
+    again, _ = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
+    assert [type(c) for c in again.changes] == [Regenerate]
+    apply(again, workspace.root)
+    package_layer = (composite.parent / SUMMARIES.package).read_text()
+    assert composite.read_text() == tuning.compose_env(
+        SUMMARIES, package_layer=package_layer, dialect=again.dialect
+    )
 
 
 def test_gitignore_gains_only_what_is_missing(tmp_path):

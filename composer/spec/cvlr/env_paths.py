@@ -1,7 +1,7 @@
-"""Spell the vendored tuning files the way a target's platform generation does.
+"""Spell the starting tuning files the way a target's platform generation does.
 
-The files under ``envs/`` are copied from upstream and written with ``solana_program::`` paths
-(``solana_program::account_info::AccountInfo``). From ``solana-program`` 2.2 on those are
+The starting tuning files (:mod:`composer.spec.cvlr.tuning`) are written with ``solana_program::``
+paths (``solana_program::account_info::AccountInfo``). From ``solana-program`` 2.2 on those are
 re-exports. A demangled symbol carries the path of the crate that defines the item
 (``solana_account_info::AccountInfo``), so a directive in the old spelling matches nothing. It
 does not fail. It does not apply.
@@ -42,7 +42,7 @@ def _crate_of(path: str) -> str:
 
 @dataclass(frozen=True)
 class PathDialect:
-    """How one target spells the paths in the vendored tuning files.
+    """How one target spells the paths in the starting tuning files.
 
     Built by :func:`dialect_for` from the aliases whose crates this target resolves.
     """
@@ -81,8 +81,8 @@ class PathDialect:
             inline = _INLINE_LINE.match(stripped)
             if inline is not None:
                 spellings = self.spellings(inline["pattern"])
-                # Unchanged lines are copied as they arrived, including trailing whitespace.
-                # Reflowing them would show up as our diff the next time the upstream file is refreshed.
+                # Unchanged lines are copied as they arrived, including trailing whitespace, so
+                # the composite reads line for line against the starting layer.
                 out += (
                     [line]
                     if spellings == (inline["pattern"],)
@@ -96,8 +96,8 @@ class PathDialect:
                     annotations = []
                     continue
                 for n, pattern in enumerate(spellings):
-                    # Upstream separates annotated summary blocks with a blank line. Without one,
-                    # two summaries read as a single block.
+                    # The starting layers separate annotated summary blocks with a blank line.
+                    # Without one, two summaries read as a single block.
                     if n and annotations:
                         out.append("")
                     out += [*annotations, pattern]
