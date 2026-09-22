@@ -17,8 +17,8 @@ No cargo and no network here — the workspace objects are built directly, the w
 ``test_cvlr_knowledge.py`` does, so these run in the routine env.
 """
 
-import dataclasses
 import tomllib
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -546,8 +546,8 @@ async def test_preflight_resolves_the_verification_graph_from_the_packages_own_d
 async def test_preflight_refuses_to_choose_between_verifiable_packages(tmp_path, fake_cargo):
     # Which program is under verification is a fact about the engagement, not about the layout.
     workspace, package = _project(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
-    second = dataclasses.replace(package, name="other")
-    fake_cargo(dataclasses.replace(workspace, members=(package, second)))
+    second = replace(package, name="other")
+    fake_cargo(replace(workspace, members=(package, second)))
 
     with pytest.raises(preflight.PreflightFailed, match="name the one to verify"):
         await preflight.prepare_workspace(tmp_path)

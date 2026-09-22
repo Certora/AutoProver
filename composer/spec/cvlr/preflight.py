@@ -22,8 +22,8 @@ There is no ``CvlrBackend`` yet — that is §7.5, with the authoring loop. Thes
 complete and tested without one, the same way phase 1b's submission plumbing was.
 """
 
-import dataclasses
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 from composer.cargo.metadata import CargoUnavailable, CratePackage, Workspace, read_workspace
@@ -51,7 +51,7 @@ class PreflightFailed(RuntimeError):
     """
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class CvlrPreflight:
     """What preflight learned, carried to ``prepare_system`` as the pipeline's opaque ``Pre``.
 
@@ -109,7 +109,7 @@ def _pick_package(workspace: Workspace, requested: str | None) -> CratePackage:
     )
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class SelectedPackage:
     """Which package a run will verify, resolved before the run starts.
 

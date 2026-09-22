@@ -22,7 +22,7 @@ gap is not pedantry: it is the difference between an agent that checks the crate
 trusts recall.
 """
 
-import dataclasses
+from dataclasses import dataclass
 from pathlib import Path
 
 from composer.cargo.metadata import CratePackage, Workspace
@@ -34,7 +34,7 @@ from composer.spec.cvlr_reference import ChainReference
 CVLR_PREFIX = "cvlr"
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class VersionGap:
     """The target builds a CVLR release the knowledge corpus was not written against."""
 
@@ -58,7 +58,7 @@ class VersionGap:
         )
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class CvlrSources:
     """The CVLR crates this build resolves, with the source trees they resolve to."""
 

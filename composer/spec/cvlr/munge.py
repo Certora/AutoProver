@@ -34,16 +34,16 @@ that an error reproduced in a scaffold this backend wrote is evidence about the 
 somebody checks it against a project the scaffold did not create.
 """
 
-import dataclasses
 import logging
 import tomllib
+from dataclasses import dataclass
 
 from composer.cargo.metadata import Workspace
 
 _log = logging.getLogger(__name__)
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class ForkOverride:
     """A repository of verification-oriented forks, and the crates in it a target may need.
 
@@ -74,7 +74,7 @@ class ForkOverride:
         return ", ".join(v for v, _ in self.branches)
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class Blocked:
     """A reason the override cannot be applied, phrased for whoever has to resolve it."""
 
@@ -83,7 +83,7 @@ class Blocked:
     resolution: str
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class AlreadySourced:
     """The target already decides where this crate comes from, so nothing was changed.
 
@@ -114,7 +114,7 @@ class AlreadySourced:
         )
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class AlreadyRedirected:
     """This workspace's own ``[patch.crates-io]`` table already names the crate.
 
@@ -146,7 +146,7 @@ def _repo_key(url: str) -> str:
     return url.removeprefix("git+").split("?")[0].split("#")[0].removesuffix(".git").lower()
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class Override:
     """One dependency's replacement, resolved against a particular target."""
 
@@ -170,7 +170,7 @@ class Override:
         )
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class MungePlan:
     """What munging this target would do. Empty when nothing needs it, which is the common case."""
 
