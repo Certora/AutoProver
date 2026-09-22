@@ -16,7 +16,13 @@ from pathlib import Path
 
 import pytest
 
-from composer.cargo.metadata import CratePackage, Workspace
+from composer.cargo.metadata import (
+    CratePackage,
+    GitSource,
+    PackageSource,
+    RegistrySource,
+    Workspace,
+)
 from composer.layout import INTERNAL_DIR
 from composer.sandbox.recipes import SANDBOX_CARGO_DIR
 from composer.spec.cvlr.munge import (
@@ -45,7 +51,7 @@ from composer.spec.cvlr.munge import (
     plan_munge,
 )
 
-REGISTRY = "registry+https://github.com/rust-lang/crates.io-index"
+REGISTRY = RegistrySource("registry+https://github.com/rust-lang/crates.io-index")
 
 
 def _workspace(root: Path, *resolved: CratePackage) -> Workspace:
@@ -54,7 +60,7 @@ def _workspace(root: Path, *resolved: CratePackage) -> Workspace:
     )
 
 
-def _package(name: str, version: str, source: str | None = REGISTRY) -> CratePackage:
+def _package(name: str, version: str, source: PackageSource | None = REGISTRY) -> CratePackage:
     return CratePackage(
         name=name,
         version=version,
@@ -99,7 +105,7 @@ def test_a_branch_is_named_rather_than_a_commit_pinned(tmp_path):
     assert "rev =" not in addition
 
 
-@pytest.mark.parametrize("version", [v for v, _ in ANCHOR_FORK.branches])
+@pytest.mark.parametrize("version", list(ANCHOR_FORK.branches))
 def test_every_declared_version_maps_to_a_branch(tmp_path, version):
     plan = plan_munge(_workspace(tmp_path, _package("anchor-lang", version)))
     assert plan.overrides and plan.overrides[0].branch == f"certora-v{version}"
@@ -140,7 +146,9 @@ def test_a_project_already_patched_to_the_fork_is_recognized_as_such(tmp_path):
     patched = _package(
         "anchor-lang",
         "0.31.1",
-        source="git+https://github.com/Certora/anchor.git?branch=certora-v0.31.1#3ebe7595",
+        source=GitSource(
+            "git+https://github.com/Certora/anchor.git?branch=certora-v0.31.1#3ebe7595"
+        ),
     )
     plan = plan_munge(_workspace(tmp_path, patched))
     assert plan.overrides == ()
@@ -155,7 +163,9 @@ def test_a_project_sourcing_anchor_from_some_other_fork_is_left_alone_and_said_s
     will not override somebody's choice, but a reader of a [3006] failure needs to know it was
     made."""
     other = _package(
-        "anchor-lang", "0.31.1", source="git+https://github.com/someone/anchor.git?branch=main"
+        "anchor-lang",
+        "0.31.1",
+        source=GitSource("git+https://github.com/someone/anchor.git?branch=main"),
     )
     plan = plan_munge(_workspace(tmp_path, other))
     (already,) = plan.already
@@ -180,10 +190,10 @@ def test_a_target_that_is_not_an_anchor_program_needs_nothing(tmp_path):
 def test_the_branch_list_matches_what_the_fork_publishes():
     """Read from ``Certora/anchor`` on 2026-09-01. The fork also has ``-pad-error`` and
     ``-reduce-error`` branches of 0.29.0. Those are experiments and are not in this list."""
-    versions = [v for v, _ in ANCHOR_FORK.branches]
+    versions = list(ANCHOR_FORK.branches)
     assert versions == sorted(versions), "keep the list ordered so a gap is visible"
     assert len(set(versions)) == len(versions)
-    for version, branch in ANCHOR_FORK.branches:
+    for version, branch in ANCHOR_FORK.branches.items():
         assert branch == f"certora-v{version}"
     # The gap that motivates listing rather than deriving.
     assert "0.30.0" not in versions

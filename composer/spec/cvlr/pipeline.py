@@ -226,11 +226,7 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
                 features=(DEFAULT_FEATURE, identity.feature),
                 # Workdir-relative, which is how certoraSolanaProver reads a conf path.
                 summaries=(
-                    str(
-                        self.deps.package_dir
-                        / ENVS_DIR
-                        / SUMMARIES.unit_composite(identity.module)
-                    ),
+                    self.deps.package_dir / ENVS_DIR / SUMMARIES.unit_composite(identity.module),
                 ),
             ),
             prover_opts=self.deps.prover_opts,
