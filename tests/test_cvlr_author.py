@@ -23,7 +23,8 @@ from types import SimpleNamespace
 import pytest
 
 from composer.authoring.state import SkippedProperty, make_validation_stamper, spec_digest
-from composer.spec.cvlr.conf import RunOverlay, SelectRules, solana_conf
+from composer.prover.conf import SelectRules
+from composer.spec.cvlr.conf import RunOverlay, solana_conf
 from composer.spec.cvlr.prover import Submission as CvlrSubmission
 from composer.spec.cvlr.harness import (
     DELIVERABLE_DIR,
@@ -639,7 +640,7 @@ def test_a_display_name_is_reduced_to_what_the_prover_accepts(raw, expected):
     because the name is not in the harness. Two units in one run spent 6 and 13+ submissions on
     exactly this, one of them holding a finished ten-rule harness with three claimed findings.
     """
-    from composer.spec.cvlr.conf import safe_msg
+    from composer.prover.conf import safe_msg
 
     assert safe_msg(raw) == expected
 
@@ -654,7 +655,7 @@ def test_the_accepted_character_set_stays_a_subset_of_the_cli_s():
     """
     import string
 
-    from composer.spec.cvlr.conf import _MSG_SAFE
+    from composer.prover.conf import _MSG_SAFE
 
     cli_extra = {"(", " ", ",", "/", "[", "'", "-", '"', "_", "]", ".", ")", ":", "\\", "=", "*", "$"}
     cli = set(string.ascii_letters) | set(string.digits) | cli_extra

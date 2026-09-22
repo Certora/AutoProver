@@ -65,16 +65,18 @@ from composer.prover.ptypes import (
     RuleResult,
     classify_violation,
 )
-from composer.spec.cvlr.conf import (
-    DEFAULT_FEATURE,
-    OVERLAY_OWNED_KEYS,
+from composer.prover.conf import (
     SelectRules,
     dump_conf,
     has_optimistic_loop,
-    has_solver_portfolio,
-    tools_version,
     with_loop_iter,
     with_optimistic_loop,
+)
+from composer.spec.cvlr.conf import (
+    DEFAULT_FEATURE,
+    OVERLAY_OWNED_KEYS,
+    has_solver_portfolio,
+    tools_version,
     with_solver_portfolio,
 )
 from composer.spec.cvlr.munge import (
