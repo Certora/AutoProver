@@ -3,11 +3,9 @@ from langchain_core.tools import BaseTool
 from pydantic import Field
 
 from composer.rag.db import ComposerRAGDB
+from composer.rag.render import no_such_section, render_refs, render_section_hits
 
 from graphcore.tools.schemas import WithAsyncDependencies
-
-def _header_string(s: list[str]) -> str:
-    return " > ".join(i for i in s if i)
 
 class FoundryKeywordSearch(WithAsyncDependencies[str, ComposerRAGDB]):
     """
@@ -25,15 +23,9 @@ class FoundryKeywordSearch(WithAsyncDependencies[str, ComposerRAGDB]):
 
     async def run(self) -> str:
         with self.tool_deps() as db:
-            res = await db.search_manual_keywords(
-                self.query, limit=self.limit
+            return render_section_hits(
+                await db.search_manual_keywords(self.query, limit=self.limit)
             )
-            to_ret = []
-            for r in res:
-                to_ret.append(f"{_header_string(r.headers)} [relevance: {r.relevance:.4f}]")
-            if not to_ret:
-                return "No results found"
-            return "\n".join(to_ret)
 
 class FoundryVectorSearch(WithAsyncDependencies[str, ComposerRAGDB]):
     """
@@ -49,16 +41,11 @@ class FoundryVectorSearch(WithAsyncDependencies[str, ComposerRAGDB]):
 
     async def run(self) -> str:
         with self.tool_deps() as db:
-            res = await db.find_refs(
-                self.query, similarity_cutoff=self.similarity_cutoff, top_k=self.max_results
+            return render_refs(
+                await db.find_refs(
+                    self.query, similarity_cutoff=self.similarity_cutoff, top_k=self.max_results
+                )
             )
-
-            to_ret = []
-            for r in res:
-                to_ret.append(f"----\nSection: {_header_string(r.headers)}\n\n{r.content}\nSimilarity: {r.similarity:.4f}")
-            if not to_ret:
-                return "(No results found)"
-            return "\n".join(to_ret)
 
 class FoundrySectionGet(WithAsyncDependencies[str, ComposerRAGDB]):
     """
@@ -74,7 +61,7 @@ class FoundrySectionGet(WithAsyncDependencies[str, ComposerRAGDB]):
         with self.tool_deps() as db:
             content = await db.get_manual_section(self.section_names)
             if content is None:
-                return f"No section found for {' > '.join(self.section_names)!r}"
+                return no_such_section(self.section_names)
             return content
 
 

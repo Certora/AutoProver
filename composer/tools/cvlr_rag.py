@@ -4,11 +4,8 @@ from langchain_core.tools import BaseTool
 from pydantic import Field
 
 from composer.rag.db import ComposerRAGDB
+from composer.rag.render import no_such_section, render_refs, render_section_hits
 from graphcore.tools.schemas import WithAsyncDependencies
-
-
-def _header_string(s: list[str]) -> str:
-    return " > ".join(i for i in s if i)
 
 
 class CvlrKeywordSearch(WithAsyncDependencies[str, ComposerRAGDB]):
@@ -29,13 +26,9 @@ class CvlrKeywordSearch(WithAsyncDependencies[str, ComposerRAGDB]):
 
     async def run(self) -> str:
         with self.tool_deps() as db:
-            res = await db.search_manual_keywords(self.query, limit=self.limit)
-            to_ret = [
-                f"{_header_string(r.headers)} [relevance: {r.relevance:.4f}]" for r in res
-            ]
-            if not to_ret:
-                return "No results found"
-            return "\n".join(to_ret)
+            return render_section_hits(
+                await db.search_manual_keywords(self.query, limit=self.limit)
+            )
 
 
 class CvlrVectorSearch(WithAsyncDependencies[str, ComposerRAGDB]):
@@ -58,19 +51,13 @@ class CvlrVectorSearch(WithAsyncDependencies[str, ComposerRAGDB]):
 
     async def run(self) -> str:
         with self.tool_deps() as db:
-            res = await db.find_refs(
-                self.query,
-                similarity_cutoff=self.similarity_cutoff,
-                top_k=self.max_results,
+            return render_refs(
+                await db.find_refs(
+                    self.query,
+                    similarity_cutoff=self.similarity_cutoff,
+                    top_k=self.max_results,
+                )
             )
-            to_ret = [
-                f"----\nSection: {_header_string(r.headers)}\n\n{r.content}\n"
-                f"Similarity: {r.similarity:.4f}"
-                for r in res
-            ]
-            if not to_ret:
-                return "(No results found)"
-            return "\n".join(to_ret)
 
 
 class CvlrSectionGet(WithAsyncDependencies[str, ComposerRAGDB]):
@@ -88,7 +75,7 @@ class CvlrSectionGet(WithAsyncDependencies[str, ComposerRAGDB]):
         with self.tool_deps() as db:
             content = await db.get_manual_section(self.section_names)
             if content is None:
-                return f"No section found for {' > '.join(self.section_names)!r}"
+                return no_such_section(self.section_names)
             return content
 
 
