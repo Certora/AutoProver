@@ -8,10 +8,9 @@ written in the canonical spelling matches nothing at all. It does not fail; it s
 apply, which is how fourteen directives and one blanket stopped taking effect on the first real
 target this backend was pointed at. ``docs/cvlr-backend-plan.md`` §7.5.6 is that investigation.
 
-So the vendored files are the **concept keys**, kept byte-identical to upstream so
-:mod:`composer.scripts.refresh_cvlr_envs` stays a copy, and the platform generation says how to spell
-those concepts (:class:`~composer.spec.cvlr_reference.PathAlias`). This module is the seam between
-them.
+So the canonical files are the **concept keys**, written in one spelling, and the platform
+generation says how to spell those concepts for a given target
+(:class:`~composer.spec.cvlr_reference.PathAlias`). This module is the seam between them.
 
 Two properties are worth stating because they are the reason this is not a string substitution:
 

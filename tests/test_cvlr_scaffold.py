@@ -407,30 +407,29 @@ def test_an_existing_harness_declaration_is_not_added_twice(tmp_path):
     assert any("already declares the harness module" in note for note in plan.satisfied)
 
 
-def test_the_composite_env_file_carries_both_canonical_layers_and_names_the_editable_one(tmp_path):
+def test_the_composite_env_file_carries_both_canonical_layers_and_names_them(tmp_path):
     plan, workspace = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
     apply(plan, workspace.root)
 
     composite = (tmp_path / "src" / "certora" / "envs" / INLINING.composite).read_text()
-    assert "DO NOT EDIT" in composite
-    # The generated file has to say which layer is the reader's, or the header's instruction not to
-    # edit has nowhere to send them.
-    assert INLINING.package in composite
+    # The generated file names the three layers it was built from, so a reader who wants to change
+    # a directive can tell which of them carries it.
+    for layer in (INLINING.core, INLINING.anchor, INLINING.package):
+        assert layer in composite
     for layer in (INLINING.core, INLINING.anchor):
         marker = scaffold.canonical_env(layer).strip().splitlines()[-1]
         assert marker in composite
-    assert scaffold.env_provenance() in composite
 
 
-def test_the_package_layer_ships_empty_and_is_what_a_recompose_picks_up(tmp_path):
+def test_the_package_layer_ships_empty_and_composes_into_the_generated_file(tmp_path):
     plan, workspace = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
     apply(plan, workspace.root)
     layer = tmp_path / "src" / "certora" / "envs" / INLINING.package
     assert "yours" in layer.read_text()
 
     layer.write_text("#[inline] ^my_program::helper$\n")
-    recomposed = scaffold.compose_env(INLINING, package_layer=layer.read_text())
-    assert "^my_program::helper$" in recomposed
+    composed = scaffold.compose_env(INLINING, package_layer=layer.read_text())
+    assert "^my_program::helper$" in composed
 
 
 def test_gitignore_gains_only_what_is_missing(tmp_path):

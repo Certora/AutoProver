@@ -50,11 +50,10 @@ _log = logging.getLogger(__name__)
 
 TEMPLATE_REPO = "https://github.com/Certora/solana-spec-template.git"
 
-#: The vendored canonical tuning files, and the stamp saying which upstream commit they came from.
-#: Product data rather than corpus data, hence in the wheel — see
-#: :mod:`composer.scripts.refresh_cvlr_envs`, which is the only thing that writes here.
+#: The canonical tuning files the scaffold writes into a target. Product data rather than corpus
+#: data, hence in the wheel. Originally taken from :data:`TEMPLATE_REPO`'s ``envs/`` and maintained
+#: here since; edit them in place.
 ENV_DIR = Path(__file__).parent / "envs"
-PROVENANCE_FILE = "PROVENANCE"
 
 #: Where the harness module goes in the target package. Inside ``src/`` because that is where the
 #: template is cloned to and what its ``[package.metadata.certora]`` paths name — unusual for
@@ -133,7 +132,7 @@ INLINING = EnvFamily("cvlr_inlining")
 SUMMARIES = EnvFamily("cvlr_summaries")
 ENV_FAMILIES = (INLINING, SUMMARIES)
 
-#: The upstream-maintained halves, which :mod:`composer.scripts.refresh_cvlr_envs` vendors.
+#: The shared halves — one content for every target, as against the per-package layer.
 CANONICAL_ENVS = tuple(name for f in ENV_FAMILIES for name in (f.core, f.anchor))
 
 
@@ -141,12 +140,11 @@ CANONICAL_ENVS = tuple(name for f in ENV_FAMILIES for name in (f.core, f.anchor)
 class Deviation:
     """One canonical line this backend deliberately does not ship as upstream wrote it.
 
-    Kept here rather than in ``envs/`` because those files are a *copy*: the refresh script
-    re-vendors them wholesale, so an edit there survives only until the next refresh and makes
-    every later diff report our change as upstream's. A deviation is applied at composition
-    instead, and :func:`_deviated` raises when :attr:`canonical` is not found exactly once — a
-    refresh that rewrites the line is meant to fail loudly and be re-reviewed, since the reason
-    for deviating may have gone away.
+    Kept here rather than edited into ``envs/`` so that our change reads as ours: a file taken
+    wholesale from upstream and then edited in place reports every later diff against it as
+    upstream's. A deviation is applied at composition instead, and :func:`_deviated` raises when
+    :attr:`canonical` is not found exactly once, so rewriting that line in ``envs/`` fails loudly
+    and gets re-reviewed — the reason for deviating may have gone away.
 
     Written in upstream's spelling, and applied before the dialect renders it, so an entry matches
     the vendored bytes rather than whatever a given target's platform generation calls the symbol.
@@ -190,9 +188,11 @@ DEVIATIONS: tuple[Deviation, ...] = (
 )
 
 _GENERATED_HEADER = """;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; DO NOT EDIT. THIS FILE HAS BEEN AUTOMATICALLY GENERATED
-;;; Composed from {core}, {anchor} and {package}.
-;;; Edit {package} and recompose; the other two are maintained upstream.
+;;; Generated — this is the file the build reports to the prover.
+;;; Composed, in order, from:
+;;;   {core}
+;;;   {anchor}
+;;;   {package}
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 """
 
@@ -300,21 +300,13 @@ class ScaffoldBlocked(RuntimeError):
 
 
 def canonical_env(name: str, dialect: PathDialect = PathDialect()) -> str:
-    """One vendored upstream tuning file, spelled for the target's platform generation.
+    """One canonical tuning file, spelled for the target's platform generation.
 
-    The default dialect changes nothing, which is the right answer for a caller that only wants to
-    see what was vendored — the refresh script's round-trip, and any test comparing against upstream.
+    Answers "what is stored", which is why the default dialect changes nothing and why
+    :data:`DEVIATIONS` are not applied here — a caller comparing against the file on disk must get
+    the file on disk.
     """
     return dialect.render((ENV_DIR / name).read_text())
-
-
-def env_provenance() -> str:
-    """Which upstream commit the vendored files came from.
-
-    Read rather than baked in: the stamp and the files are written together by the refresh script,
-    and a constant here could disagree with what is on disk."""
-    stamp = ENV_DIR / PROVENANCE_FILE
-    return stamp.read_text().strip() if stamp.is_file() else f"{TEMPLATE_REPO} (unrecorded)"
 
 
 def deviations_for(name: str) -> tuple[Deviation, ...]:
@@ -325,8 +317,8 @@ def deviations_for(name: str) -> tuple[Deviation, ...]:
 def _deviated(name: str, dialect: PathDialect) -> str:
     """One vendored file with :data:`DEVIATIONS` applied, then spelled for the target.
 
-    Deliberately not part of :func:`canonical_env`: that function answers "what was vendored", and
-    the refresh script's round-trip depends on it staying that.
+    Deliberately not part of :func:`canonical_env`: a deviation is a reviewable divergence from the
+    stored file, so something has to still answer "what is stored".
     """
     text = (ENV_DIR / name).read_text()
     for deviation in deviations_for(name):
@@ -362,7 +354,7 @@ def compose_env(
     header = _GENERATED_HEADER.format(
         core=family.core, anchor=family.anchor, package=family.package
     )
-    parts = [header, f";;; Canonical layers vendored from {env_provenance()}\n"]
+    parts = [header]
     if dialect.aliases:
         # Said in the file, because the alternative is a reader diffing it against upstream and
         # concluding it was hand-edited. Which paths moved is the whole subject of §7.5.6.

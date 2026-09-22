@@ -3,13 +3,12 @@
 ``docs/cvlr-backend-plan.md`` §7.5.6. The defect these guard against does not raise, log, or fail a
 build: a directive whose path was renamed out from under it simply matches nothing, and the prover
 proceeds with a different configuration than the file appears to describe. So the tests here are
-mostly about *silence* — that a rewrite happens where it must, that it does not happen where it must
-not, and that the vendored files stay byte-identical to upstream so the refresh script remains a
-copy.
+mostly about *silence* — that a rewrite happens where it must, and that it does not happen where it
+must not.
 
 The riskiest of them is :func:`test_every_declared_alias_still_names_something_in_the_vendored_files`.
-An alias is written against a file that upstream owns; when that file is refreshed, an alias whose
-canonical path no longer appears is dead weight that looks like coverage.
+An alias is written against a canonical file; when that file is edited, an alias whose canonical
+path no longer appears is dead weight that looks like coverage.
 """
 
 from pathlib import Path
@@ -287,10 +286,9 @@ def test_recomposing_a_composite_is_stable(split: PathDialect) -> None:
     assert compose_env(INLINING, package_layer="; mine\n", dialect=split) == once
 
 
-def test_the_vendored_files_are_returned_verbatim_without_a_dialect() -> None:
-    """The refresh script's contract: ``envs/`` is a *copy* of upstream, so a caller that asks for a
-    canonical file with no dialect must get the bytes that were vendored. Anything else and the
-    next refresh reports a diff that is ours, not upstream's."""
+def test_the_canonical_files_are_returned_verbatim_without_a_dialect() -> None:
+    """`canonical_env` answers "what is stored", so it applies neither a dialect nor a deviation.
+    Fold `DEVIATIONS` into it and this fails: one of them rewrites a line in a canonical file."""
     for name in CANONICAL_ENVS:
         assert canonical_env(name) == (ENV_DIR / name).read_text()
 
