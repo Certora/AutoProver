@@ -8,7 +8,7 @@ use soroban_sdk::{vec, map};{% set seen = [] %}
 {% for f in c.functions %}{% if f.name not in seen %}{% set seen = seen.append( f.name ) %}
 #[allow(unused)]
 #[rule]
-pub fn {{ f.name }}_{{ c.name|lower }}_sanity_test({{ f.params[0].name }}: Env) { {% for p in f.params %}{% if not loop.first %}
+pub fn {{ f.name }}_{{ c.name|lower }}_sanity_test({% if f.params|length > 0 and f.params[0].type.type.endswith("Env") %}{{f.params[0].name }}{% else %}e{% endif %}: Env) { {% for p in f.params %}{% if not loop.first or (f.params|length > 0 and not f.params[0].type.type.endswith("Env")) %}
     let {{ p.name }} = {{ nondet.nondet(p.type, true) }};{% endif %}{% endfor %}
     
     {{ f.name }}_{{ c.name }}_sanity({% for a in f.params %}{% if not loop.first %}, {% endif %}{% if a.by_ref %}&{% endif %}{{ a.name }}{% endfor %});   

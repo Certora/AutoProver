@@ -8,9 +8,7 @@ MY_TMP_DIR=$(mktemp -d)
 
 cp -r $1 $MY_TMP_DIR/`basename $1`
 
-bash $MY_DIR/process.sh $MY_TMP_DIR/`basename $1` $2
-
-cd $MY_TMP_DIR/`basename $1`
+. $MY_DIR/process.sh $MY_TMP_DIR/`basename $1` $2
 
 cargo update
 

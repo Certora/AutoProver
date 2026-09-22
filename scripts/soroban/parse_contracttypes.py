@@ -28,6 +28,57 @@ def strip_comments(src: str) -> str:
     # line comments
     src = re.sub(r'//[^\n]*', '', src)
     return src
+
+
+_TEST_ATTR_MOD_PAT = re.compile(
+    r'#\[[^\]]*\btest\b[^\]]*\]\s*(?:pub\s+)?mod\s+\w+\s*\{'
+)
+
+
+_CFG_IF_PAT = re.compile(
+    r'\bcfg_if\s*(?:::\s*cfg_if\s*)?\s*!\s*\{'
+)
+
+
+def _strip_brace_blocks(cleaned: str, pattern: re.Pattern) -> str:
+    """Remove all macro/mod blocks matched by *pattern* (which must end just
+    before the opening '{') from an already-comment-stripped source string."""
+    pos = 0
+    parts: list[str] = []
+    while pos < len(cleaned):
+        m = pattern.search(cleaned, pos)
+        if not m:
+            parts.append(cleaned[pos:])
+            break
+        parts.append(cleaned[pos:m.start()])
+        brace_pos = m.end() - 1   # points to the opening '{'
+        close = find_matching_brace(cleaned, brace_pos)
+        if close == -1:
+            parts.append(cleaned[m.start():])
+            break
+        pos = close + 1           # skip past the closing '}'
+    return ''.join(parts)
+
+
+def strip_test_blocks(cleaned: str) -> str:
+    """Remove test-attributed mod blocks (e.g. #[cfg(test)] mod tests { … })
+    from an already-comment-stripped source string so that test-only
+    #[contracttype] definitions are not mistaken for real types."""
+    return _strip_brace_blocks(cleaned, _TEST_ATTR_MOD_PAT)
+
+
+def strip_cfg_if_blocks(cleaned: str) -> str:
+    """Remove cfg_if::cfg_if! { … } blocks from an already-comment-stripped
+    source string so that conditionally-compiled definitions are not picked up."""
+    return _strip_brace_blocks(cleaned, _CFG_IF_PAT)
+
+
+def strip_non_contract_blocks(content: str) -> str:
+    """Full cleaning pipeline: strip comments, test mod blocks, and cfg_if blocks."""
+    cleaned = strip_comments(content)
+    cleaned = strip_test_blocks(cleaned)
+    cleaned = strip_cfg_if_blocks(cleaned)
+    return cleaned
  
  
 def find_matching_brace(s: str, start: int) -> int:
@@ -80,7 +131,7 @@ def parse_type_aliases(src: str) -> dict[str, str]:
     return a mapping {alias_name: rhs_type_string}.  Parametric aliases such
     as `type Foo<T> = Bar<T>` are skipped because their RHS depends on the
     type parameter and cannot be substituted without specialisation."""
-    src_s = strip_comments(src)
+    src_s = strip_non_contract_blocks(src)
     aliases: dict[str, str] = {}
     for m in re.finditer(r'\btype\s+([A-Za-z_][A-Za-z0-9_]*)\s*', src_s):
         name = m.group(1)
@@ -607,7 +658,7 @@ CONTRACTTYPE_RE = re.compile(
  
 def extract_from_source(src: str, filepath: str) -> list[dict]:
     """Return all contracttype definitions found in *src*."""
-    src_stripped = strip_comments(src)
+    src_stripped = strip_non_contract_blocks(src)
     # Build a map of explicitly-imported names for this file so cross-crate
     # types referenced in fields can be annotated with their use path even
     # when those types aren't themselves contracttypes in the scanned set.

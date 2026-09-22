@@ -3,6 +3,7 @@ import tomlkit
 from pathlib import Path
 import shutil
 import re
+import os
 
 from classify_cargo import process as classify
 
@@ -19,13 +20,15 @@ def fix_profile(t):
   if "profile" not in t:
     t["profile"] = {}
             
-  if "release" not in t["profile"]:
-    t["profile"]["release"] = {}
+  if "release-with-logs" not in t["profile"]:
+    t["profile"]["release-with-logs"] = {}
 
-  t["profile"]["release"]["opt-level"] = 2
-  t["profile"]["release"]["debug"] = 2
-  t["profile"]["release"]["strip"] = False
-  t["profile"]["release"]["lto"] = True
+  t["profile"]["release-with-logs"]["opt-level"] = 2
+  t["profile"]["release-with-logs"]["debug"] = 2
+  t["profile"]["release-with-logs"]["strip"] = False
+  t["profile"]["release-with-logs"]["lto"] = True
+  t["profile"]["release-with-logs"]["overflow-checks"] = True
+  t["profile"]["release-with-logs"]["inherits"] = "release"
 
 
 def fix_soroban_sdk(t):
@@ -90,11 +93,11 @@ def put_dependencies(t):
   t["dependencies"]["cvlr"] = put_stuff({"git": "https://github.com/Certora/cvlr", "branch": "0.6.1-soroban-changes", "default-features": False})
   
   if check_muxed_address():
-    t["dependencies"]["cvlr-soroban"] = put_stuff({ "path": "../cvlr-soroban/cvlr-soroban", "default-features": False })
+    t["dependencies"]["cvlr-soroban"] = put_stuff({ "path": str(root / "cvlr-soroban/cvlr-soroban"), "default-features": False })
   else:
-    t["dependencies"]["cvlr-soroban"] = put_stuff({ "path": "../cvlr-soroban/cvlr-soroban", "default-features": False, "features": ["nomuxedaddress"] })
+    t["dependencies"]["cvlr-soroban"] = put_stuff({ "path": str(root / "cvlr-soroban/cvlr-soroban"), "default-features": False, "features": ["nomuxedaddress"] })
 
-  t["dependencies"]["cvlr-soroban-derive"] = put_stuff({ "path": "../cvlr-soroban/cvlr-soroban-derive", "default-features": False })
+  t["dependencies"]["cvlr-soroban-derive"] = put_stuff({ "path": str(root / "cvlr-soroban/cvlr-soroban-derive"), "default-features": False })
 
 
 def ensure_cvlr_soroban(obj, from_path, to_path):
@@ -104,7 +107,6 @@ def ensure_cvlr_soroban(obj, from_path, to_path):
     cstomln = to_path / "Cargo.toml"
     with open( cstomln ) as cstomlf:
       cstoml = tomlkit.parse(cstomlf.read())
-      print(cstoml["workspace"]["dependencies"])
       if not sdk_version == get_version(cstoml["workspace"]["dependencies"]):
         if get_version_string(obj) is not None:
           cstoml["workspace"]["dependencies"]["soroban-sdk"] = put_stuff({ "version": sdk_version_string, "default-features": False})
@@ -120,15 +122,17 @@ def remove_test_projects(t, regex):
   
 sdk_version_string=sys.argv[3]
 sdk_version=get_version_tuple(sdk_version_string)
-    
+
+root = Path(sys.argv[1]).parent.resolve()
+
 tomls = classify(Path(sys.argv[1]))
 
 with open( sys.argv[2] ) as cvlrsf:
   cvlrs = tomlkit.parse(cvlrsf.read())
   for cargo in tomls:
-    print(cargo)
     with open( cargo ) as f:
       t = tomlkit.parse(f.read())
+      print(cargo + " " + tomls[cargo]["category"])
       match tomls[cargo]["category"]:
         case "WORKSPACE_ROOT":
           fix_profile(t)
@@ -146,7 +150,8 @@ with open( sys.argv[2] ) as cvlrsf:
           
         case "MEMBER":
           inherit_cvlr_stuff(t)
-          
+
+    os.remove(cargo)
     with open(cargo, "w") as f:
-        tomlkit.dump(t, f)
+      tomlkit.dump(t, f)
 

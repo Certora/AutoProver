@@ -78,24 +78,50 @@ _TEST_ATTR_MOD_PAT = re.compile(
     r'#\[[^\]]*\btest\b[^\]]*\]\s*(?:pub\s+)?mod\s+\w+\s*\{'
 )
 
+# Matches cfg_if::cfg_if! { ... } and cfg_if! { ... }
+_CFG_IF_PAT = re.compile(
+    r'\bcfg_if\s*(?:::\s*cfg_if\s*)?\s*!\s*\{'
+)
+
+
+def _strip_brace_blocks(cleaned: str, pattern: re.Pattern) -> str:
+    """Remove all blocks matched by *pattern* (which must end just before the
+    opening '{') from an already-comment-stripped source string."""
+    pos = 0
+    parts: list[str] = []
+    while pos < len(cleaned):
+        m = pattern.search(cleaned, pos)
+        if not m:
+            parts.append(cleaned[pos:])
+            break
+        parts.append(cleaned[pos:m.start()])
+        brace_pos = m.end() - 1   # the opening '{'
+        _, end_pos = extract_block(cleaned, brace_pos)
+        pos = end_pos
+    return ''.join(parts)
+
 
 def strip_test_blocks(cleaned: str) -> str:
     """Remove test-attributed mod blocks (e.g. #[cfg(test)] mod tests { … })
     from an already-comment-stripped source string so that test-only
     #[contract] structs are not mistaken for real contracts."""
-    pos = 0
-    parts: list[str] = []
-    while pos < len(cleaned):
-        m = _TEST_ATTR_MOD_PAT.search(cleaned, pos)
-        if not m:
-            parts.append(cleaned[pos:])
-            break
-        parts.append(cleaned[pos:m.start()])
-        # The match ends with the opening '{'; call extract_block on it.
-        brace_pos = m.end() - 1
-        _, end_pos = extract_block(cleaned, brace_pos)
-        pos = end_pos
-    return ''.join(parts)
+    return _strip_brace_blocks(cleaned, _TEST_ATTR_MOD_PAT)
+
+
+def strip_cfg_if_blocks(cleaned: str) -> str:
+    """Remove cfg_if::cfg_if! { … } macro invocations from an
+    already-comment-stripped source string.  Conditional compilation blocks
+    often contain alternate module declarations or type definitions that do
+    not match the current build target and would confuse the analysis."""
+    return _strip_brace_blocks(cleaned, _CFG_IF_PAT)
+
+
+def strip_non_contract_blocks(content: str) -> str:
+    """Full cleaning pipeline: strip comments, test mod blocks, and cfg_if blocks."""
+    cleaned = strip_comments(content)
+    cleaned = strip_test_blocks(cleaned)
+    cleaned = strip_cfg_if_blocks(cleaned)
+    return cleaned
 
 def split_by_comma(s: str) -> list[str]:
     """Split on commas, respecting < > ( ) nesting."""
@@ -411,7 +437,7 @@ def find_locally_defined_names(filepath: Path) -> set[str]:
     """
     try:
         content = filepath.read_text(encoding='utf-8')
-        cleaned = strip_comments(content)
+        cleaned = strip_non_contract_blocks(content)
     except Exception:
         return set()
     names: set[str] = set()
@@ -899,10 +925,9 @@ def scan_file(filepath: Path) -> tuple[list[dict], list[dict]]:
     Returns (contracts, traits) where each is a list of dicts.
     """
     content = filepath.read_text(encoding='utf-8')
-    cleaned = strip_comments(content)
-    # Remove test-only mod blocks so that #[contract] structs defined inside
-    # #[cfg(test)] or #[cfg(any(test, ...))] modules are not picked up.
-    cleaned = strip_test_blocks(cleaned)
+    # Remove comments, test-only mod blocks, and cfg_if blocks so that
+    # conditionally-compiled or test-only #[contract] structs are not picked up.
+    cleaned = strip_non_contract_blocks(content)
 
     contracts = []
     traits = []
@@ -952,10 +977,12 @@ def scan_file(filepath: Path) -> tuple[list[dict], list[dict]]:
             fns = extract_fn_signatures(block[1:-1], require_pub=not is_trait_impl)
 
             if is_trait_impl:
-                # Capture the trait name (first word after `impl`)
+                # Capture the full trait path (e.g. 'token::Interface') and its
+                # short last-segment name for use statements.
                 trait_m = re.match(r'\s*([\w:]+)', impl_header)
-                if trait_m:
-                    impl_traits.add(trait_m.group(1).split('::')[-1])
+                full_trait_name = trait_m.group(1) if trait_m else None
+                if full_trait_name:
+                    impl_traits.add(full_trait_name.split('::')[-1])
 
                 # Collect `type AssocName = ConcreteType;` definitions so we can
                 # substitute Self::AssocName → ConcreteType in method signatures
@@ -965,6 +992,7 @@ def scan_file(filepath: Path) -> tuple[list[dict], list[dict]]:
 
                 for fn in fns:
                     fn['is_trait'] = True
+                    fn['trait_name'] = full_trait_name  # full path, e.g. 'token::Interface'
                     if assoc_types:
                         fn['params'] = [
                             (n, _subst_self_assoc(t, assoc_types))
@@ -1097,7 +1125,59 @@ def fn_call(contract: str, method: str, params: list[tuple[str, str]], ret: Opti
         return f'    {expr};'
 
 
-def generate_contract_sanity(contract: dict) -> tuple[str, list[dict]]:
+def fn_call_trait(contract: str, trait_name: str, method: str,
+                  params: list[tuple[str, str]], ret: Optional[str]) -> str:
+    """Like fn_call but uses UFCS: <Contract as TraitName>::method(args).
+
+    Required for trait impl methods so the call compiles even when the method
+    name is only in scope via a trait (e.g. token::Interface::allowance).
+    """
+    args = ', '.join(call_arg(n, t) for n, t in params)
+    expr = f'<{contract} as {trait_name}>::{method}({args})'
+    if ret:
+        return f'    {expr}'
+    else:
+        return f'    {expr};'
+
+
+def resolve_qualified_trait_path(trait_name: str, source_file: Path) -> str:
+    """Resolve a module-qualified trait path from an impl header to a full path.
+
+    A Soroban source file may write::
+
+        use soroban_sdk::token::{self, Interface as _};
+        impl token::Interface for Token { ... }
+
+    Here ``token`` is not a local module — it's ``soroban_sdk::token``, brought
+    into scope via the ``self`` item in the use tree.  This function looks for
+    such module-self imports and rewrites the leading segment accordingly, so
+    ``token::Interface`` becomes ``soroban_sdk::token::Interface``.
+
+    Returns *trait_name* unchanged when no resolution is found.
+    """
+    if '::' not in trait_name:
+        return trait_name
+    first_seg, rest = trait_name.split('::', 1)
+    try:
+        source_text = source_file.read_text(encoding='utf-8')
+    except Exception:
+        return trait_name
+    raw_stmts = parse_use_stmts_from_source(source_text)
+    mod_parts = source_module_parts(source_file)
+    for stmt in raw_stmts:
+        body = re.sub(r'^\s*(?:pub\s+)?use\s+', '', stmt).rstrip(';').strip()
+        for name, path, is_self in expand_use_tree(body):
+            if name == first_seg and is_self:
+                # e.g. name='token', path='soroban_sdk::token', is_self=True
+                # → 'token::Interface' becomes 'soroban_sdk::token::Interface'
+                resolved = f'{path}::{rest}'
+                if resolved.startswith('super::'):
+                    resolved = resolve_super_path(resolved, mod_parts)
+                return resolved
+    return trait_name
+
+
+def generate_contract_sanity(contract: dict) -> tuple[str, list[dict]] | None:
     """Generate src/sanity.rs for a #[contract] struct.
 
     Returns (code, emitted_fns) where emitted_fns is the subset of functions
@@ -1115,6 +1195,43 @@ def generate_contract_sanity(contract: dict) -> tuple[str, list[dict]]:
     sdk_types = set()
     for fn in all_fns:
         sdk_types |= collect_soroban_types(fn['params'], fn['ret'])
+
+    # For trait impls whose impl header uses a qualified path like `token::Interface`
+    # (no explicit `use SomeTrait;` in the source file), we need to emit an import
+    # in the generated sanity.rs.
+    #
+    # Step 1: resolve any module-self alias in the path.
+    #   use soroban_sdk::token::{self, Interface as _};
+    #   impl token::Interface for Token  →  soroban_sdk::token::Interface
+    #
+    # Step 2: emit `use <resolved_path>;` and use only the short name in UFCS.
+    #
+    # Trait names that are already a single identifier (e.g. `FlashLoan`) are
+    # handled by collect_project_use_stmts via extra_names=impl_traits below.
+    explicit_trait_uses: list[str] = []
+    _trait_short: dict[str, str] = {}   # raw trait_name → short identifier for UFCS
+
+    for fn in trait_fns:
+        raw_tname = fn.get('trait_name') or ''
+        if not raw_tname or '::' not in raw_tname:
+            continue  # single name — handled via impl_traits / extra_names
+
+        # Resolve module-self aliases (e.g. token → soroban_sdk::token)
+        resolved = resolve_qualified_trait_path(raw_tname, source_file)
+        short = resolved.split('::')[-1]
+        _trait_short[raw_tname] = short
+
+        # Build the import line
+        first = resolved.split('::')[0]
+        if first in ('crate', 'super', 'self', 'std', 'core', 'alloc',
+                     'soroban_sdk', 'stellar_xdr'):
+            explicit_trait_uses.append(f'use {resolved};')
+        else:
+            # Unrecognised first segment — assume external crate, emit bare
+            explicit_trait_uses.append(f'use {resolved};')
+
+    # Deduplicate
+    explicit_trait_uses = sorted(set(explicit_trait_uses))
 
     # Project-local use statements; also returns SDK names shadowed by local imports
     # and names that were needed but had no triple (defined directly in source_file)
@@ -1173,7 +1290,60 @@ def generate_contract_sanity(contract: dict) -> tuple[str, list[dict]]:
     # source files like src/contract/entrypoints.rs produce the correct
     # `use crate::contract::entrypoints::Foo;` rather than `use crate::entrypoints::Foo;`.
     mod_parts_for_import = source_module_parts(source_file)
+
+    # Validate that each segment of the module path is actually declared via
+    # `mod name;` in its parent file.  Some crates use inline `mod foo { ... }`
+    # blocks or re-export patterns that don't match the filesystem layout, so
+    # source_module_parts() may return a path segment that isn't a real `mod`
+    # declaration reachable from the crate root.  When validation fails we fall
+    # back to `use crate::Name;` (i.e. treat the struct as if it lives in the
+    # crate root) so the generated file at least compiles without the bad import.
     if mod_parts_for_import:
+        src_dir = next(
+            (p for p in reversed(source_file.parents) if p.name == 'src'), None
+        )
+        validated = True
+        if src_dir is not None:
+            parent_file = src_dir / 'lib.rs'
+            if not parent_file.exists():
+                parent_file = src_dir / 'mod.rs'
+            def _declared_mods_strict(path: Path) -> set[str]:
+                """Like find_declared_modules but also strips cfg_if blocks so
+                that `mod foo;` inside cfg_if! { ... } is not counted as a real
+                unconditional declaration."""
+                text = path.read_text(encoding='utf-8')
+                cleaned = strip_cfg_if_blocks(strip_comments(text))
+                return set(re.findall(r'\bmod\s+(\w+)\s*;', cleaned))
+
+            for i, seg in enumerate(mod_parts_for_import[:-1] if source_file.stem != 'mod' else mod_parts_for_import):
+                if not parent_file.exists():
+                    validated = False
+                    break
+                declared = _declared_mods_strict(parent_file)
+                if seg not in declared:
+                    validated = False
+                    break
+                # descend: next parent is either seg/mod.rs or seg.rs
+                next_mod = parent_file.parent / seg / 'mod.rs'
+                if not next_mod.exists():
+                    next_mod = parent_file.parent / f'{seg}.rs'
+                parent_file = next_mod
+            else:
+                # Check the final segment too (the file itself must be declared)
+                if mod_parts_for_import:
+                    final_seg = mod_parts_for_import[-1]
+                    # For mod.rs files the last segment is already checked above
+                    if source_file.stem != 'mod' and parent_file.exists():
+                        declared = _declared_mods_strict(parent_file)
+                        if final_seg not in declared:
+                            validated = False
+        if not validated:
+            # Module path couldn't be validated against mod declarations
+            # (e.g. declared only inside cfg_if! or via an inline mod block).
+            # Skip this contract rather than emitting a broken import.
+            print(f'  [skip] {struct_name}: cannot resolve module path '
+                  f'{"/".join(mod_parts_for_import)} — skipping sanity generation')
+            return None
         mod_path_str = '::'.join(mod_parts_for_import)
         if len(all_local_names) > 1:
             items_str = ', '.join(all_local_names)
@@ -1198,6 +1368,7 @@ def generate_contract_sanity(contract: dict) -> tuple[str, list[dict]]:
         lines.append(f'use soroban_sdk::{{{", ".join(sorted(sdk_types))}}};')
 
     lines.extend(project_uses)
+    lines.extend(explicit_trait_uses)
 
     lines.append(struct_import)
     lines.append('')
@@ -1208,7 +1379,15 @@ def generate_contract_sanity(contract: dict) -> tuple[str, list[dict]]:
             suffix = '_' + struct_name + '_sanity'
             wrapped_name = fn['name'] + suffix
             decl = fn_decl(wrapped_name, fn['params'], fn['ret'])
-            body = fn_call(struct_name, fn['name'], fn['params'], fn['ret'])
+            raw_trait = fn.get('trait_name') if fn.get('is_trait') else None
+            if raw_trait:
+                # Use the short name (last segment) in UFCS — the explicit import
+                # above makes it resolvable:
+                #   <Token as Interface>::allowance(e, from, spender)
+                ufcs_trait = _trait_short.get(raw_trait, raw_trait)
+                body = fn_call_trait(struct_name, ufcs_trait, fn['name'], fn['params'], fn['ret'])
+            else:
+                body = fn_call(struct_name, fn['name'], fn['params'], fn['ret'])
             lines += [f'{decl} {{', body, '}', '']
 
     return '\n'.join(lines), all_fns
@@ -1599,9 +1778,17 @@ def main():
         sections = []
         emitted_fns_by_contract: dict[str, list[dict]] = {}
         for contract in group:
-            code, emitted_fns = generate_contract_sanity(contract)
+            result = generate_contract_sanity(contract)
+            if result is None:
+                continue
+            code, emitted_fns = result
             sections.append(code)
             emitted_fns_by_contract[contract['name']] = emitted_fns
+        if not sections:
+            print(f'  [skip] all contracts in group skipped — no sanity.rs written')
+            print()
+            continue
+
         sanity_code = dedup_use_stmts_in_source('\n'.join(sections))
 
         sanity_path = src_dir / 'sanity.rs'
@@ -1617,6 +1804,8 @@ def main():
             print(f'  [warn] no lib.rs or mod.rs found in {src_dir}')
 
         for contract in group:
+            if contract['name'] not in emitted_fns_by_contract:
+                continue  # was skipped during generation
             emitted_fns = emitted_fns_by_contract[contract['name']]
             summary['contracts'].append({
                 'name': contract['name'],
