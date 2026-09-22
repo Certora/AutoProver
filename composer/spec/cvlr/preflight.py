@@ -157,8 +157,8 @@ async def prepare_workspace(
     """Scaffold ``project_root`` and report what a run needs to know about it.
 
     Writes into the project it is given. For a pipeline run that is the copy the run owns. The
-    scaffold overwrites nothing the project owns, so an already-scaffolded project is only read,
-    apart from the generated tuning files.
+    harness files under ``src/certora/`` are replaced by AutoProver's. The project's manifests
+    and sources are only added to.
     """
     reference = reference_for(chain)
     workspace = await _workspace_at(project_root)

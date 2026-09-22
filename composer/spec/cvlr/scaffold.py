@@ -5,13 +5,13 @@ stanzas. What to write is read from ``cargo metadata`` and from the reference se
 refused (:class:`Blocked`) instead of guessed: a package that builds no loadable object, and a
 CVLR pin that does not match the platform generation the project is already on.
 
-The result, for a program package inside a workspace. Files marked ``*`` already exist and are
-edited. Without a ``[workspace]`` the package is the root, and the root manifest gets no
-``[workspace.dependencies]`` pins::
+The result, for a program package inside a workspace. Files marked ``*`` are the project's and
+are edited. The rest are AutoProver's. Without a ``[workspace]`` the package is the root, and the
+root manifest gets no ``[workspace.dependencies]`` pins::
 
     <workspace>/
     ├── Cargo.toml *                  [workspace.dependencies] pins, [patch.crates-io] forks
-    ├── .gitignore *                  prover build output (written if absent)
+    ├── .gitignore *                  prover build output
     ├── <local path dependency>/
     │   └── Cargo.toml *              a `certora` feature the program's forwards to
     └── <package>/
@@ -23,21 +23,19 @@ edited. Without a ``[workspace]`` the package is the root, and the root manifest
                 ├── mod.rs
                 ├── specs/mod.rs      where authored rules land
                 └── envs/
-                    ├── cvlr_inlining_package.txt    the project's own, empty to start
-                    ├── cvlr_inlining.txt            regenerated: starting configuration + package
-                    └── cvlr_summaries_*.txt         the same two files
+                    ├── cvlr_inlining.txt     generated from the starting configuration
+                    └── cvlr_summaries.txt    the same
 
-What the files under ``envs/`` mean, and which of them a project edits, is
-:mod:`composer.spec.cvlr.tuning`.
+What the files under ``envs/`` mean is :mod:`composer.spec.cvlr.tuning`.
 
-Nothing the project owns is overwritten. A file is written only when it is absent, and manifest
-edits are text insertions into the parsed file, so a second run changes nothing. Reserializing the
-manifest would rewrite the project's comments to make one edit. Re-opening an existing table is a
-duplicate-table error, so an existing ``[features]`` table is edited in place.
+AutoProver's files are rewritten whenever they differ from what the scaffold would write
+(:class:`Write`), so a harness left by an earlier run or by hand is replaced, and a newer
+starting configuration reaches the build. Nothing else under ``src/certora/`` is touched.
 
-The two generated tuning files are the exception (:class:`Regenerate`). They are rewritten whenever
-they differ from what the starting configuration and the package layer compose to, so an edit to
-the package layer, or a newer starting configuration, reaches the build.
+The project's files are edited, never replaced. Manifest edits are text insertions into the parsed
+file, and each is planned only when what it adds is missing, so a second run changes nothing.
+Reserializing the manifest would rewrite the project's comments to make one edit. Re-opening an
+existing table is a duplicate-table error, so an existing ``[features]`` table is edited in place.
 
 ``sources`` includes ``Cargo.toml``. ``.certora_sources`` is what the report and the counterexample
 analyzer read, and a source tree with no manifest cannot be rebuilt. CVLR versions come from the
@@ -45,10 +43,9 @@ reference set.
 """
 
 import json
-import logging
 import re
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Sequence
 
@@ -58,8 +55,6 @@ from composer.spec.cvlr.env_paths import PathDialect, dialect_for
 from composer.spec.cvlr import forks
 from composer.spec.cvlr.tuning import ENV_FAMILIES, INLINING, SUMMARIES, compose_env
 from composer.spec.cvlr_reference import ChainReference, CrateRelease
-
-_log = logging.getLogger(__name__)
 
 #: Where the harness module goes in the target package.
 HARNESS_DIR = Path("src") / "certora"
@@ -89,8 +84,11 @@ NO_ENTRYPOINT_FEATURE = "no-entrypoint"
 
 
 @dataclass(frozen=True)
-class NewFile:
-    """A file to create. Skipped when the path already exists."""
+class Write:
+    """One of AutoProver's files, planned whenever the file on disk differs from ``contents``.
+
+    Whatever is at the path is replaced.
+    """
 
     path: Path
     contents: str
@@ -99,7 +97,7 @@ class NewFile:
 
 @dataclass(frozen=True)
 class AppendSection:
-    """Text appended to an existing file, at the end."""
+    """Text appended at the end of one of the project's files, which is created if absent."""
 
     path: Path
     contents: str
@@ -123,20 +121,7 @@ class InsertInTable:
     why: str
 
 
-@dataclass(frozen=True)
-class Regenerate:
-    """A generated file, written whenever it differs from ``contents``.
-
-    The one change that replaces a file. Only for files composed from sources that are not
-    edited in the target, so there is nothing of the project's in them to lose.
-    """
-
-    path: Path
-    contents: str
-    why: str
-
-
-type Change = NewFile | AppendSection | InsertInTable | Regenerate
+type Change = Write | AppendSection | InsertInTable
 
 
 @dataclass(frozen=True)
@@ -168,12 +153,7 @@ class ScaffoldPlan:
     def describe(self) -> str:
         lines = [f"CVLR scaffold for {self.package}:"]
         for change in self.changes:
-            verb = {
-                NewFile: "create",
-                AppendSection: "extend",
-                InsertInTable: "edit",
-                Regenerate: "regenerate",
-            }[type(change)]
+            verb = {Write: "write", AppendSection: "extend", InsertInTable: "edit"}[type(change)]
             lines.append(f"  {verb} {change.path} — {change.why}")
         lines += [f"  ok {note}" for note in self.satisfied]
         lines += [f"  BLOCKED {b.path}: {b.problem} — {b.resolution}" for b in self.blocked]
@@ -195,32 +175,37 @@ class ScaffoldBlocked(RuntimeError):
 # the content
 
 
-#: The harness module tree. ``specs/`` is created empty so the module exists before any rule file
-#: does. A module created later is one a later step can forget to declare.
-#:
 #: ``specs`` is ``pub``. ``cvlr::mock_fn(with = crate::certora::specs::…)`` expands in the
 #: program's own file, outside ``certora``, so the path has to be visible from there. ``certora``
 #: itself stays private. Under the feature gate the module exists only in a verification build,
 #: and it adds nothing to the crate's public API.
-_HARNESS_FILES: dict[str, str] = {
-    "mod.rs": (
-        "//! Certora verification harness.\n"
-        "//!\n"
-        "//! Compiled only under the `certora` feature, which `lib.rs` gates this module on.\n"
-        "\n"
-        "pub mod specs;\n"
-    ),
-    "specs/mod.rs": (
-        "//! The rules. One module per property group; declare each one here.\n"
-    ),
-}
+_HARNESS_ROOT = (
+    "//! Certora verification harness.\n"
+    "//!\n"
+    "//! Compiled only under the `certora` feature, which `lib.rs` gates this module on.\n"
+    "\n"
+    "pub mod specs;\n"
+)
+
+#: Written empty so the module exists before any rule file does. A module created later is one a
+#: later step can forget to declare.
+_SPECS_ROOT = "//! The rules. One module per property group; declare each one here.\n"
 
 
-#: Why each harness file exists, for the plan's own output. The file contents do not repeat it.
-_HARNESS_WHY: dict[str, str] = {
-    "mod.rs": "the harness module root",
-    "specs/mod.rs": "where authored rules land",
-}
+def _harness_files(dialect: PathDialect) -> tuple[Write, ...]:
+    """AutoProver's files, with paths relative to the package root."""
+    return (
+        Write(path=HARNESS_DIR / "mod.rs", contents=_HARNESS_ROOT, why="the harness module root"),
+        Write(path=SPECS_DIR / "mod.rs", contents=_SPECS_ROOT, why="where authored rules land"),
+        *(
+            Write(
+                path=ENVS_DIR / family.composite,
+                contents=compose_env(family, dialect=dialect),
+                why=f"the {family.kind.lower()} the build reports to the prover",
+            )
+            for family in ENV_FAMILIES
+        ),
+    )
 
 
 def _lib_declaration() -> str:
@@ -564,15 +549,17 @@ def _plan_package_manifest(
     return changes, satisfied, blocked
 
 
-def _plan_harness(package: CratePackage, relative: Path) -> tuple[list[Change], list[str]]:
+def _plan_harness(
+    package: CratePackage, relative: Path, dialect: PathDialect
+) -> tuple[list[Change], list[str]]:
     changes: list[Change] = []
     satisfied: list[str] = []
-    for name, contents in _HARNESS_FILES.items():
-        target = HARNESS_DIR / name
-        if (package.root / target).exists():
-            satisfied.append(f"{relative / target} already exists")
-            continue
-        changes.append(NewFile(path=relative / target, contents=contents, why=_HARNESS_WHY[name]))
+    for file in _harness_files(dialect):
+        on_disk = package.root / file.path
+        if on_disk.is_file() and on_disk.read_text() == file.contents:
+            satisfied.append(f"{relative / file.path} is current")
+        else:
+            changes.append(replace(file, path=relative / file.path))
 
     if package.lib is not None:
         lib_rel = _project_relative(package.lib.src_path, package.root)
@@ -585,44 +572,6 @@ def _plan_harness(package: CratePackage, relative: Path) -> tuple[list[Change], 
                     path=relative / lib_rel,
                     contents=_lib_declaration(),
                     why="pull the harness into the crate, gated on the feature",
-                )
-            )
-    return changes, satisfied
-
-
-def _plan_envs(
-    package: CratePackage, relative: Path, dialect: PathDialect
-) -> tuple[list[Change], list[str]]:
-    changes: list[Change] = []
-    satisfied: list[str] = []
-    for family in ENV_FAMILIES:
-        kind = family.kind.lower()
-        layer_path = package.root / ENVS_DIR / family.package
-        layer_target = relative / ENVS_DIR / family.package
-        if layer_path.is_file():
-            package_layer = layer_path.read_text()
-            satisfied.append(f"{layer_target} already exists")
-        else:
-            package_layer = family.initial_package_layer()
-            changes.append(
-                NewFile(
-                    path=layer_target,
-                    contents=package_layer,
-                    why=f"this package's own {kind} — yours to edit",
-                )
-            )
-
-        composite_path = package.root / ENVS_DIR / family.composite
-        composite_target = relative / ENVS_DIR / family.composite
-        composite = compose_env(family, package_layer=package_layer, dialect=dialect)
-        if composite_path.is_file() and composite_path.read_text() == composite:
-            satisfied.append(f"{composite_target} is current")
-        else:
-            changes.append(
-                Regenerate(
-                    path=composite_target,
-                    contents=composite,
-                    why=f"the {kind} the build reports to the prover",
                 )
             )
     return changes, satisfied
@@ -669,24 +618,17 @@ def _plan_forks(workspace: Workspace) -> tuple[list[Change], list[str], list[Blo
 
 def _plan_gitignore(workspace: Workspace) -> tuple[list[Change], list[str]]:
     path = workspace.root / ".gitignore"
-    header = "# Certora Prover build output\n"
-    lines = "".join(f"{line}\n" for line in GITIGNORE_LINES)
-    if not path.is_file():
-        return [
-            NewFile(
-                path=Path(".gitignore"),
-                contents=header + lines,
-                why="keep prover build output out of the project's history",
-            )
-        ], []
-    existing = {line.strip() for line in path.read_text().splitlines()}
-    absent = [line for line in GITIGNORE_LINES if line not in existing]
+    existing = path.read_text() if path.is_file() else None
+    ignored = {line.strip() for line in (existing or "").splitlines()}
+    absent = [line for line in GITIGNORE_LINES if line not in ignored]
     if not absent:
         return [], ["prover build output is already gitignored"]
     return [
         AppendSection(
             path=Path(".gitignore"),
-            contents="\n" + header + "".join(f"{line}\n" for line in absent),
+            contents=("" if existing is None else "\n")
+            + "# Certora Prover build output\n"
+            + "".join(f"{line}\n" for line in absent),
             why=f"ignore {', '.join(absent)}",
         )
     ], []
@@ -707,8 +649,7 @@ def plan_scaffold(
     satisfied: list[str] = []
     for planned, notes in (
         _plan_workspace_manifest(workspace, package, reference),
-        _plan_harness(package, relative),
-        _plan_envs(package, relative, dialect),
+        _plan_harness(package, relative, dialect),
         _plan_gitignore(workspace),
         _plan_feature_forwarding(workspace, package, reference),
     ):
@@ -850,20 +791,13 @@ def apply(plan: ScaffoldPlan, root: Path) -> tuple[Path, ...]:
         if not target.resolve().is_relative_to(root.resolve()):
             raise ScaffoldOutsideProject(f"{target} escapes {root}")
         match change:
-            case NewFile(contents=contents):
-                if target.exists():
-                    # The file appeared between planning and applying. Still do not overwrite it.
-                    _log.info("scaffold: %s appeared since planning; left alone", change.path)
-                    continue
+            case Write(contents=contents):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(contents)
             case AppendSection(contents=contents):
                 existing = target.read_text() if target.is_file() else ""
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(existing + contents)
-            case Regenerate(contents=contents):
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(contents)
             case InsertInTable(header=header, contents=contents):
                 target.write_text(_insert_in_table(target.read_text(), header, contents))
         touched.append(change.path)
