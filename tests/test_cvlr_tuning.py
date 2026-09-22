@@ -27,8 +27,9 @@ from composer.spec.cvlr.tuning import (
     SUMMARIES,
     SummaryDirective,
     TuningFiles,
+    compose_env,
     merge_summaries,
-    package_layer,
+    render_layer,
 )
 
 _WHY = "[3308] on the #[error_code] Display impl; no property asserts over an error message"
@@ -40,11 +41,10 @@ _UNIT = "deposits"
 
 @pytest.fixture
 def tuning(tmp_path: Path) -> TuningFiles:
-    """A scaffolded envs directory: every family's composite present, package layers headed."""
+    """A scaffolded envs directory: every family's composite present."""
     envs = tmp_path / "envs"
     envs.mkdir()
     for family in ENV_FAMILIES:
-        (envs / family.package).write_text(f"; {family.package}, yours to edit\n")
         (envs / family.composite).write_text("; composed\n")
     return TuningFiles(envs_dir=envs, dialect=PathDialect(), unit=_UNIT)
 
@@ -70,20 +70,15 @@ def test_the_file_the_conf_names_is_this_units_own(tuning: TuningFiles):
     assert tuning.composite_path().name != SUMMARIES.composite
 
 
-def test_the_projects_own_layer_is_not_written_to(tuning: TuningFiles):
-    """`_package.txt` is the project's file. A run that appended to it would leave one unit's
-    directives applying to every later submission, including ones this run never made."""
-    before = (tuning.envs_dir / SUMMARIES.package).read_text()
+def test_the_unit_composite_carries_the_starting_configuration(tuning: TuningFiles):
+    """The conf names the unit composite in place of the package's, so it has to carry the starting
+    layers as well as the unit's own directives."""
     tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY),))
-    assert (tuning.envs_dir / SUMMARIES.package).read_text() == before
-
-
-def test_the_projects_own_layer_still_reaches_the_composite(tuning: TuningFiles):
-    """Not touching it is not the same as ignoring it: the unit composite is composed from the
-    canonical layers *and* the project's, so nothing a project declared is dropped by the override
-    the conf carries."""
-    tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY),))
-    assert "yours to edit" in tuning.composite_path().read_text()
+    assert tuning.composite_path().read_text() == compose_env(
+        SUMMARIES,
+        unit_layer=tuning.unit_layer_path(SUMMARIES).read_text(),
+        dialect=tuning.dialect,
+    )
 
 
 def test_the_justification_is_written_beside_the_pattern(tuning: TuningFiles):
@@ -123,9 +118,9 @@ def test_the_layer_is_rewritten_rather_than_appended_to(tuning: TuningFiles):
 
 def test_the_inlining_family_is_left_alone(tuning: TuningFiles):
     """Summaries and inlining directives are different instruments and only one is on offer here."""
-    before = (tuning.envs_dir / INLINING.package).read_text()
+    before = (tuning.envs_dir / INLINING.composite).read_text()
     tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY),))
-    assert (tuning.envs_dir / INLINING.package).read_text() == before
+    assert (tuning.envs_dir / INLINING.composite).read_text() == before
     assert not (tuning.envs_dir / INLINING.unit_composite(_UNIT)).exists()
 
 
@@ -142,7 +137,6 @@ def test_two_units_do_not_see_each_others_directives(tmp_path: Path):
     envs = tmp_path / "envs"
     envs.mkdir()
     for family in ENV_FAMILIES:
-        (envs / family.package).write_text("; yours to edit\n")
         (envs / family.composite).write_text("; composed\n")
     a = TuningFiles(envs_dir=envs, dialect=PathDialect(), unit="a")
     b = TuningFiles(envs_dir=envs, dialect=PathDialect(), unit="b")
@@ -237,7 +231,7 @@ def test_a_skip_still_moves_the_digest():
 def test_the_rendered_layer_ends_with_a_newline():
     """Directives are line-oriented and the composite concatenates layers; a missing terminator
     would join the last directive to whatever follows it."""
-    rendered = package_layer("; header", (SummaryDirective(pattern="^f$", why="w"),))
+    rendered = render_layer("; header", (SummaryDirective(pattern="^f$", why="w"),))
     assert rendered.endswith("\n")
 
 
