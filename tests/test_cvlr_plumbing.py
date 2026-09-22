@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from composer.cargo.metadata import parse_metadata
+from composer.prover import conf as prover_conf
 from composer.spec.cvlr import conf as cvlr_conf
 from composer.spec.cvlr.crates import resolve
 from composer.spec.cvlr_reference import SOLANA
@@ -178,7 +179,7 @@ _REAL_CONF = """\
 
 
 def test_a_real_conf_parses_despite_comments_and_trailing_commas():
-    parsed = cvlr_conf.parse_conf(_REAL_CONF)
+    parsed = prover_conf.parse_conf(_REAL_CONF)
     assert parsed["rule"] == ["rule_correct_add", "rule_vacuous"]
     assert parsed["rule_sanity"] == "basic"
 
@@ -186,12 +187,12 @@ def test_a_real_conf_parses_despite_comments_and_trailing_commas():
 def test_an_integer_conf_value_stays_a_string():
     """``certoraRun`` reads conf integers as strings, which is why real confs say
     ``"loop_iter": "1"``. Round-tripping a project's conf must not retype its values."""
-    assert cvlr_conf.parse_conf(_REAL_CONF)["loop_iter"] == "3"
+    assert prover_conf.parse_conf(_REAL_CONF)["loop_iter"] == "3"
 
 
 def test_a_conf_that_sets_a_key_twice_is_rejected():
-    with pytest.raises(cvlr_conf.MalformedConf):
-        cvlr_conf.parse_conf('{"loop_iter": "1", "loop_iter": "2"}')
+    with pytest.raises(prover_conf.MalformedConf):
+        prover_conf.parse_conf('{"loop_iter": "1", "loop_iter": "2"}')
 
 
 def test_the_recommended_starting_point_is_the_base_when_a_project_has_no_conf():
@@ -294,7 +295,7 @@ def test_the_loop_assumption_reads_both_spellings_and_defaults_off():
     """Absent means off — which is what the Prover does with a key it was not given, and what the
     Solana spec template intends. A hand-written conf may spell the bool as a string, the way one
     spells `loop_iter`, so both are read."""
-    from composer.spec.cvlr.conf import has_optimistic_loop, with_optimistic_loop
+    from composer.prover.conf import has_optimistic_loop, with_optimistic_loop
 
     assert not has_optimistic_loop({})
     assert not has_optimistic_loop({"optimistic_loop": False})
@@ -308,7 +309,8 @@ def test_the_loop_assumption_reads_both_spellings_and_defaults_off():
 def test_the_loop_assumption_is_off_in_the_default_base():
     """The template leaves the assumption off. A caller can turn it on. A run does not start with
     it on."""
-    from composer.spec.cvlr.conf import TEMPLATE_BASE, has_optimistic_loop
+    from composer.prover.conf import has_optimistic_loop
+    from composer.spec.cvlr.conf import TEMPLATE_BASE
 
     assert not has_optimistic_loop(dict(TEMPLATE_BASE))
 
@@ -324,7 +326,7 @@ def test_a_project_that_already_wrote_the_portfolio_by_hand_is_recognized():
 
 def test_the_loop_bound_is_written_the_way_a_conf_spells_an_integer():
     """Confs in the wild say `"loop_iter": "1"`, which is `read_conf`'s own `parse_int=str`."""
-    assert cvlr_conf.with_loop_iter({}, 4)["loop_iter"] == "4"
+    assert prover_conf.with_loop_iter({}, 4)["loop_iter"] == "4"
 
 
 def test_a_project_conf_that_never_mentions_rule_sanity_still_gets_vacuity_checking():
@@ -355,7 +357,7 @@ def test_turning_vacuity_checking_off_is_not_a_setting_a_run_honors():
 def test_the_run_decides_which_server_whatever_the_base_says():
     """Corpus confs that name a server all say "production", and the run passes `--server` from the
     deployment environment. Two answers that agree until they do not."""
-    base = {**cvlr_conf.parse_conf(_REAL_CONF), "server": "production"}
+    base = {**prover_conf.parse_conf(_REAL_CONF), "server": "production"}
     overlay = cvlr_conf.RunOverlay(build_script=Path("/w/o.py"))
     assert "server" not in cvlr_conf.solana_conf(base, overlay)
 
@@ -392,20 +394,20 @@ def test_the_recommended_starting_point_enables_no_optimistic_solana_flags():
 
 
 def test_an_overlay_prover_arg_replaces_the_base_setting_of_the_same_flag():
-    merged = cvlr_conf.merge_prover_args(
+    merged = prover_conf.merge_prover_args(
         ["-solanaTACOptimize 0", "-solanaStackSize 8192"], ["-solanaTACOptimize 2"]
     )
     assert merged == ["-solanaTACOptimize 2", "-solanaStackSize 8192"]
 
 
 def test_a_new_overlay_flag_is_appended_rather_than_replacing_anything():
-    merged = cvlr_conf.merge_prover_args(["-solanaTACOptimize 0"], ["-solanaTACMathInt true"])
+    merged = prover_conf.merge_prover_args(["-solanaTACOptimize 0"], ["-solanaTACMathInt true"])
     assert merged == ["-solanaTACOptimize 0", "-solanaTACMathInt true"]
 
 
 def _overlay(**kwargs) -> dict:
     return cvlr_conf.solana_conf(
-        cvlr_conf.parse_conf(_REAL_CONF),
+        prover_conf.parse_conf(_REAL_CONF),
         cvlr_conf.RunOverlay(build_script=Path("/w/.certora_build/confined_build.py"), **kwargs),
     )
 
@@ -413,7 +415,7 @@ def _overlay(**kwargs) -> dict:
 def test_the_run_owns_the_build_script_whatever_the_base_says():
     """The run's build script wins. A project conf that names its own would build unconfined
     inside the prover's process."""
-    base = {**cvlr_conf.parse_conf(_REAL_CONF), "build_script": "scripts/certora_build.py"}
+    base = {**prover_conf.parse_conf(_REAL_CONF), "build_script": "scripts/certora_build.py"}
     conf = cvlr_conf.solana_conf(base, cvlr_conf.RunOverlay(build_script=Path("/w/ours.py")))
     assert conf["build_script"] == "/w/ours.py"
 
@@ -421,7 +423,7 @@ def test_the_run_owns_the_build_script_whatever_the_base_says():
 def test_a_prebuilt_artifact_in_the_base_is_dropped():
     """``run_rust_build`` asserts the context has no ``files`` before a build script may set them,
     so keeping both would fail inside the prover instead of here."""
-    base = {**cvlr_conf.parse_conf(_REAL_CONF), "files": ["target/deploy/x.so"]}
+    base = {**prover_conf.parse_conf(_REAL_CONF), "files": ["target/deploy/x.so"]}
     overlay = cvlr_conf.RunOverlay(build_script=Path("/w/o.py"))
     assert "files" not in cvlr_conf.solana_conf(base, overlay)
 
@@ -431,13 +433,13 @@ def test_inheriting_rules_keeps_the_projects_own_selection():
 
 
 def test_selecting_rules_replaces_the_projects_selection():
-    assert _overlay(rules=cvlr_conf.SelectRules(("rule_vacuous",)))["rule"] == ["rule_vacuous"]
+    assert _overlay(rules=prover_conf.SelectRules(("rule_vacuous",)))["rule"] == ["rule_vacuous"]
 
 
 def test_asking_for_all_rules_removes_the_selection_entirely():
     """Distinct from inheriting: against a base naming two of thirty rules, one runs two and the
     other runs thirty."""
-    assert "rule" not in _overlay(rules=cvlr_conf.AllRules())
+    assert "rule" not in _overlay(rules=prover_conf.AllRules())
 
 
 def test_the_env_files_are_left_for_the_build_manifest_to_supply():
@@ -451,5 +453,5 @@ def test_the_env_files_are_left_for_the_build_manifest_to_supply():
 def test_the_conf_is_emitted_as_plain_json():
     """JSON5 is what a conf may be written in, not what this writes: a file we emit and re-read is
     the one place a trailing comma buys nothing."""
-    assert json.loads(cvlr_conf.dump_conf(_overlay()))["msg"] == ""
+    assert json.loads(prover_conf.dump_conf(_overlay()))["msg"] == ""
 
