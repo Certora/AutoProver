@@ -23,10 +23,7 @@ edited. Without a ``[workspace]`` the package is the root, and the root manifest
             ├── lib.rs *              #[cfg(feature = "certora")] mod certora;
             └── certora/
                 ├── mod.rs
-                ├── nondet.rs
-                ├── log.rs
                 ├── specs/mod.rs      where authored rules land
-                ├── mocks/mod.rs
                 └── envs/
                     ├── cvlr_inlining_core.txt       vendored
                     ├── cvlr_inlining_anchor.txt     vendored
@@ -376,42 +373,20 @@ def compose_env(
 #: The harness module tree. ``specs/`` is created empty so the module exists before any rule file
 #: does. A module created later is one a later step can forget to declare.
 #:
-#: ``specs`` and ``mocks`` are ``pub``. ``cvlr::mock_fn(with = crate::certora::…)`` expands in the
-#: program's own file, outside ``certora``, so the path has to be visible from there. ``log`` and
-#: ``nondet`` hold trait impls, which are visible without a path. ``certora`` itself stays private.
-#: Under the feature gate the module exists only in a verification build, and it adds nothing to
-#: the crate's public API.
+#: ``specs`` is ``pub``. ``cvlr::mock_fn(with = crate::certora::specs::…)`` expands in the
+#: program's own file, outside ``certora``, so the path has to be visible from there. ``certora``
+#: itself stays private. Under the feature gate the module exists only in a verification build,
+#: and it adds nothing to the crate's public API.
 _HARNESS_FILES: dict[str, str] = {
     "mod.rs": (
         "//! Certora verification harness.\n"
         "//!\n"
         "//! Compiled only under the `certora` feature, which `lib.rs` gates this module on.\n"
         "\n"
-        "mod log;\n"
-        "pub mod mocks;\n"
-        "mod nondet;\n"
         "pub mod specs;\n"
-    ),
-    "nondet.rs": (
-        "//! Implementations of `cvlr::nondet::Nondet` for this program's own types.\n"
-        "//!\n"
-        "//! A rule needs a nondeterministic value of every type it quantifies over; the derives in\n"
-        "//! `cvlr` cover the primitives, and anything else is declared here.\n"
-    ),
-    "log.rs": (
-        "//! Implementations of `cvlr::log::CvlrLog` for this program's own types.\n"
-        "//!\n"
-        "//! A counterexample is only as legible as what `clog!` can print, so a type that appears\n"
-        "//! in a rule wants an implementation here before it appears in a failure.\n"
     ),
     "specs/mod.rs": (
         "//! The rules. One module per property group; declare each one here.\n"
-    ),
-    "mocks/mod.rs": (
-        "//! Mocks that simplify functionality for verification.\n"
-        "//!\n"
-        "//! Mirror the original module hierarchy: a function `my_mod::fun` is mocked by\n"
-        "//! `certora::mocks::my_mod::fun`.\n"
     ),
 }
 
@@ -419,10 +394,7 @@ _HARNESS_FILES: dict[str, str] = {
 #: Why each harness file exists, for the plan's own output. The file contents do not repeat it.
 _HARNESS_WHY: dict[str, str] = {
     "mod.rs": "the harness module root",
-    "nondet.rs": "where this program's types become nondeterministic",
-    "log.rs": "where this program's types become printable in a counterexample",
     "specs/mod.rs": "where authored rules land",
-    "mocks/mod.rs": "where a simplified stand-in for real code goes",
 }
 
 
