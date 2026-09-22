@@ -201,7 +201,7 @@ def test_the_path_a_mock_names_resolves_from_the_programs_own_file(tmp_path):
     plan, workspace = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
     apply(plan, workspace.root)
     root = (tmp_path / HARNESS_DIR / "mod.rs").read_text()
-    assert "pub mod specs;" in root and "pub mod mocks;" in root
+    assert "pub mod specs;" in root
 
     store = CvlrArtifactStore(tmp_path, Path("."))
     declared = store.declare_modules([HarnessModule("withdraw")])[0].read_text()

@@ -758,8 +758,8 @@ class DeriveSwap:
 
 
 #: Where a redirected module's substitute file lives, relative to the crate's source root. Mirrors
-#: the original module hierarchy, which is the convention the scaffold's own ``certora/mocks/mod.rs``
-#: already states and which every corpus project follows.
+#: the original module hierarchy, the convention every corpus project follows. The ``#[path]``
+#: reaches the file directly, so no ``mocks`` module is declared.
 MOCKS_DIR = PurePosixPath("certora/mocks")
 
 

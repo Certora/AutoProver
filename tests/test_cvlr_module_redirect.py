@@ -75,8 +75,7 @@ def _applied(source: str = INVOKES, **kw) -> str:
 
 
 def test_the_stand_in_mirrors_the_module_under_the_mocks_tree():
-    """The convention every corpus project follows, and which the scaffold's own
-    ``certora/mocks/mod.rs`` already states: the mocks tree mirrors the source tree."""
+    """The convention every corpus project follows: the mocks tree mirrors the source tree."""
     assert mirror_path(DECLARING, "liquidity_layer") == PurePosixPath(
         "programs/lending/src/certora/mocks/invokes/liquidity_layer.rs"
     )
