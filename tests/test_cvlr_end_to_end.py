@@ -27,7 +27,8 @@ import pytest
 from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, Built, platform_tools_installed
 from composer.cargo.session import CargoSession, Warmed
 from composer.prover.core import make_prover_options
-from composer.spec.cvlr.conf import read_conf, tools_version
+from composer.prover.conf import read_conf
+from composer.spec.cvlr.conf import tools_version
 from composer.spec.cvlr.prover import BuildRejected, Checked, Submission, submit
 
 pytestmark = [pytest.mark.expensive, pytest.mark.asyncio]

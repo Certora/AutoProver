@@ -19,6 +19,7 @@ from composer.spec.cvl_generation import GeneratedCVL
 from composer.spec.gen_types import (
     AP_REPORT_DIR, AUTOPROVE_INTERNAL_DIR, CERTORA_DIR, under_project,
 )
+from composer.prover.conf import dump_conf
 from composer.spec.source.prover import prover_config_overlay
 from composer.spec.util import ensure_dir
 
@@ -87,7 +88,7 @@ class ProverArtifactStore(ArtifactStore[ComponentSpec, GeneratedCVL]):
             verify_target=f"{self._main_contract}:{spec_path}",
         )
         confs_dir = ensure_dir(self._deliverable_dir() / "confs")
-        (confs_dir / f"{spec.stem}.conf").write_text(json.dumps(conf, indent=2))
+        (confs_dir / f"{spec.stem}.conf").write_text(dump_conf(conf))
 
     # -- run-level ----------------------------------------------------------
 

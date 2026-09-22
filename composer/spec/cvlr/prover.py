@@ -36,14 +36,11 @@ from composer.prover.core import (
     UnanalyzedCexHandler,
     run_prover,
 )
+from composer.prover.conf import Conf, InheritRules, RuleSelection, dump_conf
 from composer.spec.cvlr.conf import (
     DEFAULT_FEATURE,
-    Conf,
-    InheritRules,
-    RuleSelection,
     RunOverlay,
     cargo_features,
-    dump_conf,
     sbf_arch,
     solana_conf,
     tools_version,

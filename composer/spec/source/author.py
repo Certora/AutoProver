@@ -28,6 +28,7 @@ from composer.spec.cvl_generation import (
 )
 from composer.prover.core import run_prover, CexHandler, ProverCallbacks, ProverReport
 from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools, WIPE_HISTORY
+from composer.prover.conf import InheritRules, SelectRules
 from composer.spec.source.prover import setup_prover_config_in
 from composer.spec.context import WorkflowContext, CVLGeneration, CacheKey, SourceCode
 from composer.spec.types import PropertyFormulation, PropertyTitle
@@ -702,7 +703,7 @@ class WrappedProverRunner:
             main_contract=self.main_contract,
             spec_contents=curr_spec,
             config=self.config,
-            rule=rules,
+            rules=InheritRules() if rules is None else SelectRules(tuple(rules)),
             **config
         ) as (conf_path, _):
             return await run_prover(

@@ -9,7 +9,6 @@ Provides get_prover_tool() which creates a verify_spec tool that:
 """
 
 import asyncio
-import json
 import logging
 import time
 from contextlib import contextmanager, asynccontextmanager, ExitStack, nullcontext
@@ -39,6 +38,9 @@ from composer.prover.core import (
     DefaultCexHandler
 )
 from composer.prover.callbacks import ProverEventCallbacks
+from composer.prover.conf import (
+    Conf, ExcludeRules, InheritRules, RuleSelection, SelectRules, dump_conf, overlay,
+)
 from composer.prover.ptypes import StatusCodes
 from composer.ui.tool_display import tool_display
 from composer.diagnostics.stream import (
@@ -72,19 +74,47 @@ from this set, or an "accepted" flag edit would never reach the prover; the asse
 beside that registry is what enforces it."""
 
 
-def prover_config_overlay(base_config: dict, *, main_contract: str, verify_target: str) -> dict:
+def prover_config_overlay(
+    base_config: Conf,
+    *,
+    main_contract: str,
+    verify_target: str,
+    extra: Conf | None = None,
+    rules: RuleSelection = InheritRules(),
+) -> Conf:
     """The fixed prover settings the source pipeline layers on top of the base config.
 
     Shared by the live ``verify_spec`` run and the persisted ``certora/confs`` dump so the
     two can't drift. ``verify_target`` is the ``<contract>:<spec path>`` the run verifies.
     """
-    return {
-        **base_config,
-        "verify": verify_target,
-        "parametric_contracts": main_contract,
-        "optimistic_loop": True,
-        "rule_sanity": "basic",
-    }
+    return overlay(
+        base_config,
+        forced={
+            "verify": verify_target,
+            "parametric_contracts": main_contract,
+            "optimistic_loop": True,
+            "rule_sanity": "basic",
+        },
+        extra=extra,
+        rules=rules,
+    )
+
+
+BOTH_RULE_SCOPES = "Cannot invoke the prover with both `rules` and `exclude_rules` set to non-none"
+
+
+def rule_selection(
+    rules: list[str] | None, exclude_rules: list[str] | None
+) -> RuleSelection | str:
+    """The run's scope from a caller's ``rules``/``exclude_rules`` pair, or why the pair is
+    invalid. Neither leaves the base config's own selection in force."""
+    if rules is not None and exclude_rules is not None:
+        return BOTH_RULE_SCOPES
+    if rules is not None:
+        return SelectRules(tuple(rules))
+    if exclude_rules is not None:
+        return ExcludeRules(tuple(exclude_rules))
+    return InheritRules()
 
 
 
@@ -103,7 +133,7 @@ def _merge_rule_skips(left: dict[str, str], right: dict[str, str]) -> dict[str, 
         to_ret[k] = v
     return to_ret
 
-class RuleSelection(TypedDict):
+class RuleSelectionRecord(TypedDict):
     sort: Literal["exclude", "include"]
     selector: list[str]
 
@@ -111,7 +141,7 @@ class ProverRunLog(TypedDict):
     tool_call_id: str
     prover_results: list[tuple[RulePath, StatusCodes]]
     spec_digest: str
-    rules: RuleSelection | None
+    rules: RuleSelectionRecord | None
     sort: Literal["run"]
     declared_rules: list[str]
     state_digest: str
@@ -496,8 +526,7 @@ def setup_prover_config_in(
     spec_contents: str,
     spec_stem: str | None = None,
     main_contract: str,
-    rule: list[str] | None,
-    exclude_rule: list[str] | None,
+    rules: RuleSelection,
     conf_dir: Path = CERTORA_DIR,
     **config_extra
 ):
@@ -507,16 +536,15 @@ def setup_prover_config_in(
         name=spec_stem
     ) as generated_path:
         config = prover_config_overlay(
-            config, main_contract=main_contract, verify_target=f"{main_contract}:{generated_path}"
+            config,
+            main_contract=main_contract,
+            verify_target=f"{main_contract}:{generated_path}",
+            extra=config_extra,
+            rules=rules,
         )
-        config.update(config_extra)
-        if rule is not None:
-            config["rule"] = rule
-        if exclude_rule is not None:
-            config["exclude_rule"] = exclude_rule
         with temp_certora_file(
             root=working_dir,
-            content=json.dumps(config, indent=2),
+            content=dump_conf(config),
             ext="conf",
             name=spec_stem,
             prefix="verify",
@@ -556,8 +584,9 @@ def get_prover_tool(
         ):
             return "Cannot call the verify_spec tool in parallel with other tool calls. verify_spec must be the only tool you call in a turn"
 
-        if rules is not None and exclude_rules is not None:
-            return "Cannot invoke the prover with both `rules` and `exclude_rules` set to non-none"
+        selection = rule_selection(rules, exclude_rules)
+        if isinstance(selection, str):
+            return selection
 
         spec = state["curr_spec"]
         if spec is None:
@@ -599,8 +628,7 @@ def get_prover_tool(
                 spec_contents=spec,
                 conf_dir=conf_dir,
                 config=conf,
-                rule=None,
-                exclude_rule=None,
+                rules=InheritRules(),
                 msg=""
             ) as (config_path, _ignored):
                 try:
@@ -617,8 +645,7 @@ def get_prover_tool(
                 spec_contents=spec,
                 conf_dir=conf_dir,
                 config=conf,
-                rule=rules,
-                exclude_rule=exclude_rules,
+                rules=selection,
                 msg=prover_msg
             ) as (config_path, config):
                 async with sem:

@@ -41,7 +41,8 @@ from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, Built, platform_tools_instal
 from composer.cargo.session import CargoSession, Warmed
 from composer.prover.core import make_prover_options
 from composer.sandbox.config import SandboxConfig
-from composer.spec.cvlr.conf import SelectRules, load_base, tools_version
+from composer.prover.conf import SelectRules
+from composer.spec.cvlr.conf import load_base, tools_version
 from composer.spec.cvlr.prover import (
     BuildRejected,
     Checked,

@@ -1,9 +1,7 @@
-"""Read a Solana prover conf and layer one run's settings onto it.
+"""Choose a Solana project's prover conf and layer one run's settings onto it.
 
-Confs are JSON5. Real ones have trailing commas and comments, and both the recommended starting
-point's ``confs/run.conf`` and the public examples' ``Default.conf`` fail ``json.loads``. Integers
-stay strings. Real confs write ``"loop_iter": "1"``, and retyping them on a round-trip would
-rewrite the project's file. ``certoraRun`` parses them the same way.
+Reading, writing, and layering are :mod:`composer.prover.conf`. This module is the Solana policy
+on top: which conf is the base, what a run owns, and the settings a run may escalate to.
 
 The project's conf is the base, as in
 :func:`composer.spec.source.prover.prover_config_overlay`. The run owns the keys in
@@ -28,27 +26,23 @@ value stops the prover from also applying the package's own declaration.
 """
 
 import hashlib
-import io
-import json
 import logging
-import re
-import string
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import json5
+from composer.prover.conf import (
+    Conf, InheritRules, RuleSelection, dump_conf, flag_name, merge_prover_args, overlay,
+    read_conf, safe_msg, str_list,
+)
 
 _log = logging.getLogger(__name__)
-
-#: A parsed conf: the top-level JSON object, with integers kept as strings.
-type Conf = dict[str, object]
 
 #: Conf keys the run always decides, whatever the base says. ``files`` is in the set because it
 #: is removed. The prover refuses a build script that sets files when the conf already names
 #: some, so a base conf naming a prebuilt ``.so`` and a run building from sources cannot both
 #: be kept.
 #:
-#: ``rule`` is not here. :data:`RuleSelection` has three answers, and inheriting the base's
+#: ``rule`` is not here. :data:`RuleSelection` has several answers, and inheriting the base's
 #: selection is one of them.
 #:
 #: ``server`` is owned because the deployment decides which cloud a run reaches and passes it on
@@ -78,29 +72,6 @@ TEMPLATE_BASE: Conf = {
     "cargo_tools_version": "v1.43",
     "rule_sanity": "basic",
 }
-
-
-class MalformedConf(ValueError):
-    """A conf file could not be read as JSON5."""
-
-
-def parse_conf(text: str) -> Conf:
-    """Parse conf text the way ``certoraRun`` does: JSON5, integers as strings.
-
-    Duplicate keys are rejected, as they are there. A conf that sets ``loop_iter`` twice has two
-    values, and neither the prover nor a reader can tell which was meant.
-    """
-    try:
-        parsed = json5.load(io.StringIO(text), allow_duplicate_keys=False, parse_int=str)
-    except ValueError as exc:
-        raise MalformedConf(str(exc)) from exc
-    if not isinstance(parsed, dict):
-        raise MalformedConf(f"conf is a {type(parsed).__name__}, not an object")
-    return parsed
-
-
-def read_conf(path: Path) -> Conf:
-    return parse_conf(path.read_text())
 
 
 #: The project's base conf, in the order a run prefers them, inside the harness's ``confs/``
@@ -149,35 +120,6 @@ def load_base(path: Path | None) -> Conf:
     return read_conf(path)
 
 
-def _flag(arg: str) -> str:
-    """The flag a ``prover_args`` entry sets: its first token.
-
-    Entries are strings like ``"-solanaTACOptimize 2"``. The same flag at two values differs only
-    after the space. Merging on the whole string keeps both and lets the prover pick. Merging on
-    the flag is what makes an overlay replace the base value."""
-    return arg.split(maxsplit=1)[0]
-
-
-def merge_prover_args(base: list[str], overlay: list[str]) -> list[str]:
-    """``base`` with ``overlay``'s flags overriding, base order preserved, new flags appended."""
-    replacements = {_flag(a): a for a in overlay}
-    merged = [replacements.pop(_flag(a), a) for a in base]
-    return merged + [a for a in overlay if a in replacements.values()]
-
-
-def _str_list(value: object) -> list[str]:
-    """A conf field the CLI declares as a list, when a conf wrote one string.
-
-    ``certoraRun`` accepts both spellings, and both appear in real confs."""
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [value] if value.strip() else []
-    if isinstance(value, list):
-        return [str(v) for v in value]
-    return []
-
-
 def tools_version(conf: Conf) -> str | None:
     """The platform-tools version this conf asks for.
 
@@ -201,34 +143,7 @@ DEFAULT_FEATURE = "certora"
 
 
 def cargo_features(conf: Conf) -> tuple[str, ...]:
-    return tuple(_str_list(conf.get("cargo_features")))
-
-
-@dataclass(frozen=True)
-class InheritRules:
-    """Check whatever the base conf selects: its ``rule`` entry, or every rule when it has none.
-
-    The default when a run has not named rules of its own. The project's conf already says which
-    rules to run."""
-
-
-@dataclass(frozen=True)
-class SelectRules:
-    """Check these rules. Names are globs, which is how a parametric rule's instances are named."""
-
-    names: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class AllRules:
-    """Check every rule the artifact declares, dropping a narrower ``rule`` list in the base.
-
-    Against a base that names three of thirty rules, :class:`InheritRules` runs three and this
-    runs thirty. Treating "no rules given" as either one would check a different set than the
-    run reports."""
-
-
-type RuleSelection = InheritRules | SelectRules | AllRules
+    return tuple(str_list(conf.get("cargo_features")))
 
 
 @dataclass(frozen=True)
@@ -246,29 +161,10 @@ class RunOverlay:
     #: Added to whatever the base conf already names. Empty leaves the key unset, so the package's
     #: ``[package.metadata.certora]`` declaration still applies.
     summaries: tuple[Path, ...] = ()
-    #: Extra keys, applied last. For settings that are not one of the fields above, such as
-    #: ``multi_assert_check`` or a caller forcing ``rule_sanity``.
+    #: Extra keys, written over the fields above. For settings that are not one of them, such as
+    #: ``multi_assert_check`` or a caller forcing ``rule_sanity``. ``prover_args`` is merged with
+    #: the base's by flag, not replaced.
     extra: Conf = field(default_factory=dict)
-
-
-#: Characters ``certoraRun`` accepts in ``msg``. A subset of what the CLI permits today, so a
-#: narrower CLI set still accepts these. The CLI raises on anything outside its set before any
-#: rule is processed.
-_MSG_SAFE = set(string.ascii_letters) | set(string.digits) | set(" ,.:_-()[]'/")
-
-
-def safe_msg(msg: str) -> str:
-    """``msg`` reduced to what the prover accepts.
-
-    The message is built from a component's display name, which is prose. ``certoraRun`` rejects
-    characters outside :data:`_MSG_SAFE` before any rule is read. An ampersand is enough:
-    ``"Deposit & Balance Tracking"`` raises ``{'&'} not allowed in 'msg'``. The name is not in
-    the harness, so it cannot be fixed there.
-
-    Characters outside the set become spaces, so words do not run together, and runs of whitespace
-    collapse. Length is left to the CLI, which truncates with a warning.
-    """
-    return re.sub(r"\s+", " ", "".join(c if c in _MSG_SAFE else " " for c in msg)).strip()
 
 
 #: Vacuity-check settings that count as on. ``"none"`` is the documented way to turn the check
@@ -305,8 +201,8 @@ def has_solver_portfolio(conf: Conf) -> bool:
     A project that wrote these settings by hand, as the reference project does, is recognized as
     already having them. Appending the recipe again would duplicate the set.
     """
-    present = {_flag(a) for a in _str_list(conf.get("prover_args"))}
-    return all(_flag(a) in present for a in NONLINEAR_SOLVER_PORTFOLIO)
+    present = {flag_name(a) for a in str_list(conf.get("prover_args"))}
+    return all(flag_name(a) in present for a in NONLINEAR_SOLVER_PORTFOLIO)
 
 
 #: The one portfolio flag that repeats. Each ``-solvers`` entry adds a solver configuration
@@ -325,42 +221,14 @@ def with_solver_portfolio(conf: Conf, enabled: bool) -> Conf:
     lines are dropped and the portfolio's four replace them. A portfolio is one set, not a flag
     whose last value wins.
     """
-    args = _str_list(conf.get("prover_args"))
+    args = str_list(conf.get("prover_args"))
     if not enabled:
-        drop = {_flag(a) for a in NONLINEAR_SOLVER_PORTFOLIO}
-        return {**conf, "prover_args": [a for a in args if _flag(a) not in drop]}
-    solvers = [a for a in NONLINEAR_SOLVER_PORTFOLIO if _flag(a) == _REPEATABLE_FLAG]
-    rest = [a for a in NONLINEAR_SOLVER_PORTFOLIO if _flag(a) != _REPEATABLE_FLAG]
-    kept = [a for a in args if _flag(a) != _REPEATABLE_FLAG]
+        drop = {flag_name(a) for a in NONLINEAR_SOLVER_PORTFOLIO}
+        return {**conf, "prover_args": [a for a in args if flag_name(a) not in drop]}
+    solvers = [a for a in NONLINEAR_SOLVER_PORTFOLIO if flag_name(a) == _REPEATABLE_FLAG]
+    rest = [a for a in NONLINEAR_SOLVER_PORTFOLIO if flag_name(a) != _REPEATABLE_FLAG]
+    kept = [a for a in args if flag_name(a) != _REPEATABLE_FLAG]
     return {**conf, "prover_args": merge_prover_args(kept, rest) + solvers}
-
-
-def with_loop_iter(conf: Conf, iterations: int) -> Conf:
-    """``conf`` with a new loop bound, written as a string, which is how a conf spells an integer."""
-    return {**conf, "loop_iter": str(iterations)}
-
-
-def has_optimistic_loop(conf: Conf) -> bool:
-    """Whether ``conf`` assumes loops finish.
-
-    :data:`TEMPLATE_BASE` writes a JSON bool. A hand-written conf may spell it as a string, the
-    way ``loop_iter`` is spelled. Absent, or any other value, is false, the prover's default.
-    """
-    match conf.get("optimistic_loop"):
-        case bool(b):
-            return b
-        case str(s):
-            return s.strip().lower() == "true"
-        case _:
-            return False
-
-
-def with_optimistic_loop(conf: Conf, enabled: bool) -> Conf:
-    """``conf`` with the loop-halt assumption on or off, written as a JSON bool.
-
-    :data:`TEMPLATE_BASE` says when turning it on is warranted.
-    """
-    return {**conf, "optimistic_loop": enabled}
 
 
 def with_sanity_floor(conf: Conf) -> Conf:
@@ -375,7 +243,7 @@ def with_sanity_floor(conf: Conf) -> Conf:
     return {**conf, "rule_sanity": "basic"}
 
 
-def solana_conf(base: Conf, overlay: RunOverlay) -> Conf:
+def solana_conf(base: Conf, run: RunOverlay) -> Conf:
     """The conf for one ``certoraSolanaProver`` submission.
 
     ``base`` is not mutated. Every key in :data:`OVERLAY_OWNED_KEYS` is decided here. ``files``
@@ -383,33 +251,21 @@ def solana_conf(base: Conf, overlay: RunOverlay) -> Conf:
     fails inside the prover. ``rule`` follows :data:`RuleSelection`, which is where keeping the
     base value is a real answer.
     """
-    conf = {k: v for k, v in base.items() if k not in OVERLAY_OWNED_KEYS}
-    conf["build_script"] = str(overlay.build_script)
-    conf["msg"] = safe_msg(overlay.msg)
-    if overlay.summaries:
+    forced: Conf = {"build_script": str(run.build_script), "msg": safe_msg(run.msg)}
+    if run.summaries:
         # Kept beside the base's entries. Naming any value stops the prover from also applying
         # the package's [package.metadata.certora] declaration, so dropping the base's entries
         # would narrow what it reads.
-        conf["solana_summaries"] = list(
+        forced["solana_summaries"] = list(
             dict.fromkeys(
-                [*_str_list(base.get("solana_summaries")), *(str(s) for s in overlay.summaries)]
+                [*str_list(base.get("solana_summaries")), *(str(s) for s in run.summaries)]
             )
         )
-    match overlay.rules:
-        case SelectRules(names):
-            conf["rule"] = list(names)
-        case AllRules():
-            conf.pop("rule", None)
-        case InheritRules():
-            pass
-    for key, value in overlay.extra.items():
-        if key == "prover_args" and isinstance(value, list):
-            conf[key] = merge_prover_args(_str_list(base.get("prover_args")), _str_list(value))
-        else:
-            conf[key] = value
+    extra = dict(run.extra)
+    if isinstance(extra_args := extra.get("prover_args"), list):
+        extra["prover_args"] = merge_prover_args(
+            str_list(base.get("prover_args")), str_list(extra_args)
+        )
+    conf = overlay(base, drop=OVERLAY_OWNED_KEYS, forced=forced, extra=extra, rules=run.rules)
     return with_sanity_floor(conf)
 
-
-def dump_conf(conf: Conf) -> str:
-    """Serialize a conf for writing. Plain JSON. JSON5 is accepted on read and not written."""
-    return json.dumps(conf, indent=4) + "\n"
