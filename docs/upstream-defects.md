@@ -28,6 +28,11 @@ concrete fix we have already verified locally. `composer/spec/cvlr/env_paths.py`
 emit time and `composer/spec/cvlr/munge.py` works around T7 by writing the fork redirect the
 template omits; the rest are worked around by not reproducing them.
 
+**Group C — the CVLR crates.** The published `cvlr-*` releases the reference set pins. One entry, and
+it is the odd one here: not a bug but a release-cadence gap, recorded because its effect is a hard
+refusal and because nothing in this repository can work around it. It is also the only entry that
+gets *worse* with time rather than staying put.
+
 One note on naming, because it constrains how T2 is written up: this repository is public, so no
 client, project or repository names appear in it. T2 is about a canonical file that carries one, and
 the write-up gives the line number rather than the name.
@@ -52,6 +57,7 @@ the write-up gives the line number rather than the name.
 | [T6](#t6) | `[workspace.dependencies]` pins CVLR by hand | minor |
 | [T7](#t7) | Nothing points a new project at the Anchor fork it needs | **major** |
 | [T8](#t8) | A canonical summary is spelled for a `RawVec` symbol current toolchains no longer emit | major |
+| [C1](#c1) | `cvlr-solana` is bound to `solana-program` 2.2, so no program on the current Solana SDK can be scaffolded at all | **blocking** for every SDK 3.x target |
 
 ---
 
@@ -950,3 +956,69 @@ it, since older toolchains still emit the old name. More usefully, a way to *rep
 binds to no symbol would have caught this the first time it went stale — `composer/cargo/symbols.py`
 exists here for exactly that reason and could be pointed at the canonical files, not just at
 author-written ones.
+
+---
+
+## C1
+
+### `cvlr-solana` is bound to `solana-program` 2.2, so a program on the current SDK cannot be scaffolded at all
+
+**Effect: every program on the Solana SDK 3.x line is refused before a single rule is authored.**
+Not a degraded run or a silent misconfiguration — [`_check_platform`](../composer/spec/cvlr/scaffold.py)
+returns `Blocked`, and a plan carrying one applies nothing.
+
+`cvlr-solana` 0.5.0 declares its platform dependency as:
+
+```toml
+[dependencies.solana-program]
+version = "2.2"
+```
+
+Read from the registry checkout, not from the repository. **0.5.0 is the newest release on
+crates.io** (published 2026-01-16; 0.4.5 the same day, 0.4.4 before that in April 2025). So there is
+no CVLR line to move *to*.
+
+The refusal, from a scaffold dry run against `solana-program/stake` at `main`:
+
+```
+BLOCKED Cargo.toml: this project builds solana-account-info 3.1.1, but the CVLR releases the
+reference set names are bound to solana-program 2.x (the last monolithic line) — and each
+generation has its own AccountInfo type, so the pairing does not compile rather than merely
+warning.
+```
+
+The gate is right to refuse. `solana-program` 2.2 re-exports `solana-account-info` **2.x**; a program
+built against `solana-account-info` 3.1.1 has a different `AccountInfo` type, and handing one of its
+accounts to a CVLR helper is a type error, not a version warning.
+
+**This is not one project's problem.** Two live, maintained Solana Foundation programs were measured
+and both are on the same generation:
+
+| target | platform pins | outcome |
+|---|---|---|
+| `solana-program/stake` | `solana-account-info` 3.1.1 | `Blocked` |
+| `solana-program/token-wrap` | `solana-account-info` 3.1.1, `solana-pubkey` 4.2.0, `solana-cpi` 3.1.0 | same `Blocked` |
+
+It went unnoticed because every project in the development corpus is on `solana-program` 2.x or
+1.18. Pointing the backend at a program somebody is still shipping is what surfaced it, and it will
+refuse the next such target too.
+
+**Distinct from T1, and not covered by its workaround.** T1 is about directives *spelled* for paths
+that no longer define anything, and `composer/spec/cvlr/env_paths.py` fixes it at emit time by
+respelling them — confirmed working here, twelve aliases in force on this target. Respelling a
+directive is a text substitution. It cannot reconcile two incompatible `AccountInfo` types in one
+dependency graph, which is a compile-time fact about the crates.
+
+**Currently worked around by not using current code.** `docs/stake-benchmark.md` records the
+benchmark this blocked and the route taken: check out the last commit before the target moved to SDK
+3.0 — roughly a year and several hundred commits behind `main`. That works for a benchmark, where a
+snapshot is defensible if it is declared. It does not work for a client on code they are shipping,
+and it expires: the gap widens every time a maintained program bumps its SDK.
+
+Fix: a `cvlr-solana` release line per platform generation, which is how
+[`cvlr_reference.py`](../composer/spec/cvlr_reference.py) already models the world —
+`PlatformGeneration` exists precisely because a chain crate implies a generation. Widening the
+existing pin is not enough on its own: the identity of `AccountInfo` comes from the crate that
+defines it, so one release cannot satisfy both generations regardless of how the facade is pinned.
+Until such a release exists, `ChainReference.platform` is documentation of a constraint rather than
+a choice anyone can make.
