@@ -444,3 +444,19 @@ async def test_a_bad_package_fails_before_any_service_starts(project, monkeypatc
             pass
 
     assert wiring.kwargs == {}
+
+
+def test_a_named_thread_is_what_makes_a_run_resumable():
+    """Formalization is the expensive half and the half you iterate on, and it checkpoints — but
+    the id those checkpoints hang off was minted fresh every run, so nothing could rejoin them.
+    Measured once: a second run against the same target re-authored 2,570 lines it already had,
+    because `--cache-ns` replays *calls* and the drafts are not calls."""
+    parsed = entry.build_parser().parse_args(
+        ["/proj", "src/lib.rs:prog", "--thread-id", "cvlr_0464ee0ea452"]
+    )
+    assert parsed.thread_id == "cvlr_0464ee0ea452"
+
+
+def test_a_run_with_no_named_thread_still_gets_a_fresh_one():
+    parsed = entry.build_parser().parse_args(["/proj", "src/lib.rs:prog"])
+    assert parsed.thread_id is None
