@@ -50,7 +50,7 @@ from composer.diagnostics.stream import (
 )
 from composer.authoring.state import make_validation_stamper, spec_digest
 from composer.spec.cvl_generation import CVLGenerationState
-from composer.diagnostics.budget import exhausted_constraint, raise_budget_exceeded
+from composer.diagnostics.budget import budget_pressure, exhausted_constraint, raise_budget_exceeded
 from composer.diagnostics.timing import RunSummary, get_run_summary
 from graphcore.graph import tool_state_update
 from composer.spec.util import temp_certora_file
@@ -97,6 +97,9 @@ def prover_config_overlay(base_config: dict, *, main_contract: str, verify_targe
 DELETE_SKIP = "__delete_skip"
 
 VALIDATION_KEY = "prover"
+
+# How often the idle collect wait wakes to re-check the budget wrap-up guard while no job has finished.
+_IDLE_WAIT_TICK = 15.0
 
 def _merge_rule_skips(left: dict[str, str], right: dict[str, str]) -> dict[str, str]:
     to_ret = left.copy()
@@ -995,18 +998,24 @@ def get_prover_tool(
             while not done_queue.empty():
                 drained.append(done_queue.get_nowait())
             if not drained and wait and any(not j.task.done() for j in buffer_jobs.values()):
-                # Idle wait: nothing else to do, sleep until one job finishes. Unbounded, but every job is
-                # guaranteed to land on the queue — run_prover self-bounds its subprocess, and a crash is
-                # caught and enqueued as an error — so this can't hang on a wedged job.
-                drained.append(await done_queue.get())
+                # Idle wait, bounded so budget wrap-up pressure can interrupt it: wait for a job to land,
+                # re-checking the wrap-up guard each tick, so once pressured the agent still gets its
+                # wrap-up window instead of blocking here.
+                while any(not j.task.done() for j in buffer_jobs.values()) and not budget_pressure():
+                    try:
+                        drained.append(await asyncio.wait_for(done_queue.get(), _IDLE_WAIT_TICK))
+                        break
+                    except TimeoutError:
+                        continue
                 while not done_queue.empty():
                     drained.append(done_queue.get_nowait())
 
-            # Cancel jobs left running against a now-stale digest: a shared buffer they import was edited, so
-            # their result would be discarded anyway — and on local runs a doomed job needlessly holds the
-            # single prover slot. The agent re-submits them (they show under needs-(re)submission below).
+            # Cancel a still-running job whose buffer was deleted, or that runs against a now-stale digest
+            # (a shared buffer it imports was edited): its result would be discarded anyway, and on local
+            # runs a doomed job needlessly holds the single prover slot. The agent re-submits the stale
+            # ones (they show under needs-(re)submission below).
             for key, j in list(buffer_jobs.items()):
-                if not j.task.done() and j.name in buffers and j.digest != cur_digest(j.name):
+                if not j.task.done() and (j.name not in buffers or j.digest != cur_digest(j.name)):
                     j.task.cancel()
                     buffer_jobs.pop(key, None)
 
