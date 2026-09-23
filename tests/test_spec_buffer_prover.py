@@ -158,7 +158,8 @@ def _put_shared(cvl: str):
 
 def _prover_complete(st: StateWithSkips) -> str | None:
     return check_buffer_completion(
-        st["buffers"], st["validations"], ["prover"], skipped=[], version_history=[]
+        st["buffers"], st["validations"], ["prover"], skipped=[], version_history=[],
+        config=st["config"],
     )
 
 
@@ -188,7 +189,7 @@ class TestBufferSubmitCollect:
         ).run()
 
         def digest(n: str) -> str:
-            return buffer_state_digest(st["buffers"], n, version_history=[])
+            return buffer_state_digest(st["buffers"], n, version_history=[], config=st["config"])
 
         assert st["validations"].get("prover:easy") == digest("easy")
         assert st["validations"].get("prover:hard") == digest("hard")
@@ -207,7 +208,7 @@ class TestBufferSubmitCollect:
         easy_runs = [c for c in certora_prover.calls if "easy" in str(c.conf.get("verify", ""))]
         assert len(easy_runs) == 1, f"expected one prover run for easy, got {len(easy_runs)}"
         assert st["validations"].get("prover:easy") == buffer_state_digest(
-            st["buffers"], "easy", version_history=[]
+            st["buffers"], "easy", version_history=[], config=st["config"]
         )
 
     async def test_rule_stripe_unions_to_completion(self, certora_prover: ProverMock):

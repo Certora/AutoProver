@@ -78,6 +78,12 @@ def certora_relative_to_project(p: str) -> Path:
     return CERTORA_DIR / p
 
 
+def component_specs_dir(slug: str) -> Path:
+    """Project-relative dir a component's buffers occupy: ``certora/specs/<slug>/`` — one dir per
+    component, so two components' same-named buffers never share a path."""
+    return SPECS_DIR / slug
+
+
 def import_statement_for(resource_path: Path, importer_dir: Path) -> str:
     """CVL import path to *resource_path* as seen from a spec located in
     *importer_dir* (both project-root-relative).

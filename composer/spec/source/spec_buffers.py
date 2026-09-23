@@ -15,6 +15,7 @@ importers.
 ``NamedBuffer`` is the value object: one buffer's text plus its metadata.
 """
 
+import json
 import os
 import posixpath
 import re
@@ -182,11 +183,18 @@ def run_targets(buffers: Mapping[str, NamedBuffer]) -> list[NamedBuffer]:
 SKIPS_VALIDATION_KEY = "skips_review"
 
 
+# Prover-conf keys that name the run, not the configuration itself: which spec/rules to run and the run
+# label. They vary per buffer and per striped sub-run, so they are stripped before the remaining config
+# parameters key a buffer's digest; every other config field stays in.
+_DIGEST_VOLATILE_KEYS: frozenset[str] = frozenset({"verify", "rule", "exclude_rule", "msg"})
+
+
 def buffer_state_digest(
     buffers: Mapping[str, NamedBuffer],
     name: str,
     *,
     version_history: Sequence[str],
+    config: Mapping[str, object] | None = None,
     include_claim: bool = False,
 ) -> str:
     """The per-buffer analogue of ``spec_digest``: a buffer's content + import closure bound to the
@@ -200,8 +208,14 @@ def buffer_state_digest(
     With ``include_claim`` the buffer's declared ``property_rules`` also key the digest, so re-assigning
     a claim re-triggers review. The feedback stamp sets it (the judge reviews a buffer against the
     properties it claims); the prover stamp leaves it False (a claim change does not affect what was
-    verified)."""
+    verified).
+
+    ``config`` (the prover configuration, minus :data:`_DIGEST_VOLATILE_KEYS`) also keys the digest, so a
+    config edit re-verifies every buffer under the new configuration."""
     extra = [f"edit:{e}" for e in version_history]
+    if config:
+        config_params = {k: v for k, v in config.items() if k not in _DIGEST_VOLATILE_KEYS}
+        extra.append(f"config:{json.dumps(config_params, sort_keys=True)}")
     if include_claim:
         claim = ";".join(
             f"{t}={','.join(rs)}" for t, rs in sorted(buffers[name].property_rules.items())
@@ -233,6 +247,7 @@ def check_buffer_completion(
     *,
     skipped: Sequence[tuple[str, str]],
     version_history: Sequence[str],
+    config: Mapping[str, object] | None = None,
 ) -> str | None:
     """None if every run-target buffer carries each required validation (e.g. ``feedback``, ``prover``)
     stamped at its current digest AND (when anything is skipped) the single skip review is current, else
@@ -248,7 +263,7 @@ def check_buffer_completion(
             # The feedback stamp tracks a buffer's claimed properties (the judge reviews against them);
             # the prover stamp does not.
             d = buffer_state_digest(
-                buffers, b.name, version_history=version_history,
+                buffers, b.name, version_history=version_history, config=config,
                 include_claim=(key == FEEDBACK_VALIDATION_KEY),
             )
             if validations.get(f"{key}:{b.name}") != d:

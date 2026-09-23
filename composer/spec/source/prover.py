@@ -54,7 +54,7 @@ from composer.diagnostics.budget import exhausted_constraint, raise_budget_excee
 from composer.diagnostics.timing import RunSummary, get_run_summary
 from graphcore.graph import tool_state_update
 from composer.spec.util import temp_certora_file
-from composer.spec.gen_types import CERTORA_DIR, SPECS_DIR
+from composer.spec.gen_types import CERTORA_DIR, SPECS_DIR, component_specs_dir
 from composer.spec.util import string_hash
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.spec_buffers import (
@@ -385,6 +385,7 @@ def completing_run_links(
     buffers: Mapping[str, NamedBuffer],
     *,
     version_history: Sequence[str],
+    config: Mapping[str, object] | None = None,
 ) -> list[str]:
     """The prover-run links whose completed results compose the run-target buffers at their current
     digests — the same runs :func:`buffer_is_complete` considers. Rule-striping runs one buffer's rules
@@ -394,7 +395,7 @@ def completing_run_links(
     seen: set[str] = set()
     for b in run_targets(buffers):
         digest = buffer_state_digest(
-            buffers, b.name, version_history=version_history,
+            buffers, b.name, version_history=version_history, config=config,
         )
         for elem in reversed(_history_for_buffer(prover_history, b.name)):
             if elem["sort"] != "run":
@@ -677,7 +678,7 @@ def materialize_buffers(
     ``import "../summaries/X.spec"`` resolves to the shared summaries a level up), and yield
     ``name -> on-disk spec path``; every file is removed on exit. The run owns its materialized project
     folder, so the deterministic filenames never collide with a concurrent job's."""
-    dest_dir = SPECS_DIR / slug
+    dest_dir = component_specs_dir(slug)
     with ExitStack() as stack:
         yield {
             name: stack.enter_context(
@@ -883,7 +884,7 @@ def get_prover_tool(
 
         def _cur_digest(state: StateWithSkips, buffers: Mapping[str, NamedBuffer], name: str) -> str:
             return buffer_state_digest(
-                buffers, name, version_history=state["version_history"],
+                buffers, name, version_history=state["version_history"], config=state["config"],
             )
 
         def _buffer_complete_at(

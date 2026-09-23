@@ -174,6 +174,7 @@ class PublishResultTool(
         if (err := check_buffer_completion(
             buffers, self.state["validations"], self.state["required_validations"],
             skipped=skipped_pairs, version_history=self.state["version_history"],
+            config=self.state["config"],
         )) is not None:
             return err
         with self.tool_deps() as titles:
@@ -189,7 +190,10 @@ class PublishResultTool(
         declared_by_buffer = {
             b.name: declared_rules_at(
                 self.state["prover_history"],
-                buffer_state_digest(buffers, b.name, version_history=self.state["version_history"]),
+                buffer_state_digest(
+                    buffers, b.name, version_history=self.state["version_history"],
+                    config=self.state["config"],
+                ),
             )
             for b in run_targets(buffers)
         }
@@ -729,7 +733,9 @@ class EditorAwareFeedbackTool(
         all_props = self._all_properties()
 
         def digest(name: str) -> str:
-            return buffer_state_digest(buffers, name, version_history=vh, include_claim=True)
+            return buffer_state_digest(
+                buffers, name, version_history=vh, config=self.state["config"], include_claim=True,
+            )
 
         new_stamps: dict[str, str] = {}
         blocks: list[str] = []
@@ -1174,7 +1180,7 @@ async def batch_cvl_generation(
     # striped/per-buffer runs are all reachable from the result.
     run_links = completing_run_links(
         res_state["prover_history"], res_state.get("buffers") or {},
-        version_history=res_state["version_history"],
+        version_history=res_state["version_history"], config=res_state["config"],
     )
     generated = GeneratedCVL(
         commentary=res_state["result"],
@@ -1187,7 +1193,7 @@ async def batch_cvl_generation(
         vfs=res_state["vfs"],
         applied_edits=applied_edits,
         spec_files={name: b.cvl for name, b in _buffers.items()},
-        run_target_buffers=[b.name for b in run_targets(_buffers)],
+        entrypoint_specs=[b.name for b in run_targets(_buffers)],
     )
     if res_state["budget_curtailed"]:
         # Published under lifted gates: hand it back as an explicitly unreliable partial.

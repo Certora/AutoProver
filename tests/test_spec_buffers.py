@@ -256,6 +256,21 @@ def test_feedback_digest_tracks_claim_but_prover_digest_does_not():
         buffer_state_digest(reclaimed, "easy", **kw)                       # prover: unchanged
 
 
+def test_buffer_state_digest_keys_on_config_params_not_run_keys():
+    # A config edit (a compilation/prover parameter) changes the digest, so a config change re-verifies
+    # the buffer; the per-run keys (which spec/rules to run, the run label) do not — they name the run,
+    # not the configuration.
+    b = _buffers()
+    base = {"files": ["src/Foo.sol"]}
+    d0 = buffer_state_digest(b, "easy", version_history=[], config=base)
+    # a real config parameter differs -> digest changes (re-verify under the new config)
+    assert d0 != buffer_state_digest(b, "easy", version_history=[], config={"files": ["src/Bar.sol"]})
+    # only volatile per-run keys differ -> digest unchanged
+    volatile = {**base, "verify": "C:certora/specs/easy.spec", "rule": ["r_easy"],
+                "exclude_rule": ["x"], "msg": "a label"}
+    assert d0 == buffer_state_digest(b, "easy", version_history=[], config=volatile)
+
+
 def test_buffer_completion_rejects_stale_feedback_after_claim_change():
     # A feedback stamp taken before a claim change is stale for completion; the prover stamp is not.
     b = _buffers()

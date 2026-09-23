@@ -17,7 +17,7 @@ from composer.diagnostics.timing import RunSummary
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.cvl_generation import GeneratedCVL
 from composer.spec.gen_types import (
-    AP_REPORT_DIR, AUTOPROVE_INTERNAL_DIR, CERTORA_DIR, SPECS_DIR, under_project,
+    AP_REPORT_DIR, AUTOPROVE_INTERNAL_DIR, CERTORA_DIR, component_specs_dir, under_project,
 )
 from composer.spec.source.prover import prover_config_overlay
 from composer.spec.util import ensure_dir
@@ -57,7 +57,16 @@ class ComponentSpec:
     def run_key(self) -> str:
         """Key under which this spec's prover run is recorded in the run-link map."""
         return self.slug
-    
+
+    @property
+    def specs_dir(self) -> Path:
+        """Project-relative dir this component's buffers occupy."""
+        return component_specs_dir(self.slug)
+
+    def buffer_spec_rel(self, name: str) -> str:
+        """Project-relative path of buffer ``name``'s ``.spec`` under this component's spec dir."""
+        return (self.specs_dir / f"{name}.spec").as_posix()
+
     @property
     def artifact_file(self) -> str:
         return self.spec_filename
@@ -83,22 +92,18 @@ class ProverArtifactStore(ArtifactStore[ComponentSpec, GeneratedCVL]):
 
     @override
     def write_artifact(self, i: ComponentSpec, artifact: GeneratedCVL) -> Path:
-        """Persist the component's proved artifacts as the files the prover actually ran — each buffer as
-        its own ``.spec`` under ``certora/specs/<slug>/`` and a ``.conf`` per run-target buffer — rather
-        than one concatenated document. The buffers import the shared ``certora/specs/summaries/`` a level
-        up, already written (once, for the whole run) by the summaries phase. Also writes the base store's
-        non-spec outputs (commentary, property map). Returns the component's spec directory."""
-        specs_root = self._deliverable_dir() / "specs" / i.slug
+        specs_root = under_project(self._project_root, i.specs_dir)
+        # Every spec -- entrypoints and the shared specs they import -- as its own file.
         for name, cvl in artifact.spec_files.items():
             _write_checked(specs_root / f"{name}.spec", cvl)
         if artifact.config is not None:
             confs_root = ensure_dir(self._deliverable_dir() / "confs" / i.slug)
-            for name in artifact.run_target_buffers:
-                spec_rel = (SPECS_DIR / i.slug / f"{name}.spec").as_posix()
+            # A runnable .conf for each entrypoint (shared specs are imported, not run directly).
+            for name in artifact.entrypoint_specs:
                 conf = prover_config_overlay(
                     artifact.config,
                     main_contract=self._main_contract,
-                    verify_target=f"{self._main_contract}:{spec_rel}",
+                    verify_target=f"{self._main_contract}:{i.buffer_spec_rel(name)}",
                 )
                 _write_checked(confs_root / f"verify_{name}.conf", json.dumps(conf, indent=2))
         else:
