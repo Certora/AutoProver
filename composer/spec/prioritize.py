@@ -38,12 +38,6 @@ from composer.templates.loader import load_jinja_template
 
 _log = logging.getLogger(__name__)
 
-#: What a property the user actually raised is worth against one we inferred unaided. A bounded
-#: boost rather than a tiebreak or a dominator: a flagged concern should win at a comparable
-#: score, but should not drag a trivial property past a critical one.
-CRITICAL_MATCH_BONUS = 15
-
-
 class RankedProperty(BaseModel):
     """One candidate property, scored."""
     key: PropertyKey = Field(
@@ -53,11 +47,14 @@ class RankedProperty(BaseModel):
     score: int = Field(
         ge=0, le=100,
         description="How badly the protocol is hurt if this property does not hold. Score the "
-        "consequence of a violation, not how hard the property looks to verify.",
+        "consequence of a violation, not how hard the property looks to verify. The highest "
+        "score decides which claim the run pursues.",
     )
     critical_match: bool = Field(
-        description="True if this property corresponds to a concern the reader of the design "
-        "document, threat model, or supplied notes explicitly raised."
+        description="True only if the design document, threat model, or supplied notes "
+        "explicitly ask for this property to be checked, or explicitly call it critical or most "
+        "important. A document that only describes the feature, lists the component, or names "
+        "the mechanism does not count."
     )
     rationale: str = Field(
         description="One or two sentences justifying the score. Say what breaks if the "
@@ -90,15 +87,18 @@ class PropertyRanking(BaseModel):
     )
     justification: str = Field(
         description="Two to four sentences on which claim came out on top and why it is the one "
-        "worth proving."
+        "worth proving. It must be the group holding your highest-scoring property."
     )
 
 
-def priority(rp: RankedProperty) -> int:
-    """What the run sorts on. The scoring model reports two things it can judge — how much the
-    property matters, and whether the reader asked for it — and this is the one place their
-    trade-off is decided, so it is reviewable and the artifact can never disagree with the pick."""
-    return rp.score + (CRITICAL_MATCH_BONUS if rp.critical_match else 0)
+def priority(rp: RankedProperty) -> tuple[int, bool]:
+    """What the run sorts on: the score, with ``critical_match`` breaking exact ties only.
+
+    The score is the model's whole judgement of a property's importance; the prompt asks it to
+    count an explicit request from the documents inside that score. So the flag never reorders
+    two properties the model scored differently, and the pick always agrees with the scores the
+    artifact records."""
+    return (rp.score, rp.critical_match)
 
 
 @dataclass(frozen=True)
@@ -200,8 +200,9 @@ def select(candidates: Sequence[Candidate], r: PropertyRanking) -> Selection:
     property, which is the claim worth the run.
 
     A group is worth what its best member is worth, so the single most important property still
-    decides, and whatever else states the same claim comes with it. ``max`` keeps the first of
-    equal-priority entries, so the model's own ordering breaks ties — but the choice is ours,
+    decides, and whatever else states the same claim comes with it. Between equal scores a
+    ``critical_match`` property wins (:func:`priority`); ``max`` keeps the first of entries that
+    are still equal, so the model's own ordering breaks the rest — but the choice is ours,
     which is what makes ``property_ranking.json`` and the run's actual subject the same thing by
     construction.
 
@@ -214,7 +215,7 @@ def select(candidates: Sequence[Candidate], r: PropertyRanking) -> Selection:
     home = next(c for c in candidates if c.label == best.key[0])
 
     by_priority = {rp.key: priority(rp) for rp in r.ranked}
-    members = sorted(group.members, key=lambda k: -by_priority[k])
+    members = sorted(group.members, key=lambda k: by_priority[k], reverse=True)
     return Selection(home.unit_index, [k[1] for k in members], group.claim, r)
 
 
