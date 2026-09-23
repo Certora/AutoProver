@@ -1,4 +1,4 @@
-"""A base model for structured LLM output that accepts JSON-encoded containers.
+"""A base model for structured LLM output that accepts JSON-encoded lists and objects.
 
 A model answering through a forced tool call sometimes encodes a list or object argument as a
 JSON string (``"groups": "[{...}]"`` instead of ``"groups": [{...}]``). The content is right; only
