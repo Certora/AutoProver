@@ -432,6 +432,26 @@ the portfolio, 4.6 minutes with every rule verified with it
 ([upstream-defects.md](./upstream-defects.md) P8, postscript). That rig is the measurement to
 repeat.
 
+**U17. A run that withheld a CVLR specialization does not say so in the report.**
+`ChainReference.withholding` lets a run keep a specialization out of the target, for the case where
+the target *is* the program that specialization models — verifying the stake program with
+`cvlr-solana-stake` in scope hands the author a model of the instructions it was asked to specify
+([stake-benchmark.md](./stake-benchmark.md)). The narrowing is visible while the run happens:
+`CvlrPreflight.describe()` logs it, and the withheld crate shows up in the gap list as "not a
+dependency of this project". It is not in the artifact a reader keeps, so a benchmark number
+published from such a run does not state the reference set that produced it, and a second run under
+the default set is not obviously a different experiment.
+
+**The nearest precedent was deliberately dropped, and this should not quietly undo it.** The
+`build_environment` field — same shape, recording whether a run's builds were confined — was removed
+before review on the grounds that *nothing reads it* (cvlr-landing-plan.md, "Dropped: reporting
+whether the builds were confined"). That argument holds here too for as long as the withholding flag
+is used by one benchmark on one branch. What would change it is a published comparison: a number
+someone outside this repository is asked to trust needs its conditions attached, and that is a
+reader the confinement field never had. So this is a workitem conditional on the benchmark actually
+publishing, not a gap to close on general principle — and whoever picks it up should reread that
+dropped section first rather than treating the absence as an oversight.
+
 ---
 
 ## Blocked on upstream
