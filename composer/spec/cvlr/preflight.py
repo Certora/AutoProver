@@ -213,7 +213,7 @@ async def gate_workspace(
             f"could not fetch the dependency graph for {pre.workspace_root} "
             f"(exit {warmed.exit_code}):\n{warmed.diagnostics}"
         )
-    run = await session.check(package=pre.package, features=features)
+    run = await session.check(manifest_dir=pre.package_dir, features=features)
     _log.info(
         "preflight gate: %s in %dms%s",
         "ok" if run.ok else "FAILED",

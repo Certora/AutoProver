@@ -144,6 +144,13 @@ class HarnessTarget:
         """The feature set every build of this unit uses — the harness, plus this unit's module."""
         return (DEFAULT_FEATURE, self.unit.feature)
 
+    @property
+    def package_dir(self) -> Path:
+        """The package's directory relative to the session's workdir, which is how a build is told
+        which package to compile.
+        """
+        return self.package_root.relative_to(self.session.workdir)
+
     @asynccontextmanager
     async def build_slot(self) -> AsyncIterator[None]:
         """Serialize staging and the cargo invocation that follows it.
@@ -423,7 +430,7 @@ class CargoCheck(
                     draft, self.state["summaries"], self.state["munges"]
                 )
                 run = await target.session.check(
-                    package=target.package, features=target.features
+                    manifest_dir=target.package_dir, features=target.features
                 )
         match run.verdict:
             case Compiled():

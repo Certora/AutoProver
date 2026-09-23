@@ -163,6 +163,20 @@ to add, or to move to P7.
 The rest — workspace layout, the env files, the conf the scaffold writes — lands here, where the
 code it tests is.
 
+**A fix found after #248 was opened, which has to be carried forward rather than forgotten.**
+`6a8ef4c4` on `eric/solanaProver` stops the compile checks naming their package with a bare
+`--package <name>`. Cargo refuses that whenever the name is ambiguous, and it is ambiguous whenever
+the program under verification is *also* a published crate that one of its own dev-dependencies
+pulls back in — local and published copies then share a name at two versions. `--manifest-path`
+names exactly one package; passing it alongside `--package` does not help, measured.
+
+It spans three PRs, so it cannot land on master as one commit: `preflight.py` here, `verify.py` in
+**P3b**, `editor.py` in **P5**. **Submit the `preflight.py` hunk to master once #248 lands**, and
+carry the other two with their own PRs. Nothing already on master exercises it — no corpus project
+is a published crate — which is why it survived this long; it was found by pointing preflight at the
+Solana stake program (`docs/stake-benchmark.md`). A regression test wants a fixture whose package
+name collides with its own graph, and is still to write.
+
 ### P2 — A hand-written rule in, verdicts out
 
 `composer/cargo/sbf.py`, `composer/spec/cvlr/{prover,rules}.py`, and

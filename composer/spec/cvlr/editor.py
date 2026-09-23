@@ -283,7 +283,9 @@ async def gate_edits(
     """
     async with target.build_slot():
         await target.stage(draft, summaries, candidate)
-        run = await target.session.check(package=target.package, features=target.features)
+        run = await target.session.check(
+            manifest_dir=target.package_dir, features=target.features
+        )
         if isinstance(run.verdict, CompileFailed):
             return DoesNotCompile(run.verdict.diagnostics)
         assert isinstance(run.verdict, Compiled)
