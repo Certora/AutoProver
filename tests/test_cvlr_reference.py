@@ -72,6 +72,34 @@ def test_a_fresh_project_is_pinned_the_whole_reference_set():
     }
 
 
+def test_withholding_narrows_what_the_project_pins_and_not_what_the_corpus_was_built_on():
+    # The two accessors answer two questions, and this is the case that makes them differ: the
+    # target *is* the program cvlr-solana-stake models, so the project must not be given it —
+    # while the corpus was still written against it, and gaps() still has to say so.
+    narrowed = ref.SOLANA.withholding("cvlr-solana-stake")
+    assert {c.name for c in narrowed.scaffold_crates()} == {
+        "cvlr", "cvlr-solana", "cvlr-spl-token",
+    }
+    assert narrowed.crates() == ref.SOLANA.crates()
+
+
+def test_withholding_leaves_the_reference_set_it_was_called_on_alone():
+    # Frozen, and the module-level set is shared by every run in the process.
+    ref.SOLANA.withholding("cvlr-solana-stake")
+    assert ref.SOLANA.withheld == frozenset()
+    assert ref.SOLANA.scaffold_crates() == ref.SOLANA.crates()
+
+
+def test_withholding_a_crate_that_is_not_a_specialization_is_refused():
+    # Silently changing nothing is the one outcome a caller cannot tell apart from success, so a
+    # typo would leave the model in the project it was meant to be kept out of.
+    with pytest.raises(ValueError, match="not specializations of cvlr-solana"):
+        ref.SOLANA.withholding("cvlr-solana-staek")
+    # The chain crate is not a specialization either: a project without it has no CVLR at all.
+    with pytest.raises(ValueError, match="cvlr-solana"):
+        ref.SOLANA.withholding("cvlr-solana")
+
+
 def test_an_unknown_chain_raises_and_names_the_ones_that_exist():
     with pytest.raises(ValueError, match="no CVLR reference set for chain 'evm'") as e:
         ref.reference_for("evm")

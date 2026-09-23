@@ -27,7 +27,7 @@ symbol carries is ``solana_account_info::AccountInfo``. :class:`PathAlias` is th
 the tuning files.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 
 @dataclass(frozen=True)
@@ -162,18 +162,53 @@ class ChainReference:
     #: is a crate the project cannot name.
     specializations: tuple[CrateRelease, ...] = ()
     unpublished: tuple[UnpublishedCapability, ...] = ()
+    #: Specializations this run will not offer the project, by crate name. Empty for every
+    #: ordinary run; :meth:`withholding` is what sets it.
+    #:
+    #: The case it exists for is a specialization that models the program *under verification*.
+    #: ``cvlr-solana-stake`` is a behavioural model of the stake program's own instructions —
+    #: ``process_split``, ``process_merge``, ``process_withdraw`` and the rest — so a run whose
+    #: target is that program would be handing its author the answers rather than a model of a
+    #: dependency (``docs/stake-benchmark.md``). Per crate rather than all-or-nothing, because the
+    #: specializations have nothing to do with each other: the same tuple carries the SPL token
+    #: model, which such a run still wants.
+    withheld: frozenset[str] = frozenset()
 
     def crates(self) -> tuple[CrateRelease, ...]:
-        """Every CVLR crate in the reference set. This is what the corpus was written against."""
+        """Every CVLR crate in the reference set. This is what the corpus was written against.
+
+        Deliberately not narrowed by :attr:`withheld`. Withholding a crate from one project says
+        nothing about what the corpus was compiled against, and claiming otherwise would both
+        misreport provenance and stop :meth:`composer.spec.cvlr.crates.CvlrSources.gaps` noticing
+        a real version disagreement.
+        """
         return (self.core, self.chain, *self.specializations)
 
     def scaffold_crates(self) -> tuple[CrateRelease, ...]:
         """What a fresh project declares in its ``Cargo.toml``.
 
-        The same crates as :meth:`crates`. The two names are the two questions: what the corpus
-        was compiled against, and what this project pins.
+        :meth:`crates` less anything :attr:`withheld`. The two names are the two questions: what
+        the corpus was compiled against, and what this project pins. They returned the same tuple
+        until a run needed to verify a program one of the specializations models, which is the
+        case where the answers differ.
         """
-        return self.crates()
+        return tuple(c for c in self.crates() if c.name not in self.withheld)
+
+    def withholding(self, *names: str) -> "ChainReference":
+        """This reference set with ``names`` not offered to the project.
+
+        Refuses a name that is not a specialization. A withheld crate that was never in the set
+        changes nothing, and "changed nothing" is the one outcome a caller cannot tell apart from
+        success — so a typo here would silently leave the model in the project it was meant to be
+        kept out of.
+        """
+        known = {c.name for c in self.specializations}
+        if unknown := set(names) - known:
+            raise ValueError(
+                f"not specializations of {self.chain.name}: {', '.join(sorted(unknown))} "
+                f"(have: {', '.join(sorted(known)) or 'none'})"
+            )
+        return replace(self, withheld=self.withheld | frozenset(names))
 
     def cargo_dependencies(self) -> str:
         """A ``[dependencies]`` body pinning this reference set, for a probe or scaffold crate.
