@@ -452,6 +452,36 @@ reader the confinement field never had. So this is a workitem conditional on the
 publishing, not a gap to close on general principle — and whoever picks it up should reread that
 dropped section first rather than treating the absence as an oversight.
 
+**U18. A run's spend is logged per call and surfaced nowhere.**
+`composer.diagnostics.usage_callback` writes a DEBUG line per LLM call into
+`.certora_internal/autoProve/<run>.log` carrying model, task, cost centre, thread, node and the full
+token split (`in`/`out`/`cache_read`/`cache_write`). Everything needed to price a run is therefore on
+disk while it happens — `composer/diagnostics/cost_callback.py` holds the arithmetic, and
+`total_input_tokens` *includes* the cache figures, so a naive sum over `in` overstates a cached run
+by roughly 4x. What is missing is any path from there to someone watching. A `--budget-total` run
+prints no running total, the events stream carries no usage fields, and the only way to answer "how
+much has this cost so far" is to grep the DEBUG log and reimplement the pricing. Measured on the
+stake benchmark: 429 calls, 784 fresh input tokens against 25M cache reads, ~$57.
+
+The fix is small and there are two halves worth separating: a periodic line on the run's own output
+(the budget ledger already has the numbers), and a reusable reader so that grepping DEBUG logs is not
+how anyone answers this twice. Distinct from [[U17]], which is about the *reference set* a run used
+rather than what it spent.
+
+**U19. A dangling symlink in the target kills the run after extraction is paid for.**
+`SharedTree.materialize()` reaches `shutil.copytree(root, target, dirs_exist_ok=True, ignore=ignore)`
+in graphcore's `tools/vfs.py` with no `symlinks=True`, so a link whose target does not exist is
+dereferenced and raises `shutil.Error`. The stake program ships exactly that: a git-tracked
+`program/tests/fixtures/solana_stake_program.so -> ../../../target/deploy/...` that the project's own
+test build populates and a fresh clone leaves dangling.
+
+The cost is what makes it worth filing rather than shrugging at. Materialization is the first step of
+formalization, so the failure lands *after* the whole extraction phase has been billed and *before*
+any rule is authored — the most expensive possible moment for a one-word fix. `symlinks=True` copies
+the link as a link; skipping unresolvable links would also do. The call is in the graphcore submodule,
+so this is an upstream change rather than one this repo can make. Worked around on the benchmark by
+populating the link's target from an SBF build.
+
 ---
 
 ## Blocked on upstream

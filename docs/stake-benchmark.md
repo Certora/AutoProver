@@ -95,29 +95,85 @@ All 18 instructions are present and the `Split`/`Merge`/`Withdraw` semantics und
 moved, so the benchmark measures what it is meant to. It is a snapshot, not current `main`, and
 saying so is part of reporting the number.
 
+## The first run, 2026-09-23
+
+Stopped deliberately at **~$57 of a $75 ceiling**, mid-authoring, with everything resumable:
+`--cache-ns stake-benchmark` holds the analysis and all 94 extracted properties, `.cvlr_work/build`
+holds the drafts and munges. A continuation re-pays for authoring iterations only.
+
+| | |
+|---|---|
+| components identified / authored | 8 / 4 |
+| properties extracted | 94 (Split+Merge 36, Delegation 28, Authorization 19, Init 11) |
+| CVLR authored | 2,570 lines |
+| prover jobs | 7 succeeded |
+| LLM calls | 429 |
+
+**The generalization question is answered, positively.** The backend handled a program shape the
+corpus does not contain, and solved two obstacles nothing taught it:
+
+- **Reachability.** Stake's handlers are *private associated functions* on `impl Processor`. Every
+  corpus program exposes free `pub fn process_deposit(...)`, which a rule calls directly; these
+  cannot be called at all. The editor reached for `extract_function` — the kind whose charter is
+  exactly *"split so `X` is a function a rule can drive"* — keeping the original behind
+  `cfg(not(feature = "unit_x"))` and adding a `pub` inner under the unit's feature.
+- **bincode.** It did not mock the seam. It worked out that `StakeStateV2` is bincode-encoded with a
+  leading little-endian `u32` tag and constrained the raw account bytes through `data_len()` and
+  that tag — reaching the state machine *through* the encoding rather than replacing the serializer.
+  Whether that is better than a `mock_fn` on `get_stake_state`/`set_stake_state` is open; it is
+  certainly not what the corpus would predict.
+
+Component decomposition tracked where invariants actually live rather than splitting evenly:
+Split+Merge drew 36 properties, `MoveStake`/`MoveLamports` got their own unit, and the two thin
+units (`deprecated_instructions` for the unimplemented `Redelegate`, `protocol_parameter_queries`
+for `GetMinimumDelegation`) correctly drew none.
+
+**The rule-quality question is answered negatively on first pass.** Rules compiled, built for SBF
+and submitted; verdicts came back largely `SANITY_FAILED` — vacuous. The judge's diagnosis is worth
+keeping: it identified `Pubkey` equality on SBF (`sol_memcmp_`) as the likely unconstrained
+primitive, noted that the shared `assume_stake_shape` helper carries the same suspect assumption so
+the *passing* rules may be passing for the wrong reason, and refused the laundering fix —
+*"summarising them would produce a green rule that checked nothing"*. That is P5's failure mode
+caught in the act, by the loop rather than by a human.
+
+**Three plumbing defects, which is what an unseen target is for.** Two are fixed; one is not.
+
+1. **`cargo --package <name>` is ambiguous** when the program under verification is also a published
+   crate that its own dev-dependencies pull back in. Fixed — the compile checks now name the package
+   by manifest path.
+2. **A dangling symlink kills the run after extraction is paid for.** `program/tests/fixtures/*.so`
+   is a git-tracked symlink the project's own test build populates; `SharedTree.materialize()` calls
+   `shutil.copytree` without `symlinks=True`, dereferences it, and raises — at the first step of
+   formalization, with every extraction agent already billed. **Not fixed**; the call is in the
+   graphcore submodule. Worked around by populating the link's target.
+3. **Withholding a specialization had no control.** Fixed — see below.
+
 ## Open, and not worked around
 
 **The SDK 3.x gap.** A `cvlr-solana` release targeting the post-split platform generation unblocks
 every current Foundation program at once. Until there is one, this workaround is the only route and
 it expires as targets age out. This belongs with whoever owns CVLR releases.
 
-**`cvlr-solana-stake` must be excluded from this target.** That crate ships 572 lines implementing
-`process_withdraw`, `process_split`, `process_merge`, `process_authorize`, `process_delegate` and
-`process_deactivate` — a behavioral model of the exact instructions the benchmark asks the backend
-to specify. For any other target it is dependency modeling, which is what a chain specialization is
-for. Here it is an answer key.
+**The dangling-symlink crash** (item 2 above) is unfixed and will bite the next target that ships
+one. `symlinks=True` — or skipping links that do not resolve — is the fix, in graphcore.
 
-Nothing suppresses it today. [`_scaffold_pins`](../composer/spec/cvlr/scaffold.py) returns the whole
-reference set for a greenfield project, so the crate lands in the manifest and in the `certora`
-feature, and [`crate_mount.py`](../composer/spec/cvlr/crate_mount.py) makes its source readable by
-the authoring agent. The seam for a fix already exists: `reference: ChainReference` is threaded as a
-parameter through the scaffold, and the `specializations` docstring in
-[`cvlr_reference.py`](../composer/spec/cvlr_reference.py) states the contract — *"a specialization
-left out of this list is a crate the project cannot name."* What is missing is only the ability to
-vary that list per run. Narrowing must be per-crate: `cvlr-spl-token` sits in the same tuple, and
-dropping specializations wholesale would cost the token model on a target that needs it.
+**`cvlr-solana-stake` is withheld from this target, and that now has a control.** The crate ships
+572 lines implementing `process_withdraw`, `process_split`, `process_merge`, `process_authorize`,
+`process_delegate` and `process_deactivate` — a behavioral model of the exact instructions the
+benchmark asks the backend to specify. For any other target it is dependency modeling, which is what
+a chain specialization is for; here it is an answer key.
+`ChainReference.withholding` narrows the reference set per run and `--withhold-crate` exposes it;
+the runs recorded above used it, and the crate is absent from both manifests and from the resolved
+graph. Narrowing is per-crate by necessity: `cvlr-spl-token` sits in the same tuple, and dropping
+specializations wholesale would cost the token model on a target that needs it.
 
 Excluding the crate removes the mechanical leak, not the semantic one — it is published on
 crates.io, and the stake program's invariants are documented protocol semantics. That residue is
 acceptable for this question, which is about whether the prompts transfer, not about what a base
 model knows.
+
+**What a resumed run should do first.** The vacuity is the live question, and the judge already
+named the experiment: add `clog!`s to the owner comparison so the counterexample is readable, and
+pin the owner to a concrete distinct key rather than assuming a disequality over an opaque 32-byte
+value. Do that before authoring anything new — a second batch of rules built on the same
+`assume_stake_shape` would inherit the same weakness.
