@@ -87,6 +87,7 @@ class CvlrArgs(ExtendedModelOptions, Protocol):
     main_contract: str
     system_doc: str | None
     package: str | None
+    thread_id: str | None
     withhold_crate: list[str]
     rag_corpus: str
     max_concurrent: int
@@ -131,6 +132,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--package", default=None,
         help="Cargo package to verify. Defaults to the crate that owns the main program's source "
              "file; name it when that is not the crate to build.",
+    )
+    parser.add_argument(
+        "--thread-id", default=None, metavar="ID",
+        help="Rejoin a previous run by its thread id, printed as `Selected run id` and carried in "
+             "the autoProve log name. Formalization continues from that run's checkpoints instead "
+             "of re-authoring every unit, which is the expensive half. The run's memory and its "
+             "counterexamples are namespaced on the same id, so they come back with it. Omit for "
+             "a fresh run.",
     )
     parser.add_argument(
         "--withhold-crate", action="append", default=[], metavar="CRATE",
@@ -338,7 +347,12 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
     caller with an ``CvlrArgs`` in hand — a test, or an embedder of this pipeline — should not have
     to go through ``sys.argv`` to reach the run.
     """
-    thread_id = f"cvlr_{uuid.uuid4().hex[:12]}"
+    # A named thread rejoins that run's checkpoints, so formalization continues from where it
+    # stopped instead of re-authoring every unit. Deliberately the *whole* identity and not just
+    # the graph state: ``memory_ns`` defaults to it (``pipeline/cli.py``) and the counterexample
+    # store namespaces on it below, and a resumed run that kept its drafts while losing its memory
+    # and its findings would be a third thing that is neither a resume nor a fresh run.
+    thread_id = args.thread_id or f"cvlr_{uuid.uuid4().hex[:12]}"
     project_root = pathlib.Path(args.project_root).resolve()
     main_source, identifier = parse_main_program(args.main_contract)
 
