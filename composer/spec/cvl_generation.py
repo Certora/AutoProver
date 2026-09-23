@@ -94,7 +94,6 @@ class AppliedEdit(BaseModel):
 
 class GeneratedCVL(BaseModel):
     commentary: str
-    cvl: str
     skipped: list[SkippedProperty] = Field(default_factory=list)
     property_rules: list[PropertyRuleMapping] = Field(default_factory=list)
     # The base prover config (state["config"]) at completion, persisted so a cache hit
@@ -104,10 +103,10 @@ class GeneratedCVL(BaseModel):
     # The last prover-run link (URL or local results dir), persisted for the report and so a
     # cache hit retains it. None when the prover never produced a link.
     final_link: str | None = Field(default=None)
-    # Every prover-run link whose results compose the buffers at their final digests, deduped (empty
-    # when no run-target buffer has a completed run at its final digest). With rule-striping a buffer's
-    # rules are run across several jobs, so this holds all of them, not just the last ``final_link``.
-    run_links: list[str] = Field(default_factory=list)
+    # (run link, the spec it verified) for every run whose results compose the buffers at their final
+    # digests, newest first; empty when no run-target buffer has a completed run. Rule-striping runs a
+    # buffer's rules across several jobs, so this holds all of them.
+    run_link_specs: list[tuple[str, str]] = Field(default_factory=list)
     # The author's working copy at completion: the edited source files the proof
     # actually ran against (empty when no edits were applied — always the case
     # outside the editing-enabled source pipeline), and the provenance of each
@@ -135,7 +134,10 @@ class GeneratedCVL(BaseModel):
     
     @property
     def artifact_text(self) -> str:
-        return self.cvl
+        """The per-buffer specs concatenated under headers, as one text."""
+        return "\n\n".join(
+            f"// ===== {name} =====\n{cvl.rstrip()}" for name, cvl in self.spec_files.items()
+        )
 
     @property
     def output_link(self) -> str | None:

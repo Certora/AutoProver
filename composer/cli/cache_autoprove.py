@@ -428,12 +428,12 @@ def format_value(val: AutoProveCachedValue) -> list[str]:
         case _SummaryCache(content=content):
             lines.extend(content.splitlines())
 
-        case GeneratedCVL(commentary=commentary, cvl=cvl, skipped=skipped):
+        case GeneratedCVL(commentary=commentary, skipped=skipped) as gen:
             lines.append(f"Commentary: {commentary}")
             if skipped:
                 lines.append(f"Skipped: {len(skipped)}")
             lines.append("")
-            lines.extend(cvl.splitlines())
+            lines.extend(gen.artifact_text.splitlines())
 
         # Subclass-of-_BugAnalysisCache cases first — match order matters.
         case _AgentRoundWithHistory(items=items, reasoning=reasoning, agent_conversation=history):

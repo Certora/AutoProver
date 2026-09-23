@@ -46,7 +46,7 @@ from composer.spec.source.plugin import CertoraProverTools, CVLAuthorState
 from composer.spec.system_model import ContractComponentInstance, SolidityIdentifier, component_context
 from composer.spec.source.prover import (
     OVERLAY_OWNED_KEYS, ProverStateExtra, DELETE_SKIP, VALIDATION_KEY as PROVER_VALIDATION_KEY,
-    materializing_project, completing_run_links, declared_rules_at,
+    materializing_project, completing_run_specs, declared_rules_at,
 )
 from langgraph.graph import MessagesState
 from pathlib import Path
@@ -547,7 +547,7 @@ Diff from {"prior edit" if i > 0 else "project directory"}:
             for (i,(t, summary, diff)) in enumerate(history)
         ]
         return "\n\n".join(to_format)
-    
+
 class RevertToEdit(WithAsyncDependencies[Command | str, EditStore], WithInjectedId, WithInjectedState[SourceCVLGenerationExtra]):
     """
     Call this tool to revert to a prior edit in your history, or (with a null
@@ -1159,10 +1159,7 @@ async def batch_cvl_generation(
             # unformalizable" judgment — it's the budget talking. Keep the agent's account.
             return Curtailed(None, detail=res_state["result"])
         return GaveUp(reason=res_state["result"])
-    # ``cvl`` is the buffers combined into one reviewable document (empty when every property was
-    # skipped, i.e. there are no buffers to combine); the delivered specs are per-buffer (``spec_files``).
     _buffers = res_state.get("buffers") or {}
-    d = combined_buffers_view(_buffers)
     applied_edits: list[AppliedEdit] = []
     for edit_id in res_state["version_history"]:
         rec = await editing.store.read(edit_id)
@@ -1176,20 +1173,20 @@ async def batch_cvl_generation(
     # hit (which skips the prover) can still reconstruct certora/confs and retain the link.
 
     assert "vfs" in res_state
-    # Every run link that composes the buffers at their final digests, so verdicts spread across
-    # striped/per-buffer runs are all reachable from the result.
-    run_links = completing_run_links(
+    # Every run link that composes the buffers at their final digests (verdicts spread across
+    # striped/per-buffer runs are all reachable) -> the spec it verified.
+    run_link_specs = completing_run_specs(
         res_state["prover_history"], res_state.get("buffers") or {},
         version_history=res_state["version_history"], config=res_state["config"],
+        slug=component.slugified_name,
     )
     generated = GeneratedCVL(
         commentary=res_state["result"],
-        cvl=d,
         skipped=res_state["skipped"],
         property_rules=res_state["property_rules"],
         config=res_state["config"],
         final_link=res_state.get("prover_link"),
-        run_links=run_links,
+        run_link_specs=run_link_specs,
         vfs=res_state["vfs"],
         applied_edits=applied_edits,
         spec_files={name: b.cvl for name, b in _buffers.items()},

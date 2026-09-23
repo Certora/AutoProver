@@ -380,18 +380,19 @@ def buffer_is_complete(
     )
 
 
-def completing_run_links(
+def completing_run_specs(
     prover_history: list[ProverHistoryItem],
     buffers: Mapping[str, NamedBuffer],
     *,
     version_history: Sequence[str],
     config: Mapping[str, object] | None = None,
-) -> list[str]:
-    """The prover-run links whose completed results compose the run-target buffers at their current
-    digests — the same runs :func:`buffer_is_complete` considers. Rule-striping runs one buffer's rules
-    across several jobs, so its verdicts are spread over all of these links rather than carried by the
-    last one alone."""
-    links: list[str] = []
+    slug: str,
+) -> list[tuple[str, str]]:
+    """(run link, the spec it verified — ``<slug>/<buffer>.spec``, its conf's spec path under
+    ``certora/specs/``) for the runs whose completed results compose the run-target buffers at their
+    current digests — the same runs :func:`buffer_is_complete` considers. Rule-striping runs one buffer's
+    rules across several jobs, so all of those links are included. Newest run first, deduped by link."""
+    runs: list[tuple[str, str]] = []
     seen: set[str] = set()
     for b in run_targets(buffers):
         digest = buffer_state_digest(
@@ -405,8 +406,9 @@ def completing_run_links(
             link = elem.get("link")
             if link and link not in seen:
                 seen.add(link)
-                links.append(link)
-    return links
+                spec = (component_specs_dir(slug) / f"{b.name}.spec").relative_to(SPECS_DIR).as_posix()
+                runs.append((link, spec))
+    return runs
 
 
 def _merge_prover_history(left: list[ProverHistoryItem], right: list[ProverHistoryItem]) -> list[ProverHistoryItem]:

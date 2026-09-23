@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import override
 
 from composer.diagnostics.timing import RunSummary
-from composer.spec.artifacts import ArtifactStore
+from composer.spec.artifacts import ArtifactStore, QUARANTINE_SUFFIX
 from composer.spec.cvl_generation import GeneratedCVL
 from composer.spec.gen_types import (
     AP_REPORT_DIR, AUTOPROVE_INTERNAL_DIR, CERTORA_DIR, component_specs_dir, under_project,
@@ -112,6 +112,15 @@ class ProverArtifactStore(ArtifactStore[ComponentSpec, GeneratedCVL]):
         self._write_property_map(
             i.stem, self._property_suffix, {k: v for (k, v) in artifact.property_checks()},
         )
+        return specs_root.relative_to(self._project_root)
+
+    @override
+    def write_quarantined(self, i: ComponentSpec, artifact: GeneratedCVL) -> Path:
+        """Persist a budget-curtailed component for inspection: each buffer under a poisoned
+        ``.spec.unverified`` name, no conf. Returns the component's spec directory."""
+        specs_root = under_project(self._project_root, i.specs_dir)
+        for name, cvl in artifact.spec_files.items():
+            _write_checked(specs_root / f"{name}.spec{QUARANTINE_SUFFIX}", cvl)
         return specs_root.relative_to(self._project_root)
 
     # -- run-level ----------------------------------------------------------

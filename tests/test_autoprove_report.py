@@ -27,7 +27,7 @@ from composer.spec.cvl_generation import GeneratedCVL, PropertyRuleMapping
 
 from composer.pipeline.core import Curtailed, Delivered
 
-from composer.spec.source.artifacts import ProverArtifactStore
+from composer.spec.source.artifacts import ComponentSpec, ProverArtifactStore
 from composer.spec.source.report import build
 from composer.spec.source.report.collect import ReportComponentInput, collect
 from composer.spec.source.report.coverage import ValidationError, validate
@@ -42,7 +42,7 @@ from composer.spec.source.report.schema import (
     GaveUpComponent, GroupStatus, ImpactLevel, IssueContent, LikelihoodLevel, Outcome,
     PropertyGroup, RuleVerdict, SeverityTier, SkippedClaim,
 )
-from composer.spec.source.report_prover import _spec_id, make_prover_fetcher
+from composer.spec.source.report_prover import make_prover_fetcher
 from composer.spec.source.report.collect import RuleEvidence
 from composer.spec.source.report.findings import FindingDraft, build_findings
 from composer.spec.source.cex_capture import CexAnalysisStore
@@ -86,18 +86,19 @@ def _prop(title, desc, *, sort: PropertyType = "safety_property") -> PropertyFor
 def _gen(mapping: dict[str, list[str]] | None = None,
          skipped: dict[str, str] | None = None,
          link: str | None = "L1",
-         run_links: list[str] | None = None) -> GeneratedCVL:
+         run_link_specs: list[tuple[str, str]] | None = None) -> GeneratedCVL:
     """A successful generation result: ``mapping`` is property_title -> [rule names];
-    ``skipped`` is property_title -> reason. ``run_links`` are the composing run links the
-    report fetches verdicts from; defaults to ``[link]`` (the single-run case production leaves)."""
+    ``skipped`` is property_title -> reason. ``run_link_specs`` are (link, the spec it verified) the
+    report fetches verdicts from and keys each rule on; defaults to ``[(link, "s.spec")]``."""
     return GeneratedCVL(
-        commentary="", cvl="",
+        commentary="",
         property_rules=[PropertyRuleMapping(property_title=t, rules=rs)
                         for t, rs in (mapping or {}).items()],
         skipped=[SkippedProperty(property_title=t, reason=r)
                  for t, r in (skipped or {}).items()],
         final_link=link,
-        run_links=run_links if run_links is not None else ([link] if link else []),
+        run_link_specs=(run_link_specs if run_link_specs is not None
+                        else ([(link, "autospec_C.spec")] if link else [])),
     )
 
 
@@ -164,7 +165,8 @@ class _StructuredStubModel(BaseChatModel):
 async def test_collect_joins_properties_to_rules_and_verdicts():
     props = [_prop("count_increases", "count up by one"),
              _prop("count_eq_sum", "count == sum", sort="invariant")]
-    gen = _gen({"count_increases": ["increment_increases_count"], "count_eq_sum": ["countEqualsSum"]})
+    gen = _gen({"count_increases": ["increment_increases_count"], "count_eq_sum": ["countEqualsSum"]},
+               run_link_specs=[("L1", "autospec_Increment.spec")])
     fetch = _fetcher({"L1": [
         _fake_check("increment_increases_count", NodeStatus.VERIFIED, line=12, duration=1.5),
         _fake_check("countEqualsSum", NodeStatus.VIOLATED, line=40),
@@ -189,10 +191,11 @@ async def test_collect_stamps_each_rule_with_the_run_that_proved_it():
     """With rule-striping a component's rules are proven across several runs; each rule's
     ``prover_link`` is the run that produced its verdict, not the last (``final_link``) one."""
     props = [_prop("p_a", "rule a"), _prop("p_b", "rule b")]
-    gen = _gen({"p_a": ["rule_a"], "p_b": ["rule_b"]}, link="LB", run_links=["LA", "LB"])
+    gen = _gen({"p_a": ["rule_a"], "p_b": ["rule_b"]}, link="LB",
+               run_link_specs=[("LA", "autospec_C.spec"), ("LB", "autospec_C.spec")])
     fetch = _fetcher({
-        "LA": [_fake_check("rule_a", NodeStatus.VERIFIED, file="autospec_C.spec")],
-        "LB": [_fake_check("rule_b", NodeStatus.VIOLATED, file="autospec_C.spec")],
+        "LA": [_fake_check("rule_a", NodeStatus.VERIFIED)],
+        "LB": [_fake_check("rule_b", NodeStatus.VIOLATED)],
     })
 
     _properties, rules, *_ = await collect(
@@ -213,10 +216,11 @@ async def test_collect_normalizes_jobstatus_run_links_to_output_view():
     out_a = job_a.replace("/jobStatus/", "/output/")
     out_b = job_b.replace("/jobStatus/", "/output/")
     props = [_prop("p_a", "rule a"), _prop("p_b", "rule b")]
-    gen = _gen({"p_a": ["rule_a"], "p_b": ["rule_b"]}, link=job_a, run_links=[job_a, job_b])
+    gen = _gen({"p_a": ["rule_a"], "p_b": ["rule_b"]}, link=job_a,
+               run_link_specs=[(job_a, "autospec_C.spec"), (job_b, "autospec_C.spec")])
     fetch = _fetcher({  # keyed on the /output/ view only — a raw /jobStatus/ lookup finds nothing
-        out_a: [_fake_check("rule_a", NodeStatus.VERIFIED, file="autospec_C.spec")],
-        out_b: [_fake_check("rule_b", NodeStatus.VIOLATED, file="autospec_C.spec")],
+        out_a: [_fake_check("rule_a", NodeStatus.VERIFIED)],
+        out_b: [_fake_check("rule_b", NodeStatus.VIOLATED)],
     })
 
     _properties, rules, *_ = await collect(
@@ -340,7 +344,7 @@ async def test_collect_backfills_unknown_for_unproven_referenced_rule():
 async def test_collect_ignores_a_run_that_does_not_account_for_the_published_spec():
     """A last run recorded against a different spec state contributes no verdicts: its results
     describe other text. The rule renders UNKNOWN and the coverage warning names it."""
-    gen = _gen({"p1": ["r1"]}, link="L_stale").model_copy(update={"run_links": []})
+    gen = _gen({"p1": ["r1"]}, link="L_stale").model_copy(update={"run_link_specs": []})
     fetch = _fetcher({"L_stale": [_fake_check("r1", NodeStatus.VERIFIED, file="autospec_C.spec")]})
 
     properties, rules, _s, _g, _c, _d = await collect(
@@ -357,7 +361,8 @@ async def test_collect_reads_a_verdict_from_the_scoped_run_that_proved_it():
     """Completion reached piecemeal: the full run left one rule unproved and a scoped re-run
     proved it. Both rules carry a verdict, each linked to the run that produced it."""
     gen = _gen({"p1": ["r_full", "r_scoped"]}, link="L_full")
-    gen = gen.model_copy(update={"run_links": ["L_full", "L_scoped"]})
+    gen = gen.model_copy(update={"run_link_specs": [("L_full", "autospec_C.spec"),
+                                                    ("L_scoped", "autospec_C.spec")]})
     fetch = _fetcher({
         "L_full": [_fake_check("r_full", NodeStatus.VERIFIED, file="autospec_C.spec")],
         "L_scoped": [_fake_check("r_scoped", NodeStatus.VERIFIED, file="autospec_C.spec")],
@@ -410,7 +415,8 @@ async def test_collect_keeps_a_supporting_invariant_the_property_names():
     invariant would be proved and then silently dropped from the report."""
     comp = _input(
         "Increment", "autospec_Increment.spec", [_prop("c", "count tracks the tally")],
-        _gen({"c": ["increment_increases_count", "countEqualsSum"]}, link="Lc"),
+        _gen({"c": ["increment_increases_count", "countEqualsSum"]}, link="Lc",
+             run_link_specs=[("Lc", "autospec_Increment.spec")]),
     )
     fetch = _fetcher({"Lc": [
         _fake_check("increment_increases_count", NodeStatus.VERIFIED),
@@ -428,11 +434,13 @@ async def test_collect_keeps_a_supporting_invariant_the_property_names():
 
 @pytest.mark.asyncio
 async def test_collect_same_name_different_spec_stays_distinct():
-    a = _input("A", "autospec_A.spec", [_prop("pa", "a")], _gen({"pa": ["transferIsSafe"]}, link="La"))
-    b = _input("B", "autospec_B.spec", [_prop("pb", "b")], _gen({"pb": ["transferIsSafe"]}, link="Lb"))
+    a = _input("A", "autospec_A.spec", [_prop("pa", "a")],
+               _gen({"pa": ["transferIsSafe"]}, link="La", run_link_specs=[("La", "autospec_A.spec")]))
+    b = _input("B", "autospec_B.spec", [_prop("pb", "b")],
+               _gen({"pb": ["transferIsSafe"]}, link="Lb", run_link_specs=[("Lb", "autospec_B.spec")]))
     fetch = _fetcher({
-        "La": [_fake_check("transferIsSafe", NodeStatus.VERIFIED, file="autospec_A.spec")],
-        "Lb": [_fake_check("transferIsSafe", NodeStatus.VIOLATED, file="autospec_B.spec")],
+        "La": [_fake_check("transferIsSafe", NodeStatus.VERIFIED)],
+        "Lb": [_fake_check("transferIsSafe", NodeStatus.VIOLATED)],
     })
     _props, rules, *_ = await collect([a, b], fetch_verdicts=fetch)
     safe = sorted((r for r in rules if r.name == "transferIsSafe"), key=lambda r: r.spec_file)
@@ -442,24 +450,17 @@ async def test_collect_same_name_different_spec_stays_distinct():
     ]
 
 
-def test_spec_id_is_the_path_under_certora_specs():
-    # Each buffer is proved at certora/specs/<slug>/<buffer>.spec; the report key is that
-    # <slug>/<buffer>.spec, taken from the run's absolute path. A flat name (no certora/specs/) —
-    # e.g. a single-file spec whose stem already carries the slug — falls back to its basename.
-    assert _spec_id("/run/abc123/certora/specs/increment/base.spec") == "increment/base.spec"
-    assert _spec_id("certora/specs/vault/invariants/supply.spec") == "vault/invariants/supply.spec"
-    assert _spec_id("autospec_Increment.spec") == "autospec_Increment.spec"
-
-
 @pytest.mark.asyncio
 async def test_collect_same_buffer_name_different_component_stays_distinct():
     # Two components each author a ``base.spec`` buffer, proved under their own certora/specs/<slug>/.
     # The <slug> segment keeps the report keys distinct, so neither verdict silently drops the other's.
-    a = _input("compA", "certora/specs/compA", [_prop("pa", "a")], _gen({"pa": ["invariantHolds"]}, link="La"))
-    b = _input("compB", "certora/specs/compB", [_prop("pb", "b")], _gen({"pb": ["invariantHolds"]}, link="Lb"))
+    a = _input("compA", "certora/specs/compA", [_prop("pa", "a")],
+               _gen({"pa": ["invariantHolds"]}, link="La", run_link_specs=[("La", "compA/base.spec")]))
+    b = _input("compB", "certora/specs/compB", [_prop("pb", "b")],
+               _gen({"pb": ["invariantHolds"]}, link="Lb", run_link_specs=[("Lb", "compB/base.spec")]))
     fetch = _fetcher({
-        "La": [_fake_check("invariantHolds", NodeStatus.VERIFIED, file="/run/x/certora/specs/compA/base.spec")],
-        "Lb": [_fake_check("invariantHolds", NodeStatus.VIOLATED, file="/run/y/certora/specs/compB/base.spec")],
+        "La": [_fake_check("invariantHolds", NodeStatus.VERIFIED)],
+        "Lb": [_fake_check("invariantHolds", NodeStatus.VIOLATED)],
     })
     _props, rules, *_ = await collect([a, b], fetch_verdicts=fetch)
     got = sorted((r for r in rules if r.name == "invariantHolds"), key=lambda r: r.spec_file)
@@ -719,6 +720,30 @@ def test_render_html_without_curtailed_has_no_appendix():
 # ---------------------------------------------------------------------------
 # build orchestrator (async)
 # ---------------------------------------------------------------------------
+
+def test_artifact_store_writes_per_buffer_specs_confs_and_quarantine(tmp_path):
+    store = ProverArtifactStore(str(tmp_path), "Vault")
+    spec = ComponentSpec("myslug")
+    art = GeneratedCVL(
+        commentary="",
+        config={"files": ["src/Vault.sol"]},
+        spec_files={"base": "rule r { assert true; }\n", "helpers": "definition d() returns uint = 1;\n"},
+        entrypoint_specs=["base"],
+    )
+    store.write_artifact(spec, art)
+    specs = tmp_path / "certora" / "specs" / "myslug"
+    assert (specs / "base.spec").read_text().startswith("rule r")
+    assert (specs / "helpers.spec").is_file()
+    # a .conf only for the entrypoint spec, not the imported-only one
+    confs = tmp_path / "certora" / "confs" / "myslug"
+    assert (confs / "verify_base.conf").is_file()
+    assert not (confs / "verify_helpers.conf").exists()
+
+    # quarantine: each buffer under a poisoned .spec.unverified, no conf
+    store.write_quarantined(spec, art)
+    assert (specs / "base.spec.unverified").read_text().startswith("rule r")
+    assert (specs / "helpers.spec.unverified").is_file()
+
 
 def test_artifact_store_write_report_round_trips(tmp_path):
     report = _mini_report()

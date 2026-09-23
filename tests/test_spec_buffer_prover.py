@@ -12,7 +12,7 @@ from composer.prover.core import ProverReport
 from composer.prover.ptypes import RulePath
 from composer.spec.source.buffer_tools import put_buffer
 from composer.spec.source.prover import (
-    StateWithSkips, VALIDATION_KEY, ProverRunLog, completing_run_links, materialize_buffers,
+    StateWithSkips, VALIDATION_KEY, ProverRunLog, completing_run_specs, materialize_buffers,
 )
 from composer.prover.ptypes import RulePath
 from composer.spec.source.spec_buffers import (
@@ -51,9 +51,9 @@ def _runlog(tc, digest, link, rule, selector):
     )
 
 
-def test_completing_run_links_unions_stripes_and_drops_stale():
-    """A buffer's rules proven across striped runs at its current digest yield every run's link (deduped);
-    a run at a superseded digest is excluded — the report unions over exactly these."""
+def test_completing_run_specs_unions_stripes_and_drops_stale():
+    """A buffer's rules proven across striped runs at its current digest yield every run's (link, spec),
+    newest first and deduped; a run at a superseded digest is excluded — the report unions over these."""
     bufs = _buffers2()  # run-target "both" (r_a, r_b) + shared
     dig = buffer_state_digest(bufs, "both", version_history=[])
     history = [
@@ -62,10 +62,8 @@ def test_completing_run_links_unions_stripes_and_drops_stale():
         _runlog("t2", dig, "link-b", "r_b", ["r_b"]),                   # stripe rule=[r_b]
         _runlog("t3", dig, "link-a", "r_a", ["r_a"]),                   # same link again -> deduped
     ]
-    links = completing_run_links(history, bufs, version_history=[])
-    assert set(links) == {"link-a", "link-b"}
-    assert "old-link" not in links
-    assert len(links) == 2  # deduped
+    runs = completing_run_specs(history, bufs, version_history=[], slug="myslug")
+    assert runs == [("link-a", "myslug/both.spec"), ("link-b", "myslug/both.spec")]
 
 
 def _buf(name: str, rule: str) -> NamedBuffer:
