@@ -19,7 +19,7 @@ from composer.input.types import (
 from composer.input.files import Document, resolve_document_paths
 
 from composer.diagnostics.logging_setup import setup_autoprove_logging
-from composer.spec.context import SourceFields, WorkflowContext, SourceCode
+from composer.spec.context import DesignDocProvenance, SourceFields, WorkflowContext, SourceCode
 from composer.spec.service_host import ServiceHost
 from composer.workflow.services import IndexedConnections, standard_connections
 from composer.pipeline.ptypes import (
@@ -361,7 +361,7 @@ async def cli_pipeline[P: enum.Enum, H, App: BaseApplication, Main, U: FeatureUn
                     memory_namespace=memory_ns,
                     cache_namespace=disc_cache_ns
                 )
-                system_doc = await run_task(
+                design_doc = await run_task(
                     factory=task_handler,
                     info=TaskInfo(
                         label="Design Doc Discovery",
@@ -378,7 +378,8 @@ async def cli_pipeline[P: enum.Enum, H, App: BaseApplication, Main, U: FeatureUn
                         )
                 )
             else:
-                system_doc = pathlib.Path(args.system_doc)
+                design_doc = DesignDocProvenance(path=pathlib.Path(args.system_doc), origin="supplied")
+            system_doc = design_doc.path if design_doc is not None else None
 
             # ``system_doc`` is None only when discovery found nothing: run source-only.
             if system_doc is not None:
@@ -418,6 +419,7 @@ async def cli_pipeline[P: enum.Enum, H, App: BaseApplication, Main, U: FeatureUn
 
             full_source = SourceCode(
                 content=system_doc_content,
+                design_doc=design_doc,
                 contract_name=init_source.contract_name,
                 forbidden_read=init_source.forbidden_read,
                 project_root=init_source.project_root,
@@ -473,6 +475,7 @@ async def cli_pipeline[P: enum.Enum, H, App: BaseApplication, Main, U: FeatureUn
                 root_key=root_key,
                 source=SourceCode(
                     content=system_doc_content,
+                    design_doc=design_doc,
                     contract_name=init_source.contract_name,
                     forbidden_read=init_source.forbidden_read,
                     project_root=init_source.project_root,

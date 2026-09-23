@@ -37,8 +37,10 @@ from composer.spec.source.report.grouping import (
     build_fallback_grouping, build_groups,
 )
 from composer.spec.source.report.render import render_html
+from composer.spec.context import DesignDocProvenance, SourceCode
+from composer.spec.util import fs_forbidden_read
 from composer.spec.source.report.schema import (
-    AutoProverReport, CoverageReport, CurtailedComponent, CurtailedSkip, DraftedProperty, Finding, FindingProvenance, FormalizedProperty,
+    AutoProverReport, CoverageReport, DesignDocRecord, CurtailedComponent, CurtailedSkip, DraftedProperty, Finding, FindingProvenance, FormalizedProperty,
     GaveUpComponent, GroupStatus, ImpactLevel, IssueContent, LikelihoodLevel, Outcome,
     PropertyGroup, RuleVerdict, SeverityTier, SkippedClaim,
 )
@@ -765,6 +767,96 @@ async def test_grouping_gives_up_after_the_retry_so_the_caller_can_fall_back():
             llm=llm, contract_name="C", properties=[_fp("C", "p1", [])],
         )
     assert len(llm.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_build_asks_the_retry_model_before_falling_back():
+    gen = _gen({"p1": ["r1"]})
+    fetch = _fetcher({"L1": [_fake_check("r1", NodeStatus.VERIFIED)]})
+    primary = _FlakyStructuredModel(
+        output=GroupingResult(groups=[]), failures=[_schema_error(), _schema_error()], calls=[],
+    )
+    retry = _FlakyStructuredModel(
+        output=GroupingResult(groups=[PropertyGroupDraft(
+            slug="g", title="G", description="d", members=[("C", "p1")])]),
+        failures=[], calls=[],
+    )
+
+    report = await build.build_report(
+        contract_name="C", backend="prover",
+        components=[_input("C", "autospec_C.spec", [_prop("p1", "d1")], gen)],
+        llm=primary, grouping_retry_llm=retry, fetch_verdicts=fetch,
+    )
+
+    assert len(primary.calls) == 2  # the correction retry still runs on the first model
+    assert len(retry.calls) == 1
+    assert [g.slug for g in report.groups] == ["g"]
+    assert not any("FALLBACK GROUPING APPLIED" in w for w in report.coverage.warnings)
+
+
+@pytest.mark.asyncio
+async def test_build_falls_back_when_the_retry_model_fails_too():
+    gen = _gen({"p1": ["r1"]})
+    fetch = _fetcher({"L1": [_fake_check("r1", NodeStatus.VERIFIED)]})
+    primary = _StructuredStubModel(output=GroupingResult(groups=[]))
+    retry = _StructuredStubModel(output=GroupingResult(groups=[]))
+
+    report = await build.build_report(
+        contract_name="C", backend="prover",
+        components=[_input("C", "autospec_C.spec", [_prop("p1", "d1")], gen)],
+        llm=primary, grouping_retry_llm=retry, fetch_verdicts=fetch,
+    )
+
+    assert [g.slug for g in report.groups] == [FALLBACK_SLUG]
+    assert any("FALLBACK GROUPING APPLIED" in w for w in report.coverage.warnings)
+
+
+def _source_with_doc(root: pathlib.Path, doc: DesignDocProvenance | None) -> SourceCode:
+    return SourceCode(
+        project_root=str(root), contract_name=cast(Any, "C"), relative_path="src/C.sol",
+        forbidden_read=fs_forbidden_read, content=None, design_doc=doc,
+    )
+
+
+def test_design_doc_record_is_project_relative_for_a_discovered_doc(tmp_path):
+    doc = DesignDocProvenance(path=tmp_path / "docs" / "README.md", origin="discovered", reason="r")
+    record = build.design_doc_record(_source_with_doc(tmp_path, doc))
+    assert record == DesignDocRecord(path="docs/README.md", origin="discovered", reason="r")
+
+
+def test_design_doc_record_keeps_a_path_outside_the_project_as_given(tmp_path):
+    outside = tmp_path / "elsewhere" / "spec.pdf"
+    doc = DesignDocProvenance(path=outside, origin="supplied")
+    record = build.design_doc_record(_source_with_doc(tmp_path / "project", doc))
+    assert record == DesignDocRecord(path=str(outside), origin="supplied", reason=None)
+
+
+def test_design_doc_record_is_none_for_a_source_only_run(tmp_path):
+    assert build.design_doc_record(_source_with_doc(tmp_path, None)) is None
+
+
+@pytest.mark.asyncio
+async def test_build_records_the_design_doc_and_it_round_trips():
+    gen = _gen({"p1": ["r1"]})
+    fetch = _fetcher({"L1": [_fake_check("r1", NodeStatus.VERIFIED)]})
+    llm = _StructuredStubModel(output=GroupingResult(groups=[PropertyGroupDraft(
+        slug="g", title="G", description="d", members=[("C", "p1")])]))
+    doc = DesignDocRecord(path="README.md", origin="discovered", reason="describes the system")
+
+    report = await build.build_report(
+        contract_name="C", backend="prover",
+        components=[_input("C", "autospec_C.spec", [_prop("p1", "d1")], gen)],
+        llm=llm, fetch_verdicts=fetch, design_doc=doc,
+    )
+
+    reloaded = AutoProverReport.model_validate_json(report.model_dump_json())
+    assert reloaded.design_doc == doc
+
+
+def test_report_without_a_design_doc_field_still_loads():
+    data = _mini_report().model_dump(mode="json")
+    data.pop("design_doc", None)
+    assert AutoProverReport.model_validate(data).design_doc is None
 
 
 @pytest.mark.asyncio

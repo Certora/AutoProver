@@ -9,7 +9,8 @@ be passed explicitly to agents that need it.
 
 from graphcore.tools.vfs import GlobalExcludeArg
 from dataclasses import dataclass
-from typing import Annotated, Callable, overload, Awaitable
+import pathlib
+from typing import Annotated, Callable, Literal, overload, Awaitable
 
 from pydantic import BaseModel, ValidationError
 
@@ -48,6 +49,17 @@ class SourceFields:
     relative_path: str
     forbidden_read: GlobalExcludeArg
 
+@dataclass(frozen=True)
+class DesignDocProvenance:
+    """The design document a run uses, and how it was chosen."""
+    path: pathlib.Path
+    #: ``"supplied"``: named on the command line. ``"discovered"``: chosen by the design-doc
+    #: finder from the project tree.
+    origin: Literal["supplied", "discovered"]
+    #: The finder's stated reason for its choice; None for a supplied document.
+    reason: str | None = None
+
+
 @dataclass
 class SourceCode(SourceFields):
     """Input when source code is available (source_spec).
@@ -60,6 +72,8 @@ class SourceCode(SourceFields):
     ``content`` is always present — so the natspec-only mode keeps its invariant.
     """
     content: Document | None
+    #: Where ``content`` came from; None for a source-only run.
+    design_doc: DesignDocProvenance | None = None
 
 # ---------------------------------------------------------------------------
 # Services protocol

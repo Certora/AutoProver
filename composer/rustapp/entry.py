@@ -55,7 +55,7 @@ from composer.rustapp.host import RustApplication, build_application, run_applic
 from composer.rustapp.result import RustFormalResult
 from composer.sandbox.config import SandboxConfig
 from composer.sandbox.recipes import DEFAULT_ENV_PASSTHROUGH
-from composer.spec.context import SourceCode, SourceFields, WorkflowContext
+from composer.spec.context import DesignDocProvenance, SourceCode, SourceFields, WorkflowContext
 from composer.spec.service_host import ModelProvider, PureServiceHost, ServiceHost
 from composer.spec.source.design_doc_finder import (
     DESIGN_DOC_DISCOVERY_TASK_ID,
@@ -322,11 +322,11 @@ async def rust_entry_point(
             # 1. Resolve the design doc: use the supplied path, else discover one as a
             #    visible task (needs the handler scope, which only exists here). Discovery
             #    may come up empty, which is not fatal — see below.
-            sys_path: pathlib.Path | None
+            design_doc: DesignDocProvenance | None
             if args.system_doc is not None:
-                sys_path = pathlib.Path(args.system_doc)
+                design_doc = DesignDocProvenance(path=pathlib.Path(args.system_doc), origin="supplied")
             else:
-                sys_path = await run_task(
+                design_doc = await run_task(
                     factory=handler,
                     info=TaskInfo(
                         task_id=DESIGN_DOC_DISCOVERY_TASK_ID,
@@ -339,6 +339,7 @@ async def rust_entry_point(
                     ),
                     semaphore=semaphore,
                 )
+            sys_path = design_doc.path if design_doc is not None else None
 
             # ``sys_path`` is None only when discovery found nothing: run source-only.
             if sys_path is not None:
@@ -358,6 +359,7 @@ async def rust_entry_point(
             )
             source_input = SourceCode(
                 content=content,
+                design_doc=design_doc,
                 project_root=str(project_root),
                 contract_name=contract_name,
                 relative_path=relative_path,
