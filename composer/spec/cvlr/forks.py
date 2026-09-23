@@ -1,20 +1,33 @@
-"""Redirect a dependency at a Certora-maintained fork when the crates.io crate cannot be analyzed.
+"""Build a Solana project against Certora's forks of Anchor and ``fixed``, not the crates.io ones.
 
-Upstream ``anchor_lang::error::Error`` boxes its payload. The Solana Prover rejects the
-``Box::new`` of that stack-built struct as [3006], "illegal store of a stack pointer", on Anchor
-dispatch and on handlers that use ``?``. The fork's ``Error`` is unboxed. The same fork simplifies
-``require!``, silences ``emit!``, and adds public constructors. ``anchor-spl`` there adds
-``new_unchecked`` for ``TokenAccount`` and ``Mint``, whose fields upstream keeps private.
+Anchor is the framework most Solana programs are written in. A program uses it through the
+``anchor-lang`` crate, and usually ``anchor-spl`` for token accounts, both from crates.io. The
+Solana Prover cannot analyze those crates as published. Anchor's error type,
+``anchor_lang::error::Error``, moves a struct built on the stack into a heap allocation
+(``Box::new``), and the Prover rejects that as [3006], "illegal store of a stack pointer".
+Anchor's generated entry point runs that code, and so does any handler that returns an error with
+``?``. Against upstream Anchor, in practice, no instruction of the program can be verified.
 
-``Certora/anchor`` has a branch per upstream release it covers. ``Certora/fixed`` is the same kind
-of fork for the ``fixed`` crate: it adds conversions upstream does not provide, such as
-``From<u64>`` for ``FixedU64``.
+``Certora/anchor`` is a copy of the Anchor repository with that fixed. For each Anchor release it
+supports, it has one branch, ``certora-v<version>``, holding that release plus Certora's changes:
+an ``Error`` that does not box, a simpler ``require!``, an ``emit!`` that does nothing, and public
+constructors a harness needs, such as ``new_unchecked`` for ``anchor-spl``'s ``TokenAccount`` and
+``Mint``, whose fields upstream keeps private. Otherwise the branch has the same API as the
+release, so the program compiles unchanged against the branch for the Anchor version it already
+uses. This module reads that version from the resolved dependency graph and adds a
+``[patch.crates-io]`` entry to the workspace manifest pointing cargo at the matching branch.
 
-Branches are an explicit list, not a pattern. A version with no branch blocks the plan. A derived
-name would send cargo after a branch that does not exist, and the error would be about git.
+``Certora/fixed`` is organized the same way, for the ``fixed`` fixed-point crate, for a different
+reason: it adds conversions a harness needs to construct values, such as ``From<u64>`` for
+``FixedU64``, which upstream does not provide.
 
-A project set up by hand usually stays on the crates.io crates, and hits [3006] with nothing
-pointing at a fork.
+The supported versions are listed explicitly (:data:`ANCHOR_FORK`, :data:`FIXED_FORK`) rather than
+derived from the version number. A version with no branch blocks the plan with a message saying
+which versions are covered. A derived name would send cargo after a branch that does not exist,
+and the failure would be a git fetch error that says nothing about coverage.
+
+A project set up by hand usually stays on the crates.io crates, and hits [3006] with nothing in
+the error pointing at the fork.
 """
 
 import logging
