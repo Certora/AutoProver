@@ -75,6 +75,7 @@ from composer.spec.cvlr.verify import (
     VerifyDeps,
     prover_stamper,
 )
+from composer.spec.cvlr_reference import SOLANA, ChainReference
 from composer.spec.solana.model import (
     SolanaApplication,
     SolanaComponentInstance,
@@ -430,6 +431,11 @@ class CvlrBackend:
     #: The package to verify. ``None`` lets preflight pick it when there is only one candidate; a
     #: workspace with several is refused rather than guessed at.
     package: str | None = None
+    #: The CVLR releases this run scaffolds the target with. Beside :attr:`package` because it is
+    #: the same kind of decision: what this run is pointed at. Narrowed by
+    #: :meth:`~composer.spec.cvlr_reference.ChainReference.withholding` when the target is itself
+    #: the program one of the specializations models.
+    reference: ChainReference = SOLANA
 
     backend_guidance = SOLANA_CVLR_GUIDANCE
     analysis_spec = SystemAnalysisSpec("solana-analysis", "solana-properties")
@@ -449,7 +455,9 @@ class CvlrBackend:
         stops the run having spent at most one partial analysis agent instead of surfacing as
         unfixable compiler errors after the whole extraction phase. The gate is a build, so it goes
         on the run's CPU budget rather than its agent budget."""
-        pre = await prepare_workspace(Path(run.source.project_root), package=self.package)
+        pre = await prepare_workspace(
+            Path(run.source.project_root), package=self.package, reference=self.reference
+        )
 
         async def gate() -> None:
             await gate_workspace(pre, sandbox=self.sandbox)

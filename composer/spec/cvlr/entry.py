@@ -54,6 +54,7 @@ from composer.spec.context import SourceFields
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness
 from composer.spec.cvlr.pipeline import BUILD_DIR, WORK_DIR, CvlrBackend, CvlrPhase
 from composer.spec.cvlr.preflight import SelectedPackage, select_package
+from composer.spec.cvlr_reference import reference_for
 from composer.spec.service_host import PureServiceHost
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.source_env import build_layered_source_tools, build_source_tools
@@ -86,6 +87,7 @@ class CvlrArgs(ExtendedModelOptions, Protocol):
     main_contract: str
     system_doc: str | None
     package: str | None
+    withhold_crate: list[str]
     rag_corpus: str
     max_concurrent: int
     max_cpu_tasks: int
@@ -129,6 +131,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--package", default=None,
         help="Cargo package to verify. Defaults to the crate that owns the main program's source "
              "file; name it when that is not the crate to build.",
+    )
+    parser.add_argument(
+        "--withhold-crate", action="append", default=[], metavar="CRATE",
+        help="A CVLR specialization the scaffold must not give this project, repeatable. Use it "
+             "when the target IS the on-chain program a specialization models — verifying the "
+             "stake program with cvlr-solana-stake in scope hands the author a model of the very "
+             "instructions it is meant to specify. Refused if CRATE is not a specialization.",
     )
     parser.add_argument(
         "--rag-corpus", default=DEFAULT_CORPUS,
@@ -427,6 +436,9 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
                     store=staged.conns.store, namespace=("cvlr_cex", thread_id)
                 ),
                 package=selected.name,
+                # The ecosystem's name is the chain key, so the reference set is looked up rather
+                # than imported: this module's ``SOLANA`` is the ecosystem, not the reference.
+                reference=reference_for(SOLANA.name).withholding(*args.withhold_crate),
             )
             return await cont(env, backend)
 
