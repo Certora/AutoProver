@@ -259,7 +259,7 @@ def _verify_attempts(state: GatedGiveUpState) -> int:
         for msg in state.get("messages", [])
         if isinstance(msg, AIMessage)
         for call in msg.tool_calls
-        if call["name"] == "verify_spec"
+        if call["name"] == "submit_buffer"
     )
 
 

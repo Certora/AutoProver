@@ -1,17 +1,20 @@
 """
-Spec-side prover tool: wraps composer/prover/core.py into a LangGraph tool.
+Spec-side prover tools: wrap composer/prover/core.py into LangGraph tools.
 
-Provides get_prover_tool() which creates a verify_spec tool that:
-- Reads curr_spec from injected state
-- Writes a temporary .spec file
-- Runs the Certora prover via run_prover()
-- Streams output/polling events via custom stream writer
+Provides get_prover_tool(), whose submit_buffer / collect_results tools:
+- Materialize each run-target buffer to a temporary .spec file
+- Run the Certora prover via run_prover() as background per-buffer jobs
+- Stream output/polling events via a custom stream writer
+- Report results as jobs finish, without blocking on a whole batch
 """
 
 import asyncio
+import functools
 import json
 import logging
+import os
 import time
+from dataclasses import dataclass
 from contextlib import contextmanager, asynccontextmanager, ExitStack, nullcontext
 from pathlib import Path
 from typing import (
@@ -24,19 +27,19 @@ from graphcore.tools.vfs import VFSAccessor, VFSState
 
 from composer.spec.source.live_explorer import VersionedHistory
 
-from langchain_core.tools import InjectedToolCallId, tool, BaseTool
+from langchain_core.tools import tool, BaseTool
 from langchain_core.messages import AIMessage
-from langgraph.prebuilt import InjectedState
 from pydantic import BaseModel, Field, Discriminator
 
 from langgraph.config import get_stream_writer
 from langgraph.types import Command
 from composer.prover.ptypes import RuleResult, RulePath
 from graphcore.graph import LLM
+from graphcore.tools.schemas import WithInjectedId, WithInjectedState
 
 from composer.prover.core import (
     ProverOptions, SpecCompilationError, declared_rules_list, run_prover,
-    DefaultCexHandler
+    DefaultCexHandler, ProverReport
 )
 from composer.prover.callbacks import ProverEventCallbacks
 from composer.prover.ptypes import StatusCodes
@@ -47,13 +50,16 @@ from composer.diagnostics.stream import (
 )
 from composer.authoring.state import make_validation_stamper, spec_digest
 from composer.spec.cvl_generation import CVLGenerationState
-from composer.diagnostics.budget import exhausted_constraint, raise_budget_exceeded
+from composer.diagnostics.budget import budget_pressure, exhausted_constraint, raise_budget_exceeded
 from composer.diagnostics.timing import RunSummary, get_run_summary
 from graphcore.graph import tool_state_update
 from composer.spec.util import temp_certora_file
-from composer.spec.gen_types import CERTORA_DIR, SPECS_DIR
+from composer.spec.gen_types import CERTORA_DIR, SPECS_DIR, buffer_spec_path, component_specs_dir
 from composer.spec.util import string_hash
 from composer.spec.source.cex_capture import CexAnalysisStore
+from composer.spec.source.spec_buffers import (
+    NamedBuffer, SpecBuffersExtra, buffer_state_digest, run_targets,
+)
 
 
 _logger = logging.getLogger("composer.prover")
@@ -62,7 +68,7 @@ _logger = logging.getLogger("composer.prover")
 OVERLAY_OWNED_KEYS: frozenset[str] = frozenset({
     # forced by prover_config_overlay
     "verify", "parametric_contracts", "optimistic_loop", "rule_sanity",
-    # set per-run by verify_spec
+    # set per prover run
     "rule", "msg",
 })
 """Config keys the run pipeline forces onto the base config after spreading it: a
@@ -74,7 +80,7 @@ from this set, or an "accepted" flag edit would never reach the prover."""
 def prover_config_overlay(base_config: dict, *, main_contract: str, verify_target: str) -> dict:
     """The fixed prover settings the source pipeline layers on top of the base config.
 
-    Shared by the live ``verify_spec`` run and the persisted ``certora/confs`` dump so the
+    Shared by the live prover run and the persisted ``certora/confs`` dump so the
     two can't drift. ``verify_target`` is the ``<contract>:<spec path>`` the run verifies.
     """
     return {
@@ -92,6 +98,9 @@ DELETE_SKIP = "__delete_skip"
 
 VALIDATION_KEY = "prover"
 
+# How often the idle collect wait wakes to re-check the budget wrap-up guard while no job has finished.
+_IDLE_WAIT_TICK = 15.0
+
 def _merge_rule_skips(left: dict[str, str], right: dict[str, str]) -> dict[str, str]:
     to_ret = left.copy()
     for (k,v) in right.items():
@@ -106,6 +115,28 @@ class RuleSelection(TypedDict):
     sort: Literal["exclude", "include"]
     selector: list[str]
 
+def _selection_of(rule: list[str] | None, exclude_rules: list[str] | None) -> RuleSelection | None:
+    """The ``RuleSelection`` a submit_buffer call asks for, or None to run the whole buffer."""
+    if rule is not None:
+        return RuleSelection(sort="include", selector=rule)
+    if exclude_rules is not None:
+        return RuleSelection(sort="exclude", selector=exclude_rules)
+    return None
+
+def _selection_key(sel: RuleSelection | None) -> str:
+    """A stable key distinguishing one buffer's rule selections, so striped runs (different subsets of
+    the same buffer at the same content) coexist as separate jobs instead of deduping each other. The
+    whole-buffer run keys to the empty string."""
+    if sel is None:
+        return ""
+    return f"{sel['sort']}:{','.join(sorted(sel['selector']))}"
+
+def _apply_selection(config: dict, selection: RuleSelection | None) -> None:
+    """Write a rule subset onto a prover conf: ``rule`` for an include selection, ``exclude_rule`` for
+    an exclude one; a None selection leaves the conf running every rule."""
+    if selection is not None:
+        config["rule" if selection["sort"] == "include" else "exclude_rule"] = list(selection["selector"])
+
 class ProverRunLog(TypedDict):
     tool_call_id: str
     prover_results: list[tuple[RulePath, StatusCodes]]
@@ -114,10 +145,12 @@ class ProverRunLog(TypedDict):
     sort: Literal["run"]
     declared_rules: list[str]
     state_digest: str
-    #: The run's job link, so a verdict can be traced back to the run that produced it: a
-    #: scoped run's results are the only record of the rules it alone covered. ``NotRequired``
-    #: because a thread checkpointed before this field existed replays without it.
-    link: NotRequired[str | None]
+    # The spec buffer this run belongs to; absent for a single-curr_spec run. Each buffer has its own
+    # spec/digest, so completion is evaluated per buffer over its own runs (see _history_for_buffer).
+    buffer: NotRequired[str]
+    # This run's prover-run link: the job URL (cloud) or local results dir the run wrote its output
+    # to; None for a run that produced no link.
+    link: str | None
 
 class NagMarker(TypedDict):
     nagged_rules: list[RulePath]
@@ -323,6 +356,64 @@ def _is_completion_history(
             return True
     return False
 
+def _history_for_buffer(l: list[ProverHistoryItem], buffer: str) -> list[ProverHistoryItem]:
+    """The prover history restricted to one buffer's runs (nag markers pass through). Each buffer has
+    its own spec, hence its own ``state_digest``; filtering first keeps :func:`_iterate_history`'s
+    digest streak from being truncated by an interleaved run of a different buffer."""
+    return [it for it in l if it["sort"] != "run" or it.get("buffer") == buffer]
+
+
+def buffer_is_complete(
+    l: list[ProverHistoryItem],
+    *,
+    buffer: str,
+    curr_digest: str,
+    expected_to_fail: set[str],
+    curr_status: list[tuple[RulePath, StatusCodes]],
+    all_rules: list[str],
+) -> bool:
+    """Whether one buffer's rules are all verified against its current digest, evaluated over that
+    buffer's own runs. Overall completion is the AND of this across every run-target buffer."""
+    return _is_completion_history(
+        l=_history_for_buffer(l, buffer),
+        curr_digest=curr_digest,
+        expected_to_fail=expected_to_fail,
+        curr_status=curr_status,
+        all_rules=all_rules,
+    )
+
+
+def completing_run_specs(
+    prover_history: list[ProverHistoryItem],
+    buffers: Mapping[str, NamedBuffer],
+    *,
+    version_history: Sequence[str],
+    config: Mapping[str, object] | None = None,
+    slug: str,
+) -> list[tuple[str, str]]:
+    """(run link, the spec it verified — ``<slug>/<buffer>.spec``, its conf's spec path under
+    ``certora/specs/``) for the runs whose completed results compose the run-target buffers at their
+    current digests — the same runs :func:`buffer_is_complete` considers. Rule-striping runs one buffer's
+    rules across several jobs, so all of those links are included. Newest run first, deduped by link."""
+    runs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for b in run_targets(buffers):
+        digest = buffer_state_digest(
+            buffers, b.name, version_history=version_history, config=config,
+        )
+        for elem in reversed(_history_for_buffer(prover_history, b.name)):
+            if elem["sort"] != "run":
+                continue
+            if elem["state_digest"] != digest:
+                break  # older runs sit at a superseded digest — the same cutoff as _iterate_history
+            link = elem.get("link")
+            if link and link not in seen:
+                seen.add(link)
+                spec = buffer_spec_path(slug, b.name).relative_to(SPECS_DIR).as_posix()
+                runs.append((link, spec))
+    return runs
+
+
 def _merge_prover_history(left: list[ProverHistoryItem], right: list[ProverHistoryItem]) -> list[ProverHistoryItem]:
     to_ret = left.copy()
     to_ret.extend(right)
@@ -331,9 +422,6 @@ def _merge_prover_history(left: list[ProverHistoryItem], right: list[ProverHisto
 class ProverStateExtra(TypedDict):
     rule_skips: Annotated[dict[str, str], _merge_rule_skips]
     config: dict
-    # Link of the last prover run this generation performed (URL or local results dir).
-    # Last-write-wins; absent until the first prover run. Read at completion onto GeneratedCVL.
-    prover_link: NotRequired[str | None]
     # Basename the spec is materialized/persisted under (e.g. "autospec_<slug>").
     # NotRequired so other ProverStateExtra injectors (e.g. config_edit) needn't set it.
     spec_stem: NotRequired[str]
@@ -344,7 +432,7 @@ class ProverStateExtra(TypedDict):
     #: injectors that set no plugin tools.
     plugin_tools: NotRequired[list[str]]
 
-    # The author's working copy of the source under verification; verify_spec runs
+    # The author's working copy of the source under verification; the prover runs
     # against its materialization when non-empty (see ProjectDirectory). Absent/empty
     # outside the editing-enabled pipeline. No merge op intentionally: the vfs is
     # only ever replaced wholesale (commit_edit / revert_to_edit).
@@ -352,11 +440,11 @@ class ProverStateExtra(TypedDict):
 
 type ProverEvents = CEXAnalysisStart | CloudPollingEvent | ProverOutputEvent | RuleAnalysisResult | ProverRun | ProverLink | ProverResult
 
-# ``verify_spec`` only runs in the source pipeline, whose state always seeds
-# ``version_history`` — permanently empty for an author that never edited, in
-# which case it contributes nothing to the digest. The prover's validation stamp is bound to it so a
+# The source pipeline's state always seeds ``version_history`` — permanently
+# empty for an author that never edited, in which case it contributes nothing to
+# the digest. The prover's validation stamp is bound to it so a
 # post-run edit invalidates the stamp.
-class StateWithSkips(CVLGenerationState, ProverStateExtra, VersionedHistory):
+class StateWithSkips(CVLGenerationState, ProverStateExtra, VersionedHistory, SpecBuffersExtra):
     pass
 
 class _SpecCallbacks(ProverEventCallbacks):
@@ -463,48 +551,22 @@ class _SpecCallbacks(ProverEventCallbacks):
         await super().on_analysis_complete(rule, explanation)
 
 
-class VerifySpecSchema(BaseModel):
-    """
-    Run the Certora prover to verify the current spec against the source code.
-
-    Returns verification results:
-    - VERIFIED: Rule holds for all inputs
-    - VIOLATED: Counterexample found (with CEX analysis)
-    - TIMEOUT: Verification did not complete in time
-
-    Use these results to refine your spec.
-    """
-    tool_call_id: Annotated[str, InjectedToolCallId]
-
-    rules: list[str] | None = Field(
-        default=None,
-        description="Specific rules to verify. If None, verifies all rules. Mutually exclusive with the `exclude_rules` argument"
-    )
-
-    exclude_rules: list[str] | None = Field(
-        default=None,
-        description="Specific rules to SKIP verifying. If none validates all rules. Mutually exclusive with `rules` argument"
-    )
-
-    state: Annotated[StateWithSkips, InjectedState]
-
-
 @contextmanager
 def tmp_spec(
     *,
     root: str,
     content: str,
     name: str | None = None,
+    dest_dir: Path = SPECS_DIR,
 ) -> Iterator[str]:
-    # Materialize under the canonical specs dir -- the same directory the spec is
-    # ultimately persisted to -- so the prover resolves the spec's CVL imports
-    # (e.g. ``summaries/X.spec``) identically at verify-time and after dumping.
+    # Materialize under the same directory the spec is ultimately persisted to, so the prover resolves
+    # the spec's CVL imports (e.g. ``../summaries/X.spec``) identically at verify-time and after dumping.
     with temp_certora_file(
         root=root,
         ext="spec",
         content=content,
         name=name,
-        dest_dir=SPECS_DIR,
+        dest_dir=dest_dir,
     ) as tmp:
         yield tmp
 
@@ -529,19 +591,14 @@ def in_situ_project(project_root: str) -> ProjectDirectory:
     return provide
 
 
-def materializing_project(
-    project_root: str, accessor: VFSAccessor[VFSState]
-) -> ProjectDirectory:
-    """The editing strategy: an empty VFS runs in-situ; a non-empty VFS is
-    materialized over the project into a temporary directory that lives for
-    the duration of the run. The copy (and the teardown) run in a worker
-    thread — materializing a whole project is blocking IO that would
-    otherwise stall every concurrently-streaming batch."""
+def materializing_project(accessor: VFSAccessor[VFSState]) -> ProjectDirectory:
+    """Materialize the project — the author's VFS overlay unioned over the base source tree — into a
+    fresh temporary directory that lives for the duration of the run, so every run is the sole tenant
+    of its own folder and concurrent runs never share on-disk scratch. The copy (and the teardown) run
+    in a worker thread — materializing a whole project is blocking IO that would otherwise stall every
+    concurrently-streaming batch."""
     @asynccontextmanager
     async def provide(vfs: dict[str, str]) -> AsyncIterator[str]:
-        if not vfs:
-            yield project_root
-            return
         stack = ExitStack()
         tmp = await asyncio.to_thread(
             stack.enter_context, accessor.materialize({"vfs": vfs})
@@ -574,10 +631,7 @@ def setup_prover_config_in(
             config, main_contract=main_contract, verify_target=f"{main_contract}:{generated_path}"
         )
         config.update(config_extra)
-        if rule is not None:
-            config["rule"] = rule
-        if exclude_rule is not None:
-            config["exclude_rule"] = exclude_rule
+        _apply_selection(config, _selection_of(rule, exclude_rule))
         with temp_certora_file(
             root=working_dir,
             content=json.dumps(config, indent=2),
@@ -588,193 +642,447 @@ def setup_prover_config_in(
         ) as conf_path:
             yield (conf_path, config)
 
+def stuck_rule_nag(
+    status_pairs: list[tuple[RulePath, StatusCodes]],
+    prover_update: list[ProverHistoryItem],
+    state: StateWithSkips,
+) -> list[str]:
+    """Warn when a rule has repeated the identical failure across recent runs: append a NagMarker to
+    ``prover_update`` and return the reminder lines (empty when nothing is stuck). Shared by the
+    single-spec and per-buffer verify paths."""
+    stuck_rules = {
+        k: v for (k, v) in status_pairs
+        if v in ("TIMEOUT", "ERROR", "SANITY_FAILED") and k.rule not in state["rule_skips"]
+    }
+    known_tc_ids = {
+        l["id"] for msg in state["messages"] if isinstance(msg, AIMessage)
+        for l in msg.tool_calls if l["name"] == "collect_results"
+    }
+    to_warn, seen_post_compaction_history = stuck_rule_warnings(
+        stuck_rules, state["prover_history"], known_tc_ids
+    )
+    if not to_warn:
+        return []
+    prover_update.append(NagMarker(sort="nag", nagged_rules=list(to_warn)))
+    return stuck_rule_reminder(
+        to_warn,
+        plugin_tools=state.get("plugin_tools") or (),
+        seen_post_compaction_history=seen_post_compaction_history,
+    )
+
+
+@contextmanager
+def materialize_buffers(
+    working_dir: str, buffers: Mapping[str, NamedBuffer], slug: str
+) -> Iterator[dict[str, str]]:
+    """Write every buffer as ``{name}.spec`` into the component's spec dir ``certora/specs/<slug>/`` (all
+    at once, so any buffer's ``import "<sibling>.spec"`` resolves to its sibling, while
+    ``import "../summaries/X.spec"`` resolves to the shared summaries a level up), and yield
+    ``name -> on-disk spec path``; every file is removed on exit. The run owns its materialized project
+    folder, so the deterministic filenames never collide with a concurrent job's."""
+    dest_dir = component_specs_dir(slug)
+    with ExitStack() as stack:
+        yield {
+            name: stack.enter_context(
+                tmp_spec(root=working_dir, content=buf.cvl, name=name, dest_dir=dest_dir)
+            )
+            for name, buf in buffers.items()
+        }
+
+
+@contextmanager
+def buffer_conf(
+    *,
+    working_dir: str,
+    config: dict,
+    main_contract: str,
+    spec_path: str,
+    buffer_name: str,
+    conf_dir: Path,
+    msg: str,
+    selection: RuleSelection | None = None,
+) -> Iterator[tuple[str, dict]]:
+    """Build a conf verifying an already-materialized buffer spec at ``spec_path`` (its imports resolve
+    to the sibling ``.spec`` files written by :func:`materialize_buffers`). ``selection`` restricts the
+    run to a subset of the buffer's rules. Yields (conf_path, config)."""
+    cfg = prover_config_overlay(
+        config, main_contract=main_contract, verify_target=f"{main_contract}:{spec_path}"
+    )
+    cfg["msg"] = msg
+    _apply_selection(cfg, selection)
+    with temp_certora_file(
+        root=working_dir,
+        content=json.dumps(cfg, indent=2),
+        ext="conf",
+        name=f"verify_{buffer_name}",
+        prefix="verify",
+        dest_dir=conf_dir,
+    ) as conf_path:
+        yield (conf_path, cfg)
+
+
+class _SubmitBufferArgs(WithInjectedState[StateWithSkips], WithInjectedId):
+    """
+    Submit one run-target buffer for verification as an independent background prover job, and return
+    immediately — the job proves while you keep working. Submit each buffer as soon as it is ready;
+    buffers prove in parallel. Re-submitting a buffer relaunches it (superseding any in-flight job for
+    it), which is how you re-verify a buffer after editing it, or after editing a shared buffer it
+    imports. A buffer already verified at its current content, or already running, is not re-launched.
+    Retrieve outcomes with collect_results.
+
+    By default the job runs every rule of the buffer. To keep one expensive rule from holding up the
+    cheap ones, submit a subset with `rule` (or run the rest with `exclude_rules`): the subsets share
+    the buffer's one compiled spec, prove as separate parallel jobs, and their results combine — the
+    buffer is verified once every rule has been covered by some run at the current content. Use this to
+    isolate a rule by *cost*; use separate buffers to isolate rules by *precision* (differing summary
+    needs).
+    """
+    name: str = Field(description="The run-target buffer to submit for verification.")
+    rule: list[str] | None = Field(
+        default=None,
+        description="Run only these rules of the buffer (a subset of its own rules). Mutually exclusive "
+        "with `exclude_rules`; omit both to run the whole buffer.",
+    )
+    exclude_rules: list[str] | None = Field(
+        default=None,
+        description="Run every rule of the buffer except these. Mutually exclusive with `rule`.",
+    )
+
+
+class _CollectResultsArgs(WithInjectedState[StateWithSkips], WithInjectedId):
+    """
+    Retrieve the results of finished buffer jobs (submitted with submit_buffer). Returns each finished
+    buffer's prover outcome plus a status board: which buffers are complete, still running, or need
+    (re)submission. By default it does NOT block — it returns whatever has finished so far (possibly
+    nothing), so you can go author or submit other buffers instead of waiting. Pass wait=true ONLY when
+    you have no other work: every buffer submitted and running, with no finished result left to process;
+    it then sleeps until the next job finishes.
+    """
+    wait: bool = Field(
+        default=False,
+        description="Block until the next job finishes. Set true ONLY when you have no other work: "
+        "every buffer is submitted and running and you have no finished result left to process. "
+        "Leave false to take whatever has finished so far without waiting.",
+    )
+
+
+@dataclass
+class ProverToolset:
+    """The prover-side agent tools. ``make_buffer_tools`` mints a fresh ``[submit_buffer,
+    collect_results]`` pair that submit per-buffer jobs asynchronously and consume results as they
+    finish; each pair owns its in-flight job state (queue, job table, submit counts, reported
+    dupes)."""
+
+    make_buffer_tools: Callable[[], list[BaseTool]]
+
+
+@dataclass
+class _BufJob:
+    """One in-flight (or just-finished) per-buffer prover job. At most one per buffer name at a time;
+    re-submitting a buffer supersedes (cancels) a stale predecessor. Lives in the prover tool's closure,
+    not in graph state — asyncio tasks span agent turns and are not serializable."""
+
+    name: str
+    #: The buffer's content digest at submit time; a completion is credited only at the current digest,
+    #: so a job whose digest is now stale (its buffer or a shared import changed) can't mark it done.
+    digest: str
+    task: asyncio.Task[None]
+    #: The rule subset this job runs, or None for the whole buffer. Jobs of one buffer are keyed by
+    #: ``(name, _selection_key(selection))``, so striped runs at the same content coexist.
+    selection: RuleSelection | None = None
+
+
+@dataclass
+class _BufDone:
+    """A finished buffer job's payload, delivered through the completion queue to ``collect_results``."""
+
+    name: str
+    digest: str
+    #: The prover report, or a compile/toolchain error message (str) that aborts only this buffer.
+    result: ProverReport | str
+    all_rules: list[str]
+    #: The rule subset this run covered, recorded onto the run's ``ProverRunLog.rules``.
+    selection: RuleSelection | None = None
+
+
 def get_prover_tool(
     llm: LLM,
     main_contract: str,
     project_directory: ProjectDirectory,
     prover_opts: ProverOptions,
     analysis_store: CexAnalysisStore | None = None,
-) -> BaseTool:
+) -> ProverToolset:
     sem = _prover_sem(prover_opts.cloud)
     stamper = make_validation_stamper(VALIDATION_KEY)
-    # Serialize verify calls targeting the same spec name: the spec/conf are written
-    # under a deterministic name and unlinked on exit, so two overlapping same-stem
-    # calls (e.g. parallel verify_spec for one component) would race. Distinct stems
-    # stay concurrent (notably on cloud, where ``sem`` is a no-op).
-    # Not pruned: bounded by this run's stems (per-component + invariants) and dies with
-    # the per-run tool; popping a held lock would let a later same-stem call mint a fresh,
-    # non-excluding one.
-    spec_locks: dict[str, asyncio.Lock] = {}
 
-    @tool_display("Running prover", None)
-    @tool(args_schema=VerifySpecSchema)
-    async def verify_spec(
-        tool_call_id: Annotated[str, InjectedToolCallId],
-        state: Annotated[StateWithSkips, InjectedState],
-        rules: list[str] | None = None,
-        exclude_rules: list[str] | None = None
-    ) -> str | Command:
-        last_msg = state["messages"][-1]
-        if isinstance(last_msg, AIMessage) and any(
-            i["id"] != tool_call_id for i in last_msg.tool_calls
-        ):
-            return "Cannot call the verify_spec tool in parallel with other tool calls. verify_spec must be the only tool you call in a turn"
+    def component_of(state: StateWithSkips) -> str:
+        """The label prefix for this generation's prover runs: its seeded spec stem, or the main
+        contract, with the ``autospec_`` prefix stripped."""
+        return (state.get("spec_stem") or main_contract).removeprefix("autospec_")
 
-        if rules is not None and exclude_rules is not None:
-            return "Cannot invoke the prover with both `rules` and `exclude_rules` set to non-none"
+    # ---- Multi-buffer async submit / collect -------------------------------------------------
+    # The agent submits each run-target buffer as an independent background job and consumes results
+    # as they finish, so a fast group is reviewed while a slow group is still proving. A shared-buffer
+    # edit re-verifying every importer rides the content digest.
 
-        spec = state["curr_spec"]
-        if spec is None:
-            return "Specification not yet put on VFS"
+    def make_buffer_tools() -> list[BaseTool]:
+        """Mint a fresh ``[submit_buffer, collect_results]`` pair with its own in-flight job state:
+        a new queue, job table, submit counts, and reported-dupe set per call, so separate pairs
+        never drain or suppress each other's jobs. The prover semaphore and the other deps stay
+        shared from the enclosing scope."""
+        # Multi-buffer async job state, held in the closure (not graph state) so it spans agent turns:
+        # submit_buffer launches a background task per buffer and returns immediately; collect_results
+        # drains finished jobs off the queue. At most one live job per buffer name — a re-submit supersedes
+        # a stale predecessor. See submit_buffer / collect_results below.
+        # Keyed by (buffer name, selection key): one buffer can have several concurrent jobs, one per
+        # rule subset it was striped into. A content edit supersedes every one of them (digest changes).
+        buffer_jobs: dict[tuple[str, str], _BufJob] = {}
+        done_queue: asyncio.Queue[_BufDone] = asyncio.Queue()
+        submit_counts: dict[str, int] = {}
 
-        spec_hash = string_hash(
-            spec
-        )
+        async def _run_buffer_job(
+            *, name: str, digest: str, label: str, buffers: Mapping[str, NamedBuffer],
+            vfs: dict[str, str], conf: dict, cex_state: StateWithSkips, tool_call_id: str,
+            writer: Callable[[ProverEvents], None], summary: RunSummary,
+            selection: RuleSelection | None = None,
+        ) -> None:
+            """Verify one buffer end-to-end against a frozen snapshot (taken at submit time) of the source
+            and all buffers, then push the outcome onto the completion queue. The job runs in its own
+            materialized project folder, so editing + re-submitting a shared buffer (or a concurrent
+            sibling job) can never mutate the files this job is reading. Cancellation (a supersede) propagates
+            as CancelledError and pushes nothing — the superseded result is simply dropped."""
+            conf_dir = CERTORA_DIR / "confs"
+            try:
+                async with sem, project_directory(vfs) as run_root:
+                    with materialize_buffers(run_root, buffers, component_of(cex_state)) as paths:
+                        spec_path = paths[name]
+                        with buffer_conf(
+                            working_dir=run_root, config=conf, main_contract=main_contract,
+                            spec_path=spec_path, buffer_name=name, conf_dir=conf_dir, msg="",
+                        ) as (cpath, _cfg):
+                            try:
+                                all_rules = await declared_rules_list(folder=Path(run_root), args=[cpath])
+                            except SpecCompilationError as exc:
+                                await done_queue.put(_BufDone(
+                                    name, digest, f"[buffer {name}] failed to compile:\n{exc.output}", [],
+                                ))
+                                return
+                        with buffer_conf(
+                            working_dir=run_root, config=conf, main_contract=main_contract,
+                            spec_path=spec_path, buffer_name=name, conf_dir=conf_dir, msg=label,
+                            selection=selection,
+                        ) as (cpath, cfg):
+                            res = await run_prover(
+                                Path(run_root), [cpath], tool_call_id, prover_opts,
+                                _SpecCallbacks(writer, tool_call_id, summary, cfg, analysis_store=analysis_store),
+                                DefaultCexHandler(llm, cex_state, summarization_threshold=10),
+                            )
+                await done_queue.put(_BufDone(name, digest, res, all_rules, selection))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # a job crash must not sink silently — surface it on the queue
+                _logger.exception("buffer job %s crashed", name)
+                await done_queue.put(_BufDone(name, digest, f"[buffer {name}] job error: {exc}", [], selection))
 
-        if (last_run := last_prover_run(state["prover_history"])) is not None:
-            if any(i == "TIMEOUT" for (_,i) in last_run["prover_results"]) and last_run["spec_digest"] == spec_hash:
-                return "Refusing to re-run prover on identical spec with a known TIMEOUT result; timeouts are not transient " \
-                    "errors and will not go away by re-running the tool."
-
-        conf = state["config"]
-        # With a seeded stem, name the spec/conf after it (so on-disk names match the
-        # dump) under a lock; else fall back to unique uid names (no lock needed).
-        spec_stem = state.get("spec_stem")
-        summary = get_run_summary()
-        component = (spec_stem or main_contract).removeprefix("autospec_")
-        iteration = len(state["prover_history"]) + 1
-
-        conf_dir = (CERTORA_DIR / "confs") if spec_stem is not None else CERTORA_DIR
-        lock = spec_locks.setdefault(spec_stem, asyncio.Lock()) if spec_stem is not None else nullcontext()
-        prover_msg = f"{component} iteration number {iteration}"
-
-        summary = get_run_summary()
-
-        component = (spec_stem or main_contract).removeprefix("autospec_")
-        iteration = len(state["prover_history"]) + 1
-        prover_msg = f"{component} iteration number {iteration}"
-
-
-        async def run_in(run_root: str) -> str | Command:
-            with setup_prover_config_in(
-                working_dir=run_root,
-                main_contract=main_contract,
-                spec_stem=spec_stem,
-                spec_contents=spec,
-                conf_dir=conf_dir,
-                config=conf,
-                rule=None,
-                exclude_rule=None,
-                msg=""
-            ) as (config_path, _ignored):
-                try:
-                    all_rules = await declared_rules_list(
-                        folder=Path(run_root),
-                        args=[config_path]
-                    )
-                except SpecCompilationError as exc:
-                    return f"The spec failed to compile:\n{exc.output}"
-            with setup_prover_config_in(
-                working_dir=run_root,
-                main_contract=main_contract,
-                spec_stem=spec_stem,
-                spec_contents=spec,
-                conf_dir=conf_dir,
-                config=conf,
-                rule=rules,
-                exclude_rule=exclude_rules,
-                msg=prover_msg
-            ) as (config_path, config):
-                async with sem:
-                    result = await run_prover(
-                        Path(run_root),
-                        [config_path],
-                        tool_call_id,
-                        prover_opts,
-                        _SpecCallbacks(get_stream_writer(), tool_call_id, summary, config,
-                                        analysis_store=analysis_store),
-                        DefaultCexHandler(llm, state, summarization_threshold=10)
-                    )
-
-            if isinstance(result, str):
-                return result
-
-            stuck_rules = {
-                k: v for (k,v) in result.raw_rule_status.items() if v in ("TIMEOUT", "ERROR", "SANITY_FAILED") and k.rule not in state["rule_skips"]
-            }
-
-            known_tc_ids = {
-                l["id"]
-                for msg in state["messages"] if isinstance(msg, AIMessage)
-                for l in msg.tool_calls if l["name"] == "verify_spec"
-            }
-
-            to_warn, seen_post_compaction_history = stuck_rule_warnings(
-                stuck_rules, state["prover_history"], known_tc_ids
+        def _cur_digest(state: StateWithSkips, buffers: Mapping[str, NamedBuffer], name: str) -> str:
+            return buffer_state_digest(
+                buffers, name, version_history=state["version_history"], config=state["config"],
             )
 
-            curr_state_digest = spec_digest(
-                spec, state["skipped"], state["version_history"]
+        def _buffer_complete_at(
+            state: StateWithSkips, buffers: Mapping[str, NamedBuffer], name: str, digest: str,
+            *, extra_history: Sequence[ProverHistoryItem] = (),
+        ) -> bool:
+            return buffer_is_complete(
+                list(state["prover_history"]) + list(extra_history), buffer=name, curr_digest=digest,
+                expected_to_fail=set(state["rule_skips"].keys()), curr_status=[],
+                all_rules=list(buffers[name].owned_rules),
             )
 
-            prover_results : list[tuple[RulePath, StatusCodes]] = [(k, v) for (k,v) in result.raw_rule_status.items()]
+        @tool_display("Submitting buffer", None)
+        @tool(args_schema=_SubmitBufferArgs)
+        async def submit_buffer(**args) -> str | Command:
+            state: StateWithSkips = args["state"]
+            name: str = args["name"]
+            tool_call_id: str = args["tool_call_id"]
+            buffers = state.get("buffers") or {}
+            b = buffers.get(name)
+            if b is None:
+                return f"No buffer named {name!r}. Create it with put_buffer first."
+            if not b.is_run_target:
+                return f"Buffer {name!r} is a shared (imports-only) buffer; it runs no rules of its own."
 
-            all_verified = _is_completion_history(
-                l=state["prover_history"],
-                curr_digest=curr_state_digest,
-                expected_to_fail=set(state["rule_skips"].keys()),
-                curr_status=prover_results,
-                all_rules=all_rules
-            )
+            rule: list[str] | None = args.get("rule")
+            exclude_rules: list[str] | None = args.get("exclude_rules")
+            if rule is not None and exclude_rules is not None:
+                return "Pass at most one of `rule` / `exclude_rules`; omit both to run the whole buffer."
+            selection = _selection_of(rule, exclude_rules)
+            if selection is not None:
+                owned = b.owned_rules
+                unknown = [r for r in selection["selector"] if r not in owned]
+                if unknown:
+                    return f"Buffer {name!r} declares no rule(s) {unknown}; its rules are {sorted(owned)}."
+                would_run = selection["selector"] if selection["sort"] == "include" \
+                    else [r for r in owned if r not in set(selection["selector"])]
+                if not would_run:
+                    return f"That selection would run no rule of buffer {name!r}; its rules are {sorted(owned)}."
 
-            prover_update : list[ProverHistoryItem] = [
-                ProverRunLog(
-                    tool_call_id=tool_call_id,
-                    prover_results=[(k, v) for (k,v) in result.raw_rule_status.items()],
-                    rules={"sort": "exclude", "selector": exclude_rules } if exclude_rules is not None else \
-                        {"sort": "include", "selector": rules} if rules is not None else None,
-                    spec_digest=spec_hash,
-                    sort="run",
-                    declared_rules=all_rules,
-                    state_digest=curr_state_digest,
-                    link=result.link
+            digest = _cur_digest(state, buffers, name)
+            if _buffer_complete_at(state, buffers, name, digest):
+                return f"Buffer {name!r} is already verified at its current content; nothing to submit."
+
+            sel_key = _selection_key(selection)
+            existing = buffer_jobs.get((name, sel_key))
+            if existing is not None and existing.digest == digest:
+                # This exact subset at this exact content is already in flight, or has just finished with
+                # its result not yet collected. Either way, do not launch a duplicate — the answer is
+                # (coming) on the queue; the agent should collect it, not re-run identical work.
+                proving = "is still proving" if not existing.task.done() else "has already finished"
+                return (
+                    f"Buffer {name!r} was already submitted at its current content and {proving}; do not "
+                    f"re-submit it. Call collect_results to take its result — if this is your only "
+                    f"remaining buffer/task and you are just waiting on it, use collect_results(wait=true)."
                 )
-            ]
-            nag_channel = {
+            # A content edit supersedes every subset job of this buffer (all now at a stale digest); the
+            # sibling subsets at the *current* digest are the parallel stripes and stay running.
+            for (nm, sk), j in list(buffer_jobs.items()):
+                if nm == name and j.digest != digest and not j.task.done():
+                    # TODO: this cancels the local task only; the cloud prover job itself keeps running.
+                    j.task.cancel()
+                    buffer_jobs.pop((nm, sk), None)
 
-            }
-            if len(to_warn) > 0:
-                prover_update.append(NagMarker(
-                    sort="nag",
-                    nagged_rules=list(to_warn)
+            n = submit_counts.get(name, 0) + 1
+            submit_counts[name] = n
+            component = component_of(state)
+            task = asyncio.create_task(_run_buffer_job(
+                name=name, digest=digest, selection=selection,
+                label=f"{component}/{name} submission {n}",
+                buffers=dict(buffers), vfs=dict(state.get("vfs") or {}), conf=state["config"],
+                cex_state=state, tool_call_id=tool_call_id,
+                # The stream writer is captured here and used by the detached task: its prover-progress
+                # events carry this submit call's tool_call_id, which has already returned, so background-job
+                # progress can render loosely in the UI (functional results are unaffected).
+                writer=get_stream_writer(), summary=get_run_summary(),
+            ))
+            buffer_jobs[(name, sel_key)] = _BufJob(name=name, digest=digest, task=task, selection=selection)
+            running = sorted({nm for (nm, _sk), j in buffer_jobs.items() if not j.task.done()})
+            sel_desc = "" if selection is None else (
+                f" (rules {selection['selector']})" if selection["sort"] == "include"
+                else f" (excluding {selection['selector']})")
+            return (
+                f"Submitted buffer {name!r}{sel_desc} (submission {n}); it is now proving in the "
+                f"background. Running: {running}. Call collect_results to retrieve results as jobs finish."
+            )
+
+        @tool_display("Collecting prover results", None)
+        @tool(args_schema=_CollectResultsArgs)
+        async def collect_results(**args) -> str | Command:
+            state: StateWithSkips = args["state"]
+            tool_call_id: str = args["tool_call_id"]
+            wait: bool = args["wait"]
+            buffers = state.get("buffers") or {}
+            targets = run_targets(buffers)
+            if not targets:
+                return "No run-target buffers to collect. Author buffers and submit_buffer them first."
+
+            # Current digest per buffer is stable within this call (buffers/skips/edit-history are fixed);
+            # memoize it — each is a content hash over the import closure, read at several points below.
+            @functools.lru_cache(maxsize=None)
+            def cur_digest(nm: str) -> str:
+                return _cur_digest(state, buffers, nm)
+
+            drained: list[_BufDone] = []
+            while not done_queue.empty():
+                drained.append(done_queue.get_nowait())
+            if not drained and wait and any(not j.task.done() for j in buffer_jobs.values()):
+                # Idle wait, bounded so budget wrap-up pressure can interrupt it: wait for a job to land,
+                # re-checking the wrap-up guard each tick, so once pressured the agent still gets its
+                # wrap-up window instead of blocking here.
+                while any(not j.task.done() for j in buffer_jobs.values()) and not budget_pressure():
+                    try:
+                        drained.append(await asyncio.wait_for(done_queue.get(), _IDLE_WAIT_TICK))
+                        break
+                    except TimeoutError:
+                        continue
+                while not done_queue.empty():
+                    drained.append(done_queue.get_nowait())
+
+            # Cancel a still-running job whose buffer was deleted, or that runs against a now-stale digest
+            # (a shared buffer it imports was edited): its result would be discarded anyway, and on local
+            # runs a doomed job needlessly holds the single prover slot. The agent re-submits the stale
+            # ones (they show under needs-(re)submission below).
+            for key, j in list(buffer_jobs.items()):
+                if not j.task.done() and (j.name not in buffers or j.digest != cur_digest(j.name)):
+                    j.task.cancel()
+                    buffer_jobs.pop(key, None)
+
+            # Retire finished jobs from the registry. A result that lands between the drain and here stays on
+            # the queue, so its buffer is picked up on the next collect even though its job is already gone.
+            for key in [key for key, j in buffer_jobs.items() if j.task.done()]:
+                buffer_jobs.pop(key, None)
+
+            prover_update: list[ProverHistoryItem] = []
+            fresh: dict[str, list[tuple[RulePath, StatusCodes]]] = {}
+            parts: list[str] = []
+            for d in drained:
+                if isinstance(d.result, str):  # compile/toolchain error: surface it, record no run
+                    parts.append(f"=== buffer {d.name} ===\n{d.result}")
+                    continue
+                results: list[tuple[RulePath, StatusCodes]] = list(d.result.raw_rule_status.items())
+                fresh.setdefault(d.name, []).extend(results)  # striped subsets of one buffer accumulate
+                stale = d.name in buffers and d.digest != cur_digest(d.name)
+                note = (" (NOTE: the spec changed since this was submitted — this result is STALE; re-submit "
+                        "this buffer.)") if stale else ""
+                parts.append(f"=== buffer {d.name} ==={note}\n{d.result.result_str}")
+                prover_update.append(ProverRunLog(
+                    tool_call_id=tool_call_id, prover_results=results, rules=d.selection,
+                    spec_digest=string_hash(buffers[d.name].cvl) if d.name in buffers else "",
+                    sort="run", declared_rules=d.all_rules, state_digest=d.digest, buffer=d.name,
+                    link=d.result.link,
                 ))
-                nag_channel["reminders_channel"] = stuck_rule_reminder(
-                    to_warn,
-                    plugin_tools=state.get("plugin_tools") or (),
-                    seen_post_compaction_history=seen_post_compaction_history,
-                )
-            if all_verified:
+
+            # Per-buffer completion is re-evaluated over history + this drain against the CURRENT digest, so
+            # a stale run (state_digest mismatch) never credits completion. Overall completion is the AND of
+            # these, checked at publish (check_buffer_completion).
+            prover_stamps: dict[str, str] = {}
+            for b in targets:
+                d = cur_digest(b.name)
+                if _buffer_complete_at(state, buffers, b.name, d, extra_history=prover_update):
+                    prover_stamps[f"prover:{b.name}"] = d
+
+            # Status board — the agent's work-list. `running` counts only a live job at the CURRENT digest;
+            # a job left running at a stale digest (its shared import changed) is doomed, so its buffer falls
+            # under needs-(re)submission until the agent relaunches it.
+            complete = {b.name for b in targets if f"prover:{b.name}" in prover_stamps}
+            running = {
+                j.name for j in buffer_jobs.values()
+                if not j.task.done() and j.name in buffers and j.digest == cur_digest(j.name)
+            }
+            needs_submit = [b.name for b in targets if b.name not in complete and b.name not in running]
+            board = [
+                "",
+                f"[buffers] complete: {sorted(complete)}",
+                f"[buffers] running: {sorted(running)}",
+                f"[buffers] needs (re)submission: {sorted(needs_submit)}",
+            ]
+            if not drained:
+                parts.append("No finished jobs yet." if running else "No finished jobs and nothing running.")
+
+            nag_channel: dict = {}
+            all_status = [pair for results in fresh.values() for pair in results]
+            if reminders := stuck_rule_nag(all_status, prover_update, state):
+                nag_channel["reminders_channel"] = reminders
+            if not needs_submit and not running:
                 nag_channel.setdefault("reminders_channel", []).append(
-                    "You have successfully verified over your prior prover run(s) that all rules verify. This task is completed."
+                    f"Buffers {', '.join(sorted(complete))} are verified at their current content. Once "
+                    "each also has feedback, you can publish."
                 )
-                # Completing the coverage stamps, however the completing run was scoped:
-                # every declared rule was verified against exactly this authoring state
-                # (the state_digest match), so a piecemeal completion is as good as a
-                # full-run one.
-                return tool_state_update(
-                    tool_call_id=tool_call_id, content=result.result_str,
-                    prover_link=result.link, validations=stamper(state, state["version_history"]),
-                    prover_history=prover_update, **nag_channel
-                )
+
             return tool_state_update(
-                tool_call_id=tool_call_id, content=result.result_str, prover_link=result.link,
-                prover_history=prover_update, **nag_channel
+                tool_call_id=tool_call_id, content="\n".join(parts + board),
+                validations=prover_stamps, prover_history=prover_update, **nag_channel,
             )
 
-        # The author's working copy decides where this run executes (in-situ for
-        # an empty VFS, a temp materialization otherwise); the same-stem lock
-        # guards the deterministic spec/conf names within it.
-        async with lock, project_directory(state.get("vfs") or {}) as run_root:
-            return await run_in(run_root)
+        return [submit_buffer, collect_results]
 
-    return verify_spec
+    return ProverToolset(make_buffer_tools=make_buffer_tools)
