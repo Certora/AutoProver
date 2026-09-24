@@ -97,9 +97,9 @@ saying so is part of reporting the number.
 
 ## The first run, 2026-09-23
 
-Stopped deliberately at **~$57 of a $75 ceiling**, mid-authoring, with everything resumable:
-`--cache-ns stake-benchmark` holds the analysis and all 94 extracted properties, `.cvlr_work/build`
-holds the drafts and munges. A continuation re-pays for authoring iterations only.
+Stopped deliberately at **~$57 of a $75 ceiling**, mid-authoring. `--cache-ns stake-benchmark`
+holds the analysis and all 94 extracted properties, so those are not re-paid for. The drafts were a
+different story — see *Recovering the drafts* below.
 
 | | |
 |---|---|
@@ -171,6 +171,41 @@ Excluding the crate removes the mechanical leak, not the semantic one — it is 
 crates.io, and the stake program's invariants are documented protocol semantics. That residue is
 acceptable for this question, which is about whether the prompts transfer, not about what a base
 model knows.
+
+## Recovering the drafts
+
+The first attempt to continue this run was wrong twice over, and both corrections are worth keeping.
+
+**Rejoining the checkpointed thread does not work.** Passing the previous `thread_id` replays the
+unit's message history into a fresh graph, which fails two ways: `author.py`'s `assert
+res_state["failed"] is not None` holds for a graph that just ran and not for a resumed terminal one,
+and the replayed history violates the API's rule about where system messages may sit. Eight units,
+$2.12, no progress. The CVL author does not do this — it runs a *fresh* graph and seeds `curr_spec`
+from a cache entry written in a `finally`. Porting that is what the CVLR author now does.
+
+**The cache write was silently suppressed.** `cache_put` drops writes made under budget pressure, so
+a rushed result is never served to a later run as finished. But `_remember_attempt` runs in a
+`finally` reached by `BudgetExceeded`, where pressure is total — so the carry-forward wrote nothing
+on the one path it exists for. A resume buffer is the exception to that guard and now says so
+(`CacheKey(..., survives_budget_pressure=True)`).
+
+**What was recoverable anyway.** The checkpointer is durable Postgres, so this run's drafts were
+never actually lost — only unreachable. `ap-trail recover-drafts` walks them back into the cache:
+
+| | on disk (`.unverified`) | in the checkpoints |
+|---|---|---|
+| Splitting & Merging | *nothing* | 2,185 lines, 53 rules |
+| Authorization & Lockup | 471 lines | 1,769 lines, 50 rules |
+| Delegation lifecycle | 275 lines | 1,371 lines, 32 rules |
+| Account Initialization | 543 lines | 819 lines, 15 rules |
+| four thin units | ~30 lines | ~30 lines |
+| **total** | **1,317 lines** | **6,176 lines, 150 rules** |
+
+Two things that gap is made of. The largest unit never reached disk at all. And a unit told to wrap
+up deletes every rule whose verdict it never saw — which under a budget cut is most of them, so its
+final draft understates its work; the delegation unit finished at 276 lines with no rules from a
+peak of 1,371 with 32. `--draft largest` recovers the high-water mark for that reason, and is what
+was used here: **6,176 lines seeded** for the next run.
 
 **What a resumed run should do first.** The vacuity is the live question, and the judge already
 named the experiment: add `clog!`s to the owner comparison so the counterexample is readable, and
