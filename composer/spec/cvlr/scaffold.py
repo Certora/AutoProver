@@ -54,7 +54,7 @@ from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.env_paths import PathDialect, dialect_for
 from composer.spec.cvlr import forks
 from composer.spec.cvlr.tuning import ENV_FAMILIES, INLINING, SUMMARIES, compose_env
-from composer.spec.cvlr_reference import ChainReference, CrateRelease
+from composer.spec.cvlr_reference import ChainReference
 
 #: Where the harness module goes in the target package.
 HARNESS_DIR = Path("src") / "certora"
@@ -322,14 +322,143 @@ def _check_platform(workspace: Workspace, reference: ChainReference) -> list[Blo
                     f"accounts to a CVLR helper"
                 ),
                 resolution=(
-                    f"either move the project to {witness.name} {witness.line}, or pin the "
-                    f"CVLR line that matches {resolved.version} by hand (the project's own pin is "
-                    f"always respected) — picking one of those is a decision about the project, "
-                    f"not about the scaffold"
+                    f"either move the project to {witness.name} {witness.line}, or move the "
+                    f"reference set (composer/spec/cvlr_reference.py) to the CVLR line that "
+                    f"matches {resolved.version} — picking one of those is a decision about the "
+                    f"project, not about the scaffold"
                 ),
             )
         ]
     return []
+
+
+@dataclass(frozen=True)
+class _Pinned:
+    """The project states a version requirement for a CVLR crate."""
+
+    requirement: str
+
+
+@dataclass(frozen=True)
+class _Unpinned:
+    """The project names a CVLR crate without a version: a git or path dependency.
+
+    Which release that checkout is cannot be read from the manifest, and the gate cannot pass
+    something it cannot read.
+    """
+
+    #: How the manifest names it, as the phrase that goes in the refusal — "as a git dependency".
+    how: str
+
+
+def _declaration(
+    workspace: Workspace, package: CratePackage, crate: str
+) -> _Pinned | _Unpinned | None:
+    """How this project declares ``crate``, or ``None`` when it does not.
+
+    Both manifests that can name a dependency are consulted, and ``workspace = true`` is followed
+    to the root's ``[workspace.dependencies]``. A crate declared only in that table is still a
+    declaration: no member depends on it yet, so the resolved graph does not mention it, but the
+    scaffold is about to make a member inherit it.
+    """
+    shared = _read_toml(workspace.root / "Cargo.toml").get("workspace", {}).get("dependencies", {})
+    spec = _read_toml(package.root / "Cargo.toml").get("dependencies", {}).get(crate)
+    if spec is None or (isinstance(spec, dict) and spec.get("workspace")):
+        spec = shared.get(crate)
+    match spec:
+        case None:
+            return None
+        case str():
+            return _Pinned(spec)
+        case {"version": str(version)}:
+            return _Pinned(version)
+        case {"git": _}:
+            return _Unpinned("as a git dependency")
+        case {"path": _}:
+            return _Unpinned("as a path dependency")
+        case _:
+            return _Unpinned("without a version")
+
+
+def _check_pins(
+    workspace: Workspace, package: CratePackage, reference: ChainReference
+) -> list[Blocked]:
+    """Refuse a project that is on a CVLR release other than the one this build is pinned to.
+
+    One line is supported at a time — the one :mod:`composer.spec.cvlr_reference` names — and
+    everything this scaffold writes belongs to it: the pins, the specializations added beside
+    them, and the env files :mod:`composer.spec.cvlr.tuning` composes. A project already on
+    another line cannot be given those without putting two CVLR generations in one graph, which
+    does not compile. This scaffold used to resolve that by deferring to the project's pin and
+    withholding the specializations; a run set up that way is on a configuration nothing else
+    here is built for, so it is refused instead.
+
+    Two readings, because neither alone covers the project. The resolved graph is exact and
+    settles a crate some member already depends on. The manifests settle a crate declared in
+    ``[workspace.dependencies]`` that no member depends on yet — absent from the graph, and about
+    to be inherited by the member this scaffold is setting up.
+
+    A crate the project does not name at all is not checked. That is
+    :class:`~composer.spec.cvlr.crates.Absent`, the ordinary state of a specialization the project
+    has no use for, and refusing it would refuse every project this scaffold exists to set up.
+    """
+    blocked: list[Blocked] = []
+    for release in reference.crates():
+        supported = (
+            f"this build supports {release.name} {release.version} and no other release: the "
+            f"pins, the specializations and the env files the scaffold writes are all that line's"
+        )
+        fix = (
+            f"either move the project to {release.name} {release.version}, or move the reference "
+            f"set (composer/spec/cvlr_reference.py) to the line this project is on — which line "
+            f"is supported is not a scaffold's call, and not a per-project one either"
+        )
+        resolved = workspace.resolved(release.name)
+        if resolved is not None and resolved.version != release.version:
+            blocked.append(
+                Blocked(
+                    path=Path("Cargo.toml"),
+                    problem=(
+                        f"this project builds {release.name} {resolved.version}, and {supported}, "
+                        f"so pinning them beside {resolved.version} would put two CVLR "
+                        f"generations in one graph"
+                    ),
+                    resolution=fix,
+                )
+            )
+            continue
+        match _declaration(workspace, package, release.name):
+            case _Pinned(requirement) if requirement.removeprefix("=") != release.version:
+                blocked.append(
+                    Blocked(
+                        path=Path("Cargo.toml"),
+                        problem=(
+                            f"this project declares {release.name} {requirement}, which no member "
+                            f"depends on yet, so cargo has not resolved it — but the member this "
+                            f"scaffold sets up is about to inherit it, and {supported}"
+                        ),
+                        resolution=fix,
+                    )
+                )
+            case _Unpinned(how):
+                blocked.append(
+                    Blocked(
+                        path=Path("Cargo.toml"),
+                        problem=(
+                            f"this project declares {release.name} {how}, so which release it is "
+                            f"cannot be read from the manifest, and {supported} — a gate cannot "
+                            f"pass a version it cannot see"
+                        ),
+                        resolution=(
+                            f"declare {release.name} as a registry dependency at "
+                            f"{release.version}, or move the reference set "
+                            f"(composer/spec/cvlr_reference.py) to whatever that checkout is"
+                        ),
+                    )
+                )
+            case _:
+                pass
+    return blocked
 
 
 def _plan_workspace_manifest(
@@ -342,12 +471,11 @@ def _plan_workspace_manifest(
 
     declared = parsed.get("workspace", {}).get("dependencies", {})
     stanzas, satisfied = [], []
-    for crate in _scaffold_pins(workspace, package, reference):
+    for crate in reference.scaffold_crates():
         if crate.name in declared:
             satisfied.append(
-                f"{crate.name} is already a workspace dependency — the project's pin wins, and a "
-                f"disagreement with the reference set is reported as a version gap rather than "
-                f"overridden here"
+                f"{crate.name} is already a workspace dependency at the supported release — "
+                f"_check_pins has already refused anything else, so this is left as it is"
             )
             continue
         stanzas.append(f'[workspace.dependencies.{crate.name}]\nversion = "={crate.version}"\n')
@@ -404,7 +532,7 @@ def _plan_feature_forwarding(
         if DEFAULT_FEATURE in features:
             satisfied.append(f"{dep.name} already declares a `{DEFAULT_FEATURE}` feature")
             continue
-        wanted = _scaffold_pins(workspace, dep, reference)
+        wanted = reference.scaffold_crates()
         declared = parsed.get("dependencies", {})
         missing = [c for c in wanted if c.name not in declared]
         enables = [f"dep:{c.name}" for c in wanted]
@@ -478,7 +606,7 @@ def _plan_package_manifest(
         )
 
     dependencies = parsed.get("dependencies", {})
-    wanted = _scaffold_pins(workspace, package, reference)
+    wanted = reference.scaffold_crates()
     missing = [c for c in wanted if c.name not in dependencies]
     satisfied += [
         f"{c.name} is already a dependency of {package.name}" for c in wanted if c not in missing
@@ -660,11 +788,10 @@ def plan_scaffold(
     manifest_changes, manifest_notes, blocked = _plan_package_manifest(
         workspace, package, relative, reference, inherit=inherit
     )
-    # Only when the scaffold would write a reference-set pin. A project that already pins CVLR
-    # keeps that pin, so the reference set's platform says nothing about what will be built.
-    # Checking it here would refuse a project whose own pairing is consistent.
-    if _introduced(workspace, package, reference):
-        blocked += _check_platform(workspace, reference)
+    # Unconditional, both of them: the scaffold always writes the reference-set pin now, so the
+    # reference set's platform generation always describes what will be built.
+    blocked += _check_pins(workspace, package, reference)
+    blocked += _check_platform(workspace, reference)
     blocked += fork_blocked
 
     return ScaffoldPlan(
@@ -673,52 +800,6 @@ def plan_scaffold(
         satisfied=tuple(satisfied + manifest_notes),
         blocked=tuple(blocked),
         dialect=dialect,
-    )
-
-
-def _declared(workspace: Workspace, package: CratePackage) -> set[str]:
-    """Every crate this project already names, across both manifests that can name one.
-
-    A project can pin CVLR in ``[workspace.dependencies]`` before any member depends on it. The
-    resolved graph then does not mention it, so this reads the manifests. Reading the graph would
-    make the platform gate refuse a project whose own pin is consistent.
-    """
-    root = _read_toml(workspace.root / "Cargo.toml")
-    return set(root.get("workspace", {}).get("dependencies", {})) | set(
-        _read_toml(package.root / "Cargo.toml").get("dependencies", {})
-    )
-
-
-def _scaffold_pins(
-    workspace: Workspace, package: CratePackage, reference: ChainReference
-) -> tuple[CrateRelease, ...]:
-    """The reference-set crates this scaffold offers to pin.
-
-    All of them, unless the project already declares the chain crate. That project has chosen its
-    CVLR line, and the scaffold keeps it. Adding a specialization at the reference version on top
-    of an older line would put two generations of ``AccountInfo`` in one graph, and the build
-    would not compile. The scaffold either pins the whole reference set or leaves the project's
-    pins alone.
-
-    ``cvlr`` and the chain crate are still offered one at a time. A project that pins one and not
-    the other has a half-configured manifest, and the platform gate checks the pairing once the
-    missing one is added.
-    """
-    declared = _declared(workspace, package)
-    if reference.chain.name in declared:
-        return (reference.core, reference.chain)
-    return reference.scaffold_crates()
-
-
-def _introduced(
-    workspace: Workspace, package: CratePackage, reference: ChainReference
-) -> tuple[str, ...]:
-    """The crates this scaffold would pin at the reference version: the ones not already declared.
-
-    Empty means the project's own pins stand, which is what the platform gate keys on."""
-    declared = _declared(workspace, package)
-    return tuple(
-        c.name for c in _scaffold_pins(workspace, package, reference) if c.name not in declared
     )
 
 

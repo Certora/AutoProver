@@ -9,9 +9,9 @@ run's CPU budget (``PipelineRun.cpu_runner``), the same split as
 :mod:`composer.rustapp.adapter`. One function that did both could not be placed on either side
 of that line.
 
-Two outcomes are refusals, both :class:`~composer.spec.cvlr.scaffold.Blocked`: a package that
-builds no loadable object, and a CVLR pin that does not match the platform generation the
-project is already on.
+Three outcomes are refusals, all :class:`~composer.spec.cvlr.scaffold.Blocked`: a package that
+builds no loadable object, a project on a CVLR release other than the one this build is pinned to,
+and a CVLR pin that does not match the platform generation the project is already on.
 """
 
 import logging
@@ -22,7 +22,7 @@ from composer.cargo.metadata import CargoUnavailable, CratePackage, Workspace, r
 from composer.cargo.session import CargoSession, CompileFailed, Compiled, WarmFailed
 from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
-from composer.spec.cvlr.crates import CvlrSources, VersionGap, resolve
+from composer.spec.cvlr.crates import CvlrSources, Divergence, resolve
 from composer.spec.cvlr.scaffold import (
     ScaffoldBlocked,
     ScaffoldPlan,
@@ -62,9 +62,11 @@ class CvlrPreflight:
     #: The CVLR crates the scaffolded graph resolves. Read after applying. Before that the
     #: project may not depend on CVLR at all.
     sources: CvlrSources
-    #: Where the resolved crates and the reference set disagree. Reported, not corrected. The
-    #: project's own pin wins, and corpus recall has to be read against that version.
-    gaps: tuple[VersionGap, ...]
+    #: Where the resolved crates and the reference set disagree. Only
+    #: :class:`~composer.spec.cvlr.crates.Absent` can appear here: the scaffold refuses a project
+    #: on another CVLR line before anything is written, and :func:`prepare_workspace` checks again
+    #: afterwards. Kept so a run can say which reference-set crates this project does not have.
+    gaps: tuple[Divergence, ...]
 
     def describe(self) -> str:
         lines = [self.scaffold.describe()]
@@ -186,6 +188,17 @@ async def prepare_workspace(
         raise PreflightFailed(f"{fresh.name} has no library target to build")
 
     sources = resolve(resolved_in)
+    # The backstop behind the scaffold's gate. That gate reads the manifests and the pre-scaffold
+    # graph; this reads what cargo actually resolved with the harness in. A mismatch here is a
+    # release that arrived some way the gate cannot see — a ``[patch]`` table is the way that
+    # happens — and it has to stop the run rather than be logged, because the harness this
+    # scaffold just wrote is the supported line's and will not compile against another.
+    if mismatched := sources.mismatched(reference):
+        raise PreflightFailed(
+            "the scaffolded project does not build the CVLR releases this build supports:\n"
+            + "\n".join(f"  {m.describe()}" for m in mismatched)
+            + "\nCheck the workspace for a [patch] table redirecting a CVLR crate."
+        )
     return CvlrPreflight(
         workspace_root=resolved_in.root,
         package=fresh.name,

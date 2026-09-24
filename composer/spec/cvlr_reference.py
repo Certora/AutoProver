@@ -12,7 +12,10 @@ the chain's own SDK that a chain crate is built against, such as ``solana-progra
 ``soroban-sdk`` 22.x.
 
 Exact versions, not ranges. The core and the chain crates are versioned separately, so "latest"
-can pair a new core with an old chain crate. A bump is an edit here.
+can pair a new core with an old chain crate. A bump is an edit here, and it moves every project
+this build sets up: what is named here is the one CVLR line supported at a time, the way a Prover
+release ships one CVL. That is why :mod:`composer.spec.cvlr.scaffold` refuses a project already on
+a different line rather than deferring to it.
 
 A chain crate is bound to one platform generation, and each generation has its own ``AccountInfo``.
 ``cvlr-solana`` 0.4.x goes with ``solana-program`` 1.18, 0.5.0 with 2.2, and the unreleased 0.6
