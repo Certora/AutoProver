@@ -482,6 +482,15 @@ the link as a link; skipping unresolvable links would also do. The call is in th
 so this is an upstream change rather than one this repo can make. Worked around on the benchmark by
 populating the link's target from an SBF build.
 
+**U20. The CVL author's draft cache has the hole the CVLR one just had fixed.**
+`cache_put` refuses writes made under budget pressure, which is right for a result and backwards
+for a resume buffer: the run whose draft most needs carrying forward is the one the budget cut, and
+that is exactly when the guard fires. `CacheKey(..., survives_budget_pressure=True)` marks the
+exception and `composer/spec/cvlr/author.py` uses it. `cvl_generation.run_cvl_generator` caches its
+draft the same way and does not, so an EVM run cut by the budget still re-authors from nothing. The
+fix is one argument; it was left out of the CVLR change because it alters EVM behaviour and wants
+its own run to confirm.
+
 ---
 
 ## Blocked on upstream
