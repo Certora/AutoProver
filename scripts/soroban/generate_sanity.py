@@ -433,9 +433,22 @@ _KNOWN_EXTERNAL_PREFIXES = frozenset({
 
 
 def find_declared_modules(source_text: str) -> set[str]:
-    """Return the set of submodule names declared via `mod name;` in source_text."""
+    """Return the set of submodule names declared in source_text, either as
+    file modules (`mod name;`) or as top-level inline modules
+    (`mod name { ... }`, e.g. a `pub mod client { contractimport!(...) }`
+    wrapper).  Test-only inline modules (`#[cfg(test)] mod tests { ... }`)
+    are ignored."""
     cleaned = strip_comments(source_text)
-    return set(re.findall(r'\bmod\s+(\w+)\s*;', cleaned))
+    mods = set(re.findall(r'\bmod\s+(\w+)\s*;', cleaned))
+
+    # Inline modules: only those at brace depth 0 are direct children of
+    # this file's module (a `mod b {}` nested in `mod a {}` is `a::b`).
+    no_tests = strip_test_blocks(cleaned)
+    for m in re.finditer(r'\bmod\s+(\w+)\s*\{', no_tests):
+        prefix = no_tests[:m.start()]
+        if prefix.count('{') == prefix.count('}'):
+            mods.add(m.group(1))
+    return mods
 
 
 def normalize_triples_bare_mods(triples: list[tuple[str, str, bool]],
