@@ -600,6 +600,11 @@ async def _remember_attempt(
     is the one that did not return: a budget cut raises out of ``run_to_completion``, and the draft
     it was holding is only in the checkpoint.
 
+    A curtailed unit may *fill* an empty slot but never *replace* an occupied one. The wrap-up
+    order has it delete every rule it cannot stand behind, so its last draft is often a fraction of
+    what it held, and writing that over a fuller draft from an earlier run loses work that was never
+    reconsidered. Seeding an empty slot is the case the cache exists for and cannot regress anything.
+
     Never raises. This runs in a ``finally`` on a path that may already be unwinding a budget
     failure, and losing the cache is worse than losing nothing only if it also loses the original
     error.
@@ -610,8 +615,12 @@ async def _remember_attempt(
         draft = values.get("curr_spec")
         if not draft:
             return
+        slot = ctx.child(LAST_ATTEMPT_KEY)
+        if values.get("budget_curtailed") and await slot.cache_get(LastCvlrAttempt) is not None:
+            _log.info("cvlr: curtailed draft not cached; a fuller one is already held")
+            return
         munges = [m.describe() for m in values.get("munges", ())]
-        await ctx.child(LAST_ATTEMPT_KEY).cache_put(LastCvlrAttempt(spec=draft, munges=munges))
+        await slot.cache_put(LastCvlrAttempt(spec=draft, munges=munges))
     except Exception:
         _log.warning("cvlr: could not cache this unit's draft for a later run", exc_info=True)
 
