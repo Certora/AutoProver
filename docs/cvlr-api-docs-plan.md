@@ -82,7 +82,8 @@ Two asymmetries matter for the migration and are easy to miss:
   of varying confidence — so the rule sorts one thing above a heap. After the split it sorts two
   named corpora, each with a stated provenance and a stated regeneration lifecycle.
 * One place (the API producer) where feature gating, deprecation and `#[doc(hidden)]` are decided,
-  rather than a habit each agent has to learn from reading `lib.rs`.
+  rather than a habit each agent has to learn from reading `lib.rs`. And that place is in this
+  repo, beside the reference set it describes and inside the test suite (§4.2).
 * The research sub-agent returns a short synthesized answer instead of raw files, which is the same
   context economy the code explorer exists for.
 
@@ -233,23 +234,29 @@ callers in #248 and were left in place rather than dropped and re-added with the
 
 ## 3. Shape of the replacement
 
+Everything below is in this repo. `certora-cvlr-kb` stops being a source of RAG content
+(§4.2), so the cross-repo half of today's picture goes away with it.
+
 ```
-certora-cvlr-kb (private)                          AutoProver
-──────────────────────────                         ─────────────────────────────────────
-rustdoc producer ─► cvlr_api_kb.rag.json ─┐
-practice producer ─► cvlr_kb.rag.json ────┤─► populate_cvlr_rag.sh ─┬─► cvlr_api_kb  (schema cvlr_api_rag)
-gen_docs.sh ─► solana.html ───────────────┘                         └─► cvlr_kb      (schema cvlr_rag)
-                                                                            │
-                                    composer/tools/cvlr_api_rag.py ◄────────┤
-                                      cvlr_api_search / _lookup / _surface  │
-                                    composer/tools/cvlr_rag.py ◄────────────┘
-                                      cvlr_manual_search / _keyword / _get_section
-                                                    │
-                                    composer/spec/cvlr_research.py
-                                      cvlr_research(question)  ── sub-agent, binds both
-                                                    │
-                                          ┌─────────┴─────────┐
-                                       author               judge
+AutoProver
+───────────────────────────────────────────────────────────────────────────
+  producers                               corpora
+  scripts/gen_docs.sh
+    └► solana.html ──► ragbuild ────────► cvlr_kb       (schema cvlr_rag)
+  composer/scripts/cvlr_api_docs.py
+    └► *.rag.json  ──► rag_import ──────► cvlr_api_kb   (schema cvlr_api_rag)
+
+  search tools
+  composer/tools/cvlr_rag.py      ◄────── cvlr_kb
+    cvlr_manual_search / _keyword / _get_section
+  composer/tools/cvlr_api_rag.py  ◄────── cvlr_api_kb
+    cvlr_api_search / _lookup / _surface
+        │
+  composer/spec/cvlr_research.py — binds both, applies the ordering
+    cvlr_research(question)
+        │
+    ┌───┴───┐
+  author  judge
 ```
 
 **The ingest path needs almost nothing.** `composer/scripts/rag_import.py` already groups manifests
@@ -257,8 +264,12 @@ by the connection each one's own `knowledge_base` tag resolves to (`_resolve_out
 `groups[...]` at :157), and `populate_cvlr_rag.sh` does **not** pass `--output` to it — the
 `$conn` it computes is used only for the manual HTML's `ragbuild` call. So a manifest declaring
 `"knowledge_base": "cvlr_api_kb"` routes itself to the new corpus with **zero importer changes**,
-as soon as the tag has a `KNOWLEDGE_BASES` entry. The script's error text and its comment header
-need updating; its logic does not.
+as soon as the tag has a `KNOWLEDGE_BASES` entry.
+
+What *does* change in that script is the other half: its manifest **discovery** — `$CVLR_KB_REPO`,
+the installed-`certora_cvlr_kb` probe, the error text explaining how to get the package — exists
+to find manifests built elsewhere, and after §4.2 nothing is built elsewhere. The script reduces to
+three steps it runs itself: build the manual, run the API producer, ingest both.
 
 ---
 
@@ -272,16 +283,18 @@ call on four counts, and the fourth is the one that decides it.
 1. **Regeneration lifecycle.** Ingest is a plain `INSERT` — no `ON CONFLICT`, no truncate — and
    `manual_sections` carries `CONSTRAINT parts_unique UNIQUE (h1..h6, part)`. Re-ingesting a
    corpus therefore either duplicates rows or raises, so the operational model is *drop the schema
-   and rebuild*. Merged, bumping CVLR means rebuilding the hand-curated practice entries and the
-   manual as collateral. Split, "rebuild the API corpus" is scoped to its own schema and the
-   manual is untouched.
+   and rebuild*. The two have nothing to do with each other's cadence: the API corpus is rebuilt on
+   a CVLR bump, which §2 makes a coupled change, and the manual on a `Certora/Documentation`
+   revision. Merged, either rebuild drags the other along, and a CVLR bump would mean re-scraping
+   sphinx to get back to where it started.
 2. **Retrieval interference.** rustdoc rows are short, dense and uniform; manual rows are long
    prose. In one vector index they compete badly in exactly the direction that hurts — a query for
    `nondet` surfaces manual paragraphs that *discuss* nondeterminism above the `nondet()` signature,
    because the prose is a better match for a prose query. Two indexes let the researcher ask each
    one deliberately and compare.
-3. **The version axis is one corpus's problem** (§2.4c). Merged, one header-path convention has to
-   carry both a crate release and a docs revision.
+3. **The provenance stamp is one corpus's problem** (§2.4c). Merged, one header-path convention
+   has to carry both a crate release and a docs revision, which are not the same kind of thing and
+   do not move together.
 4. **A retrieval hit carries no provenance.** This is the deciding one. `find_refs` returns
    headers, content and a similarity score; `search_manual_keywords` returns headers and a rank.
    Nothing says where a row came from or how much to trust it. Under a header-root convention the
@@ -296,19 +309,66 @@ a role and schema in `composer/scripts/init-db.sql`, a connection constant and `
 entry in `composer/rag/db.py`, a `_FACTORIES` entry in `composer/tools/rag_env.py`, and a
 `composer/tools/cvlr_api_rag.py`. See §6.
 
-### 4.2 `cvlr_api_kb` — source: rustdoc JSON, not rendered HTML
+### 4.2 Where the producer lives, and what it reads
 
-Build a probe crate from `ChainReference.cargo_dependencies()` (which already emits exactly the
-reference set plus the platform crates) and run `cargo +nightly rustdoc -Z unstable-options
---output-format json` over each CVLR crate. JSON rather than scraped HTML because it gives, per
-item: the resolved path, the full signature, the doc comment, `#[doc(hidden)]`, deprecation, the
-`cfg`/feature gate, and — the one that matters most — **where a re-export actually resolves to**.
+`certora-cvlr-kb` is being wound down as a source of RAG content. Its own plan
+(`certorag/docs/cvlr-knowledge-plan.md` §4) already decided that its 83 abstracted entries are the
+wrong output shape and that **its deliverable is the ledger and the evidence behind it, not corpus
+rows** — CVLR practice knowledge is hand-authored and delivered through the bundle
+(`with_cvlr_context`) and the recipes, both of which live here. That plan's §4.4 carved out one
+exception and kept it in that repo: `crate_reference.py`, the generated CVLR crate reference,
+"machine-derived from published crates, no engagement involved".
 
-`crate_mount.py` stays. It is not agent-facing any more, but it is how the kb repo reads crate
-trees as a plain script, and doc comments are not the whole story: **macro bodies are not in
-rustdoc JSON in any useful form**, and `cvlr_assert!`/`cvlr_assume!`/`clog!` are the surface the
-author touches most. Expect the producer to read those from source and emit the expansion alongside
-the doc comment. Correct `crate_mount.py`'s docstring to say producer-only.
+**That carve-out should come here too, and the reason it was made no longer holds.**
+`crate_reference.py`'s own docstring states the criterion: *"Every other public-corpus producer in
+AutoProver is cheap and offline — the docs scrape needs only bs4, so anyone with a checkout can
+rebuild it. This one calls a model and runs cargo, so rebuilding it costs an API key and a few
+dollars."* It calls a model because it has to **infer** a crate's surface and then prove it covered
+everything: `crate_inventory.py` is a 293-line regex item scanner with its own test suite, written
+because there is no Rust parser to hand, and the model's job is to turn 310 public items into a
+readable set of entries without dropping any.
+
+rustdoc JSON removes the inference. The compiler emits the item list, the signatures, the doc
+comments and the re-export targets directly, so the producer becomes cargo plus a JSON walk — cheap
+and offline, exactly the bar that docstring sets for living here. With it go the regex scanner, its
+test suite, and the completeness gate's need to reconcile two extractions: the list the producer is
+scoped by *is* the list it is checked against.
+
+Three further reasons, in the order they matter:
+
+* **§2 made the pin and the corpus one change.** The reference set is `composer/spec/cvlr_reference.py`,
+  in this repo, and the corpus must describe exactly the releases it names. A coupling that spans
+  two repositories cannot be enforced; in one, it is a test.
+* **The producer becomes testable in the ordinary suite.** No model, no API key, no network beyond
+  cargo's fetch. A cross-repo producer could never be run by `pytest tests/ -m "not expensive"`.
+* **`crate_mount.py` loses its cross-repo contract.** It was split out of `source_tools.py`
+  specifically so a plain script in `certora-cvlr-kb` could read crate trees without importing
+  langchain — its own docstring says so. With the producer here it is an ordinary internal module,
+  and the `AUTOPROVER_REPO`-on-`sys.path` shim in that repo goes away.
+
+**What to port rather than reinvent.** `crate_reference.py` got one thing exactly right that
+rustdoc does not cover: *"Macro expansions are quoted, not described. The crates ship 58 `macrotest`
+snapshot pairs — an invocation beside its expansion… An agent asked to describe those would be
+inferring what is sitting on disk."* Macro bodies are not in rustdoc JSON in any useful form, and
+`cvlr_assert!` / `cvlr_assume!` / `clog!` are the surface the author touches most. Port
+`crate_inventory.expansion_pairs()` — 20 lines, no model, it just pairs `tests/expand/<name>.rs`
+with `<name>.expanded.rs` — and emit each pair verbatim beside its macro's entry. This is also why
+`crate_mount.py` stays: it is how the producer reads those trees. Correct its docstring to say
+producer-only rather than naming the other repo.
+
+**Its input is rustdoc JSON, not rendered HTML.** Build a probe crate from
+`ChainReference.cargo_dependencies()` — which already emits exactly the reference set plus the
+platform crates, and which §2.6 noted has no caller yet; this is it — and run
+`cargo +nightly rustdoc -Z unstable-options --output-format json` over each CVLR crate. JSON rather
+than scraped HTML because it gives, per item: the resolved path, the full signature, the doc
+comment, `#[doc(hidden)]`, deprecation, the `cfg`/feature gate, and — the one that matters most —
+**where a re-export actually resolves to**.
+
+One cost to accept with open eyes: rustdoc JSON is a nightly-only, explicitly unstable format. The
+producer is a build-time tool, not a runtime dependency, and it is pinned by
+`rust-toolchain.toml` like everything else here, so a format break is a broken rebuild rather than a
+broken run — but it is a break that will happen, and the parse should fail loudly on an unexpected
+`format_version` rather than silently emitting a thin corpus.
 
 ### 4.3 Header paths
 
@@ -330,6 +390,16 @@ Per public item, two products (`rag-import-format.md` §2):
   is what an exact lookup returns in full, and it is the definitive answer.
 * `embedded_groups` — doc prose as `paragraph`, signature as `code`, tables as `atomic`. This is
   what "how do I give an account field a nondeterministic value?" lands on.
+
+**On grouping, which the old producer needed a model for.** `crate_reference.py` documented a
+module as "a handful of entries, one per *distinct idea*", because 310 public items would otherwise
+make 310 entries, "most of them 'the `Add` impl for `NativeIntU64`' — a corpus that answers a
+question nobody asks while burying the ones people do". That judgement was right and it does not
+need a model here, because the two products want opposite things: **`manual_sections` keeps every
+item addressable**, since an exact lookup of `NativeIntU64::add` should find it, while
+**`embedded_groups` collapses mechanical variants into one chunk**, since no one vector-searches for
+the twentieth trait impl. rustdoc JSON marks trait impls and their `impl` blocks, so the collapse is
+a rule over the item kind rather than a judgement about ideas.
 
 Plus, **one synthetic section per crate: the complete public surface, as a list.** This is the
 mitigation for §1.2(1). It is the only row that supports a *closed-world* read — the researcher
@@ -356,26 +426,48 @@ have an identifier and want its signature, which by the §7.5.5 census is the do
 Every docstring says the same thing in one sentence: **this corpus is generated from the CVLR
 crates and is authoritative; where it disagrees with the manual or with recall, it is right.**
 
-### 4.6 `cvlr_kb` — re-scoped, and it loses a product
+### 4.6 `cvlr_kb` — re-scoped down to the manual
 
 `cvlr_kb` today holds three things (`db.py`'s comment on `KNOWLEDGE_BASES`): the Solana manual, a
-**CVLR crate reference** manifest, and project-derived practice entries. The crate reference is
-what `cvlr_api_kb` replaces and does better; it should be retired from the kb repo's producers
-rather than left to contradict the generated corpus. That is the one migration step that deletes
-existing corpus content, and it needs a maintainer's confirmation that nothing hand-written of
-value is only in there.
+**CVLR crate reference** manifest, and project-derived practice entries. Both of the non-manual
+halves are leaving, for reasons decided elsewhere:
 
-What stays in `cvlr_kb` is what the API docs cannot say: the manual's methodology, and the
-abstracted practice entries (still `UNREVIEWED`-marked, per `CvlrVectorSearch`'s docstring). Its
-tool docstrings should be edited to state its new position in the ordering — advice and practice,
-not authority on what exists.
+* **The crate reference** is what `cvlr_api_kb` replaces and does better (§4.2). Retire it rather
+  than leave it to contradict the generated corpus.
+* **The practice entries** are retired as corpus content by `cvlr-knowledge-plan.md` §4 — not by
+  this plan. That decision is that CVLR practice knowledge is hand-authored and delivered through
+  the always-in-context bundle and the trigger-indexed recipes, because `cvlr_kb` search "is
+  explicitly allowed to be absent at run time" and "anything load-bearing must be in the prompt or
+  the bundle". Worth knowing here because it is what reduces `cvlr_kb` to one product.
 
-### 4.7 The compile gate stays, and now covers more
+So `cvlr_kb` becomes **exactly the sphinx manual**, produced by `gen_docs.sh` and `ragbuild`, both
+already in this repo. Its tool docstrings should be edited to say so and to state its position in
+the ordering: methodology and prose, allowed to lag, not authority on what exists.
 
-The kb repo already compile-gates corpus content against the reference set (`cargo check`, a few
-seconds on the host — no SBF toolchain needed). Examples extracted from doc comments go through it,
-and rustdoc's own doctests are the cheap version of the same check and should be run. This is what
-keeps §1.2(2) honest: the top channel is only authoritative because something compiles it.
+This is the one migration step that deletes existing corpus content. It needs a maintainer's
+confirmation that nothing hand-written of value is only in those rows — and the practice half of
+that question is `cvlr-knowledge-plan.md`'s W4 triage, not ours.
+
+### 4.7 The gates, and what rustdoc does to them
+
+`crate_reference.py` ran two, and the lesson it paid for is worth keeping: *"generated content needs
+a check that can fail for a reason nobody had to notice."* Both survive the move and both get
+cheaper.
+
+* **Compile.** Every emitted example was put through `compile_gate.Probe` *inside* the retry loop,
+  because placing the check after generation "left the abstraction pass at 4 of 48 examples
+  compiling". With no generation step there is no retry loop, and the examples come from doc
+  comments — so the gate is `cargo test --doc` over the probe crate, which is rustdoc's own
+  doctest runner. Cheap enough (a few seconds on the host, no SBF toolchain) to belong in the
+  producer rather than beside it.
+* **Completeness.** Every public item had to be named by some entry, checked against
+  `crate_inventory`'s regex scan. That gate existed because the scan and the generation were two
+  extractions that could drift apart. With rustdoc there is one extraction, so completeness stops
+  being a gate and becomes a property of the walk — and the thing worth asserting instead is that
+  the synthetic surface section (§4.4) lists exactly the items the walk emitted.
+
+This is what keeps §1.2(2) honest: the top channel outranks the manual only because something
+compiles it.
 
 ---
 
@@ -441,12 +533,15 @@ Display: a `CommonTools.cvlr_research` entry in `composer/ui/tool_display.py` be
 * `composer/templates/cvlr_source_tools.j2`
 
 **New**
+* `composer/scripts/cvlr_api_docs.py` — the rustdoc producer (§4.2), beside `ragbuild.py` and
+  `rag_import.py`
 * `composer/tools/cvlr_api_rag.py` — the three tools of §4.5
 * `composer/spec/cvlr_research.py`, `composer/templates/cvlr_research_system_prompt.j2`,
   `composer/templates/cvlr_research.j2` (the prompt fragment that replaces `cvlr_source_tools.j2`)
 
 **Kept, re-purposed**
-* `composer/spec/cvlr/crate_mount.py` — producer-only; docstring corrected (§4.2)
+* `composer/spec/cvlr/crate_mount.py` — producer-only, and now an ordinary internal module rather
+  than a cross-repo contract; docstring corrected (§4.2)
 * `composer/spec/cvlr/crates.py` — `gaps()` has a real consumer as of §2.6: the scaffold gate and
   the preflight backstop, where until then it only reached a log line
 * `composer/tools/cvlr_rag.py` — docstrings restated for its new position in the ordering (§4.6)
@@ -458,8 +553,10 @@ Display: a `CommonTools.cvlr_research` entry in `composer/ui/tool_display.py` be
   `KNOWLEDGE_BASES` comment corrected: it currently describes `cvlr_kb` as holding the crate
   reference, which §4.6 retires
 * `composer/tools/rag_env.py` — a `_FACTORIES` entry and a second line in its module docstring
-* `scripts/populate_cvlr_rag.sh` — header comment and the no-manifest error text only; the ingest
-  logic already routes per manifest (§3)
+* `scripts/populate_cvlr_rag.sh` — loses its manifest **discovery** (`$CVLR_KB_REPO`, the
+  installed-`certora_cvlr_kb` probe, and the error text explaining how to get that package) and
+  gains a call to the producer. The ingest logic already routes per manifest (§3) and does not
+  change.
 
 **Edited**
 * `pipeline.py` — drop `mount` / `cvlr_source_tools` and the "no CVLR sources" warning; build the
@@ -502,6 +599,12 @@ Display: a `CommonTools.cvlr_research` entry in `composer/ui/tool_display.py` be
   catch.
 * A test that the two corpora do not share a connection — `CVLR_DEFAULT_CONNECTION !=
   CVLR_API_DEFAULT_CONNECTION` — so a copy-paste of the constant cannot silently merge them again.
+* New `tests/test_cvlr_api_docs.py` — **this is new ground: the producer has never been testable.**
+  Over a checked-in rustdoc-JSON fixture rather than a live `cargo rustdoc`: a re-export resolves to
+  its defining crate, a `#[doc(hidden)]` item is dropped, a feature-gated item carries its gate, the
+  surface section lists exactly what the walk emitted (§4.7), and an unexpected `format_version`
+  raises rather than emitting a thin corpus. Port `test_crate_inventory.py`'s hand-written Rust
+  cases for `expansion_pairs` only; the rest of that file tests a regex scanner rustdoc retires.
 * ~~`tests/test_cvlr_scaffold.py` — the pin gate, beside the platform-generation witness tests.~~
   **Landed** (§2.6): five tests covering a foreign line, the refusal arriving before `apply` writes
   anything, a `[workspace.dependencies]`-only pin, an unreadable git dependency, and both spellings
@@ -527,20 +630,24 @@ everything below, correct on its own terms, and it is what makes the single-vers
 guarantee rather than an assumption. Step 5 now has one precondition left instead of two.
 
 1. **Register `cvlr_api_kb`** — the four-file corpus registration of §6, with an empty schema.
-   Reviewable on its own and it unblocks everyone: the kb repo can ingest against it immediately.
-2. **The rustdoc producer** in `certora-cvlr-kb`. Additive; nothing here changes, because
-   `rag_import` already routes by tag. This is where §4.4's complete-surface section gets proven out
-   by hand before any agent depends on it.
+   Reviewable on its own, and it is what step 2 ingests into.
+2. **The rustdoc producer**, `composer/scripts/cvlr_api_docs.py` (§4.2). Additive — nothing reads
+   the corpus yet — and it lands with its own tests, which a cross-repo producer never had. This is
+   where §4.4's complete-surface section gets proven out before any agent depends on it. It ports
+   `expansion_pairs` from `certora-cvlr-kb` and retires `crate_reference.py` and
+   `crate_inventory.py` there.
 3. **`cvlr_api_rag.py` + `cvlr_research.py` + templates + display + tests**, wired *alongside* the
    source mount. Both channels live. This is the only point at which the two can be compared on the
    same run.
 4. **The `--withhold-crate` corpus filter** (§2.3) — the one version-adjacent item (0) does not
    close. Independent of (3).
 5. **Remove the mount**, rewrite the two system prompts, delete `source_tools.py` and its fragment.
-6. **Retire the crate-reference manifest** from `cvlr_kb` (§4.6) and restate `cvlr_rag.py`'s
+6. **Re-scope `cvlr_kb` to the manual** (§4.6): drop the crate-reference manifest, drop
+   `populate_cvlr_rag.sh`'s discovery of manifests built elsewhere, and restate `cvlr_rag.py`'s
    docstrings. Deliberately *after* (5): while both channels are live, a duplicated crate reference
    is harmless, and retiring it early would leave a window where neither corpus answers an API
-   question well.
+   question well. The practice-entry half of this is `cvlr-knowledge-plan.md`'s W4 and moves on its
+   own schedule.
 7. **Re-record the tape**, re-run the gate, re-take the census.
 
 (1)–(4) are additive and reviewable on their own. (5) is the only irreversible step. Its second
