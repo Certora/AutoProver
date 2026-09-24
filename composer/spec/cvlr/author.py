@@ -543,7 +543,7 @@ _PropertyGenTemplate = TypedTemplate[CvlrPropertyGenParams]("cvlr_property_gener
 
 _log = logging.getLogger(__name__)
 
-class _LastCvlrAttempt(BaseModel):
+class LastCvlrAttempt(BaseModel):
     """What a unit carries out of one run and into the next.
 
     The peer of ``cvl_generation._LastAttemptCache``, and it needs two fields where CVL needs one,
@@ -565,7 +565,10 @@ class _LastCvlrAttempt(BaseModel):
 
 #: Per unit, so two units of one run do not read each other's drafts. ``cache_ns`` scopes it to
 #: the run family, which is what makes a resumed run find yesterday's work and an unrelated one not.
-LAST_ATTEMPT_KEY = CacheKey[CvlrGeneration, _LastCvlrAttempt]("last_attempt")
+#: Survives budget pressure, because a run the budget cut is the one whose draft matters most.
+LAST_ATTEMPT_KEY = CacheKey[CvlrGeneration, LastCvlrAttempt](
+    "last_attempt", survives_budget_pressure=True
+)
 
 
 _BUDGET_WRAPUP_MESSAGE = """
@@ -607,7 +610,7 @@ async def _remember_attempt(
         if not draft:
             return
         munges = [m.describe() for m in values.get("munges", ())]
-        await ctx.child(LAST_ATTEMPT_KEY).cache_put(_LastCvlrAttempt(spec=draft, munges=munges))
+        await ctx.child(LAST_ATTEMPT_KEY).cache_put(LastCvlrAttempt(spec=draft, munges=munges))
     except Exception:
         _log.warning("cvlr: could not cache this unit's draft for a later run", exc_info=True)
 
@@ -734,7 +737,7 @@ async def batch_cvlr_generation(
     # Seeded from the previous run's draft when there is one, the way CVL's author does it
     # (``cvl_generation.run_cvl_generator``). A budget-cut unit otherwise starts from nothing,
     # which on the stake benchmark meant re-authoring thousands of lines it had already written.
-    last = await ctx.child(LAST_ATTEMPT_KEY).cache_get(_LastCvlrAttempt)
+    last = await ctx.child(LAST_ATTEMPT_KEY).cache_get(LastCvlrAttempt)
     resumed_input: list[str | dict[Any, Any]] = []
     if last is not None:
         resumed_input.append(
