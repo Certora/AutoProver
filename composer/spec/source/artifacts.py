@@ -113,6 +113,10 @@ class ProverArtifactStore(ArtifactStore[ComponentSpec, GeneratedCVL]):
         self._write_property_map(
             i.stem, self._property_suffix, {k: v for (k, v) in artifact.property_checks()},
         )
+        # Which spec file verifies each property.
+        (self._properties_dir() / f"{i.stem}.property_specs.json").write_text(
+            json.dumps({str(m.property_title): m.spec_file for m in artifact.property_rules}, indent=2)
+        )
         return specs_root.relative_to(self._project_root)
 
     @override

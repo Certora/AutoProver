@@ -8,7 +8,7 @@ edit to one buffer leaves the others untouched. Each tool is a pydantic model ge
 concrete graph state; the factory subscribes it to that state and mints the tool.
 """
 
-import posixpath
+from pathlib import PurePosixPath
 
 from langchain_core.tools import BaseTool
 from langgraph.types import Command
@@ -35,8 +35,8 @@ def _escapes_component_dir(name: str) -> bool:
     outside that dir. A leading ``/`` or a ``..`` that climbs out escapes; a plain subdir does not. This
     is what confines every buffer to its own component, keeping the shared ``summaries/`` and other
     components' spec dirs immutable to the agent."""
-    n = posixpath.normpath(name)
-    return n.startswith("/") or n == ".." or n.startswith("../")
+    p = PurePosixPath(name)
+    return p.is_absolute() or ".." in p.parts
 
 
 def _dup_note(buffers: dict[str, NamedBuffer], name: str) -> str:

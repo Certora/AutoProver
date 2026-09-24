@@ -92,7 +92,7 @@ def _gen(mapping: dict[str, list[str]] | None = None,
     report fetches verdicts from and keys each rule on; defaults to ``[(link, "s.spec")]``."""
     return GeneratedCVL(
         commentary="",
-        property_rules=[PropertyRuleMapping(property_title=t, rules=rs)
+        property_rules=[PropertyRuleMapping(property_title=t, rules=rs, spec_file="s.spec")
                         for t, rs in (mapping or {}).items()],
         skipped=[SkippedProperty(property_title=t, reason=r)
                  for t, r in (skipped or {}).items()],

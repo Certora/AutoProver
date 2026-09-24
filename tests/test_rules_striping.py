@@ -554,7 +554,7 @@ class TestBufferCoverage:
 
 def _mapping(title: str, *rules: str) -> PropertyRuleMapping:
     return PropertyRuleMapping(
-        property_title=PropertyTitle(title), rules=[RuleName(r) for r in rules]
+        property_title=PropertyTitle(title), rules=[RuleName(r) for r in rules], spec_file="s.spec"
     )
 
 

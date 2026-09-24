@@ -48,6 +48,7 @@ class PropertyRuleMapping(BaseModel):
     """The rules/invariants in the spec that verify a given property."""
     property_title: PropertyTitle = Field(description="The unique snake_case title of the property (from the batch listing) that these rules verify")
     rules: list[RuleName] = Field(description="The names of the rules/invariants in the spec that verify this property")
+    spec_file: str = Field(description="Project-relative spec file (`<component>/<buffer>.spec`, relative to the specs dir) whose rules verify this property")
 
 class Rebuttal(RebuttalBase):
     """A rebuttal to a specific piece of feedback from a prior round, backed by evidence.

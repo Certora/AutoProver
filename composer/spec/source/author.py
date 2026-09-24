@@ -50,7 +50,9 @@ from composer.spec.source.prover import (
 )
 from langgraph.graph import MessagesState
 from pathlib import Path
-from composer.spec.gen_types import CVLResource, TypedTemplate, import_statement_for
+from composer.spec.gen_types import (
+    CVLResource, SPECS_DIR, TypedTemplate, buffer_spec_path, import_statement_for,
+)
 from composer.spec.service_host import ServiceHost, Sort
 from composer.llm.provider import CacheLevel
 from composer.kb.kb_context import with_cvl_context
@@ -208,15 +210,10 @@ class PublishResultTool(
             expected_to_fail=set(self.state["rule_skips"]),
         )) is not None:
             return f"Completion REJECTED: {err}"
-        pr = [
-            PropertyRuleMapping(property_title=PropertyTitle(p), rules=[RuleName(rn) for rn in rs])
-            for b in run_targets(buffers) for p, rs in b.property_rules.items()
-        ]
         return tool_state_update(
             self.tool_call_id,
             "Accepted",
             result=self.commentary,
-            property_rules=pr,
             failed=False,
         )
 
@@ -1183,10 +1180,16 @@ async def batch_cvl_generation(
     generated = GeneratedCVL(
         commentary=res_state["result"],
         skipped=res_state["skipped"],
-        property_rules=res_state["property_rules"],
+        property_rules=[
+            PropertyRuleMapping(
+                property_title=PropertyTitle(p),
+                rules=[RuleName(rn) for rn in rs],
+                spec_file=buffer_spec_path(component.slugified_name, b.name).relative_to(SPECS_DIR).as_posix(),
+            )
+            for b in run_targets(_buffers) for p, rs in b.property_rules.items()
+        ],
         config=res_state["config"],
-        # A representative per-component prover link (the newest run that composes the result); the
-        # per-rule links live in run_link_specs. None when no run has completed.
+        # A representative per-component link; the per-rule links live in run_link_specs.
         final_link=(run_link_specs[0][0] if run_link_specs else None),
         run_link_specs=run_link_specs,
         vfs=res_state["vfs"],
