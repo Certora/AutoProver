@@ -538,7 +538,7 @@ reports, which show the withdrawals were deliberate and measured. The second bla
 for starting doomed units. The CVLR wrap-up text does carry an "any whose verdict you never saw"
 clause that CVL's and Foundry's do not, but nothing observed has been traced to it.)*
 
-**U22. The draft carry-forward can overwrite a better draft with a worse one.**
+**U22. The draft carry-forward can overwrite a better draft with a worse one.** *(CVLR side fixed; CVL side open.)*
 `_remember_attempt` caches whatever `curr_spec` holds when the unit unwinds, with no comparison
 against what is already there. On 2026-09-24 the stake run finished with 1,609 lines and 12 rules in
 the cache, over the 6,176 lines seeded into it that morning.
@@ -554,10 +554,18 @@ does, and the two failure modes are complementary:
 
 Neither is right. Without the opt-in a budget-cut unit caches nothing, which is the bug the opt-in
 was added to fix — the carry-forward silently no-opping in exactly the case it exists for. With it,
-a run that achieves less than its predecessor replaces the predecessor's work. What makes the opt-in
-safe is refusing to regress: keep the cached attempt that carries more rules, or hold the high-water
-draft beside the last one. CVL should get the opt-in **and** the guard together, not the opt-in on
-its own.
+a run that achieves less than its predecessor replaces the predecessor's work.
+
+**CVLR now takes the shortest route that makes the opt-in safe:** a unit whose state carries
+`budget_curtailed` may *fill* an empty slot but never *replace* an occupied one. Seeding an empty
+slot is the case the cache exists for and cannot regress anything; replacing a fuller draft with a
+post-wrap-up remnant is the only loss actually observed. A unit that finished on its own terms still
+overwrites unconditionally, which is CVL's behaviour and the right one — a smaller *considered*
+draft is the better thing to resume from. The per-unit `budget_curtailed` flag is the test rather
+than `budget_pressure()`, because the run pool is shared and near the end of a run every unit sees
+pressure whether or not it was cut.
+
+CVL should get the opt-in **and** this guard together, not the opt-in on its own.
 
 `ap-trail recover-drafts --draft largest` repairs the cache from the checkpoints after the fact,
 which is a workaround and not a reason to leave this.
