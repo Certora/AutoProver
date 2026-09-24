@@ -119,22 +119,22 @@ CVLR pin does not match its platform generation, and `tests/test_cvlr_gate.py`'s
 the consequence: `test_scenarios/solana_vault` pins Anchor 1.x, lands on the Solana v3 split, and
 **the scaffold refuses it**, with witness tests in `test_cvlr_scaffold`. The new gate is the same
 refusal widened from "wrong platform generation" to "any CVLR pin that is not ours", in the same
-place, with the same `Blocked` type, before any LLM spend.
+place, with the same `Blocked` type, before any LLM spend. That is what `_check_pins` is (§2.6).
 
-The branch to change is the one that exists to *tolerate* a foreign pin.
-[`scaffold._scaffold_pins`](../composer/spec/cvlr/scaffold.py#L692) currently says: if the project
-already declares the chain crate, it has chosen its CVLR line and the scaffold keeps it. That branch
-becomes the refusal path, and its docstring's reasoning — that mixing lines puts two generations of
-`AccountInfo` in one graph — becomes the message.
+The branch that changed is the one that existed to *tolerate* a foreign pin. `_scaffold_pins` said:
+if the project already declares the chain crate, it has chosen its CVLR line and the scaffold keeps
+it. Its docstring's reasoning — that mixing lines puts two generations of `AccountInfo` in one graph
+— is now the refusal's message, and the function is gone, along with `_introduced` and `_declared`,
+which existed only to serve it.
 
-**`VersionGap` has to split into two types first**, because it conflates two different facts behind
+**`VersionGap` had to split into two types first**, because it conflated two different facts behind
 one `resolved: str | None`, and only one of them is a refusal:
 
 ```python
 type Divergence = Mismatched | Absent
 
 @dataclass(frozen=True)
-class Mismatched:   # refuse: the project builds a CVLR the corpus does not describe
+class Mismatched:   # refuse: the project builds a CVLR release this build does not support
     crate: str; reference: str; resolved: str
 
 @dataclass(frozen=True)
@@ -142,7 +142,7 @@ class Absent:       # fine: the project does not depend on it at all
     crate: str; reference: str
 ```
 
-`VersionGap.describe()` already spells out that the two mean different things. `Absent` is the
+`VersionGap.describe()` already spelled out that the two mean different things. `Absent` is the
 *expected* state under `--withhold-crate` (§2.3) and must never be a refusal — a run that withholds
 `cvlr-solana-stake` would otherwise refuse itself.
 
@@ -175,25 +175,59 @@ Worth listing, because it is most of the complexity the first draft was carrying
   becomes pure provenance. Keep it anyway: it is free, it makes a stale corpus visible in every
   answer the researcher gives, and it makes a 0.6→0.7 rebuild legible while it is half-done.
 
-### 2.5 Costs, and two things to decide
+### 2.5 Costs, and what was decided
 
-* **A bump gets heavier.** Today a `cvlr_reference.py` edit is a pin change. After this it is a pin
-  change *plus* a corpus rebuild, and the two must land together or every answer is about the wrong
-  release. That coupling should be written into `cvlr_reference.py`'s module docstring, which
-  currently says only "a bump is an edit here".
-* **`cvlr-backend-plan.md` §5.5 needs correcting.** It cites the three gaps the public examples
-  produce — `cvlr` 0.4.1, `cvlr-solana` 0.4.4, `cvlr-solana-stake` absent — as evidence for the
-  mount. Under this policy the first two describe targets we refuse. Leaving that paragraph as
-  written will mislead the next reader about what the gap machinery is for.
-* **Decide: is there an escape hatch?** An `--allow-cvlr-version-drift` flag costs almost nothing
-  and keeps the refusal from blocking someone deliberately testing an old line. The argument
-  against is the CVL analogy itself — there is no flag for using an old CVL, and a flag that
-  silently degrades every answer the researcher gives is worse than a refusal. **Recommendation: no
-  flag.** If a real need appears, it is an argument for the next item, not for drift.
-* **Decide: should the scaffold offer to bump an off-reference project?** It would turn a refusal
+* **A bump gets heavier.** A `cvlr_reference.py` edit was a pin change. It is now a pin change
+  *plus* an API-corpus rebuild, and the two must land together or every answer is about the wrong
+  release. **Done in spirit, not in letter:** that docstring now says a bump "moves every project
+  this build sets up" and names the one-supported-line rule, but it does not mention the corpus,
+  because no corpus exists on `eric/cvlr-preflight` and a forward reference there is unreviewable.
+  The coupling has to be written in when §8 step 2 lands the producer.
+* **No escape hatch. Decided.** An `--allow-cvlr-version-drift` flag was considered and rejected:
+  there is no flag for using an old CVL, and a flag that silently degrades every answer the
+  researcher gives is worse than a refusal. Nothing was shipped, and a real need is an argument for
+  the next bullet rather than for drift.
+* **`cvlr-backend-plan.md` §5.5 still needs correcting.** It cites the three gaps the public
+  examples produce — `cvlr` 0.4.1, `cvlr-solana` 0.4.4, `cvlr-solana-stake` absent — as evidence
+  for the mount. Under this policy the first two describe targets we now refuse. Open.
+* **Open: should the scaffold offer to bump an off-reference project?** It would turn a refusal
   into a fix and is the natural follow-on. It edits the project under verification, so it is
-  `who-edits-the-program.md` territory and needs a maintainer's call. Out of scope here; worth
-  filing.
+  `who-edits-the-program.md` territory and needs a maintainer's call. Not filed yet.
+
+### 2.6 Landed, in PR #248
+
+**Done.** [#248 "Add the Solana Prover preflight step"](https://github.com/Certora/AutoProver/pull/248)
+adds every file the gate touches — `crates.py`, `scaffold.py`, `preflight.py` and
+`cvlr_reference.py` are all *new* in it — so the pin work went in as an update to that PR rather
+than a follow-up, which kept `VersionGap` from ever landing in the shape we had already decided was
+wrong.
+
+Two commits on `eric/cvlr-preflight` (`a396088a`, `3a5bf37f`), pushed, and cherry-picked here as
+`ff1a6030` and `b2efa926`:
+
+| file | what changed |
+|---|---|
+| `composer/spec/cvlr/scaffold.py` | `_check_pins`, beside `_check_platform`, refusing before anything is written. `_scaffold_pins`, `_introduced` and `_declared` existed only to express the deference and are gone; both gates now run unconditionally. |
+| `composer/spec/cvlr/crates.py` | `VersionGap` → `Mismatched \| Absent` (§2.2), plus `CvlrSources.mismatched()`. |
+| `composer/spec/cvlr/preflight.py` | the post-scaffold backstop: `PreflightFailed` on a `Mismatched`, which the gate cannot produce and a `[patch]` table can. |
+| `composer/spec/cvlr_reference.py` | the one-supported-line rule in the module docstring, and four docstrings rewritten to stop explaining themselves by naming a corpus that does not exist there (`3a5bf37f`). |
+| `tests/` | five scaffold tests replacing the three that encoded the deference, and the plumbing tests moved to the new types. |
+| the PR description | three refusals, not two, with the narrowing argued rather than listed. |
+
+Two things the work settled that the plan had not:
+
+* **The gate needs two readings, not one.** The resolved graph is exact for a crate some member
+  already depends on, but a crate pinned in `[workspace.dependencies]` and depended on by nobody
+  yet is absent from the graph and about to be inherited by the member being scaffolded. Only the
+  manifests see it. A git or path dependency is refused outright: a gate cannot pass a version it
+  cannot read.
+* **`_check_pins` iterates `crates()`, not `scaffold_crates()`** — deliberately, and it matters
+  only on this branch, where `withholding` makes the two differ. A withheld crate the project
+  declares *for itself* at a foreign version still collides; a withheld crate that is simply not
+  there is `Absent` and never refuses.
+
+Deliberately kept: `UnpublishedCapability` and `ChainReference.cargo_dependencies()` have no
+callers in #248 and were left in place rather than dropped and re-added with their consumers.
 
 ---
 
@@ -413,8 +447,8 @@ Display: a `CommonTools.cvlr_research` entry in `composer/ui/tool_display.py` be
 
 **Kept, re-purposed**
 * `composer/spec/cvlr/crate_mount.py` — producer-only; docstring corrected (§4.2)
-* `composer/spec/cvlr/crates.py` — `gaps()` gains a real consumer for the first time: the preflight
-  refusal (§2.2), where until now it only reached a log line
+* `composer/spec/cvlr/crates.py` — `gaps()` has a real consumer as of §2.6: the scaffold gate and
+  the preflight backstop, where until then it only reached a log line
 * `composer/tools/cvlr_rag.py` — docstrings restated for its new position in the ordering (§4.6)
 
 **Corpus registration** (all four together, or the tag validates and silently produces no tools —
@@ -431,11 +465,9 @@ Display: a `CommonTools.cvlr_research` entry in `composer/ui/tool_display.py` be
 * `pipeline.py` — drop `mount` / `cvlr_source_tools` and the "no CVLR sources" warning; build the
   research tool instead. `CvlrDeps.crate_tools` → `research_tool`. The gap loop at :495 goes away
   entirely: under the pin there is nothing left to report by the time `prepare_system` runs.
-* `composer/spec/cvlr/crates.py` — `VersionGap` splits into `Mismatched | Absent` (§2.2).
-* `composer/spec/cvlr/scaffold.py` — `_scaffold_pins`'s tolerate-a-foreign-pin branch becomes the
-  refusal (§2.2), beside `_check_platform`.
-* `composer/spec/cvlr_reference.py` — docstring: a bump is now an edit here **and** a corpus
-  rebuild, landing together (§2.5).
+* ~~`crates.py`, `scaffold.py`, `preflight.py`, `cvlr_reference.py` — the pin gate.~~ **Landed**
+  (§2.6). What is left is the corpus-rebuild coupling in `cvlr_reference.py`'s docstring, which
+  waits on the producer.
 * `author.py` — `CvlrMountParams` is no longer about a mount; rename to `CvlrVersionParams` and keep
   `cvlr_versions` (the author still needs to know what it is writing against). `crate_tools` /
   `extra_tools` become the research tool, still routed to author **and** judge (§1.1).
@@ -470,9 +502,11 @@ Display: a `CommonTools.cvlr_research` entry in `composer/ui/tool_display.py` be
   catch.
 * A test that the two corpora do not share a connection — `CVLR_DEFAULT_CONNECTION !=
   CVLR_API_DEFAULT_CONNECTION` — so a copy-paste of the constant cannot silently merge them again.
-* `tests/test_cvlr_reference.py` / `tests/test_cvlr_scaffold.py` — the pin gate is testable without
-  a live run, beside the existing platform-generation witness tests: a project on a foreign `cvlr`
-  pin is refused, and a project with a withheld crate absent from its graph is **not**.
+* ~~`tests/test_cvlr_scaffold.py` — the pin gate, beside the platform-generation witness tests.~~
+  **Landed** (§2.6): five tests covering a foreign line, the refusal arriving before `apply` writes
+  anything, a `[workspace.dependencies]`-only pin, an unreadable git dependency, and both spellings
+  of the supported release passing. The `Absent` test stands in for the real withheld-stake case and
+  is worth strengthening now that `withholding` is in scope here.
 * **`composer/testing/ui_harness_cvlr_vault.py` must be re-recorded.** 514 `cvlr_source` mentions; the
   tape is keyed on the tool calls the author actually made, and none of those calls will exist. This
   is an expensive run (`scripts/record_cvlr_tape.sh`, the `generate-tape` skill) plus a hand-clean
@@ -487,6 +521,11 @@ Display: a `CommonTools.cvlr_research` entry in `composer/ui/tool_display.py` be
 
 ## 8. Landing order
 
+**0. The version pin, in PR #248 (§2.6). ✅ Done** — `a396088a` and `3a5bf37f` on
+`eric/cvlr-preflight`, cherry-picked here as `ff1a6030` and `b2efa926`. It was separable from
+everything below, correct on its own terms, and it is what makes the single-version corpus a
+guarantee rather than an assumption. Step 5 now has one precondition left instead of two.
+
 1. **Register `cvlr_api_kb`** — the four-file corpus registration of §6, with an empty schema.
    Reviewable on its own and it unblocks everyone: the kb repo can ingest against it immediately.
 2. **The rustdoc producer** in `certora-cvlr-kb`. Additive; nothing here changes, because
@@ -495,9 +534,8 @@ Display: a `CommonTools.cvlr_research` entry in `composer/ui/tool_display.py` be
 3. **`cvlr_api_rag.py` + `cvlr_research.py` + templates + display + tests**, wired *alongside* the
    source mount. Both channels live. This is the only point at which the two can be compared on the
    same run.
-4. **The pin gate** (§2.2: the `Mismatched | Absent` split and the scaffold refusal) and the
-   `--withhold-crate` corpus filter. Independent of (3); do not let it block — in fact it is correct
-   today and can land first of all, becoming load-bearing only at (5).
+4. **The `--withhold-crate` corpus filter** (§2.3) — the one version-adjacent item (0) does not
+   close. Independent of (3).
 5. **Remove the mount**, rewrite the two system prompts, delete `source_tools.py` and its fragment.
 6. **Retire the crate-reference manifest** from `cvlr_kb` (§4.6) and restate `cvlr_rag.py`'s
    docstrings. Deliberately *after* (5): while both channels are live, a duplicated crate reference
@@ -505,6 +543,7 @@ Display: a `CommonTools.cvlr_research` entry in `composer/ui/tool_display.py` be
    question well.
 7. **Re-record the tape**, re-run the gate, re-take the census.
 
-(1)–(4) are additive and reviewable on their own. (5) is the only irreversible step and should not be
-taken until (3)'s comparison run says the researcher answers the questions the census shows the author
-actually asks.
+(1)–(4) are additive and reviewable on their own. (5) is the only irreversible step. Its second
+precondition — the pin, without which the mount is the only thing guaranteeing the author reads the
+right CVLR — is met; what remains is (3)'s comparison run, which has to show the researcher
+answering the questions the §7.5.5 census says the author actually asks.
