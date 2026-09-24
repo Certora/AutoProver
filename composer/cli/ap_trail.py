@@ -9,12 +9,20 @@ Subcommands:
                 consumable by ``ap-trail view --from-export``.
 * ``data``   — show the ``run_data`` metadata dicts recorded for a run
                 (``--json`` for pipeable output).
+* ``recover-drafts`` — re-seed a run's CVLR drafts from its checkpoints into the
+                cache, for a run that died without unwinding.
 """
 
 import argparse
 import sys
 
-from composer.cli.diagnostics import ap_trail_data, ap_trail_export, ap_trail_ls, ap_trail_view
+from composer.cli.diagnostics import (
+    ap_trail_data,
+    ap_trail_export,
+    ap_trail_ls,
+    ap_trail_recover,
+    ap_trail_view,
+)
 
 
 def main() -> int:
@@ -33,6 +41,11 @@ def main() -> int:
     p_data = sub.add_parser("data", help="Show a run's recorded run_data metadata.")
     ap_trail_data.add_arguments(p_data)
 
+    p_recover = sub.add_parser(
+        "recover-drafts", help="Re-seed a run's CVLR drafts from its checkpoints."
+    )
+    ap_trail_recover.add_arguments(p_recover)
+
     args = parser.parse_args()
     match args.cmd:
         case "ls":
@@ -43,6 +56,8 @@ def main() -> int:
             return ap_trail_export.main(args)
         case "data":
             return ap_trail_data.main(args)
+        case "recover-drafts":
+            return ap_trail_recover.main(args)
         case _:
             parser.print_help()
             return 2
