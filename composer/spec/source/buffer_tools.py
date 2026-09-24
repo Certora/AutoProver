@@ -55,6 +55,7 @@ def _dup_note(buffers: dict[str, NamedBuffer], name: str) -> str:
 _put_display = ToolDisplay("Writing spec buffer", suppress_ack("Buffer write result"))
 _get_display = ToolDisplay("Reading spec buffer", None)
 _edit_display = ToolDisplay("Editing spec buffer", suppress_ack("Buffer edit result"))
+_remap_display = ToolDisplay("Remapping spec buffer", suppress_ack("Buffer remap result"))
 _list_display = ToolDisplay("Listing spec buffers", None)
 _delete_display = ToolDisplay("Deleting spec buffer", suppress_ack("Buffer delete result"))
 
@@ -69,7 +70,7 @@ class PutBuffer[S: WithBuffers](WithImplementation[str | Command], WithInjectedS
     and runs no rules of its own. To depend on a shared buffer, just `import "<name>.spec";` in this
     buffer's CVL — the dependency is read from those import statements, so editing a shared buffer
     correctly re-verifies exactly the buffers that import it. Re-putting an existing buffer keeps its
-    property->rule mapping.
+    property->rule mapping; to change only that mapping, use `remap_buffer`.
 
     The number of run-target buffers is capped; creating one past the cap is refused — fold those
     properties into an existing run-target buffer instead."""
@@ -160,6 +161,37 @@ class EditBuffer[S: WithBuffers](WithImplementation[str | Command], WithInjected
 
 def edit_buffer[S: WithBuffers](ty: type[S]) -> BaseTool:
     return tool_display_of(_edit_display)(EditBuffer[ty].as_tool("edit_buffer"))
+
+
+class RemapBuffer[S: WithBuffers](WithImplementation[str | Command], WithInjectedState[S], WithInjectedId):
+    """Replace a run-target buffer's property->rule mapping without re-emitting its CVL. Provide `name`
+    and the full new `property_rules`; the buffer's CVL is unchanged."""
+
+    name: str = Field(description="The run-target buffer to remap.")
+    property_rules: dict[str, list[str]] = Field(
+        description="The full replacement mapping: each property title -> the rule/invariant names in "
+        "this buffer that verify it."
+    )
+
+    def run(self) -> str | Command:
+        existing = (self.state.get("buffers") or {}).get(self.name)
+        if existing is None:
+            return f"No buffer named {self.name!r}. Create it with put_buffer first."
+        if not existing.is_run_target:
+            return f"Buffer {self.name!r} is shared (is_run_target=false) and declares no properties."
+        if not self.property_rules:
+            return f"Refusing an empty mapping for {self.name!r}: use delete_buffer to drop the buffer."
+        buf = existing.model_copy(update={"property_rules": self.property_rules})
+        buffers_now = self.state.get("buffers") or {}
+        return tool_state_update(
+            tool_call_id=self.tool_call_id,
+            content="Accepted" + _dup_note({**buffers_now, self.name: buf}, self.name),
+            buffers={self.name: buf},
+        )
+
+
+def remap_buffer[S: WithBuffers](ty: type[S]) -> BaseTool:
+    return tool_display_of(_remap_display)(RemapBuffer[ty].as_tool("remap_buffer"))
 
 
 class GetBuffer[S: WithBuffers](WithImplementation[str], WithInjectedState[S]):

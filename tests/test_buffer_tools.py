@@ -9,6 +9,7 @@ from composer.spec.source.buffer_tools import (
     get_buffer,
     list_buffers,
     put_buffer,
+    remap_buffer,
 )
 from composer.spec.source.spec_buffers import NamedBuffer
 
@@ -26,7 +27,7 @@ def _state():
 
 
 def test_all_factories_build():
-    for factory in (put_buffer, edit_buffer, get_buffer, list_buffers, delete_buffer):
+    for factory in (put_buffer, edit_buffer, remap_buffer, get_buffer, list_buffers, delete_buffer):
         assert isinstance(factory(WithBuffers), BaseTool)
 
 
@@ -95,6 +96,31 @@ def test_edit_buffer_warns_when_edit_introduces_duplicate(monkeypatch):
     msg = _invoke_msg(edit_buffer(WithBuffers), "edit_buffer", state, name="hard",
                       old_string="rule r_hard", new_string="ghost dup(uint) returns uint;\nrule r_hard")
     assert "NOTE" in msg and "easy" in msg
+
+
+def test_remap_buffer_replaces_mapping_and_keeps_cvl():
+    """remap_buffer swaps a run-target buffer's property->rule mapping, leaving the CVL untouched."""
+    cvl = "rule a { assert true; }\nrule b { assert true; }\n"
+    state = {"buffers": {"easy": NamedBuffer(name="easy", cvl=cvl, property_rules={"P": ["a"]})}}
+    res = remap_buffer(WithBuffers).invoke(
+        {"name": "remap_buffer", "id": "t", "type": "tool_call",
+         "args": {"state": state, "name": "easy", "property_rules": {"P": ["a", "b"]}}},
+    )
+    buf = res.update["buffers"]["easy"]
+    assert buf.property_rules == {"P": ["a", "b"]}
+    assert buf.cvl == cvl
+
+
+def test_remap_buffer_rejects_missing_shared_and_empty():
+    tool = remap_buffer(WithBuffers)
+    assert "No buffer" in _invoke_msg(tool, "remap_buffer", {"buffers": {}},
+                                      name="x", property_rules={"P": ["r"]})
+    shared = {"buffers": {"s": NamedBuffer(name="s", cvl="ghost g(uint) returns uint;\n",
+                                           is_run_target=False)}}
+    assert "shared" in _invoke_msg(tool, "remap_buffer", shared, name="s", property_rules={"P": ["r"]})
+    rt = {"buffers": {"e": NamedBuffer(name="e", cvl="rule r { assert true; }\n",
+                                       property_rules={"P": ["r"]})}}
+    assert "empty mapping" in _invoke_msg(tool, "remap_buffer", rt, name="e", property_rules={})
 
 
 def test_put_buffer_rejects_names_that_escape_the_component_dir(monkeypatch):

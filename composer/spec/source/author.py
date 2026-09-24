@@ -36,7 +36,7 @@ from composer.spec.source.spec_buffers import (
     validate_disjoint_rules, validate_requireinvariant_proved,
 )
 from composer.spec.source.buffer_tools import (
-    put_buffer, get_buffer, edit_buffer, list_buffers, delete_buffer,
+    put_buffer, get_buffer, edit_buffer, remap_buffer, list_buffers, delete_buffer,
 )
 from composer.spec.context import WorkflowContext, CVLGeneration, CacheKey, CVLJudge, SourceCode
 from composer.spec.types import PropertyFormulation, PropertyTitle, RuleName
@@ -1042,8 +1042,8 @@ async def batch_cvl_generation(
     # CVL tools are bound (no put_cvl/edit_cvl).
     buffer_authoring: list[BaseTool] = [
         put_buffer(SourceCVLGenerationState), get_buffer(SourceCVLGenerationState),
-        edit_buffer(SourceCVLGenerationState), list_buffers(SourceCVLGenerationState),
-        delete_buffer(SourceCVLGenerationState),
+        edit_buffer(SourceCVLGenerationState), remap_buffer(SourceCVLGenerationState),
+        list_buffers(SourceCVLGenerationState), delete_buffer(SourceCVLGenerationState),
     ]
     task_graph = b.with_tools(
         cvl_guidance_tools()
