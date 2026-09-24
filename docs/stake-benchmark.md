@@ -241,31 +241,41 @@ keyword quietly absent from one call while the comment beside it claimed otherwi
 The waits that caused it were real: one job ran **100 minutes** and another 66, against a median of
 under two.
 
-### Budget curtailment deletes rules whose verdicts are merely outstanding
+### Four units never got to start
 
-The wrap-up order tells a unit to delete every rule that does not compile *and every rule whose
-verdict it never saw*. Those are not the same thing. A unit cut while its jobs are still in flight
-has seen no verdicts, so it deletes work that compiled and was successfully submitted:
+The pipeline kept dispatching queued units after the run pool was exhausted. Withdrawals, Stake &
+Lamport Movement, Deprecated Instructions and Protocol Parameter Queries each began, met the wrap-up
+order immediately and finished in about thirty seconds having authored nothing — **63 properties
+recorded as skipped for budget exhaustion without a line written**. The final report then counts
+them as failed components beside the four that did real work. Filed as [[U21]].
+
+### What the surviving units published, and why the rule counts are low
 
 | unit | at its peak | as delivered |
 |---|---|---|
-| Delegation & Activation | 1,380 lines, 32 rules | 330 lines, **0 rules** |
-| Splitting & Merging | 2,185 lines, 53 rules | 482 lines, **1 rule** |
-| Authorization & Lockup | 1,769 lines, 50 rules | 59 lines, **0 rules** |
+| Delegation & Activation | 1,380 lines, 32 rules | 330 lines, 0 rules |
+| Splitting & Merging | 2,185 lines, 53 rules | 482 lines, 1 rule |
+| Authorization & Lockup | 1,769 lines, 50 rules | 59 lines, 0 rules |
 | Account Initialization | 1,097 lines, 23 rules | 706 lines, 11 rules |
 
-Filed as [[U21]].
+Those collapses are **not** budget damage, and reading them as such is a mistake this document made
+in an earlier revision. Each unit withdrew its rules deliberately, on measurement, and said so:
 
-### The carry-forward cache then enshrines the curtailed draft
+> *Delegation:* "every rule that was written and run either failed for a reason traced to the
+> harness rather than to the program, came back vacuous, or came back as a pointer-analysis error
+> with no verdict at all… Nothing here should be read as evidence for or against any property of the
+> stake program, and in particular none of the counterexamples seen is a finding."
 
-`_remember_attempt` runs in a `finally`, so it caches the *last* state — which after curtailment is
-the stripped one. At the end of this run the resume cache held 1,609 lines and 12 rules, having
-overwritten the 6,176 lines seeded into it that morning. The mechanism built to preserve work
-preserved the worst version of it. Filed as [[U22]].
+> *Authorization & Lockup:* "No rules are published for this unit… This is a negative result, and
+> the reason is specific and reproducible."
 
-Nothing was lost, because the checkpointer is durable and `ap-trail recover-drafts --draft largest`
-restored 6,463 lines and 158 rules — more than the run started with. That the workaround exists is
-not a reason to leave the defect.
+> *Splitting & Merging:* "One verified rule, and thirty-five recorded skips… the skips carry the
+> substance: each names the specific mechanism that blocked it, the measurement that established it,
+> and the next step."
+
+Thirty-six of thirty-six properties accounted for in that last one. A loop that spends its prover
+budget establishing *why* it cannot soundly specify a program, and then declines to publish rules it
+cannot stand behind, is behaving correctly — that is P5's failure mode being avoided, not incurred.
 
 ### What the run actually established
 
@@ -294,10 +304,48 @@ Two things follow. The byte-decomposition idiom is unsound under this prover and
 reached for — that belongs in the authoring guidance. And the loop diagnosed a defect **it had
 introduced itself** in the current revision, and said so rather than filing it against the program.
 
-The related `rule_probe_hashset_*` and `rule_diag_signer_set*` rules all came back *violated on an
-assertion the prover generated* — the Prover's own internal assertion, not a property failure. That
-cluster, and `rule_diag_signer_set_membership` being the rule that pinned the 100-minute job in
-*both* runs, is the next thread to pull.
+### Three modelling limits, each measured rather than guessed
+
+The units' own reports carry the substance, and each names the measurement behind it.
+
+**`HashSet<Pubkey>` is not soundly modelled.** The program builds the effective signer set as a
+`std::collections::HashSet<Pubkey>` in `collect_signers`, and tests membership inside
+`Authorized::authorize`, `Authorized::check` and `Meta::set_lockup` — all `solana-program` code, out
+of reach of any munge. Program-free probes stopped on *"Unwinding condition in a loop"* inside
+`hashbrown::raw::RawTable::reserve_rehash`. The unit walked the loop ladder properly: rung 1 does not
+apply (the trip counts are `Pubkey`'s 32-byte width and hashbrown's group stride, with no
+rule-visible length to bound), rung 2 does not apply (the loops are exactly the code the properties
+are about, so a summary would havoc the answer), so it raised `loop_iter` to 6 — and the outcome got
+*worse*, the reported iteration tracking the bound, which is the ladder's own signal for a trip count
+the analysis cannot pin. Its own `for account in accounts` loop discharged at 2. Every one of the 19
+Authorization & Lockup properties depends on signer-set membership, which is why that unit publishes
+nothing.
+
+**`bincode`-decoding `StakeStateV2` from a symbolic buffer is not soundly modelled.** A rule that
+decoded an account and compared the decoded value *to itself* came back VIOLATED. This is why
+`processor::get_stake_state` and `set_stake_state` were replaced by stand-ins — the previous run's
+choice to reason *through* the encoding rather than mock the seam is, on this evidence, the weaker
+of the two options.
+
+**Copying a large aggregate through a `static mut` by value is imprecise** — a store/load round trip
+of the modelled state, with no program call in between, did not hold.
+
+Against those, one positive: **`rule_probe_pubkey_stable` VERIFIED** — a `Pubkey` equality read in
+place out of account memory *is* modelled soundly. Taken with `rule_diag_pubkey_eq_stable` above,
+the byte-decomposition is the defect and native equality is not.
+
+The `rule_probe_hashset_*` and `rule_diag_signer_set*` rules came back *violated on an assertion the
+prover generated* — the Prover's own internal assertion, not a property failure — which is the same
+container limit seen from the other side. `rule_diag_signer_set_membership` pinned the longest job of
+*both* runs, 100 minutes here.
+
+### A note on the resume cache
+
+The run ended with the cache holding its final drafts (1,609 lines, 12 rules), overwriting the 6,176
+lines seeded that morning. Those final drafts are the considered ones, so this is not damage — but
+the write is unconditional, so a run that achieves nothing and dies would degrade the cache the same
+way. Filed as [[U22]]. `ap-trail recover-drafts --draft largest` restored 6,463 lines and 158 rules
+from the checkpoints.
 
 **What a resumed run should do first.** The vacuity is the live question, and the judge already
 named the experiment: add `clog!`s to the owner comparison so the counterexample is readable, and

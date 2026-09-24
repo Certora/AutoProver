@@ -491,31 +491,36 @@ draft the same way and does not, so an EVM run cut by the budget still re-author
 fix is one argument; it was left out of the CVLR change because it alters EVM behaviour and wants
 its own run to confirm.
 
-**U21. Budget curtailment deletes rules whose verdicts are merely outstanding.**
-The wrap-up order tells a unit to delete every rule that does not compile *and* every rule whose
-verdict it never saw. Those are different populations. A unit cut while its prover jobs are still in
-flight has seen no verdicts by definition, so it deletes rules that compiled, built for SBF and were
-successfully submitted — work whose only defect is that the budget expired before the results came
-back. On the 2026-09-24 stake run this cost three units nearly everything: Delegation went from 32
-rules to 0, Splitting & Merging from 53 to 1, Authorization & Lockup from 50 to 0. Only the unit
-whose jobs had already returned kept its rules.
+**U21. Four units were dispatched after the budget was already spent.**
+On the 2026-09-24 stake run the pipeline kept starting queued units after the run pool was
+exhausted. Each began, met the wrap-up order immediately, and completed in ~30 seconds having
+authored nothing: Withdrawals, Stake & Lamport Movement, Deprecated Instructions and Protocol
+Parameter Queries, **63 properties recorded as skipped for budget exhaustion without a line
+written**. The report then counts them as attempted-and-failed components alongside the four that
+did real work, which overstates the failure and buries the units that produced findings.
 
-The order's intent is sound — do not publish a rule you cannot stand behind. The fix is to separate
-the two cases: a rule that failed to compile is deleted, a rule awaiting a verdict is *skipped* with
-that reason, so it is reported honestly and survives into the next run's draft. The prompt text is in
-`_BUDGET_WRAPUP_MESSAGE` in `composer/spec/cvlr/author.py`.
+`budget_pressure()` already exists for precisely this — *"skip launching work that would only be
+told to immediately pack it in"* — and the formalization dispatcher does not consult it. A unit that
+cannot start should stay queued and be reported as never-reached, which is a different and more
+useful statement than "gave up".
 
-**U22. The draft carry-forward caches the curtailed draft over the good one.**
-`_remember_attempt` runs in a `finally` and caches whatever `curr_spec` holds at that moment. After a
-budget cut that is the post-wrap-up draft, so the cache ends the run holding the *stripped* version
-and overwrites the fuller one a previous run left there. On 2026-09-24 the resume cache finished at
-1,609 lines / 12 rules, having overwritten 6,176 lines seeded into it that morning — the mechanism
-built to carry work forward carried the worst version of it.
+*(An earlier version of this entry claimed the wrap-up order was deleting rules whose verdicts were
+merely outstanding. That was wrong — read from rule counts without reading the units' own reports,
+which show the withdrawals were deliberate and measured. The CVLR wrap-up text does carry a "any
+whose verdict you never saw" clause that CVL's and Foundry's do not, but nothing observed has been
+traced to it.)*
 
-Compounds with [[U21]]: curtailment strips the rules, then the cache enshrines the stripped result.
-Candidate fixes: keep the high-water draft rather than the last one, or decline to overwrite a cached
-attempt that has more rules than the one being written. `ap-trail recover-drafts --draft largest`
-repairs it after the fact from the checkpoints, which is a workaround and not a reason to leave it.
+**U22. The draft carry-forward overwrites unconditionally.**
+`_remember_attempt` caches whatever `curr_spec` holds when the unit unwinds, with no comparison
+against what is already cached. Usually that is right — the last draft is the considered one. But
+the write is unconditional, so a run that starts, achieves nothing and dies replaces a good cached
+draft with a worse one, and the next run resumes from the worse.
+
+Not what happened on 2026-09-24 (the small final drafts there were deliberate withdrawals, not
+damage), so this is a property of the code rather than an observed failure. It is cheap to make
+safe: decline to overwrite a cached attempt that carries more rules than the one being written, or
+keep the high-water draft alongside the last one. `ap-trail recover-drafts --draft largest` repairs
+the cache from the checkpoints after the fact either way.
 
 **U23. The byte-decomposition idiom for `Pubkey` is unsound under the Prover.**
 A harness that decomposes a `Pubkey` into four `u64` words via `to_bytes()` + `u64::from_le_bytes`
