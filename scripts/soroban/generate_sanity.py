@@ -18,7 +18,7 @@ import sys, os, re, argparse, json
 from pathlib import Path
 from typing import Optional
 from collections import defaultdict
-
+from util import *
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -123,85 +123,6 @@ def strip_non_contract_blocks(content: str) -> str:
     cleaned = strip_cfg_if_blocks(cleaned)
     return cleaned
 
-def split_by_comma(s: str) -> list[str]:
-    """Split on commas, respecting < > ( ) nesting."""
-    parts, depth, cur = [], 0, []
-    for ch in s:
-        if ch in '<([':
-            depth += 1
-        elif ch in '>)]':
-            depth -= 1
-        if ch == ',' and depth == 0:
-            parts.append(''.join(cur).strip())
-            cur = []
-        else:
-            cur.append(ch)
-    if cur:
-        parts.append(''.join(cur).strip())
-    return [p for p in parts if p]
-
-def split_by_comma_nested(s: str) -> list[str]:
-    """Split on commas, respecting < > ( ) { } nesting."""
-    parts, depth, cur = [], 0, []
-    for ch in s:
-        if ch in '<([{':
-            depth += 1
-        elif ch in '>)]}':
-            depth -= 1
-        if ch == ',' and depth == 0:
-            parts.append(''.join(cur).strip())
-            cur = []
-        else:
-            cur.append(ch)
-    if cur:
-        parts.append(''.join(cur).strip())
-    return [p for p in parts if p]
-
-def parse_type_str(s: str) -> dict:
-    """Parse a Rust type string into a structured dict.
-
-    Simple type:   'u64'            → {'type': 'u64'}
-    Generic:       'Vec<Address>'   → {'type': 'Vec', 'params': [{'type': 'Address'}]}
-    Nested:        'Map<Address, Vec<u64>>'
-                                    → {'type': 'Map', 'params': [{'type': 'Address'},
-                                                                  {'type': 'Vec', 'params': [{'type': 'u64'}]}]}
-    Tuple:         '(u64, Address)' → {'type': 'tuple', 'params': [{'type': 'u64'}, {'type': 'Address'}]}
-    """
-    s = s.strip()
-    if not s:
-        return {'type': ''}
-
-    # Tuple types: (T1, T2, ...)
-    if s.startswith('(') and s.endswith(')'):
-        inner = s[1:-1]
-        parts = split_by_comma(inner)
-        return {'type': 'tuple', 'params': [parse_type_str(p) for p in parts]} if parts else {'type': 'tuple'}
-
-    # Find the first '<' — everything before it is the base type name
-    angle = s.find('<')
-    if angle == -1:
-        return {'type': s}
-
-    base = s[:angle].strip()
-    # Walk to find the matching '>'
-    depth = 0
-    for i, ch in enumerate(s[angle:], angle):
-        if ch == '<':
-            depth += 1
-        elif ch == '>':
-            depth -= 1
-            if depth == 0:
-                params_str = s[angle + 1:i]
-                params = split_by_comma(params_str)
-                result: dict = {'type': base}
-                if params:
-                    result['params'] = [parse_type_str(p) for p in params]
-                return result
-
-    # Malformed — return as-is
-    return {'type': s}
-
-
 def parse_param(s: str) -> Optional[tuple[str, str]]:
     """Parse 'name: Type' → (name, type). Returns None for self variants."""
     s = s.strip()
@@ -285,7 +206,7 @@ def expand_use_tree(tree: str, prefix: str = '') -> list[tuple[str, str, bool]]:
                 break
 
     inner = tree[brace_idx + 1:end_idx]
-    items = split_by_comma_nested(inner)
+    items = split_by_comma(inner)
 
     result = []
     for item in items:
@@ -1262,6 +1183,28 @@ def generate_contract_sanity(contract: dict) -> tuple[str, list[dict]] | None:
         project_uses, sdk_shadowed, unresolved_needed = collect_project_use_stmts(
             all_fns, source_file, extra_names=impl_traits
         )
+
+    # A trait-impl method is called via UFCS `<Contract as Trait>::method`, so
+    # the trait must be importable.  If its name could not be resolved from the
+    # source file's `use` statements and it is not defined locally, emitting
+    # the wrapper would fail with E0405 — drop those methods with a warning.
+    unimportable_traits = (impl_traits & unresolved_needed) - locally_defined
+    if unimportable_traits:
+        dropped = [fn for fn in trait_fns
+                   if (fn.get('trait_name') or '').split('::')[-1] in unimportable_traits
+                   and '::' not in (fn.get('trait_name') or '')]
+        if dropped:
+            print(f'  [warn] {struct_name}: cannot resolve import for trait(s) '
+                  f'{", ".join(sorted(unimportable_traits))}; skipping '
+                  f'{", ".join(fn["name"] for fn in dropped)}', file=sys.stderr)
+            trait_fns = [fn for fn in trait_fns if fn not in dropped]
+            all_fns = direct_fns + trait_fns
+            sdk_types = set()
+            for fn in all_fns:
+                sdk_types |= collect_soroban_types(fn['params'], fn['ret'])
+            project_uses, sdk_shadowed, unresolved_needed = collect_project_use_stmts(
+                all_fns, source_file, extra_names=impl_traits - unimportable_traits
+            )
 
     # Remove locally-shadowed names from the soroban_sdk import
     sdk_types -= sdk_shadowed

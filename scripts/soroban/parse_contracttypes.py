@@ -619,11 +619,30 @@ def expand_macro_enum_variants(inner: str, enum_pos: int, src: str):
     if inv_body is None:
         return None
 
+    # A repetition over a single bare metavariable, e.g. `$($variant),*`,
+    # emits only the variant *name* of each invocation entry: the enum is a
+    # fieldless "tag" enum (like `OperationKind` alongside `GovernanceAction`),
+    # even if the invocation entries carry field lists for another type.
+    # Only when that metavariable is declared `:ident` in the macro's matchers;
+    # a `:tt` bundle such as `$($ev)*` carries whole variants (with fields).
+    names_only = False
+    rep_m = re.fullmatch(
+        r'\$\(\s*\$([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*,?\s*[*+]\s*,?', body)
+    if rep_m:
+        macro_src = src[ctx[1]:ctx[2] + 1]
+        frag = re.search(r'\$' + re.escape(rep_m.group(1)) + r'\s*:\s*([a-z_]+)', macro_src)
+        names_only = bool(frag and frag.group(1) == 'ident')
+
     entries = _split_invocation_entries(inv_body)
     variants: list[dict] = []
     for entry in entries:
         entry = entry.strip()
         entry = re.sub(r'\s*=>\s*[A-Za-z_][A-Za-z0-9_]*\s*$', '', entry).strip()
+        if names_only:
+            vname_m = re.match(r'([A-Za-z_][A-Za-z0-9_]*)', entry)
+            if vname_m and not entry.startswith('$'):
+                variants.append({"variant": vname_m.group(1), "kind": "unit"})
+            continue
         if not entry or entry.startswith('$'):
             continue
         vname_m = re.match(r'([A-Za-z_][A-Za-z0-9_]*)', entry)

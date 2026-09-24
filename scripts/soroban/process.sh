@@ -7,7 +7,7 @@ MY_DIR=$(realpath $(dirname $0))
 SDK_USAGE_JSON=/tmp/sdk_versions.json
 
 if [[ -e $1/Cargo.lock ]]; then
-    DIR=$1
+    DIR=$(realpath $1)
 else
     DIR=$(realpath $1/$(dirname $(python $MY_DIR/classify_cargo.py $1 | jq -r 'to_entries[] | select(.["value"]["category"] == "WORKSPACE_ROOT").key')))
 fi
@@ -15,11 +15,12 @@ fi
 echo Using $DIR
 cd $DIR
 
-cargo update
+python $MY_DIR/soroban_sdk_versions.py $DIR --json > $SDK_USAGE_JSON
 
-python $MY_DIR/soroban_sdk_versions.py $1 --json > $SDK_USAGE_JSON
 export SDK_VERSION=$(jq -r '.["latest_version"]' $SDK_USAGE_JSON)
 echo using SDK $SDK_VERSION
+
+cargo update -p ethnum
 
 SDKS=$(jq '.["lock_versions"] | length' $SDK_USAGE_JSON)
 if [[ "$SDKS" -gt 1 ]]; then

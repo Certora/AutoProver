@@ -14,6 +14,7 @@ If no path is given the current directory is used.
 Supports Cargo.lock format versions 3 and 4.
 """
 
+import os
 import sys
 import re
 import json
@@ -106,33 +107,125 @@ def find_workspace_members(packages):
 
 # ── Cargo.toml declared specs ──────────────────────────────────────────────────
 
+SKIP_DIRS = {"target", ".git", "node_modules"}
+
+_DEP_SECTION_RE = re.compile(
+    r'^(?:target\.[^\]]+\.)?(?:dev-|build-)?dependencies$|^workspace\.dependencies$')
+
+
+def _iter_cargo_tomls(root: Path):
+    """Yield every Cargo.toml under root, skipping build output and VCS dirs."""
+    for toml in sorted(root.rglob("Cargo.toml")):
+        rel_parts = toml.relative_to(root).parts[:-1]
+        if any(p in SKIP_DIRS for p in rel_parts):
+            continue
+        yield toml
+
+
+def _sdk_entries(text: str):
+    """Yield (section, value) for every soroban-sdk dependency entry in a
+    Cargo.toml.  `value` is either a version string or a dict of keys
+    (version / workspace / package).  Handles:
+      soroban-sdk = "21.6"
+      soroban-sdk = { version = "21.6", ... }
+      soroban-sdk = { workspace = true, ... }
+      [dependencies.soroban-sdk] / [dev-dependencies.soroban-sdk] tables
+      renamed deps: sdk = { package = "soroban-sdk", version = "..." }
+    in [dependencies], [dev-dependencies], [build-dependencies],
+    [target.*.dependencies] and [workspace.dependencies].
+    """
+    section = None          # current [header]
+    table_dep = None        # dict being filled for [x.soroban-sdk] tables
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip() if not raw.lstrip().startswith("#") else ""
+        if not line:
+            continue
+        hm = re.match(r'^\[\s*([^\[\]]+?)\s*\]$', line)
+        if hm:
+            if table_dep is not None:
+                yield table_dep.pop("__section"), table_dep
+            table_dep = None
+            section = hm.group(1).replace('"', "")
+            base, _, dep = section.rpartition(".")
+            if dep == "soroban-sdk" and _DEP_SECTION_RE.match(base):
+                table_dep = {"__section": base}
+            continue
+        if table_dep is not None:
+            km = re.match(r'^(version|workspace|package)\s*=\s*("?)([^"]+)\2', line)
+            if km:
+                table_dep[km.group(1)] = km.group(3).strip()
+            continue
+        if not (section and _DEP_SECTION_RE.match(section)):
+            continue
+        dm = re.match(r'^"?([A-Za-z0-9_-]+)"?\s*=\s*(.+)$', line)
+        if not dm:
+            continue
+        key, rhs = dm.group(1), dm.group(2).strip()
+        if rhs.startswith('"'):
+            if key == "soroban-sdk":
+                yield section, rhs.strip('"')
+            continue
+        if rhs.startswith("{"):
+            fields = dict(re.findall(r'(version|workspace|package)\s*=\s*"?([^",}]+)"?', rhs))
+            fields = {k: v.strip() for k, v in fields.items()}
+            if key == "soroban-sdk" or fields.get("package") == "soroban-sdk":
+                yield section, fields
+    if table_dep is not None:
+        yield table_dep.pop("__section"), table_dep
+
+
+def _concrete_spec(value):
+    if isinstance(value, str):
+        return value
+    return value.get("version")
+
+
+def workspace_sdk_spec(start: Path):
+    """Walk upward from `start` to the workspace root and return the
+    soroban-sdk spec from its [workspace.dependencies], if any."""
+    for d in [start, *start.parents]:
+        toml = d / "Cargo.toml"
+        if not toml.is_file():
+            continue
+        text = toml.read_text(errors="replace")
+        if not re.search(r'^\s*\[workspace\]', text, re.MULTILINE) and \
+           "workspace.dependencies" not in text:
+            continue
+        for section, value in _sdk_entries(text):
+            if section == "workspace.dependencies":
+                spec = _concrete_spec(value)
+                if spec:
+                    return spec, toml
+    return None, None
+
+
 def read_cargo_toml_sdk_specs(project_root: Path) -> dict:
     """Return {relative_toml_path: version_spec} for every Cargo.toml that
-    declares a concrete soroban-sdk version.
+    declares a concrete soroban-sdk version (the first one found in the file).
 
-    Handles three patterns:
-      soroban-sdk = "21.6"                          — shorthand
-      soroban-sdk = { version = "21.6", ... }       — inline table
-      soroban-sdk = { workspace = true }            — skipped (no version here)
+    `workspace = true` entries carry no version of their own and are not
+    listed here; the workspace root's [workspace.dependencies] entry is.
     """
     results = {}
-    # Matches a bare string spec OR an inline table with a version key,
-    # but NOT a pure { workspace = true } entry (no version key present).
-    pattern = re.compile(
-        r'soroban-sdk\s*=\s*(?:"([^"]+)"|(?:\{[^}]*?version\s*=\s*"([^"]+)")[^}]*\})',
-        re.MULTILINE,
-    )
-    for toml in sorted(project_root.rglob("Cargo.toml")):
+    for toml in _iter_cargo_tomls(project_root):
         try:
             text = toml.read_text(errors="replace")
         except OSError:
             continue
-        m = pattern.search(text)
-        if m:
-            spec = m.group(1) or m.group(2)
-            rel  = str(toml.relative_to(project_root))
-            results[rel] = spec
+        for _section, value in _sdk_entries(text):
+            spec = _concrete_spec(value)
+            if spec:
+                results[str(toml.relative_to(project_root))] = spec
+                break
     return results
+
+
+def _crate_inherits_workspace_sdk(crate_dir: Path) -> bool:
+    toml = crate_dir / "Cargo.toml"
+    if not toml.is_file():
+        return False
+    return any(isinstance(v, dict) and v.get("workspace") == "true"
+               for _s, v in _sdk_entries(toml.read_text(errors="replace")))
 
 
 # ── Version summary helpers ────────────────────────────────────────────────────
@@ -228,23 +321,32 @@ def header(title):
     print(f"{BOLD}{'─' * width}{RESET}")
 
 
-def print_text(data, packages):
+def print_text(data, packages=None, lock_label=None, summary=True):
+    """Print one lock's analysis.  `summary=False` omits the lock+toml
+    summary and Cargo.toml sections (printed once globally instead)."""
     lock_versions = data["lock_versions"]
-    toml_specs    = data["cargo_toml_specs"]
-    sdk_ver_set   = set(lock_versions)
+    toml_specs    = data["cargo_toml_specs"] if summary else {}
 
     # 1. Versions in lock
-    header("soroban-sdk versions present in Cargo.lock")
+    where = f"  ({lock_label})" if lock_label else ""
+    header(f"soroban-sdk versions present in Cargo.lock{where}")
     color = RED if data["multiple_lock_versions"] else GREEN
     for v in lock_versions:
         print(f"  {color}• {v}{RESET}")
+    if not lock_versions:
+        print(f"  {YELLOW}(none — soroban-sdk is not in this lock file){RESET}")
     if data["multiple_lock_versions"]:
         print(f"\n  {YELLOW}⚠  Multiple versions detected — may cause ABI mismatches.{RESET}")
 
-    # 2. Version summary (all mentioned)
+    if summary:
+        print_version_summary(data["version_summary"])
+
+    _print_lock_details(data, toml_specs)
+
+
+def print_version_summary(vs):
     header("All soroban-sdk versions mentioned (lock + Cargo.toml)")
-    vs = data["version_summary"]
-    for ver, info in sorted(vs.items()):
+    for ver, info in sorted(vs.items(), key=lambda kv: _semver_key(kv[0])):
         in_lock = "lock" in info["sources"]
         in_toml = "toml" in info["sources"]
         tags = []
@@ -254,10 +356,14 @@ def print_text(data, packages):
             tags.append(f"{CYAN}declared in toml{RESET}")
         tag_str = ", ".join(tags)
         print(f"  {BOLD}{ver}{RESET}  [{tag_str}]")
+        for f in info.get("lock_files") or []:
+            print(f"    {f}  {GREEN}(lock){RESET}")
         if info["toml_files"]:
             for f in info["toml_files"]:
                 print(f"    {f}")
 
+
+def _print_lock_details(data, toml_specs):
     # 3. Direct dependents
     header("Direct dependents of each soroban-sdk version")
     for v, deps in data["direct_dependents_by_sdk_version"].items():
@@ -276,13 +382,16 @@ def print_text(data, packages):
             print(f"  {crate['name']} {crate['version']}  →  {c}{sdk_str}{RESET}")
 
     # 5. Cargo.toml specs
+    print_toml_specs(toml_specs)
+    print()
+
+
+def print_toml_specs(toml_specs):
     if toml_specs:
         header("soroban-sdk version specs declared in Cargo.toml files")
         for path, spec in toml_specs.items():
             print(f"  {path}")
             print(f"    version = {CYAN}\"{spec}\"{RESET}")
-
-    print()
 
 
 # ── Toml-only fallback (no Cargo.lock present) ────────────────────────────────
@@ -296,6 +405,12 @@ def _report_toml_only(project_root: Path, emit_json: bool) -> None:
     print("Note: no Cargo.lock found; reading declared specs from Cargo.toml files.",
           file=sys.stderr)
     toml_specs = read_cargo_toml_sdk_specs(project_root)
+    if _crate_inherits_workspace_sdk(project_root):
+        # Run inside a member crate that uses `soroban-sdk = { workspace = true }`:
+        # the version lives in the workspace root's Cargo.toml.
+        spec, ws_toml = workspace_sdk_spec(project_root.parent)
+        if spec:
+            toml_specs[os.path.relpath(ws_toml, project_root)] = spec
     unique_specs = sorted(set(toml_specs.values()), key=_semver_key)
     latest = max(unique_specs, key=_semver_key) if unique_specs else None
     if emit_json:
@@ -330,6 +445,58 @@ def _report_toml_only(project_root: Path, emit_json: bool) -> None:
     print()
 
 
+def find_locks(root: Path):
+    """Return every Cargo.lock relevant to `root`:
+      - the one governing `root` itself (in `root` or an ancestor — a member
+        crate uses its workspace root's lock), and
+      - every Cargo.lock below `root` (nested / sibling workspaces),
+    skipping build output and VCS dirs.  Shallowest first."""
+    governing = None
+    for d in [root, *root.parents]:
+        cand = d / "Cargo.lock"
+        if cand.is_file():
+            governing = cand
+            break
+    below = [p for p in root.rglob("Cargo.lock")
+             if not any(part in SKIP_DIRS for part in p.relative_to(root).parts[:-1])
+             and p != governing]
+    below.sort(key=lambda p: (len(p.parts), str(p)))
+    return ([governing] if governing else []) + below
+
+
+def analyze_lock(lock_path: Path):
+    packages      = parse_lock(lock_path.read_text())
+    lock_versions = sdk_versions_in_lock(packages)
+    graph         = build_dep_graph(packages)
+    rev           = reverse_graph(graph)
+    members       = find_workspace_members(packages)
+    toml_specs    = read_cargo_toml_sdk_specs(lock_path.parent)
+    data = build_json(packages, lock_versions, graph, rev, members, toml_specs)
+    return packages, data
+
+
+def _rel(path: Path, base: Path) -> str:
+    return os.path.relpath(path, base)
+
+
+def merged_summary(per_lock: dict, toml_specs: dict) -> dict:
+    """{version: {sources, lock_files, toml_files}} across all lock files
+    and every Cargo.toml under the scan root."""
+    summary = {}
+    for lock_rel, data in per_lock.items():
+        for v in data["lock_versions"]:
+            e = summary.setdefault(v, {"sources": [], "lock_files": [], "toml_files": []})
+            if "lock" not in e["sources"]:
+                e["sources"].append("lock")
+            e["lock_files"].append(lock_rel)
+    for path, spec in toml_specs.items():
+        e = summary.setdefault(spec, {"sources": [], "lock_files": [], "toml_files": []})
+        if "toml" not in e["sources"]:
+            e["sources"].append("toml")
+        e["toml_files"].append(path)
+    return dict(sorted(summary.items(), key=lambda kv: _semver_key(kv[0])))
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
@@ -337,56 +504,82 @@ def main():
     emit_json = "--json" in args
     paths     = [a for a in args if not a.startswith("--")]
 
-    root      = Path(paths[0]) if paths else Path(".")
-    lock_path = (root / "Cargo.lock") if root.is_dir() else root
+    root = Path(paths[0]) if paths else Path(".")
+    if not root.exists():
+        sys.exit(f"error: {root} does not exist")
+    root = root.resolve()
+    # Accept a Cargo.toml (or any non-lock file) by using its directory.
+    if root.is_file() and root.name != "Cargo.lock":
+        root = root.parent
 
-    # If not found directly, search recursively for the shallowest Cargo.lock.
-    if not lock_path.exists() and root.is_dir():
-        candidates = sorted(root.rglob("Cargo.lock"),
-                            key=lambda p: len(p.parts))
-        if candidates:
-            lock_path = candidates[0]
-            print(f"Note: Cargo.lock not at root; using {lock_path.relative_to(root)}",
-                  file=sys.stderr)
-        else:
-            # No Cargo.lock anywhere — fall back to Cargo.toml specs.
-            _report_toml_only(root, emit_json)
-            return
-    elif not lock_path.exists():
-        _report_toml_only(root.parent if root.is_file() else root, emit_json)
+    if root.is_file():                      # explicit Cargo.lock
+        locks = [root]
+        root = root.parent
+    else:
+        locks = find_locks(root)
+    if not locks:
+        # No Cargo.lock anywhere — fall back to Cargo.toml specs.
+        _report_toml_only(root, emit_json)
         return
 
-    project_root  = lock_path.parent
-    packages      = parse_lock(lock_path.read_text())
-    lock_versions = sdk_versions_in_lock(packages)
+    # Scan root for Cargo.toml files: `root`, or the workspace root above it
+    # if the governing lock lives in an ancestor directory.
+    scan_root = root
+    for l in locks:
+        if l.parent in root.parents:
+            scan_root = l.parent
+    if len(locks) > 1 or scan_root != root:
+        print("Note: analysing " + ", ".join(_rel(l, root) for l in locks), file=sys.stderr)
 
-    if not lock_versions:
-        # Lock exists but soroban-sdk not in it — still show toml specs.
-        toml_specs = read_cargo_toml_sdk_specs(project_root)
-        out = {"lock_versions": [], "multiple_lock_versions": False,
-               "version_summary": {}, "direct_dependents_by_sdk_version": {},
-               "workspace_crates": [], "cargo_toml_specs": toml_specs}
-        if emit_json:
-            print(json.dumps(out, indent=2))
-        else:
-            print("No soroban-sdk dependency found in Cargo.lock.")
-            if toml_specs:
-                print("\nDeclared in Cargo.toml files:")
-                for path, spec in toml_specs.items():
-                    print(f"  {path}: {spec}")
-        return
+    per_lock, pkgs = {}, {}
+    for l in locks:
+        key = _rel(l, scan_root)
+        pkgs[key], per_lock[key] = analyze_lock(l)
 
-    graph      = build_dep_graph(packages)
-    rev        = reverse_graph(graph)
-    members    = find_workspace_members(packages)
-    toml_specs = read_cargo_toml_sdk_specs(project_root)
+    toml_specs = read_cargo_toml_sdk_specs(scan_root)
+    if _crate_inherits_workspace_sdk(root) and scan_root == root:
+        spec, ws_toml = workspace_sdk_spec(root.parent)
+        if spec:
+            toml_specs[_rel(ws_toml, scan_root)] = spec
 
-    data = build_json(packages, lock_versions, graph, rev, members, toml_specs)
+    all_lock_versions = sorted({v for d in per_lock.values() for v in d["lock_versions"]},
+                               key=_semver_key)
+    summary = merged_summary(per_lock, toml_specs)
+    latest  = max(all_lock_versions, key=_semver_key) if all_lock_versions else None
 
     if emit_json:
-        print(json.dumps(data, indent=2))
-    else:
-        print_text(data, packages)
+        if len(per_lock) == 1:
+            out = dict(next(iter(per_lock.values())))
+            out["lock_file"] = next(iter(per_lock))
+        else:
+            out = {"lock_versions": all_lock_versions,
+                   "multiple_lock_versions": len(all_lock_versions) > 1,
+                   "lock_files": per_lock}
+        out["lock_versions"] = all_lock_versions
+        out["latest_version"] = latest
+        out["multiple_lock_versions"] = len(all_lock_versions) > 1
+        out["version_summary"] = {
+            v: {"sources": i["sources"],
+                "lock_files": i["lock_files"] or None,
+                "toml_files": i["toml_files"] or None}
+            for v, i in summary.items()}
+        out["cargo_toml_specs"] = toml_specs
+        print(json.dumps(out, indent=2))
+        return
+
+    if len(per_lock) > 1:
+        header(f"Cargo.lock files found ({len(per_lock)})")
+        for key, data in per_lock.items():
+            vers = ", ".join(data["lock_versions"]) or "(no soroban-sdk)"
+            print(f"  {key}  →  {vers}")
+        if len(all_lock_versions) > 1:
+            print(f"\n  {YELLOW}⚠  Different soroban-sdk versions across lock files: "
+                  f"{', '.join(all_lock_versions)}{RESET}")
+    print_version_summary(summary)
+    for key, data in per_lock.items():
+        print_text(data, pkgs[key], lock_label=key, summary=False)
+    print_toml_specs(toml_specs)
+    print()
 
 
 if __name__ == "__main__":

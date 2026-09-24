@@ -35,12 +35,16 @@ def src_path_to_module(src_file: str) -> str:
 
  
 def split_by_comma(s: str) -> list[str]:
-    """Split on commas, respecting < > ( ) nesting."""
+    """Split on commas, respecting < > ( ) [ ] { } nesting.
+
+    `{ }` matters for nested use trees such as
+    `a::{b::{c, D}, E}` — without it the inner group is split apart and
+    names like `D` are lost."""
     parts, depth, cur = [], 0, []
     for ch in s:
-        if ch in '<([':
+        if ch in '<([{':
             depth += 1
-        elif ch in '>)]':
+        elif ch in '>)]}':
             depth -= 1
         if ch == ',' and depth == 0:
             parts.append(''.join(cur).strip())
@@ -51,7 +55,12 @@ def split_by_comma(s: str) -> list[str]:
         parts.append(''.join(cur).strip())
     return [p for p in parts if p]
 
-
+def strip_soroban_sdk(s: str) -> str:
+    if s.startswith("soroban_sdk::"):
+        return s[13:]
+    else:
+        return s
+    
 def parse_type_str(s: str) -> dict:
     """Parse a Rust type string into a structured dict.
 
@@ -75,7 +84,7 @@ def parse_type_str(s: str) -> dict:
     # Find the first '<' — everything before it is the base type name
     angle = s.find('<')
     if angle == -1:
-        return {'type': s}
+        return {'type': strip_soroban_sdk(s)}
 
     base = s[:angle].strip()
     # Walk to find the matching '>'
@@ -88,7 +97,7 @@ def parse_type_str(s: str) -> dict:
             if depth == 0:
                 params_str = s[angle + 1:i]
                 params = split_by_comma(params_str)
-                result: dict = {'type': base}
+                result: dict = {'type': strip_soroban_sdk(base)}
                 if params:
                     result['params'] = [parse_type_str(p) for p in params]
                 return result
