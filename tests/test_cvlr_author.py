@@ -43,6 +43,7 @@ from composer.spec.cvlr.state import (
     validate_rule_subjects,
 )
 from composer.spec.cvlr.tuning import SummaryDirective
+from composer.spec.cvlr import author
 from composer.spec.cvlr import verify as verify_mod
 from composer.spec.cvlr.verify import _unaccounted, _wrongly_expected
 
@@ -722,3 +723,67 @@ def test_a_harness_with_no_rules_is_not_a_harness_that_verifies_itself():
         rule="rule_real", function="crate::vault_program::withdraw"
     )]
     assert not _verifies_only_its_own_code(_harness_with(mixed))
+
+
+# ---------------------------------------------------------------------------------------------
+# carrying a draft between runs
+
+
+class _FakeGraph:
+    """Just enough of the compiled graph for ``_remember_attempt``: a last checkpoint."""
+
+    def __init__(self, values: dict[str, object] | None = None, raises: bool = False):
+        self._values = values or {}
+        self._raises = raises
+
+    async def aget_state(self, _config: object) -> object:
+        if self._raises:
+            raise RuntimeError("checkpointer is gone")
+        return SimpleNamespace(values=self._values)
+
+
+class _RecordingCtx:
+    """``ctx.child(KEY).cache_put(...)`` without a store behind it."""
+
+    def __init__(self):
+        self.put: object = None
+
+    def child(self, _key: object) -> "_RecordingCtx":
+        return self
+
+    async def cache_put(self, value: object) -> None:
+        self.put = value
+
+
+def test_a_units_draft_and_its_munges_are_carried_to_the_next_run():
+    """The expensive half is authoring, and a budget-cut unit used to lose all of it: measured on
+    the stake benchmark as thousands of lines re-written at full price. Munges travel as their
+    `describe()` lines, not as values — restoring a program edit from a cache would put it into a
+    run whose reviewer never saw it."""
+    ctx = _RecordingCtx()
+    graph = _FakeGraph({
+        "curr_spec": "#[rule]\npub fn rule_x() {}",
+        "munges": [SimpleNamespace(describe=lambda: "split so `f_inner` is a function a rule can drive")],
+    })
+
+    asyncio.run(author._remember_attempt(ctx, graph, "tid"))  # type: ignore[arg-type]
+
+    assert ctx.put is not None
+    assert ctx.put.spec == "#[rule]\npub fn rule_x() {}"
+    assert ctx.put.munges == ["split so `f_inner` is a function a rule can drive"]
+
+
+def test_a_unit_that_authored_nothing_caches_nothing():
+    # An empty draft would seed the next run with "here is your last draft" and then nothing,
+    # which is worse than starting clean.
+    ctx = _RecordingCtx()
+    asyncio.run(author._remember_attempt(ctx, _FakeGraph({"curr_spec": ""}), "tid"))  # type: ignore[arg-type]
+    assert ctx.put is None
+
+
+def test_losing_the_cache_never_loses_the_error_that_caused_it():
+    """This runs in a `finally`, often while a BudgetExceeded is already unwinding. A raise here
+    would replace the real failure with a bookkeeping one."""
+    ctx = _RecordingCtx()
+    asyncio.run(author._remember_attempt(ctx, _FakeGraph(raises=True), "tid"))  # type: ignore[arg-type]
+    assert ctx.put is None
