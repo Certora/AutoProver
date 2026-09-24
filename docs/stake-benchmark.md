@@ -207,6 +207,98 @@ final draft understates its work; the delegation unit finished at 276 lines with
 peak of 1,371 with 32. `--draft largest` recovers the high-water mark for that reason, and is what
 was used here: **6,176 lines seeded** for the next run.
 
+## The second run, 2026-09-24
+
+Resumed from the recovered drafts with a **$300** ceiling; spent **$282.89** and ended
+`RUN FAILED: every component failed to generate or gave up` — every one of the eight units
+curtailed by budget. 18 prover jobs (16 succeeded, 2 failed), 75 counterexamples with judge
+analyses, and **12 rules** in the delivered harnesses.
+
+**The resume mechanism itself worked.** Analysis and all 147 properties came back from cache in
+seven seconds for $0, and each unit opened its buffer at exactly its recovered size — 2,185 /
+1,769 / 1,371 / 819 lines. The unit thread ids were byte-identical to the previous run's, which is
+what made the backfilled cache keys line up. Munges are deliberately *not* restored, so each unit
+spent its first 10–40 minutes re-establishing them through the editor before anything compiled.
+
+Three defects dominated the result. Two are ours and are fixed or filed; the third is the
+interesting one.
+
+### The prompt cache was set to 5 minutes, under a workload that waits hours
+
+`builder_heavy()` in the author carried a comment reading *"long cache: a prover run can take many
+minutes, and the author's context should still be warm on the other side of one"* — and never
+passed `cache_level`, so it took the 5-minute default. Every prover wait evicted the context and
+the next call re-wrote all of it:
+
+```
+$2.40  in=326,013  cache_read=0  cache_write=326,011  out=14,609  formalize-2
+```
+
+**122 calls cost $173 of the $283 — 61% of the budget in 15% of the calls.** Fixed; the author now
+asks for `CacheLevel.LONG`, and a structural test pins the argument, because what went wrong was a
+keyword quietly absent from one call while the comment beside it claimed otherwise.
+
+The waits that caused it were real: one job ran **100 minutes** and another 66, against a median of
+under two.
+
+### Budget curtailment deletes rules whose verdicts are merely outstanding
+
+The wrap-up order tells a unit to delete every rule that does not compile *and every rule whose
+verdict it never saw*. Those are not the same thing. A unit cut while its jobs are still in flight
+has seen no verdicts, so it deletes work that compiled and was successfully submitted:
+
+| unit | at its peak | as delivered |
+|---|---|---|
+| Delegation & Activation | 1,380 lines, 32 rules | 330 lines, **0 rules** |
+| Splitting & Merging | 2,185 lines, 53 rules | 482 lines, **1 rule** |
+| Authorization & Lockup | 1,769 lines, 50 rules | 59 lines, **0 rules** |
+| Account Initialization | 1,097 lines, 23 rules | 706 lines, 11 rules |
+
+Filed as [[U21]].
+
+### The carry-forward cache then enshrines the curtailed draft
+
+`_remember_attempt` runs in a `finally`, so it caches the *last* state — which after curtailment is
+the stripped one. At the end of this run the resume cache held 1,609 lines and 12 rules, having
+overwritten the 6,176 lines seeded into it that morning. The mechanism built to preserve work
+preserved the worst version of it. Filed as [[U22]].
+
+Nothing was lost, because the checkpointer is durable and `ap-trail recover-drafts --draft largest`
+restored 6,463 lines and 158 rules — more than the run started with. That the workaround exists is
+not a reason to leave the defect.
+
+### What the run actually established
+
+Not rule counts. The agents spent their prover budget on **diagnostics**, which is what
+[the previous run's judge](#open-and-not-worked-around) said a resumed run should do first, and the
+answer came back.
+
+The standing hypothesis was that `Pubkey` equality on SBF (`sol_memcmp_`) was the unconstrained
+primitive behind the vacuity cluster. `rule_diag_pubkey_eq_stable` tested it directly by drawing two
+nondet `Pubkey`s and checking three things at once. The witness reports `eq1 = 1, eq2 = 1, weq = 0,
+rt = 0`:
+
+- **Native `Pubkey` equality is stable and repeatable.** `eq1 == eq2` held. The hypothesis is
+  **not** supported.
+- The failure is in the *harness's own* four-`u64`-word decomposition. `rt = 0` says
+  `words_pk(pk_words(&p)) != p` for a single key — the round trip does not hold.
+
+The judge's reading: `pk_words` reassembles thirty-two individual byte loads through
+`u64::from_le_bytes`, and *"the prover cannot relate the bytes written by `to_le_bytes` to the bytes
+read back by `from_le_bytes` through that `[u8; 32]` buffer — the byte-level view of the key and the
+aggregate view of the key are, to the analysis, two unrelated objects."* Once the round trip breaks,
+the word comparison is four comparisons over unconstrained values and may disagree with the native
+one freely.
+
+Two things follow. The byte-decomposition idiom is unsound under this prover and should not be
+reached for — that belongs in the authoring guidance. And the loop diagnosed a defect **it had
+introduced itself** in the current revision, and said so rather than filing it against the program.
+
+The related `rule_probe_hashset_*` and `rule_diag_signer_set*` rules all came back *violated on an
+assertion the prover generated* — the Prover's own internal assertion, not a property failure. That
+cluster, and `rule_diag_signer_set_membership` being the rule that pinned the 100-minute job in
+*both* runs, is the next thread to pull.
+
 **What a resumed run should do first.** The vacuity is the live question, and the judge already
 named the experiment: add `clog!`s to the owner comparison so the counterexample is readable, and
 pin the owner to a concrete distinct key rather than assuming a disequality over an opaque 32-byte
