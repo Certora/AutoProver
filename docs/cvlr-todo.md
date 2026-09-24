@@ -487,9 +487,11 @@ populating the link's target from an SBF build.
 for a resume buffer: the run whose draft most needs carrying forward is the one the budget cut, and
 that is exactly when the guard fires. `CacheKey(..., survives_budget_pressure=True)` marks the
 exception and `composer/spec/cvlr/author.py` uses it. `cvl_generation.run_cvl_generator` caches its
-draft the same way and does not, so an EVM run cut by the budget still re-authors from nothing. The
-fix is one argument; it was left out of the CVLR change because it alters EVM behaviour and wants
-its own run to confirm.
+draft the same way and does not, so an EVM run cut by the budget still re-authors from nothing.
+
+It is one argument to add, but **do not add it on its own** — see [[U22]]. The opt-in is what lets a
+curtailed run overwrite a better cached draft, and CVL is currently shielded from that only by
+having the hole. The guard against regressing and the opt-in belong in the same change.
 
 **U21. A run that delivered partials under budget pressure reports itself as a total failure.**
 The 2026-09-24 stake run printed `RUN FAILED: every component failed to generate or gave up` after
@@ -536,17 +538,37 @@ reports, which show the withdrawals were deliberate and measured. The second bla
 for starting doomed units. The CVLR wrap-up text does carry an "any whose verdict you never saw"
 clause that CVL's and Foundry's do not, but nothing observed has been traced to it.)*
 
-**U22. The draft carry-forward overwrites unconditionally.**
+**U22. The draft carry-forward can overwrite a better draft with a worse one.**
 `_remember_attempt` caches whatever `curr_spec` holds when the unit unwinds, with no comparison
-against what is already cached. Usually that is right — the last draft is the considered one. But
-the write is unconditional, so a run that starts, achieves nothing and dies replaces a good cached
-draft with a worse one, and the next run resumes from the worse.
+against what is already there. On 2026-09-24 the stake run finished with 1,609 lines and 12 rules in
+the cache, over the 6,176 lines seeded into it that morning.
 
-Not what happened on 2026-09-24 (the small final drafts there were deliberate withdrawals, not
-damage), so this is a property of the code rather than an observed failure. It is cheap to make
-safe: decline to overwrite a cached attempt that carries more rules than the one being written, or
-keep the high-water draft alongside the last one. `ap-trail recover-drafts --draft largest` repairs
-the cache from the checkpoints after the fact either way.
+**This and [[U20]] are one design question, and fixing either alone is wrong.** `cache_put` drops
+writes made under budget pressure unless the key opts out. CVL's key does not opt out, CVLR's now
+does, and the two failure modes are complementary:
+
+| | run cut by the budget | run that ends normally |
+|---|---|---|
+| CVL (no opt-in) | writes nothing — keeps the older draft, loses its own | overwrites unconditionally |
+| CVLR (opted in) | overwrites — can regress | overwrites unconditionally |
+
+Neither is right. Without the opt-in a budget-cut unit caches nothing, which is the bug the opt-in
+was added to fix — the carry-forward silently no-opping in exactly the case it exists for. With it,
+a run that achieves less than its predecessor replaces the predecessor's work. What makes the opt-in
+safe is refusing to regress: keep the cached attempt that carries more rules, or hold the high-water
+draft beside the last one. CVL should get the opt-in **and** the guard together, not the opt-in on
+its own.
+
+`ap-trail recover-drafts --draft largest` repairs the cache from the checkpoints after the fact,
+which is a workaround and not a reason to leave this.
+
+**Two places the CVLR version is ahead of CVL's, worth carrying back:**
+
+* `LastCvlrAttempt` carries the `munges` the draft was written against (as `describe()` strings, not
+  values — see the class docstring for why). CVL's `_LastAttemptCache` holds only `cvl`.
+* `_remember_attempt` is wrapped in try/except and logs. CVL's `finally` is unguarded, so an
+  `aget_state` that throws replaces whatever exception was already unwinding — including the
+  `BudgetExceeded` that caused the unwind, turning a budget stop into an unrelated traceback.
 
 **U23. The byte-decomposition idiom for `Pubkey` is unsound under the Prover.**
 A harness that decomposes a `Pubkey` into four `u64` words via `to_bytes()` + `u64::from_le_bytes`
