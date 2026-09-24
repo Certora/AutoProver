@@ -17,7 +17,8 @@ from composer.diagnostics.timing import RunSummary
 from composer.spec.artifacts import ArtifactStore, QUARANTINE_SUFFIX
 from composer.spec.cvl_generation import GeneratedCVL
 from composer.spec.gen_types import (
-    AP_REPORT_DIR, AUTOPROVE_INTERNAL_DIR, CERTORA_DIR, component_specs_dir, under_project,
+    AP_REPORT_DIR, AUTOPROVE_INTERNAL_DIR, CERTORA_DIR, buffer_spec_path, component_specs_dir,
+    under_project,
 )
 from composer.spec.source.prover import prover_config_overlay
 from composer.spec.util import ensure_dir
@@ -65,7 +66,7 @@ class ComponentSpec:
 
     def buffer_spec_rel(self, name: str) -> str:
         """Project-relative path of buffer ``name``'s ``.spec`` under this component's spec dir."""
-        return (self.specs_dir / f"{name}.spec").as_posix()
+        return buffer_spec_path(self.slug, name).as_posix()
 
     @property
     def artifact_file(self) -> str:
@@ -95,7 +96,7 @@ class ProverArtifactStore(ArtifactStore[ComponentSpec, GeneratedCVL]):
         specs_root = under_project(self._project_root, i.specs_dir)
         # Every spec -- entrypoints and the shared specs they import -- as its own file.
         for name, cvl in artifact.spec_files.items():
-            _write_checked(specs_root / f"{name}.spec", cvl)
+            _write_checked(under_project(self._project_root, i.buffer_spec_rel(name)), cvl)
         if artifact.config is not None:
             confs_root = ensure_dir(self._deliverable_dir() / "confs" / i.slug)
             # A runnable .conf for each entrypoint (shared specs are imported, not run directly).
@@ -120,7 +121,9 @@ class ProverArtifactStore(ArtifactStore[ComponentSpec, GeneratedCVL]):
         ``.spec.unverified`` name, no conf. Returns the component's spec directory."""
         specs_root = under_project(self._project_root, i.specs_dir)
         for name, cvl in artifact.spec_files.items():
-            _write_checked(specs_root / f"{name}.spec{QUARANTINE_SUFFIX}", cvl)
+            _write_checked(
+                under_project(self._project_root, i.buffer_spec_rel(name) + QUARANTINE_SUFFIX), cvl
+            )
         return specs_root.relative_to(self._project_root)
 
     # -- run-level ----------------------------------------------------------

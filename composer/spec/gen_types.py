@@ -79,9 +79,15 @@ def certora_relative_to_project(p: str) -> Path:
 
 
 def component_specs_dir(slug: str) -> Path:
-    """Project-relative dir a component's buffers occupy: ``certora/specs/<slug>/`` — one dir per
-    component, so two components' same-named buffers never share a path."""
+    """Project-relative dir a component's buffers occupy: the ``slug`` subdir of :data:`SPECS_DIR` —
+    one dir per component, so two components' same-named buffers never share a path."""
     return SPECS_DIR / slug
+
+
+def buffer_spec_path(slug: str, name: str) -> Path:
+    """Project-relative path of a buffer's spec file: the ``<name>.spec`` file inside the component's
+    :func:`component_specs_dir`."""
+    return component_specs_dir(slug) / f"{name}.spec"
 
 
 def import_statement_for(resource_path: Path, importer_dir: Path) -> str:

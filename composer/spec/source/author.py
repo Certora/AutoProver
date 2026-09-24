@@ -1185,7 +1185,9 @@ async def batch_cvl_generation(
         skipped=res_state["skipped"],
         property_rules=res_state["property_rules"],
         config=res_state["config"],
-        final_link=res_state.get("prover_link"),
+        # A representative per-component prover link (the newest run that composes the result); the
+        # per-rule links live in run_link_specs. None when no run has completed.
+        final_link=(run_link_specs[0][0] if run_link_specs else None),
         run_link_specs=run_link_specs,
         vfs=res_state["vfs"],
         applied_edits=applied_edits,

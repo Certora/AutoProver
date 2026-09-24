@@ -54,7 +54,7 @@ from composer.diagnostics.budget import budget_pressure, exhausted_constraint, r
 from composer.diagnostics.timing import RunSummary, get_run_summary
 from graphcore.graph import tool_state_update
 from composer.spec.util import temp_certora_file
-from composer.spec.gen_types import CERTORA_DIR, SPECS_DIR, component_specs_dir
+from composer.spec.gen_types import CERTORA_DIR, SPECS_DIR, buffer_spec_path, component_specs_dir
 from composer.spec.util import string_hash
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.spec_buffers import (
@@ -409,7 +409,7 @@ def completing_run_specs(
             link = elem.get("link")
             if link and link not in seen:
                 seen.add(link)
-                spec = (component_specs_dir(slug) / f"{b.name}.spec").relative_to(SPECS_DIR).as_posix()
+                spec = buffer_spec_path(slug, b.name).relative_to(SPECS_DIR).as_posix()
                 runs.append((link, spec))
     return runs
 
@@ -422,9 +422,6 @@ def _merge_prover_history(left: list[ProverHistoryItem], right: list[ProverHisto
 class ProverStateExtra(TypedDict):
     rule_skips: Annotated[dict[str, str], _merge_rule_skips]
     config: dict
-    # Link of the last prover run this generation performed (URL or local results dir).
-    # Last-write-wins; absent until the first prover run. Read at completion onto GeneratedCVL.
-    prover_link: NotRequired[str | None]
     # Basename the spec is materialized/persisted under (e.g. "autospec_<slug>").
     # NotRequired so other ProverStateExtra injectors (e.g. config_edit) needn't set it.
     spec_stem: NotRequired[str]
@@ -1026,7 +1023,6 @@ def get_prover_tool(
 
             prover_update: list[ProverHistoryItem] = []
             fresh: dict[str, list[tuple[RulePath, StatusCodes]]] = {}
-            link: str | None = None
             parts: list[str] = []
             for d in drained:
                 if isinstance(d.result, str):  # compile/toolchain error: surface it, record no run
@@ -1034,7 +1030,6 @@ def get_prover_tool(
                     continue
                 results: list[tuple[RulePath, StatusCodes]] = list(d.result.raw_rule_status.items())
                 fresh.setdefault(d.name, []).extend(results)  # striped subsets of one buffer accumulate
-                link = d.result.link or link
                 stale = d.name in buffers and d.digest != cur_digest(d.name)
                 note = (" (NOTE: the spec changed since this was submitted — this result is STALE; re-submit "
                         "this buffer.)") if stale else ""
@@ -1084,7 +1079,7 @@ def get_prover_tool(
                 )
 
             return tool_state_update(
-                tool_call_id=tool_call_id, content="\n".join(parts + board), prover_link=link,
+                tool_call_id=tool_call_id, content="\n".join(parts + board),
                 validations=prover_stamps, prover_history=prover_update, **nag_channel,
             )
 
