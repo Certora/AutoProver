@@ -110,8 +110,9 @@ class NamespacePattern:
 class PlatformGeneration:
     """The chain-platform release line a CVLR chain crate is bound to.
 
-    ``label`` is for people and for corpus provenance. ``crates`` is what a probe crate declares
-    so it can name the platform types (``AccountInfo`` and the rest) the chain crate uses."""
+    ``label`` is for people: the platform refusal names it, and so does the tuning-path log line.
+    ``crates`` is what a crate built against this generation declares so it can name the platform
+    types (``AccountInfo`` and the rest) the chain crate uses."""
 
     label: str
     crates: tuple[CrateRequirement, ...]
@@ -135,14 +136,16 @@ class PlatformGeneration:
 class UnpublishedCapability:
     """Something current practice uses that no published crate provides.
 
-    Recorded so the corpus can say it is uncovered, and why. A reader who meets the capability
-    in a project should see that it is outside the reference set.
+    Recorded here rather than left out, so a reader who meets the capability in a project can see
+    that it is outside what this build can pin: nothing publishes it, so there is no release to
+    name. Deliberately not a :class:`~composer.spec.cvlr.crates.Mismatched` — that is a
+    disagreement about *which* release, and this is the absence of one to disagree about.
     """
 
     #: Every name the capability has gone by. A rename is the case where searching for one
     #: name and finding nothing looks like absence.
     names: tuple[str, ...]
-    #: What the corpus therefore does not cover.
+    #: What a project reaching for it therefore finds nothing for.
     missing: str
 
 
@@ -167,14 +170,16 @@ class ChainReference:
     unpublished: tuple[UnpublishedCapability, ...] = ()
 
     def crates(self) -> tuple[CrateRelease, ...]:
-        """Every CVLR crate in the reference set. This is what the corpus was written against."""
+        """Every CVLR crate in the reference set: the line this build supports."""
         return (self.core, self.chain, *self.specializations)
 
     def scaffold_crates(self) -> tuple[CrateRelease, ...]:
         """What a fresh project declares in its ``Cargo.toml``.
 
-        The same crates as :meth:`crates`. The two names are the two questions: what the corpus
-        was compiled against, and what this project pins.
+        The same crates as :meth:`crates` today. Two names because they answer two questions, and
+        the questions are asked in different places: :func:`composer.spec.cvlr.scaffold._check_pins`
+        gates on which releases this build supports, and the manifest planning writes which of them
+        a project is given.
         """
         return self.crates()
 
