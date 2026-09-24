@@ -69,6 +69,7 @@ from composer.diagnostics.budget import (
     constraint_sort_to_noun,
     raise_budget_exceeded,
 )
+from composer.llm.types import CacheLevel
 from composer.spec.context import CacheKey, CvlrGeneration, CvlrJudge, WorkflowContext
 from composer.spec.cvlr.anchor_surface import read_surface
 from composer.spec.cvlr.conf import settings_conf
@@ -684,8 +685,10 @@ async def batch_cvlr_generation(
 
     builder = (
         # "long" cache: a prover run can take many minutes, and the author's context should still be
-        # warm on the other side of one.
-        env.builder_heavy()
+        # warm on the other side of one. The 5-minute default expires under every prover wait, and
+        # the whole context is then re-written at the cache-write rate rather than read at the
+        # cache-read rate — 12x the price for the same tokens.
+        env.builder_heavy(cache_level=CacheLevel.LONG)
         .with_state(CvlrGenerationState)
         .with_input(CvlrGenerationInput)
         .with_output_key("result")
