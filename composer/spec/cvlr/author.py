@@ -28,10 +28,14 @@ Four things are CVLR's own:
 import asyncio
 import dataclasses
 from pathlib import Path
-from typing import Literal, Sequence, TypedDict, override
+from typing import Any, Literal, Sequence, TypedDict, override
 
 from langchain_core.tools import BaseTool
-from pydantic import Field
+import logging
+
+from langgraph.graph.state import CompiledStateGraph
+
+from pydantic import BaseModel, Field
 
 from graphcore.graph import CacheMarker, RawPromptInput, SummaryConfig, tool_state_update
 from graphcore.tools.schemas import (
@@ -65,7 +69,7 @@ from composer.diagnostics.budget import (
     constraint_sort_to_noun,
     raise_budget_exceeded,
 )
-from composer.spec.context import CvlrGeneration, CvlrJudge, WorkflowContext
+from composer.spec.context import CacheKey, CvlrGeneration, CvlrJudge, WorkflowContext
 from composer.spec.cvlr.anchor_surface import read_surface
 from composer.spec.cvlr.conf import settings_conf
 from composer.spec.cvlr.editor import editor_tools
@@ -537,6 +541,33 @@ class CvlrPropertyGenParams(TypedDict):
 
 _PropertyGenTemplate = TypedTemplate[CvlrPropertyGenParams]("cvlr_property_generation_prompt.j2")
 
+_log = logging.getLogger(__name__)
+
+class _LastCvlrAttempt(BaseModel):
+    """What a unit carries out of one run and into the next.
+
+    The peer of ``cvl_generation._LastAttemptCache``, and it needs two fields where CVL needs one,
+    because a CVLR draft is not self-contained: the rules call handlers the *munges* made reachable,
+    so a draft restored without them does not compile.
+
+    The munges are carried as their ``describe()`` lines rather than as :data:`Munge` values. Two
+    reasons, and the second is the load-bearing one. ``Munge`` is a five-way union of frozen
+    dataclasses with no discriminator, so round-tripping it through a cache is a silent-mismatch
+    risk for no gain. And a munge is an edit to the *program*, which reaches the tree only through
+    the editor and its reviewer (``docs/who-edits-the-program.md``); restoring one from a cache
+    would put a program edit into a run that never reviewed it. Handing the agent the list and
+    letting it re-apply what it still needs keeps that gate where it belongs.
+    """
+
+    spec: str
+    munges: list[str] = []
+
+
+#: Per unit, so two units of one run do not read each other's drafts. ``cache_ns`` scopes it to
+#: the run family, which is what makes a resumed run find yesterday's work and an unrelated one not.
+LAST_ATTEMPT_KEY = CacheKey[CvlrGeneration, _LastCvlrAttempt]("last_attempt")
+
+
 _BUDGET_WRAPUP_MESSAGE = """
 <system-alert>
 You have almost exceeded the {resource} budget for this task. Wrap up IMMEDIATELY; a partial harness
@@ -552,6 +583,33 @@ is better than going over budget. Concretely:
 </system-alert>
 """
 
+
+
+async def _remember_attempt(
+    ctx: WorkflowContext[CvlrGeneration],
+    graph: CompiledStateGraph[CvlrGenerationState, None, CvlrGenerationInput, Any],
+    tid: str,
+) -> None:
+    """Cache this unit's draft and the munges it was written against, for the next run.
+
+    Reads the graph's last checkpoint rather than the returned state, because the interesting case
+    is the one that did not return: a budget cut raises out of ``run_to_completion``, and the draft
+    it was holding is only in the checkpoint.
+
+    Never raises. This runs in a ``finally`` on a path that may already be unwinding a budget
+    failure, and losing the cache is worse than losing nothing only if it also loses the original
+    error.
+    """
+    try:
+        state = await graph.aget_state({"configurable": {"thread_id": tid}})
+        values = state.values
+        draft = values.get("curr_spec")
+        if not draft:
+            return
+        munges = [m.describe() for m in values.get("munges", ())]
+        await ctx.child(LAST_ATTEMPT_KEY).cache_put(_LastCvlrAttempt(spec=draft, munges=munges))
+    except Exception:
+        _log.warning("cvlr: could not cache this unit's draft for a later run", exc_info=True)
 
 async def batch_cvlr_generation(
     ctx: WorkflowContext[CvlrGeneration],
@@ -673,9 +731,28 @@ async def batch_cvlr_generation(
     )
     graph = builder.compile_async()
 
+    # Seeded from the previous run's draft when there is one, the way CVL's author does it
+    # (``cvl_generation.run_cvl_generator``). A budget-cut unit otherwise starts from nothing,
+    # which on the stake benchmark meant re-authoring thousands of lines it had already written.
+    last = await ctx.child(LAST_ATTEMPT_KEY).cache_get(_LastCvlrAttempt)
+    resumed_input: list[str | dict[Any, Any]] = []
+    if last is not None:
+        resumed_input.append(
+            "Your last working draft on this task is below; it has been automatically placed "
+            "into your working buffer."
+        )
+        resumed_input.append(last.spec)
+        if last.munges:
+            resumed_input.append(
+                "That draft was written against these munges, which are NOT restored — the tree "
+                "is the pristine program again. Re-apply the ones the draft still needs, through "
+                "the editor as usual, before expecting it to compile:\n"
+                + "\n".join(f"- {m}" for m in last.munges)
+            )
+
     init_state = CvlrGenerationInput(
-        curr_spec=None,
-        input=[],
+        curr_spec=last.spec if last is not None else None,
+        input=resumed_input,
         required_validations=[PROVER_VALIDATION_KEY, FEEDBACK],
         skipped=[],
         property_rules=[],
@@ -700,6 +777,11 @@ async def batch_cvlr_generation(
         )
     except BudgetExceeded as exc:
         return Curtailed(None, detail=str(exc))
+    finally:
+        # However this ended — delivered, gave up, or the budget cut it mid-draft — the draft is
+        # what the next run should not have to write again. In the `finally` for that reason: the
+        # run that most needs its work carried forward is the one that did not finish.
+        await _remember_attempt(ctx, graph, tid)
 
     assert "result" in res_state
     assert res_state["failed"] is not None
