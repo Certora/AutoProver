@@ -147,18 +147,46 @@ class Absent:       # fine: the project does not depend on it at all
 *expected* state under `--withhold-crate` (§2.3) and must never be a refusal — a run that withholds
 `cvlr-solana-stake` would otherwise refuse itself.
 
-### 2.3 The one version-shaped leak the pin does not close: `--withhold-crate`
+### 2.3 `--withhold-crate`, and why the researcher can ignore it
 
-`entry.py:441` lets a run withhold a specialization — the case is a target that *is* the stake
-program, where `cvlr-solana-stake` would hand the author the answers
-(`docs/stake-benchmark.md`). Today this works for free: a withheld crate is never pinned, so it is
-never resolved, so it is never mounted. **A corpus has the stake rows regardless of what this run
-pinned**, and the researcher would serve them. Pinning does not help here: the corpus is correct
-about the reference set and the run has deliberately departed from it.
+An earlier draft of this plan listed withholding as the one leak the pin does not close: a run
+withholding `cvlr-solana-stake` would still get stake rows from a corpus that knows nothing about
+this run, so the researcher would need a per-run filter. That is no longer true, and the reason is
+worth stating because it is what keeps the researcher run-invariant.
 
-So withholding has to become a corpus-side filter — the researcher is told which crates are out of
-scope, and `cvlr_api_surface` (§4.5) must not list them. This is the only version-adjacent work the
-pin policy leaves on the table, and it is small.
+`--withhold-crate` was declared against `specializations`, a tuple that held two unlike things: the
+crates that model a named on-chain program (`cvlr-solana-stake`, `cvlr-spl-token`) and Soroban's
+derive-macro companion, which models nothing. Anything in that tuple could be named, so "withheld"
+meant only "some CVLR crate this run is not being given" — a statement about the *run's knowledge*,
+which is exactly the kind of thing every downstream consumer then has to ask about.
+
+`ProgramModel` makes it a statement about the *target* instead. Only a crate that models a named
+program can be withheld, and only for the one case that type exists for: this run's target **is**
+that program, so its model would be an answer key rather than a model of a dependency
+(`docs/stake-benchmark.md`). A companion cannot be withheld, because there is no target it could be
+an answer key for. The bound is the type, not a convention someone maintains.
+
+With that, the researcher needs no filter, for three reasons in ascending order of weight:
+
+1. **The withheld crate is not in the graph.** The scaffold never pins it, so cargo never resolves
+   it — `docs/stake-benchmark.md` records exactly this ("absent from both manifests and from the
+   resolved graph"). An answer naming it costs one failed `cargo_check`, not a wrong verdict.
+2. **The corpus does not hold what withholding protects.** The leak is the crate's *body* — the 572
+   lines implementing `process_withdraw`, `process_split`, `process_merge`. `cvlr_api_kb` holds
+   signatures, doc comments and macro expansions of a crate published on crates.io. The stake
+   benchmark already concedes the semantic residue is irreducible: the program's invariants are
+   documented protocol semantics. Removing the source mount removes the body; the API surface was
+   never the answer key.
+3. **A per-run filter would cost the cache.** §5.1 binds the researcher through `AgentIndex` under
+   one cross-run namespace, which is what makes it affordable at §7.5.5's call volume. Filtering
+   per run either serves a filtered answer to an unfiltered run — wrong — or fragments the
+   namespace by withhold-set, which defeats the cache. Paying that to prevent a failed compile is
+   a bad trade.
+
+So: **no corpus-side filter, no scope rule in the researcher's prompt, no run-varying corpus.** The
+reference set the corpus describes is `crates()`, which `withholding` deliberately does not narrow;
+the project's pins are `scaffold_crates()`, which it does. The two accessors were already the two
+questions, and this is the case that makes them differ.
 
 ### 2.4 What the pin deletes from the rest of this plan
 
@@ -168,6 +196,9 @@ Worth listing, because it is most of the complexity the first draft was carrying
   whether multi-version content is needed. One gate, two outcomes.
 * No version divergence for the researcher to reason about: `{{ documented_versions }}` and
   `{{ cvlr_versions }}` are the same string, so the caveat rule leaves the system prompt (§5.2).
+* With §2.3, **nothing** about a run reaches the corpus: no version, no withheld set. The
+  researcher's answers depend only on the pinned reference set, which is what lets one cross-run
+  cache serve every run.
 * **The authority ordering gets its full strength back.** §1.2(2) worried that rustdoc is one step
   further from the code than the mount was. With a guaranteed version match and a compile gate
   (§4.7), `cvlr_api_kb` is as authoritative about *this run* as the mount was — the gap between
@@ -229,6 +260,10 @@ Two things the work settled that the plan had not:
 
 Deliberately kept: `UnpublishedCapability` and `ChainReference.cargo_dependencies()` have no
 callers in #248 and were left in place rather than dropped and re-added with their consumers.
+
+**Also landed on this branch, not in #248:** the `ProgramModel` restriction of §2.3. It is a change
+to `withholding`, which #248 does not have, so it sits on `eric/solanaProver` alone — and it is what
+lets §5 drop the researcher's per-run filter.
 
 ---
 
@@ -417,7 +452,7 @@ stated:
 |---|---|---|
 | `cvlr_api_search(query)` | `find_refs` | "what helper does X?" — natural language over the item docs |
 | `cvlr_api_lookup(name)` | `search_manual_keywords` + `get_manual_section` | "what is the exact signature of X, and which crate defines it?" — the one-shot path for the question the author asks most |
-| `cvlr_api_surface(crate)` | `get_manual_section` on the §4.4 heading | "does X exist?" — the closed-world read |
+| `cvlr_api_surface(crate)` | `get_manual_section` on the §4.4 heading | "does X exist?" — the closed-world read, over the pinned reference set and nothing run-specific (§2.3) |
 
 `cvlr_api_lookup` collapsing keyword-search-then-fetch into one call is a deliberate departure from
 CVL's three-tool shape. The two-step is right when you are exploring a manual and wrong when you
@@ -491,9 +526,10 @@ What differs:
   (`composer/tools/cvlr_rag.py`), and nothing else. No filesystem, no project source — this agent
   answers about CVLR, not about the program. Holding both is what lets one agent apply the ordering
   instead of pushing that judgement onto every caller.
-* **No version reasoning.** The pin (§2) means the corpus and the build agree by construction, so
-  the researcher states the version as a fact and never has to hedge on it. What it does need from
-  `CvlrPreflight` is the withheld-crate list (§2.3).
+* **Nothing run-specific at all.** The pin (§2) means the corpus and the build agree by
+  construction, and §2.3 means withholding is a fact about the target rather than about what CVLR
+  the run may know. So the researcher takes no per-run input beyond the question, which is the
+  precondition for the cross-run cache above.
 
 ### 5.2 `composer/templates/cvlr_research_system_prompt.j2`
 
@@ -508,9 +544,9 @@ source mount's job across; the rest are narrower:
 2. **Existence is settled in one place.** A name you did not retrieve is a name you do not have. To
    answer "does X exist", call `cvlr_api_surface` for the crate and read it as closed — do not infer
    absence from an empty search, and never from the manual's silence.
-3. **Scope.** Crates this run withheld (§2.3) are out of scope; do not recommend them or list them
-   as available. There is no version caveat to give — the pin guarantees the corpus describes the
-   crates this project builds.
+3. **Scope.** The corpus is the pinned reference set, whole. There is no version caveat to give
+   and no per-run exclusion to honour (§2, §2.3) — if an answer names a crate this project does
+   not build, the compiler says so and that is cheap.
 4. **Answer in the shape the caller needs**: the signature, and the crate that *defines* the item
    rather than the facade path — the caller is about to write it into Rust that has to compile.
 
@@ -581,8 +617,7 @@ Display: a `CommonTools.cvlr_research` entry in `composer/ui/tool_display.py` be
   `AppDescriptor` is a *single* tag, so a wheel cannot declare two corpora. The CVLR entry point
   already composes its own tool set by hand there, so this costs one line — but if a second
   descriptor-driven corpus is ever wanted, `rag_env` needs a real answer rather than this.
-  `--withhold-crate` (:441) now also has to reach the researcher as a corpus filter (§2.3), and
-  `cvlr_api_surface` is the tool it most obviously has to hide a crate from.
+  `--withhold-crate` (:441) does **not** reach the researcher, and §2.3 is why.
 * `template_manifest.json` — the new template, minus the deleted fragment.
 
 ---
@@ -639,8 +674,8 @@ guarantee rather than an assumption. Step 5 now has one precondition left instea
 3. **`cvlr_api_rag.py` + `cvlr_research.py` + templates + display + tests**, wired *alongside* the
    source mount. Both channels live. This is the only point at which the two can be compared on the
    same run.
-4. **The `--withhold-crate` corpus filter** (§2.3) — the one version-adjacent item (0) does not
-   close. Independent of (3).
+4. ~~The `--withhold-crate` corpus filter.~~ **Not needed** — §2.3. Restricting the setting to
+   program models is what removed it, and that has landed.
 5. **Remove the mount**, rewrite the two system prompts, delete `source_tools.py` and its fragment.
 6. **Re-scope `cvlr_kb` to the manual** (§4.6): drop the crate-reference manifest, drop
    `populate_cvlr_rag.sh`'s discovery of manifests built elsewhere, and restate `cvlr_rag.py`'s
