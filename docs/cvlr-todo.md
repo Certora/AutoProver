@@ -491,6 +491,48 @@ draft the same way and does not, so an EVM run cut by the budget still re-author
 fix is one argument; it was left out of the CVLR change because it alters EVM behaviour and wants
 its own run to confirm.
 
+**U21. Budget curtailment deletes rules whose verdicts are merely outstanding.**
+The wrap-up order tells a unit to delete every rule that does not compile *and* every rule whose
+verdict it never saw. Those are different populations. A unit cut while its prover jobs are still in
+flight has seen no verdicts by definition, so it deletes rules that compiled, built for SBF and were
+successfully submitted — work whose only defect is that the budget expired before the results came
+back. On the 2026-09-24 stake run this cost three units nearly everything: Delegation went from 32
+rules to 0, Splitting & Merging from 53 to 1, Authorization & Lockup from 50 to 0. Only the unit
+whose jobs had already returned kept its rules.
+
+The order's intent is sound — do not publish a rule you cannot stand behind. The fix is to separate
+the two cases: a rule that failed to compile is deleted, a rule awaiting a verdict is *skipped* with
+that reason, so it is reported honestly and survives into the next run's draft. The prompt text is in
+`_BUDGET_WRAPUP_MESSAGE` in `composer/spec/cvlr/author.py`.
+
+**U22. The draft carry-forward caches the curtailed draft over the good one.**
+`_remember_attempt` runs in a `finally` and caches whatever `curr_spec` holds at that moment. After a
+budget cut that is the post-wrap-up draft, so the cache ends the run holding the *stripped* version
+and overwrites the fuller one a previous run left there. On 2026-09-24 the resume cache finished at
+1,609 lines / 12 rules, having overwritten 6,176 lines seeded into it that morning — the mechanism
+built to carry work forward carried the worst version of it.
+
+Compounds with [[U21]]: curtailment strips the rules, then the cache enshrines the stripped result.
+Candidate fixes: keep the high-water draft rather than the last one, or decline to overwrite a cached
+attempt that has more rules than the one being written. `ap-trail recover-drafts --draft largest`
+repairs it after the fact from the checkpoints, which is a workaround and not a reason to leave it.
+
+**U23. The byte-decomposition idiom for `Pubkey` is unsound under the Prover.**
+A harness that decomposes a `Pubkey` into four `u64` words via `to_bytes()` + `u64::from_le_bytes`
+does not round-trip: `words_pk(pk_words(&p)) != p` for a single nondet key
+(`rule_diag_pubkey_eq_stable`, 2026-09-24). The judge's diagnosis is that the prover cannot relate
+bytes written by `to_le_bytes` to bytes read back by `from_le_bytes` through an intermediate
+`[u8; 32]`, so the byte-level and aggregate views of the key are unrelated objects to the analysis.
+Any comparison built on the word view is then four comparisons over unconstrained values.
+
+Two consequences. The authoring guidance should steer away from the idiom — this is a trap an agent
+will otherwise re-derive, as one did here. And the long-standing suspicion that native `Pubkey`
+equality on SBF (`sol_memcmp_`) is unconstrained is **not supported**: the same rule checked it and
+it was stable and repeatable. The remaining vacuity cluster needs a different explanation; the
+`rule_probe_hashset_*` / `rule_diag_signer_set*` rules coming back *violated on a prover-generated
+assertion* are the next lead, as is `rule_diag_signer_set_membership` pinning the longest job of both
+runs.
+
 ---
 
 ## Blocked on upstream
