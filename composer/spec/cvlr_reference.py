@@ -6,8 +6,9 @@ not depend on any chain: the specification language, plus the parametric-rule ma
 supplies the helpers that work with that chain's platform types. Specializations are narrower
 crates that go with one chain crate. Most of them model a single on-chain program rather than the
 whole chain: ``cvlr-spl-token`` models SPL token accounts and ``cvlr-solana-stake`` models the
-stake program. Soroban's derive-macro crate is counted here as well. A project declares the core,
-its chain's crate, and that chain's specializations. A platform generation is the release line of
+stake program. Soroban's derive-macro crate is a companion rather than a model — it is declared
+the same way and models no program, which is what makes it un-withholdable. A project declares the
+core, its chain's crate, and that chain's models and companions. A platform generation is the release line of
 the chain's own SDK that a chain crate is built against, such as ``solana-program`` 2.x or
 ``soroban-sdk`` 22.x.
 
@@ -150,6 +151,26 @@ class UnpublishedCapability:
 
 
 @dataclass(frozen=True)
+class ProgramModel:
+    """A crate that models one named on-chain program's own instructions.
+
+    Separate from a plain :class:`CrateRelease` because only this kind can be withheld, and only
+    for one reason: a run whose target *is* :attr:`program` would be handed a behavioural model of
+    the very instructions it is meant to specify — an answer key rather than a model of a
+    dependency (``docs/stake-benchmark.md``). A crate that models no program cannot be an answer
+    key for any target, so there is no run that would want it withheld.
+
+    That is the whole of what withholding means, and having it in the type rather than in a
+    convention is what lets everything downstream ignore the setting: a withheld crate is always
+    *this target's own behaviour*, never a piece of CVLR the author needs and cannot have.
+    """
+
+    release: CrateRelease
+    #: The program it models, named as a reader would name it: "the stake program".
+    program: str
+
+
+@dataclass(frozen=True)
 class ChainReference:
     """What current CVLR means for one chain."""
 
@@ -164,20 +185,21 @@ class ChainReference:
     #: They are optional crates behind the ``certora`` feature, so a project that never calls them
     #: pays one extra compile. They are still pinned here. The scaffold is what writes
     #: dependencies, and it does not add one later. A dependency changes how the project builds
-    #: for everyone, which the scaffold does not guess at. A specialization left out of this list
-    #: is a crate the project cannot name.
-    specializations: tuple[CrateRelease, ...] = ()
+    #: for everyone, which the scaffold does not guess at. A model left out of this list is a
+    #: crate the project cannot name.
+    models: tuple[ProgramModel, ...] = ()
+    #: Crates declared beside the chain crate that model no program — Soroban's derive macros are
+    #: the case. They are pinned exactly like a :class:`ProgramModel`'s release and differ in one
+    #: respect: :meth:`withholding` cannot name them, because there is no target they could be an
+    #: answer key for.
+    companions: tuple[CrateRelease, ...] = ()
     unpublished: tuple[UnpublishedCapability, ...] = ()
-    #: Specializations this run will not offer the project, by crate name. Empty for every
-    #: ordinary run; :meth:`withholding` is what sets it.
+    #: Program models this run will not offer the project, by crate name. Empty for every ordinary
+    #: run; :meth:`withholding` is what sets it, and :class:`ProgramModel` is what bounds it.
     #:
-    #: The case it exists for is a specialization that models the program *under verification*.
-    #: ``cvlr-solana-stake`` is a behavioural model of the stake program's own instructions —
-    #: ``process_split``, ``process_merge``, ``process_withdraw`` and the rest — so a run whose
-    #: target is that program would be handing its author the answers rather than a model of a
-    #: dependency (``docs/stake-benchmark.md``). Per crate rather than all-or-nothing, because the
-    #: specializations have nothing to do with each other: the same tuple carries the SPL token
-    #: model, which such a run still wants.
+    #: Per crate rather than all-or-nothing, because the models have nothing to do with each
+    #: other: the same tuple carries the SPL token model, which a run verifying the stake program
+    #: still wants.
     withheld: frozenset[str] = frozenset()
 
     def crates(self) -> tuple[CrateRelease, ...]:
@@ -189,7 +211,7 @@ class ChainReference:
         :func:`composer.spec.cvlr.scaffold._check_pins` — noticing a real version disagreement on
         a crate the project declares for itself.
         """
-        return (self.core, self.chain, *self.specializations)
+        return (self.core, self.chain, *(m.release for m in self.models), *self.companions)
 
     def scaffold_crates(self) -> tuple[CrateRelease, ...]:
         """What a fresh project declares in its ``Cargo.toml``.
@@ -205,16 +227,23 @@ class ChainReference:
     def withholding(self, *names: str) -> "ChainReference":
         """This reference set with ``names`` not offered to the project.
 
-        Refuses a name that is not a specialization. A withheld crate that was never in the set
-        changes nothing, and "changed nothing" is the one outcome a caller cannot tell apart from
-        success — so a typo here would silently leave the model in the project it was meant to be
-        kept out of.
+        Only a :class:`ProgramModel` can be named, and only for the one reason that type exists:
+        this run's target *is* the program it models. Nothing else is withholdable — not the core,
+        not the chain crate, not a companion — because nothing else can be an answer key, and a
+        setting that could withhold arbitrary CVLR would make every consumer of the reference set
+        ask what this run is missing.
+
+        Refuses a name that is not a model. A withheld crate that was never in the set changes
+        nothing, and "changed nothing" is the one outcome a caller cannot tell apart from success —
+        so a typo here would silently leave the model in the project it was meant to be kept out of.
         """
-        known = {c.name for c in self.specializations}
-        if unknown := set(names) - known:
+        known = {m.release.name: m.program for m in self.models}
+        if unknown := set(names) - set(known):
+            offered = ", ".join(f"{n} ({p})" for n, p in sorted(known.items())) or "none"
             raise ValueError(
-                f"not specializations of {self.chain.name}: {', '.join(sorted(unknown))} "
-                f"(have: {', '.join(sorted(known)) or 'none'})"
+                f"not program models of {self.chain.name}: {', '.join(sorted(unknown))}. "
+                f"Withholding is only for a target that *is* the modelled program; this chain "
+                f"models: {offered}"
             )
         return replace(self, withheld=self.withheld | frozenset(names))
 
@@ -236,11 +265,11 @@ _CORE = CrateRelease("cvlr", "0.6.1")
 SOLANA = ChainReference(
     core=_CORE,
     chain=CrateRelease("cvlr-solana", "0.5.0"),
-    specializations=(
-        CrateRelease("cvlr-solana-stake", "0.5.0"),
+    models=(
+        ProgramModel(CrateRelease("cvlr-solana-stake", "0.5.0"), "the stake program"),
         # The SPL token account model: nondet token accounts and mints, and the token instruction
         # summaries. On crates.io at 0.5.0, the same version as the chain crate it was split from.
-        CrateRelease("cvlr-spl-token", "0.5.0"),
+        ProgramModel(CrateRelease("cvlr-spl-token", "0.5.0"), "the SPL token program"),
     ),
     platform=PlatformGeneration(
         label="solana-program 2.x (the last monolithic line)",
@@ -293,9 +322,10 @@ SOLANA = ChainReference(
 SOROBAN = ChainReference(
     core=_CORE,
     chain=CrateRelease("cvlr-soroban", "0.4.0"),
-    # The derive crate is a companion of the chain crate. A target uses it when it writes the
-    # attribute macros. It is declared the same way as a specialization.
-    specializations=(CrateRelease("cvlr-soroban-derive", "0.4.0"),),
+    # The derive crate is a companion of the chain crate: a target uses it when it writes the
+    # attribute macros. It is declared and pinned like a model's release, and models no program,
+    # so it is not withholdable.
+    companions=(CrateRelease("cvlr-soroban-derive", "0.4.0"),),
     platform=PlatformGeneration(
         label="soroban-sdk 22.x",
         crates=(CrateRequirement("soroban-sdk", "22"),),

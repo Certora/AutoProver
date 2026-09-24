@@ -162,8 +162,9 @@ async def prepare_workspace(
     harness files under ``src/certora/`` are replaced by AutoProver's. The project's manifests
     and sources are only added to.
 
-    ``reference`` is the set rather than a chain name because a run may narrow it — a target that
-    *is* the program one of the specializations models must not be offered that model
+    ``reference`` is the set rather than a chain name because a run may narrow it, in exactly one
+    way: a target that *is* the program a :class:`~composer.spec.cvlr_reference.ProgramModel`
+    crate models must not be offered that model
     (:meth:`~composer.spec.cvlr_reference.ChainReference.withholding`). Every function this calls
     already takes the set, so passing it in removes a lookup rather than adding an argument.
     """

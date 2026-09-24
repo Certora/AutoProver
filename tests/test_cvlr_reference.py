@@ -59,13 +59,15 @@ def test_the_solana_choice_records_the_platform_it_implies():
 def test_the_spl_token_model_is_part_of_the_reference_set():
     # On crates.io at 0.5.0, the same version as the chain crate it was split from. Leaving it
     # off the reference set would keep the scaffold from pinning it.
-    assert ref.CrateRelease("cvlr-spl-token", "0.5.0") in ref.SOLANA.specializations
+    assert ref.ProgramModel(
+        ref.CrateRelease("cvlr-spl-token", "0.5.0"), "the SPL token program"
+    ) in ref.SOLANA.models
     assert ref.SOLANA.unpublished == ()
 
 
 def test_a_fresh_project_is_pinned_the_whole_reference_set():
-    # The scaffold is what writes dependencies, and it does not add one later. A specialization
-    # left out of this list is a crate the project cannot name.
+    # The scaffold is what writes dependencies, and it does not add one later. A crate left out
+    # of this list is one the project cannot name.
     assert ref.SOLANA.scaffold_crates() == ref.SOLANA.crates()
     assert {c.name for c in ref.SOLANA.scaffold_crates()} == {
         "cvlr", "cvlr-solana", "cvlr-solana-stake", "cvlr-spl-token",
@@ -90,14 +92,32 @@ def test_withholding_leaves_the_reference_set_it_was_called_on_alone():
     assert ref.SOLANA.scaffold_crates() == ref.SOLANA.crates()
 
 
-def test_withholding_a_crate_that_is_not_a_specialization_is_refused():
+def test_only_a_program_model_can_be_withheld():
     # Silently changing nothing is the one outcome a caller cannot tell apart from success, so a
     # typo would leave the model in the project it was meant to be kept out of.
-    with pytest.raises(ValueError, match="not specializations of cvlr-solana"):
+    with pytest.raises(ValueError, match="not program models of cvlr-solana"):
         ref.SOLANA.withholding("cvlr-solana-staek")
-    # The chain crate is not a specialization either: a project without it has no CVLR at all.
-    with pytest.raises(ValueError, match="cvlr-solana"):
+    # The chain crate models no program: a project without it has no CVLR at all, and "run
+    # without part of CVLR" is not what this setting is for.
+    with pytest.raises(ValueError, match="not program models"):
         ref.SOLANA.withholding("cvlr-solana")
+
+
+def test_a_companion_crate_cannot_be_withheld_though_it_is_pinned_like_a_model():
+    # Soroban's derive crate is declared beside the chain crate and pinned the same way, and it
+    # models no program — so there is no target it could be an answer key for. The bound is the
+    # type, not a list someone has to remember to keep in step.
+    assert ref.CrateRelease("cvlr-soroban-derive", "0.4.0") in ref.SOROBAN.crates()
+    assert ref.SOROBAN.models == ()
+    with pytest.raises(ValueError, match="this chain models: none"):
+        ref.SOROBAN.withholding("cvlr-soroban-derive")
+
+
+def test_the_refusal_names_what_each_model_stands_for():
+    # The error has to say what withholding *means*, because the setting is a statement about the
+    # target: an operator who reads "the stake program" knows whether it applies to their run.
+    with pytest.raises(ValueError, match="cvlr-solana-stake \\(the stake program\\)"):
+        ref.SOLANA.withholding("nonsense")
 
 
 def test_an_unknown_chain_raises_and_names_the_ones_that_exist():
