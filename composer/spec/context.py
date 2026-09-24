@@ -95,8 +95,18 @@ MNEMONIC_KEYS = ("thread_mnemonics",)
 
 
 class CacheKey[Parent, Curr]:
-    def __init__(self, key: str):
+    """Names one step's cache entry, and the child context that writes it.
+
+    ``survives_budget_pressure`` marks a key whose value is a *resume buffer* rather than a
+    result. ``cache_put`` otherwise drops writes made under budget pressure, because rushed
+    output should not be handed to a later run as though it were finished — right for a
+    result, and exactly backwards for a buffer, whose only job is to carry unfinished work
+    across the cut that produced it.
+    """
+
+    def __init__(self, key: str, *, survives_budget_pressure: bool = False):
         self.key = key
+        self.survives_budget_pressure = survives_budget_pressure
 
     def __str__(self) -> str:
         return self.key
@@ -169,6 +179,8 @@ class WorkflowContext[K]:
     cache_namespace: tuple[str, ...] | None
     _store: BaseStore
     recursion_limit: int
+    #: From the :class:`CacheKey` this context was derived through; see its docstring.
+    _keep_under_pressure: bool = False
 
     def abstract[T: Abstraction](self, ty: type[T]) -> "WorkflowContext[T]":
         return self  # type: ignore[return-value]
@@ -216,6 +228,7 @@ class WorkflowContext[K]:
             cache_namespace=child_cache_ns,
             _store=self._store,
             recursion_limit=self.recursion_limit,
+            _keep_under_pressure=name_key.survives_budget_pressure,
         ), child_cache_ns)
 
     async def _child_async[NXT](
@@ -258,7 +271,7 @@ class WorkflowContext[K]:
 
     async def cache_put(self, value: K) -> None:
         """Put a typed value in the cache. No-op if caching disabled."""
-        if budget_pressure():
+        if budget_pressure() and not self._keep_under_pressure:
             # refuse to cache anything produced under budget pressure
             # It's likely incomplete or "rushed", and a future run with more money
             # should try again
