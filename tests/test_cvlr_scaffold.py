@@ -318,55 +318,113 @@ def test_a_project_on_the_reference_generation_passes_on_the_specific_witness(tm
     assert not plan.blocked
 
 
-def test_the_platform_is_not_second_guessed_when_the_project_pins_cvlr_itself(tmp_path):
-    # The scaffold keeps the project's pins, so the reference set's platform says nothing about
-    # what will be built. Refusing here would reject a project whose own pairing is consistent.
+ON_AN_OLDER_LINE = STANDALONE.replace(
+    "[dependencies]\nsolana-program",
+    '[dependencies]\ncvlr = "0.4"\ncvlr-solana = "0.4"\nsolana-program',
+)
+
+
+def test_a_project_on_a_different_cvlr_line_is_refused(tmp_path):
+    # One CVLR line is supported at a time, and everything the scaffold writes is that line's.
+    # It used to defer to a pin like this, withhold the specializations that would collide, and
+    # report the disagreement for someone to read later; now it stops.
+    plan, _ = _plan(
+        tmp_path,
+        manifest=ON_AN_OLDER_LINE,
+        workspace_manifest=ON_AN_OLDER_LINE,
+        cvlr_resolved={"cvlr": "0.4.1", "cvlr-solana": "0.4.5"},
+    )
+    assert any("0.4.1" in b.problem for b in plan.blocked)
+    assert any("0.4.5" in b.problem for b in plan.blocked)
+
+
+def test_a_refused_pin_stops_the_plan_before_a_specialization_is_written(tmp_path):
+    """The refusal has to arrive before the changes, not alongside them.
+
+    A project on the 0.4 line given a 0.5.0 specialization gets two generations of ``AccountInfo``
+    in one graph. That used to be avoided by withholding the specializations from such a project;
+    now the project is refused outright, and :func:`apply` is what must never run.
+    """
+    plan, workspace = _plan(
+        tmp_path,
+        manifest=ON_AN_OLDER_LINE,
+        workspace_manifest=ON_AN_OLDER_LINE,
+        cvlr_resolved={"cvlr": "0.4.1", "cvlr-solana": "0.4.5"},
+    )
+    assert plan.blocked
+    with pytest.raises(ScaffoldBlocked):
+        apply(plan, workspace.root)
+    assert 'cvlr = "0.4"' in (tmp_path / "Cargo.toml").read_text()
+
+
+def test_a_cvlr_pin_no_member_depends_on_yet_is_still_refused(tmp_path):
+    # Declared in [workspace.dependencies] and used by nobody, so cargo has not resolved it and
+    # the graph says nothing. The scaffold is about to make this member inherit it, which is
+    # exactly when reading the manifest instead of the graph is the only way to see it.
+    root = WORKSPACE_ROOT.replace(
+        "[workspace.dependencies]", '[workspace.dependencies]\ncvlr = "0.4.1"'
+    )
+    plan, _ = _plan(
+        tmp_path, manifest=STANDALONE, workspace_manifest=root, package_dir="programs/prog"
+    )
+    assert any("0.4.1" in b.problem for b in plan.blocked)
+
+
+def test_a_cvlr_dependency_with_no_readable_version_is_refused(tmp_path):
+    # A git checkout could be any release. A gate cannot pass a version it cannot see, and
+    # guessing that a checkout is the pinned one is the mistake the pin exists to prevent.
     manifest = STANDALONE.replace(
         "[dependencies]\nsolana-program",
-        '[dependencies]\ncvlr = "0.4"\ncvlr-solana = "0.4"\nsolana-program',
+        '[dependencies]\ncvlr = { git = "https://github.com/Certora/cvlr" }\nsolana-program',
+    )
+    plan, _ = _plan(tmp_path, manifest=manifest, workspace_manifest=manifest)
+    assert any("git dependency" in b.problem for b in plan.blocked)
+
+
+def test_a_project_already_on_the_pinned_release_is_not_refused(tmp_path):
+    # The idempotence case, and the one the gate must not catch: `=0.6.1` is what the scaffold
+    # itself writes, and a bare `0.6.1` is the same release written by hand.
+    for requirement in ("=0.6.1", "0.6.1"):
+        root = tmp_path / requirement
+        manifest = STANDALONE.replace(
+            "[dependencies]\nsolana-program",
+            f'[dependencies]\ncvlr = "{requirement}"\nsolana-program',
+        )
+        plan, _ = _plan(
+            root,
+            manifest=manifest,
+            workspace_manifest=manifest,
+            cvlr_resolved={"cvlr": "0.6.1"},
+        )
+        assert not plan.blocked, requirement
+
+
+def test_a_reference_set_crate_the_project_does_not_name_is_not_a_refusal(tmp_path):
+    # Absent, not mismatched, and the reason the two are separate types. This project is on the
+    # pinned core and chain crate and names neither specialization; the scaffold adds them. A gate
+    # that read "not in the graph" as a disagreement would refuse every project it is meant to set
+    # up, starting with the fresh one.
+    manifest = STANDALONE.replace(
+        "[dependencies]\nsolana-program",
+        '[dependencies]\ncvlr = "=0.6.1"\ncvlr-solana = "=0.5.0"\nsolana-program',
     )
     plan, _ = _plan(
         tmp_path,
         manifest=manifest,
         workspace_manifest=manifest,
-        platform="1.18.26",
-        cvlr_resolved={"cvlr": "0.4.1", "cvlr-solana": "0.4.5"},
+        cvlr_resolved={"cvlr": "0.6.1", "cvlr-solana": "0.5.0"},
     )
     assert not plan.blocked
-
-
-def test_specializations_are_withheld_from_a_project_that_chose_its_own_cvlr_line(tmp_path):
-    """The scaffold pins the whole reference set, or leaves the project's pins alone.
-
-    A project on the 0.4 line given a 0.5.0 specialization gets two generations of ``AccountInfo``
-    in one graph, and the build does not compile. Adding any reference-set crate also turns the
-    platform check back on, which is why a project that already pins the chain crate is left alone
-    above.
-    """
-    manifest = STANDALONE.replace(
-        "[dependencies]\nsolana-program",
-        '[dependencies]\ncvlr = "0.4"\ncvlr-solana = "0.4"\nsolana-program',
-    )
-    plan, project = _plan(
-        tmp_path,
-        manifest=manifest,
-        workspace_manifest=manifest,
-        platform="1.18.26",
-        cvlr_resolved={"cvlr": "0.4.1", "cvlr-solana": "0.4.5"},
-    )
-
     written = "".join(
         c.contents for c in plan.changes if getattr(c, "path", None) == Path("Cargo.toml")
     )
-    # The positive half, so this cannot pass by writing nothing at all.
-    assert 'certora = ["dep:cvlr", "dep:cvlr-solana"]' in written
-    assert "cvlr-solana-stake" not in written
-    assert "cvlr-spl-token" not in written
+    assert "cvlr-solana-stake" in written
+    assert "cvlr-spl-token" in written
 
 
 def test_a_partly_pinned_project_is_still_checked(tmp_path):
-    # One CVLR crate pinned and one not: the scaffold would write the reference version for the
-    # missing one, so the pairing question is live and the exemption above must not apply.
+    # One CVLR crate on an old line and one absent: the platform gate has to fire too, because
+    # the scaffold would write the reference version for the missing one.
     manifest = STANDALONE.replace(
         "[dependencies]\nsolana-program", '[dependencies]\ncvlr = "0.4"\nsolana-program'
     )
@@ -378,6 +436,7 @@ def test_a_partly_pinned_project_is_still_checked(tmp_path):
         cvlr_resolved={"cvlr": "0.4.1"},
     )
     assert any("1.18.26" in b.problem for b in plan.blocked)
+    assert any("0.4.1" in b.problem for b in plan.blocked)
 
 
 def test_an_existing_harness_declaration_is_not_added_twice(tmp_path):
