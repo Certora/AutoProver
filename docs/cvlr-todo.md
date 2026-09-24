@@ -491,24 +491,50 @@ draft the same way and does not, so an EVM run cut by the budget still re-author
 fix is one argument; it was left out of the CVLR change because it alters EVM behaviour and wants
 its own run to confirm.
 
-**U21. Four units were dispatched after the budget was already spent.**
-On the 2026-09-24 stake run the pipeline kept starting queued units after the run pool was
-exhausted. Each began, met the wrap-up order immediately, and completed in ~30 seconds having
-authored nothing: Withdrawals, Stake & Lamport Movement, Deprecated Instructions and Protocol
-Parameter Queries, **63 properties recorded as skipped for budget exhaustion without a line
-written**. The report then counts them as attempted-and-failed components alongside the four that
-did real work, which overstates the failure and buries the units that produced findings.
+**U21. A run that delivered partials under budget pressure reports itself as a total failure.**
+The 2026-09-24 stake run printed `RUN FAILED: every component failed to generate or gave up` after
+four components had published 12 rules, documented dispositions for every property they held
+(Splitting & Merging covered 36 of 36), and established three soundness limits by measurement. The
+sentence is false, and it is load-bearing: it is what caused this document's first reading of that
+run to be wrong.
 
-`budget_pressure()` already exists for precisely this — *"skip launching work that would only be
-told to immediately pack it in"* — and the formalization dispatcher does not consult it. A unit that
-cannot start should stay queued and be reported as never-reached, which is a different and more
-useful statement than "gave up".
+The cause is one line in `CorePipelineResult.all_failed`
+(`composer/pipeline/ptypes.py`):
 
-*(An earlier version of this entry claimed the wrap-up order was deleting rules whose verdicts were
-merely outstanding. That was wrong — read from rule counts without reading the units' own reports,
-which show the withdrawals were deliberate and measured. The CVLR wrap-up text does carry a "any
-whose verdict you never saw" clause that CVL's and Foundry's do not, but nothing observed has been
-traced to it.)*
+```python
+return bool(self.outcomes) and self.n_delivered == 0
+```
+
+A `Curtailed` never counts toward `n_delivered`, even when it carries a substantial partial.
+`composer/pipeline/core.py` already draws the distinction the rollup throws away — it checks
+`o.result.partial is not None` when it writes the failure line — so the types are right and only the
+predicate is wrong. The exit code follows it, so this is not merely cosmetic.
+
+**Not a backend gap, and not a missing copy from CVL.** Both layers involved are shared: dispatch is
+`run_task` (`composer/io/multi_job.py`) reached through `TaskRunnerHost.runner`
+(`composer/pipeline/ptypes.py`), and the classification is `composer/pipeline/core.py`. CVL, CVLR and
+Foundry are equally affected and one fix serves all three. The judge-level `budget_pressure()` guard
+that CVL has, CVLR has too (`composer/spec/cvlr/author.py`) — nothing was missed there. If anything
+the debt runs the other way: CVLR's console unwraps a `Curtailed` to name the partial it wrote, and
+`console_foundry` / `console_autoprove` do not, so those two hide deliverables that exist on disk.
+
+**Worth fixing together**, since the three console modules are ~42 near-identical lines each and the
+false sentence is triplicated across them:
+
+1. `all_failed` should not treat a curtailed-with-partial as nothing.
+2. Fold the three console summaries into one, carrying CVLR's `Curtailed` unwrapping.
+
+**Explicitly not proposed: skipping dispatch under budget pressure.** Four units did start after the
+pool was exhausted and wrapped up in ~30 seconds each having authored nothing (63 properties skipped
+for budget exhaustion). That reads like waste but the cost is seconds, and the skips are an honest
+record of properties nobody got to. Gating the dispatcher on `budget_pressure()` would trade a true
+record for a smaller one; the misleading rollup was the whole of the harm.
+
+*(Two earlier versions of this entry were wrong. The first claimed the wrap-up order was deleting
+rules whose verdicts were merely outstanding — read from rule counts without reading the units'
+reports, which show the withdrawals were deliberate and measured. The second blamed the dispatcher
+for starting doomed units. The CVLR wrap-up text does carry an "any whose verdict you never saw"
+clause that CVL's and Foundry's do not, but nothing observed has been traced to it.)*
 
 **U22. The draft carry-forward overwrites unconditionally.**
 `_remember_attempt` caches whatever `curr_spec` holds when the unit unwinds, with no comparison
