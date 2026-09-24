@@ -743,13 +743,17 @@ class _FakeGraph:
 
 
 class _RecordingCtx:
-    """``ctx.child(KEY).cache_put(...)`` without a store behind it."""
+    """``ctx.child(KEY).cache_{get,put}(...)`` without a store behind it."""
 
-    def __init__(self):
+    def __init__(self, held: object = None):
         self.put: object = None
+        self._held = held
 
     def child(self, _key: object) -> "_RecordingCtx":
         return self
+
+    async def cache_get(self, _ty: object) -> object:
+        return self._held
 
     async def cache_put(self, value: object) -> None:
         self.put = value
@@ -787,3 +791,40 @@ def test_losing_the_cache_never_loses_the_error_that_caused_it():
     ctx = _RecordingCtx()
     asyncio.run(author._remember_attempt(ctx, _FakeGraph(raises=True), "tid"))  # type: ignore[arg-type]
     assert ctx.put is None
+
+
+def test_a_curtailed_unit_does_not_overwrite_a_fuller_draft():
+    """The wrap-up order has a curtailed unit delete every rule it cannot stand behind, so its last
+    draft is often a fraction of what it held. Writing that over an earlier run's fuller draft loses
+    work nobody reconsidered — measured on the stake benchmark as 6,176 cached lines replaced by
+    1,609."""
+    held = author.LastCvlrAttempt(spec="#[rule]\n" * 40, munges=[])
+    ctx = _RecordingCtx(held=held)
+    graph = _FakeGraph({"curr_spec": "#[rule]\npub fn rule_survivor() {}", "budget_curtailed": True})
+
+    asyncio.run(author._remember_attempt(ctx, graph, "tid"))  # type: ignore[arg-type]
+
+    assert ctx.put is None
+
+
+def test_a_curtailed_unit_still_seeds_an_empty_slot():
+    # The case the cache exists for: a run cut before it ever cached anything. Nothing can regress,
+    # so the guard must not turn into "a curtailed unit never caches".
+    ctx = _RecordingCtx(held=None)
+    graph = _FakeGraph({"curr_spec": "#[rule]\npub fn rule_x() {}", "budget_curtailed": True})
+
+    asyncio.run(author._remember_attempt(ctx, graph, "tid"))  # type: ignore[arg-type]
+
+    assert ctx.put is not None and ctx.put.spec == "#[rule]\npub fn rule_x() {}"
+
+
+def test_a_unit_that_finished_on_its_own_terms_still_overwrites():
+    # Not curtailed: the last draft is the considered one even when it is smaller, and CVL's
+    # unconditional overwrite is the behaviour to keep here.
+    held = author.LastCvlrAttempt(spec="#[rule]\n" * 40, munges=[])
+    ctx = _RecordingCtx(held=held)
+    graph = _FakeGraph({"curr_spec": "#[rule]\npub fn rule_considered() {}"})
+
+    asyncio.run(author._remember_attempt(ctx, graph, "tid"))  # type: ignore[arg-type]
+
+    assert ctx.put is not None and ctx.put.spec == "#[rule]\npub fn rule_considered() {}"
