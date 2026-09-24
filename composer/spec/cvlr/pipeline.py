@@ -434,7 +434,8 @@ class CvlrBackend:
     #: The CVLR releases this run scaffolds the target with. Beside :attr:`package` because it is
     #: the same kind of decision: what this run is pointed at. Narrowed by
     #: :meth:`~composer.spec.cvlr_reference.ChainReference.withholding` when the target is itself
-    #: the program one of the specializations models.
+    #: the program one of the :class:`~composer.spec.cvlr_reference.ProgramModel` crates models,
+    #: which is the only narrowing there is.
     reference: ChainReference = SOLANA
 
     backend_guidance = SOLANA_CVLR_GUIDANCE

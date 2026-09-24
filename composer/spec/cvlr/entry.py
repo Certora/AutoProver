@@ -134,10 +134,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--withhold-crate", action="append", default=[], metavar="CRATE",
-        help="A CVLR specialization the scaffold must not give this project, repeatable. Use it "
-             "when the target IS the on-chain program a specialization models — verifying the "
-             "stake program with cvlr-solana-stake in scope hands the author a model of the very "
-             "instructions it is meant to specify. Refused if CRATE is not a specialization.",
+        help="A CVLR program model the scaffold must not give this project, repeatable. Use it "
+             "for one case only: the target IS the on-chain program that crate models — verifying "
+             "the stake program with cvlr-solana-stake in scope hands the author a model of the "
+             "very instructions it is meant to specify. Refused for anything that is not a "
+             "program model, which is what keeps this a statement about the target rather than a "
+             "way to run without part of CVLR.",
     )
     parser.add_argument(
         "--rag-corpus", default=DEFAULT_CORPUS,
