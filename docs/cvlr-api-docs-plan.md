@@ -65,11 +65,14 @@ Two asymmetries matter for the migration and are easy to miss:
 3. **Tolerance for a project on another CVLR line.** The mount was what made a floating version
    safe. Nothing replaces it, so the version gets pinned instead and off-pin projects are refused
    (§2). That is a deliberate narrowing of what we accept, not a mitigation.
-4. **The macro contract, which is undocumented upstream.** CVLR's macros carry no doc comments at
-   all, and two macro facts decided verdicts in the recorded run. Today the author recovers them by
-   reading the mount; after the change there is nowhere to recover them from until the crates are
-   documented. §4.2 has the measurements. This is the one forfeit the corpus cannot mitigate by
-   itself, and it is why step 5 depends on work in another repository.
+4. **The macro contract, which was undocumented upstream.** CVLR's macros carried no doc comments
+   at all, and two macro facts decided verdicts in the recorded run. The author recovers them by
+   reading the mount, and after the change there is nowhere to recover them from until the crates
+   are documented. §4.2 has the measurements. This was the one forfeit the corpus could not
+   mitigate by itself, and it is why step 5 depends on work in another repository. **Since
+   2026-09-25 it is addressed in the CVLR checkouts** (step 2b) and reaches the corpus through
+   `--crate-source`; it is not yet in a release, so the forfeit still stands for a corpus built
+   from crates.io.
 5. **Cost shape.** `cvlr_source_search` is a local grep. The research agent is an LLM call with its
    own tool loop. §7.5.5's census recorded **50 combined `cvlr_source_read`/`cvlr_source_search`
    calls in one run**; the replay tape has 514 mentions of `cvlr_source`. Converting that traffic to
@@ -404,15 +407,16 @@ not how it is built. A doc comment is the right place for each, and the better o
 learns "logs both operands" from a doc comment depends on a promise, while one who learns it from
 an expansion depends on `__cvlr_lhs` and a log scope name that are nobody's contract.
 
-*How big the ask is:* measured against the corpus the producer actually emits,
-**218 of 282 items carry no prose documentation** — the itemised list is
+*How big the ask is:* measured against the corpus the producer actually emits from the *published*
+crates, **218 of 284 items carry no prose documentation** — the itemised list is
 [`docs/cvlr-undocumented-api.md`](./cvlr-undocumented-api.md), regenerable from the producer with
 `--undocumented`. The worst are `cvlr-log` (57 of 58), `cvlr-fixed` (38 of 40), `cvlr-asserts` (31
 of 31) and `cvlr-mathint` (30 of 31); `cvlr-spec` (2 of 28) and `cvlr-macros` (1 of 11) show it is
 not a house style. 61 of the undocumented items were searched for by name in the one recorded run.
 So "document the macros" is the sharp end of documenting CVLR, and it is worth doing on its own
 merits: it serves every human user of the crates, and §4.7's `cargo test --doc` gates the examples
-that come with it.
+that come with it. **Status:** written, in the checkouts, unreleased — 0 of 286 when the corpus is
+built with `--crate-source`. Step 2b in §8 has what that does and does not settle.
 
 **Macro-generated macros are not an obstacle — checked, not assumed.** `cvlr_assert_le` and its
 seventeen siblings are produced by `impl_bin_assert!`, so there is no source line to attach a `///`
@@ -762,17 +766,25 @@ guarantee rather than an assumption. Step 5 now has one precondition left instea
    the three flavours of procedural macro, which had all been rendered as `name!`; `mock_fn` was
    being published to the corpus as `mock_fn!` when it is `#[mock_fn]`.
 
-**2b. Document CVLR's macros upstream** (§4.2) — **in the CVLR crates, not here.** Underway
-   upstream as of 2026-09-25: checkouts at `~/src/cvlr` and `~/src/cvlr-solana` carry prose for
-   every one of the 286 items they export, and both repositories now check for it in CI. Built with
-   `--crate-source`, the corpus reports 0 undocumented. None of it is released, so
-   `docs/cvlr-undocumented-api.md` still measures the published crates and still reads 218 of 284.
-   The itemised ask is
-   [`docs/cvlr-undocumented-api.md`](./cvlr-undocumented-api.md): 218 of 282 items, with the 61 the
-   recorded run reached for called out first. The assert and assume families are documented from
-   their `impl_*` template, which rustdoc is confirmed to carry — three edits cover eighteen items.
-   File it early: it is worth doing for its own sake, it needs another team's time, and step 5
-   waits on it. Everything else in this list can proceed while it is open.
+**2b. Document CVLR's macros upstream** (§4.2) — **in the CVLR crates, not here.** ✅
+   **Tentatively done**, 2026-09-25. Checkouts at `~/src/cvlr` (`cvlr-asserts-v0.6.1-6-g8d9d463`)
+   and `~/src/cvlr-solana` (`cvlr-solana-stake-v0.5.0-3-g75855bd`) carry prose for every one of the
+   286 items they export, the assert and assume families included — documented from their `impl_*`
+   templates, which is the three edits for eighteen items this section predicted. Both repositories
+   now check for it in CI. Built with `--crate-source`, the corpus reports 0 undocumented, against
+   218 of 284 for the published releases.
+
+   The rest of this plan proceeds against a corpus built from those checkouts. That is sound for
+   the question steps 5 and 7 ask — whether the documentation carries the author — because the rows
+   are identical to the ones the same crates will emit once published.
+
+   **What "tentatively" is doing:** none of it is released. So the schedule risk this section
+   flagged has not gone away, it has moved. A run nobody is watching still gets its corpus from
+   crates.io, and until `cvlr` and `cvlr-solana` publish, that corpus has 218 undocumented items in
+   it — which is the state in which removing the mount (5) is a real loss rather than a relocation.
+   Step 5 can be written and reviewed now; whether it lands before the release is a call to make
+   with the release date in hand. [`docs/cvlr-undocumented-api.md`](./cvlr-undocumented-api.md)
+   stays as it is, measuring the published crates, until the work lands there.
    
 3. **`cvlr_research.py` + templates + display + tests**, wired *alongside* the source mount. ✅
    **Done** — `238cbd11`. Both channels live, which is the only arrangement in which they can be
@@ -785,9 +797,11 @@ guarantee rather than an assumption. Step 5 now has one precondition left instea
 4. ~~The `--withhold-crate` corpus filter.~~ **Not needed** — §2.3. Restricting the setting to
    program models is what removed it, and that landed in `9b3a58ed`.
 5. **Remove the mount**, rewrite the two system prompts, delete `source_tools.py`,
-   `crate_mount.py` and the fragment. **Gated on 2b.** The macro contract is the only thing the
-   mount holds that the rustdoc walk does not replace, so removing it before the crates are
-   documented loses information outright rather than relocating it.
+   `crate_mount.py` and the fragment. **Gate tentatively met.** The macro contract is the only
+   thing the mount holds that the rustdoc walk does not replace, and as of 2b it is in the
+   checkouts — so a corpus built with `--crate-source` relocates it rather than losing it, and
+   (3)'s comparison run can finally be run against a corpus that has it. Landing this against the
+   *published* corpus is a separate question, and 2b is where it is answered.
 6. **Re-scope `cvlr_kb` to the manual** (§4.6): drop the crate-reference manifest, drop
    `populate_cvlr_rag.sh`'s discovery of manifests built elsewhere, and restate `cvlr_rag.py`'s
    docstrings. Deliberately *after* (5): while both channels are live, a duplicated crate reference
@@ -797,8 +811,9 @@ guarantee rather than an assumption. Step 5 now has one precondition left instea
 7. **Re-record the tape**, re-run the gate, re-take the census.
 
 Steps 0–4 are done and additive; nothing yet removes a capability. (5) is the only irreversible
-step, and it has three preconditions. The pin is met. (3)'s comparison run has yet to happen, and
-has to show the researcher answering the questions the §7.5.5 census says the author actually asks.
-And **2b has to have landed upstream** — the schedule risk in this plan, so file it first even
-though it is last to matter. (7), re-recording the tape, follows (5) and not before: the tape
-records the author's tool calls, and those do not change until the mount goes.
+step, and it has three preconditions. The pin is met. 2b is met in the checkouts and not yet in a
+release, which is what makes it tentative — and what makes `--crate-source` the way the remaining
+work gets a corpus. What is left is **(3)'s comparison run**, which has to show the researcher
+answering the questions the §7.5.5 census says the author actually asks. (7), re-recording the
+tape, follows (5) and not before: the tape records the author's tool calls, and those do not change
+until the mount goes.
