@@ -23,6 +23,12 @@ Run with::
     env -u CERTORA uv run --no-sync pytest tests/test_cvlr_tape.py -m expensive -q -s
 
 Re-record with ``scripts/record_cvlr_tape.sh`` when the pipeline's shape changes on purpose.
+
+**This tape is stale and this test is expected to fail.** It records 176 ``cvlr_source_*`` calls
+against a mount that ``docs/cvlr-api-docs-plan.md`` §8 step 5 removed, so the replay hits a tool
+that no longer exists and the lane exhausts. Step 7 of that plan is the re-recording, and it is
+also where the recording's ``--rag-corpus none`` has to flip — the corpus is the only CVLR channel
+now, so a tape recorded without one would smoke-test a configuration nobody ships.
 """
 
 import importlib

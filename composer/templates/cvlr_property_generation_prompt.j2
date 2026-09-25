@@ -27,10 +27,10 @@ Read the parts of the program each property is about: the handler, the account l
 writes, and the invariants the code already assumes. You cannot state a postcondition about state
 you have not read.
 
-When you need a CVLR macro or helper you are not certain about, **read the crate source**
-(`cvlr_source_search` / `cvlr_source_read`). It is mounted at the versions this build resolves:
-{{ cvlr_versions }}. Guessing a helper name is the single most common way a draft fails to compile,
-and the answer is on disk.
+When you need a CVLR macro or helper you are not certain about, **ask `cvlr_research`**. It answers
+about the CVLR this build resolves — {{ cvlr_versions }} — from the crates' own generated API
+reference. Guessing a helper name is the single most common way a draft fails to compile, and one
+question costs less than the compile cycle it saves.
 
 Do not speculate about whether a property is true. Your job is to state it precisely; the prover
 decides.
