@@ -137,6 +137,12 @@
     "template_name": "cvlr_property_generation_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
+  "composer.spec.cvlr_research:_ResearchSys": {
+    "module": "composer.spec.cvlr_research",
+    "qualname": "_ResearchSys",
+    "template_name": "cvlr_research_system_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
   "composer.spec.feedback:FeedbackTemplate": {
     "module": "composer.spec.feedback",
     "qualname": "FeedbackTemplate",

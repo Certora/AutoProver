@@ -286,6 +286,12 @@ def wiring(monkeypatch, tmp_path):
         ),
     )
     monkeypatch.setattr(entry, "build_rag_tools", lambda tag, model: (f"tools:{tag}:{model}",))
+    # The researcher is a compiled sub-agent graph over a real model provider; these tests are
+    # about which tools reach which agent, so it records its inputs and stands in for itself.
+    monkeypatch.setattr(
+        entry, "cvlr_research_tools",
+        lambda models, corpus, store, **kw: (("researcher", corpus),),
+    )
     # The real probe shells out to `cargo certora-sbf --version`; these tests are about wiring and
     # run on machines that have no Solana toolchain at all.
     async def fake_probe() -> str:
@@ -424,11 +430,32 @@ async def test_the_corpus_can_be_turned_off(project, monkeypatch, wiring):
 
 
 @pytest.mark.asyncio
-async def test_the_corpus_is_searched_by_default(project, monkeypatch, wiring):
+async def test_both_corpora_reach_the_researcher_and_neither_reaches_the_author(
+    project, monkeypatch, wiring
+):
+    """The ordering between a generated reference and a hand-written manual is applied once,
+    inside the sub-agent, rather than restated in every prompt that could search."""
     await _run([str(project), "programs/vault/src/lib.rs:vault"], monkeypatch, wiring)
 
+    rag_tools = wiring.env["rag_tools"]  # type: ignore[index]
+    researcher = next(t for t in rag_tools if isinstance(t, tuple) and t[0] == "researcher")
     # The embedder the run already staged, not a second load of the same transformer.
-    assert "tools:cvlr_kb:staged-embedder" in wiring.env["rag_tools"]  # type: ignore[index]
+    assert researcher[1] == ("tools:cvlr_kb:staged-embedder", "tools:cvlr_api_kb:staged-embedder")
+    assert not any(isinstance(t, str) and t.startswith("tools:") for t in rag_tools), (
+        "the corpus search tools belong to the researcher, not to the author"
+    )
+
+
+@pytest.mark.asyncio
+async def test_turning_the_corpus_off_takes_the_researcher_with_it(project, monkeypatch, wiring):
+    # A researcher with no corpus can only answer from recall, which is the failure the corpus
+    # exists to prevent — so `none` means no search rather than an unsourced sub-agent.
+    await _run(
+        [str(project), "programs/vault/src/lib.rs:vault", "--rag-corpus", "none"],
+        monkeypatch, wiring,
+    )
+    rag_tools = wiring.env["rag_tools"]  # type: ignore[index]
+    assert not any(isinstance(t, tuple) and t[0] == "researcher" for t in rag_tools)
 
 
 @pytest.mark.asyncio

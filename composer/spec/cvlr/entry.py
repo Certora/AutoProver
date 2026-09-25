@@ -60,6 +60,8 @@ from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.source_env import build_layered_source_tools, build_source_tools
 from composer.kb.kb_context import CVLR_BUNDLE
 from composer.kb.knowledge_base import kb_tools
+from composer.spec.agent_index import agent_index_config_from_env
+from composer.spec.cvlr_research import DEFAULT_CVLR_AGENT_INDEX_NS, cvlr_research_tools
 from composer.tools.rag_env import build_rag_tools
 
 _log = logging.getLogger(__name__)
@@ -68,6 +70,10 @@ _log = logging.getLogger(__name__)
 #: ``composer.rag.db.KNOWLEDGE_BASES`` is where a tag's connection lives and the importer targets
 #: the same name. ``none`` disables the search tools.
 DEFAULT_CORPUS = "cvlr_kb"
+
+#: The generated API corpus. Not a CLI choice and not a default among alternatives: it describes
+#: the CVLR releases ``composer.spec.cvlr_reference`` pins, so a run either has it or does not.
+CVLR_API_CORPUS = "cvlr_api_kb"
 
 #: The result a frontend renders.
 type CvlrPipelineResult = CorePipelineResult[GeneratedHarness]
@@ -143,9 +149,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--rag-corpus", default=DEFAULT_CORPUS,
-        choices=(*sorted(KNOWLEDGE_BASES), "none"),
-        help=f"CVLR knowledge corpus to search, or none (default: {DEFAULT_CORPUS}). A corpus that "
-             "is not installed degrades to no search tools rather than failing the run.",
+        choices=(*sorted(set(KNOWLEDGE_BASES) - {CVLR_API_CORPUS}), "none"),
+        help=f"CVLR *manual* corpus to search, or none to search nothing (default: "
+             f"{DEFAULT_CORPUS}). The generated API corpus ({CVLR_API_CORPUS}) is not a choice: "
+             f"it describes the CVLR releases this build pins, so there is only ever one of it. "
+             f"A corpus that is not installed degrades to no search tools rather than failing "
+             f"the run, and `none` also turns off the research sub-agent that reads them.",
     )
     parser.add_argument("--max-concurrent", type=int, default=4, help="Max concurrent agents (default: 4)")
     parser.add_argument(
@@ -419,10 +428,29 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
             # The recipes ride with the corpus tools rather than with the bundle's documents: the
             # documents are a cached prefix every CVLR agent gets, and a tool is something an agent
             # is given. Every agent that searches the corpus can also retrieve a recipe.
-            rag_tools = tuple(kb_tools(CVLR_BUNDLE)) + (
-                build_rag_tools(args.rag_corpus, staged.embed_model)
+            # Two corpora, one agent. The search tools go to the researcher and not to the
+            # author: an ordering between a generated reference and a hand-written manual is a
+            # judgement, and making it once inside a sub-agent is cheaper and more consistent
+            # than restating it in every prompt that could search (docs/cvlr-api-docs-plan.md §5).
+            # The recipes are not corpus search and stay with the author, which is what the tool
+            # list in its prompt describes.
+            corpus_tools = (
+                (
+                    build_rag_tools(args.rag_corpus, staged.embed_model)
+                    + build_rag_tools(CVLR_API_CORPUS, staged.embed_model)
+                )
                 if args.rag_corpus != "none" else ()
             )
+            researcher = cvlr_research_tools(
+                staged.llm_models,
+                corpus_tools,
+                staged.conns.indexed_store,
+                recursion_limit=args.recursion_limit,
+                index_config=agent_index_config_from_env(
+                    user_ns(*DEFAULT_CVLR_AGENT_INDEX_NS, staged.root_key)
+                ),
+            ) if corpus_tools else ()
+            rag_tools = tuple(kb_tools(CVLR_BUNDLE)) + researcher
             env = PureServiceHost(
                 models=staged.llm_models, rag_tools=rag_tools, sort="existing"
             ).bind_source_tools(full)
