@@ -45,7 +45,7 @@ def test_a_really_registered_corpus_validates():
 
 def test_the_registered_corpora_are_listed_when_a_tag_is_unknown(monkeypatch: pytest.MonkeyPatch):
     msg = str(pytest.raises(ValueError, rag_env.validate_rag_db, "no_such_kb").value)
-    assert "known: ['cvlr_kb']" in msg
+    assert "known: ['cvlr_api_kb', 'cvlr_kb']" in msg
 
 
 def test_the_message_says_so_when_nothing_is_registered_at_all(monkeypatch: pytest.MonkeyPatch):

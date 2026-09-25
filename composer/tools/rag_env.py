@@ -9,8 +9,11 @@ application fork (the tool classes live in ``composer/tools/<corpus>_rag.py``, s
 ``composer.rag.db.KNOWLEDGE_BASES``, the same map the corpus importer
 (:mod:`composer.scripts.rag_import`) targets, so a corpus is imported and searched under one name.
 
-One corpus is registered: ``cvlr_kb`` (:mod:`composer.tools.cvlr_rag`), the CVLR reference and
-verification-practice corpus. Both halves of a corpus — a ``composer/tools/<corpus>_rag.py`` and
+Two corpora are registered, and they are separate on purpose (``docs/cvlr-api-docs-plan.md``
+§4.1): ``cvlr_kb`` (:mod:`composer.tools.cvlr_rag`), the CVLR manual and verification practice,
+and ``cvlr_api_kb`` (:mod:`composer.tools.cvlr_api_rag`), the API generated from the crates. A
+retrieval hit carries no provenance, so which tool set answered is how an agent knows which of the
+two it is holding. Both halves of a corpus — a ``composer/tools/<corpus>_rag.py`` and
 its ``KNOWLEDGE_BASES`` connection — must land together: a half-registration (a tag whose tools
 module doesn't exist) would pass :func:`validate_rag_db` and then be swallowed by the degrade path
 below, which is exactly the confusion the two failure modes are separated to avoid.
@@ -51,11 +54,18 @@ def _cvlr_tools(db: "ComposerRAGDB") -> "Iterable[BaseTool]":
     return get_tools(db)
 
 
+def _cvlr_api_tools(db: "ComposerRAGDB") -> "Iterable[BaseTool]":
+    from composer.tools.cvlr_api_rag import get_tools
+
+    return get_tools(db)
+
+
 #: Registered corpora, by tag. An entry is added together with the ``composer/tools/<corpus>_rag.py``
 #: it imports and the ``KNOWLEDGE_BASES`` connection it needs — all three at once, or the tag
 #: validates and then silently produces no tools.
 _FACTORIES: dict[str, _ToolsFactory] = {
     "cvlr_kb": _cvlr_tools,
+    "cvlr_api_kb": _cvlr_api_tools,
 }
 
 
