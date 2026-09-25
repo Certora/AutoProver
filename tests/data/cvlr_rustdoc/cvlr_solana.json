@@ -1,0 +1,8902 @@
+{
+ "root": 166,
+ "crate_version": "0.5.0",
+ "includes_private": false,
+ "index": {
+  "0": {
+   "id": 0,
+   "crate_id": 0,
+   "name": "cvt_get_clock_slot",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/clock.rs",
+    "begin": [
+     38,
+     1
+    ],
+    "end": [
+     42,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Returns the slot most recently produced by [`cvt_get_next_clock_slot`].\n\nAsserts (`cvlr_assert!`) that [`cvt_get_next_clock_slot`] has been called\nbefore in the rule; otherwise the rule fails at this call.",
+   "links": {
+    "`cvt_get_next_clock_slot`": 1
+   },
+   "attrs": [
+    {
+     "other": "#[allow(non_snake_case, static_mut_refs)]"
+    },
+    {
+     "other": "#[attr = Inline(Always)]"
+    }
+   ],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [],
+      "output": {
+       "resolved_path": {
+        "path": "solana_program::clock::Slot",
+        "id": 2,
+        "args": null
+       }
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "88": {
+   "id": 88,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zerocopy-0.8.57/src/pointer/invariant.rs",
+    "begin": [
+     265,
+     1
+    ],
+    "end": [
+     265,
+     56
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "T",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": [
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "T"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "Sized",
+             "id": 47,
+             "args": null
+            },
+            "generic_params": [],
+            "modifier": "maybe"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       }
+      ]
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "Read",
+      "id": 89,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "resolved_path": {
+            "path": "Exclusive",
+            "id": 90,
+            "args": null
+           }
+          }
+         },
+         {
+          "type": {
+           "resolved_path": {
+            "path": "BecauseExclusive",
+            "id": 91,
+            "args": null
+           }
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "Pk",
+       "id": 11,
+       "args": {
+        "angle_bracketed": {
+         "args": [
+          {
+           "lifetime": "'a"
+          }
+         ],
+         "constraints": []
+        }
+       }
+      }
+     },
+     "items": [],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "T"
+     }
+    }
+   }
+  },
+  "151": {
+   "id": 151,
+   "crate_id": 0,
+   "name": "spl_close_account",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/token.rs",
+    "begin": [
+     217,
+     1
+    ],
+    "end": [
+     234,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Summary for SPL Token close_account instruction\n\nReturns `Err(ProgramError::InvalidAccountData)` if `src_info` and\n`dst_info` have **different** keys, or if the source's token amount is\nnon-zero; otherwise returns `Ok(())`. It changes no account: lamports are\nnot moved to the destination and the source is not closed or cleared.\n\nNote that the key check is the reverse of the Token program's, which\nrejects a close whose source and destination are the *same* account. As\nwritten, this model succeeds only for self-closes, so a rule that closes a\ntoken account into a different destination sees an error.",
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [
+       [
+        "src_info",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "resolved_path": {
+            "path": "solana_program::account_info::AccountInfo",
+            "id": 8,
+            "args": {
+             "angle_bracketed": {
+              "args": [
+               {
+                "lifetime": "'a"
+               }
+              ],
+              "constraints": []
+             }
+            }
+           }
+          }
+         }
+        }
+       ],
+       [
+        "dst_info",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "resolved_path": {
+            "path": "solana_program::account_info::AccountInfo",
+            "id": 8,
+            "args": {
+             "angle_bracketed": {
+              "args": [
+               {
+                "lifetime": "'a"
+               }
+              ],
+              "constraints": []
+             }
+            }
+           }
+          }
+         }
+        }
+       ],
+       [
+        "_authority_info",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "resolved_path": {
+            "path": "solana_program::account_info::AccountInfo",
+            "id": 8,
+            "args": {
+             "angle_bracketed": {
+              "args": [
+               {
+                "lifetime": "'a"
+               }
+              ],
+              "constraints": []
+             }
+            }
+           }
+          }
+         }
+        }
+       ]
+      ],
+      "output": {
+       "resolved_path": {
+        "path": "solana_program::entrypoint::ProgramResult",
+        "id": 147,
+        "args": null
+       }
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [
+       {
+        "name": "'a",
+        "kind": {
+         "lifetime": {
+          "outlives": []
+         }
+        }
+       }
+      ],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "25": {
+   "id": 25,
+   "crate_id": 0,
+   "name": "cvlr_nondet_coption_pubkey",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/nondet.rs",
+    "begin": [
+     89,
+     1
+    ],
+    "end": [
+     91,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Either `COption::None` or `COption::Some` of an arbitrary\n[`cvlr_nondet_pubkey`].",
+   "links": {
+    "`cvlr_nondet_pubkey`": 18
+   },
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [],
+      "output": {
+       "resolved_path": {
+        "path": "solana_program::program_option::COption",
+        "id": 23,
+        "args": {
+         "angle_bracketed": {
+          "args": [
+           {
+            "type": {
+             "resolved_path": {
+              "path": "solana_program::pubkey::Pubkey",
+              "id": 19,
+              "args": null
+             }
+            }
+           }
+          ],
+          "constraints": []
+         }
+        }
+       }
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "113": {
+   "id": 113,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "Freeze",
+      "id": 36,
+      "args": null
+     },
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [],
+     "is_negative": false,
+     "is_synthetic": true,
+     "blanket_impl": null
+    }
+   }
+  },
+  "50": {
+   "id": 50,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "T",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": [
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "T"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "Sized",
+             "id": 47,
+             "args": null
+            },
+            "generic_params": [],
+            "modifier": "maybe"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       }
+      ]
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "BorrowMut",
+      "id": 51,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "generic": "T"
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "Pk",
+       "id": 11,
+       "args": {
+        "angle_bracketed": {
+         "args": [
+          {
+           "lifetime": "'a"
+          }
+         ],
+         "constraints": []
+        }
+       }
+      }
+     },
+     "items": [
+      49
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "T"
+     }
+    }
+   }
+  },
+  "138": {
+   "id": 138,
+   "crate_id": 0,
+   "name": "deref",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     100,
+     5
+    ],
+    "end": [
+     102,
+     6
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [
+       [
+        "self",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "generic": "Self"
+          }
+         }
+        }
+       ]
+      ],
+      "output": {
+       "borrowed_ref": {
+        "lifetime": null,
+        "is_mutable": false,
+        "type": {
+         "qualified_path": {
+          "name": "Target",
+          "args": null,
+          "self_type": {
+           "generic": "Self"
+          },
+          "trait": {
+           "path": "",
+           "id": 70,
+           "args": null
+          }
+         }
+        }
+       }
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "12": {
+   "id": 12,
+   "crate_id": 0,
+   "name": "clog_acc_info",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/log.rs",
+    "begin": [
+     11,
+     1
+    ],
+    "end": [
+     15,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Logs an account to the counterexample call trace, tagged with the source\ntext of the argument.\n\n`clog_acc_info!(acc)` is\n[`cvlr_clog_account_info`](crate::cvlr_clog_account_info)`(stringify!(acc),\nacc)`; `acc` must be a `&AccountInfo`.",
+   "links": {
+    "crate::cvlr_clog_account_info": 13
+   },
+   "attrs": [
+    "macro_export"
+   ],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "macro": "macro_rules! clog_acc_info {\n    ($acc: expr) => { ... };\n}"
+   }
+  },
+  "163": {
+   "id": 163,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/lib.rs",
+    "begin": [
+     36,
+     1
+    ],
+    "end": [
+     36,
+     18
+    ]
+   },
+   "visibility": "public",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "use": {
+     "source": "clock",
+     "name": "clock",
+     "id": 3,
+     "is_glob": true
+    }
+   }
+  },
+  "100": {
+   "id": 100,
+   "crate_id": 0,
+   "name": "deref",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     44,
+     5
+    ],
+    "end": [
+     46,
+     6
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [
+       [
+        "self",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "generic": "Self"
+          }
+         }
+        }
+       ]
+      ],
+      "output": {
+       "borrowed_ref": {
+        "lifetime": null,
+        "is_mutable": false,
+        "type": {
+         "qualified_path": {
+          "name": "Target",
+          "args": null,
+          "self_type": {
+           "generic": "Self"
+          },
+          "trait": {
+           "path": "",
+           "id": 70,
+           "args": null
+          }
+         }
+        }
+       }
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "37": {
+   "id": 37,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "'a",
+        "kind": {
+         "lifetime": {
+          "outlives": []
+         }
+        }
+       }
+      ],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "UnsafeUnpin",
+      "id": 38,
+      "args": null
+     },
+     "for": {
+      "resolved_path": {
+       "path": "Pk",
+       "id": 11,
+       "args": {
+        "angle_bracketed": {
+         "args": [
+          {
+           "lifetime": "'a"
+          }
+         ],
+         "constraints": []
+        }
+       }
+      }
+     },
+     "items": [],
+     "is_negative": false,
+     "is_synthetic": true,
+     "blanket_impl": null
+    }
+   }
+  },
+  "125": {
+   "id": 125,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "T",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": [
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "T"
+         },
+         "bounds": [
+          {
+           "outlives": "'static"
+          },
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "Sized",
+             "id": 47,
+             "args": null
+            },
+            "generic_params": [],
+            "modifier": "maybe"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       }
+      ]
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "Any",
+      "id": 75,
+      "args": null
+     },
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [
+      72
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "T"
+     }
+    }
+   }
+  },
+  "62": {
+   "id": 62,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "T",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       },
+       {
+        "name": "U",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": [
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "U"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "TryFrom",
+             "id": 59,
+             "args": {
+              "angle_bracketed": {
+               "args": [
+                {
+                 "type": {
+                  "generic": "T"
+                 }
+                }
+               ],
+               "constraints": []
+              }
+             }
+            },
+            "generic_params": [],
+            "modifier": "none"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       }
+      ]
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "TryInto",
+      "id": 63,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "generic": "U"
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "Pk",
+       "id": 11,
+       "args": {
+        "angle_bracketed": {
+         "args": [
+          {
+           "lifetime": "'a"
+          }
+         ],
+         "constraints": []
+        }
+       }
+      }
+     },
+     "items": [
+      58,
+      60
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "T"
+     }
+    }
+   }
+  },
+  "150": {
+   "id": 150,
+   "crate_id": 0,
+   "name": "spl_burn",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/token.rs",
+    "begin": [
+     185,
+     1
+    ],
+    "end": [
+     204,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Summary for SPL Token Burn instruction\n\nAssumes the source holds at least `amount` (executions where it does not\nare dropped), then subtracts `amount` from the source's token amount and\nfrom the mint's supply, panicking if the supply would underflow. Always\nreturns `Ok(())`. Note the argument order: mint first, then the token\naccount. `_authority` is ignored.",
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [
+       [
+        "mint_info",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "resolved_path": {
+            "path": "solana_program::account_info::AccountInfo",
+            "id": 8,
+            "args": {
+             "angle_bracketed": {
+              "args": [
+               {
+                "lifetime": "'a"
+               }
+              ],
+              "constraints": []
+             }
+            }
+           }
+          }
+         }
+        }
+       ],
+       [
+        "src_info",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "resolved_path": {
+            "path": "solana_program::account_info::AccountInfo",
+            "id": 8,
+            "args": {
+             "angle_bracketed": {
+              "args": [
+               {
+                "lifetime": "'a"
+               }
+              ],
+              "constraints": []
+             }
+            }
+           }
+          }
+         }
+        }
+       ],
+       [
+        "_authority",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "resolved_path": {
+            "path": "solana_program::account_info::AccountInfo",
+            "id": 8,
+            "args": {
+             "angle_bracketed": {
+              "args": [
+               {
+                "lifetime": "'a"
+               }
+              ],
+              "constraints": []
+             }
+            }
+           }
+          }
+         }
+        }
+       ],
+       [
+        "amount",
+        {
+         "primitive": "u64"
+        }
+       ]
+      ],
+      "output": {
+       "resolved_path": {
+        "path": "solana_program::entrypoint::ProgramResult",
+        "id": 147,
+        "args": null
+       }
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [
+       {
+        "name": "'a",
+        "kind": {
+         "lifetime": {
+          "outlives": []
+         }
+        }
+       }
+      ],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "112": {
+   "id": 112,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "Sync",
+      "id": 34,
+      "args": null
+     },
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [],
+     "is_negative": false,
+     "is_synthetic": true,
+     "blanket_impl": null
+    }
+   }
+  },
+  "137": {
+   "id": 137,
+   "crate_id": 0,
+   "name": "Target",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     98,
+     5
+    ],
+    "end": [
+     98,
+     26
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "assoc_type": {
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "bounds": [],
+     "type": {
+      "resolved_path": {
+       "path": "Pubkey",
+       "id": 19,
+       "args": null
+      }
+     },
+     "default_unstable": null
+    }
+   }
+  },
+  "74": {
+   "id": 74,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "T",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": [
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "T"
+         },
+         "bounds": [
+          {
+           "outlives": "'static"
+          },
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "Sized",
+             "id": 47,
+             "args": null
+            },
+            "generic_params": [],
+            "modifier": "maybe"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       }
+      ]
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "Any",
+      "id": 75,
+      "args": null
+     },
+     "for": {
+      "resolved_path": {
+       "path": "Pk",
+       "id": 11,
+       "args": {
+        "angle_bracketed": {
+         "args": [
+          {
+           "lifetime": "'a"
+          }
+         ],
+         "constraints": []
+        }
+       }
+      }
+     },
+     "items": [
+      72
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "T"
+     }
+    }
+   }
+  },
+  "11": {
+   "id": 11,
+   "crate_id": 0,
+   "name": "Pk",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     15,
+     1
+    ],
+    "end": [
+     18,
+     3
+    ]
+   },
+   "visibility": "public",
+   "docs": "A lightweight wrapper around a borrowed [`Pubkey`] that provides\nconvenience methods and logging capabilities.\n\n`Pubkey` does not implement `CvlrLog`; wrap it to log it:\n`clog!(Pk(acc.key) => \"vault key\")`. The key is shown as a 256-bit integer\n(its 32 bytes read as a little-endian number), so two logged keys can be\ncompared at a glance. `Pk` dereferences to `Pubkey` and converts from and\nto `&Pubkey`.",
+   "links": {
+    "`Pubkey`": 19
+   },
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "struct": {
+     "kind": {
+      "tuple": [
+       27
+      ]
+     },
+     "generics": {
+      "params": [
+       {
+        "name": "'a",
+        "kind": {
+         "lifetime": {
+          "outlives": []
+         }
+        }
+       }
+      ],
+      "where_predicates": []
+     },
+     "impls": [
+      30,
+      31,
+      33,
+      35,
+      37,
+      39,
+      41,
+      43,
+      46,
+      50,
+      54,
+      57,
+      62,
+      67,
+      69,
+      74,
+      77,
+      80,
+      83,
+      86,
+      88,
+      93,
+      97,
+      101,
+      103,
+      105,
+      107
+     ]
+    }
+   }
+  },
+  "162": {
+   "id": 162,
+   "crate_id": 0,
+   "name": "impl_nondet_mint",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/token.rs",
+    "begin": [
+     250,
+     1
+    ],
+    "end": [
+     263,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Defines a function returning an arbitrary SPL mint.\n\n`impl_nondet_mint!(name, MintType)` defines `pub fn name() -> MintType`,\nwhich builds a `MintType` with an arbitrary `supply`, `decimals` and\n`is_initialized`, and `mint_authority` and `freeze_authority` that are\neach arbitrarily `None` or an arbitrary key. `MintType` must be a path to a\nstruct with exactly those five fields, such as `spl_token::state::Mint` or\n`spl_token_2022::state::Mint`, and the calling crate must depend on\n`cvlr_nondet` (the expansion names it directly):\n\n```ignore\ncvlr_solana::impl_nondet_mint!(nondet_token_mint, spl_token::state::Mint);\n```",
+   "links": {},
+   "attrs": [
+    "macro_export"
+   ],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "macro": "macro_rules! impl_nondet_mint {\n    ($name:ident, $mint_ty:ty) => { ... };\n}"
+   }
+  },
+  "99": {
+   "id": 99,
+   "crate_id": 0,
+   "name": "Target",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     42,
+     5
+    ],
+    "end": [
+     42,
+     26
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "assoc_type": {
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "bounds": [],
+     "type": {
+      "resolved_path": {
+       "path": "Pubkey",
+       "id": 19,
+       "args": null
+      }
+     },
+     "default_unstable": null
+    }
+   }
+  },
+  "124": {
+   "id": 124,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "P",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       },
+       {
+        "name": "T",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": [
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "P"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "Deref",
+             "id": 70,
+             "args": {
+              "angle_bracketed": {
+               "args": [],
+               "constraints": [
+                {
+                 "name": "Target",
+                 "args": null,
+                 "binding": {
+                  "equality": {
+                   "type": {
+                    "generic": "T"
+                   }
+                  }
+                 }
+                }
+               ]
+              }
+             }
+            },
+            "generic_params": [],
+            "modifier": "none"
+           }
+          },
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "Sized",
+             "id": 47,
+             "args": null
+            },
+            "generic_params": [],
+            "modifier": "maybe"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       },
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "T"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "Sized",
+             "id": 47,
+             "args": null
+            },
+            "generic_params": [],
+            "modifier": "maybe"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       }
+      ]
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "Receiver",
+      "id": 71,
+      "args": null
+     },
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [
+      68
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "P"
+     }
+    }
+   }
+  },
+  "149": {
+   "id": 149,
+   "crate_id": 0,
+   "name": "spl_mint_to",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/token.rs",
+    "begin": [
+     160,
+     1
+    ],
+    "end": [
+     176,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Summary for SPL Token MintTo instruction\n\nAdds `amount` to the mint's supply and to the destination's token amount,\npanicking if either would overflow. Always returns `Ok(())`. `_authority`\nis ignored, and `dst_info` is not checked to belong to the mint.",
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [
+       [
+        "mint_info",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "resolved_path": {
+            "path": "solana_program::account_info::AccountInfo",
+            "id": 8,
+            "args": {
+             "angle_bracketed": {
+              "args": [
+               {
+                "lifetime": "'a"
+               }
+              ],
+              "constraints": []
+             }
+            }
+           }
+          }
+         }
+        }
+       ],
+       [
+        "dst_info",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "resolved_path": {
+            "path": "solana_program::account_info::AccountInfo",
+            "id": 8,
+            "args": {
+             "angle_bracketed": {
+              "args": [
+               {
+                "lifetime": "'a"
+               }
+              ],
+              "constraints": []
+             }
+            }
+           }
+          }
+         }
+        }
+       ],
+       [
+        "_authority",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "resolved_path": {
+            "path": "solana_program::account_info::AccountInfo",
+            "id": 8,
+            "args": {
+             "angle_bracketed": {
+              "args": [
+               {
+                "lifetime": "'a"
+               }
+              ],
+              "constraints": []
+             }
+            }
+           }
+          }
+         }
+        }
+       ],
+       [
+        "amount",
+        {
+         "primitive": "u64"
+        }
+       ]
+      ],
+      "output": {
+       "resolved_path": {
+        "path": "solana_program::entrypoint::ProgramResult",
+        "id": 147,
+        "args": null
+       }
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [
+       {
+        "name": "'a",
+        "kind": {
+         "lifetime": {
+          "outlives": []
+         }
+        }
+       }
+      ],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "86": {
+   "id": 86,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zerocopy-0.8.57/src/pointer/invariant.rs",
+    "begin": [
+     246,
+     1
+    ],
+    "end": [
+     246,
+     86
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "ST",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       },
+       {
+        "name": "DT",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": [
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "ST"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "Sized",
+             "id": 47,
+             "args": null
+            },
+            "generic_params": [],
+            "modifier": "maybe"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       },
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "DT"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "Sized",
+             "id": 47,
+             "args": null
+            },
+            "generic_params": [],
+            "modifier": "maybe"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       }
+      ]
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "CastableFrom",
+      "id": 84,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "generic": "ST"
+          }
+         },
+         {
+          "type": {
+           "resolved_path": {
+            "path": "Initialized",
+            "id": 87,
+            "args": null
+           }
+          }
+         },
+         {
+          "type": {
+           "resolved_path": {
+            "path": "Initialized",
+            "id": 87,
+            "args": null
+           }
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "Pk",
+       "id": 11,
+       "args": {
+        "angle_bracketed": {
+         "args": [
+          {
+           "lifetime": "'a"
+          }
+         ],
+         "constraints": []
+        }
+       }
+      }
+     },
+     "items": [],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "DT"
+     }
+    }
+   }
+  },
+  "111": {
+   "id": 111,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "Send",
+      "id": 32,
+      "args": null
+     },
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [],
+     "is_negative": false,
+     "is_synthetic": true,
+     "blanket_impl": null
+    }
+   }
+  },
+  "136": {
+   "id": 136,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     85,
+     1
+    ],
+    "end": [
+     89,
+     2
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "From",
+      "id": 52,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "borrowed_ref": {
+            "lifetime": null,
+            "is_mutable": false,
+            "type": {
+             "resolved_path": {
+              "path": "Pubkey",
+              "id": 19,
+              "args": null
+             }
+            }
+           }
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [
+      135
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": null
+    }
+   }
+  },
+  "161": {
+   "id": 161,
+   "crate_id": 0,
+   "name": "invoke_signed",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/macros.rs",
+    "begin": [
+     81,
+     1
+    ],
+    "end": [
+     85,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Program-side replacement for `solana_program::program::invoke_signed`.\n\n`invoke_signed!(instruction, account_infos, signer_seeds)` expands to\n`solana_program::program::invoke_signed_unchecked(instruction, account_infos, signer_seeds)`.\nAs with [`invoke!`](crate::invoke), the called program is **not modeled**:\nthe call returns an arbitrary result and changes no account under the\nstandard summaries, and the Prover's CPI substitution does not apply.",
+   "links": {
+    "crate::invoke": 160
+   },
+   "attrs": [
+    "macro_export"
+   ],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "macro": "macro_rules! invoke_signed {\n    ($instruction: expr, $acc_infos: expr, $seeds: expr $(,)*) => { ... };\n}"
+   }
+  },
+  "35": {
+   "id": 35,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "'a",
+        "kind": {
+         "lifetime": {
+          "outlives": []
+         }
+        }
+       }
+      ],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "Freeze",
+      "id": 36,
+      "args": null
+     },
+     "for": {
+      "resolved_path": {
+       "path": "Pk",
+       "id": 11,
+       "args": {
+        "angle_bracketed": {
+         "args": [
+          {
+           "lifetime": "'a"
+          }
+         ],
+         "constraints": []
+        }
+       }
+      }
+     },
+     "items": [],
+     "is_negative": false,
+     "is_synthetic": true,
+     "blanket_impl": null
+    }
+   }
+  },
+  "123": {
+   "id": 123,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "T",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       },
+       {
+        "name": "U",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": [
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "U"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "Into",
+             "id": 55,
+             "args": {
+              "angle_bracketed": {
+               "args": [
+                {
+                 "type": {
+                  "generic": "T"
+                 }
+                }
+               ],
+               "constraints": []
+              }
+             }
+            },
+            "generic_params": [],
+            "modifier": "none"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       }
+      ]
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "TryFrom",
+      "id": 59,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "generic": "U"
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [
+      64,
+      66
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "T"
+     }
+    }
+   }
+  },
+  "148": {
+   "id": 148,
+   "crate_id": 0,
+   "name": "spl_token_2022_transfer",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/token.rs",
+    "begin": [
+     146,
+     1
+    ],
+    "end": [
+     153,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Summary for SPL Token 2022 transfer instruction\nThis summary ignores extensions from SPL Token 2022 (e.g., fees)\n\nIdentical to [`spl_token_transfer`]; in particular no transfer fee is\nwithheld.",
+   "links": {
+    "`spl_token_transfer`": 146
+   },
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [
+       [
+        "src_info",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "resolved_path": {
+            "path": "solana_program::account_info::AccountInfo",
+            "id": 8,
+            "args": {
+             "angle_bracketed": {
+              "args": [
+               {
+                "lifetime": "'a"
+               }
+              ],
+              "constraints": []
+             }
+            }
+           }
+          }
+         }
+        }
+       ],
+       [
+        "dst_info",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "resolved_path": {
+            "path": "solana_program::account_info::AccountInfo",
+            "id": 8,
+            "args": {
+             "angle_bracketed": {
+              "args": [
+               {
+                "lifetime": "'a"
+               }
+              ],
+              "constraints": []
+             }
+            }
+           }
+          }
+         }
+        }
+       ],
+       [
+        "authority_info",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "resolved_path": {
+            "path": "solana_program::account_info::AccountInfo",
+            "id": 8,
+            "args": {
+             "angle_bracketed": {
+              "args": [
+               {
+                "lifetime": "'a"
+               }
+              ],
+              "constraints": []
+             }
+            }
+           }
+          }
+         }
+        }
+       ],
+       [
+        "amount",
+        {
+         "primitive": "u64"
+        }
+       ]
+      ],
+      "output": {
+       "resolved_path": {
+        "path": "solana_program::entrypoint::ProgramResult",
+        "id": 147,
+        "args": null
+       }
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [
+       {
+        "name": "'a",
+        "kind": {
+         "lifetime": {
+          "outlives": []
+         }
+        }
+       }
+      ],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "22": {
+   "id": 22,
+   "crate_id": 0,
+   "name": "cvlr_nondet_coption",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/nondet.rs",
+    "begin": [
+     76,
+     1
+    ],
+    "end": [
+     85,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Either `COption::None` or `COption::Some(func())`, chosen arbitrarily.\n\nThe `COption` counterpart of `cvlr::nondet::nondet_option`, for the\noptional fields of SPL Token state (e.g. a mint's authorities or an\naccount's delegate). `func` is called only on the `Some` path.",
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [
+       [
+        "func",
+        {
+         "generic": "F"
+        }
+       ]
+      ],
+      "output": {
+       "resolved_path": {
+        "path": "solana_program::program_option::COption",
+        "id": 23,
+        "args": {
+         "angle_bracketed": {
+          "args": [
+           {
+            "type": {
+             "generic": "T"
+            }
+           }
+          ],
+          "constraints": []
+         }
+        }
+       }
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [
+       {
+        "name": "T",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       },
+       {
+        "name": "F",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": [
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "F"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "FnOnce",
+             "id": 24,
+             "args": {
+              "parenthesized": {
+               "inputs": [],
+               "output": {
+                "generic": "T"
+               }
+              }
+             }
+            },
+            "generic_params": [],
+            "modifier": "none"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       }
+      ]
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "110": {
+   "id": 110,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     66,
+     1
+    ],
+    "end": [
+     71,
+     2
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": null,
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [
+      109
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": null
+    }
+   }
+  },
+  "135": {
+   "id": 135,
+   "crate_id": 0,
+   "name": "from",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     86,
+     5
+    ],
+    "end": [
+     88,
+     6
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [
+       [
+        "value",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "resolved_path": {
+            "path": "Pubkey",
+            "id": 19,
+            "args": null
+           }
+          }
+         }
+        }
+       ]
+      ],
+      "output": {
+       "generic": "Self"
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "9": {
+   "id": 9,
+   "crate_id": 0,
+   "name": "cvlr_new_account_info",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/layout.rs",
+    "begin": [
+     304,
+     1
+    ],
+    "end": [
+     306,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Returns one `AccountInfo` with arbitrary contents, laid out as the Solana\nruntime lays out program inputs.\n\nEach call reserves a fresh, fixed memory region for the account (the Prover\ngives every call its own 10 MiB range in the SVM input region), so the\n`key`, `owner`, `lamports` and `data` of different accounts never share\nmemory. Their *values* are unconstrained:\n\n* `key` and `owner` are arbitrary. In particular, two accounts may have the\n  same key; assume `a.key != b.key` where the program relies on distinct\n  accounts.\n* `is_signer`, `is_writable` and `executable` are arbitrary.\n* `lamports` and `rent_epoch` are arbitrary `u64`s.\n* `data` has an arbitrary length of at most 8 MiB and arbitrary contents,\n  with room after it for the runtime's permitted realloc increase\n  (`MAX_PERMITTED_DATA_INCREASE`); the recorded original data length equals\n  the length.\n\nConstrain the account with `cvlr_assume!` (e.g. on its owner, data length\nor deserialized contents) to match what the program expects. Usually called\nthrough [`cvlr_deserialize_nondet_accounts`].",
+   "links": {
+    "`cvlr_deserialize_nondet_accounts`": 6
+   },
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [],
+      "output": {
+       "resolved_path": {
+        "path": "solana_program::account_info::AccountInfo",
+        "id": 8,
+        "args": {
+         "angle_bracketed": {
+          "args": [
+           {
+            "lifetime": "'a"
+           }
+          ],
+          "constraints": []
+         }
+        }
+       }
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [
+       {
+        "name": "'a",
+        "kind": {
+         "lifetime": {
+          "outlives": []
+         }
+        }
+       }
+      ],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "160": {
+   "id": 160,
+   "crate_id": 0,
+   "name": "invoke",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/macros.rs",
+    "begin": [
+     67,
+     1
+    ],
+    "end": [
+     71,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Program-side replacement for `solana_program::program::invoke`.\n\n`invoke!(instruction, account_infos)` expands to\n`solana_program::program::invoke_signed_unchecked(instruction, account_infos, &[])`,\nwhich skips the runtime's signer and privilege checks. Use it in the code\nunder verification (typically behind the verification feature) in place of\n`invoke(...)`; the calling crate must depend on `solana_program`.\n\n**This macro does not model the called program.** The standard Prover\nsummaries (`cvlr_summaries_core.txt` in Certora's Solana template) treat\n`invoke_signed_unchecked` as returning an arbitrary result, `Ok` or an\nerror, with no effect on any account. The callee's effects, such as a token\ntransfer, are not represented. Because the call no longer goes through\n`invoke`, the Prover's CPI substitution (see the `cvlr-spl-token` crate)\ndoes not apply to it either. To model a callee, call a model of it\ndirectly (e.g. `cvlr_solana::token::spl_token_transfer`) or mock the\nwrapper function with `#[cvlr::mock_fn]`.",
+   "links": {},
+   "attrs": [
+    "macro_export"
+   ],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "macro": "macro_rules! invoke {\n    ($instruction: expr, $acc_infos: expr $(,)*) => { ... };\n}"
+   }
+  },
+  "97": {
+   "id": 97,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     32,
+     1
+    ],
+    "end": [
+     39,
+     2
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "CvlrLog",
+      "id": 98,
+      "args": null
+     },
+     "for": {
+      "resolved_path": {
+       "path": "Pk",
+       "id": 11,
+       "args": {
+        "angle_bracketed": {
+         "args": [
+          {
+           "lifetime": "'_"
+          }
+         ],
+         "constraints": []
+        }
+       }
+      }
+     },
+     "items": [
+      95
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": null
+    }
+   }
+  },
+  "122": {
+   "id": 122,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "T",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       },
+       {
+        "name": "U",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": [
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "U"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "TryFrom",
+             "id": 59,
+             "args": {
+              "angle_bracketed": {
+               "args": [
+                {
+                 "type": {
+                  "generic": "T"
+                 }
+                }
+               ],
+               "constraints": []
+              }
+             }
+            },
+            "generic_params": [],
+            "modifier": "none"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       }
+      ]
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "TryInto",
+      "id": 63,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "generic": "U"
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [
+      58,
+      60
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "T"
+     }
+    }
+   }
+  },
+  "109": {
+   "id": 109,
+   "crate_id": 0,
+   "name": "new",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     68,
+     5
+    ],
+    "end": [
+     70,
+     6
+    ]
+   },
+   "visibility": "public",
+   "docs": "Creates a new owned wrapper from a [`Pubkey`].",
+   "links": {
+    "`Pubkey`": 19
+   },
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [
+       [
+        "pk",
+        {
+         "resolved_path": {
+          "path": "Pubkey",
+          "id": 19,
+          "args": null
+         }
+        }
+       ]
+      ],
+      "output": {
+       "generic": "Self"
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "46": {
+   "id": 46,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "T",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": [
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "T"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "Sized",
+             "id": 47,
+             "args": null
+            },
+            "generic_params": [],
+            "modifier": "maybe"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       }
+      ]
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "Borrow",
+      "id": 48,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "generic": "T"
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "Pk",
+       "id": 11,
+       "args": {
+        "angle_bracketed": {
+         "args": [
+          {
+           "lifetime": "'a"
+          }
+         ],
+         "constraints": []
+        }
+       }
+      }
+     },
+     "items": [
+      45
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "T"
+     }
+    }
+   }
+  },
+  "134": {
+   "id": 134,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     79,
+     1
+    ],
+    "end": [
+     83,
+     2
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "From",
+      "id": 52,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "resolved_path": {
+            "path": "Pubkey",
+            "id": 19,
+            "args": null
+           }
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [
+      133
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": null
+    }
+   }
+  },
+  "159": {
+   "id": 159,
+   "crate_id": 0,
+   "name": "require_keys_neq",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/macros.rs",
+    "begin": [
+     38,
+     1
+    ],
+    "end": [
+     45,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Verification replacement for Anchor's `require_keys_neq!`: *assumes* the\ntwo keys differ.\n\n`require_keys_neq!(a, b)` and `require_keys_neq!(a, b, error_code)` expand\nto `cvt::CVT_assume(a != b)`; the error code is ignored. See\n[`require_keys_eq!`](crate::require_keys_eq) for the consequences and for\nthe `cvt::CVT_assume` the calling crate must provide.",
+   "links": {
+    "crate::require_keys_eq": 158
+   },
+   "attrs": [
+    "macro_export"
+   ],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "macro": "macro_rules! require_keys_neq {\n    ($value1: expr, $value2: expr, $error_code:expr $(,)?) => { ... };\n    ($value1: expr, $value2: expr $(,)?) => { ... };\n}"
+   }
+  },
+  "33": {
+   "id": 33,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "'a",
+        "kind": {
+         "lifetime": {
+          "outlives": []
+         }
+        }
+       }
+      ],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "Sync",
+      "id": 34,
+      "args": null
+     },
+     "for": {
+      "resolved_path": {
+       "path": "Pk",
+       "id": 11,
+       "args": {
+        "angle_bracketed": {
+         "args": [
+          {
+           "lifetime": "'a"
+          }
+         ],
+         "constraints": []
+        }
+       }
+      }
+     },
+     "items": [],
+     "is_negative": false,
+     "is_synthetic": true,
+     "blanket_impl": null
+    }
+   }
+  },
+  "121": {
+   "id": 121,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "T",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "From",
+      "id": 52,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "generic": "T"
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [
+      56
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "T"
+     }
+    }
+   }
+  },
+  "146": {
+   "id": 146,
+   "crate_id": 0,
+   "name": "spl_token_transfer",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/token.rs",
+    "begin": [
+     132,
+     1
+    ],
+    "end": [
+     139,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Summary for SPL Token transfer instruction\n\nIf `src_info` and `dst_info` have different keys, assumes the source\nholds at least `amount` (executions where it does not are dropped), moves\n`amount` from the source's to the destination's token amount, and panics\nif the destination amount would overflow. If the keys are equal, nothing\nchanges. Always returns `Ok(())`. `authority_info` is ignored, and neither\naccount's mint or owner is checked.",
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [
+       [
+        "src_info",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "resolved_path": {
+            "path": "solana_program::account_info::AccountInfo",
+            "id": 8,
+            "args": {
+             "angle_bracketed": {
+              "args": [
+               {
+                "lifetime": "'a"
+               }
+              ],
+              "constraints": []
+             }
+            }
+           }
+          }
+         }
+        }
+       ],
+       [
+        "dst_info",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "resolved_path": {
+            "path": "solana_program::account_info::AccountInfo",
+            "id": 8,
+            "args": {
+             "angle_bracketed": {
+              "args": [
+               {
+                "lifetime": "'a"
+               }
+              ],
+              "constraints": []
+             }
+            }
+           }
+          }
+         }
+        }
+       ],
+       [
+        "authority_info",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "resolved_path": {
+            "path": "solana_program::account_info::AccountInfo",
+            "id": 8,
+            "args": {
+             "angle_bracketed": {
+              "args": [
+               {
+                "lifetime": "'a"
+               }
+              ],
+              "constraints": []
+             }
+            }
+           }
+          }
+         }
+        }
+       ],
+       [
+        "amount",
+        {
+         "primitive": "u64"
+        }
+       ]
+      ],
+      "output": {
+       "resolved_path": {
+        "path": "solana_program::entrypoint::ProgramResult",
+        "id": 147,
+        "args": null
+       }
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [
+       {
+        "name": "'a",
+        "kind": {
+         "lifetime": {
+          "outlives": []
+         }
+        }
+       }
+      ],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "83": {
+   "id": 83,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zerocopy-0.8.57/src/pointer/invariant.rs",
+    "begin": [
+     244,
+     1
+    ],
+    "end": [
+     244,
+     76
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "ST",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       },
+       {
+        "name": "DT",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": [
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "ST"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "Sized",
+             "id": 47,
+             "args": null
+            },
+            "generic_params": [],
+            "modifier": "maybe"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       },
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "DT"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "Sized",
+             "id": 47,
+             "args": null
+            },
+            "generic_params": [],
+            "modifier": "maybe"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       }
+      ]
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "CastableFrom",
+      "id": 84,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "generic": "ST"
+          }
+         },
+         {
+          "type": {
+           "resolved_path": {
+            "path": "Uninit",
+            "id": 85,
+            "args": null
+           }
+          }
+         },
+         {
+          "type": {
+           "resolved_path": {
+            "path": "Uninit",
+            "id": 85,
+            "args": null
+           }
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "Pk",
+       "id": 11,
+       "args": {
+        "angle_bracketed": {
+         "args": [
+          {
+           "lifetime": "'a"
+          }
+         ],
+         "constraints": []
+        }
+       }
+      }
+     },
+     "items": [],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "DT"
+     }
+    }
+   }
+  },
+  "20": {
+   "id": 20,
+   "crate_id": 0,
+   "name": "cvlr_nondet_option_pubkey",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/nondet.rs",
+    "begin": [
+     67,
+     1
+    ],
+    "end": [
+     69,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Either `None` or `Some` of an arbitrary [`cvlr_nondet_pubkey`].",
+   "links": {
+    "`cvlr_nondet_pubkey`": 18
+   },
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [],
+      "output": {
+       "resolved_path": {
+        "path": "Option",
+        "id": 21,
+        "args": {
+         "angle_bracketed": {
+          "args": [
+           {
+            "type": {
+             "resolved_path": {
+              "path": "solana_program::pubkey::Pubkey",
+              "id": 19,
+              "args": null
+             }
+            }
+           }
+          ],
+          "constraints": []
+         }
+        }
+       }
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "133": {
+   "id": 133,
+   "crate_id": 0,
+   "name": "from",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     80,
+     5
+    ],
+    "end": [
+     82,
+     6
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [
+       [
+        "value",
+        {
+         "resolved_path": {
+          "path": "Pubkey",
+          "id": 19,
+          "args": null
+         }
+        }
+       ]
+      ],
+      "output": {
+       "generic": "Self"
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "7": {
+   "id": 7,
+   "crate_id": 0,
+   "name": "fun_acc_infos_with_mem_layout",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/layout.rs",
+    "begin": [
+     100,
+     1
+    ],
+    "end": [
+     268,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "The function `fun_acc_infos_with_mem_layout` returns 16 AccountInfo\ninitialized non-deterministically.\n\nThis is the older way of creating accounts, built on\n[`cvlr_nondet_account_info`](crate::cvlr_nondet_account_info); prefer\n[`cvlr_deserialize_nondet_accounts`], which the current Prover models\ndirectly.\n\nWhile the contents of the accounts are unconstrained, this function\nassigns fixed addresses to any field that contains a pointer or\nreference: `key`, `lamports`, `data`, and `owner`.\n\nThe purpose of this is to eliminate spurious counterexamples while\nmaking easier the debugging of counterexamples.  This assignment of\nfixed addresses should be sound since no Solana contract should branch\non whether, for instance, a public key starts at some particular\naddress in the SVM (Solana Virtual Machine).\n\n```\nuse std::cell::RefCell;\nuse std::rc::Rc;\nuse solana_program::{pubkey::Pubkey, clock::Epoch};\n\npub struct AccountInfo<'a> {\n    /// Public key of the account\n    pub key: &'a Pubkey,\n    /// The lamports in the account.  Modifiable by programs.\n    pub lamports: Rc<RefCell<&'a mut u64>>,\n    /// The data held in this account.  Modifiable by programs.\n    pub data: Rc<RefCell<&'a mut [u8]>>,\n    /// Program that owns this account\n    pub owner: &'a Pubkey,\n    /// The epoch at which this account will next owe rent\n    pub rent_epoch: Epoch,\n    /// Was the transaction signed by this account's public key?\n    pub is_signer: bool,\n    /// Is the account writable?\n    pub is_writable: bool,\n    /// This account's data contains a loaded program (and is now read-only)\n    pub executable: bool\n}\n```",
+   "links": {
+    "crate::cvlr_nondet_account_info": 5,
+    "`cvlr_deserialize_nondet_accounts`": 6
+   },
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [],
+      "output": {
+       "array": {
+        "type": {
+         "resolved_path": {
+          "path": "solana_program::account_info::AccountInfo",
+          "id": 8,
+          "args": {
+           "angle_bracketed": {
+            "args": [
+             {
+              "lifetime": "'static"
+             }
+            ],
+            "constraints": []
+           }
+          }
+         }
+        },
+        "len": "16"
+       }
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "158": {
+   "id": 158,
+   "crate_id": 0,
+   "name": "require_keys_eq",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/macros.rs",
+    "begin": [
+     21,
+     1
+    ],
+    "end": [
+     28,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Verification replacement for Anchor's `require_keys_eq!`: *assumes* the two\nkeys are equal.\n\n`require_keys_eq!(a, b)` and `require_keys_eq!(a, b, error_code)` expand to\n`cvt::CVT_assume(a == b)`; the error code is ignored. Where Anchor's macro\nreturns an error when the keys differ, this one drops those executions\nfrom the analysis, so rules only consider executions in which the check\npasses.\n\nThe expansion names `cvt::CVT_assume`, a function of the legacy `cvt`\ncrate, so the calling crate must have `cvt::CVT_assume(bool)` in scope. A\nshim is enough:\n\n```ignore\nmod cvt {\n    pub use cvlr::asserts::cvlr_assume_checked as CVT_assume;\n}\n```",
+   "links": {},
+   "attrs": [
+    "macro_export"
+   ],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "macro": "macro_rules! require_keys_eq {\n    ($value1: expr, $value2: expr, $error_code:expr $(,)?) => { ... };\n    ($value1: expr, $value2: expr $(,)?) => { ... };\n}"
+   }
+  },
+  "95": {
+   "id": 95,
+   "crate_id": 0,
+   "name": "log",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     35,
+     5
+    ],
+    "end": [
+     38,
+     6
+    ]
+   },
+   "visibility": "default",
+   "docs": "Logs the wrapped [`Pubkey`] using a provided tag and logger.",
+   "links": {
+    "`Pubkey`": 19
+   },
+   "attrs": [
+    {
+     "other": "#[attr = Inline(Always)]"
+    }
+   ],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [
+       [
+        "self",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "generic": "Self"
+          }
+         }
+        }
+       ],
+       [
+        "tag",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "primitive": "str"
+          }
+         }
+        }
+       ],
+       [
+        "logger",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": true,
+          "type": {
+           "resolved_path": {
+            "path": "cvlr_log::CvlrLogger",
+            "id": 96,
+            "args": null
+           }
+          }
+         }
+        }
+       ]
+      ],
+      "output": null,
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "120": {
+   "id": 120,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "T",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       },
+       {
+        "name": "U",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": [
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "U"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "From",
+             "id": 52,
+             "args": {
+              "angle_bracketed": {
+               "args": [
+                {
+                 "type": {
+                  "generic": "T"
+                 }
+                }
+               ],
+               "constraints": []
+              }
+             }
+            },
+            "generic_params": [],
+            "modifier": "none"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       }
+      ]
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "Into",
+      "id": 55,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "generic": "U"
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [
+      53
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "T"
+     }
+    }
+   }
+  },
+  "57": {
+   "id": 57,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "T",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "From",
+      "id": 52,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "generic": "T"
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "Pk",
+       "id": 11,
+       "args": {
+        "angle_bracketed": {
+         "args": [
+          {
+           "lifetime": "'a"
+          }
+         ],
+         "constraints": []
+        }
+       }
+      }
+     },
+     "items": [
+      56
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "T"
+     }
+    }
+   }
+  },
+  "145": {
+   "id": 145,
+   "crate_id": 0,
+   "name": "spl_mint_set_supply",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/token.rs",
+    "begin": [
+     86,
+     1
+    ],
+    "end": [
+     97,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Pack only `supply` from `mint` base\n\nSets the `supply` field of the mint account `mint` to `supply`; no other\nbyte is changed.",
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [
+       [
+        "supply",
+        {
+         "primitive": "u64"
+        }
+       ],
+       [
+        "mint",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "resolved_path": {
+            "path": "solana_program::account_info::AccountInfo",
+            "id": 8,
+            "args": {
+             "angle_bracketed": {
+              "args": [
+               {
+                "lifetime": "'_"
+               }
+              ],
+              "constraints": []
+             }
+            }
+           }
+          }
+         }
+        }
+       ]
+      ],
+      "output": null,
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "107": {
+   "id": 107,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     91,
+     1
+    ],
+    "end": [
+     95,
+     2
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "From",
+      "id": 52,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "borrowed_ref": {
+            "lifetime": null,
+            "is_mutable": false,
+            "type": {
+             "resolved_path": {
+              "path": "Pk",
+              "id": 11,
+              "args": {
+               "angle_bracketed": {
+                "args": [
+                 {
+                  "lifetime": "'_"
+                 }
+                ],
+                "constraints": []
+               }
+              }
+             }
+            }
+           }
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [
+      106
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": null
+    }
+   }
+  },
+  "132": {
+   "id": 132,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     73,
+     1
+    ],
+    "end": [
+     77,
+     2
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "AsRef",
+      "id": 94,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "resolved_path": {
+            "path": "Pubkey",
+            "id": 19,
+            "args": null
+           }
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [
+      131
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": null
+    }
+   }
+  },
+  "69": {
+   "id": 69,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "P",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       },
+       {
+        "name": "T",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": [
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "P"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "Deref",
+             "id": 70,
+             "args": {
+              "angle_bracketed": {
+               "args": [],
+               "constraints": [
+                {
+                 "name": "Target",
+                 "args": null,
+                 "binding": {
+                  "equality": {
+                   "type": {
+                    "generic": "T"
+                   }
+                  }
+                 }
+                }
+               ]
+              }
+             }
+            },
+            "generic_params": [],
+            "modifier": "none"
+           }
+          },
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "Sized",
+             "id": 47,
+             "args": null
+            },
+            "generic_params": [],
+            "modifier": "maybe"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       },
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "T"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "Sized",
+             "id": 47,
+             "args": null
+            },
+            "generic_params": [],
+            "modifier": "maybe"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       }
+      ]
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "Receiver",
+      "id": 71,
+      "args": null
+     },
+     "for": {
+      "resolved_path": {
+       "path": "Pk",
+       "id": 11,
+       "args": {
+        "angle_bracketed": {
+         "args": [
+          {
+           "lifetime": "'a"
+          }
+         ],
+         "constraints": []
+        }
+       }
+      }
+     },
+     "items": [
+      68
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "P"
+     }
+    }
+   }
+  },
+  "6": {
+   "id": 6,
+   "crate_id": 0,
+   "name": "cvlr_deserialize_nondet_accounts",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/layout.rs",
+    "begin": [
+     518,
+     1
+    ],
+    "end": [
+     537,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Returns 16 arbitrary accounts: the standard input of a Solana rule.\n\nEach element is a separate [`cvlr_new_account_info`], so the accounts\noccupy disjoint memory but their keys, owners, flags, balances and data are\nunconstrained and independent; in particular keys may coincide. Pass the\narray (as a slice) to the program's processor or instruction handler, and\nassume whatever relationships between accounts the scenario requires:\n\n```ignore\n#[rule]\nfn rule_withdraw() {\n    let accounts = cvlr_deserialize_nondet_accounts();\n    let (vault, user) = (&accounts[0], &accounts[1]);\n    cvlr_assume!(vault.key != user.key);\n    let amount: u64 = nondet();\n    process_withdraw(&program_id(), &accounts, amount).unwrap();\n    // assertions over vault / user\n}\n```\n\nAlso exported as `cvlr_nondet_acc_infos`.",
+   "links": {
+    "`cvlr_new_account_info`": 9
+   },
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [],
+      "output": {
+       "array": {
+        "type": {
+         "resolved_path": {
+          "path": "solana_program::account_info::AccountInfo",
+          "id": 8,
+          "args": {
+           "angle_bracketed": {
+            "args": [
+             {
+              "lifetime": "'a"
+             }
+            ],
+            "constraints": []
+           }
+          }
+         }
+        },
+        "len": "16"
+       }
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [
+       {
+        "name": "'a",
+        "kind": {
+         "lifetime": {
+          "outlives": []
+         }
+        }
+       }
+      ],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "157": {
+   "id": 157,
+   "crate_id": 0,
+   "name": "acc_infos_with_mem_layout",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/layout.rs",
+    "begin": [
+     277,
+     1
+    ],
+    "end": [
+     281,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "The same as\n[`cvlr_deserialize_nondet_accounts()`](crate::cvlr_deserialize_nondet_accounts).\n\nDespite its name, this macro does not use\n[`fun_acc_infos_with_mem_layout`](crate::fun_acc_infos_with_mem_layout); it\nis kept for existing specs.",
+   "links": {
+    "crate::cvlr_deserialize_nondet_accounts": 6,
+    "crate::fun_acc_infos_with_mem_layout": 7
+   },
+   "attrs": [
+    "macro_export"
+   ],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "macro": "macro_rules! acc_infos_with_mem_layout {\n    () => { ... };\n}"
+   }
+  },
+  "31": {
+   "id": 31,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "'a",
+        "kind": {
+         "lifetime": {
+          "outlives": []
+         }
+        }
+       }
+      ],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "Send",
+      "id": 32,
+      "args": null
+     },
+     "for": {
+      "resolved_path": {
+       "path": "Pk",
+       "id": 11,
+       "args": {
+        "angle_bracketed": {
+         "args": [
+          {
+           "lifetime": "'a"
+          }
+         ],
+         "constraints": []
+        }
+       }
+      }
+     },
+     "items": [],
+     "is_negative": false,
+     "is_synthetic": true,
+     "blanket_impl": null
+    }
+   }
+  },
+  "119": {
+   "id": 119,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "T",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": [
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "T"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "Sized",
+             "id": 47,
+             "args": null
+            },
+            "generic_params": [],
+            "modifier": "maybe"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       }
+      ]
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "BorrowMut",
+      "id": 51,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "generic": "T"
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [
+      49
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "T"
+     }
+    }
+   }
+  },
+  "144": {
+   "id": 144,
+   "crate_id": 0,
+   "name": "spl_mint_get_decimals",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/token.rs",
+    "begin": [
+     72,
+     1
+    ],
+    "end": [
+     80,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Unpack only decimals from `mint` base\n\nReturns the `decimals` field of the mint account `mint`.",
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [
+       [
+        "mint",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "resolved_path": {
+            "path": "solana_program::account_info::AccountInfo",
+            "id": 8,
+            "args": {
+             "angle_bracketed": {
+              "args": [
+               {
+                "lifetime": "'_"
+               }
+              ],
+              "constraints": []
+             }
+            }
+           }
+          }
+         }
+        }
+       ]
+      ],
+      "output": {
+       "primitive": "u8"
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "18": {
+   "id": 18,
+   "crate_id": 0,
+   "name": "cvlr_nondet_pubkey",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/nondet.rs",
+    "begin": [
+     62,
+     1
+    ],
+    "end": [
+     64,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "An arbitrary `Pubkey`.\n\nEvery call returns an independent value, which may equal any other key.\nThe Prover models the underlying `CVT_nondet_pubkey` builtin through the\nproject's summaries file (`cvlr_summaries_core.txt` in Certora's Solana\ntemplate), which makes all 32 bytes arbitrary. With the `rt` feature it\nreturns `Pubkey::default()`.",
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [],
+      "output": {
+       "resolved_path": {
+        "path": "solana_program::pubkey::Pubkey",
+        "id": 19,
+        "args": null
+       }
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "106": {
+   "id": 106,
+   "crate_id": 0,
+   "name": "from",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     92,
+     5
+    ],
+    "end": [
+     94,
+     6
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [
+       [
+        "value",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "resolved_path": {
+            "path": "Pk",
+            "id": 11,
+            "args": {
+             "angle_bracketed": {
+              "args": [
+               {
+                "lifetime": "'_"
+               }
+              ],
+              "constraints": []
+             }
+            }
+           }
+          }
+         }
+        }
+       ]
+      ],
+      "output": {
+       "generic": "Self"
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "43": {
+   "id": 43,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "'a",
+        "kind": {
+         "lifetime": {
+          "outlives": []
+         }
+        }
+       }
+      ],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "RefUnwindSafe",
+      "id": 44,
+      "args": null
+     },
+     "for": {
+      "resolved_path": {
+       "path": "Pk",
+       "id": 11,
+       "args": {
+        "angle_bracketed": {
+         "args": [
+          {
+           "lifetime": "'a"
+          }
+         ],
+         "constraints": []
+        }
+       }
+      }
+     },
+     "items": [],
+     "is_negative": false,
+     "is_synthetic": true,
+     "blanket_impl": null
+    }
+   }
+  },
+  "131": {
+   "id": 131,
+   "crate_id": 0,
+   "name": "as_ref",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     74,
+     5
+    ],
+    "end": [
+     76,
+     6
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [
+       [
+        "self",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "generic": "Self"
+          }
+         }
+        }
+       ]
+      ],
+      "output": {
+       "borrowed_ref": {
+        "lifetime": null,
+        "is_mutable": false,
+        "type": {
+         "resolved_path": {
+          "path": "Pubkey",
+          "id": 19,
+          "args": null
+         }
+        }
+       }
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "5": {
+   "id": 5,
+   "crate_id": 0,
+   "name": "cvlr_nondet_account_info",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/nondet.rs",
+    "begin": [
+     42,
+     1
+    ],
+    "end": [
+     44,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Returns an `AccountInfo` produced by the `CVT_nondet_account_info` builtin.\n\nPrefer [`cvlr_new_account_info`](crate::cvlr_new_account_info). The Prover\nmarks this builtin as deprecated: by default it treats the call as a\nno-op, so the returned `AccountInfo`, including its pointer fields, is\nwhatever was in memory. It is modeled only when the Prover runs with\n`-solanaCvtNondetAccountInfo true` and the project's summaries file\ndescribes it (as `cvlr_summaries_core.txt` from Certora's Solana template\ndoes).",
+   "links": {
+    "crate::cvlr_new_account_info": 9
+   },
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [],
+      "output": {
+       "resolved_path": {
+        "path": "solana_program::account_info::AccountInfo",
+        "id": 8,
+        "args": {
+         "angle_bracketed": {
+          "args": [
+           {
+            "lifetime": "'static"
+           }
+          ],
+          "constraints": []
+         }
+        }
+       }
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "156": {
+   "id": 156,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/lib.rs",
+    "begin": [
+     39,
+     28
+    ],
+    "end": [
+     39,
+     57
+    ]
+   },
+   "visibility": "public",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "use": {
+     "source": "layout::fun_acc_infos_with_mem_layout",
+     "name": "fun_acc_infos_with_mem_layout",
+     "id": 7,
+     "is_glob": false
+    }
+   }
+  },
+  "93": {
+   "id": 93,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     26,
+     1
+    ],
+    "end": [
+     30,
+     2
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "'a",
+        "kind": {
+         "lifetime": {
+          "outlives": []
+         }
+        }
+       }
+      ],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "AsRef",
+      "id": 94,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "resolved_path": {
+            "path": "Pubkey",
+            "id": 19,
+            "args": null
+           }
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "Pk",
+       "id": 11,
+       "args": {
+        "angle_bracketed": {
+         "args": [
+          {
+           "lifetime": "'a"
+          }
+         ],
+         "constraints": []
+        }
+       }
+      }
+     },
+     "items": [
+      92
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": null
+    }
+   }
+  },
+  "30": {
+   "id": 30,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     19,
+     1
+    ],
+    "end": [
+     24,
+     2
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": null,
+     "for": {
+      "resolved_path": {
+       "path": "Pk",
+       "id": 11,
+       "args": {
+        "angle_bracketed": {
+         "args": [
+          {
+           "lifetime": "'_"
+          }
+         ],
+         "constraints": []
+        }
+       }
+      }
+     },
+     "items": [
+      29
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": null
+    }
+   }
+  },
+  "118": {
+   "id": 118,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "T",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": [
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "T"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "Sized",
+             "id": 47,
+             "args": null
+            },
+            "generic_params": [],
+            "modifier": "maybe"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       }
+      ]
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "Borrow",
+      "id": 48,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "generic": "T"
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [
+      45
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "T"
+     }
+    }
+   }
+  },
+  "143": {
+   "id": 143,
+   "crate_id": 0,
+   "name": "spl_mint_get_supply",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/token.rs",
+    "begin": [
+     59,
+     1
+    ],
+    "end": [
+     67,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Unpack only supply from `mint` base\n\nReturns the `supply` field of the mint account `mint`.",
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [
+       [
+        "mint",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "resolved_path": {
+            "path": "solana_program::account_info::AccountInfo",
+            "id": 8,
+            "args": {
+             "angle_bracketed": {
+              "args": [
+               {
+                "lifetime": "'_"
+               }
+              ],
+              "constraints": []
+             }
+            }
+           }
+          }
+         }
+        }
+       ]
+      ],
+      "output": {
+       "primitive": "u64"
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "80": {
+   "id": 80,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ppv-lite86-0.2.21/src/types.rs",
+    "begin": [
+     221,
+     1
+    ],
+    "end": [
+     223,
+     21
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "V",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       },
+       {
+        "name": "T",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": [
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "V"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "MultiLane",
+             "id": 81,
+             "args": {
+              "angle_bracketed": {
+               "args": [
+                {
+                 "type": {
+                  "generic": "T"
+                 }
+                }
+               ],
+               "constraints": []
+              }
+             }
+            },
+            "generic_params": [],
+            "modifier": "none"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       }
+      ]
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "VZip",
+      "id": 82,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "generic": "V"
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "Pk",
+       "id": 11,
+       "args": {
+        "angle_bracketed": {
+         "args": [
+          {
+           "lifetime": "'a"
+          }
+         ],
+         "constraints": []
+        }
+       }
+      }
+     },
+     "items": [
+      79
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "T"
+     }
+    }
+   }
+  },
+  "17": {
+   "id": 17,
+   "crate_id": 0,
+   "name": "cvlr_nondet_account_info_ref",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/nondet.rs",
+    "begin": [
+     51,
+     1
+    ],
+    "end": [
+     53,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "[`cvlr_nondet_account_info`] moved to the heap and leaked, as a\n`&'static mut`.\n\nThe same caveats apply; prefer\n[`cvlr_new_account_info`](crate::cvlr_new_account_info).",
+   "links": {
+    "`cvlr_nondet_account_info`": 5,
+    "crate::cvlr_new_account_info": 9
+   },
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [],
+      "output": {
+       "borrowed_ref": {
+        "lifetime": "'static",
+        "is_mutable": true,
+        "type": {
+         "resolved_path": {
+          "path": "solana_program::account_info::AccountInfo",
+          "id": 8,
+          "args": {
+           "angle_bracketed": {
+            "args": [
+             {
+              "lifetime": "'static"
+             }
+            ],
+            "constraints": []
+           }
+          }
+         }
+        }
+       }
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "105": {
+   "id": 105,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     55,
+     1
+    ],
+    "end": [
+     59,
+     2
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "'a",
+        "kind": {
+         "lifetime": {
+          "outlives": []
+         }
+        }
+       }
+      ],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "From",
+      "id": 52,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "resolved_path": {
+            "path": "Pk",
+            "id": 11,
+            "args": {
+             "angle_bracketed": {
+              "args": [
+               {
+                "lifetime": "'a"
+               }
+              ],
+              "constraints": []
+             }
+            }
+           }
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "borrowed_ref": {
+       "lifetime": "'a",
+       "is_mutable": false,
+       "type": {
+        "resolved_path": {
+         "path": "solana_program::pubkey::Pubkey",
+         "id": 19,
+         "args": null
+        }
+       }
+      }
+     },
+     "items": [
+      104
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": null
+    }
+   }
+  },
+  "130": {
+   "id": 130,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zerocopy-0.8.57/src/pointer/invariant.rs",
+    "begin": [
+     265,
+     1
+    ],
+    "end": [
+     265,
+     56
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "T",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": [
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "T"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "Sized",
+             "id": 47,
+             "args": null
+            },
+            "generic_params": [],
+            "modifier": "maybe"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       }
+      ]
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "Read",
+      "id": 89,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "resolved_path": {
+            "path": "Exclusive",
+            "id": 90,
+            "args": null
+           }
+          }
+         },
+         {
+          "type": {
+           "resolved_path": {
+            "path": "BecauseExclusive",
+            "id": 91,
+            "args": null
+           }
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "T"
+     }
+    }
+   }
+  },
+  "67": {
+   "id": 67,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "T",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       },
+       {
+        "name": "U",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": [
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "U"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "Into",
+             "id": 55,
+             "args": {
+              "angle_bracketed": {
+               "args": [
+                {
+                 "type": {
+                  "generic": "T"
+                 }
+                }
+               ],
+               "constraints": []
+              }
+             }
+            },
+            "generic_params": [],
+            "modifier": "none"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       }
+      ]
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "TryFrom",
+      "id": 59,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "generic": "U"
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "Pk",
+       "id": 11,
+       "args": {
+        "angle_bracketed": {
+         "args": [
+          {
+           "lifetime": "'a"
+          }
+         ],
+         "constraints": []
+        }
+       }
+      }
+     },
+     "items": [
+      64,
+      66
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "T"
+     }
+    }
+   }
+  },
+  "155": {
+   "id": 155,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/lib.rs",
+    "begin": [
+     39,
+     5
+    ],
+    "end": [
+     39,
+     26
+    ]
+   },
+   "visibility": "public",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "use": {
+     "source": "layout::cvlr_new_account_info",
+     "name": "cvlr_new_account_info",
+     "id": 9,
+     "is_glob": false
+    }
+   }
+  },
+  "92": {
+   "id": 92,
+   "crate_id": 0,
+   "name": "as_ref",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     27,
+     5
+    ],
+    "end": [
+     29,
+     6
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [
+       [
+        "self",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "generic": "Self"
+          }
+         }
+        }
+       ]
+      ],
+      "output": {
+       "borrowed_ref": {
+        "lifetime": "'a",
+        "is_mutable": false,
+        "type": {
+         "resolved_path": {
+          "path": "Pubkey",
+          "id": 19,
+          "args": null
+         }
+        }
+       }
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "29": {
+   "id": 29,
+   "crate_id": 0,
+   "name": "to_owned",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     21,
+     5
+    ],
+    "end": [
+     23,
+     6
+    ]
+   },
+   "visibility": "public",
+   "docs": "Converts this borrowed `Pk` into an owned [`PkO`] instance.",
+   "links": {
+    "`PkO`": 28
+   },
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [
+       [
+        "self",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "generic": "Self"
+          }
+         }
+        }
+       ]
+      ],
+      "output": {
+       "resolved_path": {
+        "path": "PkO",
+        "id": 28,
+        "args": null
+       }
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "117": {
+   "id": 117,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "RefUnwindSafe",
+      "id": 44,
+      "args": null
+     },
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [],
+     "is_negative": false,
+     "is_synthetic": true,
+     "blanket_impl": null
+    }
+   }
+  },
+  "54": {
+   "id": 54,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "T",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       },
+       {
+        "name": "U",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": [
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "U"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "From",
+             "id": 52,
+             "args": {
+              "angle_bracketed": {
+               "args": [
+                {
+                 "type": {
+                  "generic": "T"
+                 }
+                }
+               ],
+               "constraints": []
+              }
+             }
+            },
+            "generic_params": [],
+            "modifier": "none"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       }
+      ]
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "Into",
+      "id": 55,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "generic": "U"
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "Pk",
+       "id": 11,
+       "args": {
+        "angle_bracketed": {
+         "args": [
+          {
+           "lifetime": "'a"
+          }
+         ],
+         "constraints": []
+        }
+       }
+      }
+     },
+     "items": [
+      53
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "T"
+     }
+    }
+   }
+  },
+  "142": {
+   "id": 142,
+   "crate_id": 0,
+   "name": "spl_token_account_set_amount",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/token.rs",
+    "begin": [
+     40,
+     1
+    ],
+    "end": [
+     54,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Pack only `amount` from account `info` base\n\nSets the `amount` field of the token account `info` to `amount`; no other\nbyte is changed.",
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [
+       [
+        "amount",
+        {
+         "primitive": "u64"
+        }
+       ],
+       [
+        "info",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "resolved_path": {
+            "path": "solana_program::account_info::AccountInfo",
+            "id": 8,
+            "args": {
+             "angle_bracketed": {
+              "args": [
+               {
+                "lifetime": "'_"
+               }
+              ],
+              "constraints": []
+             }
+            }
+           }
+          }
+         }
+        }
+       ]
+      ],
+      "output": null,
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "104": {
+   "id": 104,
+   "crate_id": 0,
+   "name": "from",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     56,
+     5
+    ],
+    "end": [
+     58,
+     6
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [
+       [
+        "value",
+        {
+         "resolved_path": {
+          "path": "Pk",
+          "id": 11,
+          "args": {
+           "angle_bracketed": {
+            "args": [
+             {
+              "lifetime": "'a"
+             }
+            ],
+            "constraints": []
+           }
+          }
+         }
+        }
+       ]
+      ],
+      "output": {
+       "generic": "Self"
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "41": {
+   "id": 41,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "'a",
+        "kind": {
+         "lifetime": {
+          "outlives": []
+         }
+        }
+       }
+      ],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "UnwindSafe",
+      "id": 42,
+      "args": null
+     },
+     "for": {
+      "resolved_path": {
+       "path": "Pk",
+       "id": 11,
+       "args": {
+        "angle_bracketed": {
+         "args": [
+          {
+           "lifetime": "'a"
+          }
+         ],
+         "constraints": []
+        }
+       }
+      }
+     },
+     "items": [],
+     "is_negative": false,
+     "is_synthetic": true,
+     "blanket_impl": null
+    }
+   }
+  },
+  "129": {
+   "id": 129,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zerocopy-0.8.57/src/pointer/invariant.rs",
+    "begin": [
+     246,
+     1
+    ],
+    "end": [
+     246,
+     86
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "ST",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       },
+       {
+        "name": "DT",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": [
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "ST"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "Sized",
+             "id": 47,
+             "args": null
+            },
+            "generic_params": [],
+            "modifier": "maybe"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       },
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "DT"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "Sized",
+             "id": 47,
+             "args": null
+            },
+            "generic_params": [],
+            "modifier": "maybe"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       }
+      ]
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "CastableFrom",
+      "id": 84,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "generic": "ST"
+          }
+         },
+         {
+          "type": {
+           "resolved_path": {
+            "path": "Initialized",
+            "id": 87,
+            "args": null
+           }
+          }
+         },
+         {
+          "type": {
+           "resolved_path": {
+            "path": "Initialized",
+            "id": 87,
+            "args": null
+           }
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "DT"
+     }
+    }
+   }
+  },
+  "3": {
+   "id": 3,
+   "crate_id": 0,
+   "name": "clock",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/clock.rs",
+    "begin": [
+     1,
+     1
+    ],
+    "end": [
+     42,
+     2
+    ]
+   },
+   "visibility": "crate",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "module": {
+     "is_crate": false,
+     "items": [
+      1,
+      0
+     ],
+     "is_stripped": true
+    }
+   }
+  },
+  "154": {
+   "id": 154,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/lib.rs",
+    "begin": [
+     38,
+     39
+    ],
+    "end": [
+     38,
+     96
+    ]
+   },
+   "visibility": "public",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "use": {
+     "source": "layout::cvlr_deserialize_nondet_accounts",
+     "name": "cvlr_nondet_acc_infos",
+     "id": 6,
+     "is_glob": false
+    }
+   }
+  },
+  "28": {
+   "id": 28,
+   "crate_id": 0,
+   "name": "PkO",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     65,
+     1
+    ],
+    "end": [
+     65,
+     24
+    ]
+   },
+   "visibility": "public",
+   "docs": "An owned wrapper around [`Pubkey`] that complements [`Pk`].\n\nIt dereferences to `Pubkey` but does not implement `CvlrLog`; to log it,\nlog `Pk(&pko)`.",
+   "links": {
+    "`Pk`": 11,
+    "`Pubkey`": 19
+   },
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "struct": {
+     "kind": {
+      "tuple": [
+       null
+      ]
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "impls": [
+      110,
+      111,
+      112,
+      113,
+      114,
+      115,
+      116,
+      117,
+      118,
+      119,
+      120,
+      121,
+      122,
+      123,
+      124,
+      125,
+      126,
+      127,
+      128,
+      129,
+      130,
+      132,
+      134,
+      136,
+      107,
+      139
+     ]
+    }
+   }
+  },
+  "116": {
+   "id": 116,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "UnwindSafe",
+      "id": 42,
+      "args": null
+     },
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [],
+     "is_negative": false,
+     "is_synthetic": true,
+     "blanket_impl": null
+    }
+   }
+  },
+  "141": {
+   "id": 141,
+   "crate_id": 0,
+   "name": "spl_token_account_get_amount",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/token.rs",
+    "begin": [
+     26,
+     1
+    ],
+    "end": [
+     34,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Unpack only amount from account `info` base\n\nReturns the `amount` field of the token account `info`.",
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [
+       [
+        "info",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "resolved_path": {
+            "path": "solana_program::account_info::AccountInfo",
+            "id": 8,
+            "args": {
+             "angle_bracketed": {
+              "args": [
+               {
+                "lifetime": "'_"
+               }
+              ],
+              "constraints": []
+             }
+            }
+           }
+          }
+         }
+        }
+       ]
+      ],
+      "output": {
+       "primitive": "u64"
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "166": {
+   "id": 166,
+   "crate_id": 0,
+   "name": "cvlr_solana",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/lib.rs",
+    "begin": [
+     1,
+     1
+    ],
+    "end": [
+     42,
+     19
+    ]
+   },
+   "visibility": "public",
+   "docs": "Solana support for CVLR, the Certora Verification Language for Rust.\n\nHelpers for writing Certora Prover rules about Solana programs:\n\n* **Accounts.** [`cvlr_deserialize_nondet_accounts`] returns 16\n  arbitrary `AccountInfo`s, the usual input of a rule; pass them to the\n  program's processor. [`cvlr_new_account_info`] creates one.\n* **Nondeterministic values.** [`cvlr_nondet_pubkey`],\n  [`cvlr_nondet_option_pubkey`], [`cvlr_nondet_coption`],\n  [`cvlr_nondet_coption_pubkey`].\n* **Logging.** [`cvlr_clog_account_info`] / [`clog_acc_info!`] show an\n  account in the counterexample; [`pubkey::Pk`] makes a `Pubkey` loggable\n  with `clog!`.\n* **Models of the environment.** [`token`] reads and writes SPL Token\n  account and mint fields and models Token instructions;\n  [`cvt_get_next_clock_slot`] models the clock slot; [`invoke!`] and\n  [`invoke_signed!`] replace CPIs; [`require_keys_eq!`] and\n  [`require_keys_neq!`] replace Anchor's checks.\n\nSPL Token CPI mocks are in the `cvlr-spl-token` crate and a model of the\nStake program is in `cvlr-solana-stake`.\n\nSeveral functions here rely on the Prover summaries in\n`cvlr_summaries_core.txt`, shipped with Certora's Solana project template;\nthose are noted where they apply.",
+   "links": {
+    "`clog_acc_info!`": 12,
+    "`token`": 152,
+    "`cvlr_nondet_coption`": 22,
+    "`cvlr_nondet_option_pubkey`": 20,
+    "`require_keys_eq!`": 158,
+    "`invoke_signed!`": 161,
+    "`require_keys_neq!`": 159,
+    "`cvlr_clog_account_info`": 13,
+    "`cvlr_nondet_pubkey`": 18,
+    "`cvlr_nondet_coption_pubkey`": 25,
+    "`cvlr_deserialize_nondet_accounts`": 6,
+    "`pubkey::Pk`": 11,
+    "`cvlr_new_account_info`": 9,
+    "`cvt_get_next_clock_slot`": 1,
+    "`invoke!`": 160
+   },
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "module": {
+     "is_crate": true,
+     "items": [
+      140,
+      152,
+      153,
+      154,
+      155,
+      156,
+      157,
+      12,
+      158,
+      159,
+      160,
+      161,
+      162,
+      163,
+      164,
+      165
+     ],
+     "is_stripped": false
+    }
+   }
+  },
+  "103": {
+   "id": 103,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     49,
+     1
+    ],
+    "end": [
+     53,
+     2
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "'a",
+        "kind": {
+         "lifetime": {
+          "outlives": []
+         }
+        }
+       }
+      ],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "From",
+      "id": 52,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "borrowed_ref": {
+            "lifetime": "'a",
+            "is_mutable": false,
+            "type": {
+             "resolved_path": {
+              "path": "Pubkey",
+              "id": 19,
+              "args": null
+             }
+            }
+           }
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "Pk",
+       "id": 11,
+       "args": {
+        "angle_bracketed": {
+         "args": [
+          {
+           "lifetime": "'a"
+          }
+         ],
+         "constraints": []
+        }
+       }
+      }
+     },
+     "items": [
+      102
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": null
+    }
+   }
+  },
+  "128": {
+   "id": 128,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zerocopy-0.8.57/src/pointer/invariant.rs",
+    "begin": [
+     244,
+     1
+    ],
+    "end": [
+     244,
+     76
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "ST",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       },
+       {
+        "name": "DT",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": [
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "ST"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "Sized",
+             "id": 47,
+             "args": null
+            },
+            "generic_params": [],
+            "modifier": "maybe"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       },
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "DT"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "Sized",
+             "id": 47,
+             "args": null
+            },
+            "generic_params": [],
+            "modifier": "maybe"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       }
+      ]
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "CastableFrom",
+      "id": 84,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "generic": "ST"
+          }
+         },
+         {
+          "type": {
+           "resolved_path": {
+            "path": "Uninit",
+            "id": 85,
+            "args": null
+           }
+          }
+         },
+         {
+          "type": {
+           "resolved_path": {
+            "path": "Uninit",
+            "id": 85,
+            "args": null
+           }
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "DT"
+     }
+    }
+   }
+  },
+  "153": {
+   "id": 153,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/lib.rs",
+    "begin": [
+     38,
+     5
+    ],
+    "end": [
+     38,
+     37
+    ]
+   },
+   "visibility": "public",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "use": {
+     "source": "layout::cvlr_deserialize_nondet_accounts",
+     "name": "cvlr_deserialize_nondet_accounts",
+     "id": 6,
+     "is_glob": false
+    }
+   }
+  },
+  "27": {
+   "id": 27,
+   "crate_id": 0,
+   "name": "0",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     17,
+     5
+    ],
+    "end": [
+     17,
+     19
+    ]
+   },
+   "visibility": "public",
+   "docs": "The wrapped key.",
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "struct_field": {
+     "borrowed_ref": {
+      "lifetime": "'a",
+      "is_mutable": false,
+      "type": {
+       "resolved_path": {
+        "path": "solana_program::pubkey::Pubkey",
+        "id": 19,
+        "args": null
+       }
+      }
+     }
+    }
+   }
+  },
+  "115": {
+   "id": 115,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "Unpin",
+      "id": 40,
+      "args": null
+     },
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [],
+     "is_negative": false,
+     "is_synthetic": true,
+     "blanket_impl": null
+    }
+   }
+  },
+  "140": {
+   "id": 140,
+   "crate_id": 0,
+   "name": "pubkey",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     1,
+     1
+    ],
+    "end": [
+     103,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Wrappers that make a [`Pubkey`] loggable with `clog!`.",
+   "links": {
+    "`Pubkey`": 19
+   },
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "module": {
+     "is_crate": false,
+     "items": [
+      11,
+      28
+     ],
+     "is_stripped": false
+    }
+   }
+  },
+  "77": {
+   "id": 77,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typenum-1.20.1/src/type_operators.rs",
+    "begin": [
+     34,
+     1
+    ],
+    "end": [
+     34,
+     22
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "T",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "Same",
+      "id": 78,
+      "args": null
+     },
+     "for": {
+      "resolved_path": {
+       "path": "Pk",
+       "id": 11,
+       "args": {
+        "angle_bracketed": {
+         "args": [
+          {
+           "lifetime": "'a"
+          }
+         ],
+         "constraints": []
+        }
+       }
+      }
+     },
+     "items": [
+      76
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "T"
+     }
+    }
+   }
+  },
+  "14": {
+   "id": 14,
+   "crate_id": 0,
+   "name": "log",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/log.rs",
+    "begin": [
+     1,
+     1
+    ],
+    "end": [
+     32,
+     2
+    ]
+   },
+   "visibility": "crate",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "module": {
+     "is_crate": false,
+     "items": [
+      13
+     ],
+     "is_stripped": true
+    }
+   }
+  },
+  "165": {
+   "id": 165,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/lib.rs",
+    "begin": [
+     42,
+     1
+    ],
+    "end": [
+     42,
+     19
+    ]
+   },
+   "visibility": "public",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "use": {
+     "source": "nondet",
+     "name": "nondet",
+     "id": 26,
+     "is_glob": true
+    }
+   }
+  },
+  "102": {
+   "id": 102,
+   "crate_id": 0,
+   "name": "from",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     50,
+     5
+    ],
+    "end": [
+     52,
+     6
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [
+       [
+        "value",
+        {
+         "borrowed_ref": {
+          "lifetime": "'a",
+          "is_mutable": false,
+          "type": {
+           "resolved_path": {
+            "path": "Pubkey",
+            "id": 19,
+            "args": null
+           }
+          }
+         }
+        }
+       ]
+      ],
+      "output": {
+       "generic": "Self"
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "39": {
+   "id": 39,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "'a",
+        "kind": {
+         "lifetime": {
+          "outlives": []
+         }
+        }
+       }
+      ],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "Unpin",
+      "id": 40,
+      "args": null
+     },
+     "for": {
+      "resolved_path": {
+       "path": "Pk",
+       "id": 11,
+       "args": {
+        "angle_bracketed": {
+         "args": [
+          {
+           "lifetime": "'a"
+          }
+         ],
+         "constraints": []
+        }
+       }
+      }
+     },
+     "items": [],
+     "is_negative": false,
+     "is_synthetic": true,
+     "blanket_impl": null
+    }
+   }
+  },
+  "127": {
+   "id": 127,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ppv-lite86-0.2.21/src/types.rs",
+    "begin": [
+     221,
+     1
+    ],
+    "end": [
+     223,
+     21
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "V",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       },
+       {
+        "name": "T",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": [
+       {
+        "bound_predicate": {
+         "type": {
+          "generic": "V"
+         },
+         "bounds": [
+          {
+           "trait_bound": {
+            "trait": {
+             "path": "MultiLane",
+             "id": 81,
+             "args": {
+              "angle_bracketed": {
+               "args": [
+                {
+                 "type": {
+                  "generic": "T"
+                 }
+                }
+               ],
+               "constraints": []
+              }
+             }
+            },
+            "generic_params": [],
+            "modifier": "none"
+           }
+          }
+         ],
+         "generic_params": []
+        }
+       }
+      ]
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "VZip",
+      "id": 82,
+      "args": {
+       "angle_bracketed": {
+        "args": [
+         {
+          "type": {
+           "generic": "V"
+          }
+         }
+        ],
+        "constraints": []
+       }
+      }
+     },
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [
+      79
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "T"
+     }
+    }
+   }
+  },
+  "1": {
+   "id": 1,
+   "crate_id": 0,
+   "name": "cvt_get_next_clock_slot",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/clock.rs",
+    "begin": [
+     21,
+     1
+    ],
+    "end": [
+     30,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Advances a modeled clock and returns the new slot.\n\nReturns an arbitrary slot that is strictly greater than the one returned by\nthe previous call (the first call returns any slot), and records it for\n[`cvt_get_clock_slot`]. Use these two functions in a mock of the program's\nclock access (e.g. in place of `Clock::get()?.slot`) to model time moving\nforward between operations within one rule. They are unrelated to the\n`Clock` sysvar account; the state lives in a global variable for the\nduration of the rule.",
+   "links": {
+    "`cvt_get_clock_slot`": 0
+   },
+   "attrs": [
+    {
+     "other": "#[allow(non_snake_case)]"
+    },
+    {
+     "other": "#[attr = Inline(Always)]"
+    }
+   ],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [],
+      "output": {
+       "resolved_path": {
+        "path": "solana_program::clock::Slot",
+        "id": 2,
+        "args": null
+       }
+      },
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "152": {
+   "id": 152,
+   "crate_id": 0,
+   "name": "token",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/token.rs",
+    "begin": [
+     1,
+     1
+    ],
+    "end": [
+     263,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Summaries for Token and Token-2022\n\nField accessors for SPL Token accounts and mints, and models of Token\ninstructions that update those fields directly. The accessors read and\nwrite the fixed-offset base layout (165 bytes for a token account, 82 for\na mint), which Token-2022 shares, and panic if the account's data is\nshorter. Each borrows the account data mutably, so it panics if the data is\nalready borrowed.\n\nThe instruction models perform none of the Token program's checks\n(ownership, authority and signer, mint match, frozen state, delegation) and\nignore Token-2022 extensions; they only move amounts. Arithmetic overflow\nin a model panics, which ends that execution. `cvlr-spl-token` uses these\nmodels as the Prover's CPI mocks.",
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "module": {
+     "is_crate": false,
+     "items": [
+      141,
+      142,
+      143,
+      144,
+      145,
+      146,
+      148,
+      149,
+      150,
+      151
+     ],
+     "is_stripped": false
+    }
+   }
+  },
+  "26": {
+   "id": 26,
+   "crate_id": 0,
+   "name": "nondet",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/nondet.rs",
+    "begin": [
+     1,
+     1
+    ],
+    "end": [
+     91,
+     2
+    ]
+   },
+   "visibility": "crate",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "module": {
+     "is_crate": false,
+     "items": [
+      5,
+      17,
+      18,
+      20,
+      22,
+      25
+     ],
+     "is_stripped": true
+    }
+   }
+  },
+  "114": {
+   "id": 114,
+   "crate_id": 0,
+   "name": null,
+   "span": null,
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "UnsafeUnpin",
+      "id": 38,
+      "args": null
+     },
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [],
+     "is_negative": false,
+     "is_synthetic": true,
+     "blanket_impl": null
+    }
+   }
+  },
+  "139": {
+   "id": 139,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     97,
+     1
+    ],
+    "end": [
+     103,
+     2
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "Deref",
+      "id": 70,
+      "args": null
+     },
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [
+      137,
+      138
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": null
+    }
+   }
+  },
+  "13": {
+   "id": 13,
+   "crate_id": 0,
+   "name": "cvlr_clog_account_info",
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/log.rs",
+    "begin": [
+     26,
+     1
+    ],
+    "end": [
+     32,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Logs the main fields of an account to the counterexample call trace.\n\nEmits `tag` as a message line, followed by the account's lamports, data\nlength, `is_signer` and `is_writable` (in that order, each under its own\nlabel). The key, owner and data contents are not logged; log the key with\n`clog!(Pk(acc.key))` (see [`Pk`](crate::pubkey::Pk)) if needed. As with\nall logging, `tag` must be a string literal after inlining (the\n[`clog_acc_info!`](crate::clog_acc_info) macro passes one).",
+   "links": {
+    "crate::pubkey::Pk": 11,
+    "crate::clog_acc_info": 12
+   },
+   "attrs": [
+    {
+     "other": "#[attr = Inline(Always)]"
+    }
+   ],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "function": {
+     "sig": {
+      "inputs": [
+       [
+        "tag",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "primitive": "str"
+          }
+         }
+        }
+       ],
+       [
+        "acc_info",
+        {
+         "borrowed_ref": {
+          "lifetime": null,
+          "is_mutable": false,
+          "type": {
+           "resolved_path": {
+            "path": "solana_program::account_info::AccountInfo",
+            "id": 8,
+            "args": {
+             "angle_bracketed": {
+              "args": [
+               {
+                "lifetime": "'_"
+               }
+              ],
+              "constraints": []
+             }
+            }
+           }
+          }
+         }
+        }
+       ]
+      ],
+      "output": null,
+      "is_c_variadic": false
+     },
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "header": {
+      "is_const": false,
+      "is_unsafe": false,
+      "is_async": false,
+      "abi": "Rust"
+     },
+     "has_body": true,
+     "default_unstable": null
+    }
+   }
+  },
+  "164": {
+   "id": 164,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/lib.rs",
+    "begin": [
+     41,
+     1
+    ],
+    "end": [
+     41,
+     16
+    ]
+   },
+   "visibility": "public",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "use": {
+     "source": "log",
+     "name": "log",
+     "id": 14,
+     "is_glob": true
+    }
+   }
+  },
+  "101": {
+   "id": 101,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/src/cvlr-solana/cvlr-solana/src/pubkey.rs",
+    "begin": [
+     41,
+     1
+    ],
+    "end": [
+     47,
+     2
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "Deref",
+      "id": 70,
+      "args": null
+     },
+     "for": {
+      "resolved_path": {
+       "path": "Pk",
+       "id": 11,
+       "args": {
+        "angle_bracketed": {
+         "args": [
+          {
+           "lifetime": "'_"
+          }
+         ],
+         "constraints": []
+        }
+       }
+      }
+     },
+     "items": [
+      99,
+      100
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": null
+    }
+   }
+  },
+  "126": {
+   "id": 126,
+   "crate_id": 0,
+   "name": null,
+   "span": {
+    "filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typenum-1.20.1/src/type_operators.rs",
+    "begin": [
+     34,
+     1
+    ],
+    "end": [
+     34,
+     22
+    ]
+   },
+   "visibility": "default",
+   "docs": null,
+   "links": {},
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "impl": {
+     "is_unsafe": false,
+     "generics": {
+      "params": [
+       {
+        "name": "T",
+        "kind": {
+         "type": {
+          "bounds": [],
+          "default": null,
+          "is_synthetic": false
+         }
+        }
+       }
+      ],
+      "where_predicates": []
+     },
+     "provided_trait_methods": [],
+     "trait": {
+      "path": "Same",
+      "id": 78,
+      "args": null
+     },
+     "for": {
+      "resolved_path": {
+       "path": "PkO",
+       "id": 28,
+       "args": null
+      }
+     },
+     "items": [
+      76
+     ],
+     "is_negative": false,
+     "is_synthetic": false,
+     "blanket_impl": {
+      "generic": "T"
+     }
+    }
+   }
+  }
+ },
+ "paths": {
+  "0": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "clock",
+    "cvt_get_clock_slot"
+   ],
+   "kind": "function"
+  },
+  "146": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "token",
+    "spl_token_transfer"
+   ],
+   "kind": "function"
+  },
+  "149": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "token",
+    "spl_mint_to"
+   ],
+   "kind": "function"
+  },
+  "22": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "nondet",
+    "cvlr_nondet_coption"
+   ],
+   "kind": "function"
+  },
+  "6": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "layout",
+    "cvlr_deserialize_nondet_accounts"
+   ],
+   "kind": "function"
+  },
+  "152": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "token"
+   ],
+   "kind": "module"
+  },
+  "25": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "nondet",
+    "cvlr_nondet_coption_pubkey"
+   ],
+   "kind": "function"
+  },
+  "9": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "layout",
+    "cvlr_new_account_info"
+   ],
+   "kind": "function"
+  },
+  "28": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "pubkey",
+    "PkO"
+   ],
+   "kind": "struct"
+  },
+  "12": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "clog_acc_info"
+   ],
+   "kind": "macro"
+  },
+  "158": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "require_keys_eq"
+   ],
+   "kind": "macro"
+  },
+  "142": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "token",
+    "spl_token_account_set_amount"
+   ],
+   "kind": "function"
+  },
+  "161": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "invoke_signed"
+   ],
+   "kind": "macro"
+  },
+  "145": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "token",
+    "spl_mint_set_supply"
+   ],
+   "kind": "function"
+  },
+  "18": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "nondet",
+    "cvlr_nondet_pubkey"
+   ],
+   "kind": "function"
+  },
+  "148": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "token",
+    "spl_token_2022_transfer"
+   ],
+   "kind": "function"
+  },
+  "5": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "nondet",
+    "cvlr_nondet_account_info"
+   ],
+   "kind": "function"
+  },
+  "151": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "token",
+    "spl_close_account"
+   ],
+   "kind": "function"
+  },
+  "11": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "pubkey",
+    "Pk"
+   ],
+   "kind": "struct"
+  },
+  "157": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "acc_infos_with_mem_layout"
+   ],
+   "kind": "macro"
+  },
+  "141": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "token",
+    "spl_token_account_get_amount"
+   ],
+   "kind": "function"
+  },
+  "160": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "invoke"
+   ],
+   "kind": "macro"
+  },
+  "144": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "token",
+    "spl_mint_get_decimals"
+   ],
+   "kind": "function"
+  },
+  "17": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "nondet",
+    "cvlr_nondet_account_info_ref"
+   ],
+   "kind": "function"
+  },
+  "1": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "clock",
+    "cvt_get_next_clock_slot"
+   ],
+   "kind": "function"
+  },
+  "20": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "nondet",
+    "cvlr_nondet_option_pubkey"
+   ],
+   "kind": "function"
+  },
+  "166": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana"
+   ],
+   "kind": "module"
+  },
+  "150": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "token",
+    "spl_burn"
+   ],
+   "kind": "function"
+  },
+  "7": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "layout",
+    "fun_acc_infos_with_mem_layout"
+   ],
+   "kind": "function"
+  },
+  "140": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "pubkey"
+   ],
+   "kind": "module"
+  },
+  "13": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "log",
+    "cvlr_clog_account_info"
+   ],
+   "kind": "function"
+  },
+  "159": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "require_keys_neq"
+   ],
+   "kind": "macro"
+  },
+  "143": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "token",
+    "spl_mint_get_supply"
+   ],
+   "kind": "function"
+  },
+  "162": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_solana",
+    "impl_nondet_mint"
+   ],
+   "kind": "macro"
+  }
+ },
+ "external_crates": {},
+ "target": {
+  "triple": "x86_64-unknown-linux-gnu",
+  "target_features": [
+   {
+    "name": "adx",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "aes",
+    "implies_features": [
+     "sse2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "amx-avx512",
+    "implies_features": [
+     "amx-tile"
+    ],
+    "unstable_feature_gate": "x86_amx_intrinsics",
+    "globally_enabled": false
+   },
+   {
+    "name": "amx-bf16",
+    "implies_features": [
+     "amx-tile"
+    ],
+    "unstable_feature_gate": "x86_amx_intrinsics",
+    "globally_enabled": false
+   },
+   {
+    "name": "amx-complex",
+    "implies_features": [
+     "amx-tile"
+    ],
+    "unstable_feature_gate": "x86_amx_intrinsics",
+    "globally_enabled": false
+   },
+   {
+    "name": "amx-fp8",
+    "implies_features": [
+     "amx-tile"
+    ],
+    "unstable_feature_gate": "x86_amx_intrinsics",
+    "globally_enabled": false
+   },
+   {
+    "name": "amx-fp16",
+    "implies_features": [
+     "amx-tile"
+    ],
+    "unstable_feature_gate": "x86_amx_intrinsics",
+    "globally_enabled": false
+   },
+   {
+    "name": "amx-int8",
+    "implies_features": [
+     "amx-tile"
+    ],
+    "unstable_feature_gate": "x86_amx_intrinsics",
+    "globally_enabled": false
+   },
+   {
+    "name": "amx-movrs",
+    "implies_features": [
+     "amx-tile"
+    ],
+    "unstable_feature_gate": "x86_amx_intrinsics",
+    "globally_enabled": false
+   },
+   {
+    "name": "amx-tf32",
+    "implies_features": [
+     "amx-tile"
+    ],
+    "unstable_feature_gate": "x86_amx_intrinsics",
+    "globally_enabled": false
+   },
+   {
+    "name": "amx-tile",
+    "implies_features": [],
+    "unstable_feature_gate": "x86_amx_intrinsics",
+    "globally_enabled": false
+   },
+   {
+    "name": "apxf",
+    "implies_features": [],
+    "unstable_feature_gate": "apx_target_feature",
+    "globally_enabled": false
+   },
+   {
+    "name": "avx",
+    "implies_features": [
+     "sse4.2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx2",
+    "implies_features": [
+     "avx"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx10.1",
+    "implies_features": [
+     "avx512bf16",
+     "avx512bitalg",
+     "avx512bw",
+     "avx512cd",
+     "avx512dq",
+     "avx512f",
+     "avx512fp16",
+     "avx512ifma",
+     "avx512vbmi",
+     "avx512vbmi2",
+     "avx512vl",
+     "avx512vnni",
+     "avx512vpopcntdq"
+    ],
+    "unstable_feature_gate": "avx10_target_feature",
+    "globally_enabled": false
+   },
+   {
+    "name": "avx10.2",
+    "implies_features": [
+     "avx10.1",
+     "avxvnni",
+     "avxvnniint8",
+     "avxvnniint16"
+    ],
+    "unstable_feature_gate": "avx10_target_feature",
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512bf16",
+    "implies_features": [
+     "avx512bw"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512bitalg",
+    "implies_features": [
+     "avx512bw"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512bw",
+    "implies_features": [
+     "avx512f"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512cd",
+    "implies_features": [
+     "avx512f"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512dq",
+    "implies_features": [
+     "avx512f"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512f",
+    "implies_features": [
+     "avx2",
+     "fma",
+     "f16c"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512fp16",
+    "implies_features": [
+     "avx512bw"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512ifma",
+    "implies_features": [
+     "avx512f"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512vbmi",
+    "implies_features": [
+     "avx512bw"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512vbmi2",
+    "implies_features": [
+     "avx512bw"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512vl",
+    "implies_features": [
+     "avx512f"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512vnni",
+    "implies_features": [
+     "avx512f"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512vp2intersect",
+    "implies_features": [
+     "avx512f"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512vpopcntdq",
+    "implies_features": [
+     "avx512f"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avxifma",
+    "implies_features": [
+     "avx2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avxneconvert",
+    "implies_features": [
+     "avx2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avxvnni",
+    "implies_features": [
+     "avx2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avxvnniint8",
+    "implies_features": [
+     "avx2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avxvnniint16",
+    "implies_features": [
+     "avx2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "bmi1",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "bmi2",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "clflushopt",
+    "implies_features": [],
+    "unstable_feature_gate": "clflushopt_target_feature",
+    "globally_enabled": false
+   },
+   {
+    "name": "cmpxchg16b",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "ermsb",
+    "implies_features": [],
+    "unstable_feature_gate": "ermsb_target_feature",
+    "globally_enabled": false
+   },
+   {
+    "name": "f16c",
+    "implies_features": [
+     "avx"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "fma",
+    "implies_features": [
+     "avx"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "fma4",
+    "implies_features": [
+     "avx",
+     "sse4a"
+    ],
+    "unstable_feature_gate": "fma4_target_feature",
+    "globally_enabled": false
+   },
+   {
+    "name": "fxsr",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": true
+   },
+   {
+    "name": "gfni",
+    "implies_features": [
+     "sse2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "kl",
+    "implies_features": [
+     "sse2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "lahfsahf",
+    "implies_features": [],
+    "unstable_feature_gate": "lahfsahf_target_feature",
+    "globally_enabled": false
+   },
+   {
+    "name": "lzcnt",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "movbe",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "movrs",
+    "implies_features": [],
+    "unstable_feature_gate": "movrs_target_feature",
+    "globally_enabled": false
+   },
+   {
+    "name": "pclmulqdq",
+    "implies_features": [
+     "sse2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "popcnt",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "prfchw",
+    "implies_features": [],
+    "unstable_feature_gate": "prfchw_target_feature",
+    "globally_enabled": false
+   },
+   {
+    "name": "rdrand",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "rdseed",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "rtm",
+    "implies_features": [],
+    "unstable_feature_gate": "rtm_target_feature",
+    "globally_enabled": false
+   },
+   {
+    "name": "sha",
+    "implies_features": [
+     "sse2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "sha512",
+    "implies_features": [
+     "avx2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "sm3",
+    "implies_features": [
+     "avx"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "sm4",
+    "implies_features": [
+     "avx2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "sse",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": true
+   },
+   {
+    "name": "sse2",
+    "implies_features": [
+     "sse"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": true
+   },
+   {
+    "name": "sse3",
+    "implies_features": [
+     "sse2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "sse4.1",
+    "implies_features": [
+     "ssse3"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "sse4.2",
+    "implies_features": [
+     "sse4.1"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "sse4a",
+    "implies_features": [
+     "sse3"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "ssse3",
+    "implies_features": [
+     "sse3"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "tbm",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "vaes",
+    "implies_features": [
+     "avx2",
+     "aes"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "vpclmulqdq",
+    "implies_features": [
+     "avx",
+     "pclmulqdq"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "widekl",
+    "implies_features": [
+     "kl"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "x87",
+    "implies_features": [],
+    "unstable_feature_gate": "x87_target_feature",
+    "globally_enabled": true
+   },
+   {
+    "name": "xop",
+    "implies_features": [
+     "fma4",
+     "avx",
+     "sse4a"
+    ],
+    "unstable_feature_gate": "xop_target_feature",
+    "globally_enabled": false
+   },
+   {
+    "name": "xsave",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "xsavec",
+    "implies_features": [
+     "xsave"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "xsaveopt",
+    "implies_features": [
+     "xsave"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "xsaves",
+    "implies_features": [
+     "xsave"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   }
+  ]
+ },
+ "format_version": 60
+}
