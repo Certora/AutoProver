@@ -16,7 +16,8 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from composer.spec.types import (
-    ComponentName, PropertyFormulation, PropertyKey, PropertyTitle, PropertyType, RuleName,
+    ComponentName, DesignDocOrigin, PropertyFormulation, PropertyKey, PropertyTitle, PropertyType,
+    RuleName,
 )
 
 type RuleRef = tuple[str, RuleName]
@@ -239,6 +240,20 @@ class VerificationArtifactRecord(BaseModel):
     path: str
 
 
+class DesignDocRecord(BaseModel):
+    """The design document the run analysed, and how it was chosen. Kept apart from the
+    workflow-internal provenance type because report.json is a persisted contract."""
+    path: str = Field(
+        description="Project-relative path when the document lies inside the project; otherwise "
+        "the path as given.",
+    )
+    #: SUPPLIED (``"supplied"``): named when the run was launched. DISCOVERED
+    #: (``"discovered"``): found in the project tree by the design-doc finder.
+    origin: DesignDocOrigin
+    #: The finder's stated reason for its choice; None for a supplied document.
+    reason: str | None = None
+
+
 type ReportBackend = Literal["prover", "foundry", "none"]
 """Which pipeline produced this report. Provenance only — every backend fills the same fields;
 this tag just lets the renderer pick the right outcome labels ("Verified" vs "Successful test"
@@ -337,6 +352,9 @@ class AutoProverReport(BaseModel):
     #: a run with no plugins, and on reports written before the field existed.
     active_plugins: list[str] = Field(default_factory=list)
     contract_name: str
+    #: The design document the run analysed. None for a source-only run, and on reports written
+    #: before the field existed.
+    design_doc: DesignDocRecord | None = None
     run_timestamp_utc: str | None = None
     #: component name -> prover run link/path
     prover_links: dict[ComponentName, str] = Field(default_factory=dict)

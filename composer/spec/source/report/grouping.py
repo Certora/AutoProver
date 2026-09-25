@@ -5,11 +5,13 @@ A structured LLM call takes the `FormalizedProperty` list and partitions it into
 properties are formalized by may surface under several groups. Each group's status is rolled up from
 its members' rules' verdicts. Groups are identified by the slug the LLM assigns — a per-run snapshot.
 
-A response that misses the schema costs the report every heading it has, so one thing stands
-between a malformed answer and the fallback: the call is retried once with the rejection appended.
+A response that misses the schema costs the report every heading it has, so two things stand
+between a malformed answer and the fallback: a list or object that arrives JSON-encoded as a string
+is decoded (see `DecodesJsonStrings`), and a response that still does not validate is retried once
+with the rejection appended. `build` may then put the same question to a second model.
 
-A single ``general`` fallback group (every property in one group) is used by `build` when the LLM
-call raises, validation rejects the grouping, or the grouping covers no properties.
+A single ``general`` fallback group (every property in one group) is used by `build` when every
+model's call raises, validation rejects the grouping, or the grouping covers no properties.
 """
 import logging
 from typing import Iterable
@@ -18,6 +20,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, ValidationError
 
+from composer.llm.structured import DecodesJsonStrings
 from composer.templates.loader import load_jinja_template
 from composer.spec.source.report.schema import (
     FormalizedProperty, GroupStatus, Outcome, PropertyGroup, PropertyKey, RuleRef,
@@ -71,7 +74,7 @@ class PropertyGroupDraft(BaseModel):
     )
 
 
-class GroupingResult(BaseModel):
+class GroupingResult(DecodesJsonStrings):
     """The high-level property groups covering every input property exactly once."""
     groups: list[PropertyGroupDraft] = Field(
         description="The high-level property groups; collectively they cover every input property "
