@@ -713,15 +713,22 @@ Display: a `CommonTools.cvlr_research` entry in `composer/ui/tool_display.py` be
 everything below, correct on its own terms, and it is what makes the single-version corpus a
 guarantee rather than an assumption. Step 5 now has one precondition left instead of two.
 
-1. **Register `cvlr_api_kb`** — the four-file corpus registration of §6, with an empty schema.
-   Reviewable on its own, and it is what step 2 ingests into.
-2. **The rustdoc producer**, `composer/scripts/cvlr_api_docs.py` (§4.2). Additive — nothing reads
-   the corpus yet — and it lands with its own tests, which a cross-repo producer never had. This is
-   where §4.4's complete-surface section gets proven out before any agent depends on it. It retires
-   `crate_reference.py` and `crate_inventory.py` in `certora-cvlr-kb`.
+1. **Register `cvlr_api_kb`** (§6). ✅ **Done** — `1aa9f5a9`. Role and schema in `init-db.sql`,
+   connection and `KNOWLEDGE_BASES` entry, `_FACTORIES` entry, and `composer/tools/cvlr_api_rag.py`
+   with the three tools of §4.5.
+2. **The rustdoc producer**, `composer/scripts/cvlr_api_docs.py` (§4.2). ✅ **Done** — `1aa9f5a9`.
+   Runs offline against a warm registry; over the pinned Solana set it emits 297 sections and 282
+   embedded groups across 15 crates. Tests run over three trimmed payloads from a real rustdoc run,
+   so the producer is covered by the ordinary suite — it never was before.
 
    It carries whatever doc comments exist at the time, so it does not wait on step 2b and it
-   improves on every rebuild as that lands.
+   improves on every rebuild as that lands. **Still open:** retiring `crate_reference.py` and
+   `crate_inventory.py` in `certora-cvlr-kb`, which is work in that repo.
+
+   Two things the implementation settled. rustdoc's `paths` omits associated items, so inherent
+   impls are walked — `NativeIntU64::u64_max`, the most-searched name in the census, is only
+   reachable that way. And a `macro` item turns out to carry the *matchers* with the body elided
+   as `{ ... }`, so the contract/implementation line §4.2 argues for is one rustdoc already draws.
 
 **2b. Document CVLR's macros upstream** (§4.2) — **in the CVLR crates, not here, and the one piece
    of this plan that is not ours to schedule.** 64 `macro_rules!` across the reference set, with the
@@ -729,11 +736,16 @@ guarantee rather than an assumption. Step 5 now has one precondition left instea
    to carry. File it early: it is worth doing for its own sake, it needs another team's time, and
    step 5 waits on it. Everything else in this list can proceed while it is open.
    
-3. **`cvlr_api_rag.py` + `cvlr_research.py` + templates + display + tests**, wired *alongside* the
-   source mount. Both channels live. This is the only point at which the two can be compared on the
-   same run.
+3. **`cvlr_research.py` + templates + display + tests**, wired *alongside* the source mount. ✅
+   **Done** — `238cbd11`. Both channels live, which is the only arrangement in which they can be
+   compared on one run. The author and judge get the researcher and the recipes; the corpus search
+   tools go to the researcher alone, so the ordering is applied once rather than restated in every
+   prompt that could search. `--rag-corpus` now names the *manual* corpus — the API corpus is not a
+   choice among alternatives.
+
+   **Not yet done:** the comparison run itself, which is what step 5 waits on.
 4. ~~The `--withhold-crate` corpus filter.~~ **Not needed** — §2.3. Restricting the setting to
-   program models is what removed it, and that has landed.
+   program models is what removed it, and that landed in `9b3a58ed`.
 5. **Remove the mount**, rewrite the two system prompts, delete `source_tools.py`,
    `crate_mount.py` and the fragment. **Gated on 2b.** The macro contract is the only thing the
    mount holds that the rustdoc walk does not replace, so removing it before the crates are
@@ -746,8 +758,9 @@ guarantee rather than an assumption. Step 5 now has one precondition left instea
    own schedule.
 7. **Re-record the tape**, re-run the gate, re-take the census.
 
-(1)–(4) are additive and reviewable on their own. (5) is the only irreversible step, and it now
-has three preconditions rather than two. The pin is met. (3)'s comparison run has to show the
-researcher answering the questions the §7.5.5 census says the author actually asks. And **2b has to
-have landed upstream** — which is the schedule risk in this plan, so file it first even though it
-is last to matter.
+Steps 0–4 are done and additive; nothing yet removes a capability. (5) is the only irreversible
+step, and it has three preconditions. The pin is met. (3)'s comparison run has yet to happen, and
+has to show the researcher answering the questions the §7.5.5 census says the author actually asks.
+And **2b has to have landed upstream** — the schedule risk in this plan, so file it first even
+though it is last to matter. (7), re-recording the tape, follows (5) and not before: the tape
+records the author's tool calls, and those do not change until the mount goes.
