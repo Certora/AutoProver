@@ -16,8 +16,14 @@
 #   3. $CVLR_KB_REPO/src/certora_cvlr_kb/data/*.rag.json
 #   4. the installed certora_cvlr_kb package
 #
+# --crate-source PATH (repeatable) generates cvlr_api_kb from a local CVLR checkout instead of the
+# published crates, which is how documentation gets read before it is released. The pin still says
+# which crates the corpus holds; the checkout only says what is in them, and every entry it
+# produces records that it came from an unpublished tree.
+#
 # Args after `--` go to rag_import:
-#   ./populate_cvlr_rag.sh -- --print          # dry run
+#   ./populate_cvlr_rag.sh -- --print                          # dry run
+#   ./populate_cvlr_rag.sh --crate-source ~/src/cvlr --crate-source ~/src/cvlr-solana
 set -euo pipefail
 
 script_dir="$(realpath "$(dirname "$0")")"
@@ -45,7 +51,8 @@ ingest_manual() {
 # nothing else, which is the whole reason it moved into this repo.
 build_api_docs() {
     local out="$1"
-    if ! (cd "$parent"; uv run --no-sync python -m composer.scripts.cvlr_api_docs --output "$out"); then
+    if ! (cd "$parent"; uv run --no-sync python -m composer.scripts.cvlr_api_docs \
+            --output "$out" "${crate_sources[@]+"${crate_sources[@]}"}"); then
         echo "Could not generate the CVLR API corpus; continuing with whatever else is available." >&2
         echo "  It needs a nightly toolchain (rustup toolchain install nightly) and a warm cargo registry." >&2
         return 1
@@ -54,16 +61,37 @@ build_api_docs() {
 
 manifests=()
 forward=()
+crate_sources=()
 seen_ddash=0
+want_source=0
 for arg in "$@"; do
     if [[ $seen_ddash -eq 1 ]]; then
         forward+=("$arg")
+    elif [[ $want_source -eq 1 ]]; then
+        crate_sources+=(--crate-source "$arg")
+        want_source=0
     elif [[ "$arg" == "--" ]]; then
         seen_ddash=1
+    elif [[ "$arg" == "--crate-source" ]]; then
+        want_source=1
+    elif [[ "$arg" == --crate-source=* ]]; then
+        crate_sources+=(--crate-source "${arg#*=}")
     else
         manifests+=("$arg")
     fi
 done
+if [[ $want_source -eq 1 ]]; then
+    echo "Error: --crate-source needs a path." >&2
+    exit 2
+fi
+
+# An explicit manifest list skips generation entirely, so a checkout passed with one would be
+# silently ignored -- and "it ingested the published API" is indistinguishable from success.
+if [[ ${#crate_sources[@]} -gt 0 && ${#manifests[@]} -gt 0 ]]; then
+    echo "Error: --crate-source generates a manifest, so it cannot be combined with manifest" >&2
+    echo "paths, which skip generation. Pass one or the other." >&2
+    exit 2
+fi
 
 # Unmatched globs must vanish rather than being passed through as literal patterns.
 shopt -s nullglob
