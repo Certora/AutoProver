@@ -52,6 +52,9 @@ DEFAULT_CONNECTION: str = f"postgresql://rag_user:rag_password@{_RAG_HOST}:{_RAG
 SANITY_DEFAULT_CONNECTION: str = f"postgresql://extended_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
 FOUNDRY_DEFAULT_CONNECTION: str = f"postgresql://foundry_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
 CVLR_DEFAULT_CONNECTION: str = f"postgresql://cvlr_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
+CVLR_API_DEFAULT_CONNECTION: str = (
+    f"postgresql://cvlr_api_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
+)
 
 # Logical knowledge-base tag -> default DB connection, for corpora ingested by the generic importer
 # (`composer.scripts.rag_import`). The tag is the one the manifest carries (== a wheel's
@@ -59,11 +62,18 @@ CVLR_DEFAULT_CONNECTION: str = f"postgresql://cvlr_rag_user:rag_password@{_RAG_H
 # `composer.tools.rag_env` requires both halves before a tag is usable. The CVL/Foundry builders
 # predate the importer and use the constants above instead.
 #
-# `cvlr_kb` is fed by the Solana manual built here (scripts/gen_docs.sh, ingested by ragbuild) and
-# by two manifests from the private `certora-cvlr-kb` package. Which of them a database holds is
-# not modelled; an install carrying only some of them is supported.
+# The two CVLR corpora are deliberately separate, and which one answered a question is the whole
+# of how an agent knows what to trust (docs/cvlr-api-docs-plan.md §4.1):
+#
+# * `cvlr_kb` — the Solana manual built here (scripts/gen_docs.sh, ingested by ragbuild), plus
+#   whatever practice manifests an install carries. Prose. Allowed to lag the crates.
+# * `cvlr_api_kb` — generated from the CVLR crates by `composer.scripts.cvlr_api_docs`, at the
+#   releases `composer.spec.cvlr_reference` pins. Authoritative on what exists.
+#
+# Which manifests a database holds is not modelled; an install carrying only some is supported.
 KNOWLEDGE_BASES: dict[str, str] = {
     "cvlr_kb": CVLR_DEFAULT_CONNECTION,
+    "cvlr_api_kb": CVLR_API_DEFAULT_CONNECTION,
 }
 
 

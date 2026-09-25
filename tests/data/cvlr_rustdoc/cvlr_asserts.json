@@ -1,0 +1,1667 @@
+{
+"root": 60,
+"crate_version": "0.6.1",
+"includes_private": false,
+"index": {
+"0": {
+"id": 0,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/asserts.rs",
+"begin": [
+21,
+1
+],
+"end": [
+21,
+40
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_assert_eq",
+"name": "cvlr_assert_eq",
+"id": 1,
+"is_glob": false
+}
+}
+},
+"6": {
+"id": 6,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/asserts.rs",
+"begin": [
+24,
+1
+],
+"end": [
+24,
+39
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_assert_lt",
+"name": "cvlr_assert_lt",
+"id": 7,
+"is_glob": false
+}
+}
+},
+"50": {
+"id": 50,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/lib.rs",
+"begin": [
+13,
+5
+],
+"end": [
+13,
+48
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": {
+"since": null,
+"note": "Replaced by cvlr"
+},
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "crate::cvlr_satisfy",
+"name": "cvt_satisfy",
+"id": 51,
+"is_glob": false
+}
+}
+},
+"12": {
+"id": 12,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/asserts.rs",
+"begin": [
+48,
+1
+],
+"end": [
+48,
+40
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_assume_eq",
+"name": "cvlr_assume_eq",
+"id": 13,
+"is_glob": false
+}
+}
+},
+"18": {
+"id": 18,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/asserts.rs",
+"begin": [
+51,
+1
+],
+"end": [
+51,
+39
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_assume_lt",
+"name": "cvlr_assume_lt",
+"id": 19,
+"is_glob": false
+}
+}
+},
+"24": {
+"id": 24,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/asserts.rs",
+"begin": [
+86,
+1
+],
+"end": [
+86,
+46
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_assert_eq_if",
+"name": "cvlr_assert_eq_if",
+"id": 25,
+"is_glob": false
+}
+}
+},
+"5": {
+"id": 5,
+"crate_id": 0,
+"name": "cvlr_assert_le",
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/asserts.rs",
+"begin": [
+23,
+1
+],
+"end": [
+23,
+40
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [
+"macro_export"
+],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"macro": "macro_rules! cvlr_assert_le {\n    ($lhs:expr, $rhs:expr $(, $desc:literal)?) => { ... };\n}"
+}
+},
+"49": {
+"id": 49,
+"crate_id": 0,
+"name": "cvlr_assume",
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/core.rs",
+"begin": [
+75,
+1
+],
+"end": [
+79,
+2
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [
+"macro_export"
+],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"macro": "macro_rules! cvlr_assume {\n    ($cond: expr $(, $desc: literal)?) => { ... };\n}"
+}
+},
+"30": {
+"id": 30,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/asserts.rs",
+"begin": [
+89,
+1
+],
+"end": [
+89,
+45
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_assert_lt_if",
+"name": "cvlr_assert_lt_if",
+"id": 31,
+"is_glob": false
+}
+}
+},
+"4": {
+"id": 4,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/asserts.rs",
+"begin": [
+23,
+1
+],
+"end": [
+23,
+40
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_assert_le",
+"name": "cvlr_assert_le",
+"id": 5,
+"is_glob": false
+}
+}
+},
+"48": {
+"id": 48,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/lib.rs",
+"begin": [
+12,
+5
+],
+"end": [
+12,
+46
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": {
+"since": null,
+"note": "Replaced by cvlr"
+},
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "crate::cvlr_assume",
+"name": "cvt_assume",
+"id": 49,
+"is_glob": false
+}
+}
+},
+"10": {
+"id": 10,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/asserts.rs",
+"begin": [
+26,
+1
+],
+"end": [
+26,
+39
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_assert_gt",
+"name": "cvlr_assert_gt",
+"id": 11,
+"is_glob": false
+}
+}
+},
+"16": {
+"id": 16,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/asserts.rs",
+"begin": [
+50,
+1
+],
+"end": [
+50,
+40
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_assume_le",
+"name": "cvlr_assume_le",
+"id": 17,
+"is_glob": false
+}
+}
+},
+"60": {
+"id": 60,
+"crate_id": 0,
+"name": "cvlr_asserts",
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/lib.rs",
+"begin": [
+1,
+1
+],
+"end": [
+15,
+2
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [
+{
+"other": "#[attr = NoStd]"
+}
+],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"module": {
+"is_crate": true,
+"items": [
+36,
+45,
+54,
+55,
+47,
+49,
+51,
+53,
+56,
+57,
+58,
+1,
+3,
+5,
+7,
+9,
+11,
+13,
+15,
+17,
+19,
+21,
+23,
+25,
+27,
+29,
+31,
+33,
+35,
+59
+],
+"is_stripped": false
+}
+}
+},
+"22": {
+"id": 22,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/asserts.rs",
+"begin": [
+53,
+1
+],
+"end": [
+53,
+39
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_assume_gt",
+"name": "cvlr_assume_gt",
+"id": 23,
+"is_glob": false
+}
+}
+},
+"28": {
+"id": 28,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/asserts.rs",
+"begin": [
+88,
+1
+],
+"end": [
+88,
+46
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_assert_le_if",
+"name": "cvlr_assert_le_if",
+"id": 29,
+"is_glob": false
+}
+}
+},
+"34": {
+"id": 34,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/asserts.rs",
+"begin": [
+91,
+1
+],
+"end": [
+91,
+45
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_assert_gt_if",
+"name": "cvlr_assert_gt_if",
+"id": 35,
+"is_glob": false
+}
+}
+},
+"59": {
+"id": 59,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/lib.rs",
+"begin": [
+7,
+1
+],
+"end": [
+7,
+17
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "core",
+"name": "core",
+"id": 42,
+"is_glob": true
+}
+}
+},
+"2": {
+"id": 2,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/asserts.rs",
+"begin": [
+22,
+1
+],
+"end": [
+22,
+40
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_assert_ne",
+"name": "cvlr_assert_ne",
+"id": 3,
+"is_glob": false
+}
+}
+},
+"46": {
+"id": 46,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/lib.rs",
+"begin": [
+11,
+5
+],
+"end": [
+11,
+46
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": {
+"since": null,
+"note": "Replaced by cvlr"
+},
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "crate::cvlr_assert",
+"name": "cvt_assert",
+"id": 47,
+"is_glob": false
+}
+}
+},
+"8": {
+"id": 8,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/asserts.rs",
+"begin": [
+25,
+1
+],
+"end": [
+25,
+40
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_assert_ge",
+"name": "cvlr_assert_ge",
+"id": 9,
+"is_glob": false
+}
+}
+},
+"52": {
+"id": 52,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/lib.rs",
+"begin": [
+14,
+5
+],
+"end": [
+14,
+60
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": {
+"since": null,
+"note": "Replaced by cvlr"
+},
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "crate::cvlr_vacuity_check",
+"name": "cvt_vacuity_check",
+"id": 53,
+"is_glob": false
+}
+}
+},
+"14": {
+"id": 14,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/asserts.rs",
+"begin": [
+49,
+1
+],
+"end": [
+49,
+40
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_assume_ne",
+"name": "cvlr_assume_ne",
+"id": 15,
+"is_glob": false
+}
+}
+},
+"20": {
+"id": 20,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/asserts.rs",
+"begin": [
+52,
+1
+],
+"end": [
+52,
+40
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_assume_ge",
+"name": "cvlr_assume_ge",
+"id": 21,
+"is_glob": false
+}
+}
+},
+"26": {
+"id": 26,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/asserts.rs",
+"begin": [
+87,
+1
+],
+"end": [
+87,
+46
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_assert_ne_if",
+"name": "cvlr_assert_ne_if",
+"id": 27,
+"is_glob": false
+}
+}
+},
+"51": {
+"id": 51,
+"crate_id": 0,
+"name": "cvlr_satisfy",
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/core.rs",
+"begin": [
+82,
+1
+],
+"end": [
+88,
+2
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [
+"macro_export"
+],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"macro": "macro_rules! cvlr_satisfy {\n    ($cond: expr $(, $desc: literal)?) => { ... };\n}"
+}
+},
+"32": {
+"id": 32,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-asserts-0.6.1/src/asserts.rs",
+"begin": [
+90,
+1
+],
+"end": [
+90,
+46
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_assert_ge_if",
+"name": "cvlr_assert_ge_if",
+"id": 33,
+"is_glob": false
+}
+}
+}
+},
+"paths": {
+"25": {
+"crate_id": 0,
+"path": [
+"cvlr_asserts",
+"cvlr_assert_eq_if"
+],
+"kind": "macro"
+},
+"23": {
+"crate_id": 0,
+"path": [
+"cvlr_asserts",
+"cvlr_assume_gt"
+],
+"kind": "macro"
+},
+"21": {
+"crate_id": 0,
+"path": [
+"cvlr_asserts",
+"cvlr_assume_ge"
+],
+"kind": "macro"
+},
+"19": {
+"crate_id": 0,
+"path": [
+"cvlr_asserts",
+"cvlr_assume_lt"
+],
+"kind": "macro"
+},
+"17": {
+"crate_id": 0,
+"path": [
+"cvlr_asserts",
+"cvlr_assume_le"
+],
+"kind": "macro"
+},
+"15": {
+"crate_id": 0,
+"path": [
+"cvlr_asserts",
+"cvlr_assume_ne"
+],
+"kind": "macro"
+},
+"13": {
+"crate_id": 0,
+"path": [
+"cvlr_asserts",
+"cvlr_assume_eq"
+],
+"kind": "macro"
+},
+"11": {
+"crate_id": 0,
+"path": [
+"cvlr_asserts",
+"cvlr_assert_gt"
+],
+"kind": "macro"
+},
+"9": {
+"crate_id": 0,
+"path": [
+"cvlr_asserts",
+"cvlr_assert_ge"
+],
+"kind": "macro"
+},
+"7": {
+"crate_id": 0,
+"path": [
+"cvlr_asserts",
+"cvlr_assert_lt"
+],
+"kind": "macro"
+},
+"5": {
+"crate_id": 0,
+"path": [
+"cvlr_asserts",
+"cvlr_assert_le"
+],
+"kind": "macro"
+},
+"3": {
+"crate_id": 0,
+"path": [
+"cvlr_asserts",
+"cvlr_assert_ne"
+],
+"kind": "macro"
+},
+"53": {
+"crate_id": 0,
+"path": [
+"cvlr_asserts",
+"cvlr_vacuity_check"
+],
+"kind": "macro"
+},
+"1": {
+"crate_id": 0,
+"path": [
+"cvlr_asserts",
+"cvlr_assert_eq"
+],
+"kind": "macro"
+},
+"51": {
+"crate_id": 0,
+"path": [
+"cvlr_asserts",
+"cvlr_satisfy"
+],
+"kind": "macro"
+},
+"49": {
+"crate_id": 0,
+"path": [
+"cvlr_asserts",
+"cvlr_assume"
+],
+"kind": "macro"
+},
+"47": {
+"crate_id": 0,
+"path": [
+"cvlr_asserts",
+"cvlr_assert"
+],
+"kind": "macro"
+},
+"35": {
+"crate_id": 0,
+"path": [
+"cvlr_asserts",
+"cvlr_assert_gt_if"
+],
+"kind": "macro"
+},
+"60": {
+"crate_id": 0,
+"path": [
+"cvlr_asserts"
+],
+"kind": "module"
+},
+"33": {
+"crate_id": 0,
+"path": [
+"cvlr_asserts",
+"cvlr_assert_ge_if"
+],
+"kind": "macro"
+},
+"31": {
+"crate_id": 0,
+"path": [
+"cvlr_asserts",
+"cvlr_assert_lt_if"
+],
+"kind": "macro"
+},
+"29": {
+"crate_id": 0,
+"path": [
+"cvlr_asserts",
+"cvlr_assert_le_if"
+],
+"kind": "macro"
+},
+"27": {
+"crate_id": 0,
+"path": [
+"cvlr_asserts",
+"cvlr_assert_ne_if"
+],
+"kind": "macro"
+}
+},
+"external_crates": {},
+"target": {
+"triple": "x86_64-unknown-linux-gnu",
+"target_features": [
+{
+"name": "adx",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "aes",
+"implies_features": [
+"sse2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "amx-avx512",
+"implies_features": [
+"amx-tile"
+],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "amx-bf16",
+"implies_features": [
+"amx-tile"
+],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "amx-complex",
+"implies_features": [
+"amx-tile"
+],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "amx-fp8",
+"implies_features": [
+"amx-tile"
+],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "amx-fp16",
+"implies_features": [
+"amx-tile"
+],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "amx-int8",
+"implies_features": [
+"amx-tile"
+],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "amx-movrs",
+"implies_features": [
+"amx-tile"
+],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "amx-tf32",
+"implies_features": [
+"amx-tile"
+],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "amx-tile",
+"implies_features": [],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "apxf",
+"implies_features": [],
+"unstable_feature_gate": "apx_target_feature",
+"globally_enabled": false
+},
+{
+"name": "avx",
+"implies_features": [
+"sse4.2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx2",
+"implies_features": [
+"avx"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx10.1",
+"implies_features": [
+"avx512bf16",
+"avx512bitalg",
+"avx512bw",
+"avx512cd",
+"avx512dq",
+"avx512f",
+"avx512fp16",
+"avx512ifma",
+"avx512vbmi",
+"avx512vbmi2",
+"avx512vl",
+"avx512vnni",
+"avx512vpopcntdq"
+],
+"unstable_feature_gate": "avx10_target_feature",
+"globally_enabled": false
+},
+{
+"name": "avx10.2",
+"implies_features": [
+"avx10.1",
+"avxvnni",
+"avxvnniint8",
+"avxvnniint16"
+],
+"unstable_feature_gate": "avx10_target_feature",
+"globally_enabled": false
+},
+{
+"name": "avx512bf16",
+"implies_features": [
+"avx512bw"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512bitalg",
+"implies_features": [
+"avx512bw"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512bw",
+"implies_features": [
+"avx512f"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512cd",
+"implies_features": [
+"avx512f"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512dq",
+"implies_features": [
+"avx512f"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512f",
+"implies_features": [
+"avx2",
+"fma",
+"f16c"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512fp16",
+"implies_features": [
+"avx512bw"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512ifma",
+"implies_features": [
+"avx512f"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512vbmi",
+"implies_features": [
+"avx512bw"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512vbmi2",
+"implies_features": [
+"avx512bw"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512vl",
+"implies_features": [
+"avx512f"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512vnni",
+"implies_features": [
+"avx512f"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512vp2intersect",
+"implies_features": [
+"avx512f"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512vpopcntdq",
+"implies_features": [
+"avx512f"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avxifma",
+"implies_features": [
+"avx2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avxneconvert",
+"implies_features": [
+"avx2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avxvnni",
+"implies_features": [
+"avx2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avxvnniint8",
+"implies_features": [
+"avx2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avxvnniint16",
+"implies_features": [
+"avx2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "bmi1",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "bmi2",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "clflushopt",
+"implies_features": [],
+"unstable_feature_gate": "clflushopt_target_feature",
+"globally_enabled": false
+},
+{
+"name": "cmpxchg16b",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "ermsb",
+"implies_features": [],
+"unstable_feature_gate": "ermsb_target_feature",
+"globally_enabled": false
+},
+{
+"name": "f16c",
+"implies_features": [
+"avx"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "fma",
+"implies_features": [
+"avx"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "fma4",
+"implies_features": [
+"avx",
+"sse4a"
+],
+"unstable_feature_gate": "fma4_target_feature",
+"globally_enabled": false
+},
+{
+"name": "fxsr",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": true
+},
+{
+"name": "gfni",
+"implies_features": [
+"sse2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "kl",
+"implies_features": [
+"sse2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "lahfsahf",
+"implies_features": [],
+"unstable_feature_gate": "lahfsahf_target_feature",
+"globally_enabled": false
+},
+{
+"name": "lzcnt",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "movbe",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "movrs",
+"implies_features": [],
+"unstable_feature_gate": "movrs_target_feature",
+"globally_enabled": false
+},
+{
+"name": "pclmulqdq",
+"implies_features": [
+"sse2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "popcnt",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "prfchw",
+"implies_features": [],
+"unstable_feature_gate": "prfchw_target_feature",
+"globally_enabled": false
+},
+{
+"name": "rdrand",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "rdseed",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "rtm",
+"implies_features": [],
+"unstable_feature_gate": "rtm_target_feature",
+"globally_enabled": false
+},
+{
+"name": "sha",
+"implies_features": [
+"sse2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "sha512",
+"implies_features": [
+"avx2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "sm3",
+"implies_features": [
+"avx"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "sm4",
+"implies_features": [
+"avx2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "sse",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": true
+},
+{
+"name": "sse2",
+"implies_features": [
+"sse"
+],
+"unstable_feature_gate": null,
+"globally_enabled": true
+},
+{
+"name": "sse3",
+"implies_features": [
+"sse2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "sse4.1",
+"implies_features": [
+"ssse3"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "sse4.2",
+"implies_features": [
+"sse4.1"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "sse4a",
+"implies_features": [
+"sse3"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "ssse3",
+"implies_features": [
+"sse3"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "tbm",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "vaes",
+"implies_features": [
+"avx2",
+"aes"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "vpclmulqdq",
+"implies_features": [
+"avx",
+"pclmulqdq"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "widekl",
+"implies_features": [
+"kl"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "x87",
+"implies_features": [],
+"unstable_feature_gate": "x87_target_feature",
+"globally_enabled": true
+},
+{
+"name": "xop",
+"implies_features": [
+"fma4",
+"avx",
+"sse4a"
+],
+"unstable_feature_gate": "xop_target_feature",
+"globally_enabled": false
+},
+{
+"name": "xsave",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "xsavec",
+"implies_features": [
+"xsave"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "xsaveopt",
+"implies_features": [
+"xsave"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "xsaves",
+"implies_features": [
+"xsave"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+}
+]
+},
+"format_version": 60
+}

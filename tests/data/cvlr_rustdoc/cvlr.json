@@ -1,0 +1,2245 @@
+{
+"root": 87,
+"crate_version": "0.6.1",
+"includes_private": false,
+"index": {
+"47": {
+"id": 47,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+53,
+5
+],
+"end": [
+53,
+38
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "__macro_support::mock_fn",
+"name": "mock_fn",
+"id": 48,
+"is_glob": false
+}
+}
+},
+"69": {
+"id": 69,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+42,
+5
+],
+"end": [
+42,
+31
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "super::asserts",
+"name": "asserts",
+"id": 7,
+"is_glob": true
+}
+}
+},
+"50": {
+"id": 50,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+55,
+5
+],
+"end": [
+55,
+43
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_early_panic::early_panic",
+"name": "early_panic",
+"id": 42,
+"is_glob": false
+}
+}
+},
+"72": {
+"id": 72,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+71,
+26
+],
+"end": [
+71,
+33
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "crate::mathint::is_u128",
+"name": "is_u128",
+"id": 73,
+"is_glob": false
+}
+}
+},
+"53": {
+"id": 53,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+60,
+9
+],
+"end": [
+60,
+24
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "super::macros::cvlr_assert_all",
+"name": "cvlr_assert_all",
+"id": 54,
+"is_glob": false
+}
+}
+},
+"34": {
+"id": 34,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+44,
+5
+],
+"end": [
+44,
+42
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "super::log::cvlr_log",
+"name": "clog",
+"id": 35,
+"is_glob": false
+}
+}
+},
+"78": {
+"id": 78,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+71,
+51
+],
+"end": [
+71,
+57
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "crate::mathint::is_u64",
+"name": "is_u64",
+"id": 79,
+"is_glob": false
+}
+}
+},
+"59": {
+"id": 59,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+60,
+61
+],
+"end": [
+60,
+77
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "super::macros::cvlr_assume_that",
+"name": "cvlr_assume_that",
+"id": 60,
+"is_glob": false
+}
+}
+},
+"84": {
+"id": 84,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+73,
+1
+],
+"end": [
+73,
+45
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "macros::cvlr_predicate",
+"name": "predicate",
+"id": 85,
+"is_glob": false
+}
+}
+},
+"43": {
+"id": 43,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+50,
+5
+],
+"end": [
+50,
+43
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_hook::cvlr_hook_on_entry",
+"name": "cvlr_hook_on_entry",
+"id": 44,
+"is_glob": false
+}
+}
+},
+"65": {
+"id": 65,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+64,
+29
+],
+"end": [
+64,
+36
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "super::derive::CvlrLog",
+"name": "CvlrLog",
+"id": 66,
+"is_glob": false
+}
+}
+},
+"87": {
+"id": 87,
+"crate_id": 0,
+"name": "cvlr",
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+1,
+1
+],
+"end": [
+73,
+45
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [
+{
+"other": "#[attr = NoStd]"
+}
+],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"module": {
+"is_crate": true,
+"items": [
+4,
+7,
+10,
+13,
+16,
+19,
+22,
+25,
+28,
+31,
+71,
+72,
+74,
+76,
+78,
+80,
+82,
+84,
+86
+],
+"is_stripped": false
+}
+}
+},
+"5": {
+"id": 5,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+6,
+5
+],
+"end": [
+6,
+29
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_asserts",
+"name": "cvlr_asserts",
+"id": 6,
+"is_glob": true
+}
+}
+},
+"49": {
+"id": 49,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+54,
+5
+],
+"end": [
+54,
+35
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "__macro_support::rule",
+"name": "rule",
+"id": 40,
+"is_glob": false
+}
+}
+},
+"8": {
+"id": 8,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+10,
+5
+],
+"end": [
+10,
+29
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_mathint",
+"name": "cvlr_mathint",
+"id": 9,
+"is_glob": true
+}
+}
+},
+"52": {
+"id": 52,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+57,
+5
+],
+"end": [
+57,
+58
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_hook::cvlr_hook_on_exit",
+"name": "hook_on_exit",
+"id": 46,
+"is_glob": false
+}
+}
+},
+"74": {
+"id": 74,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+71,
+35
+],
+"end": [
+71,
+41
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "crate::mathint::is_u16",
+"name": "is_u16",
+"id": 75,
+"is_glob": false
+}
+}
+},
+"11": {
+"id": 11,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+14,
+5
+],
+"end": [
+14,
+28
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_nondet",
+"name": "cvlr_nondet",
+"id": 12,
+"is_glob": true
+}
+}
+},
+"55": {
+"id": 55,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+60,
+26
+],
+"end": [
+60,
+42
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "super::macros::cvlr_assert_that",
+"name": "cvlr_assert_that",
+"id": 56,
+"is_glob": false
+}
+}
+},
+"14": {
+"id": 14,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+18,
+5
+],
+"end": [
+18,
+25
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_log",
+"name": "cvlr_log",
+"id": 15,
+"is_glob": true
+}
+}
+},
+"36": {
+"id": 36,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+45,
+5
+],
+"end": [
+45,
+35
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "super::nondet::nondet",
+"name": "nondet",
+"id": 37,
+"is_glob": false
+}
+}
+},
+"80": {
+"id": 80,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+71,
+59
+],
+"end": [
+71,
+64
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "crate::mathint::is_u8",
+"name": "is_u8",
+"id": 81,
+"is_glob": false
+}
+}
+},
+"17": {
+"id": 17,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+22,
+5
+],
+"end": [
+22,
+28
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_macros",
+"name": "cvlr_macros",
+"id": 18,
+"is_glob": true
+}
+}
+},
+"39": {
+"id": 39,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+48,
+5
+],
+"end": [
+48,
+48
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "__macro_support::rule",
+"name": "cvlr_rule",
+"id": 40,
+"is_glob": false
+}
+}
+},
+"61": {
+"id": 61,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+60,
+79
+],
+"end": [
+60,
+92
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "super::macros::cvlr_eval_all",
+"name": "cvlr_eval_all",
+"id": 62,
+"is_glob": false
+}
+}
+},
+"20": {
+"id": 20,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+26,
+5
+],
+"end": [
+26,
+28
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_derive",
+"name": "cvlr_derive",
+"id": 21,
+"is_glob": true
+}
+}
+},
+"86": {
+"id": 86,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+69,
+1
+],
+"end": [
+69,
+20
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "prelude",
+"name": "prelude",
+"id": 71,
+"is_glob": true
+}
+}
+},
+"23": {
+"id": 23,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+30,
+5
+],
+"end": [
+30,
+26
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_spec",
+"name": "cvlr_spec",
+"id": 24,
+"is_glob": true
+}
+}
+},
+"45": {
+"id": 45,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+51,
+5
+],
+"end": [
+51,
+42
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_hook::cvlr_hook_on_exit",
+"name": "cvlr_hook_on_exit",
+"id": 46,
+"is_glob": false
+}
+}
+},
+"26": {
+"id": 26,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+34,
+5
+],
+"end": [
+34,
+27
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_fixed",
+"name": "cvlr_fixed",
+"id": 27,
+"is_glob": true
+}
+}
+},
+"67": {
+"id": 67,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+64,
+38
+],
+"end": [
+64,
+44
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "super::derive::Nondet",
+"name": "Nondet",
+"id": 68,
+"is_glob": false
+}
+}
+},
+"29": {
+"id": 29,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+38,
+5
+],
+"end": [
+38,
+29
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_decimal",
+"name": "cvlr_decimal",
+"id": 30,
+"is_glob": true
+}
+}
+},
+"51": {
+"id": 51,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+56,
+5
+],
+"end": [
+56,
+60
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_hook::cvlr_hook_on_entry",
+"name": "hook_on_entry",
+"id": 44,
+"is_glob": false
+}
+}
+},
+"32": {
+"id": 32,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+44,
+5
+],
+"end": [
+44,
+42
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "super::log::cvlr_log",
+"name": "clog",
+"id": 33,
+"is_glob": false
+}
+}
+},
+"70": {
+"id": 70,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+66,
+5
+],
+"end": [
+66,
+28
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "super::spec",
+"name": "spec",
+"id": 25,
+"is_glob": true
+}
+}
+},
+"57": {
+"id": 57,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+60,
+44
+],
+"end": [
+60,
+59
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "super::macros::cvlr_assume_all",
+"name": "cvlr_assume_all",
+"id": 58,
+"is_glob": false
+}
+}
+},
+"76": {
+"id": 76,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+71,
+43
+],
+"end": [
+71,
+49
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "crate::mathint::is_u32",
+"name": "is_u32",
+"id": 77,
+"is_glob": false
+}
+}
+},
+"38": {
+"id": 38,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+46,
+5
+],
+"end": [
+46,
+50
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "super::nondet::nondet",
+"name": "cvlr_nondet",
+"id": 37,
+"is_glob": false
+}
+}
+},
+"82": {
+"id": 82,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+72,
+1
+],
+"end": [
+72,
+33
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "macros::cvlr_pif",
+"name": "pif",
+"id": 83,
+"is_glob": false
+}
+}
+},
+"41": {
+"id": 41,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+49,
+5
+],
+"end": [
+49,
+63
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "cvlr_early_panic::early_panic",
+"name": "cvlr_early_panic",
+"id": 42,
+"is_glob": false
+}
+}
+},
+"63": {
+"id": 63,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-0.6.1/src/lib.rs",
+"begin": [
+61,
+9
+],
+"end": [
+61,
+23
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "super::macros::cvlr_eval_that",
+"name": "cvlr_eval_that",
+"id": 64,
+"is_glob": false
+}
+}
+}
+},
+"paths": {
+"73": {
+"crate_id": 4,
+"path": [
+"cvlr_mathint",
+"nativeint_u64",
+"is_u128"
+],
+"kind": "function"
+},
+"46": {
+"crate_id": 30,
+"path": [
+"cvlr_hook",
+"cvlr_hook_on_exit"
+],
+"kind": "proc_attribute"
+},
+"30": {
+"crate_id": 28,
+"path": [
+"cvlr_decimal"
+],
+"kind": "module"
+},
+"68": {
+"crate_id": 25,
+"path": [
+"cvlr_derive",
+"Nondet"
+],
+"kind": "proc_derive"
+},
+"87": {
+"crate_id": 0,
+"path": [
+"cvlr"
+],
+"kind": "module"
+},
+"60": {
+"crate_id": 24,
+"path": [
+"cvlr_macros",
+"cvlr_assume_that"
+],
+"kind": "macro"
+},
+"33": {
+"crate_id": 23,
+"path": [
+"cvlr_log",
+"log",
+"cvlr_log"
+],
+"kind": "function"
+},
+"6": {
+"crate_id": 2,
+"path": [
+"cvlr_asserts"
+],
+"kind": "module"
+},
+"79": {
+"crate_id": 4,
+"path": [
+"cvlr_mathint",
+"nativeint_u64",
+"is_u64"
+],
+"kind": "function"
+},
+"25": {
+"crate_id": 0,
+"path": [
+"cvlr",
+"spec"
+],
+"kind": "module"
+},
+"71": {
+"crate_id": 0,
+"path": [
+"cvlr",
+"prelude"
+],
+"kind": "module"
+},
+"44": {
+"crate_id": 30,
+"path": [
+"cvlr_hook",
+"cvlr_hook_on_entry"
+],
+"kind": "proc_attribute"
+},
+"9": {
+"crate_id": 4,
+"path": [
+"cvlr_mathint"
+],
+"kind": "module"
+},
+"66": {
+"crate_id": 25,
+"path": [
+"cvlr_derive",
+"CvlrLog"
+],
+"kind": "proc_derive"
+},
+"12": {
+"crate_id": 5,
+"path": [
+"cvlr_nondet"
+],
+"kind": "module"
+},
+"85": {
+"crate_id": 24,
+"path": [
+"cvlr_macros",
+"cvlr_predicate"
+],
+"kind": "proc_attribute"
+},
+"58": {
+"crate_id": 24,
+"path": [
+"cvlr_macros",
+"cvlr_assume_all"
+],
+"kind": "macro"
+},
+"77": {
+"crate_id": 4,
+"path": [
+"cvlr_mathint",
+"nativeint_u64",
+"is_u32"
+],
+"kind": "function"
+},
+"42": {
+"crate_id": 29,
+"path": [
+"cvlr_early_panic",
+"early_panic"
+],
+"kind": "proc_attribute"
+},
+"15": {
+"crate_id": 23,
+"path": [
+"cvlr_log"
+],
+"kind": "module"
+},
+"7": {
+"crate_id": 0,
+"path": [
+"cvlr",
+"asserts"
+],
+"kind": "module"
+},
+"18": {
+"crate_id": 24,
+"path": [
+"cvlr_macros"
+],
+"kind": "module"
+},
+"64": {
+"crate_id": 24,
+"path": [
+"cvlr_macros",
+"cvlr_eval_that"
+],
+"kind": "macro"
+},
+"37": {
+"crate_id": 5,
+"path": [
+"cvlr_nondet",
+"core",
+"nondet"
+],
+"kind": "function"
+},
+"83": {
+"crate_id": 24,
+"path": [
+"cvlr_macros",
+"cvlr_pif"
+],
+"kind": "macro"
+},
+"56": {
+"crate_id": 24,
+"path": [
+"cvlr_macros",
+"cvlr_assert_that"
+],
+"kind": "macro"
+},
+"75": {
+"crate_id": 4,
+"path": [
+"cvlr_mathint",
+"nativeint_u64",
+"is_u16"
+],
+"kind": "function"
+},
+"48": {
+"crate_id": 24,
+"path": [
+"cvlr_macros",
+"mock_fn"
+],
+"kind": "proc_attribute"
+},
+"21": {
+"crate_id": 25,
+"path": [
+"cvlr_derive"
+],
+"kind": "module"
+},
+"40": {
+"crate_id": 24,
+"path": [
+"cvlr_macros",
+"rule"
+],
+"kind": "proc_attribute"
+},
+"24": {
+"crate_id": 26,
+"path": [
+"cvlr_spec"
+],
+"kind": "module"
+},
+"62": {
+"crate_id": 24,
+"path": [
+"cvlr_macros",
+"cvlr_eval_all"
+],
+"kind": "macro"
+},
+"35": {
+"crate_id": 23,
+"path": [
+"cvlr_log",
+"cvlr_log"
+],
+"kind": "macro"
+},
+"81": {
+"crate_id": 4,
+"path": [
+"cvlr_mathint",
+"nativeint_u64",
+"is_u8"
+],
+"kind": "function"
+},
+"54": {
+"crate_id": 24,
+"path": [
+"cvlr_macros",
+"cvlr_assert_all"
+],
+"kind": "macro"
+},
+"27": {
+"crate_id": 27,
+"path": [
+"cvlr_fixed"
+],
+"kind": "module"
+}
+},
+"external_crates": {
+"25": {
+"name": "cvlr_derive",
+"html_root_url": null,
+"path": "/tmp/claude-1000/-home-eric-src-AutoProver-solanaProver/21fc606f-22c1-4d10-a664-de553e2045f3/scratchpad/gen/target/debug/deps/libcvlr_derive-5f11962595223bf4.so"
+},
+"28": {
+"name": "cvlr_decimal",
+"html_root_url": null,
+"path": "/tmp/claude-1000/-home-eric-src-AutoProver-solanaProver/21fc606f-22c1-4d10-a664-de553e2045f3/scratchpad/gen/target/debug/deps/libcvlr_decimal-0c8c2b79ae3cc20a.rmeta"
+},
+"2": {
+"name": "cvlr_asserts",
+"html_root_url": null,
+"path": "/tmp/claude-1000/-home-eric-src-AutoProver-solanaProver/21fc606f-22c1-4d10-a664-de553e2045f3/scratchpad/gen/target/debug/deps/libcvlr_asserts-209979ad17d2c1a4.rmeta"
+},
+"24": {
+"name": "cvlr_macros",
+"html_root_url": null,
+"path": "/tmp/claude-1000/-home-eric-src-AutoProver-solanaProver/21fc606f-22c1-4d10-a664-de553e2045f3/scratchpad/gen/target/debug/deps/libcvlr_macros-a0d5ef125b6bae1d.so"
+},
+"5": {
+"name": "cvlr_nondet",
+"html_root_url": null,
+"path": "/tmp/claude-1000/-home-eric-src-AutoProver-solanaProver/21fc606f-22c1-4d10-a664-de553e2045f3/scratchpad/gen/target/debug/deps/libcvlr_nondet-1dc9a8ea8bea4d32.rmeta"
+},
+"27": {
+"name": "cvlr_fixed",
+"html_root_url": null,
+"path": "/tmp/claude-1000/-home-eric-src-AutoProver-solanaProver/21fc606f-22c1-4d10-a664-de553e2045f3/scratchpad/gen/target/debug/deps/libcvlr_fixed-5c5e64235bde4141.rmeta"
+},
+"30": {
+"name": "cvlr_hook",
+"html_root_url": null,
+"path": "/tmp/claude-1000/-home-eric-src-AutoProver-solanaProver/21fc606f-22c1-4d10-a664-de553e2045f3/scratchpad/gen/target/debug/deps/libcvlr_hook-9dfe4245230e0f6d.so"
+},
+"23": {
+"name": "cvlr_log",
+"html_root_url": null,
+"path": "/tmp/claude-1000/-home-eric-src-AutoProver-solanaProver/21fc606f-22c1-4d10-a664-de553e2045f3/scratchpad/gen/target/debug/deps/libcvlr_log-31bed42137373005.rmeta"
+},
+"4": {
+"name": "cvlr_mathint",
+"html_root_url": null,
+"path": "/tmp/claude-1000/-home-eric-src-AutoProver-solanaProver/21fc606f-22c1-4d10-a664-de553e2045f3/scratchpad/gen/target/debug/deps/libcvlr_mathint-d0b9d0692d62790f.rmeta"
+},
+"26": {
+"name": "cvlr_spec",
+"html_root_url": null,
+"path": "/tmp/claude-1000/-home-eric-src-AutoProver-solanaProver/21fc606f-22c1-4d10-a664-de553e2045f3/scratchpad/gen/target/debug/deps/libcvlr_spec-67e67718186b9ab0.rmeta"
+},
+"29": {
+"name": "cvlr_early_panic",
+"html_root_url": null,
+"path": "/tmp/claude-1000/-home-eric-src-AutoProver-solanaProver/21fc606f-22c1-4d10-a664-de553e2045f3/scratchpad/gen/target/debug/deps/libcvlr_early_panic-10e621699f012a7f.so"
+}
+},
+"target": {
+"triple": "x86_64-unknown-linux-gnu",
+"target_features": [
+{
+"name": "adx",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "aes",
+"implies_features": [
+"sse2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "amx-avx512",
+"implies_features": [
+"amx-tile"
+],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "amx-bf16",
+"implies_features": [
+"amx-tile"
+],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "amx-complex",
+"implies_features": [
+"amx-tile"
+],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "amx-fp8",
+"implies_features": [
+"amx-tile"
+],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "amx-fp16",
+"implies_features": [
+"amx-tile"
+],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "amx-int8",
+"implies_features": [
+"amx-tile"
+],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "amx-movrs",
+"implies_features": [
+"amx-tile"
+],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "amx-tf32",
+"implies_features": [
+"amx-tile"
+],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "amx-tile",
+"implies_features": [],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "apxf",
+"implies_features": [],
+"unstable_feature_gate": "apx_target_feature",
+"globally_enabled": false
+},
+{
+"name": "avx",
+"implies_features": [
+"sse4.2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx2",
+"implies_features": [
+"avx"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx10.1",
+"implies_features": [
+"avx512bf16",
+"avx512bitalg",
+"avx512bw",
+"avx512cd",
+"avx512dq",
+"avx512f",
+"avx512fp16",
+"avx512ifma",
+"avx512vbmi",
+"avx512vbmi2",
+"avx512vl",
+"avx512vnni",
+"avx512vpopcntdq"
+],
+"unstable_feature_gate": "avx10_target_feature",
+"globally_enabled": false
+},
+{
+"name": "avx10.2",
+"implies_features": [
+"avx10.1",
+"avxvnni",
+"avxvnniint8",
+"avxvnniint16"
+],
+"unstable_feature_gate": "avx10_target_feature",
+"globally_enabled": false
+},
+{
+"name": "avx512bf16",
+"implies_features": [
+"avx512bw"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512bitalg",
+"implies_features": [
+"avx512bw"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512bw",
+"implies_features": [
+"avx512f"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512cd",
+"implies_features": [
+"avx512f"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512dq",
+"implies_features": [
+"avx512f"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512f",
+"implies_features": [
+"avx2",
+"fma",
+"f16c"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512fp16",
+"implies_features": [
+"avx512bw"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512ifma",
+"implies_features": [
+"avx512f"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512vbmi",
+"implies_features": [
+"avx512bw"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512vbmi2",
+"implies_features": [
+"avx512bw"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512vl",
+"implies_features": [
+"avx512f"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512vnni",
+"implies_features": [
+"avx512f"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512vp2intersect",
+"implies_features": [
+"avx512f"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512vpopcntdq",
+"implies_features": [
+"avx512f"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avxifma",
+"implies_features": [
+"avx2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avxneconvert",
+"implies_features": [
+"avx2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avxvnni",
+"implies_features": [
+"avx2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avxvnniint8",
+"implies_features": [
+"avx2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avxvnniint16",
+"implies_features": [
+"avx2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "bmi1",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "bmi2",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "clflushopt",
+"implies_features": [],
+"unstable_feature_gate": "clflushopt_target_feature",
+"globally_enabled": false
+},
+{
+"name": "cmpxchg16b",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "ermsb",
+"implies_features": [],
+"unstable_feature_gate": "ermsb_target_feature",
+"globally_enabled": false
+},
+{
+"name": "f16c",
+"implies_features": [
+"avx"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "fma",
+"implies_features": [
+"avx"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "fma4",
+"implies_features": [
+"avx",
+"sse4a"
+],
+"unstable_feature_gate": "fma4_target_feature",
+"globally_enabled": false
+},
+{
+"name": "fxsr",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": true
+},
+{
+"name": "gfni",
+"implies_features": [
+"sse2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "kl",
+"implies_features": [
+"sse2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "lahfsahf",
+"implies_features": [],
+"unstable_feature_gate": "lahfsahf_target_feature",
+"globally_enabled": false
+},
+{
+"name": "lzcnt",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "movbe",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "movrs",
+"implies_features": [],
+"unstable_feature_gate": "movrs_target_feature",
+"globally_enabled": false
+},
+{
+"name": "pclmulqdq",
+"implies_features": [
+"sse2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "popcnt",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "prfchw",
+"implies_features": [],
+"unstable_feature_gate": "prfchw_target_feature",
+"globally_enabled": false
+},
+{
+"name": "rdrand",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "rdseed",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "rtm",
+"implies_features": [],
+"unstable_feature_gate": "rtm_target_feature",
+"globally_enabled": false
+},
+{
+"name": "sha",
+"implies_features": [
+"sse2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "sha512",
+"implies_features": [
+"avx2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "sm3",
+"implies_features": [
+"avx"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "sm4",
+"implies_features": [
+"avx2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "sse",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": true
+},
+{
+"name": "sse2",
+"implies_features": [
+"sse"
+],
+"unstable_feature_gate": null,
+"globally_enabled": true
+},
+{
+"name": "sse3",
+"implies_features": [
+"sse2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "sse4.1",
+"implies_features": [
+"ssse3"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "sse4.2",
+"implies_features": [
+"sse4.1"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "sse4a",
+"implies_features": [
+"sse3"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "ssse3",
+"implies_features": [
+"sse3"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "tbm",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "vaes",
+"implies_features": [
+"avx2",
+"aes"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "vpclmulqdq",
+"implies_features": [
+"avx",
+"pclmulqdq"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "widekl",
+"implies_features": [
+"kl"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "x87",
+"implies_features": [],
+"unstable_feature_gate": "x87_target_feature",
+"globally_enabled": true
+},
+{
+"name": "xop",
+"implies_features": [
+"fma4",
+"avx",
+"sse4a"
+],
+"unstable_feature_gate": "xop_target_feature",
+"globally_enabled": false
+},
+{
+"name": "xsave",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "xsavec",
+"implies_features": [
+"xsave"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "xsaveopt",
+"implies_features": [
+"xsave"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "xsaves",
+"implies_features": [
+"xsave"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+}
+]
+},
+"format_version": 60
+}

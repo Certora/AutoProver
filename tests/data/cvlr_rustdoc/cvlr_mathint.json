@@ -1,0 +1,5438 @@
+{
+"root": 269,
+"crate_version": "0.6.1",
+"includes_private": false,
+"index": {
+"100": {
+"id": 100,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+314,
+1
+],
+"end": [
+342,
+2
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [
+{
+"other": "#[allow(clippy::comparison_chain, clippy::non_canonical_partial_ord_impl)]"
+}
+],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [
+"lt",
+"le",
+"gt",
+"ge",
+"__chaining_lt",
+"__chaining_le",
+"__chaining_gt",
+"__chaining_ge"
+],
+"trait": {
+"path": "PartialOrd",
+"id": 101,
+"args": null
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"251": {
+"id": 251,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+550,
+1
+],
+"end": [
+562,
+2
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "From",
+"id": 55,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"borrowed_ref": {
+"lifetime": null,
+"is_mutable": false,
+"type": {
+"array": {
+"type": {
+"primitive": "u8"
+},
+"len": "32"
+}
+}
+}
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"49": {
+"id": 49,
+"crate_id": 0,
+"name": null,
+"span": null,
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [
+{
+"name": "T",
+"kind": {
+"type": {
+"bounds": [],
+"default": null,
+"is_synthetic": false
+}
+}
+}
+],
+"where_predicates": [
+{
+"bound_predicate": {
+"type": {
+"generic": "T"
+},
+"bounds": [
+{
+"trait_bound": {
+"trait": {
+"path": "Sized",
+"id": 46,
+"args": null
+},
+"generic_params": [],
+"modifier": "maybe"
+}
+}
+],
+"generic_params": []
+}
+}
+]
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "BorrowMut",
+"id": 50,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"generic": "T"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": {
+"generic": "T"
+}
+}
+}
+},
+"174": {
+"id": 174,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+508,
+1
+],
+"end": [
+508,
+31
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Add",
+"id": 114,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u32"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"199": {
+"id": 199,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+509,
+1
+],
+"end": [
+509,
+31
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [
+"ne"
+],
+"trait": {
+"path": "PartialEq",
+"id": 92,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u64"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"224": {
+"id": 224,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+512,
+1
+],
+"end": [
+520,
+2
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "From",
+"id": 55,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "i32"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"249": {
+"id": 249,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+543,
+1
+],
+"end": [
+548,
+2
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "From",
+"id": 55,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"borrowed_ref": {
+"lifetime": null,
+"is_mutable": false,
+"type": {
+"array": {
+"type": {
+"primitive": "u64"
+},
+"len": "4"
+}
+}
+}
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"123": {
+"id": 123,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+407,
+1
+],
+"end": [
+413,
+2
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Mul",
+"id": 122,
+"args": null
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"148": {
+"id": 148,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+506,
+1
+],
+"end": [
+506,
+30
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [
+"ne"
+],
+"trait": {
+"path": "PartialEq",
+"id": 92,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u8"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"72": {
+"id": 72,
+"crate_id": 0,
+"name": null,
+"span": null,
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [
+{
+"name": "T",
+"kind": {
+"type": {
+"bounds": [],
+"default": null,
+"is_synthetic": false
+}
+}
+}
+],
+"where_predicates": [
+{
+"bound_predicate": {
+"type": {
+"generic": "T"
+},
+"bounds": [
+{
+"outlives": "'static"
+},
+{
+"trait_bound": {
+"trait": {
+"path": "Sized",
+"id": 46,
+"args": null
+},
+"generic_params": [],
+"modifier": "maybe"
+}
+}
+],
+"generic_params": []
+}
+}
+]
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Any",
+"id": 73,
+"args": null
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": {
+"generic": "T"
+}
+}
+}
+},
+"197": {
+"id": 197,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+509,
+1
+],
+"end": [
+509,
+31
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Div",
+"id": 126,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u64"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"222": {
+"id": 222,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+510,
+1
+],
+"end": [
+510,
+32
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [
+"lt",
+"le",
+"gt",
+"ge",
+"__chaining_lt",
+"__chaining_le",
+"__chaining_gt",
+"__chaining_ge"
+],
+"trait": {
+"path": "PartialOrd",
+"id": 101,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u128"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"247": {
+"id": 247,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+536,
+1
+],
+"end": [
+541,
+2
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "From",
+"id": 55,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"borrowed_ref": {
+"lifetime": null,
+"is_mutable": false,
+"type": {
+"array": {
+"type": {
+"primitive": "u64"
+},
+"len": "2"
+}
+}
+}
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"146": {
+"id": 146,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+506,
+1
+],
+"end": [
+506,
+30
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Div",
+"id": 126,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u8"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"171": {
+"id": 171,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+507,
+1
+],
+"end": [
+507,
+31
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [
+"lt",
+"le",
+"gt",
+"ge",
+"__chaining_lt",
+"__chaining_le",
+"__chaining_gt",
+"__chaining_ge"
+],
+"trait": {
+"path": "PartialOrd",
+"id": 101,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u16"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"45": {
+"id": 45,
+"crate_id": 0,
+"name": null,
+"span": null,
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [
+{
+"name": "T",
+"kind": {
+"type": {
+"bounds": [],
+"default": null,
+"is_synthetic": false
+}
+}
+}
+],
+"where_predicates": [
+{
+"bound_predicate": {
+"type": {
+"generic": "T"
+},
+"bounds": [
+{
+"trait_bound": {
+"trait": {
+"path": "Sized",
+"id": 46,
+"args": null
+},
+"generic_params": [],
+"modifier": "maybe"
+}
+}
+],
+"generic_params": []
+}
+}
+]
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Borrow",
+"id": 47,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"generic": "T"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": {
+"generic": "T"
+}
+}
+}
+},
+"69": {
+"id": 69,
+"crate_id": 0,
+"name": null,
+"span": null,
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [
+{
+"name": "T",
+"kind": {
+"type": {
+"bounds": [],
+"default": null,
+"is_synthetic": false
+}
+}
+},
+{
+"name": "U",
+"kind": {
+"type": {
+"bounds": [],
+"default": null,
+"is_synthetic": false
+}
+}
+}
+],
+"where_predicates": [
+{
+"bound_predicate": {
+"type": {
+"generic": "U"
+},
+"bounds": [
+{
+"trait_bound": {
+"trait": {
+"path": "Into",
+"id": 4,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"generic": "T"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"generic_params": [],
+"modifier": "none"
+}
+}
+],
+"generic_params": []
+}
+}
+]
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "TryFrom",
+"id": 61,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"generic": "U"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": {
+"generic": "T"
+}
+}
+}
+},
+"119": {
+"id": 119,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+399,
+1
+],
+"end": [
+405,
+2
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Sub",
+"id": 118,
+"args": null
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"18": {
+"id": 18,
+"crate_id": 0,
+"name": "is_u128",
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+257,
+5
+],
+"end": [
+259,
+6
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"function": {
+"sig": {
+"inputs": [
+[
+"self",
+{
+"generic": "Self"
+}
+]
+],
+"output": {
+"primitive": "bool"
+},
+"is_c_variadic": false
+},
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"header": {
+"is_const": false,
+"is_unsafe": false,
+"is_async": false,
+"abi": "Rust"
+},
+"has_body": true,
+"default_unstable": null
+}
+}
+},
+"194": {
+"id": 194,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+509,
+1
+],
+"end": [
+509,
+31
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Mul",
+"id": 122,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u64"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"269": {
+"id": 269,
+"crate_id": 0,
+"name": "cvlr_mathint",
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/lib.rs",
+"begin": [
+1,
+1
+],
+"end": [
+16,
+65
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [
+{
+"other": "#[attr = NoStd]"
+}
+],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"module": {
+"is_crate": true,
+"items": [
+262,
+263,
+264,
+265,
+266,
+267,
+268
+],
+"is_stripped": false
+}
+}
+},
+"143": {
+"id": 143,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+506,
+1
+],
+"end": [
+506,
+30
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Mul",
+"id": 122,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u8"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"42": {
+"id": 42,
+"crate_id": 0,
+"name": null,
+"span": null,
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "RefUnwindSafe",
+"id": 43,
+"args": null
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": true,
+"blanket_impl": null
+}
+}
+},
+"268": {
+"id": 268,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/lib.rs",
+"begin": [
+16,
+58
+],
+"end": [
+16,
+63
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "nativeint_u64::is_u8",
+"name": "is_u8",
+"id": 257,
+"is_glob": false
+}
+}
+},
+"91": {
+"id": 91,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+304,
+1
+],
+"end": [
+309,
+2
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [
+"ne"
+],
+"trait": {
+"path": "PartialEq",
+"id": 92,
+"args": null
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"267": {
+"id": 267,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/lib.rs",
+"begin": [
+16,
+50
+],
+"end": [
+16,
+56
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "nativeint_u64::is_u64",
+"name": "is_u64",
+"id": 260,
+"is_glob": false
+}
+}
+},
+"40": {
+"id": 40,
+"crate_id": 0,
+"name": null,
+"span": null,
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "UnwindSafe",
+"id": 41,
+"args": null
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": true,
+"blanket_impl": null
+}
+}
+},
+"191": {
+"id": 191,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+509,
+1
+],
+"end": [
+509,
+31
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Add",
+"id": 114,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u64"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"216": {
+"id": 216,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+510,
+1
+],
+"end": [
+510,
+32
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [
+"ne"
+],
+"trait": {
+"path": "PartialEq",
+"id": 92,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u128"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"241": {
+"id": 241,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+521,
+1
+],
+"end": [
+521,
+31
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [
+"lt",
+"le",
+"gt",
+"ge",
+"__chaining_lt",
+"__chaining_le",
+"__chaining_gt",
+"__chaining_ge"
+],
+"trait": {
+"path": "PartialOrd",
+"id": 101,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "i32"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"115": {
+"id": 115,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+391,
+1
+],
+"end": [
+397,
+2
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Add",
+"id": 114,
+"args": null
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"266": {
+"id": 266,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/lib.rs",
+"begin": [
+16,
+42
+],
+"end": [
+16,
+48
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "nativeint_u64::is_u32",
+"name": "is_u32",
+"id": 259,
+"is_glob": false
+}
+}
+},
+"140": {
+"id": 140,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+506,
+1
+],
+"end": [
+506,
+30
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Add",
+"id": 114,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u8"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"165": {
+"id": 165,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+507,
+1
+],
+"end": [
+507,
+31
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [
+"ne"
+],
+"trait": {
+"path": "PartialEq",
+"id": 92,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u16"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"64": {
+"id": 64,
+"crate_id": 0,
+"name": null,
+"span": null,
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [
+{
+"name": "T",
+"kind": {
+"type": {
+"bounds": [],
+"default": null,
+"is_synthetic": false
+}
+}
+},
+{
+"name": "U",
+"kind": {
+"type": {
+"bounds": [],
+"default": null,
+"is_synthetic": false
+}
+}
+}
+],
+"where_predicates": [
+{
+"bound_predicate": {
+"type": {
+"generic": "U"
+},
+"bounds": [
+{
+"trait_bound": {
+"trait": {
+"path": "TryFrom",
+"id": 61,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"generic": "T"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"generic_params": [],
+"modifier": "none"
+}
+}
+],
+"generic_params": []
+}
+}
+]
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "TryInto",
+"id": 65,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"generic": "U"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": {
+"generic": "T"
+}
+}
+}
+},
+"89": {
+"id": 89,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+1,
+27
+],
+"end": [
+1,
+32
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [
+"automatically_derived"
+],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [
+"clone_from"
+],
+"trait": {
+"path": "Clone",
+"id": 53,
+"args": null
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"265": {
+"id": 265,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/lib.rs",
+"begin": [
+16,
+34
+],
+"end": [
+16,
+40
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "nativeint_u64::is_u16",
+"name": "is_u16",
+"id": 258,
+"is_glob": false
+}
+}
+},
+"38": {
+"id": 38,
+"crate_id": 0,
+"name": null,
+"span": null,
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Unpin",
+"id": 39,
+"args": null
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": true,
+"blanket_impl": null
+}
+}
+},
+"214": {
+"id": 214,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+510,
+1
+],
+"end": [
+510,
+32
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Div",
+"id": 126,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u128"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"264": {
+"id": 264,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/lib.rs",
+"begin": [
+16,
+25
+],
+"end": [
+16,
+32
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "nativeint_u64::is_u128",
+"name": "is_u128",
+"id": 261,
+"is_glob": false
+}
+}
+},
+"163": {
+"id": 163,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+507,
+1
+],
+"end": [
+507,
+31
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Div",
+"id": 126,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u16"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"188": {
+"id": 188,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+508,
+1
+],
+"end": [
+508,
+31
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [
+"lt",
+"le",
+"gt",
+"ge",
+"__chaining_lt",
+"__chaining_le",
+"__chaining_gt",
+"__chaining_ge"
+],
+"trait": {
+"path": "PartialOrd",
+"id": 101,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u32"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"263": {
+"id": 263,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/lib.rs",
+"begin": [
+14,
+1
+],
+"end": [
+14,
+50
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"use": {
+"source": "nativeint_u64::NativeIntU64",
+"name": "NativeInt",
+"id": 2,
+"is_glob": false
+}
+}
+},
+"137": {
+"id": 137,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+496,
+1
+],
+"end": [
+504,
+2
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "From",
+"id": 55,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u128"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"11": {
+"id": 11,
+"crate_id": 0,
+"name": "u64_max",
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+229,
+5
+],
+"end": [
+231,
+6
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"function": {
+"sig": {
+"inputs": [],
+"output": {
+"generic": "Self"
+},
+"is_c_variadic": false
+},
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"header": {
+"is_const": false,
+"is_unsafe": false,
+"is_async": false,
+"abi": "Rust"
+},
+"has_body": true,
+"default_unstable": null
+}
+}
+},
+"36": {
+"id": 36,
+"crate_id": 0,
+"name": null,
+"span": null,
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "UnsafeUnpin",
+"id": 37,
+"args": null
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": true,
+"blanket_impl": null
+}
+}
+},
+"86": {
+"id": 86,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+1,
+21
+],
+"end": [
+1,
+25
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [
+"automatically_derived"
+],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Copy",
+"id": 87,
+"args": null
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"111": {
+"id": 111,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+383,
+1
+],
+"end": [
+389,
+2
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Neg",
+"id": 110,
+"args": null
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"211": {
+"id": 211,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+510,
+1
+],
+"end": [
+510,
+32
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Mul",
+"id": 122,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u128"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"261": {
+"id": 261,
+"crate_id": 0,
+"name": "is_u128",
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+590,
+1
+],
+"end": [
+590,
+41
+]
+},
+"visibility": "public",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"function": {
+"sig": {
+"inputs": [
+[
+"v",
+{
+"primitive": "u128"
+}
+]
+],
+"output": {
+"primitive": "bool"
+},
+"is_c_variadic": false
+},
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"header": {
+"is_const": false,
+"is_unsafe": false,
+"is_async": false,
+"abi": "Rust"
+},
+"has_body": true,
+"default_unstable": null
+}
+}
+},
+"135": {
+"id": 135,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+494,
+1
+],
+"end": [
+494,
+31
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "From",
+"id": 55,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u64"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"160": {
+"id": 160,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+507,
+1
+],
+"end": [
+507,
+31
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Mul",
+"id": 122,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u16"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"34": {
+"id": 34,
+"crate_id": 0,
+"name": null,
+"span": null,
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Freeze",
+"id": 35,
+"args": null
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": true,
+"blanket_impl": null
+}
+}
+},
+"59": {
+"id": 59,
+"crate_id": 0,
+"name": null,
+"span": null,
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [
+{
+"name": "T",
+"kind": {
+"type": {
+"bounds": [],
+"default": null,
+"is_synthetic": false
+}
+}
+}
+],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "From",
+"id": 55,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"generic": "T"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": {
+"generic": "T"
+}
+}
+}
+},
+"84": {
+"id": 84,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+1,
+14
+],
+"end": [
+1,
+19
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [
+"automatically_derived"
+],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Debug",
+"id": 85,
+"args": null
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"235": {
+"id": 235,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+521,
+1
+],
+"end": [
+521,
+31
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [
+"ne"
+],
+"trait": {
+"path": "PartialEq",
+"id": 92,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "i32"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"133": {
+"id": 133,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+493,
+1
+],
+"end": [
+493,
+31
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "From",
+"id": 55,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u32"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"32": {
+"id": 32,
+"crate_id": 0,
+"name": null,
+"span": null,
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Sync",
+"id": 33,
+"args": null
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": true,
+"blanket_impl": null
+}
+}
+},
+"57": {
+"id": 57,
+"crate_id": 0,
+"name": null,
+"span": null,
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [
+{
+"name": "T",
+"kind": {
+"type": {
+"bounds": [],
+"default": null,
+"is_synthetic": false
+}
+}
+},
+{
+"name": "U",
+"kind": {
+"type": {
+"bounds": [],
+"default": null,
+"is_synthetic": false
+}
+}
+}
+],
+"where_predicates": [
+{
+"bound_predicate": {
+"type": {
+"generic": "U"
+},
+"bounds": [
+{
+"trait_bound": {
+"trait": {
+"path": "From",
+"id": 55,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"generic": "T"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"generic_params": [],
+"modifier": "none"
+}
+}
+],
+"generic_params": []
+}
+}
+]
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Into",
+"id": 4,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"generic": "U"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": {
+"generic": "T"
+}
+}
+}
+},
+"208": {
+"id": 208,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+510,
+1
+],
+"end": [
+510,
+32
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Add",
+"id": 114,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u128"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"233": {
+"id": 233,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+521,
+1
+],
+"end": [
+521,
+31
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Div",
+"id": 126,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "i32"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"157": {
+"id": 157,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+507,
+1
+],
+"end": [
+507,
+31
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Add",
+"id": 114,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u16"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"182": {
+"id": 182,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+508,
+1
+],
+"end": [
+508,
+31
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [
+"ne"
+],
+"trait": {
+"path": "PartialEq",
+"id": 92,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u32"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"106": {
+"id": 106,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+344,
+1
+],
+"end": [
+381,
+2
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [
+"max",
+"min",
+"clamp"
+],
+"trait": {
+"path": "Ord",
+"id": 107,
+"args": null
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"131": {
+"id": 131,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+492,
+1
+],
+"end": [
+492,
+31
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "From",
+"id": 55,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u16"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"30": {
+"id": 30,
+"crate_id": 0,
+"name": null,
+"span": null,
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Send",
+"id": 31,
+"args": null
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": true,
+"blanket_impl": null
+}
+}
+},
+"29": {
+"id": 29,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+196,
+1
+],
+"end": [
+302,
+2
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": null,
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [
+11,
+18
+],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"180": {
+"id": 180,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+508,
+1
+],
+"end": [
+508,
+31
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Div",
+"id": 126,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u32"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"205": {
+"id": 205,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+509,
+1
+],
+"end": [
+509,
+31
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [
+"lt",
+"le",
+"gt",
+"ge",
+"__chaining_lt",
+"__chaining_le",
+"__chaining_gt",
+"__chaining_ge"
+],
+"trait": {
+"path": "PartialOrd",
+"id": 101,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u64"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"79": {
+"id": 79,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+1,
+10
+],
+"end": [
+1,
+12
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [
+"automatically_derived"
+],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [
+"assert_receiver_is_total_eq",
+"assert_fields_are_eq"
+],
+"trait": {
+"path": "Eq",
+"id": 80,
+"args": null
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"230": {
+"id": 230,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+521,
+1
+],
+"end": [
+521,
+31
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Mul",
+"id": 122,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "i32"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"255": {
+"id": 255,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+572,
+1
+],
+"end": [
+576,
+2
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [
+"nondet_with"
+],
+"trait": {
+"path": "Nondet",
+"id": 256,
+"args": null
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"129": {
+"id": 129,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+491,
+1
+],
+"end": [
+491,
+30
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "From",
+"id": 55,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u8"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"154": {
+"id": 154,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+506,
+1
+],
+"end": [
+506,
+30
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [
+"lt",
+"le",
+"gt",
+"ge",
+"__chaining_lt",
+"__chaining_le",
+"__chaining_gt",
+"__chaining_ge"
+],
+"trait": {
+"path": "PartialOrd",
+"id": 101,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u8"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"2": {
+"id": 2,
+"crate_id": 0,
+"name": "NativeIntU64",
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+6,
+1
+],
+"end": [
+6,
+30
+]
+},
+"visibility": "public",
+"docs": "Native Mathematical Integer (represented by u64 number)\n\nThe magic is that symbolically an SBF word is mapped to 256 bit symbolic\ninteger.",
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"struct": {
+"kind": {
+"tuple": [
+null
+]
+},
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"impls": [
+29,
+30,
+32,
+34,
+36,
+38,
+40,
+42,
+45,
+49,
+52,
+57,
+59,
+64,
+69,
+72,
+77,
+79,
+84,
+86,
+89,
+91,
+100,
+106,
+111,
+115,
+119,
+123,
+127,
+129,
+131,
+133,
+135,
+137,
+140,
+143,
+146,
+148,
+154,
+157,
+160,
+163,
+165,
+171,
+174,
+177,
+180,
+182,
+188,
+191,
+194,
+197,
+199,
+205,
+208,
+211,
+214,
+216,
+222,
+224,
+227,
+230,
+233,
+235,
+241,
+243,
+245,
+247,
+249,
+251,
+253,
+255
+]
+}
+}
+},
+"52": {
+"id": 52,
+"crate_id": 0,
+"name": null,
+"span": null,
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [
+{
+"name": "T",
+"kind": {
+"type": {
+"bounds": [],
+"default": null,
+"is_synthetic": false
+}
+}
+}
+],
+"where_predicates": [
+{
+"bound_predicate": {
+"type": {
+"generic": "T"
+},
+"bounds": [
+{
+"trait_bound": {
+"trait": {
+"path": "Clone",
+"id": 53,
+"args": null
+},
+"generic_params": [],
+"modifier": "none"
+}
+}
+],
+"generic_params": []
+}
+}
+]
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "CloneToUninit",
+"id": 54,
+"args": null
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": {
+"generic": "T"
+}
+}
+}
+},
+"77": {
+"id": 77,
+"crate_id": 0,
+"name": null,
+"span": null,
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [
+{
+"name": "T",
+"kind": {
+"type": {
+"bounds": [],
+"default": null,
+"is_synthetic": false
+}
+}
+}
+],
+"where_predicates": [
+{
+"bound_predicate": {
+"type": {
+"generic": "T"
+},
+"bounds": [
+{
+"trait_bound": {
+"trait": {
+"path": "Clone",
+"id": 53,
+"args": null
+},
+"generic_params": [],
+"modifier": "none"
+}
+}
+],
+"generic_params": []
+}
+}
+]
+},
+"provided_trait_methods": [
+"clone_into"
+],
+"trait": {
+"path": "ToOwned",
+"id": 78,
+"args": null
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": {
+"generic": "T"
+}
+}
+}
+},
+"253": {
+"id": 253,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+564,
+1
+],
+"end": [
+570,
+2
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "From",
+"id": 55,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"borrowed_ref": {
+"lifetime": null,
+"is_mutable": false,
+"type": {
+"slice": {
+"primitive": "u8"
+}
+}
+}
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"127": {
+"id": 127,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+415,
+1
+],
+"end": [
+421,
+2
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Div",
+"id": 126,
+"args": null
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"177": {
+"id": 177,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+508,
+1
+],
+"end": [
+508,
+31
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Mul",
+"id": 122,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "u32"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+},
+"227": {
+"id": 227,
+"crate_id": 0,
+"name": null,
+"span": {
+"filename": "/home/eric/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cvlr-mathint-0.6.1/src/nativeint_u64.rs",
+"begin": [
+521,
+1
+],
+"end": [
+521,
+31
+]
+},
+"visibility": "default",
+"docs": null,
+"links": {},
+"attrs": [],
+"deprecation": null,
+"stability": null,
+"const_stability": null,
+"inner": {
+"impl": {
+"is_unsafe": false,
+"generics": {
+"params": [],
+"where_predicates": []
+},
+"provided_trait_methods": [],
+"trait": {
+"path": "Add",
+"id": 114,
+"args": {
+"angle_bracketed": {
+"args": [
+{
+"type": {
+"primitive": "i32"
+}
+}
+],
+"constraints": []
+}
+}
+},
+"for": {
+"resolved_path": {
+"path": "NativeIntU64",
+"id": 2,
+"args": null
+}
+},
+"items": [],
+"is_negative": false,
+"is_synthetic": false,
+"blanket_impl": null
+}
+}
+}
+},
+"paths": {
+"257": {
+"crate_id": 0,
+"path": [
+"cvlr_mathint",
+"nativeint_u64",
+"is_u8"
+],
+"kind": "function"
+},
+"260": {
+"crate_id": 0,
+"path": [
+"cvlr_mathint",
+"nativeint_u64",
+"is_u64"
+],
+"kind": "function"
+},
+"258": {
+"crate_id": 0,
+"path": [
+"cvlr_mathint",
+"nativeint_u64",
+"is_u16"
+],
+"kind": "function"
+},
+"269": {
+"crate_id": 0,
+"path": [
+"cvlr_mathint"
+],
+"kind": "module"
+},
+"261": {
+"crate_id": 0,
+"path": [
+"cvlr_mathint",
+"nativeint_u64",
+"is_u128"
+],
+"kind": "function"
+},
+"2": {
+"crate_id": 0,
+"path": [
+"cvlr_mathint",
+"nativeint_u64",
+"NativeIntU64"
+],
+"kind": "struct"
+},
+"259": {
+"crate_id": 0,
+"path": [
+"cvlr_mathint",
+"nativeint_u64",
+"is_u32"
+],
+"kind": "function"
+}
+},
+"external_crates": {},
+"target": {
+"triple": "x86_64-unknown-linux-gnu",
+"target_features": [
+{
+"name": "adx",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "aes",
+"implies_features": [
+"sse2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "amx-avx512",
+"implies_features": [
+"amx-tile"
+],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "amx-bf16",
+"implies_features": [
+"amx-tile"
+],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "amx-complex",
+"implies_features": [
+"amx-tile"
+],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "amx-fp8",
+"implies_features": [
+"amx-tile"
+],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "amx-fp16",
+"implies_features": [
+"amx-tile"
+],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "amx-int8",
+"implies_features": [
+"amx-tile"
+],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "amx-movrs",
+"implies_features": [
+"amx-tile"
+],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "amx-tf32",
+"implies_features": [
+"amx-tile"
+],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "amx-tile",
+"implies_features": [],
+"unstable_feature_gate": "x86_amx_intrinsics",
+"globally_enabled": false
+},
+{
+"name": "apxf",
+"implies_features": [],
+"unstable_feature_gate": "apx_target_feature",
+"globally_enabled": false
+},
+{
+"name": "avx",
+"implies_features": [
+"sse4.2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx2",
+"implies_features": [
+"avx"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx10.1",
+"implies_features": [
+"avx512bf16",
+"avx512bitalg",
+"avx512bw",
+"avx512cd",
+"avx512dq",
+"avx512f",
+"avx512fp16",
+"avx512ifma",
+"avx512vbmi",
+"avx512vbmi2",
+"avx512vl",
+"avx512vnni",
+"avx512vpopcntdq"
+],
+"unstable_feature_gate": "avx10_target_feature",
+"globally_enabled": false
+},
+{
+"name": "avx10.2",
+"implies_features": [
+"avx10.1",
+"avxvnni",
+"avxvnniint8",
+"avxvnniint16"
+],
+"unstable_feature_gate": "avx10_target_feature",
+"globally_enabled": false
+},
+{
+"name": "avx512bf16",
+"implies_features": [
+"avx512bw"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512bitalg",
+"implies_features": [
+"avx512bw"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512bw",
+"implies_features": [
+"avx512f"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512cd",
+"implies_features": [
+"avx512f"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512dq",
+"implies_features": [
+"avx512f"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512f",
+"implies_features": [
+"avx2",
+"fma",
+"f16c"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512fp16",
+"implies_features": [
+"avx512bw"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512ifma",
+"implies_features": [
+"avx512f"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512vbmi",
+"implies_features": [
+"avx512bw"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512vbmi2",
+"implies_features": [
+"avx512bw"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512vl",
+"implies_features": [
+"avx512f"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512vnni",
+"implies_features": [
+"avx512f"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512vp2intersect",
+"implies_features": [
+"avx512f"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avx512vpopcntdq",
+"implies_features": [
+"avx512f"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avxifma",
+"implies_features": [
+"avx2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avxneconvert",
+"implies_features": [
+"avx2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avxvnni",
+"implies_features": [
+"avx2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avxvnniint8",
+"implies_features": [
+"avx2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "avxvnniint16",
+"implies_features": [
+"avx2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "bmi1",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "bmi2",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "clflushopt",
+"implies_features": [],
+"unstable_feature_gate": "clflushopt_target_feature",
+"globally_enabled": false
+},
+{
+"name": "cmpxchg16b",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "ermsb",
+"implies_features": [],
+"unstable_feature_gate": "ermsb_target_feature",
+"globally_enabled": false
+},
+{
+"name": "f16c",
+"implies_features": [
+"avx"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "fma",
+"implies_features": [
+"avx"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "fma4",
+"implies_features": [
+"avx",
+"sse4a"
+],
+"unstable_feature_gate": "fma4_target_feature",
+"globally_enabled": false
+},
+{
+"name": "fxsr",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": true
+},
+{
+"name": "gfni",
+"implies_features": [
+"sse2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "kl",
+"implies_features": [
+"sse2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "lahfsahf",
+"implies_features": [],
+"unstable_feature_gate": "lahfsahf_target_feature",
+"globally_enabled": false
+},
+{
+"name": "lzcnt",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "movbe",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "movrs",
+"implies_features": [],
+"unstable_feature_gate": "movrs_target_feature",
+"globally_enabled": false
+},
+{
+"name": "pclmulqdq",
+"implies_features": [
+"sse2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "popcnt",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "prfchw",
+"implies_features": [],
+"unstable_feature_gate": "prfchw_target_feature",
+"globally_enabled": false
+},
+{
+"name": "rdrand",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "rdseed",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "rtm",
+"implies_features": [],
+"unstable_feature_gate": "rtm_target_feature",
+"globally_enabled": false
+},
+{
+"name": "sha",
+"implies_features": [
+"sse2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "sha512",
+"implies_features": [
+"avx2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "sm3",
+"implies_features": [
+"avx"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "sm4",
+"implies_features": [
+"avx2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "sse",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": true
+},
+{
+"name": "sse2",
+"implies_features": [
+"sse"
+],
+"unstable_feature_gate": null,
+"globally_enabled": true
+},
+{
+"name": "sse3",
+"implies_features": [
+"sse2"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "sse4.1",
+"implies_features": [
+"ssse3"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "sse4.2",
+"implies_features": [
+"sse4.1"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "sse4a",
+"implies_features": [
+"sse3"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "ssse3",
+"implies_features": [
+"sse3"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "tbm",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "vaes",
+"implies_features": [
+"avx2",
+"aes"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "vpclmulqdq",
+"implies_features": [
+"avx",
+"pclmulqdq"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "widekl",
+"implies_features": [
+"kl"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "x87",
+"implies_features": [],
+"unstable_feature_gate": "x87_target_feature",
+"globally_enabled": true
+},
+{
+"name": "xop",
+"implies_features": [
+"fma4",
+"avx",
+"sse4a"
+],
+"unstable_feature_gate": "xop_target_feature",
+"globally_enabled": false
+},
+{
+"name": "xsave",
+"implies_features": [],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "xsavec",
+"implies_features": [
+"xsave"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "xsaveopt",
+"implies_features": [
+"xsave"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+},
+{
+"name": "xsaves",
+"implies_features": [
+"xsave"
+],
+"unstable_feature_gate": null,
+"globally_enabled": false
+}
+]
+},
+"format_version": 60
+}

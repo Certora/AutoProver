@@ -1,15 +1,20 @@
 #!/bin/bash
-# Ingest the cvlr_kb corpus: solana.html (from gen_docs.sh), plus any manifests found.
+# Ingest the two CVLR corpora.
 #
-# The manifests -- the CVLR crate reference and the project-derived practice entries -- are built
-# in the private certora-cvlr-kb repo, because that is where the API key, cargo and model are.
-# This script finds and ingests them; it does not build them. Either source can be missing and the
-# other still lands; both missing is an error.
+#   cvlr_kb      the Solana manual (solana.html, from gen_docs.sh) plus any practice manifests
+#                found. Prose, hand-written, allowed to lag the crates.
+#   cvlr_api_kb  the CVLR API, generated here by composer.scripts.cvlr_api_docs from rustdoc over
+#                the releases composer/spec/cvlr_reference.py pins.
+#
+# Each manifest declares its own knowledge_base, and rag_import routes by that tag, so both land
+# from one call. See docs/cvlr-api-docs-plan.md. Any source can be missing and the others still
+# land; all missing is an error.
 #
 # Manifest resolution, in order:
-#   1. paths given before `--`, which skip discovery
-#   2. $CVLR_KB_REPO/src/certora_cvlr_kb/data/*.rag.json
-#   3. the installed certora_cvlr_kb package
+#   1. paths given before `--`, which skip both generation and discovery
+#   2. the generated cvlr_api_kb manifest
+#   3. $CVLR_KB_REPO/src/certora_cvlr_kb/data/*.rag.json
+#   4. the installed certora_cvlr_kb package
 #
 # Args after `--` go to rag_import:
 #   ./populate_cvlr_rag.sh -- --print          # dry run
@@ -36,6 +41,17 @@ ingest_manual() {
         python -m composer.scripts.ragbuild --output "$conn" "$docs_dir/solana.html")
 }
 
+# The API corpus is built here rather than found: it needs cargo and a nightly toolchain and
+# nothing else, which is the whole reason it moved into this repo.
+build_api_docs() {
+    local out="$1"
+    if ! (cd "$parent"; uv run --no-sync python -m composer.scripts.cvlr_api_docs --output "$out"); then
+        echo "Could not generate the CVLR API corpus; continuing with whatever else is available." >&2
+        echo "  It needs a nightly toolchain (rustup toolchain install nightly) and a warm cargo registry." >&2
+        return 1
+    fi
+}
+
 manifests=()
 forward=()
 seen_ddash=0
@@ -51,6 +67,19 @@ done
 
 # Unmatched globs must vanish rather than being passed through as literal patterns.
 shopt -s nullglob
+
+# Generated first so it joins the same rag_import call as everything else; an explicit manifest
+# list on the command line means the caller is driving, so nothing is generated.
+generated=""
+if [[ ${#manifests[@]} -eq 0 ]]; then
+    generated="$(mktemp -t cvlr_api_kb.XXXXXX.rag.json)"
+    trap 'rm -f "$generated"' EXIT
+    if build_api_docs "$generated"; then
+        manifests+=("$generated")
+    else
+        generated=""
+    fi
+fi
 
 if [[ ${#manifests[@]} -eq 0 ]]; then
     if [[ -n "${CVLR_KB_REPO:-}" ]]; then
@@ -83,19 +112,24 @@ if [[ ${#manifests[@]} -eq 0 ]]; then
         exit 0
     fi
     cat >&2 <<'MSG'
-Error: no cvlr_kb manifest found and no local manual, so there is nothing to ingest.
+Error: nothing to ingest -- the API corpus could not be generated, no practice manifest was found,
+and there is no local manual.
 
-The manifests ship in the certora-cvlr-kb package: clone that repo and point CVLR_KB_REPO at it,
-or `pip install certora-cvlr-kb`. Its tools/README.md maps each manifest to its producer. For the
-manual, run ./gen_docs.sh.
+  cvlr_api_kb  needs a nightly toolchain and a warm cargo registry; see the error above.
+  cvlr_kb      needs ./gen_docs.sh for the manual. Practice manifests, where an install still has
+               them, ship in the certora-cvlr-kb package (set CVLR_KB_REPO, or pip install it) --
+               that repo is being wound down as a corpus source, so an install without them is
+               expected rather than broken.
 
-Pass manifest paths explicitly to skip discovery.
+Pass manifest paths explicitly to skip generation and discovery.
 MSG
     exit 1
 fi
 
 ingest_manual || true
 
-echo "Ingesting ${#manifests[@]} manifest(s) into cvlr_kb ..." >&2
+# No --output: each manifest carries its own knowledge_base and rag_import groups by the
+# connection that resolves to, which is what lets one call fill two corpora.
+echo "Ingesting ${#manifests[@]} manifest(s) ..." >&2
 (cd "$parent"; uv run --isolated --group ragbuild \
     python -m composer.scripts.rag_import "${manifests[@]}" "${forward[@]+"${forward[@]}"}")
