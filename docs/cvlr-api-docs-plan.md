@@ -404,11 +404,15 @@ not how it is built. A doc comment is the right place for each, and the better o
 learns "logs both operands" from a doc comment depends on a promise, while one who learns it from
 an expansion depends on `__cvlr_lhs` and a log scope name that are nobody's contract.
 
-*How big the ask is:* 64 `macro_rules!` definitions across the reference set (`cvlr-asserts` 17,
-`cvlr-log` 13, `cvlr-spec` 13, `cvlr-solana` 13, rest), and the wider gap is worse — roughly 97 doc
-lines against ~157 public functions, two thirds of them in `cvlr-solana` alone. So "document the
-macros" is the sharp end of documenting CVLR, and it is worth doing on its own merits: it serves
-every human user of the crates, and §4.7's `cargo test --doc` gates the examples that come with it.
+*How big the ask is:* measured against the corpus the producer actually emits,
+**218 of 282 items carry no prose documentation** — the itemised list is
+[`docs/cvlr-undocumented-api.md`](./cvlr-undocumented-api.md), regenerable from the producer with
+`--undocumented`. The worst are `cvlr-log` (57 of 58), `cvlr-fixed` (38 of 40), `cvlr-asserts` (31
+of 31) and `cvlr-mathint` (30 of 31); `cvlr-spec` (2 of 28) and `cvlr-macros` (1 of 11) show it is
+not a house style. 61 of the undocumented items were searched for by name in the one recorded run.
+So "document the macros" is the sharp end of documenting CVLR, and it is worth doing on its own
+merits: it serves every human user of the crates, and §4.7's `cargo test --doc` gates the examples
+that come with it.
 
 **Macro-generated macros are not an obstacle — checked, not assumed.** `cvlr_assert_le` and its
 seventeen siblings are produced by `impl_bin_assert!`, so there is no source line to attach a `///`
@@ -731,10 +735,12 @@ guarantee rather than an assumption. Step 5 now has one precondition left instea
    as `{ ... }`, so the contract/implementation line §4.2 argues for is one rustdoc already draws.
 
 **2b. Document CVLR's macros upstream** (§4.2) — **in the CVLR crates, not here, and the one piece
-   of this plan that is not ours to schedule.** 64 `macro_rules!` across the reference set, with the
-   assert and assume families documented from their `impl_*` template, which rustdoc is confirmed
-   to carry. File it early: it is worth doing for its own sake, it needs another team's time, and
-   step 5 waits on it. Everything else in this list can proceed while it is open.
+   of this plan that is not ours to schedule.** The itemised ask is
+   [`docs/cvlr-undocumented-api.md`](./cvlr-undocumented-api.md): 218 of 282 items, with the 61 the
+   recorded run reached for called out first. The assert and assume families are documented from
+   their `impl_*` template, which rustdoc is confirmed to carry — three edits cover eighteen items.
+   File it early: it is worth doing for its own sake, it needs another team's time, and step 5
+   waits on it. Everything else in this list can proceed while it is open.
    
 3. **`cvlr_research.py` + templates + display + tests**, wired *alongside* the source mount. ✅
    **Done** — `238cbd11`. Both channels live, which is the only arrangement in which they can be
