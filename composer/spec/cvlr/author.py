@@ -289,18 +289,20 @@ class _CvlrJudgeParams(TypedDict):
     program: str
 
 
-class CvlrMountParams(TypedDict):
-    """What both system prompts need to state about the mounted CVLR source.
+class CvlrVersionParams(TypedDict):
+    """What both system prompts state about which CVLR this build resolves.
 
-    The versions belong in the *system* prompt rather than only in the task: which release is on
-    disk is a standing fact about the session, and an agent that reads it once per turn is less
-    likely to reach for a helper from a different line."""
+    The versions belong in the *system* prompt rather than only in the task: which release the run
+    is on is a standing fact about the session, and an agent that reads it once per turn is less
+    likely to reach for a helper from a different line. It is also what ties an answer from
+    ``cvlr_research`` to a release: the corpus describes exactly the line §2's pin names, and the
+    prompt is where that is said out loud."""
 
     cvlr_versions: str
 
 
-class CvlrAuthorSystemParams(CvlrMountParams):
-    """What the author's system prompt needs beyond the mounted-source facts.
+class CvlrAuthorSystemParams(CvlrVersionParams):
+    """What the author's system prompt needs beyond the resolved versions.
 
     ``example`` is the worked invocation example rendered against *this* program (see
     :mod:`composer.spec.cvlr.example`). ``None`` leaves the prompt's stand-in program in place,
@@ -318,7 +320,7 @@ class CvlrAuthorSystemParams(CvlrMountParams):
 
 
 _JudgeTemplate = TypedTemplate[_CvlrJudgeParams]("cvlr_feedback_prompt.j2")
-_JudgeSystemTemplate = TypedTemplate[CvlrMountParams]("cvlr_property_judge_system_prompt.j2")
+_JudgeSystemTemplate = TypedTemplate[CvlrVersionParams]("cvlr_property_judge_system_prompt.j2")
 _PropertyGenSysTemplate = TypedTemplate[CvlrAuthorSystemParams](
     "cvlr_property_generation_system_prompt.j2"
 )
@@ -340,13 +342,12 @@ def build_feedback_thunk(
     component: SolanaComponentInstance | None,
     program: str,
     cvlr_versions: str,
-    extra_tools: Sequence[BaseTool],
 ) -> ContextualFeedbackThunk[Rebuttal, HarnessAssumptions]:
     """The CVLR feedback judge.
 
-    ``extra_tools`` is where the CVLR crate source reaches the judge. It matters more here than for
-    the author: the judge's most useful and most dangerous move is "use helper X instead", and a
-    judge that cannot check whether X exists in the resolved version sends the author after a name
+    It gets ``cvlr_research`` through ``env.rag_tools``, and it needs it more than the author does:
+    the judge's most useful and most dangerous move is "use helper X instead", and a judge that
+    cannot check whether X exists in the release this build resolves sends the author after a name
     the compiler will reject.
 
     Contextual rather than plain because the draft is not the whole artifact under review: the
@@ -414,7 +415,6 @@ def build_feedback_thunk(
         description="CVLR harness feedback judge",
         thread_prefix="cvlr-feedback",
         input_lift=with_assumptions,
-        extra_tools=extra_tools,
     )
 
 
@@ -637,7 +637,6 @@ async def batch_cvlr_generation(
     target: HarnessTarget,
     verify: VerifyDeps,
     pristine: Path,
-    crate_tools: Sequence[BaseTool] = (),
 ) -> BatchHarnessResult:
     """Author one harness module covering ``props``.
 
@@ -652,8 +651,9 @@ async def batch_cvlr_generation(
     ``pristine`` is the developer's project — the *from* side of every munge diff, and the only thing
     the editor sub-agent needs that is not on ``target``.
 
-    ``crate_tools`` mounts the resolved CVLR source (§5.5). They go to the author *and* the judge;
-    the prompt states the source is present and authoritative.
+    CVLR itself is not mounted here. The author and the judge both reach it through
+    ``cvlr_research`` in ``env.rag_tools`` (``docs/cvlr-api-docs-plan.md`` §5), which is the one
+    place the ordering between the generated API reference and the hand-written manual is applied.
     """
     bound_template = _PropertyGenTemplate.bind(
         {
@@ -670,7 +670,7 @@ async def batch_cvlr_generation(
     judge_ctx = ctx.child(CVLR_JUDGE_KEY)
     feedback_deps = FeedbackDependencies(
         thunk=build_feedback_thunk(
-            judge_ctx, env, props, component, program, cvlr_versions, crate_tools
+            judge_ctx, env, props, component, program, cvlr_versions
         ),
         stamper=make_validation_stamper(FEEDBACK),
         pristine=pristine,
@@ -703,7 +703,6 @@ async def batch_cvlr_generation(
         .with_output_key("result")
         .with_tools(env.source_tools)
         .with_tools(env.rag_tools)
-        .with_tools(crate_tools)
         .with_tools(
             [
                 PutHarness.as_tool("put_harness"),

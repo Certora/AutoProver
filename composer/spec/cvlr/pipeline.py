@@ -41,7 +41,6 @@ import logging
 from pathlib import Path
 from typing import Sequence, override
 
-from langchain_core.tools import BaseTool
 
 from composer.cargo.session import CargoSession, WarmFailed
 from composer.pipeline.core import (
@@ -67,7 +66,6 @@ from composer.spec.cvlr.prover import Submission
 from composer.spec.cvlr.scaffold import ENVS_DIR, SPECS_DIR, declare_unit_features
 from composer.spec.cvlr.tree import SharedTree, munge_diff
 from composer.spec.cvlr.tuning import SUMMARIES, TuningFiles
-from composer.spec.cvlr.source_tools import cvlr_source_tools, mount
 from composer.spec.cvlr.state import PROVER_VALIDATION_KEY
 from composer.spec.cvlr.verify import (
     CexAnalysis,
@@ -137,7 +135,6 @@ class CvlrDeps:
     #: ``cvlr 0.6.1, cvlr-solana 0.5.0, …`` — stated in the prompt, so a reader of a transcript can
     #: tell which release the advice in it was about.
     versions: str
-    crate_tools: tuple[BaseTool, ...]
     #: Where each violated rule's analysis lands, for the report to reshape into findings.
     cex_analysis: CexAnalysisStore
 
@@ -238,7 +235,6 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
             target=target,
             verify=verify,
             pristine=self.build.tree.pristine,
-            crate_tools=self.deps.crate_tools,
         )
 
     @override
@@ -482,16 +478,6 @@ class CvlrBackend:
         from composer.pipeline.ecosystem import SOLANA
 
         project = Path(run.source.project_root)
-        crates = mount(preflight.sources)
-        crate_tools = tuple(cvlr_source_tools(crates)) if crates is not None else ()
-        if crates is None:
-            # Not fatal, but worth a loud line: §9 lists reading the wrong CVLR as worse than
-            # reading none, and reading *nothing* is the state where every helper name is a guess.
-            _log.warning(
-                "cvlr: no CVLR sources resolved for %s — the author will have no crate source to "
-                "check against, which is the condition the hallucination risk is about",
-                preflight.package,
-            )
         versions = ", ".join(f"{c.name} {c.version}" for c in preflight.sources.crates)
         for gap in preflight.gaps:
             _log.info("cvlr: %s", gap.describe())
@@ -503,7 +489,6 @@ class CvlrBackend:
             preflight=preflight,
             package_dir=preflight.package_dir,
             versions=versions,
-            crate_tools=crate_tools,
             cex_analysis=self.cex_analysis,
         )
         return CvlrPrepared(SOLANA.locate_main(analyzed, run.source), deps)
