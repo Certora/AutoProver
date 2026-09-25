@@ -484,6 +484,112 @@ def _proc_macro_paths(docs: CrateDocs) -> dict[str, dict]:
     }
 
 
+def _modules(docs: CrateDocs) -> tuple[dict[str, str], dict[str, bool]]:
+    """``(module path per item id, is-public per module path)`` for this crate's own modules.
+
+    Both halves answer the same question from different directions: which module an item was
+    *declared* in, and whether that module can be named from outside the crate.
+    """
+    owner: dict[str, str] = {}
+    public: dict[str, bool] = {}
+    for item_id, item in docs.index.items():
+        if item.get("crate_id") != docs.local_crate_id:
+            continue
+        inner = item.get("inner")
+        if not isinstance(inner, dict) or "module" not in inner:
+            continue
+        summary = docs.paths.get(item_id)
+        if summary is None:
+            continue
+        path = "::".join(summary["path"])
+        public[path] = item.get("visibility") == "public" or len(summary["path"]) == 1
+        for child in inner["module"].get("items", []):
+            owner[str(child)] = path
+    return owner, public
+
+
+def _reachable(path: str, public: dict[str, bool]) -> bool:
+    """Can ``path`` be written from outside the crate?
+
+    Every module between the crate root and the item has to be public. rustdoc gives the
+    *definition* path, and a crate that defines in ``mod layout;`` and re-exports with
+    ``pub use layout::{...}`` has a definition path that does not compile — which is a third of
+    the CVLR surface, including ``cvlr_deserialize_nondet_accounts``, the most-searched name in
+    the census. The crate root itself is always reachable.
+    """
+    parts = path.split("::")
+    return all(public.get("::".join(parts[: i + 1]), False) for i in range(1, len(parts) - 1))
+
+
+def public_paths(docs: CrateDocs) -> dict[str, list[str]]:
+    """Every path each of this crate's items can be written as, by item id, shallowest first.
+
+    The definition path when it is reachable, plus every intra-crate ``pub use`` that re-exports
+    the item from a module that is itself reachable. :func:`resolve_aliases` does this across
+    crates and deliberately not within one — a facade alias is a fact about two crates — so this
+    is the same inversion applied to the crate's own re-exports, which is where the paths that
+    actually compile live.
+
+    **Globs are expanded here and skipped there**, and the difference is knowledge rather than
+    taste. Across crates a glob names no item this payload can enumerate, so reporting a path
+    through one would be a guess. Within a crate the module's own contents are right here, so
+    ``pub use log::*`` at the root *derives* ``cvlr_solana::<name>`` for every public item ``log``
+    declares. That matters because the glob is the house style: ``cvlr-log`` re-exports its whole
+    surface with two of them, and without this every ``log_*`` function has no writable path.
+    """
+    owner, public = _modules(docs)
+    root = docs.name.replace("-", "_")
+    found: dict[str, list[str]] = {}
+    for item_id, summary in docs.paths.items():
+        if summary.get("crate_id") == docs.local_crate_id and summary.get("path"):
+            path = "::".join(summary["path"])
+            if _reachable(path, public):
+                found.setdefault(item_id, []).append(path)
+
+    for item_id, item in docs.index.items():
+        if item.get("crate_id") != docs.local_crate_id:
+            continue
+        kinds = _kind_of(item)
+        if kinds is None or kinds[0] != "use" or not isinstance(kinds[1], dict):
+            continue
+        use = kinds[1]
+        target, name, is_glob = use.get("id"), use.get("name"), bool(use.get("is_glob"))
+        if target is None or (not name and not is_glob):
+            continue
+        if str(target) not in docs.index and str(target) not in docs.paths:
+            continue
+        # A `use` is declared inside some module; the path it creates hangs off that module.
+        module = owner.get(item_id, root)
+        if not public.get(module, module == root) or not _reachable(f"{module}::x", public):
+            continue
+        for target_id, exported in _exports(docs, str(target), name or "", is_glob):
+            path = f"{module}::{exported}"
+            if path not in found.get(target_id, []):
+                found.setdefault(target_id, []).append(path)
+
+    return {k: sorted(v, key=lambda p: (p.count("::"), len(p))) for k, v in found.items()}
+
+
+def _exports(docs: CrateDocs, target: str, name: str, is_glob: bool) -> list[tuple[str, str]]:
+    """``(item id, exported name)`` for what one ``use`` brings into its module.
+
+    A plain ``use`` exports one item under ``name``, which is the rename when there is one. A glob
+    exports every public item of the target module under its own name.
+    """
+    if not is_glob:
+        return [(target, name)]
+    item = docs.index.get(target)
+    inner = item.get("inner") if item else None
+    if not isinstance(inner, dict) or "module" not in inner:
+        return []
+    out: list[tuple[str, str]] = []
+    for child_id in inner["module"].get("items", []):
+        child = docs.index.get(str(child_id))
+        if child and child.get("name") and child.get("visibility") == "public":
+            out.append((str(child_id), child["name"]))
+    return out
+
+
 def items_of(docs: CrateDocs) -> list[Item]:
     """Every entry this crate contributes, in name order.
 
@@ -492,6 +598,8 @@ def items_of(docs: CrateDocs) -> list[Item]:
     """
     traits, members = _impl_items(docs)
     proc_macros = _proc_macro_paths(docs)
+    reachable = public_paths(docs)
+    _, module_public = _modules(docs)
     found: list[Item] = []
 
     for item_id, item in docs.index.items():
@@ -502,12 +610,26 @@ def items_of(docs: CrateDocs) -> list[Item]:
             continue
         kind, inner = kinds
         kind = _item_kind(kind, inner)
-        summary = docs.paths.get(item_id) or proc_macros.get(item["name"])
+        name = item["name"]
+        summary = docs.paths.get(item_id) or proc_macros.get(name)
         if summary is None:
             # Not path-addressable: an associated item, reached through its type below.
             continue
-        path = "::".join(summary["path"])
-        name = item["name"]
+        # The shallowest path that compiles, not the definition path. They differ for a third of
+        # this family: `mod layout;` + `pub use layout::{...}` is the CVLR house style.
+        # Prefer the path that spells the item's own name: `cvlr-solana` re-exports
+        # `cvlr_deserialize_nondet_accounts` twice, once renamed, and the rename is shorter.
+        # Two paths, and they are not interchangeable. `declared` is where rustdoc says the item
+        # is defined, which is the key `resolve_aliases` files facade re-exports under. `path` is
+        # what a caller writes, which for a third of this family is a re-export instead.
+        declared = "::".join(summary["path"])
+        writable = reachable.get(item_id) or []
+        path = next((p for p in writable if p.rsplit("::", 1)[-1] == name), "")
+        path = path or (writable[0] if writable else "")
+        if not path and _reachable(declared, module_public):
+            # A procedural macro's export is filed under an id of its own, so `public_paths` has
+            # nothing under the index item's id. Its declaring module is the crate root.
+            path = declared
         found.append(
             Item(
                 name=name,
@@ -518,7 +640,7 @@ def items_of(docs: CrateDocs) -> list[Item]:
                 docs=item.get("docs"),
                 gate=_gate_of(item),
                 deprecated=_deprecation_of(item),
-                aliases=tuple(sorted(docs.aliases.get(path, ()))),
+                aliases=tuple(sorted(docs.aliases.get(declared, ()))),
                 traits=tuple(sorted(set(traits.get(name, ())))),
             )
         )
@@ -552,10 +674,28 @@ def resolve_aliases(crates: list[CrateDocs]) -> None:
     surface, so ``clog`` is reached as ``cvlr::clog`` and *defined* as ``cvlr_log::cvlr_log``; an
     entry that named only one of the two would send a caller to a path that does not resolve or to
     a crate they cannot search.
+
+    **The alias is not a nicety, it is usually the only path the caller can write.** The scaffold
+    declares four crates — the core, the chain crate and its models — so the other eleven are
+    transitive, and ``use cvlr_log::log_u64`` in a scaffolded project is
+    ``E0433: use of undeclared crate``. 138 of 200 entries name such a crate.
+
+    The facade reaches them with whole-crate globs, one public module each::
+
+        pub mod asserts { pub use cvlr_asserts::*; }
+
+    so the glob is expanded rather than skipped. The comment this replaces said a glob "names no
+    item", which was true of a pass holding one payload; :func:`document_family` loads the whole
+    family, so the target crate's own contents are right here to enumerate.
     """
     by_crate = {c.name: c for c in crates}
     #: rustdoc spells a crate name with underscores; cargo spells it with hyphens.
     by_module = {c.name.replace("-", "_"): c for c in crates}
+    #: Which module each ``use`` is declared in, per crate: a glob's alias hangs off that module,
+    #: and the facade puts every one of them in a module of its own.
+    facade_modules = {c.name: _modules(c)[0] for c in crates}
+    #: Computed once per crate: a glob asks the same question of the whole family.
+    writable = {c.name: public_paths(c) for c in crates}
     for facade in crates:
         externals = facade.payload.get("external_crates", {})
         for item_id, item in facade.index.items():
@@ -566,7 +706,7 @@ def resolve_aliases(crates: list[CrateDocs]) -> None:
                 continue
             use = kinds[1]
             target_id = use.get("id")
-            if target_id is None or use.get("is_glob"):
+            if target_id is None:
                 continue
             target = facade.paths.get(str(target_id))
             if target is None:
@@ -575,6 +715,16 @@ def resolve_aliases(crates: list[CrateDocs]) -> None:
             defining = by_module.get(owner) if owner else None
             if defining is None or defining.name == facade.name:
                 continue
+            if use.get("is_glob"):
+                module = facade_modules[facade.name].get(item_id)
+                if module is None:
+                    continue
+                contents = _glob_contents(
+                    defining, "::".join(target["path"]), writable[defining.name]
+                )
+                for declared, name in contents:
+                    defining.aliases.setdefault(declared, []).append(f"{module}::{name}")
+                continue
             alias_path = _alias_path(facade, item_id, use.get("name") or "")
             if alias_path is None:
                 continue
@@ -582,6 +732,34 @@ def resolve_aliases(crates: list[CrateDocs]) -> None:
     for crate in by_crate.values():
         for target, paths in crate.aliases.items():
             crate.aliases[target] = sorted(set(paths))
+
+
+def _glob_contents(
+    defining: CrateDocs, module_path: str, writable: dict[str, list[str]]
+) -> list[tuple[str, str]]:
+    """``(defining path, name)`` for every item a whole-module glob brings in.
+
+    Built from the defining crate's own writable paths rather than from the module's direct
+    children, because the two globs compose: ``cvlr-log`` declares in ``mod core`` and re-exports
+    with ``pub use crate::core::*``, and ``cvlr`` then re-exports the crate with
+    ``pub mod log { pub use cvlr_log::*; }``. An item's name at ``module_path`` is what the outer
+    glob carries, whichever module inside the crate declared it — and chasing only direct children
+    left ``log_u64`` and the ``*_checked`` assert family with no path a project could write.
+    """
+    out: list[tuple[str, str]] = []
+    for item_id, paths in writable.items():
+        summary = defining.paths.get(item_id)
+        if summary is None or summary.get("crate_id") != defining.local_crate_id:
+            continue
+        declared = "::".join(summary["path"])
+        for path in paths:
+            # Anything *under* the target, not only its direct children: a glob re-exports the
+            # public submodules too, so `pub use cvlr_nondet::*` makes `havoc` reachable and
+            # `cvlr::nondet::havoc::memhavoc` with it.
+            if path.startswith(f"{module_path}::"):
+                out.append((declared, path[len(module_path) + 2 :]))
+                break
+    return out
 
 
 def _alias_path(facade: CrateDocs, item_id: str, name: str) -> str | None:
