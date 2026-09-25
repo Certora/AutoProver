@@ -18,8 +18,9 @@
 #
 # --crate-source PATH (repeatable) generates cvlr_api_kb from a local CVLR checkout instead of the
 # published crates, which is how documentation gets read before it is released. The pin still says
-# which crates the corpus holds; the checkout only says what is in them, and every entry it
-# produces records that it came from an unpublished tree.
+# which crates the corpus holds; the checkout only says what is in them. The entries are identical
+# to the ones the same crates produce once published -- a corpus like this is built to be tried,
+# so only the manifest's source line records that a checkout was read.
 #
 # Args after `--` go to rag_import:
 #   ./populate_cvlr_rag.sh -- --print                          # dry run
