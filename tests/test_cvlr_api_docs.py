@@ -239,3 +239,44 @@ def test_an_unexpected_format_version_is_refused_rather_than_half_parsed():
     payload["format_version"] = FORMAT_VERSION + 1
     with pytest.raises(RustdocUnavailable, match="format_version"):
         CrateDocs(name="cvlr-asserts", version="0.6.1", payload=payload)
+
+
+# ---------------------------------------------------------------------------------------------
+# the undocumented report
+
+
+def test_the_report_lists_exactly_the_items_with_no_prose(family):
+    """The corpus can only carry what the crates carry, and this is the ask against them.
+
+    It has to be a list of *items*, not of doc-comment lines: what an agent hits is a specific
+    name with nothing behind it, and the person fixing it needs that name.
+    """
+    from composer.scripts.cvlr_api_docs import undocumented_report
+
+    report = undocumented_report(family)
+    for crate in family:
+        for item in items_of(crate):
+            listed = f"`{item.name}`" in report
+            assert listed is (not item.docs), f"{item.name} documented={bool(item.docs)}"
+
+
+def test_the_report_counts_what_it_lists(family):
+    # The counts are the measure of whether the ask is being met, so they cannot drift from the
+    # list under them.
+    from composer.scripts.cvlr_api_docs import undocumented_report
+
+    report = undocumented_report(family)
+    total = sum(len(items_of(c)) for c in family)
+    missing = sum(1 for c in family for i in items_of(c) if not i.docs)
+    assert f"{missing} of {total} items carry no prose documentation." in report
+
+
+def test_the_report_carries_the_signature_of_each_missing_item(family):
+    # Whoever writes the doc comment needs to see what they are documenting without opening the
+    # crate; a bare name would send them looking for it.
+    from composer.scripts.cvlr_api_docs import undocumented_report
+
+    report = undocumented_report(family)
+    item = _named(items_of(_docs("cvlr-asserts")), "cvlr_assert_le")
+    assert item is not None and not item.docs
+    assert item.signature.splitlines()[0] in report
