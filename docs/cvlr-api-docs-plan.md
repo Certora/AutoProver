@@ -728,6 +728,7 @@ guarantee rather than an assumption. Step 5 now has one precondition left instea
    assert and assume families documented from their `impl_*` template, which rustdoc is confirmed
    to carry. File it early: it is worth doing for its own sake, it needs another team's time, and
    step 5 waits on it. Everything else in this list can proceed while it is open.
+   
 3. **`cvlr_api_rag.py` + `cvlr_research.py` + templates + display + tests**, wired *alongside* the
    source mount. Both channels live. This is the only point at which the two can be compared on the
    same run.
