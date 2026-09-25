@@ -226,3 +226,37 @@ def test_the_two_corpora_are_displayed_apart():
     assert {"cvlr_api_lookup", "cvlr_api_search", "cvlr_api_surface"} <= set(displays)
     assert {"cvlr_manual_search", "cvlr_keyword_search", "cvlr_get_section"} <= set(displays)
     assert "cvlr_research" in displays
+
+
+def test_the_prompt_makes_the_manual_a_second_resort_rather_than_a_confirmation():
+    """The corpus-only run spent three of six turns in the manual after the API had answered.
+
+    Most of those searches came back empty, which cost turns and told the caller nothing: prose
+    cannot make a signature more true. The manual's two real jobs are a conceptual question and
+    supplying a name the caller did not have, and the second one ends by going *back* to the API
+    reference. Its cost is small — the whole researcher was ~$5 of the run's $82 — so this is
+    about answers arriving settled, not about spend.
+    """
+    prompt = (
+        Path(__file__).parent.parent
+        / "composer" / "templates" / "cvlr_research_system_prompt.j2"
+    ).read_text()
+    assert "you are done retrieving" in prompt
+    assert "Do not visit" in prompt and "manual to confirm" in prompt
+    assert "An empty manual search is an answer" in prompt
+
+
+def test_the_prompt_asks_for_the_path_that_compiles_over_the_defining_crate():
+    """The defining crate is usually one a project does not declare.
+
+    The scaffold gives a project four crates; the other eleven are transitive, so
+    `use cvlr_log::log_u64;` is `E0433` however faithfully it names where the item lives. An
+    instruction to prefer the defining path over the facade was pointing at the one that does not
+    compile.
+    """
+    prompt = (
+        Path(__file__).parent.parent
+        / "composer" / "templates" / "cvlr_research_system_prompt.j2"
+    ).read_text()
+    assert "Give the path that compiles" in prompt
+    assert "E0433" in prompt
