@@ -721,8 +721,8 @@ guarantee rather than an assumption. Step 5 now has one precondition left instea
    connection and `KNOWLEDGE_BASES` entry, `_FACTORIES` entry, and `composer/tools/cvlr_api_rag.py`
    with the three tools of §4.5.
 2. **The rustdoc producer**, `composer/scripts/cvlr_api_docs.py` (§4.2). ✅ **Done** — `1aa9f5a9`.
-   Runs offline against a warm registry; over the pinned Solana set it emits 297 sections and 282
-   embedded groups across 15 crates. Tests run over three trimmed payloads from a real rustdoc run,
+   Runs offline against a warm registry; over the pinned Solana set it emits 299 sections and 284
+   embedded groups across 15 crates. Tests run over four trimmed payloads from a real rustdoc run,
    so the producer is covered by the ordinary suite — it never was before.
 
    It carries whatever doc comments exist at the time, so it does not wait on step 2b and it
@@ -734,8 +734,37 @@ guarantee rather than an assumption. Step 5 now has one precondition left instea
    reachable that way. And a `macro` item turns out to carry the *matchers* with the body elided
    as `{ ... }`, so the contract/implementation line §4.2 argues for is one rustdoc already draws.
 
-**2b. Document CVLR's macros upstream** (§4.2) — **in the CVLR crates, not here, and the one piece
-   of this plan that is not ours to schedule.** The itemised ask is
+   **`--crate-source PATH` documents a local checkout instead of the published crates**, which is
+   what makes 2b reviewable before it is released. Each CVLR package the checkout defines enters
+   the probe as `[patch.crates-io]` rather than as a path dependency, so the two questions stay
+   apart: the pin still decides which crates resolve and at what version, the checkout only decides
+   where their source is read from, and a checkout that has drifted off the pin fails at cargo
+   instead of yielding a corpus for a release this build does not support. A corpus built that way
+   says so in the manifest's source line, in each crate's surface listing and in every entry —
+   an unpublished tree can carry items the pinned release does not, and an agent that writes one
+   gets a compile error with no way back to this decision. `populate_cvlr_rag.sh --crate-source`
+   passes it through, and refuses to be combined with explicit manifest paths, which skip
+   generation.
+
+   **Two corpus defects surfaced with it, both fixed.** Seven header paths collided: a crate
+   exporting a macro and the function it expands into is ordinary CVLR (`cvlr_log`, four in
+   `cvlr-spec`, plus two functions both named `get_minimum_delegation`), and the manual product
+   keys on the header parts, so the first real ingest would have died at the importer's
+   `parts_unique` constraint naming no item at all. Leaves are now qualified by kind, and by
+   defining path where even that is shared, and only where a name is not already unique. And
+   `cvlr-derive` was an **empty crate**: rustdoc files a proc macro's export under an id unrelated
+   to the item's own, so the `paths[item_id]` lookup read `#[derive(Nondet)]` and
+   `#[derive(CvlrLog)]` as associated items and skipped them — while that crate's "complete public
+   surface" section announced itself as a closed listing of nothing. The same fix distinguishes
+   the three flavours of procedural macro, which had all been rendered as `name!`; `mock_fn` was
+   being published to the corpus as `mock_fn!` when it is `#[mock_fn]`.
+
+**2b. Document CVLR's macros upstream** (§4.2) — **in the CVLR crates, not here.** Underway
+   upstream as of 2026-09-25: checkouts at `~/src/cvlr` and `~/src/cvlr-solana` carry prose for
+   every one of the 286 items they export, and both repositories now check for it in CI. Built with
+   `--crate-source`, the corpus reports 0 undocumented. None of it is released, so
+   `docs/cvlr-undocumented-api.md` still measures the published crates and still reads 218 of 284.
+   The itemised ask is
    [`docs/cvlr-undocumented-api.md`](./cvlr-undocumented-api.md): 218 of 282 items, with the 61 the
    recorded run reached for called out first. The assert and assume families are documented from
    their `impl_*` template, which rustdoc is confirmed to carry — three edits cover eighteen items.

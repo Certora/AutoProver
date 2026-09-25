@@ -26,6 +26,14 @@ it invites a dependency on a binding name that is nobody's promise.
   that answer a question nobody asks while burying the ones people do. Their methods are not
   emitted; the type's entry names the traits it implements instead.
 
+**Documenting a working copy.** ``--crate-source`` points the probe at a local CVLR checkout:
+every CVLR package that checkout defines replaces the crates.io release through
+``[patch.crates-io]``, so the pin still decides *which* crates the corpus holds and the checkout
+decides what is in them. That is how doc comments get read before they are published. A corpus
+built that way says so — in the manifest's source line, in each crate's surface listing and in
+every entry — because a checkout is not a release, and an entry naming something the release does
+not have is a compile error waiting for whoever believes it.
+
 Run it through :mod:`composer.scripts.populate_cvlr_rag`'s wrapper, or directly::
 
     uv run --no-sync python -m composer.scripts.cvlr_api_docs --output cvlr_api_kb.rag.json
@@ -42,7 +50,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from types import MappingProxyType
 
 from composer.rag.import_format import (
     EmbeddedBlock,
@@ -53,6 +64,7 @@ from composer.rag.import_format import (
     ManualSection,
     RagManifest,
 )
+from composer.spec.cvlr.crates import CVLR_PREFIX
 from composer.spec.cvlr_reference import ChainReference, reference_for
 from composer.tools.cvlr_api_rag import API_ROOT, SURFACE_HEADING
 
@@ -93,6 +105,39 @@ PROBE_PACKAGE = "cvlr-api-probe"
 
 class RustdocUnavailable(RuntimeError):
     """cargo could not produce rustdoc JSON, so there is no corpus to emit."""
+
+
+@dataclass(frozen=True)
+class Published:
+    """The crate as crates.io publishes it, at the release the reference set pins."""
+
+    def describe(self) -> str:
+        return "the published release"
+
+
+@dataclass(frozen=True)
+class LocalCheckout:
+    """A working copy documented in place of the published release.
+
+    Two paths because they answer different questions. :attr:`root` is what the caller pointed at
+    and what a reader recognizes; :attr:`crate_dir` is the package's own directory, which is what
+    ``[patch.crates-io]`` has to name.
+    """
+
+    root: pathlib.Path
+    crate_dir: pathlib.Path
+    #: ``git describe`` of :attr:`root`, ``-dirty`` included. The only thing that distinguishes
+    #: one build of a checkout from another, and uncommitted edits are the case that matters.
+    revision: str
+
+    def describe(self) -> str:
+        return f"{self.root} @ {self.revision}"
+
+
+#: Where one crate's documentation came from. A corpus mixes the two: a caller who points at the
+#: ``cvlr`` checkout still gets ``cvlr-solana`` from crates.io, and an entry has to be able to say
+#: which it is.
+type Origin = Published | LocalCheckout
 
 
 @dataclass(frozen=True)
@@ -156,6 +201,7 @@ class CrateDocs:
     name: str
     version: str
     payload: dict
+    origin: Origin = Published()
     #: Facade paths pointing into this crate, by the defining path they resolve to. Filled by
     #: :func:`resolve_aliases` once every crate has been loaded, since a re-export is a fact about
     #: two crates.
@@ -307,8 +353,12 @@ def _signature(name: str, kind: str, inner: dict | str) -> str:
     match kind:
         case "macro":
             return str(inner)
-        case "proc_macro" | "proc_attribute" | "proc_derive":
-            return f"#[{name}]" if kind == "proc_attribute" else f"{name}!"
+        case "proc_derive":
+            return f"#[derive({name})]"
+        case "proc_attribute":
+            return f"#[{name}]"
+        case "proc_macro":
+            return f"{name}!"
         case "function" if isinstance(inner, dict):
             return _function_signature(name, inner)
         case "struct" | "union" if isinstance(inner, dict):
@@ -327,6 +377,24 @@ def _signature(name: str, kind: str, inner: dict | str) -> str:
 
 # ---------------------------------------------------------------------------------------------
 # the walk
+
+
+def _item_kind(kind: str, inner: dict | str) -> str:
+    """rustdoc's kind, with a procedural macro resolved to the three ways one is written.
+
+    ``index`` calls all three ``proc_macro`` and puts the distinction inside; the difference is the
+    whole of how a caller writes it — ``#[derive(Nondet)]``, ``#[rule]``, ``thing!()`` — so it is
+    lifted out here, to the same spellings rustdoc's ``paths`` uses.
+    """
+    if kind == "proc_macro" and isinstance(inner, dict):
+        match inner.get("kind"):
+            case "derive":
+                return "proc_derive"
+            case "attr":
+                return "proc_attribute"
+            case _:
+                return kind
+    return kind
 
 
 def _kind_of(item: dict) -> tuple[str, dict | str] | None:
@@ -391,6 +459,27 @@ def _impl_items(docs: CrateDocs) -> tuple[dict[str, list[str]], dict[str, list[t
     return traits, members
 
 
+def _proc_macro_paths(docs: CrateDocs) -> dict[str, dict]:
+    """``name -> paths entry`` for this crate's procedural macros.
+
+    rustdoc files a proc macro's export under an id of its own, unrelated to the id of the item in
+    ``index``, so the usual ``paths[item_id]`` lookup finds nothing and the walk reads it as an
+    associated item and skips it. A proc-macro crate therefore contributed *no entries at all*:
+    ``cvlr-derive``, whose whole surface is ``#[derive(Nondet)]`` and ``#[derive(CvlrLog)]``, was
+    an empty crate in the corpus — and its "complete public surface" section said so.
+
+    Name is a safe key only because these kinds are crate-level by construction: a procedural
+    macro cannot be an associated item, so there is nothing for it to be confused with.
+    """
+    return {
+        summary["path"][-1]: summary
+        for summary in docs.paths.values()
+        if summary.get("crate_id") == docs.local_crate_id
+        and summary.get("kind") in ("proc_macro", "proc_attribute", "proc_derive")
+        and summary.get("path")
+    }
+
+
 def items_of(docs: CrateDocs) -> list[Item]:
     """Every entry this crate contributes, in name order.
 
@@ -398,6 +487,7 @@ def items_of(docs: CrateDocs) -> list[Item]:
     and attributing those here would file the same item under several crates.
     """
     traits, members = _impl_items(docs)
+    proc_macros = _proc_macro_paths(docs)
     found: list[Item] = []
 
     for item_id, item in docs.index.items():
@@ -407,7 +497,8 @@ def items_of(docs: CrateDocs) -> list[Item]:
         if kinds is None or kinds[0] not in DOCUMENTED_KINDS:
             continue
         kind, inner = kinds
-        summary = docs.paths.get(item_id)
+        kind = _item_kind(kind, inner)
+        summary = docs.paths.get(item_id) or proc_macros.get(item["name"])
         if summary is None:
             # Not path-addressable: an associated item, reached through its type below.
             continue
@@ -507,6 +598,55 @@ def _alias_path(facade: CrateDocs, item_id: str, name: str) -> str | None:
 # the manifest
 
 
+def _provenance(origin: Origin) -> str | None:
+    """What an entry says about where it came from, or nothing when it came from the release.
+
+    The published case adds no sentence on purpose: it is what every entry in an ordinary corpus
+    would say, and a warning everything carries is one nothing carries.
+    """
+    match origin:
+        case Published():
+            return None
+        case LocalCheckout() as checkout:
+            return (
+                f"Documented from a local checkout ({checkout.describe()}), not from the "
+                f"published release. Anything here that the published crate does not have will "
+                f"not compile against the release this build pins."
+            )
+
+
+def _leaves(items: list[Item]) -> list[str]:
+    """The header leaf for each item, disambiguated only where a name is not unique.
+
+    Names collide: ``cvlr-log`` exports both the ``cvlr_log!`` macro and the ``cvlr_log`` function
+    it expands into, and ``cvlr-spec`` does the same four times over. The leaf is the primary key
+    of the manual product — the importer's ``parts_unique`` constraint is over the header parts —
+    so a collision is an ingest that fails at the database with a message about no item in
+    particular, and before that an entry that silently shadows another.
+
+    Qualified by kind first, which is the distinction in every real case and reads as English, and
+    by the defining path only when even that is shared. Nothing is renamed that does not have to
+    be: an agent reaches these sections by searching for a bare identifier, and a uniform
+    ``name (kind)`` scheme would put a parenthesis in the middle of every header in the corpus.
+    """
+    by_name = Counter(i.name for i in items)
+    kinded = [f"{i.name} ({i.kind.replace('_', ' ')})" for i in items]
+    by_kind = Counter(kinded)
+    leaves = [
+        item.name if by_name[item.name] == 1
+        else kind_leaf if by_kind[kind_leaf] == 1
+        else item.path or kind_leaf
+        for item, kind_leaf in zip(items, kinded)
+    ]
+    if duplicated := [n for n, count in Counter(leaves).items() if count > 1]:
+        raise RustdocUnavailable(
+            f"{items[0].crate if items else '?'}: {', '.join(duplicated)} name more than one item "
+            f"each, and not even the defining path tells them apart. The manual product keys on "
+            f"the header path, so these entries would overwrite each other."
+        )
+    return leaves
+
+
 def _surface_section(docs: CrateDocs, items: list[Item]) -> ManualSection:
     """The closed-world listing: every item this crate exports, as one atomic block.
 
@@ -516,6 +656,17 @@ def _surface_section(docs: CrateDocs, items: list[Item]) -> ManualSection:
     """
     lines = [f"`{i.name}` — {i.kind.replace('_', ' ')}" for i in items]
     listing = "\n".join(f"- {line}" for line in lines) or "- (this crate exports nothing)"
+    closed = (
+        "This list is closed: a name that is not on it is not in this crate at the release this "
+        "build pins."
+        if isinstance(docs.origin, Published)
+        else (
+            "This list is closed: a name that is not on it is not in this crate. It was read from "
+            "an unpublished checkout, so a name that *is* on it may not exist in the release this "
+            "build pins."
+        )
+    )
+    note = _provenance(docs.origin)
     return ManualSection(
         headers=[API_ROOT, docs.name, docs.version, SURFACE_HEADING],
         blocks=[
@@ -523,8 +674,9 @@ def _surface_section(docs: CrateDocs, items: list[Item]) -> ManualSection:
                 kind=ManualBlockKind.TEXT,
                 body=(
                     f"Everything `{docs.name}` {docs.version} exports, in full — "
-                    f"{len(items)} items. This list is closed: a name that is not on it is not in "
-                    f"this crate at the release this build pins.\n\n{listing}"
+                    f"{len(items)} items. {closed}"
+                    + (f"\n\n{note}" if note else "")
+                    + f"\n\n{listing}"
                 ),
             )
         ],
@@ -545,9 +697,10 @@ def build_manifest(crates: list[CrateDocs], source: str) -> RagManifest:
     for docs in sorted(crates, key=lambda c: c.name):
         items = items_of(docs)
         manual.append(_surface_section(docs, items))
-        for item in items:
-            headers = [API_ROOT, docs.name, docs.version, item.name]
-            body = item.body()
+        note = _provenance(docs.origin)
+        for item, leaf in zip(items, _leaves(items)):
+            headers = [API_ROOT, docs.name, docs.version, leaf]
+            body = item.body() + ([("text", note)] if note else [])
             manual.append(
                 ManualSection(
                     headers=headers,
@@ -585,21 +738,102 @@ def build_manifest(crates: list[CrateDocs], source: str) -> RagManifest:
 # driving cargo
 
 
-def _probe_crate(root: pathlib.Path, reference: ChainReference) -> None:
+def cvlr_packages(metadata: dict, root: pathlib.Path) -> dict[str, pathlib.Path]:
+    """The CVLR packages one checkout defines, as ``name -> the package's own directory``.
+
+    Taken from ``cargo metadata`` rather than by reading manifests, because a workspace member
+    inherits its name's neighbours — the version, the edition — from the root table, and cargo is
+    the thing that knows how to follow that.
+
+    A checkout that defines none is refused rather than ignored. It is the one outcome a caller
+    cannot tell from success: the build would finish, and describe the published releases.
+    """
+    found = {
+        package["name"]: pathlib.Path(package["manifest_path"]).parent
+        for package in metadata.get("packages", [])
+        if package["name"].startswith(CVLR_PREFIX)
+    }
+    if not found:
+        offered = ", ".join(sorted(p["name"] for p in metadata.get("packages", []))) or "none"
+        raise RustdocUnavailable(
+            f"{root} defines no CVLR crate, so documenting it would describe the published "
+            f"releases while looking like it had used the checkout. It defines: {offered}"
+        )
+    return found
+
+
+def _revision(root: pathlib.Path) -> str:
+    """``git describe`` of a checkout, or a statement that there is none.
+
+    The ``-dirty`` suffix is the point: the common case for this flag is documentation that has
+    not been committed anywhere yet, and a corpus built from it has no other way to be identified.
+    """
+    result = subprocess.run(
+        ["git", "-C", str(root), "describe", "--always", "--dirty", "--tags"],
+        capture_output=True, text=True, check=False,
+    )
+    return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else (
+        "no git revision"
+    )
+
+
+def crate_sources(roots: Sequence[pathlib.Path]) -> dict[str, LocalCheckout]:
+    """Every CVLR crate the given checkouts define, by cargo package name.
+
+    Two checkouts claiming one crate is refused rather than resolved by order: which of the two a
+    corpus describes is not a thing to pick quietly, and the entries would not say which won.
+    """
+    sources: dict[str, LocalCheckout] = {}
+    for root in roots:
+        resolved = root.expanduser().resolve()
+        if not (resolved / "Cargo.toml").is_file():
+            raise RustdocUnavailable(f"{resolved} has no Cargo.toml, so it is not a checkout.")
+        result = subprocess.run(
+            ["cargo", "metadata", "--no-deps", "--offline", "--format-version", "1"],
+            cwd=resolved, capture_output=True, text=True, check=False,
+        )
+        if result.returncode != 0:
+            raise RustdocUnavailable(
+                f"cargo metadata failed in {resolved}:\n{result.stderr.strip()}"
+            )
+        revision = _revision(resolved)
+        for name, crate_dir in cvlr_packages(json.loads(result.stdout), resolved).items():
+            if (prior := sources.get(name)) is not None:
+                raise RustdocUnavailable(
+                    f"both {prior.root} and {resolved} define {name}. Pass one of them: which "
+                    f"copy the corpus would describe is not something this can choose for you."
+                )
+            sources[name] = LocalCheckout(root=resolved, crate_dir=crate_dir, revision=revision)
+    return sources
+
+
+def _probe_crate(
+    root: pathlib.Path, reference: ChainReference, sources: Mapping[str, LocalCheckout]
+) -> None:
     """A crate whose only purpose is to make the reference set resolvable.
 
     The dependency block comes from the reference set itself, so the corpus is built against
     exactly the releases a run pins — which is what makes a bump one change rather than two
     (``docs/cvlr-api-docs-plan.md`` §2).
+
+    A checkout enters as ``[patch.crates-io]`` rather than as a dependency, which is what keeps
+    those two questions apart: the pin still says which crates resolve and at what version, and
+    the patch only redirects where their source is read from. A checkout whose version has moved
+    off the pin therefore fails here, at cargo, rather than producing a corpus quietly describing
+    a release this build does not support.
     """
     (root / "src").mkdir(parents=True, exist_ok=True)
     (root / "src" / "lib.rs").write_text("")
+    patches = "".join(
+        f'{name} = {{ path = "{source.crate_dir}" }}\n' for name, source in sorted(sources.items())
+    )
     (root / "Cargo.toml").write_text(
         "[package]\n"
         f'name = "{PROBE_PACKAGE}"\n'
         'version = "0.0.0"\n'
         'edition = "2021"\n\n'
         "[dependencies]\n" + reference.cargo_dependencies() + "\n"
+        + (f"\n[patch.crates-io]\n{patches}" if patches else "")
     )
 
 
@@ -642,11 +876,20 @@ def _rustdoc(root: pathlib.Path, package: str) -> pathlib.Path:
     return out
 
 
-def load(path: pathlib.Path, name: str, version: str) -> CrateDocs:
-    return CrateDocs(name=name, version=version, payload=json.loads(path.read_text()))
+def load(
+    path: pathlib.Path, name: str, version: str, origin: Origin = Published()
+) -> CrateDocs:
+    return CrateDocs(
+        name=name, version=version, payload=json.loads(path.read_text()), origin=origin
+    )
 
 
-def document_family(reference: ChainReference, workdir: pathlib.Path) -> list[CrateDocs]:
+def document_family(
+    reference: ChainReference,
+    workdir: pathlib.Path,
+    *,
+    sources: Mapping[str, LocalCheckout] = MappingProxyType({}),
+) -> list[CrateDocs]:
     """Build the probe, run rustdoc over the whole family, and resolve re-exports across it.
 
     Returns the parsed crates rather than a manifest: the walk has two consumers now, and which
@@ -654,7 +897,7 @@ def document_family(reference: ChainReference, workdir: pathlib.Path) -> list[Cr
     """
     if shutil.which("cargo") is None:
         raise RustdocUnavailable("cargo is not on PATH, so there is nothing to document.")
-    _probe_crate(workdir, reference)
+    _probe_crate(workdir, reference, sources)
     subprocess.run(
         ["cargo", "generate-lockfile", "-q", "--offline"],
         cwd=workdir, capture_output=True, text=True, check=False,
@@ -667,15 +910,29 @@ def document_family(reference: ChainReference, workdir: pathlib.Path) -> list[Cr
         )
     crates: list[CrateDocs] = []
     for name, version in packages:
-        _log.info("rustdoc: %s %s", name, version)
-        crates.append(load(_rustdoc(workdir, name), name, version))
+        origin = sources.get(name, Published())
+        _log.info("rustdoc: %s %s from %s", name, version, origin.describe())
+        crates.append(load(_rustdoc(workdir, name), name, version, origin))
     resolve_aliases(crates)
     return crates
 
 
-def manifest_source(reference: ChainReference) -> str:
+def manifest_source(reference: ChainReference, sources: Mapping[str, LocalCheckout]) -> str:
+    """What the manifest records about where it came from.
+
+    A corpus built from a checkout has to be identifiable as one from the manifest alone: the row
+    an agent reads says so too, but this is what someone looking at an ingested corpus and asking
+    why it disagrees with crates.io has to go on.
+    """
     pinned = ", ".join(f"{c.name} {c.version}" for c in reference.crates())
-    return f"rustdoc over the CVLR family pinned at {pinned}"
+    base = f"rustdoc over the CVLR family pinned at {pinned}"
+    if not sources:
+        return base
+    by_checkout: dict[str, list[str]] = {}
+    for name, source in sorted(sources.items()):
+        by_checkout.setdefault(source.describe(), []).append(name)
+    read = "; ".join(f"{where}: {', '.join(names)}" for where, names in by_checkout.items())
+    return f"{base}, reading these from local checkouts rather than the published releases — {read}"
 
 
 def undocumented_report(crates: list[CrateDocs]) -> str:
@@ -710,6 +967,18 @@ def undocumented_report(crates: list[CrateDocs]) -> str:
         "| --- | --- | --- |",
     ]
     header += [f"| `{name}` | {miss} | {count} |" for name, miss, count in summary]
+    checkouts = sorted(
+        {c.origin.describe() for c in crates if isinstance(c.origin, LocalCheckout)}
+    )
+    if checkouts:
+        # Without this the list reads as a measurement of the published crates, and the whole
+        # reason to run it over a checkout is to watch it shrink before the crates are published.
+        header += [
+            "",
+            "Read from local checkouts rather than the published releases: "
+            + "; ".join(checkouts)
+            + ".",
+        ]
     return "\n".join(header + lines) + "\n"
 
 
@@ -727,6 +996,14 @@ def main() -> None:
         help="Build the probe crate here and leave it, instead of in a temporary directory.",
     )
     parser.add_argument(
+        "--crate-source", type=pathlib.Path, action="append", default=[], metavar="PATH",
+        help="A local CVLR checkout to document instead of the published crates. Repeatable, and "
+             "it may be a workspace root or a single crate directory. Every CVLR package the "
+             "checkout defines replaces the crates.io release, so the pin still decides which "
+             "crates the corpus holds and the checkout decides what is in them. The corpus says "
+             "where it was read from, in the manifest and in every entry.",
+    )
+    parser.add_argument(
         "--undocumented", action="store_true",
         help="Instead of a manifest, write the list of items that carry no prose documentation. "
              "That list is the ask against the CVLR crates, and it is meant to shrink.",
@@ -736,12 +1013,13 @@ def main() -> None:
 
     reference = reference_for(args.chain)
     try:
+        sources = crate_sources(args.crate_source)
         if args.keep is not None:
             args.keep.mkdir(parents=True, exist_ok=True)
-            crates = document_family(reference, args.keep)
+            crates = document_family(reference, args.keep, sources=sources)
         else:
             with tempfile.TemporaryDirectory(prefix="cvlr-api-docs-") as tmp:
-                crates = document_family(reference, pathlib.Path(tmp))
+                crates = document_family(reference, pathlib.Path(tmp), sources=sources)
     except RustdocUnavailable as exc:
         raise SystemExit(f"cvlr_api_docs: {exc}") from exc
 
@@ -749,7 +1027,7 @@ def main() -> None:
         args.output.write_text(undocumented_report(crates))
         _log.info("wrote %s", args.output)
         return
-    manifest = build_manifest(crates, source=manifest_source(reference))
+    manifest = build_manifest(crates, source=manifest_source(reference, sources))
     args.output.write_text(manifest.model_dump_json(indent=1))
     _log.info(
         "wrote %s: %d sections, %d embedded groups",
