@@ -706,7 +706,9 @@ Display: a `CommonTools.cvlr_research` entry in `composer/ui/tool_display.py` be
   tape is keyed on the tool calls the author actually made, and none of those calls will exist. This
   is an expensive run (`scripts/record_cvlr_tape.sh`, the `generate-tape` skill) plus a hand-clean
   pass, and it is the largest single cost in the migration. Budget it explicitly rather than
-  discovering it.
+  discovering it. The re-recording also has to turn the corpus on, which is an edit to
+  `composer/testing/cvlr_tape.py` rather than a re-run of the script — step 7 in §8 has why and what
+  it costs.
 * `tests/test_cvlr_gate.py` — the live gate is where §7.5.5's census gets re-taken. **The success
   criterion for the whole migration is that census**: the author's CVLR questions should still be
   ~50 per run in *volume of questions asked* while collapsing to far fewer sub-agent invocations
@@ -809,6 +811,38 @@ guarantee rather than an assumption. Step 5 now has one precondition left instea
    question well. The practice-entry half of this is `cvlr-knowledge-plan.md`'s W4 and moves on its
    own schedule.
 7. **Re-record the tape**, re-run the gate, re-take the census.
+
+   **The re-recording turns the corpus on**, which is an edit to `composer/testing/cvlr_tape.py`
+   and not merely a re-run of `scripts/record_cvlr_tape.sh`. `tape_argv` pins `--rag-corpus none`
+   today for exactly one reason, stated in that module: a corpus is optional and degrades to no
+   search tools, so a tape that depended on one would replay differently on a machine that had it
+   than on a machine that did not. **Step 5 is what removes that premise.** With the mount gone the
+   corpus is the only CVLR channel there is; a run without one is not a configuration anybody
+   ships, and a tape recorded under `none` would smoke-test an author holding nothing but
+   `cvlr_baseline_facts.md` and the recipes. Three consequences follow, and all three are work
+   rather than choices:
+
+   * **The replay gains a corpus prerequisite**, the same shape as the `needs_postgres` marker
+     `tests/test_cvlr_tape.py` already carries. Satisfiable, because `cvlr_api_kb` is *generated*
+     from the pin by `composer/scripts/cvlr_api_docs.py` rather than curated: CI can build it, and
+     §2's pin is what makes two builds of it agree.
+   * **The researcher's own turns become lanes.** The tape fakes the LLM and only the LLM, so the
+     sub-agent's model calls have to be recorded and curated while its `cvlr_api_*` calls run for
+     real against the database. The tape gets bigger, and this is the part to budget.
+   * **The embedder stays mocked.** `MockSentenceTransformer` makes vector search deterministic and
+     semantically meaningless, which is the right trade for a gate that exists to catch a change in
+     the pipeline's *shape*. `cvlr_api_lookup` and `cvlr_api_surface` are keyword-then-fetch, so
+     the researcher's dominant traffic does not depend on the embedder at all.
+
+   **The live gate needs the same flip.** `tests/test_cvlr_gate.py` passes `rag_tools=()` with a
+   comment that a corpus-backed run is the comparison rather than the baseline. After (5) there is
+   no baseline left to measure: the floor it was measuring is an author with no CVLR reference at
+   all.
+
+   **This is not (3)'s comparison run.** That one goes *before* (5), with the mount and the
+   researcher both live, because "which channel does the author reach for" is only answerable while
+   it has the choice. This one goes after, and is where the census §7 names as the success
+   criterion gets re-taken.
 
 Steps 0–4 are done and additive; nothing yet removes a capability. (5) is the only irreversible
 step, and it has three preconditions. The pin is met. 2b is met in the checkouts and not yet in a
