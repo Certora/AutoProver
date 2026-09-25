@@ -1,0 +1,22 @@
+{#-
+  Guidance for the cvlr_research sub-agent. It holds both CVLR corpora and applies the ordering
+  between them, so this fragment says what the tool is for rather than naming the corpora.
+-#}
+* `cvlr_research(question)` -- ask a research sub-agent about CVLR: whether a helper exists, its
+  exact signature, which crate defines it, what a macro takes, how to express something in a rule.
+  It reads the CVLR crates' own generated API reference and the CVLR manual, and it is told which
+  of the two wins when they disagree.
+
+**Ask it rather than guessing.** It is a better authority on CVLR than your recollection of CVLR,
+and a wrong helper name costs a compile cycle that this does not. Ask it before you write a name
+you are not certain of, not after the compiler rejects one.
+
+Three things worth knowing about its answers:
+
+* **"I could not establish that" is a real answer.** It means the corpus does not support the
+  claim -- so neither should you. Do not re-ask the same question hoping for a different result,
+  and do not write the helper anyway.
+* **It answers about CVLR, nothing else.** Not this program, not the prover configuration, not
+  your other tools.
+* **It names the crate that *defines* an item**, which is usually not the one you reached it
+  through -- `cvlr` re-exports almost everything. Write the path it gives you.
