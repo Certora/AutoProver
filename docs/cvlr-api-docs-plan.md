@@ -426,6 +426,34 @@ snapshot pairs. That is the crate behind the judge's *second* fact and five of t
 those the producer has to quote the `macro_rules!` body from source, which is a third reason
 `crate_mount.py` stays: correct its docstring to say producer-only rather than naming the other repo.
 
+**Should we document the macros instead?** It is the obvious alternative and the answer is: yes,
+upstream, and not instead. Two measurements decide it.
+
+*There are 64 `macro_rules!` definitions across the reference set* — `cvlr-asserts` 17, `cvlr-log`
+13, `cvlr-spec` 13, `cvlr-solana` 13, and the rest. The assert and assume families are themselves
+macro-generated: three `impl_*` templates produce eighteen exported names
+(`cvlr_assert_le`, `cvlr_assert_le_if`, `cvlr_assume_lt`, …). Hand-writing 64 descriptions is real
+work, it goes stale on every bump, and — the part that matters most here — it is *authored*, which
+would put the most-consulted part of the surface on the wrong side of the authority ordering this
+whole plan rests on (§1.2(2)). The 58 snapshots are already written and maintained upstream as
+tests, are current by construction under §2's pin, and cost twenty lines to quote. A description
+also answers only the questions its author thought of; an expansion answers the ones nobody
+anticipated — whether a macro binds, shadows, double-evaluates its arguments, what scope name lands
+in the log. Both verdict facts above look anticipable, but only in hindsight.
+
+*The bigger finding is that CVLR is barely documented at all.* Doc comments per crate, against
+public functions: `cvlr` 0 lines / 6 fns, `cvlr-asserts` 0 / 10, `cvlr-nondet` 2 / 22, `cvlr-log`
+11 / 42, `cvlr-mathint` 21 / 48, `cvlr-solana` 63 / 29. Roughly 97 doc lines for ~157 public
+functions and 64 macros, and two thirds of those lines are in one crate. So the prose half of
+§4.4's per-item entry is thin **everywhere**, not only on macros, and "document the macros" is the
+small end of a real upstream gap.
+
+That gap is worth filing against CVLR — it would serve every human user of the crates, rustdoc
+would carry it, and §2's coupling means the next corpus rebuild picks it up with no work here. It
+is not ours to schedule and the corpus must not block on it. What the corpus can rely on today is
+what rustdoc gives without any doc comments at all: existence, signature, defining crate, feature
+gate. The tape says that is most of the traffic.
+
 **Its input is rustdoc JSON, not rendered HTML.** Build a probe crate from
 `ChainReference.cargo_dependencies()` — which already emits exactly the reference set plus the
 platform crates, and which §2.6 noted has no caller yet; this is it — and run
@@ -459,7 +487,10 @@ Per public item, two products (`rag-import-format.md` §2):
 * `manual_sections` — signature as a `code` block, doc comment as `text`, examples as `code`. This
   is what an exact lookup returns in full, and it is the definitive answer.
 * `embedded_groups` — doc prose as `paragraph`, signature as `code`, tables as `atomic`. This is
-  what "how do I give an account field a nondeterministic value?" lands on.
+  what "how do I give an account field a nondeterministic value?" lands on — and it is the product
+  that suffers from §4.2's doc-comment measurement, since there is often no prose to embed. Expect
+  it to be thin at first and to improve on its own as upstream doc comments land. Conceptual
+  questions lean on `cvlr_kb` until then, which is what having two corpora is for.
 
 **On grouping, which the old producer needed a model for.** `crate_reference.py` documented a
 module as "a handful of entries, one per *distinct idea*", because 310 public items would otherwise
