@@ -21,7 +21,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.outputs import ChatResult
 from langchain_core.runnables import Runnable, RunnableLambda
 
-from composer.spec.types import PropertyFormulation, PropertyType
+from composer.spec.types import DesignDocOrigin, PropertyFormulation, PropertyType
 from composer.authoring.state import SkippedProperty
 from composer.spec.cvl_generation import GeneratedCVL, PropertyRuleMapping
 
@@ -819,16 +819,16 @@ def _source_with_doc(root: pathlib.Path, doc: DesignDocProvenance | None) -> Sou
 
 
 def test_design_doc_record_is_project_relative_for_a_discovered_doc(tmp_path):
-    doc = DesignDocProvenance(path=tmp_path / "docs" / "README.md", origin="discovered", reason="r")
+    doc = DesignDocProvenance(path=tmp_path / "docs" / "README.md", origin=DesignDocOrigin.DISCOVERED, reason="r")
     record = build.design_doc_record(_source_with_doc(tmp_path, doc))
-    assert record == DesignDocRecord(path="docs/README.md", origin="discovered", reason="r")
+    assert record == DesignDocRecord(path="docs/README.md", origin=DesignDocOrigin.DISCOVERED, reason="r")
 
 
 def test_design_doc_record_keeps_a_path_outside_the_project_as_given(tmp_path):
     outside = tmp_path / "elsewhere" / "spec.pdf"
-    doc = DesignDocProvenance(path=outside, origin="supplied")
+    doc = DesignDocProvenance(path=outside, origin=DesignDocOrigin.SUPPLIED)
     record = build.design_doc_record(_source_with_doc(tmp_path / "project", doc))
-    assert record == DesignDocRecord(path=str(outside), origin="supplied", reason=None)
+    assert record == DesignDocRecord(path=str(outside), origin=DesignDocOrigin.SUPPLIED, reason=None)
 
 
 def test_design_doc_record_is_none_for_a_source_only_run(tmp_path):
@@ -841,7 +841,9 @@ async def test_build_records_the_design_doc_and_it_round_trips():
     fetch = _fetcher({"L1": [_fake_check("r1", NodeStatus.VERIFIED)]})
     llm = _StructuredStubModel(output=GroupingResult(groups=[PropertyGroupDraft(
         slug="g", title="G", description="d", members=[("C", "p1")])]))
-    doc = DesignDocRecord(path="README.md", origin="discovered", reason="describes the system")
+    doc = DesignDocRecord(
+        path="README.md", origin=DesignDocOrigin.DISCOVERED, reason="describes the system"
+    )
 
     report = await build.build_report(
         contract_name="C", backend="prover",
@@ -849,7 +851,10 @@ async def test_build_records_the_design_doc_and_it_round_trips():
         llm=llm, fetch_verdicts=fetch, design_doc=doc,
     )
 
-    reloaded = AutoProverReport.model_validate_json(report.model_dump_json())
+    dumped = report.model_dump_json()
+    # report.json carries the plain string; consumers outside this repo read it as such.
+    assert '"origin":"discovered"' in dumped
+    reloaded = AutoProverReport.model_validate_json(dumped)
     assert reloaded.design_doc == doc
 
 

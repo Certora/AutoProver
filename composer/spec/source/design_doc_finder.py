@@ -34,6 +34,7 @@ from composer.input.files import Document, FileUploader
 from composer.io.context import emit_custom_event
 from composer.io.multi_job import HandlerFactory, HasName, TaskInfo, run_task
 from composer.spec.context import CacheKey, DesignDocProvenance, WorkflowContext, SourceFields
+from composer.spec.types import DesignDocOrigin
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.service_host import ModelProvider
@@ -314,6 +315,6 @@ async def resolve_design_doc[P: HasName](
         return None
     return DesignDocProvenance(
         path=pathlib.Path(source.project_root) / choice.selected_path,
-        origin="discovered",
+        origin=DesignDocOrigin.DISCOVERED,
         reason=choice.reason,
     )

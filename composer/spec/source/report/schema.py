@@ -16,7 +16,8 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from composer.spec.types import (
-    ComponentName, PropertyFormulation, PropertyKey, PropertyTitle, PropertyType, RuleName,
+    ComponentName, DesignDocOrigin, PropertyFormulation, PropertyKey, PropertyTitle, PropertyType,
+    RuleName,
 )
 
 type RuleRef = tuple[str, RuleName]
@@ -246,9 +247,9 @@ class DesignDocRecord(BaseModel):
         description="Project-relative path when the document lies inside the project; otherwise "
         "the path as given.",
     )
-    #: ``"supplied"``: named when the run was launched. ``"discovered"``: found in the project
-    #: tree by the design-doc finder.
-    origin: Literal["supplied", "discovered"]
+    #: SUPPLIED (``"supplied"``): named when the run was launched. DISCOVERED
+    #: (``"discovered"``): found in the project tree by the design-doc finder.
+    origin: DesignDocOrigin
     #: The finder's stated reason for its choice; None for a supplied document.
     reason: str | None = None
 

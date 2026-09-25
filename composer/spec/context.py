@@ -10,7 +10,7 @@ be passed explicitly to agents that need it.
 from graphcore.tools.vfs import GlobalExcludeArg
 from dataclasses import dataclass
 import pathlib
-from typing import Annotated, Callable, Literal, overload, Awaitable
+from typing import Annotated, Callable, overload, Awaitable
 
 from pydantic import BaseModel, ValidationError
 
@@ -22,7 +22,7 @@ from graphcore.graph import Builder
 from composer.input.files import Document
 from composer.io.mnemonic_store import assign_mnemonic
 from composer.core.user import user_data_ns
-from composer.spec.types import SourceIdentifier
+from composer.spec.types import DesignDocOrigin, SourceIdentifier
 from composer.diagnostics.budget import budget_pressure
 
 
@@ -53,9 +53,9 @@ class SourceFields:
 class DesignDocProvenance:
     """The design document a run uses, and how it was chosen."""
     path: pathlib.Path
-    #: ``"supplied"``: named on the command line. ``"discovered"``: chosen by the design-doc
-    #: finder from the project tree.
-    origin: Literal["supplied", "discovered"]
+    #: SUPPLIED: named on the command line. DISCOVERED: chosen by the design-doc finder from
+    #: the project tree.
+    origin: DesignDocOrigin
     #: The finder's stated reason for its choice; None for a supplied document.
     reason: str | None = None
 

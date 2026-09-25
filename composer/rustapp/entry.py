@@ -66,7 +66,7 @@ from composer.spec.source.source_env import (
     build_basic_source_tools,
     build_source_tools,
 )
-from composer.spec.types import SourceIdentifier
+from composer.spec.types import DesignDocOrigin, SourceIdentifier
 from composer.tools.rag_env import build_rag_tools
 from composer.ui.tool_display import async_tool_context
 from composer.workflow.services import standard_connections
@@ -324,7 +324,9 @@ async def rust_entry_point(
             #    may come up empty, which is not fatal — see below.
             design_doc: DesignDocProvenance | None
             if args.system_doc is not None:
-                design_doc = DesignDocProvenance(path=pathlib.Path(args.system_doc), origin="supplied")
+                design_doc = DesignDocProvenance(
+                    path=pathlib.Path(args.system_doc), origin=DesignDocOrigin.SUPPLIED
+                )
             else:
                 design_doc = await run_task(
                     factory=handler,

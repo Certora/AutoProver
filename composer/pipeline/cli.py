@@ -29,7 +29,7 @@ from composer.pipeline.ptypes import (
 from composer.spec.artifacts import ArtifactIdentifier
 from composer.spec.system_model import FeatureUnit, BaseApplication
 from composer.spec.service_host import ModelProvider
-from composer.spec.types import SourceIdentifier
+from composer.spec.types import DesignDocOrigin, SourceIdentifier
 from composer.pipeline.ecosystem import Ecosystem
 from .core import PipelineBackend, run_pipeline
 from .run_mode import RunMode
@@ -378,7 +378,9 @@ async def cli_pipeline[P: enum.Enum, H, App: BaseApplication, Main, U: FeatureUn
                         )
                 )
             else:
-                design_doc = DesignDocProvenance(path=pathlib.Path(args.system_doc), origin="supplied")
+                design_doc = DesignDocProvenance(
+                    path=pathlib.Path(args.system_doc), origin=DesignDocOrigin.SUPPLIED
+                )
             system_doc = design_doc.path if design_doc is not None else None
 
             # ``system_doc`` is None only when discovery found nothing: run source-only.

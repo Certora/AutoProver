@@ -38,6 +38,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from composer.llm.anthropic import AnthropicRenderer, _get_service
 from composer.input.files import InMemoryTextFile
 from composer.spec.context import DesignDocProvenance, WorkflowContext, SourceFields
+from composer.spec.types import DesignDocOrigin
 from composer.spec.service_host import ModelProvider
 from composer.spec.util import fs_forbidden_read
 from composer.templates.loader import load_jinja_template
@@ -172,7 +173,7 @@ async def test_resolve_discovered_doc(tmp_path, monkeypatch):
         disc_ctx=cast(Any, None),
     )
     # The finder's verdict is carried along, so the report can say which doc was used and why.
-    assert resolved == DesignDocProvenance(path=doc, origin="discovered", reason="found it")
+    assert resolved == DesignDocProvenance(path=doc, origin=DesignDocOrigin.DISCOVERED, reason="found it")
 
 
 async def test_resolve_no_doc_returns_none_for_source_only(tmp_path, monkeypatch):
