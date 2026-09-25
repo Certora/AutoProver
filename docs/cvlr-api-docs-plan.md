@@ -789,21 +789,44 @@ guarantee rather than an assumption. Step 5 now has one precondition left instea
    stays as it is, measuring the published crates, until the work lands there.
    
 3. **`cvlr_research.py` + templates + display + tests**, wired *alongside* the source mount. ✅
-   **Done** — `238cbd11`. Both channels live, which is the only arrangement in which they can be
-   compared on one run. The author and judge get the researcher and the recipes; the corpus search
+   **Done** — `238cbd11`. The author and judge get the researcher and the recipes; the corpus search
    tools go to the researcher alone, so the ordering is applied once rather than restated in every
    prompt that could search. `--rag-corpus` now names the *manual* corpus — the API corpus is not a
    choice among alternatives.
 
-   **Not yet done:** the comparison run itself, which is what step 5 waits on.
+   **Wiring it alongside the mount is a deployment decision, not a measurement design**, and this
+   entry used to claim otherwise — "the only arrangement in which they can be compared on one run".
+   It is not an arrangement in which anything can be compared. With the mount live the author can
+   decline to ask the researcher on exactly the questions that decide the migration, and a clean run
+   then cannot tell "the researcher answered well" from "the author never needed to ask"; the
+   reverse signal, a researcher answer followed by a grep, measures the two tools' descriptions and
+   a long-standing habit rather than either one's capability. Both-live also ships to nobody.
+
+   What it *is* good for is the reason to keep it: nothing is removed before its replacement is
+   proven, so step 5 is a deletion that can wait for evidence instead of a leap. See (5) for what
+   the evidence actually is.
 4. ~~The `--withhold-crate` corpus filter.~~ **Not needed** — §2.3. Restricting the setting to
    program models is what removed it, and that landed in `9b3a58ed`.
 5. **Remove the mount**, rewrite the two system prompts, delete `source_tools.py`,
    `crate_mount.py` and the fragment. **Gate tentatively met.** The macro contract is the only
    thing the mount holds that the rustdoc walk does not replace, and as of 2b it is in the
-   checkouts — so a corpus built with `--crate-source` relocates it rather than losing it, and
-   (3)'s comparison run can finally be run against a corpus that has it. Landing this against the
-   *published* corpus is a separate question, and 2b is where it is answered.
+   checkouts — so a corpus built with `--crate-source` relocates it rather than losing it. Landing
+   this against the *published* corpus is a separate question, and 2b is where it is answered.
+
+   **The evidence is a corpus-only run, and it belongs on this branch rather than ahead of it.**
+   There are two configurations anyone ships and they are the two arms: mount-only with the corpus
+   off, which is *already recorded and already paid for* — the tape's census, 88 searches over 22
+   names, 152 reads over 27 files, and the two macro facts of §4.2 recovered from source — and
+   corpus-only with the mount gone, which is this step. So one run remains, in this step's own
+   configuration, and its census is also §7's re-take (see 7). Nothing has to be deleted to run it:
+   the mount is unconditional at `pipeline.py`'s `crate_tools = tuple(cvlr_source_tools(crates))`,
+   so a flag or a one-line change gets there, and a branch that does not stand up is reverted.
+
+   Read against the baseline, the census answers whether the corpus carries the author. Read on its
+   own it answers more reliably, because the two arms are months and a model generation apart and
+   nothing controls for that: did the run recover the two macro facts, did the volume of CVLR
+   questions stay near 50 while collapsing to far fewer sub-agent invocations through the
+   `AgentIndex` cache, and did the compile-failure rate on helper names hold.
 6. **Re-scope `cvlr_kb` to the manual** (§4.6): drop the crate-reference manifest, drop
    `populate_cvlr_rag.sh`'s discovery of manifests built elsewhere, and restate `cvlr_rag.py`'s
    docstrings. Deliberately *after* (5): while both channels are live, a duplicated crate reference
@@ -839,15 +862,17 @@ guarantee rather than an assumption. Step 5 now has one precondition left instea
    no baseline left to measure: the floor it was measuring is an author with no CVLR reference at
    all.
 
-   **This is not (3)'s comparison run.** That one goes *before* (5), with the mount and the
-   researcher both live, because "which channel does the author reach for" is only answerable while
-   it has the choice. This one goes after, and is where the census §7 names as the success
-   criterion gets re-taken.
+   **The census re-take is (5)'s run, not a second one.** A corpus-only run against the vault is
+   at once the evidence for step 5 and the census §7 names as the success criterion, so it is paid
+   for once. What is left here after it is the tape and the live gate.
 
-Steps 0–4 are done and additive; nothing yet removes a capability. (5) is the only irreversible
-step, and it has three preconditions. The pin is met. 2b is met in the checkouts and not yet in a
+Steps 0–4 are done and additive; nothing yet removes a capability. (5) is the only one that takes
+a capability away, and it has three preconditions — "irreversible", as earlier drafts called it,
+overstates a branch that is reverted with git. What makes it worth gating is that a bad removal is
+discovered in production rather than in the diff. The pin is met. 2b is met in the checkouts and not yet in a
 release, which is what makes it tentative — and what makes `--crate-source` the way the remaining
-work gets a corpus. What is left is **(3)'s comparison run**, which has to show the researcher
-answering the questions the §7.5.5 census says the author actually asks. (7), re-recording the
-tape, follows (5) and not before: the tape records the author's tool calls, and those do not change
-until the mount goes.
+work gets a corpus. What is left is **one corpus-only run on (5)'s own branch**, which has to show
+the researcher answering the questions the §7.5.5 census says the author actually asks. The other
+arm of that comparison is the recorded tape's census and needs no run. (7), re-recording the tape,
+follows (5) and not before: the tape records the author's tool calls, and those do not change until
+the mount goes.
