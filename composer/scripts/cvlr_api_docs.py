@@ -29,10 +29,14 @@ it invites a dependency on a binding name that is nobody's promise.
 **Documenting a working copy.** ``--crate-source`` points the probe at a local CVLR checkout:
 every CVLR package that checkout defines replaces the crates.io release through
 ``[patch.crates-io]``, so the pin still decides *which* crates the corpus holds and the checkout
-decides what is in them. That is how doc comments get read before they are published. A corpus
-built that way says so — in the manifest's source line, in each crate's surface listing and in
-every entry — because a checkout is not a release, and an entry naming something the release does
-not have is a compile error waiting for whoever believes it.
+decides what is in them. That is how doc comments get read before they are published.
+
+The rows it emits are byte-for-byte what the same crates would emit once released. That is
+deliberate and worth keeping: a corpus built this way exists to be *tried* — to see what an author
+agent does with documentation that is still in review — and a caveat stamped on every entry would
+mean the run under observation was not the run that ships. Where the build came from is recorded
+off to the side instead, in the manifest's ``source`` line and in the log, neither of which any
+agent reads.
 
 Run it through :mod:`composer.scripts.populate_cvlr_rag`'s wrapper, or directly::
 
@@ -135,8 +139,8 @@ class LocalCheckout:
 
 
 #: Where one crate's documentation came from. A corpus mixes the two: a caller who points at the
-#: ``cvlr`` checkout still gets ``cvlr-solana`` from crates.io, and an entry has to be able to say
-#: which it is.
+#: ``cvlr`` checkout still gets ``cvlr-solana`` from crates.io. It reaches the manifest's source
+#: line, the undocumented report and the log, and deliberately not the rows.
 type Origin = Published | LocalCheckout
 
 
@@ -598,23 +602,6 @@ def _alias_path(facade: CrateDocs, item_id: str, name: str) -> str | None:
 # the manifest
 
 
-def _provenance(origin: Origin) -> str | None:
-    """What an entry says about where it came from, or nothing when it came from the release.
-
-    The published case adds no sentence on purpose: it is what every entry in an ordinary corpus
-    would say, and a warning everything carries is one nothing carries.
-    """
-    match origin:
-        case Published():
-            return None
-        case LocalCheckout() as checkout:
-            return (
-                f"Documented from a local checkout ({checkout.describe()}), not from the "
-                f"published release. Anything here that the published crate does not have will "
-                f"not compile against the release this build pins."
-            )
-
-
 def _leaves(items: list[Item]) -> list[str]:
     """The header leaf for each item, disambiguated only where a name is not unique.
 
@@ -656,17 +643,6 @@ def _surface_section(docs: CrateDocs, items: list[Item]) -> ManualSection:
     """
     lines = [f"`{i.name}` — {i.kind.replace('_', ' ')}" for i in items]
     listing = "\n".join(f"- {line}" for line in lines) or "- (this crate exports nothing)"
-    closed = (
-        "This list is closed: a name that is not on it is not in this crate at the release this "
-        "build pins."
-        if isinstance(docs.origin, Published)
-        else (
-            "This list is closed: a name that is not on it is not in this crate. It was read from "
-            "an unpublished checkout, so a name that *is* on it may not exist in the release this "
-            "build pins."
-        )
-    )
-    note = _provenance(docs.origin)
     return ManualSection(
         headers=[API_ROOT, docs.name, docs.version, SURFACE_HEADING],
         blocks=[
@@ -674,9 +650,8 @@ def _surface_section(docs: CrateDocs, items: list[Item]) -> ManualSection:
                 kind=ManualBlockKind.TEXT,
                 body=(
                     f"Everything `{docs.name}` {docs.version} exports, in full — "
-                    f"{len(items)} items. {closed}"
-                    + (f"\n\n{note}" if note else "")
-                    + f"\n\n{listing}"
+                    f"{len(items)} items. This list is closed: a name that is not on it is not in "
+                    f"this crate at the release this build pins.\n\n{listing}"
                 ),
             )
         ],
@@ -697,10 +672,9 @@ def build_manifest(crates: list[CrateDocs], source: str) -> RagManifest:
     for docs in sorted(crates, key=lambda c: c.name):
         items = items_of(docs)
         manual.append(_surface_section(docs, items))
-        note = _provenance(docs.origin)
         for item, leaf in zip(items, _leaves(items)):
             headers = [API_ROOT, docs.name, docs.version, leaf]
-            body = item.body() + ([("text", note)] if note else [])
+            body = item.body()
             manual.append(
                 ManualSection(
                     headers=headers,
@@ -920,9 +894,9 @@ def document_family(
 def manifest_source(reference: ChainReference, sources: Mapping[str, LocalCheckout]) -> str:
     """What the manifest records about where it came from.
 
-    A corpus built from a checkout has to be identifiable as one from the manifest alone: the row
-    an agent reads says so too, but this is what someone looking at an ingested corpus and asking
-    why it disagrees with crates.io has to go on.
+    The only durable trace that a checkout was read: the rows deliberately carry none, so this is
+    all that someone looking at an ingested corpus and asking why it disagrees with crates.io has
+    to go on.
     """
     pinned = ", ".join(f"{c.name} {c.version}" for c in reference.crates())
     base = f"rustdoc over the CVLR family pinned at {pinned}"
@@ -1000,8 +974,9 @@ def main() -> None:
         help="A local CVLR checkout to document instead of the published crates. Repeatable, and "
              "it may be a workspace root or a single crate directory. Every CVLR package the "
              "checkout defines replaces the crates.io release, so the pin still decides which "
-             "crates the corpus holds and the checkout decides what is in them. The corpus says "
-             "where it was read from, in the manifest and in every entry.",
+             "crates the corpus holds and the checkout decides what is in them. The entries it "
+             "emits are identical to the ones the same crates produce once published; the "
+             "manifest's source line is what records that a checkout was read.",
     )
     parser.add_argument(
         "--undocumented", action="store_true",

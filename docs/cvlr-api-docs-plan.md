@@ -739,12 +739,15 @@ guarantee rather than an assumption. Step 5 now has one precondition left instea
    the probe as `[patch.crates-io]` rather than as a path dependency, so the two questions stay
    apart: the pin still decides which crates resolve and at what version, the checkout only decides
    where their source is read from, and a checkout that has drifted off the pin fails at cargo
-   instead of yielding a corpus for a release this build does not support. A corpus built that way
-   says so in the manifest's source line, in each crate's surface listing and in every entry —
-   an unpublished tree can carry items the pinned release does not, and an agent that writes one
-   gets a compile error with no way back to this decision. `populate_cvlr_rag.sh --crate-source`
-   passes it through, and refuses to be combined with explicit manifest paths, which skip
-   generation.
+   instead of yielding a corpus for a release this build does not support. `populate_cvlr_rag.sh
+   --crate-source` passes it through, and refuses to be combined with explicit manifest paths,
+   which skip generation.
+
+   **The rows say nothing about where they came from**, which is a property to preserve rather than
+   an omission. A corpus built this way exists to be *tried* — to watch an author agent work
+   against documentation that is still in review — and an entry stamped with a caveat no released
+   corpus carries would mean the run under observation was not the run that ships. Provenance goes
+   where no agent reads it: the manifest's `source` line, the undocumented report, and the log.
 
    **Two corpus defects surfaced with it, both fixed.** Seven header paths collided: a crate
    exporting a macro and the function it expands into is ordinary CVLR (`cvlr_log`, four in

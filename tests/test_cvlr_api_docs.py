@@ -23,7 +23,6 @@ from composer.scripts.cvlr_api_docs import (
     CrateDocs,
     Item,
     LocalCheckout,
-    Published,
     RustdocUnavailable,
     _leaves,
     _probe_crate,
@@ -407,58 +406,30 @@ def test_a_package_resolves_to_its_own_directory_not_the_workspace_root():
     assert found == {"cvlr-asserts": Path("/home/eric/src/cvlr/cvlr-asserts")}
 
 
-def test_an_entry_read_from_a_checkout_says_so_in_the_entry():
-    """The row is where it matters. A caller reads one entry, not the manifest header.
+def test_a_checkout_corpus_is_indistinguishable_from_a_published_one():
+    """The rows must not mention where they came from, and this is the reason.
 
-    An unpublished checkout can carry items the pinned release does not, and an agent that writes
-    one gets a compile error with no way back to this decision.
+    A checkout is documented in order to be *tried*: to watch an author agent work against
+    documentation that is still in review. An entry stamped with a caveat no released corpus
+    carries would mean the run under observation was not the run that ships, and the difference
+    would show up as a difference in the agent's behaviour rather than as anything visible here.
+
+    Provenance is recorded where no agent reads it — the manifest's source line and the log.
     """
-    docs = CrateDocs(
-        "cvlr-asserts", "0.6.1", json.loads((_DATA / "cvlr_asserts.json").read_text()),
-        origin=_checkout("cvlr-asserts"),
+    payload = json.loads((_DATA / "cvlr_asserts.json").read_text())
+    published = build_manifest([CrateDocs("cvlr-asserts", "0.6.1", payload)], source="s")
+    checkout = build_manifest(
+        [CrateDocs("cvlr-asserts", "0.6.1", payload, origin=_checkout("cvlr-asserts"))], source="s"
     )
-    manifest = build_manifest([docs], source="test")
-    for section in manifest.manual_sections:
-        body = "\n".join(b.body for b in section.blocks)
-        assert "local checkout" in body, section.headers
-        assert "g8d9d463-dirty" in body
-    assert all(
-        "local checkout" in "\n".join(b.body for b in g.blocks) for g in manifest.embedded_groups
-    )
-
-
-def test_a_published_entry_carries_no_provenance_note(family):
-    # The published case is every entry in an ordinary corpus, and a caveat on all of them is a
-    # caveat on none.
-    manifest = build_manifest(family, source="test")
-    assert all(c.origin == Published() for c in family)
-    for section in manifest.manual_sections:
-        assert "local checkout" not in "\n".join(b.body for b in section.blocks)
-
-
-def test_the_surface_listing_stops_claiming_the_pinned_release():
-    """The closed-world read is the one row that settles existence, so its wording is load-bearing.
-
-    Closed it stays — the checkout is still a complete listing of itself — but "at the release this
-    build pins" would be a false claim about every name on it.
-    """
-    docs = CrateDocs(
-        "cvlr-asserts", "0.6.1", json.loads((_DATA / "cvlr_asserts.json").read_text()),
-        origin=_checkout("cvlr-asserts"),
-    )
-    surface = next(
-        s for s in build_manifest([docs], "t").manual_sections if s.headers[-1] == SURFACE_HEADING
-    )
-    body = surface.blocks[0].body
-    assert "This list is closed" in body
-    assert "not in this crate at the release this build pins" not in body
-    assert "may not exist in the release this build pins" in body
+    assert checkout == published
+    assert "/home/eric/src" not in checkout.model_dump_json()
 
 
 def test_the_manifest_source_names_every_checkout_it_read():
     """What someone looking at an ingested corpus and wondering why it disagrees with crates.io has.
 
     Grouped by checkout rather than listed per crate: fifteen crates from two trees is two facts.
+    It is also the only durable trace, since the rows carry none.
     """
     from composer.spec.cvlr_reference import SOLANA
 
