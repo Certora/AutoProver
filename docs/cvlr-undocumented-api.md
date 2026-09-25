@@ -67,14 +67,14 @@ so on this one sample they are the cheapest to defer.
 
 ## The list
 
-218 of 282 items carry no prose documentation.
+218 of 284 items carry no prose documentation.
 
 | crate | undocumented | items |
 | --- | --- | --- |
 | `cvlr 0.6.1` | 3 | 3 |
 | `cvlr-asserts 0.6.1` | 31 | 31 |
 | `cvlr-decimal 0.6.1` | 5 | 5 |
-| `cvlr-derive 0.6.1` | 0 | 0 |
+| `cvlr-derive 0.6.1` | 0 | 2 |
 | `cvlr-early-panic 0.6.1` | 0 | 1 |
 | `cvlr-fixed 0.6.1` | 38 | 40 |
 | `cvlr-hook 0.6.1` | 0 | 2 |
@@ -372,8 +372,8 @@ so on this one sample they are the cheapest to defer.
 
 ### cvlr-macros 0.6.1 — 1 of 11
 
-- `mock_fn` — proc macro
-  - `mock_fn!`
+- `mock_fn` — proc attribute
+  - `#[mock_fn]`
 
 ### cvlr-mathint 0.6.1 — 30 of 31
 
