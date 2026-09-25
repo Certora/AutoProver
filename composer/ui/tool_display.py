@@ -179,6 +179,28 @@ class CommonTools:
     get_cvlr_recipe = ToolDisplay(
         lambda p: f"Retrieving CVLR recipe: {p.get('id', '?')}", "CVLR recipe",
     )
+    cvlr_research = ToolDisplay(
+        lambda p: f"Researching CVLR: {p.get('question', '?')}", "Research result",
+        short_display_name="CVLR research",
+    )
+    cvlr_api_lookup = ToolDisplay(
+        lambda p: f"CVLR API: {p.get('name', '?')}", "CVLR API entry",
+    )
+    cvlr_api_search = ToolDisplay(
+        lambda p: f"CVLR API search: {p.get('query', '?')}", "CVLR API matches",
+    )
+    cvlr_api_surface = ToolDisplay(
+        lambda p: f"CVLR API surface: {p.get('crate', '?')}", "Public surface",
+    )
+    cvlr_manual_search = ToolDisplay(
+        lambda p: f"CVLR Manual Search: {p.get('query', '?')}", "CVLR Manual matches",
+    )
+    cvlr_keyword_search = ToolDisplay(
+        lambda p: f"CVLR Manual keywords: {p.get('query', '?')}", "CVLR Matching Sections",
+    )
+    cvlr_get_section = ToolDisplay(
+        lambda p: f"Read CVLR Manual: {' / '.join(p.get('section_names', []))}", None,
+    )
 
     # -- Grouped display bundles ---------------------------------------------
     # Each corresponds to a capability provider (builder / service).
@@ -218,6 +240,30 @@ class CommonTools:
         return {
             "write_rough_draft": CommonTools.write_rough_draft,
             "read_rough_draft": CommonTools.read_rough_draft,
+        }
+
+    @staticmethod
+    def cvlr_corpus_displays() -> dict[str, "ToolDisplay | GroupedTool"]:
+        """The two CVLR corpora's search tools. Named apart on purpose: which corpus answered is
+        how a reader of the transcript knows whether a claim came from the crates or from prose
+        (``docs/cvlr-api-docs-plan.md`` §4.1), and the UI should not flatten that away."""
+        return {
+            "cvlr_api_lookup": CommonTools.cvlr_api_lookup,
+            "cvlr_api_search": CommonTools.cvlr_api_search,
+            "cvlr_api_surface": CommonTools.cvlr_api_surface,
+            "cvlr_manual_search": CommonTools.cvlr_manual_search,
+            "cvlr_keyword_search": CommonTools.cvlr_keyword_search,
+            "cvlr_get_section": CommonTools.cvlr_get_section,
+        }
+
+    @staticmethod
+    def cvlr_research_displays() -> dict[str, "ToolDisplay | GroupedTool"]:
+        """The CVLR research sub-agent and everything it uses."""
+        return {
+            "cvlr_research": CommonTools.cvlr_research,
+            **CommonTools.cvlr_corpus_displays(),
+            **CommonTools.kb_displays(),
+            **CommonTools.rough_draft_displays(),
         }
 
     @staticmethod
