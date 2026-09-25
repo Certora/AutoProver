@@ -139,7 +139,7 @@ not.
 | `backend_guidance` (property prompt) | Solana vs. Soroban CVLR idioms | A module-level string constant, exactly as `CERTORA_BACKEND_GUIDANCE`, `FOUNDRY_BACKEND_GUIDANCE` and `SOLANA_NULL_GUIDANCE` are today. No mechanism required |
 | Munge charter | mocks, feature gates, CPI stubs, SDK nondet vs. host-env and storage stubs | A template, as [munge_charter.j2](../composer/templates/munge_charter.j2) is for EVM |
 | Knowledge corpus | `cvlr-solana` vs. Soroban helper sections | One `cvlr` corpus with chain-tagged sections (§5.4) |
-| CVLR source access for agents | Which helper crate resolves | One chain-neutral tool set; the crates come from the project's own `cargo metadata` (§5.5) |
+| CVLR source access for agents | Which helper crate resolves | ~~One chain-neutral tool set; the crates come from the project's own `cargo metadata` (§5.5)~~ — superseded: one generated API corpus at the pinned releases, reached through `cvlr_research` |
 
 The top row is the point: the large, expensive, hard-to-get-right machinery does not vary at
 all. What varies is a build command, a CLI name, some templates, and two strings.
@@ -323,6 +323,17 @@ and `rag_env._FACTORIES` — both are empty today — so it lands as a three-par
 module + connection + importer target), as [rag_env.py](../composer/tools/rag_env.py) requires.
 
 ### 5.5 CVLR's source ships with the build — put it in front of the agents
+
+> **Superseded, 2026-09-25.** The mount this section designs was built, exercised, measured
+> (§7.5.5) and then removed — see [cvlr-api-docs-plan.md](./cvlr-api-docs-plan.md), whose §1 is the
+> argument against it and whose §8 step 5 is the removal. The premise below still holds: CVLR's
+> source *is* on disk and that is a real asset CVL does not have. What changed is what to do with
+> it. Source read at authoring time is an implementation, and an author who learns a macro's
+> behaviour from its expansion depends on binding names nobody promised; the same ground truth
+> reaches the agents as a *contract* through rustdoc, which is where the crates say what they
+> promise. The version-identity property this section leans on — every path carries its release —
+> is carried instead by pinning one CVLR line per build. Read what follows as the reasoning that
+> produced the mount, not as a description of the code.
 
 **This inverts the "we have less documentation" premise.** CVL's implementation is not
 available to an agent: the language lives inside the Prover, so a curated manual plus RAG is
@@ -575,7 +586,7 @@ that most directly attacks the hallucination risk.
 | Corpus registration (tools module · `KNOWLEDGE_BASES` · importer target) | **Done** — [cvlr_rag.py](../composer/tools/cvlr_rag.py), [rag_env.py](../composer/tools/rag_env.py), [db.py](../composer/rag/db.py). `cvlr_kb` is the first corpus AutoProver has ever registered |
 | Published docs import | **Done**, then moved out — `certora-cvlr-kb` `tools/docs_manifest.py` → `cvlr-docs.rag.json` (156 sections, 147 groups). Built here originally; see §7.3.3 for why it moved |
 | First KB articles from real projects | **Done, shipping from the private repo** — 83 entries + 15 recipes under one of the three manifests sharing the `cvlr_kb` tag ([capture plan](./cvlr-capture-plan.md) §8.2) |
-| CVLR-source tool set (§5.5) | **Done** — [crate_mount.py](../composer/spec/cvlr/crate_mount.py) (the tree) + [source_tools.py](../composer/spec/cvlr/source_tools.py) (the tools), reaching the explorer through `build_source_tools(library_source=…)` |
+| CVLR-source tool set (§5.5) | **Done, then removed.** Was `crate_mount.py` (the tree) + `source_tools.py` (the tools); deleted with [cvlr-api-docs-plan.md](./cvlr-api-docs-plan.md) §8 step 5 in favour of the generated API corpus |
 | `backend_guidance` | **Done** — [guidance.py](../composer/spec/cvlr/guidance.py) |
 | Generated crate reference | **Built and run**, in the private repo — `certora-cvlr-kb` `tools/crate_reference.py` → `cvlr-crates.rag.json` (175 sections, 117 groups, 310/310 items covered) |
 
@@ -789,9 +800,11 @@ before the pin is written rather than after.
 `optional = true`, which is what keeps it out of a release build — and a default-feature
 `cargo metadata` therefore reports it absent. Found by reading the first real preflight's output: the
 version-gap report said `cvlr-solana is not a dependency` for a project that had just been given one,
-and [crates.py](../composer/spec/cvlr/crates.py)`.roots()` — the CVLR **source mount** that §5.5 calls
-the cheaper half of the answer to the hallucination risk — would have found nothing to mount. The
-whole §5.5 mitigation would have been silently empty on every scaffolded project. `read_workspace`
+and `crates.py`'s `roots()` — the CVLR **source mount** that §5.5 calls the cheaper half of the
+answer to the hallucination risk — would have found nothing to mount. The whole §5.5 mitigation
+would have been silently empty on every scaffolded project. (The mount and `roots()` are gone as of
+the API-corpus migration; the defect this records is not, because preflight still resolves the
+graph the verification build gets and still gates on it.) `read_workspace`
 now takes `features`, and preflight resolves the graph the verification build actually gets, from the
 package's own directory (feature selection resolves against the package cargo considers current).
 

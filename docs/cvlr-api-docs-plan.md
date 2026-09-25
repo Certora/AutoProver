@@ -29,11 +29,11 @@ pinning — the CVLR analogue of CVL being whatever the Prover ships. §3–§8 
 | piece | role |
 |---|---|
 | [`composer/spec/cvlr/crates.py`](../composer/spec/cvlr/crates.py) | resolves the CVLR family from `cargo metadata`; reports gaps against the reference set |
-| [`composer/spec/cvlr/crate_mount.py`](../composer/spec/cvlr/crate_mount.py) | presents those crate trees under one version-stamped namespace (`cvlr-asserts-0.6.1/src/lib.rs`) |
-| [`composer/spec/cvlr/source_tools.py`](../composer/spec/cvlr/source_tools.py) | `cvlr_source_files` / `cvlr_source_read` / `cvlr_source_search` over the mount |
-| [`cvlr_source_tools.j2`](../composer/templates/cvlr_source_tools.j2) | the prompt fragment that says the mount is **the authority** |
+| `composer/spec/cvlr/crate_mount.py` | presents those crate trees under one version-stamped namespace (`cvlr-asserts-0.6.1/src/lib.rs`) — *deleted at step 5* |
+| `composer/spec/cvlr/source_tools.py` | `cvlr_source_files` / `cvlr_source_read` / `cvlr_source_search` over the mount — *deleted at step 5* |
+| `cvlr_source_tools.j2` | the prompt fragment that says the mount is **the authority** — *deleted at step 5* |
 | [`cvlr_rag_tools.j2`](../composer/templates/cvlr_rag_tools.j2) | the fragment for the existing `cvlr_kb` corpus tools, which says the corpus is *not* the authority |
-| [`pipeline.py:484`](../composer/spec/cvlr/pipeline.py#L484) | mounts, builds the tools, carries them on `CvlrDeps.crate_tools` |
+| `pipeline.py`'s `prepare_system` | mounted, built the tools, carried them on `CvlrDeps.crate_tools` — *removed at step 5* |
 | [`author.py:645`](../composer/spec/cvlr/author.py#L645) | routes them to the author **and** the judge |
 
 Two asymmetries matter for the migration and are easy to miss:
@@ -808,7 +808,14 @@ guarantee rather than an assumption. Step 5 now has one precondition left instea
 4. ~~The `--withhold-crate` corpus filter.~~ **Not needed** — §2.3. Restricting the setting to
    program models is what removed it, and that landed in `9b3a58ed`.
 5. **Remove the mount**, rewrite the two system prompts, delete `source_tools.py`,
-   `crate_mount.py` and the fragment. **Gate tentatively met.** The macro contract is the only
+   `crate_mount.py` and the fragment. ✅ **Implemented** — `crate_mount.py`, `source_tools.py` and
+   `cvlr_source_tools.j2` are gone, with `CvlrSources.roots()`, `CvlrDeps.crate_tools` and the
+   judge's `extra_tools`; `CvlrMountParams` is now `CvlrVersionParams`. The author and the judge
+   reach CVLR through `cvlr_research` alone, and `cvlr_research.j2` picked up the version-identity
+   claim the mount fragment carried — the one property source-on-disk had that a corpus does not
+   get for free, and which §2's pin is what actually makes true. `cvlr-backend-plan.md` §5.5 now
+   opens with a superseded banner. **The run below is what says whether this stands.**
+   **Gate tentatively met.** The macro contract is the only
    thing the mount holds that the rustdoc walk does not replace, and as of 2b it is in the
    checkouts — so a corpus built with `--crate-source` relocates it rather than losing it. Landing
    this against the *published* corpus is a separate question, and 2b is where it is answered.

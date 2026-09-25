@@ -161,13 +161,12 @@ def test_a_published_dependency_is_distinguished_from_a_workspace_member():
 # --------------------------------------------------------------------------------------------
 
 
-def test_the_cvlr_source_roots_are_the_crate_directories_the_build_resolved():
+def test_the_resolved_cvlr_crates_are_the_family_the_build_pulled_in():
+    """``cvlr`` is a facade — ``cvlr_assert!`` expands in ``cvlr-asserts`` — so the family is what
+    matters and it is recognized by name rather than declared anywhere."""
     sources = resolve(parse_metadata(_METADATA))
     assert sources.core is not None and sources.core.version == "0.6.1"
-    assert sources.roots() == (
-        Path("/home/u/.cargo/registry/src/idx/cvlr-0.6.1"),
-        Path("/home/u/.cargo/registry/src/idx/cvlr-log-0.6.1"),
-    )
+    assert [c.name for c in sources.crates] == ["cvlr", "cvlr-log"]
 
 
 def test_a_project_on_the_reference_core_but_without_the_chain_crate_reports_that_gap():

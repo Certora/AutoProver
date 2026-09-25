@@ -12,7 +12,6 @@ way the scaffold's gate does not see, such as a ``[patch]`` table.
 """
 
 from dataclasses import dataclass
-from pathlib import Path
 
 from composer.cargo.metadata import CratePackage, Workspace
 from composer.spec.cvlr_reference import ChainReference
@@ -77,13 +76,6 @@ class CvlrSources:
     @property
     def core(self) -> CratePackage | None:
         return next((c for c in self.crates if c.name == CVLR_PREFIX), None)
-
-    def roots(self) -> tuple[Path, ...]:
-        """The crate directories, one per family member.
-
-        ``cvlr_assert!`` expands in ``cvlr-asserts``. The ``cvlr`` crate only re-exports it.
-        """
-        return tuple(c.root for c in self.crates)
 
     def gaps(self, reference: ChainReference) -> tuple[Divergence, ...]:
         """Where this build and the reference set disagree.
