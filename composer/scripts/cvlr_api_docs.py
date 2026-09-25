@@ -646,8 +646,12 @@ def load(path: pathlib.Path, name: str, version: str) -> CrateDocs:
     return CrateDocs(name=name, version=version, payload=json.loads(path.read_text()))
 
 
-def generate(reference: ChainReference, workdir: pathlib.Path) -> RagManifest:
-    """Build the probe, run rustdoc over the whole family, and walk the result."""
+def document_family(reference: ChainReference, workdir: pathlib.Path) -> list[CrateDocs]:
+    """Build the probe, run rustdoc over the whole family, and resolve re-exports across it.
+
+    Returns the parsed crates rather than a manifest: the walk has two consumers now, and which
+    one runs is a flag rather than a second pass over cargo.
+    """
     if shutil.which("cargo") is None:
         raise RustdocUnavailable("cargo is not on PATH, so there is nothing to document.")
     _probe_crate(workdir, reference)
@@ -666,8 +670,47 @@ def generate(reference: ChainReference, workdir: pathlib.Path) -> RagManifest:
         _log.info("rustdoc: %s %s", name, version)
         crates.append(load(_rustdoc(workdir, name), name, version))
     resolve_aliases(crates)
+    return crates
+
+
+def manifest_source(reference: ChainReference) -> str:
     pinned = ", ".join(f"{c.name} {c.version}" for c in reference.crates())
-    return build_manifest(crates, source=f"rustdoc over the CVLR family pinned at {pinned}")
+    return f"rustdoc over the CVLR family pinned at {pinned}"
+
+
+def undocumented_report(crates: list[CrateDocs]) -> str:
+    """Every corpus item with no prose documentation, grouped by crate.
+
+    The corpus can only carry what the crates carry. rustdoc gives existence, signature, defining
+    crate and feature gate with no doc comment at all — which is most of what the live run's tool
+    census asked for — but *what an item is for* has to be written by someone, and this is the
+    list of what nobody has written yet (``docs/cvlr-api-docs-plan.md`` §4.2).
+
+    Regenerate rather than edit: the point of the list is to shrink.
+    """
+    lines: list[str] = []
+    total = undocumented = 0
+    summary: list[tuple[str, int, int]] = []
+    for docs in sorted(crates, key=lambda c: c.name):
+        items = items_of(docs)
+        missing = [i for i in items if not i.docs]
+        total += len(items)
+        undocumented += len(missing)
+        summary.append((f"{docs.name} {docs.version}", len(missing), len(items)))
+        if not missing:
+            continue
+        lines.append(f"\n### {docs.name} {docs.version} — {len(missing)} of {len(items)}\n")
+        for item in missing:
+            gate = f"  *(feature `{item.gate}`)*" if item.gate else ""
+            lines.append(f"- `{item.name}` — {item.kind.replace('_', ' ')}{gate}")
+            lines.append(f"  - `{item.signature.splitlines()[0]}`")
+    header = [
+        f"{undocumented} of {total} items carry no prose documentation.\n",
+        "| crate | undocumented | items |",
+        "| --- | --- | --- |",
+    ]
+    header += [f"| `{name}` | {miss} | {count} |" for name, miss, count in summary]
+    return "\n".join(header + lines) + "\n"
 
 
 def main() -> None:
@@ -683,6 +726,11 @@ def main() -> None:
         "--keep", type=pathlib.Path, default=None,
         help="Build the probe crate here and leave it, instead of in a temporary directory.",
     )
+    parser.add_argument(
+        "--undocumented", action="store_true",
+        help="Instead of a manifest, write the list of items that carry no prose documentation. "
+             "That list is the ask against the CVLR crates, and it is meant to shrink.",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
@@ -690,13 +738,18 @@ def main() -> None:
     try:
         if args.keep is not None:
             args.keep.mkdir(parents=True, exist_ok=True)
-            manifest = generate(reference, args.keep)
+            crates = document_family(reference, args.keep)
         else:
             with tempfile.TemporaryDirectory(prefix="cvlr-api-docs-") as tmp:
-                manifest = generate(reference, pathlib.Path(tmp))
+                crates = document_family(reference, pathlib.Path(tmp))
     except RustdocUnavailable as exc:
         raise SystemExit(f"cvlr_api_docs: {exc}") from exc
 
+    if args.undocumented:
+        args.output.write_text(undocumented_report(crates))
+        _log.info("wrote %s", args.output)
+        return
+    manifest = build_manifest(crates, source=manifest_source(reference))
     args.output.write_text(manifest.model_dump_json(indent=1))
     _log.info(
         "wrote %s: %d sections, %d embedded groups",
