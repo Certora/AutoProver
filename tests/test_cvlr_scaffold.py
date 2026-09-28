@@ -598,7 +598,7 @@ class _FakeCargo:
 def fake_cargo(monkeypatch):
     def install(workspace: Workspace) -> _FakeCargo:
         fake = _FakeCargo(workspace)
-        monkeypatch.setattr(preflight, "read_workspace", fake)
+        monkeypatch.setattr(Workspace, "read", fake)
         return fake
 
     return install

@@ -18,7 +18,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from composer.cargo.metadata import CargoUnavailable, CratePackage, Workspace, read_workspace
+from composer.cargo.metadata import CargoUnavailable, CratePackage, Workspace
 from composer.cargo.session import CargoSession, CompileFailed, Compiled, WarmFailed
 from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
@@ -140,7 +140,7 @@ async def select_package(
 
 async def _workspace_at(root: Path, *, features: tuple[str, ...] = ()) -> Workspace:
     try:
-        workspace = await read_workspace(root, features=features)
+        workspace = await Workspace.read(root, features=features)
     except CargoUnavailable as exc:
         raise PreflightFailed(str(exc)) from exc
     if workspace is None:
@@ -176,7 +176,7 @@ async def prepare_workspace(
     # Re-read with the verification feature, from the package directory. The scaffold adds CVLR
     # to the manifests, so the graph from before that does not contain those crates. They are
     # optional, so a default-feature read still reports them absent
-    # (:func:`composer.cargo.metadata.read_workspace`). Features resolve against the package
+    # (:meth:`composer.cargo.metadata.Workspace.read`). Features resolve against the package
     # cargo considers current.
     resolved_in = await _workspace_at(member.root, features=(DEFAULT_FEATURE,))
     fresh = resolved_in.member(member.name) or member

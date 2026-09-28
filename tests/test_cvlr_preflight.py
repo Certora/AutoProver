@@ -1,6 +1,6 @@
 """Resolving a real Cargo project with real cargo, from a bare workspace to one that compiles.
 
-The other preflight tests build a ``Workspace`` by hand and patch out ``read_workspace``. That
+The other preflight tests build a ``Workspace`` by hand and patch out ``Workspace.read``. That
 pins what the planner decides. It cannot pin what cargo decides:
 
 * which member owns a source file, which is cargo's answer, not a prefix match;

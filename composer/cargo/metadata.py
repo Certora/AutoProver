@@ -11,7 +11,7 @@ Answers two questions the host has to answer; an agent must not guess them:
 ``cargo metadata`` runs no build scripts and no proc-macros, so it needs no
 confinement — unlike :mod:`composer.cargo.session`. It does resolve the
 dependency graph, which needs a warm cache or the network; see
-:func:`read_workspace`'s ``offline``.
+:meth:`Workspace.read`'s ``offline``.
 """
 
 import asyncio
@@ -219,6 +219,41 @@ class Workspace:
     #: Every package the graph resolves, members included.
     packages: tuple[CratePackage, ...]
 
+    @classmethod
+    async def read(
+        cls,
+        project_root: Path,
+        *,
+        offline: bool = False,
+        features: tuple[str, ...] = (),
+        timeout_s: int = METADATA_TIMEOUT_S,
+    ) -> "Workspace | None":
+        """The workspace containing ``project_root``, or ``None`` if there is none.
+
+        ``None`` covers no manifest, an unparseable one, or a graph that will not
+        resolve — :func:`composer.rustapp.toolchain.source_unit` treats an empty
+        answer as a supported state. The cargo diagnostic is logged, not raised.
+        Missing cargo raises: that is a machine problem, not a project problem.
+
+        ``offline`` passes ``--offline``. Pass it when a warm cache is guaranteed;
+        leave it off for the first read of an unseen project.
+
+        ``features`` selects the graph the verification build resolves. Pass it
+        whenever the answer is about CVLR. A scaffolded project marks CVLR crates
+        ``optional = true`` behind the ``certora`` feature; a default-feature read
+        then reports them as absent. Features resolve against the package cargo
+        considers current, so pass the package directory as ``project_root`` when
+        naming one.
+        """
+        payload = await asyncio.to_thread(
+            _cargo_metadata,
+            project_root,
+            offline=offline,
+            features=features,
+            timeout_s=timeout_s,
+        )
+        return parse_metadata(payload) if payload is not None else None
+
     def owning(self, path: Path) -> CratePackage | None:
         """The member whose directory contains ``path``. Deepest match, so a nested
         crate wins over the workspace-root package that also contains it."""
@@ -320,36 +355,3 @@ def _cargo_metadata(
         _log.warning("cargo metadata in %s printed unreadable output: %s", project_root, exc)
         return None
 
-
-async def read_workspace(
-    project_root: Path,
-    *,
-    offline: bool = False,
-    features: tuple[str, ...] = (),
-    timeout_s: int = METADATA_TIMEOUT_S,
-) -> Workspace | None:
-    """The workspace containing ``project_root``, or ``None`` if there is none.
-
-    ``None`` covers no manifest, an unparseable one, or a graph that will not
-    resolve — :func:`composer.rustapp.toolchain.source_unit` treats an empty
-    answer as a supported state. The cargo diagnostic is logged, not raised.
-    Missing cargo raises: that is a machine problem, not a project problem.
-
-    ``offline`` passes ``--offline``. Pass it when a warm cache is guaranteed;
-    leave it off for the first read of an unseen project.
-
-    ``features`` selects the graph the verification build resolves. Pass it
-    whenever the answer is about CVLR. A scaffolded project marks CVLR crates
-    ``optional = true`` behind the ``certora`` feature; a default-feature read
-    then reports them as absent. Features resolve against the package cargo
-    considers current, so pass the package directory as ``project_root`` when
-    naming one.
-    """
-    payload = await asyncio.to_thread(
-        _cargo_metadata,
-        project_root,
-        offline=offline,
-        features=features,
-        timeout_s=timeout_s,
-    )
-    return parse_metadata(payload) if payload is not None else None
