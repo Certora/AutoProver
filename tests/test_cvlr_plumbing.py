@@ -1,7 +1,7 @@
 """CVLR metadata and the prover conf, with no toolchain, network, or LLM.
 
 Nothing here shells out to cargo or submits a job. What is checked is the parse of
-``cargo metadata``, the conf the prover settings render to, and the keys one submission adds.
+``cargo metadata``, the conf a tunable conf renders to, and the keys one submission adds.
 """
 
 import json
@@ -168,7 +168,7 @@ def test_loops_are_bounded_soundly_and_the_bound_is_raised_instead():
     """``optimistic_loop`` assumes loops halt instead of proving it, so a violation that needs
     more iterations is not found. Bound the inputs that set the trip count, or edit the loop,
     before raising ``loop_iter``."""
-    conf = cvlr_conf.settings_conf(cvlr_conf.ProverSettings())
+    conf = cvlr_conf.tunable_conf(cvlr_conf.TunableConf())
     assert conf["optimistic_loop"] is False
     assert conf["loop_iter"] == "2"
 
@@ -176,31 +176,31 @@ def test_loops_are_bounded_soundly_and_the_bound_is_raised_instead():
 def test_the_base_enables_no_optimistic_solana_flags():
     """None of the ``-solanaOptimistic*`` flags. They are unsound, and they do not fix the [3308]
     they were meant to."""
-    flags = cvlr_conf.settings_conf(cvlr_conf.ProverSettings())["prover_args"]
+    flags = cvlr_conf.tunable_conf(cvlr_conf.TunableConf())["prover_args"]
     assert not [f for f in flags if f.startswith("-solanaOptimistic")]
 
 
 def test_every_conf_checks_vacuity():
     """With ``rule_sanity`` off, a [3308] inside the generated vacuity rule is reported as
     verified. No setting turns it off."""
-    for settings in (
-        cvlr_conf.ProverSettings(),
-        cvlr_conf.ProverSettings(loop_iter=5, optimistic_loop=True),
+    for tunable in (
+        cvlr_conf.TunableConf(),
+        cvlr_conf.TunableConf(loop_iter=5, optimistic_loop=True),
     ):
-        assert cvlr_conf.settings_conf(settings)["rule_sanity"] == "basic"
+        assert cvlr_conf.tunable_conf(tunable)["rule_sanity"] == "basic"
 
 
 def test_the_loop_bound_is_written_the_way_a_conf_spells_an_integer():
-    assert cvlr_conf.settings_conf(cvlr_conf.ProverSettings(loop_iter=4))["loop_iter"] == "4"
+    assert cvlr_conf.tunable_conf(cvlr_conf.TunableConf(loop_iter=4))["loop_iter"] == "4"
 
 
 def test_a_conf_change_invalidates_a_stamp_earned_before_it():
     """A verdict under one loop bound, or with loops assumed to finish, is not a verdict under
     another."""
-    default = cvlr_conf.conf_history(cvlr_conf.ProverSettings())
-    assert default != cvlr_conf.conf_history(cvlr_conf.ProverSettings(loop_iter=3))
-    assert default != cvlr_conf.conf_history(cvlr_conf.ProverSettings(optimistic_loop=True))
-    assert default == cvlr_conf.conf_history(cvlr_conf.ProverSettings())
+    default = cvlr_conf.conf_history(cvlr_conf.TunableConf())
+    assert default != cvlr_conf.conf_history(cvlr_conf.TunableConf(loop_iter=3))
+    assert default != cvlr_conf.conf_history(cvlr_conf.TunableConf(optimistic_loop=True))
+    assert default == cvlr_conf.conf_history(cvlr_conf.TunableConf())
 
 
 # ---------------------------------------------------------------------------------------------
@@ -209,7 +209,7 @@ def test_a_conf_change_invalidates_a_stamp_earned_before_it():
 
 def _submission(**kwargs) -> dict:
     return cvlr_conf.solana_conf(
-        cvlr_conf.ProverSettings(),
+        cvlr_conf.TunableConf(),
         cvlr_conf.RunOverlay(build_script=Path("/w/.certora_build/confined_build.py"), **kwargs),
     )
 
