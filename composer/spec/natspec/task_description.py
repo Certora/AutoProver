@@ -123,6 +123,30 @@ class ConfigurationBuilder:
             solc=version if version.startswith("solc") else f"solc{version}"
         )
 
+    def with_compilation_steps_only(self) -> Self:
+        return self._replace(compilation_steps_only=True)
+
+    def with_loop_iter(self, n: int) -> Self:
+        return self._replace(loop_iter=str(n))
+
+    def with_optimistic_loop(self) -> Self:
+        return self._replace(optimistic_loop=True)
+
+    def with_optimistic_hashing(self) -> Self:
+        return self._replace(optimistic_hashing=True)
+
+    def with_solc_via_ir(self) -> Self:
+        return self._replace(solc_via_ir=True)
+
+    def with_strict_solc_optimizer(self) -> Self:
+        return self._replace(strict_solc_optimizer=True)
+
+    def with_prover_args(self, args: list[str]) -> Self:
+        return self._replace(prover_args=list(args))
+
+    def with_rule(self, rule: str) -> Self:
+        return self._replace(rule=[rule])
+
     def build_to(self, path: pathlib.Path) -> ContextManager[pathlib.Path]:
         """Write the merged conf to ``<path>/certora/run_<uniq>.conf``; yield its absolute path; clean up on exit."""
         return self._build_to(path)
