@@ -1,9 +1,9 @@
 """AnthropicService.should_retry classifies the two failures a stream can deliver.
 
-A connection that drops while the response body streams surfaces as a raw
-``httpx.RemoteProtocolError`` (the SDK does not wrap streamed-body failures as
-``anthropic.APIConnectionError``); an error the server reports part-way through a stream rides
-the already-open 200 response, so the exception's status code says nothing about it. Left
+A transport failure while the response body streams surfaces as a raw ``httpx.TransportError``,
+a dropped connection as ``RemoteProtocolError`` and a stalled one as ``ReadTimeout`` (the SDK
+does not wrap streamed-body failures as ``anthropic.APIConnectionError``); an error the server
+reports part-way through a stream rides the already-open 200 response, so the exception's status code says nothing about it. Left
 unclassified either one would crash the run instead of resuming from checkpoint.
 See composer/llm/anthropic.py."""
 
@@ -19,6 +19,12 @@ def _svc() -> AnthropicService:
 
 def test_mid_stream_drop_is_retryable():
     exc = httpx.RemoteProtocolError("peer closed connection without sending complete message body")
+    assert _svc().should_retry(exc) is True
+
+
+def test_mid_stream_stall_is_retryable():
+    # No chunk within the client's read timeout: the stream stalled after the request succeeded.
+    exc = httpx.ReadTimeout("")
     assert _svc().should_retry(exc) is True
 
 
