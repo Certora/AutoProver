@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from composer.prover.conf import ExcludeRules, InheritRules, SelectRules, dump_conf, with_rules
+from composer.prover.conf import ExcludeRules, InheritRules, SelectRules, dump_conf
 from composer.spec.source.prover import (
     BOTH_RULE_SCOPES, prover_config_overlay, rule_selection, setup_prover_config_in,
 )
@@ -13,9 +13,9 @@ _BASE = {"files": ["C.sol"], "rule": ["base_rule"], "exclude_rule": ["skipped"],
 
 
 def test_each_rule_selection_writes_only_its_key():
-    assert with_rules(_BASE, InheritRules()) == _BASE
-    assert with_rules(_BASE, SelectRules(("r",))) == {**_BASE, "rule": ["r"]}
-    assert with_rules(_BASE, ExcludeRules(("r",))) == {**_BASE, "exclude_rule": ["r"]}
+    assert InheritRules().apply_to(_BASE) == _BASE
+    assert SelectRules(("r",)).apply_to(_BASE) == {**_BASE, "rule": ["r"]}
+    assert ExcludeRules(("r",)).apply_to(_BASE) == {**_BASE, "exclude_rule": ["r"]}
 
 
 def test_cvl_overlay_forces_its_settings_over_the_base():

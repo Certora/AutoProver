@@ -19,7 +19,7 @@ import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from composer.prover.conf import Conf, InheritRules, RuleSelection, dump_conf, safe_msg, with_rules
+from composer.prover.conf import Conf, InheritRules, RuleSelection, dump_conf, safe_msg
 
 #: Conf keys no author or run changes.
 #:
@@ -118,4 +118,4 @@ def solana_conf(settings: ProverSettings, run: RunOverlay) -> Conf:
     }
     if run.summaries:
         conf["solana_summaries"] = [str(s) for s in run.summaries]
-    return with_rules(conf, run.rules)
+    return run.rules.apply_to(conf)

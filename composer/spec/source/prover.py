@@ -39,7 +39,7 @@ from composer.prover.core import (
 )
 from composer.prover.callbacks import ProverEventCallbacks
 from composer.prover.conf import (
-    Conf, ExcludeRules, InheritRules, RuleSelection, SelectRules, dump_conf, with_rules,
+    Conf, ExcludeRules, InheritRules, RuleSelection, SelectRules, dump_conf,
 )
 from composer.prover.ptypes import StatusCodes
 from composer.ui.tool_display import tool_display
@@ -94,7 +94,7 @@ def prover_config_overlay(
         "rule_sanity": "basic",
         **(extra or {}),
     }
-    return with_rules(conf, rules)
+    return rules.apply_to(conf)
 
 
 BOTH_RULE_SCOPES = "Cannot invoke the prover with both `rules` and `exclude_rules` set to non-none"

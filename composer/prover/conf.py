@@ -42,12 +42,18 @@ class InheritRules:
     """Check whatever the base conf selects: its ``rule`` and ``exclude_rule`` entries, or every
     rule when it has neither."""
 
+    def apply_to(self, conf: Conf) -> Conf:
+        return conf
+
 
 @dataclass(frozen=True)
 class SelectRules:
     """Check these rules. Names are globs, which is how a parametric rule's instances are named."""
 
     names: tuple[str, ...]
+
+    def apply_to(self, conf: Conf) -> Conf:
+        return {**conf, "rule": list(self.names)}
 
 
 @dataclass(frozen=True)
@@ -56,16 +62,10 @@ class ExcludeRules:
 
     names: tuple[str, ...]
 
+    def apply_to(self, conf: Conf) -> Conf:
+        return {**conf, "exclude_rule": list(self.names)}
 
+
+#: A run's rule scope. ``apply_to(conf)`` returns ``conf`` scoped to it, writing only the key the
+#: selection names.
 type RuleSelection = InheritRules | SelectRules | ExcludeRules
-
-
-def with_rules(conf: Conf, rules: RuleSelection) -> Conf:
-    """``conf`` scoped to ``rules``. Each selection writes only the key it names."""
-    match rules:
-        case InheritRules():
-            return conf
-        case SelectRules(names):
-            return {**conf, "rule": list(names)}
-        case ExcludeRules(names):
-            return {**conf, "exclude_rule": list(names)}
