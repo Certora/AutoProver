@@ -69,10 +69,13 @@ GITIGNORE_LINES = (".certora", ".certora_internal", "certora_out", ".cvlr_work")
 #: loadable object, and the prover has nothing to read.
 SHARED_OBJECT_TYPE = "cdylib"
 
-#: The feature that removes a package's entrypoint so the harness can call handlers directly.
-#: Enabled by ``certora`` when the package already has it. Not added when it does not: a package
-#: with no entrypoint to suppress does not need one. The examples' ``first_example`` has
-#: ``certora = []``.
+#: The Solana convention for compiling a program without its ``entrypoint!``, which exports an
+#: ``entrypoint`` symbol and installs a global allocator. Two programs linked into one object
+#: collide on both, so a local dependency that is itself a program needs it on. For the verified
+#: program it keeps the instruction dispatch, and the allocator and panic handler the macro
+#: installs, out of the build. Enabled by ``certora`` when the package already has it. Not added
+#: when it does not: a package with no entrypoint to suppress does not need one. The examples'
+#: ``first_example`` has ``certora = []``.
 NO_ENTRYPOINT_FEATURE = "no-entrypoint"
 
 

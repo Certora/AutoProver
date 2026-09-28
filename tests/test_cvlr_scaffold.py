@@ -214,8 +214,7 @@ def test_a_feature_table_that_exists_is_edited_rather_than_reopened(tmp_path):
     assert "The project's own comment" in text
     parsed = tomllib.loads(text)
     assert parsed["features"]["no-entrypoint"] == []
-    # no-entrypoint leads because suppressing the program's entrypoint is what lets a rule call a
-    # handler directly; it is enabled only because this package has it.
+    # no-entrypoint is enabled only because this package declares it.
     assert parsed["features"]["certora"] == [
         "no-entrypoint", "dep:cvlr", "dep:cvlr-solana", "dep:cvlr-solana-stake",
         "dep:cvlr-spl-token",
