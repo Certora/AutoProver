@@ -175,10 +175,20 @@ def test_a_crate_family_is_recognized_by_name():
 
 def test_a_published_dependency_is_distinguished_from_a_workspace_member():
     workspace = _workspace(_METADATA)
-    cvlr = workspace.resolved("cvlr")
-    lend = workspace.resolved("example-lending")
-    assert cvlr is not None and not cvlr.is_local
-    assert lend is not None and lend.is_local
+    (cvlr,) = workspace.resolved("cvlr")
+    (lend,) = workspace.resolved("example-lending")
+    assert not cvlr.is_local
+    assert lend.is_local
+
+
+def test_every_copy_of_a_crate_the_graph_resolves_twice_is_reported():
+    """A graph holds two releases of one crate when dependents require incompatible ones. A lookup
+    that returned the first would answer about whichever copy cargo happened to list first."""
+    payload = json.loads(json.dumps(_METADATA))
+    older = json.loads(json.dumps(payload["packages"][2]))
+    older.update(id=f"{older['source']}#cvlr@0.4.1", version="0.4.1")
+    payload["packages"].append(older)
+    assert [c.version for c in _workspace(payload).resolved("cvlr")] == ["0.6.1", "0.4.1"]
 
 
 # --------------------------------------------------------------------------------------------
@@ -222,7 +232,10 @@ def test_a_manifest_cargo_would_refuse_is_malformed(text):
 
 def test_the_cvlr_source_roots_are_the_crate_directories_the_build_resolved():
     sources = resolve(_workspace(_METADATA))
-    assert sources.core is not None and sources.core.version == "0.6.1"
+    assert [(c.name, c.version) for c in sources.crates] == [
+        ("cvlr", "0.6.1"),
+        ("cvlr-log", "0.6.1"),
+    ]
     assert sources.roots() == (
         Path("/home/u/.cargo/registry/src/idx/cvlr-0.6.1"),
         Path("/home/u/.cargo/registry/src/idx/cvlr-log-0.6.1"),
@@ -247,6 +260,15 @@ def test_an_older_cvlr_than_the_pin_is_a_mismatch_that_stops_the_run():
     mismatched = {g.crate: g for g in sources.mismatched(SOLANA)}
     assert mismatched["cvlr"].resolved == "0.4.1"
     assert mismatched["cvlr"].reference == "0.6.1"
+
+
+def test_an_older_cvlr_beside_the_pinned_one_is_still_a_mismatch():
+    payload = json.loads(json.dumps(_METADATA))
+    older = json.loads(json.dumps(payload["packages"][2]))
+    older.update(id=f"{older['source']}#cvlr@0.4.1", version="0.4.1")
+    payload["packages"].append(older)
+    (mismatch,) = resolve(_workspace(payload)).mismatched(SOLANA)
+    assert (mismatch.crate, mismatch.resolved) == ("cvlr", "0.4.1")
 
 
 # --------------------------------------------------------------------------------------------

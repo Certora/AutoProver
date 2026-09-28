@@ -74,10 +74,6 @@ class CvlrSources:
 
     crates: tuple[CratePackage, ...]
 
-    @property
-    def core(self) -> CratePackage | None:
-        return next((c for c in self.crates if c.name == CVLR_PREFIX), None)
-
     def roots(self) -> tuple[Path, ...]:
         """The crate directories, one per family member.
 
@@ -91,15 +87,20 @@ class CvlrSources:
         Only crates the reference set names are compared. A dependency the reference does not
         mention is not a disagreement. A capability with no published crate is recorded on the
         reference itself, as :class:`~composer.spec.cvlr_reference.UnpublishedCapability`.
+        A crate the graph resolves more than once is one :class:`Mismatched` per copy off the
+        reference.
         """
-        resolved = {c.name: c.version for c in self.crates}
-        return tuple(
-            Absent(crate=r.name, reference=r.version)
-            if (found := resolved.get(r.name)) is None
-            else Mismatched(crate=r.name, reference=r.version, resolved=found)
-            for r in reference.crates()
-            if resolved.get(r.name) != r.version
-        )
+        gaps: list[Divergence] = []
+        for r in reference.crates():
+            versions = [c.version for c in self.crates if c.name == r.name]
+            if not versions:
+                gaps.append(Absent(crate=r.name, reference=r.version))
+            gaps += [
+                Mismatched(crate=r.name, reference=r.version, resolved=v)
+                for v in versions
+                if v != r.version
+            ]
+        return tuple(gaps)
 
     def mismatched(self, reference: ChainReference) -> tuple[Mismatched, ...]:
         """Only the divergences that stop a run. See :class:`Absent` for why the rest do not."""
@@ -112,4 +113,6 @@ def resolve(workspace: Workspace) -> CvlrSources:
     Cargo's order is not stable. This list is written into run metadata, where a shuffle looks
     like a change.
     """
-    return CvlrSources(tuple(sorted(workspace.family(CVLR_PREFIX), key=lambda c: c.name)))
+    return CvlrSources(
+        tuple(sorted(workspace.family(CVLR_PREFIX), key=lambda c: (c.name, c.version)))
+    )

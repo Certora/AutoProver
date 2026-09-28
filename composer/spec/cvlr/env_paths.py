@@ -133,7 +133,7 @@ def dialect_for(workspace: Workspace, reference: ChainReference) -> PathDialect:
     for alias in reference.platform.path_aliases:
         match alias:
             case PathAlias(canonical=canonical, actual=actual):
-                usable = tuple(a for a in actual if workspace.resolved(_crate_of(a)) is not None)
+                usable = tuple(a for a in actual if workspace.resolved(_crate_of(a)))
                 if usable:
                     aliases.append(PathAlias(canonical, usable))
             case NamespacePattern(canonical=canonical, actual=actual):

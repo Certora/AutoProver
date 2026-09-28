@@ -230,11 +230,16 @@ class Workspace:
         return max(containing, key=lambda m: len(m.root.parts)) if containing else None
 
     def member(self, name: str) -> CratePackage | None:
+        """Unique when present: cargo refuses a workspace with two members of one name."""
         return next((m for m in self.members if m.name == name), None)
 
-    def resolved(self, name: str) -> CratePackage | None:
-        """The version of ``name`` this build compiles against, member or not."""
-        return next((p for p in self.packages if p.name == name), None)
+    def resolved(self, name: str) -> tuple[CratePackage, ...]:
+        """Every copy of ``name`` this build compiles against, member or not.
+
+        Usually one. A graph holds several when dependents require semver-incompatible
+        releases, or the same release from different sources, and cargo builds each.
+        """
+        return tuple(p for p in self.packages if p.name == name)
 
     def family(self, prefix: str) -> tuple[CratePackage, ...]:
         """Every resolved package named ``prefix`` or ``prefix-*``.

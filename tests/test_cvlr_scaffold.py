@@ -318,6 +318,16 @@ def test_a_project_on_the_reference_generation_passes_on_the_specific_witness(tm
     assert not plan.blocked
 
 
+def test_an_older_platform_copy_beside_the_reference_one_is_refused(tmp_path):
+    # Both copies build. The old one is what the dependents that pulled it in hand to CVLR.
+    workspace, package = _project(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
+    (current,) = workspace.resolved("solana-program")
+    older = replace(current, version="1.18.26")
+    workspace = replace(workspace, packages=(*workspace.packages, older))
+    plan = plan_scaffold(workspace, package, SOLANA)
+    assert any("1.18.26" in b.problem for b in plan.blocked)
+
+
 ON_AN_OLDER_LINE = STANDALONE.replace(
     "[dependencies]\nsolana-program",
     '[dependencies]\ncvlr = "0.4"\ncvlr-solana = "0.4"\nsolana-program',

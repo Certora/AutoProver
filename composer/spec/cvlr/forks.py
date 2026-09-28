@@ -35,7 +35,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from composer.cargo.manifest import Manifest
-from composer.cargo.metadata import GitSource, OtherSource, RegistrySource, Workspace
+from composer.cargo.metadata import (
+    CratePackage,
+    GitSource,
+    OtherSource,
+    RegistrySource,
+    Workspace,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -252,6 +258,13 @@ def already_patched(manifest: Manifest) -> frozenset[str]:
     return frozenset(manifest.patch.get("crates-io", {}))
 
 
+def _copies(copies: tuple[CratePackage, ...]) -> str:
+    return ", ".join(
+        f"{c.version} from {c.source.spelling if c.source is not None else 'this workspace'}"
+        for c in copies
+    )
+
+
 def plan_overrides(
     workspace: Workspace,
     overrides: tuple[ForkOverride, ...] = SOLANA_OVERRIDES,
@@ -262,6 +275,7 @@ def plan_overrides(
     Each crate lands in one of four outcomes:
 
     * inapplicable — not in the resolved graph.
+    * blocked — resolved more than once. One patch entry redirects one of the copies.
     * already sourced — a workspace member, a path dependency, a git dependency, or a crate named
       in ``already_redirected``. Overriding it would replace a choice, which may already be this
       fork. The graph is what cargo computed. ``already_redirected``
@@ -277,12 +291,29 @@ def plan_overrides(
 
     for fork in overrides:
         for crate in fork.crates:
-            resolved = workspace.resolved(crate)
-            if resolved is None:
+            copies = workspace.resolved(crate)
+            if not copies:
                 inapplicable.append(crate)
                 continue
             if crate in already_redirected:
                 already.append(AlreadyRedirected(crate=crate))
+                continue
+            resolved, *others = copies
+            if others:
+                blocked.append(
+                    Blocked(
+                        crate=crate,
+                        problem=(
+                            f"this project resolves {crate} more than once "
+                            f"({_copies(copies)}), and one patch entry redirects one of them — "
+                            f"the build would still link the other"
+                        ),
+                        resolution=(
+                            f"unify the project on one {crate} release, then re-run — which "
+                            f"dependent moves is a decision about the project"
+                        ),
+                    )
+                )
                 continue
             if not isinstance(resolved.source, RegistrySource):
                 left = AlreadySourced(crate=crate, source=resolved.source, fork_repo=fork.repo)

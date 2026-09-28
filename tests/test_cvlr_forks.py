@@ -153,6 +153,17 @@ def test_a_project_sourcing_anchor_from_some_other_fork_is_left_alone_and_said_s
     assert "will not analyze" in already.describe()
 
 
+def test_a_crate_resolved_twice_is_blocked_rather_than_half_redirected(tmp_path):
+    """One ``[patch.crates-io]`` entry replaces one semver-compatible release. The other copy
+    would stay upstream and keep [3006] in the build."""
+    plan = plan_overrides(
+        _workspace(tmp_path, _package("anchor-lang", "0.29.0"), _package("anchor-lang", "0.31.1"))
+    )
+    assert not plan.overrides
+    (blocked,) = [b for b in plan.blocked if b.crate == "anchor-lang"]
+    assert "0.29.0" in blocked.problem and "0.31.1" in blocked.problem
+
+
 def test_a_target_that_is_not_an_anchor_program_needs_nothing(tmp_path):
     plan = plan_overrides(_workspace(tmp_path, _package("solana-program", "2.3.0")))
     assert not plan

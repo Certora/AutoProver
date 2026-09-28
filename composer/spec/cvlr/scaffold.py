@@ -295,18 +295,22 @@ def _check_platform(workspace: Workspace, reference: ChainReference) -> list[Blo
     The first witness the project resolves decides. Later ones are not consulted. The list is
     most-specific first because a target on a newer generation resolves only the specific crate.
     Falling through to a broader witness after a specific one has answered would undo that order.
+    Every copy of that witness has to be on the generation: one that is not still meets CVLR's
+    types wherever its dependents hand an account to a helper.
     """
     for witness in reference.platform.witnesses:
-        resolved = workspace.resolved(witness.name)
-        if resolved is None:
+        copies = workspace.resolved(witness.name)
+        if not copies:
             continue
-        if _generation(resolved.version) == _generation(witness.line):
+        off = [c.version for c in copies if _generation(c.version) != _generation(witness.line)]
+        if not off:
             return []
+        builds = ", ".join(off)
         return [
             Blocked(
                 path=Path("Cargo.toml"),
                 problem=(
-                    f"this project builds {witness.name} {resolved.version}, but the CVLR "
+                    f"this project builds {witness.name} {builds}, but the CVLR "
                     f"releases the reference set names are bound to {reference.platform.label} — "
                     f"and each generation has its own AccountInfo type, so the pairing does not "
                     f"compile rather than merely warning. The scaffold itself would still build; "
@@ -316,7 +320,7 @@ def _check_platform(workspace: Workspace, reference: ChainReference) -> list[Blo
                 resolution=(
                     f"either move the project to {witness.name} {witness.line}, or move the "
                     f"reference set (composer/spec/cvlr_reference.py) to the CVLR line that "
-                    f"matches {resolved.version} — picking one of those is a decision about the "
+                    f"matches {builds} — picking one of those is a decision about the "
                     f"project, not about the scaffold"
                 ),
             )
@@ -402,14 +406,15 @@ def _check_pins(
             f"set (composer/spec/cvlr_reference.py) to the line this project is on — which line "
             f"is supported is not a scaffold's call, and not a per-project one either"
         )
-        resolved = workspace.resolved(release.name)
-        if resolved is not None and resolved.version != release.version:
+        off = [c.version for c in workspace.resolved(release.name) if c.version != release.version]
+        if off:
+            builds = ", ".join(off)
             blocked.append(
                 Blocked(
                     path=Path("Cargo.toml"),
                     problem=(
-                        f"this project builds {release.name} {resolved.version}, and {supported}, "
-                        f"so pinning them beside {resolved.version} would put two CVLR "
+                        f"this project builds {release.name} {builds}, and {supported}, "
+                        f"so pinning them beside {builds} would put two CVLR "
                         f"generations in one graph"
                     ),
                     resolution=fix,
