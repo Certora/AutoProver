@@ -814,26 +814,69 @@ guarantee rather than an assumption. Step 5 now has one precondition left instea
    reach CVLR through `cvlr_research` alone, and `cvlr_research.j2` picked up the version-identity
    claim the mount fragment carried — the one property source-on-disk had that a corpus does not
    get for free, and which §2's pin is what actually makes true. `cvlr-backend-plan.md` §5.5 now
-   opens with a superseded banner. **The run below is what says whether this stands.**
-   **Gate tentatively met.** The macro contract is the only
+   opens with a superseded banner. **Gate met — the run below is what says so.**
+   The macro contract is the only
    thing the mount holds that the rustdoc walk does not replace, and as of 2b it is in the
    checkouts — so a corpus built with `--crate-source` relocates it rather than losing it. Landing
    this against the *published* corpus is a separate question, and 2b is where it is answered.
 
-   **The evidence is a corpus-only run, and it belongs on this branch rather than ahead of it.**
-   There are two configurations anyone ships and they are the two arms: mount-only with the corpus
-   off, which is *already recorded and already paid for* — the tape's census, 88 searches over 22
-   names, 152 reads over 27 files, and the two macro facts of §4.2 recovered from source — and
-   corpus-only with the mount gone, which is this step. So one run remains, in this step's own
-   configuration, and its census is also §7's re-take (see 7). Nothing has to be deleted to run it:
-   the mount is unconditional at `pipeline.py`'s `crate_tools = tuple(cvlr_source_tools(crates))`,
-   so a flag or a one-line change gets there, and a branch that does not stand up is reverted.
+   **The evidence is a corpus-only run on this branch.** The two arms are the two configurations
+   anyone ships: mount-only with the corpus off, which is *already recorded and already paid for* —
+   the tape's census, 88 searches over 22 names, 152 reads over 27 files, and the two macro facts
+   of §4.2 recovered from source — and corpus-only with the mount gone, which is this step. It took
+   two attempts.
 
-   Read against the baseline, the census answers whether the corpus carries the author. Read on its
-   own it answers more reliably, because the two arms are months and a model generation apart and
-   nothing controls for that: did the run recover the two macro facts, did the volume of CVLR
-   questions stay near 50 while collapsing to far fewer sub-agent invocations through the
-   `AgentIndex` cache, and did the compile-failure rate on helper names hold.
+   **Run #1, 2026-09-25 — stopped at 34 minutes, deliberately.** It found the corpus defective: two
+   `error[E0603]: module `layout` is private`, which an audit widened to **65 of 200 entries naming
+   a private module** and, behind that, **138 of 200 offering no path a scaffolded project could
+   write at all**. rustdoc's `paths` gives the *definition* path and the CVLR house style is a
+   private `mod` plus a public re-export; the scaffold declares four crates, so the other eleven are
+   transitive and `use cvlr_log::log_u64;` is `E0433`. Both were `resolve_aliases` skipping globs,
+   at two levels. Finishing would have measured a corpus in which `cvlr::asserts::cvlr_assert`,
+   `cvlr::log::log_u64` and `cvlr::nondet::nondet` — most of what an author writes — were
+   unreachable. Fixed in `4f33361e`, with `cvlr-solana` added as a fixture because the old ones
+   carried none of the shapes; the producer's tests had passed against a corpus a third wrong.
+
+   Run #1 is still where most of the *qualitative* evidence comes from, and all of it stands: the
+   macro contract reached the author through a doc comment ("program-side replacement for
+   `solana_program::program::invoke`"), the authority ordering caught the manual claiming an
+   8-element account array against the reference's 16 and called it stale, the not-found contract
+   held on PDA derivation — searched both corpora *and* the recipes, refused to stretch a
+   tangential Anchor line into a helper, and labelled its own workaround "not sourced from either
+   corpus" — and §1 forfeit 5's cost fear was measured and dismissed: the researcher is ~10% of a
+   run, the heavy-tier authoring loop is the rest.
+
+   **Run #2, 2026-09-28 — completed, 2h47m, $173.63**
+   (`run_id 70e88da52c3841deafd5ee9bde211952`). Against the fixed corpus, the revised prompt
+   (`63b34a91`) and a cleared `AgentIndex` namespace, so nothing was inherited:
+
+   | | baseline (mount) | run #1 (broken corpus) | run #2 |
+   |---|---|---|---|
+   | CVLR lookups | 178 source calls | 15 sub-agents @ 34m | **51 sub-agents** |
+   | compile errors | — | 2 × `E0603` @ 25m | **0** |
+   | rules authored | 19 published | — | 41 in flight, 9 published |
+
+   **Zero compile errors of any kind across 2h47m and 2,668 lines of authored CVLR.** The imports
+   the author wrote, taken from the corpus and compiled:
+
+   ```rust
+   use cvlr::prelude::*;
+   use cvlr_solana::cvlr_deserialize_nondet_accounts;
+   use cvlr_solana::pubkey::Pk;
+   use cvlr_solana::clog_acc_info;
+   ```
+
+   The second line is exactly the path the glob fix produces, and exactly the one run #1's author
+   had to *ask about* because the corpus had said `cvlr_solana::layout::…`. The chain closes end to
+   end — rustdoc, glob expansion, corpus entry, researcher answer, author import, compile, prover —
+   with no source mount in it.
+
+   **Two of three units failed, and it was not the corpus.** `formalize-1` (11 rules, 927 lines) and
+   `formalize-2` (21 rules, 1319 lines) both died to `httpx.ReadTimeout` on a streaming Anthropic
+   response, eleven minutes apart at the 151- and 162-minute marks, after each had submitted and
+   completed prover jobs. Their drafts survive in the build tree. This is the same class of failure
+   that cost the baseline recording a unit, and it is what 2½-hour-lived units over a streaming API
+   are exposed to. The pipeline degraded correctly: one unit published, the report ran, exit 0.
 6. **Re-scope `cvlr_kb` to the manual** (§4.6): drop the crate-reference manifest, drop
    `populate_cvlr_rag.sh`'s discovery of manifests built elsewhere, and restate `cvlr_rag.py`'s
    docstrings. Deliberately *after* (5): while both channels are live, a duplicated crate reference
@@ -869,17 +912,23 @@ guarantee rather than an assumption. Step 5 now has one precondition left instea
    no baseline left to measure: the floor it was measuring is an author with no CVLR reference at
    all.
 
-   **The census re-take is (5)'s run, not a second one.** A corpus-only run against the vault is
-   at once the evidence for step 5 and the census §7 names as the success criterion, so it is paid
-   for once. What is left here after it is the tape and the live gate.
+   **The census re-take is (5)'s run, not a second one**, and it has happened: 51 `cvlr_research`
+   sub-agents against the baseline's 178 source calls, zero compile failures on helper names. What
+   is left here is the tape and the live gate.
+
+   **§7's cache criterion needs rewording.** It expects the questions to "collapse to far fewer
+   sub-agent invocations through the `AgentIndex` cache". `IndexedTool` does not skip the
+   invocation — it injects prior findings into it, so the collapse is in *turns and tokens per
+   question*, not in invocation count. Neither run could measure even that: three units run
+   concurrently against an index that starts empty, so they all miss. Measuring it needs a run
+   against a warm index, which is a different experiment from this one.
 
 Steps 0–4 are done and additive; nothing yet removes a capability. (5) is the only one that takes
 a capability away, and it has three preconditions — "irreversible", as earlier drafts called it,
 overstates a branch that is reverted with git. What makes it worth gating is that a bad removal is
-discovered in production rather than in the diff. The pin is met. 2b is met in the checkouts and not yet in a
-release, which is what makes it tentative — and what makes `--crate-source` the way the remaining
-work gets a corpus. What is left is **one corpus-only run on (5)'s own branch**, which has to show
-the researcher answering the questions the §7.5.5 census says the author actually asks. The other
-arm of that comparison is the recorded tape's census and needs no run. (7), re-recording the tape,
-follows (5) and not before: the tape records the author's tool calls, and those do not change until
-the mount goes.
+discovered in production rather than in the diff. The pin is met. 2b is met in the checkouts and
+not yet in a release, which is what keeps it tentative — and what makes `--crate-source` the way
+the remaining work gets a corpus. **The corpus-only run is done** (see 5): 51 research sub-agents,
+41 rules, zero compile errors across 2h47m, with the other arm supplied by the recorded tape at no
+cost. So (5) now stands on evidence rather than on argument. What remains is (6), (7), and the
+release — and the release is 2b's, not ours.
