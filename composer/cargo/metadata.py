@@ -15,13 +15,13 @@ dependency graph, which needs a warm cache or the network; see
 """
 
 import asyncio
-import json
 import logging
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import NotRequired, TypedDict
+
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
 _log = logging.getLogger(__name__)
 
@@ -37,31 +37,38 @@ class CargoUnavailable(RuntimeError):
     """``cargo`` is not on ``PATH``."""
 
 
-class CargoTargetJson(TypedDict):
+class _CargoJson(BaseModel):
+    """cargo adds fields across releases; only the ones read here are declared."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+
+class CargoTargetJson(_CargoJson):
     name: str
-    src_path: str
+    src_path: Path
     #: Older cargos report only ``kind``.
-    crate_types: NotRequired[list[str]]
-    kind: NotRequired[list[str]]
+    crate_types: tuple[str, ...] = Field(
+        default=(), validation_alias=AliasChoices("crate_types", "kind")
+    )
 
 
-class CargoPackageJson(TypedDict):
+class CargoPackageJson(_CargoJson):
     id: str
     name: str
     version: str
-    manifest_path: str
-    targets: NotRequired[list[CargoTargetJson]]
-    features: NotRequired[dict[str, list[str]]]
-    source: NotRequired[str | None]
+    manifest_path: Path
+    targets: tuple[CargoTargetJson, ...] = ()
+    features: dict[str, list[str]] = {}
+    source: str | None = None
 
 
-class CargoMetadataJson(TypedDict):
+class CargoMetadataJson(_CargoJson):
     """The parts of ``cargo metadata --format-version 1`` output this module reads."""
 
-    packages: list[CargoPackageJson]
-    workspace_root: str
-    workspace_members: NotRequired[list[str]]
-    target_directory: NotRequired[str]
+    packages: tuple[CargoPackageJson, ...]
+    workspace_root: Path
+    workspace_members: tuple[str, ...] = ()
+    target_directory: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -182,35 +189,33 @@ class Workspace:
 
 
 def _lib_target(raw: CargoPackageJson) -> LibTarget | None:
-    for target in raw.get("targets", ()):
-        kinds = tuple(target.get("crate_types") or target.get("kind") or ())
-        if _LIB_CRATE_TYPES.intersection(kinds):
+    for target in raw.targets:
+        if _LIB_CRATE_TYPES.intersection(target.crate_types):
             return LibTarget(
-                name=target["name"], src_path=Path(target["src_path"]), crate_types=kinds
+                name=target.name, src_path=target.src_path, crate_types=target.crate_types
             )
     return None
 
 
 def _package(raw: CargoPackageJson) -> CratePackage:
     return CratePackage(
-        name=raw["name"],
-        version=raw["version"],
-        manifest_path=Path(raw["manifest_path"]),
+        name=raw.name,
+        version=raw.version,
+        manifest_path=raw.manifest_path,
         lib=_lib_target(raw),
-        features=tuple(sorted(raw.get("features") or {})),
-        source=_package_source(raw.get("source")),
+        features=tuple(sorted(raw.features)),
+        source=_package_source(raw.source),
     )
 
 
 def parse_metadata(payload: CargoMetadataJson) -> Workspace:
-    """Build a :class:`Workspace` from ``cargo metadata --format-version 1`` output."""
-    by_id = {raw["id"]: _package(raw) for raw in payload["packages"]}
-    member_ids = payload.get("workspace_members") or ()
-    root = Path(payload["workspace_root"])
+    """Build a :class:`Workspace` from validated ``cargo metadata --format-version 1`` output."""
+    by_id = {raw.id: _package(raw) for raw in payload.packages}
+    root = payload.workspace_root
     return Workspace(
         root=root,
-        target_directory=Path(payload.get("target_directory") or root / "target"),
-        members=tuple(by_id[i] for i in member_ids if i in by_id),
+        target_directory=payload.target_directory or root / "target",
+        members=tuple(by_id[i] for i in payload.workspace_members if i in by_id),
         packages=tuple(by_id.values()),
     )
 
@@ -246,9 +251,9 @@ def _cargo_metadata(
         )
         return None
     try:
-        return json.loads(completed.stdout)
-    except json.JSONDecodeError as exc:
-        _log.warning("cargo metadata in %s printed unreadable JSON: %r", project_root, exc)
+        return CargoMetadataJson.model_validate_json(completed.stdout)
+    except ValidationError as exc:
+        _log.warning("cargo metadata in %s printed unreadable output: %s", project_root, exc)
         return None
 
 
@@ -279,13 +284,7 @@ def read_workspace_sync(
     payload = _cargo_metadata(
         project_root, offline=offline, features=features, timeout_s=timeout_s
     )
-    if payload is None:
-        return None
-    try:
-        return parse_metadata(payload)
-    except KeyError as exc:
-        _log.warning("cargo metadata in %s omitted %s", project_root, exc)
-        return None
+    return parse_metadata(payload) if payload is not None else None
 
 
 async def read_workspace(

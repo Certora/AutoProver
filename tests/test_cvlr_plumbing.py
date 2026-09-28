@@ -1,13 +1,17 @@
 """CVLR metadata and the prover conf, with no toolchain, network, or LLM.
 
 Nothing here shells out to cargo or submits a job. What is checked is the parse of
-``cargo metadata``, the conf a tunable conf renders to, and the keys one submission adds.
+``cargo metadata`` and ``Cargo.toml``, the conf a tunable conf renders to, and the keys one
+submission adds.
 """
 
 import json
 from pathlib import Path
 
-from composer.cargo.metadata import parse_metadata
+import pytest
+
+from composer.cargo.manifest import Dependency, MalformedManifest, parse_manifest
+from composer.cargo.metadata import CargoMetadataJson, Workspace, parse_metadata
 from composer.prover import conf as prover_conf
 from composer.spec.cvlr import conf as cvlr_conf
 from composer.spec.cvlr.crates import Absent, resolve
@@ -78,9 +82,13 @@ _METADATA = {
 }
 
 
+def _workspace(payload: dict) -> Workspace:
+    return parse_metadata(CargoMetadataJson.model_validate(payload))
+
+
 def test_the_lib_target_is_the_one_an_artifact_is_named_after():
     """A package's bench and bin targets are not what a verification build produces."""
-    lend = parse_metadata(_METADATA).member("example-lending")
+    lend = _workspace(_METADATA).member("example-lending")
     assert lend is not None
     assert lend.lib is not None
     assert lend.lib.name == "example_lending"
@@ -92,37 +100,80 @@ def test_a_dash_in_a_lib_name_becomes_an_underscore_in_the_artifact():
     build manifest follows that, not the package name."""
     payload = json.loads(json.dumps(_METADATA))
     payload["packages"][0]["targets"][0]["name"] = "example-lending"
-    lend = parse_metadata(payload).member("example-lending")
+    lend = _workspace(payload).member("example-lending")
     assert lend is not None and lend.lib is not None
     assert lend.lib.artifact_stem == "example_lending"
+
+
+def test_an_older_cargo_that_reports_only_kind_still_names_the_lib_target():
+    payload = json.loads(json.dumps(_METADATA))
+    del payload["packages"][0]["targets"][0]["crate_types"]
+    payload["packages"][0]["targets"][0]["kind"] = ["cdylib"]
+    lend = _workspace(payload).member("example-lending")
+    assert lend is not None and lend.lib is not None
+    assert lend.lib.builds_shared_object
 
 
 def test_the_owning_crate_is_the_deepest_one_containing_the_file():
     """A workspace whose root is itself a package contains every nested crate's files too, so the
     shallow match is always available and always wrong."""
-    workspace = parse_metadata(_METADATA)
+    workspace = _workspace(_METADATA)
     owner = workspace.owning(Path("/w/programs/lend/src/lib.rs"))
     assert owner is not None and owner.name == "example-lending"
 
 
 def test_a_file_in_no_member_has_no_owning_crate():
-    workspace = parse_metadata(_METADATA)
+    workspace = _workspace(_METADATA)
     assert workspace.owning(Path("/elsewhere/src/lib.rs")) is None
 
 
 def test_a_crate_family_is_recognized_by_name():
     """``cvlr`` does not declare its family anywhere; the helper crates come in as ordinary
     dependencies, and an agent asking what a macro expands to needs all of them."""
-    workspace = parse_metadata(_METADATA)
+    workspace = _workspace(_METADATA)
     assert [c.name for c in workspace.family("cvlr")] == ["cvlr", "cvlr-log"]
 
 
 def test_a_published_dependency_is_distinguished_from_a_workspace_member():
-    workspace = parse_metadata(_METADATA)
+    workspace = _workspace(_METADATA)
     cvlr = workspace.resolved("cvlr")
     lend = workspace.resolved("example-lending")
     assert cvlr is not None and not cvlr.is_local
     assert lend is not None and lend.is_local
+
+
+# --------------------------------------------------------------------------------------------
+# Cargo.toml
+# --------------------------------------------------------------------------------------------
+
+
+def test_a_bare_version_string_is_a_version_requirement():
+    """``foo = "1.0"`` is cargo's shorthand for ``foo = { version = "1.0" }``; a reader that kept
+    the two apart would have to handle both at every use."""
+    manifest = parse_manifest(
+        '[dependencies]\ncvlr = "=0.6.1"\nlocal = { path = "../local", version = "0.1" }\n'
+    )
+    assert manifest.dependencies["cvlr"] == Dependency(version="=0.6.1")
+    assert manifest.dependencies["local"] == Dependency(path="../local", version="0.1")
+
+
+def test_an_empty_workspace_table_still_makes_a_workspace_root():
+    assert parse_manifest("[workspace]\n").workspace is not None
+    assert parse_manifest('[package]\nname = "p"\n').workspace is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "[dependencies\nnot toml",
+        '[features]\ncertora = "dep:cvlr"\n',
+        "[dependencies]\ncvlr = 6\n",
+    ],
+    ids=["unparseable", "feature-not-a-list", "dependency-not-a-spec"],
+)
+def test_a_manifest_cargo_would_refuse_is_malformed(text):
+    with pytest.raises(MalformedManifest):
+        parse_manifest(text)
 
 
 # --------------------------------------------------------------------------------------------
@@ -131,7 +182,7 @@ def test_a_published_dependency_is_distinguished_from_a_workspace_member():
 
 
 def test_the_cvlr_source_roots_are_the_crate_directories_the_build_resolved():
-    sources = resolve(parse_metadata(_METADATA))
+    sources = resolve(_workspace(_METADATA))
     assert sources.core is not None and sources.core.version == "0.6.1"
     assert sources.roots() == (
         Path("/home/u/.cargo/registry/src/idx/cvlr-0.6.1"),
@@ -142,7 +193,7 @@ def test_the_cvlr_source_roots_are_the_crate_directories_the_build_resolved():
 def test_a_project_on_the_reference_core_but_without_the_chain_crate_reports_that_gap():
     """Two different statements, and only one of them stops a run: an old ``cvlr-solana`` and no
     ``cvlr-solana`` at all. They are separate types so a caller cannot conflate them."""
-    sources = resolve(parse_metadata(_METADATA))
+    sources = resolve(_workspace(_METADATA))
     gaps = {g.crate: g for g in sources.gaps(SOLANA)}
     assert "cvlr" not in gaps, "the fixture pins the reference core, so it is not a gap"
     assert isinstance(gaps["cvlr-solana"], Absent)
@@ -153,7 +204,7 @@ def test_a_project_on_the_reference_core_but_without_the_chain_crate_reports_tha
 def test_an_older_cvlr_than_the_pin_is_a_mismatch_that_stops_the_run():
     payload = json.loads(json.dumps(_METADATA))
     payload["packages"][2]["version"] = "0.4.1"
-    sources = resolve(parse_metadata(payload))
+    sources = resolve(_workspace(payload))
     mismatched = {g.crate: g for g in sources.mismatched(SOLANA)}
     assert mismatched["cvlr"].resolved == "0.4.1"
     assert mismatched["cvlr"].reference == "0.6.1"

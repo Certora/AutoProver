@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from composer.cargo.metadata import (
+    CargoMetadataJson,
     CratePackage,
     LibTarget,
     RegistrySource,
@@ -528,27 +529,33 @@ def test_the_lib_target_reports_where_cargo_says_its_source_is(tmp_path):
     # `[lib] path` can move it, and a scaffold that assumed src/lib.rs would append a module
     # declaration to a file nothing compiles.
     workspace = parse_metadata(
-        {
-            "workspace_root": str(tmp_path),
-            "workspace_members": ["prog 0.1.0 (path+file:///prog)"],
-            "packages": [
-                {
-                    "id": "prog 0.1.0 (path+file:///prog)",
-                    "name": "prog",
-                    "version": "0.1.0",
-                    "manifest_path": str(tmp_path / "Cargo.toml"),
-                    "features": {"certora": []},
-                    "targets": [
-                        {"name": "build-script-build", "kind": ["custom-build"]},
-                        {
-                            "name": "prog",
-                            "crate_types": ["cdylib"],
-                            "src_path": str(tmp_path / "program" / "entry.rs"),
-                        },
-                    ],
-                }
-            ],
-        }
+        CargoMetadataJson.model_validate(
+            {
+                "workspace_root": str(tmp_path),
+                "workspace_members": ["prog 0.1.0 (path+file:///prog)"],
+                "packages": [
+                    {
+                        "id": "prog 0.1.0 (path+file:///prog)",
+                        "name": "prog",
+                        "version": "0.1.0",
+                        "manifest_path": str(tmp_path / "Cargo.toml"),
+                        "features": {"certora": []},
+                        "targets": [
+                            {
+                                "name": "build-script-build",
+                                "kind": ["custom-build"],
+                                "src_path": str(tmp_path / "build.rs"),
+                            },
+                            {
+                                "name": "prog",
+                                "crate_types": ["cdylib"],
+                                "src_path": str(tmp_path / "program" / "entry.rs"),
+                            },
+                        ],
+                    }
+                ],
+            }
+        )
     )
     (member,) = workspace.members
     assert member.lib is not None

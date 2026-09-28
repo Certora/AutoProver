@@ -13,6 +13,7 @@ No cargo and no network. ``Workspace`` objects are built in the test.
 import pytest
 from pathlib import Path
 
+from composer.cargo.manifest import parse_manifest
 from composer.cargo.metadata import (
     CratePackage,
     GitSource,
@@ -242,7 +243,7 @@ anchor-lang = { git = "https://github.com/Certora/anchor.git", branch = "certora
 anchor-spl = { git = "https://github.com/Certora/anchor.git", branch = "certora-v0.29.0" }
 spl-token-2022 = { git = "https://github.com/example/solana-program-library.git" }
 """
-    assert already_patched(inline) == frozenset(
+    assert already_patched(parse_manifest(inline)) == frozenset(
         {"anchor-lang", "anchor-spl", "spl-token-2022"}
     )
 
@@ -253,19 +254,12 @@ def test_the_subtable_spelling_this_module_writes_is_recognized_too():
 git = "https://github.com/Certora/anchor.git"
 branch = "certora-v0.31.1"
 """
-    assert already_patched(subtables) == frozenset({"anchor-lang"})
+    assert already_patched(parse_manifest(subtables)) == frozenset({"anchor-lang"})
 
 
 def test_a_manifest_with_no_patch_table_redirects_nothing():
-    assert already_patched('[workspace]\nmembers = ["."]\n') == frozenset()
-    assert already_patched("[patch]\n") == frozenset()
-
-
-def test_an_unparseable_manifest_is_not_a_reason_to_refuse_to_scaffold():
-    """cargo parsed this manifest to produce the graph, so failing here means this reader disagrees
-    with cargo's — which is worth a log line and not worth stopping over. The graph still catches
-    the redirect on the next run."""
-    assert already_patched("[patch.crates-io\nthis is not toml") == frozenset()
+    assert already_patched(parse_manifest('[workspace]\nmembers = ["."]\n')) == frozenset()
+    assert already_patched(parse_manifest("[patch]\n")) == frozenset()
 
 
 def test_a_crate_the_table_already_names_is_left_alone(tmp_path):

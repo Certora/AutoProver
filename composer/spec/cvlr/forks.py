@@ -31,10 +31,10 @@ the error pointing at the fork.
 """
 
 import logging
-import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from composer.cargo.manifest import Manifest
 from composer.cargo.metadata import GitSource, OtherSource, RegistrySource, Workspace
 
 _log = logging.getLogger(__name__)
@@ -250,7 +250,7 @@ SOLANA_OVERRIDES: tuple[ForkOverride, ...] = (ANCHOR_FORK, FIXED_FORK)
 # planning
 
 
-def already_patched(manifest_text: str) -> frozenset[str]:
+def already_patched(manifest: Manifest) -> frozenset[str]:
     """The crates a workspace manifest's ``[patch.crates-io]`` table already redirects.
 
     Parsed, not searched. Projects write one ``[patch.crates-io]`` header with an inline table
@@ -261,18 +261,7 @@ def already_patched(manifest_text: str) -> frozenset[str]:
     :func:`plan_overrides` also checks the resolved graph, which is what cargo computed. This covers
     the case the graph cannot: a snapshot taken before the patch table was applied.
     """
-    try:
-        parsed = tomllib.loads(manifest_text)
-    except tomllib.TOMLDecodeError:
-        # cargo parsed this manifest to produce the graph. A failure here means this reader
-        # disagrees with cargo. Log it and continue; the graph still shows the redirect.
-        _log.warning("could not parse the workspace manifest to look for existing patches")
-        return frozenset()
-    patch = parsed.get("patch")
-    if not isinstance(patch, dict):
-        return frozenset()
-    crates_io = patch.get("crates-io")
-    return frozenset(crates_io) if isinstance(crates_io, dict) else frozenset()
+    return frozenset(manifest.patch.get("crates-io", {}))
 
 
 def plan_overrides(

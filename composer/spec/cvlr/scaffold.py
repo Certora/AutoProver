@@ -44,11 +44,11 @@ reference set.
 
 import json
 import re
-import tomllib
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Sequence
 
+from composer.cargo.manifest import Dependency, read_manifest
 from composer.cargo.metadata import CratePackage, Workspace
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.env_paths import PathDialect, dialect_for
@@ -232,22 +232,11 @@ def _metadata_section(*, inlining: Path, summaries: Path) -> str:
 # planning
 
 
-class MalformedManifest(RuntimeError):
-    """A ``Cargo.toml`` could not be parsed, so the scaffold cannot decide what to write."""
-
-
 _MOD_CERTORA = re.compile(r"^[ \t]*(?:pub[ \t]+)?mod[ \t]+certora[ \t]*;", re.MULTILINE)
 
 
 def _section_banner() -> str:
     return "\n\n# === Certora CVLR — added by AutoProver ===\n"
-
-
-def _read_toml(path: Path) -> dict:
-    try:
-        return tomllib.loads(path.read_text())
-    except (OSError, tomllib.TOMLDecodeError) as exc:
-        raise MalformedManifest(f"{path}: {exc}") from exc
 
 
 def _project_relative(path: Path, root: Path) -> Path:
@@ -364,20 +353,17 @@ def _declaration(
     declaration: no member depends on it yet, so the resolved graph does not mention it, but the
     scaffold is about to make a member inherit it.
     """
-    shared = _read_toml(workspace.root / "Cargo.toml").get("workspace", {}).get("dependencies", {})
-    spec = _read_toml(package.root / "Cargo.toml").get("dependencies", {}).get(crate)
-    if spec is None or (isinstance(spec, dict) and spec.get("workspace")):
-        spec = shared.get(crate)
+    spec = read_manifest(package.root / "Cargo.toml").dependencies.get(crate)
+    if spec is None or spec.workspace:
+        spec = read_manifest(workspace.root / "Cargo.toml").workspace_dependencies.get(crate)
     match spec:
         case None:
             return None
-        case str():
-            return _Pinned(spec)
-        case {"version": str(version)}:
+        case Dependency(version=str(version)):
             return _Pinned(version)
-        case {"git": _}:
+        case Dependency(git=str()):
             return _Unpinned("as a git dependency")
-        case {"path": _}:
+        case Dependency(path=str()):
             return _Unpinned("as a path dependency")
         case _:
             return _Unpinned("without a version")
@@ -468,11 +454,11 @@ def _plan_workspace_manifest(
     workspace: Workspace, package: CratePackage, reference: ChainReference
 ) -> tuple[list[Change], list[str]]:
     """Pins in ``[workspace.dependencies]``, when the root manifest has a ``[workspace]``."""
-    parsed = _read_toml(workspace.root / "Cargo.toml")
-    if "workspace" not in parsed:
+    root = read_manifest(workspace.root / "Cargo.toml")
+    if root.workspace is None:
         return [], []
 
-    declared = parsed.get("workspace", {}).get("dependencies", {})
+    declared = root.workspace.dependencies
     stanzas, satisfied = [], []
     for crate in reference.scaffold_crates():
         if crate.name in declared:
@@ -500,10 +486,8 @@ def local_dependencies(workspace: Workspace, package: CratePackage) -> tuple[Cra
     which crates this project owns. A registry crate that a patch table resolves to a workspace
     member is still somebody else's code.
     """
-    declared = _read_toml(package.root / "Cargo.toml").get("dependencies", {})
-    named = [
-        name for name, spec in declared.items() if isinstance(spec, dict) and "path" in spec
-    ]
+    declared = read_manifest(package.root / "Cargo.toml").dependencies
+    named = [name for name, spec in declared.items() if spec.path is not None]
     return tuple(
         found for name in named if (found := workspace.member(name)) is not None
     )
@@ -530,14 +514,13 @@ def _plan_feature_forwarding(
     for dep in local_dependencies(workspace, package):
         forwards.append(f"{dep.name}/{DEFAULT_FEATURE}")
         rel = dep.root.resolve().relative_to(workspace.root.resolve())
-        parsed = _read_toml(dep.root / "Cargo.toml")
-        features = parsed.get("features", {})
+        manifest = read_manifest(dep.root / "Cargo.toml")
+        features = manifest.features
         if DEFAULT_FEATURE in features:
             satisfied.append(f"{dep.name} already declares a `{DEFAULT_FEATURE}` feature")
             continue
         wanted = reference.scaffold_crates()
-        declared = parsed.get("dependencies", {})
-        missing = [c for c in wanted if c.name not in declared]
+        missing = [c for c in wanted if c.name not in manifest.dependencies]
         enables = [f"dep:{c.name}" for c in wanted]
         if NO_ENTRYPOINT_FEATURE in dep.features:
             enables.insert(0, NO_ENTRYPOINT_FEATURE)
@@ -584,7 +567,7 @@ def _plan_package_manifest(
     inherit: bool,
 ) -> tuple[list[Change], list[str], list[Blocked]]:
     manifest_rel = relative / "Cargo.toml"
-    parsed = _read_toml(package.root / "Cargo.toml")
+    manifest = read_manifest(package.root / "Cargo.toml")
     changes: list[Change] = []
     satisfied: list[str] = []
     blocked: list[Blocked] = []
@@ -608,14 +591,13 @@ def _plan_package_manifest(
             )
         )
 
-    dependencies = parsed.get("dependencies", {})
     wanted = reference.scaffold_crates()
-    missing = [c for c in wanted if c.name not in dependencies]
+    missing = [c for c in wanted if c.name not in manifest.dependencies]
     satisfied += [
         f"{c.name} is already a dependency of {package.name}" for c in wanted if c not in missing
     ]
 
-    features = parsed.get("features", {})
+    features = manifest.features
     if DEFAULT_FEATURE in features:
         satisfied.append(
             f"the `{DEFAULT_FEATURE}` feature already exists as {features[DEFAULT_FEATURE]!r}"
@@ -657,7 +639,7 @@ def _plan_package_manifest(
         _dependency_stanza(c.name, inherit=inherit, version=c.version) for c in missing
     ]
 
-    if "certora" in parsed.get("package", {}).get("metadata", {}):
+    if "certora" in manifest.package_metadata:
         satisfied.append("[package.metadata.certora] already declares sources and tuning files")
     else:
         appended.append(
@@ -720,7 +702,7 @@ def _plan_forks(workspace: Workspace) -> tuple[list[Change], list[str], list[Blo
     """
     plan = forks.plan_overrides(
         workspace,
-        already_redirected=forks.already_patched((workspace.root / "Cargo.toml").read_text()),
+        already_redirected=forks.already_patched(read_manifest(workspace.root / "Cargo.toml")),
     )
     blocked = [
         Blocked(path=Path("Cargo.toml"), problem=b.problem, resolution=b.resolution)
@@ -770,7 +752,7 @@ def plan_scaffold(
     Every path is relative to ``workspace.root``, which is also what :func:`apply` writes under.
     """
     relative = _project_relative(package.root, workspace.root)
-    inherit = "workspace" in _read_toml(workspace.root / "Cargo.toml")
+    inherit = read_manifest(workspace.root / "Cargo.toml").workspace is not None
     dialect = dialect_for(workspace, reference)
 
     changes: list[Change] = []
@@ -841,8 +823,7 @@ def declare_unit_features(manifest: Path, features: Sequence[str]) -> tuple[str,
 
     A feature that is already declared is left as it is.
     """
-    parsed = _read_toml(manifest)
-    declared = parsed.get("features", {})
+    declared = read_manifest(manifest).features
     wanted = [f for f in dict.fromkeys(features) if f not in declared]
     if not wanted:
         return ()
