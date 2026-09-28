@@ -616,7 +616,7 @@ async def test_preflight_resolves_the_verification_graph_from_the_packages_own_d
     )
     fake = fake_cargo(workspace)
 
-    result = await preflight.prepare_workspace(tmp_path, package="prog")
+    result = await preflight.prepare_workspace(tmp_path, reference=SOLANA, package="prog")
 
     assert fake.calls[0] == (tmp_path, ())
     assert fake.calls[-1] == (package.root, ("certora",))
@@ -631,7 +631,7 @@ async def test_preflight_refuses_to_choose_between_verifiable_packages(tmp_path,
     fake_cargo(replace(workspace, members=(package, second)))
 
     with pytest.raises(preflight.PreflightFailed, match="name the one to verify"):
-        await preflight.prepare_workspace(tmp_path)
+        await preflight.prepare_workspace(tmp_path, reference=SOLANA)
 
 
 @pytest.mark.asyncio
@@ -642,7 +642,7 @@ async def test_preflight_names_the_members_when_asked_for_one_that_is_not_there(
     fake_cargo(workspace)
 
     with pytest.raises(preflight.PreflightFailed, match="members: prog"):
-        await preflight.prepare_workspace(tmp_path, package="nope")
+        await preflight.prepare_workspace(tmp_path, reference=SOLANA, package="nope")
 
 
 @pytest.mark.asyncio
@@ -657,7 +657,7 @@ async def test_a_blocked_plan_stops_preflight_with_the_resolution_in_the_message
     fake_cargo(workspace)
 
     with pytest.raises(preflight.PreflightFailed, match="crate-type"):
-        await preflight.prepare_workspace(tmp_path, package="prog")
+        await preflight.prepare_workspace(tmp_path, reference=SOLANA, package="prog")
     assert not (tmp_path / "src" / "certora").exists()
 
 

@@ -29,7 +29,7 @@ from composer.spec.cvlr.scaffold import (
     apply,
     plan_scaffold,
 )
-from composer.spec.cvlr_reference import reference_for
+from composer.spec.cvlr_reference import ChainReference
 
 _log = logging.getLogger(__name__)
 
@@ -154,15 +154,17 @@ async def _workspace_at(root: Path, *, features: tuple[str, ...] = ()) -> Worksp
 
 
 async def prepare_workspace(
-    project_root: Path, *, package: str | None = None, chain: str = "solana"
+    project_root: Path, *, reference: ChainReference, package: str | None = None
 ) -> CvlrPreflight:
     """Scaffold ``project_root`` and report what a run needs to know about it.
 
     Writes into the project it is given. For a pipeline run that is the copy the run owns. The
     harness files under ``src/certora/`` are replaced by AutoProver's. The project's manifests
     and sources are only added to.
+
+    ``reference`` is the set rather than a chain name because every function this calls takes the
+    set.
     """
-    reference = reference_for(chain)
     workspace = await _workspace_at(project_root)
     member = _pick_package(workspace, package)
 
