@@ -74,7 +74,7 @@ def test_the_manifest_says_these_are_not_the_deployed_dependencies(tmp_path):
     next to the dependency it replaces."""
     addition = manifest_additions(plan_overrides(_workspace(tmp_path, _package("anchor-lang", "0.31.1"))))
     assert "NOT the deployed program's" in addition
-    assert "[3006]" in addition
+    assert "Certora fork of Anchor" in addition
 
 
 def test_a_branch_is_named_rather_than_a_commit_pinned(tmp_path):
@@ -226,7 +226,7 @@ def test_one_forks_two_crates_share_one_reason_in_the_manifest(tmp_path):
             )
         )
     )
-    assert addition.count("Upstream anchor_lang::error::Error boxes its payload") == 1
+    assert addition.count("Certora fork of Anchor") == 1
     assert "anchor-lang 0.31.1 -> certora-v0.31.1" in addition
     assert "anchor-spl 0.31.1 -> certora-v0.31.1" in addition
 

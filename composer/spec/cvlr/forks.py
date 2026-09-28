@@ -209,11 +209,8 @@ ANCHOR_FORK = ForkOverride(
         "0.32.1": "certora-v0.32.1",
     },
     why=(
-        "Upstream anchor_lang::error::Error boxes its payload, and the Solana Prover rejects the "
-        "resulting Box::new of a stack-built struct as [3006] 'illegal store of a stack pointer' — "
-        "on every path through Anchor dispatch. The fork's Error is unboxed, and carries other "
-        "verification-oriented changes besides: anchor-spl gains public new_unchecked constructors "
-        "for TokenAccount and Mint, whose upstream newtypes a harness cannot otherwise build."
+        "Use the Certora fork of Anchor. It avoids the boxing the official library does, which is "
+        "hard to analyze."
     ),
 )
 
