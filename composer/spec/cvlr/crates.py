@@ -2,7 +2,7 @@
 
 The version comes from the resolved graph. ``RUST_FORBIDDEN_READ`` hides ``Cargo.lock`` from
 agents, and source for a different version than the build compiles is worse than no source.
-:func:`resolve` reports each crate together with the directory it came from.
+:meth:`CvlrSources.of` reports each crate together with the directory it came from.
 
 :mod:`composer.spec.cvlr_reference` records the one CVLR line this build supports.
 :meth:`CvlrSources.gaps` reports where a project's graph and that line disagree, which
@@ -13,6 +13,7 @@ way the scaffold's gate does not see, such as a ``[patch]`` table.
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Self
 
 from composer.cargo.metadata import CratePackage, Workspace
 from composer.spec.cvlr_reference import ChainReference
@@ -74,6 +75,17 @@ class CvlrSources:
 
     crates: tuple[CratePackage, ...]
 
+    @classmethod
+    def of(cls, workspace: Workspace) -> Self:
+        """Every CVLR crate in ``workspace``'s resolved graph, in name order.
+
+        Cargo's order is not stable. This list is written into run metadata, where a shuffle looks
+        like a change.
+        """
+        return cls(
+            tuple(sorted(workspace.family(CVLR_PREFIX), key=lambda c: (c.name, c.version)))
+        )
+
     def roots(self) -> tuple[Path, ...]:
         """The crate directories, one per family member."""
         return tuple(c.root for c in self.crates)
@@ -102,14 +114,3 @@ class CvlrSources:
     def mismatched(self, reference: ChainReference) -> tuple[Mismatched, ...]:
         """Only the divergences that stop a run. See :class:`Absent` for why the rest do not."""
         return tuple(g for g in self.gaps(reference) if isinstance(g, Mismatched))
-
-
-def resolve(workspace: Workspace) -> CvlrSources:
-    """Every CVLR crate in ``workspace``'s resolved graph, in name order.
-
-    Cargo's order is not stable. This list is written into run metadata, where a shuffle looks
-    like a change.
-    """
-    return CvlrSources(
-        tuple(sorted(workspace.family(CVLR_PREFIX), key=lambda c: (c.name, c.version)))
-    )

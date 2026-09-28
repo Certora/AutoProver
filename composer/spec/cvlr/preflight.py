@@ -22,7 +22,7 @@ from composer.cargo.metadata import CargoUnavailable, CratePackage, Workspace
 from composer.cargo.session import CargoSession, CompileFailed, Compiled, WarmFailed
 from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
-from composer.spec.cvlr.crates import CvlrSources, Divergence, resolve
+from composer.spec.cvlr.crates import CvlrSources, Divergence
 from composer.spec.cvlr.scaffold import (
     ScaffoldBlocked,
     ScaffoldPlan,
@@ -183,7 +183,7 @@ async def prepare_workspace(
     if fresh.lib is None:
         raise PreflightFailed(f"{fresh.name} has no library target to build")
 
-    sources = resolve(resolved_in)
+    sources = CvlrSources.of(resolved_in)
     # The backstop behind the scaffold's gate. That gate reads the manifests and the pre-scaffold
     # graph; this reads what cargo actually resolved with the harness in. A mismatch here is a
     # release that arrived some way the gate cannot see — a ``[patch]`` table is the way that
