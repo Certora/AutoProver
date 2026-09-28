@@ -222,9 +222,8 @@ FIXED_FORK = ForkOverride(
     crates=("fixed",),
     branches={"1.23.1": "certora-v1.23.1"},
     why=(
-        "The Certora-maintained fork of `fixed` carries conversions verification code needs (e.g. "
-        "From<u64> for FixedU64) that upstream does not provide, so a harness over a program using "
-        "fixed-point arithmetic cannot construct its own values without it."
+        "Use the Certora fork of fixed. It adds conversions the official library lacks, such as "
+        "From<u64> for FixedU64, which verification code needs to build fixed-point values."
     ),
 )
 
