@@ -75,10 +75,7 @@ class CvlrSources:
     crates: tuple[CratePackage, ...]
 
     def roots(self) -> tuple[Path, ...]:
-        """The crate directories, one per family member.
-
-        ``cvlr_assert!`` expands in ``cvlr-asserts``. The ``cvlr`` crate only re-exports it.
-        """
+        """The crate directories, one per family member."""
         return tuple(c.root for c in self.crates)
 
     def gaps(self, reference: ChainReference) -> tuple[Divergence, ...]:
