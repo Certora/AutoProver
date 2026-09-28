@@ -252,7 +252,26 @@ def _cargo_metadata(
         return None
 
 
-def read_workspace_sync(
+def _read_workspace(
+    project_root: Path,
+    *,
+    offline: bool = False,
+    features: tuple[str, ...] = (),
+    timeout_s: int = METADATA_TIMEOUT_S,
+) -> Workspace | None:
+    payload = _cargo_metadata(
+        project_root, offline=offline, features=features, timeout_s=timeout_s
+    )
+    if payload is None:
+        return None
+    try:
+        return parse_metadata(payload)
+    except KeyError as exc:
+        _log.warning("cargo metadata in %s omitted %s", project_root, exc)
+        return None
+
+
+async def read_workspace(
     project_root: Path,
     *,
     offline: bool = False,
@@ -276,28 +295,8 @@ def read_workspace_sync(
     considers current, so pass the package directory as ``project_root`` when
     naming one.
     """
-    payload = _cargo_metadata(
-        project_root, offline=offline, features=features, timeout_s=timeout_s
-    )
-    if payload is None:
-        return None
-    try:
-        return parse_metadata(payload)
-    except KeyError as exc:
-        _log.warning("cargo metadata in %s omitted %s", project_root, exc)
-        return None
-
-
-async def read_workspace(
-    project_root: Path,
-    *,
-    offline: bool = False,
-    features: tuple[str, ...] = (),
-    timeout_s: int = METADATA_TIMEOUT_S,
-) -> Workspace | None:
-    """:func:`read_workspace_sync`, off the event loop."""
     return await asyncio.to_thread(
-        read_workspace_sync,
+        _read_workspace,
         project_root,
         offline=offline,
         features=features,

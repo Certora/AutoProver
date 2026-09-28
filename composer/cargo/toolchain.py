@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from composer.cargo.metadata import read_workspace, read_workspace_sync
+from composer.cargo.metadata import read_workspace
 from composer.cargo.sbf import Built, sbf_build
 from composer.cargo.session import CargoSession, WarmFailed
 from composer.sandbox.config import SandboxConfig
@@ -57,7 +57,7 @@ class ToolchainRequestUnsupported(ValueError):
 class SolanaToolchain:
     """Cargo, for a project whose verification artifact is an sBPF program."""
 
-    def source_unit(self, source: SourceFields) -> dict[str, Any]:
+    async def source_unit(self, source: SourceFields) -> dict[str, Any]:
         """The crate owning ``source``'s main file: ``{dir, package, lib}``.
 
         ``dir`` is relative to the project root, because that is the vocabulary every path crossing
@@ -67,7 +67,7 @@ class SolanaToolchain:
         none of them is improved by an exception.
         """
         root = Path(source.project_root)
-        workspace = read_workspace_sync(root)
+        workspace = await read_workspace(root)
         if workspace is None:
             return {}
         owner = workspace.owning(root / source.relative_path)

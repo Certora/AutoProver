@@ -52,7 +52,7 @@ class ProjectToolchain(Protocol):
     One object per chain rather than two registries, because both questions are the same knowledge:
     the thing that can read a Cargo manifest is the thing that can drive Cargo."""
 
-    def source_unit(self, source: SourceFields) -> dict[str, Any]:
+    async def source_unit(self, source: SourceFields) -> dict[str, Any]:
         """Where ``source``'s code lives as a unit of this chain's build system — for Cargo, the crate
         whose manifest owns the main source file, and what that crate is called.
 
@@ -120,11 +120,11 @@ class ProjectToolchain(Protocol):
 PROJECT_TOOLCHAINS: dict[ChainTag, ProjectToolchain] = {"solana": SolanaToolchain()}
 
 
-def source_unit(chain: ChainTag, source: SourceFields) -> dict[str, Any]:
+async def source_unit(chain: ChainTag, source: SourceFields) -> dict[str, Any]:
     """Where ``source``'s code lives as a build-system unit, per ``chain``'s toolchain — empty when
     the chain has none, which the wheel reads as "apply your own convention"."""
     toolchain = PROJECT_TOOLCHAINS.get(chain)
-    return toolchain.source_unit(source) if toolchain is not None else {}
+    return await toolchain.source_unit(source) if toolchain is not None else {}
 
 
 def project_toolchain(chain: ChainTag) -> ProjectToolchain:

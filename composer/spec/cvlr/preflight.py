@@ -181,7 +181,7 @@ async def prepare_workspace(
     # Re-read with the verification feature, from the package directory. The scaffold adds CVLR
     # to the manifests, so the graph from before that does not contain those crates. They are
     # optional, so a default-feature read still reports them absent
-    # (:func:`composer.cargo.metadata.read_workspace_sync`). Features resolve against the package
+    # (:func:`composer.cargo.metadata.read_workspace`). Features resolve against the package
     # cargo considers current.
     resolved_in = await _workspace_at(member.root, features=(DEFAULT_FEATURE,))
     fresh = resolved_in.member(member.name) or member

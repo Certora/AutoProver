@@ -505,10 +505,11 @@ def _source(root: Path) -> SourceFields:
     )
 
 
-def test_a_project_that_is_not_a_cargo_workspace_resolves_no_source_unit(tmp_path):
+@pytest.mark.asyncio
+async def test_a_project_that_is_not_a_cargo_workspace_resolves_no_source_unit(tmp_path):
     """The empty answer the seam documents as "apply your own convention" — not an exception, because
     it is a state the wheel already handles."""
-    assert SolanaToolchain().source_unit(_source(tmp_path)) == {}
+    assert await SolanaToolchain().source_unit(_source(tmp_path)) == {}
 
 
 @pytest.mark.asyncio

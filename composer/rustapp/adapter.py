@@ -168,7 +168,7 @@ def confined_target(root: Path, rel: str) -> Path:
     return root / p
 
 
-def source_unit_of(
+async def source_unit_of(
     ecosystem: Ecosystem[Any, Any, Any], source: SourceFields
 ) -> dict[str, Any]:
     """The ``AuthorInput.source_unit`` field — where the code under analysis lives as a unit of its
@@ -181,7 +181,7 @@ def source_unit_of(
     toolchain, when the language has no such unit (Solidity), or when the layout couldn't be read —
     all three mean the same thing to the wheel, which then applies its own convention.
     """
-    return source_unit(ecosystem.name, source)
+    return await source_unit(ecosystem.name, source)
 
 
 def _setup_identity(input: SetupInput) -> str:
@@ -698,7 +698,7 @@ class RustBackend:
         # Resolved once per run and carried on every AuthorInput from here on: the wheel renders its
         # build files from this, so prep, every gated build, and the deliverable agree on what they
         # are building against.
-        unit = source_unit_of(self.ecosystem, run.source)
+        unit = await source_unit_of(self.ecosystem, run.source)
         # Declared args are in scope from the start: prep may need one (Crucible reads
         # ``program_idl`` when deciding how to source the program's types).
         prep_input = PreflightInput(
