@@ -34,8 +34,8 @@ def test_the_platform_is_a_line_not_a_release():
     # The platform generation is about the target. An exact pin would claim a patch level that
     # was never compiled.
     for chain, r in ref.REFERENCE_SET.items():
-        assert r.platform.crates, chain
-        for crate in r.platform.crates:
+        assert r.platform.sdk_crates, chain
+        for crate in r.platform.sdk_crates:
             assert crate.dependency_line() == f'{crate.name} = "{crate.line}"'
             assert "=" not in crate.line
 

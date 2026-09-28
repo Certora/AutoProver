@@ -110,21 +110,22 @@ class NamespacePattern:
 class PlatformGeneration:
     """The chain-platform release line a CVLR chain crate is bound to.
 
+    The CVLR crates the reference set pins work only with this generation. :attr:`witnesses` is
+    how a target is checked to be on it, :attr:`path_aliases` is how it spells the paths in the
+    tuning files, and :attr:`sdk_crates` is what a crate built against it declares.
+
     ``label`` is for people: the platform refusal names it, and so does the tuning-path log line.
-    ``crates`` is what a crate built against this generation declares so it can name the platform
-    types (``AccountInfo`` and the rest) the chain crate uses."""
+    ``sdk_crates`` are the chain platform's own crates (``solana-program``, ``soroban-sdk``).
+    """
 
     label: str
-    crates: tuple[CrateRequirement, ...]
-    #: Crates whose presence in a target's graph says which generation it is on, most specific
-    #: first. The scaffold's platform gate uses the first one the target resolves.
+    sdk_crates: tuple[CrateRequirement, ...]
+    #: The platform crates that define the types the chain crate's API uses, such as Solana's
+    #: ``AccountInfo``. When those types have moved between crates across generations, every
+    #: crate they have lived in is listed, most recent first.
     #:
-    #: Separate from :attr:`crates`. That list is what this generation declares, so it can only
-    #: name crates this generation has. A newer generation is recognized by a crate this one
-    #: lacks. Solana v3 moved ``AccountInfo`` out of ``solana-program`` and stopped publishing
-    #: that crate, so a v3 target resolves no ``solana-program``. A gate that only asked about
-    #: ``solana-program`` would read the absence as "no opinion" and pin this generation's CVLR
-    #: against it. The witness is the crate that still defines the type.
+    #: These are read from a target's resolved graph, never declared. The scaffold's platform gate
+    #: takes the first one the target resolves and compares its version against this generation.
     witnesses: tuple[CrateRequirement, ...]
     #: How this generation spells the paths in the starting tuning files.
     #: :mod:`composer.spec.cvlr.env_paths` applies these. Empty when this generation's spelling
@@ -184,12 +185,12 @@ class ChainReference:
         return self.crates()
 
     def cargo_dependencies(self) -> str:
-        """A ``[dependencies]`` body pinning this reference set, for a probe or scaffold crate.
+        """A ``[dependencies]`` body pinning this reference set, for a probe crate.
 
         The platform crates are included because the chain crate's public types come from them.
         Without them a probe cannot name what the helpers return."""
         lines = [c.dependency_line() for c in self.crates()]
-        lines += [c.dependency_line() for c in self.platform.crates]
+        lines += [c.dependency_line() for c in self.platform.sdk_crates]
         return "\n".join(lines)
 
 
@@ -209,7 +210,7 @@ SOLANA = ChainReference(
     ),
     platform=PlatformGeneration(
         label="solana-program 2.x (the last monolithic line)",
-        crates=(CrateRequirement("solana-program", "2.2"),),
+        sdk_crates=(CrateRequirement("solana-program", "2.2"),),
         # ``solana-account-info`` first: it defines ``AccountInfo`` and exists on both 2.x and 3.x.
         # ``solana-program`` is the fallback for 1.18, which predates the split and defines the
         # type inside the monolith.
@@ -263,7 +264,7 @@ SOROBAN = ChainReference(
     specializations=(CrateRelease("cvlr-soroban-derive", "0.4.0"),),
     platform=PlatformGeneration(
         label="soroban-sdk 22.x",
-        crates=(CrateRequirement("soroban-sdk", "22"),),
+        sdk_crates=(CrateRequirement("soroban-sdk", "22"),),
         # Soroban has one SDK crate, so the declared crate and the witness are the same. Spelled
         # out because that is a fact about this platform. On Solana the witness list names a crate
         # this generation does not declare.
