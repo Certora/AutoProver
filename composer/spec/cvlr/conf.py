@@ -27,11 +27,8 @@ from composer.prover.conf import Conf, InheritRules, RuleSelection, dump_conf, s
 #: reported as verified.
 #:
 #: ``prover_args`` has none of the ``-solanaOptimistic*`` flags: they are unsound, and they do not
-#: fix the [3308] they were meant to. Nor ``-solanaTACSoundSignedMath``: next to
-#: ``-solanaTACMathInt`` it turned a seven-minute, eighteen-rule run into a two-hour timeout with
-#: thirteen rules unverified.
+#: fix the [3308] they were meant to.
 BASE_CONF: Conf = {
-    "java_args": ["-Dlevel.sbf=info"],
     "smt_timeout": "6000",
     "rule_sanity": "basic",
     "prover_args": [
