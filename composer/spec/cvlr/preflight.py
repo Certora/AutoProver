@@ -58,6 +58,8 @@ class CvlrPreflight:
     #: The library target's file stem. The built ``.so`` is named after it.
     artifact_stem: str
     scaffold: ScaffoldPlan
+    #: The files this run wrote, relative to :attr:`workspace_root`, in the order they were
+    #: written. Empty when the project was already set up.
     applied: tuple[Path, ...]
     #: The CVLR crates the scaffolded graph resolves. Read after applying. Before that the
     #: project may not depend on CVLR at all.
@@ -145,10 +147,10 @@ async def _workspace_at(root: Path, *, features: tuple[str, ...] = ()) -> Worksp
         raise PreflightFailed(str(exc)) from exc
     if workspace is None:
         raise PreflightFailed(
-            f"cargo could not resolve a workspace at {root}. What cargo said is logged as a "
-            f"warning by composer.cargo.metadata — most often a manifest that does not parse, a "
-            f"`workspace = true` dependency the root does not declare, or a graph that needs the "
-            f"network"
+            f"Could not read the Cargo project at {root}. Common causes: a Cargo.toml with a "
+            f"syntax error, a dependency marked `workspace = true` that the workspace's "
+            f"Cargo.toml does not list, or dependencies that need downloading while the network "
+            f"is unavailable. Running `cargo metadata` in that directory shows cargo's error."
         )
     return workspace
 
