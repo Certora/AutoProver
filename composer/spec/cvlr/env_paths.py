@@ -116,11 +116,11 @@ def _unique(patterns: Iterable[str]) -> list[str]:
 
     An alias can list its canonical spelling as one of its own replacements, for a symbol that
     exists on both sides of a split. Without this that directive would be emitted twice.
+
+    Order matters, which is why this is not a ``set``: the spellings are written into the tuning
+    file in this order, and the scaffold rewrites that file whenever its text changes.
     """
-    seen: dict[str, None] = {}
-    for p in patterns:
-        seen.setdefault(p, None)
-    return list(seen)
+    return list(dict.fromkeys(patterns))
 
 
 def dialect_for(workspace: Workspace, reference: ChainReference) -> PathDialect:
