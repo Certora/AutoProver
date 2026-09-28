@@ -26,8 +26,9 @@ _Skip = RecordSkip.with_template(description="Skip it.", reason="why")
 
 
 def _prover_calls(n: int) -> list[AIMessage]:
+    # `_verify_attempts` counts prover attempts by the buffer-submission tool.
     return [
-        AIMessage(content="", tool_calls=[{"name": "verify_spec", "args": {}, "id": f"c{i}"}])
+        AIMessage(content="", tool_calls=[{"name": "submit_buffer", "args": {}, "id": f"c{i}"}])
         for i in range(n)
     ]
 

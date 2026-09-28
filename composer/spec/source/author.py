@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 import json
 import pathlib
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from langchain_core.tools import BaseTool
 from pydantic import Field, BaseModel, Discriminator
@@ -14,34 +14,45 @@ from graphcore.tools.schemas import (
     WithAsyncImplementation, WithImplementation, WithInjectedId, WithInjectedState,
     WithAsyncDependencies
 )
-from graphcore.graph import tool_state_update, RawPromptInput, CacheMarker, SummaryConfig
+from graphcore.graph import tool_state_update, tool_return, RawPromptInput, CacheMarker, SummaryConfig
 from graphcore.tools.vfs import VFSAccessor, VFSState
 
 from composer.authoring.judge import PropertyFeedbackProtocol
-from composer.authoring.state import SkippedProperty, check_completion, spec_digest
+from composer.authoring.state import SkippedProperty
 from composer.authoring.tools import gated_give_up_tool, give_up_tool
 from composer.spec.guidance import StructuralInvariantGuidance
 from composer.spec.cvl_generation import (
-    static_tools, property_tools, skip_tools, CVLGenerationExtra, FEEDBACK_VALIDATION_KEY,
-    validate_property_rules, CVL_JUDGE_KEY, run_cvl_generator,
+    cvl_guidance_tools, skip_tools, CVLGenerationExtra, FEEDBACK_VALIDATION_KEY,
+    CVL_JUDGE_KEY, run_cvl_generator,
     GeneratedCVL, PropertyRuleMapping, AppliedEdit, FeedbackToolBase,
 )
 from composer.prover.core import run_prover, CexHandler, ProverCallbacks, ProverReport
 from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools, WIPE_HISTORY
 from composer.spec.source.prover import setup_prover_config_in
-from composer.spec.context import WorkflowContext, CVLGeneration, CacheKey, SourceCode
-from composer.spec.types import PropertyFormulation, PropertyTitle
+from composer.spec.source.spec_buffers import (
+    SpecBuffersExtra, buffer_review_text, buffer_state_digest, check_buffer_completion,
+    combined_buffers_view, max_spec_buffers, requireinvariant_citations, run_targets,
+    skips_review_digest, SKIPS_VALIDATION_KEY, validate_coverage, validate_declared_rules_mapped,
+    validate_disjoint_rules, validate_requireinvariant_proved,
+)
+from composer.spec.source.buffer_tools import (
+    put_buffer, get_buffer, edit_buffer, remap_buffer, list_buffers, delete_buffer,
+)
+from composer.spec.context import WorkflowContext, CVLGeneration, CacheKey, CVLJudge, SourceCode
+from composer.spec.types import PropertyFormulation, PropertyTitle, RuleName
 from composer.pipeline.core import GaveUp, ToolBinder, InjectingToolExtension, Curtailed
 from composer.pipeline.plugin_api import ProvidedTools
 from composer.spec.source.plugin import CertoraProverTools, CVLAuthorState
 from composer.spec.system_model import ContractComponentInstance, SolidityIdentifier, component_context
 from composer.spec.source.prover import (
     OVERLAY_OWNED_KEYS, ProverStateExtra, DELETE_SKIP, VALIDATION_KEY as PROVER_VALIDATION_KEY,
-    covering_run_links, declared_rules_at, materializing_project,
+    materializing_project, completing_run_specs, declared_rules_at,
 )
 from langgraph.graph import MessagesState
 from pathlib import Path
-from composer.spec.gen_types import CVLResource, TypedTemplate, import_statement_for
+from composer.spec.gen_types import (
+    CVLResource, SPECS_DIR, TypedTemplate, buffer_spec_path, import_statement_for,
+)
 from composer.spec.service_host import ServiceHost, Sort
 from composer.llm.provider import CacheLevel
 from composer.kb.kb_context import with_cvl_context
@@ -53,7 +64,7 @@ from composer.prover.core import ProverOptions
 from langgraph.types import Command
 from graphcore.graph import Builder
 from composer.spec.feedback import (
-    property_feedback_judge, source_feedback_judge, FeedbackTemplate, Properties,
+    source_feedback_judge, FeedbackTemplate, Properties,
     SourceSnapshot, ContextualFeedbackToolImpl,
 )
 from composer.ui.tool_display import tool_display
@@ -87,7 +98,7 @@ class SourceAuthorExtra(TypedDict):
 # ``vfs`` comes from ProverStateExtra (NotRequired, no merge op — replaced
 # wholesale by commit_edit / revert_to_edit); the generation input always
 # seeds it explicitly.
-class SourceCVLGenerationExtra(CVLGenerationExtra, ProverStateExtra, SourceAuthorExtra, VersionedHistory):
+class SourceCVLGenerationExtra(CVLGenerationExtra, ProverStateExtra, SourceAuthorExtra, VersionedHistory, SpecBuffersExtra):
     pass
 
 class SourceCVLGenerationInput(SourceCVLGenerationExtra, FlowInput):
@@ -151,36 +162,58 @@ class PublishResultTool(
     Call to signal your completed cvl generation.
     """
     commentary: str = Field(description="Commentary on your generated spec")
-    property_rules: list[PropertyRuleMapping] = Field(
-        description="The property->rules mapping. For every property you did NOT skip "
-        "(referenced by its unique snake_case title from the batch listing), list the "
-        "name(s) of the rule(s)/invariant(s) in your spec that verify it. Every non-skipped "
-        "property must appear with at least one rule."
-    )
 
     @override
     async def run(self) -> Command | str:
-        st = self.state
-        if (err := check_completion(st, st["version_history"])) is not None:
+        # Completion requires every run-target buffer verified AND reviewed at its current digest
+        # (per-buffer stamps), with a clean property/rule partition across buffers. Each run-target
+        # declares its own property->rules on ``put_buffer``, so the published mapping is derived
+        # from the buffers. When every property is skipped there are no run-target buffers: the
+        # stamp check is then vacuous and ``validate_coverage`` alone decides whether publishing is
+        # allowed.
+        buffers = self.state.get("buffers") or {}
+        skipped_pairs = [(str(s.property_title), str(s.reason)) for s in self.state["skipped"]]
+        if (err := check_buffer_completion(
+            buffers, self.state["validations"], self.state["required_validations"],
+            skipped=skipped_pairs, version_history=self.state["version_history"],
+            config=self.state["config"],
+        )) is not None:
             return err
-        spec = st["curr_spec"]
-        assert spec is not None, "check_completion admits no spec-less state"
-        # What the typechecker actually found in the published spec, so the mapping is checked
-        # in both directions: a supporting invariant the author proved but never tied back to a
-        # property would otherwise be dropped from the report as an orphan.
-        declared = declared_rules_at(
-            st["prover_history"], spec_digest(spec, st["skipped"], st["version_history"])
-        )
         with self.tool_deps() as titles:
-            if (err := validate_property_rules(
-                self.property_rules, st["skipped"], titles, declared
-            )) is not None:
-                return err
+            skip_titles = {str(s.property_title) for s in self.state["skipped"]}
+            if (err := validate_coverage(buffers, all_properties=set(titles), skipped=skip_titles)) is not None:
+                return f"Completion REJECTED: {err}"
+        if (err := validate_disjoint_rules(buffers)) is not None:
+            return f"Completion REJECTED: {err}"
+        # Reverse of validate_coverage: every rule/invariant the typechecker declared in a buffer must be
+        # named in that buffer's property_rules, so the mapping accounts for everything proved (nothing
+        # proved is left attributed to no property). Read each buffer's declared set off its completing
+        # prover run (None when no run covered it — a lifted publish gate).
+        declared_by_buffer = {
+            b.name: declared_rules_at(
+                self.state["prover_history"],
+                buffer_state_digest(
+                    buffers, b.name, version_history=self.state["version_history"],
+                    config=self.state["config"],
+                ),
+            )
+            for b in run_targets(buffers)
+        }
+        if (err := validate_declared_rules_mapped(buffers, declared_by_buffer)) is not None:
+            return f"Completion REJECTED: {err}"
+        # Every invariant a buffer cites with requireInvariant must be declared (hence proved) in that
+        # same buffer: an imported invariant is not re-verified in the importing run, so citing one that
+        # lives only in another buffer — e.g. an unproven shared buffer — is an unproven assumption.
+        cited_by_buffer = {b.name: requireinvariant_citations(b.cvl) for b in run_targets(buffers)}
+        if (err := validate_requireinvariant_proved(
+            buffers, cited_by_buffer, declared_by_buffer,
+            expected_to_fail=set(self.state["rule_skips"]),
+        )) is not None:
+            return f"Completion REJECTED: {err}"
         return tool_state_update(
             self.tool_call_id,
             "Accepted",
             result=self.commentary,
-            property_rules=self.property_rules,
             failed=False,
         )
 
@@ -511,7 +544,7 @@ Diff from {"prior edit" if i > 0 else "project directory"}:
             for (i,(t, summary, diff)) in enumerate(history)
         ]
         return "\n\n".join(to_format)
-    
+
 class RevertToEdit(WithAsyncDependencies[Command | str, EditStore], WithInjectedId, WithInjectedState[SourceCVLGenerationExtra]):
     """
     Call this tool to revert to a prior edit in your history, or (with a null
@@ -638,33 +671,142 @@ class _LiveJudgeHost:
         )
 
 
+@dataclass
+class _PerBufferJudge[J]:
+    """Lazily builds and caches one persistent judge per buffer, keyed by buffer name — each bound to
+    that buffer's claimed properties, on its own child context so its review memory stays scoped to the
+    buffer. Rebuilt only when the buffer's claimed properties change; because the child namespace is
+    derived from the name, the rebuilt judge keeps its memory. ``properties`` is the batch's full set,
+    for resolving each buffer's subset."""
+    build: Callable[[str, list[PropertyFormulation]], J]
+    properties: list[PropertyFormulation]
+    _cache: dict[str, tuple[tuple[str, ...], J]] = field(default_factory=dict)
+    _skips_judge: J | None = field(default=None)
+
+    def for_buffer(self, name: str, claimed: list[PropertyFormulation]) -> J:
+        sig = tuple(sorted(str(p.title) for p in claimed))
+        cached = self._cache.get(name)
+        if cached is None or cached[0] != sig:
+            # Namespaced under "buffer:<name>", disjoint from the skips judge's SKIPS_VALIDATION_KEY.
+            self._cache[name] = (sig, self.build(f"buffer:{name}", claimed))
+        return self._cache[name][1]
+
+    def for_skips(self) -> J:
+        """The judge for the whole-spec skip review, on its own slot so it never shares an instance or
+        memory namespace with a buffer that happens to be named the skip-review key."""
+        judge = self._skips_judge
+        if judge is None:
+            judge = self._skips_judge = self.build(SKIPS_VALIDATION_KEY, [])
+        return judge
+
+
 @tool_display("Getting feedback", "Feedback")
 class EditorAwareFeedbackTool(
     FeedbackToolBase[SourceCVLGenerationState],
-    WithAsyncDependencies[Command, ContextualFeedbackToolImpl[SourceSnapshot]],
+    WithAsyncDependencies[Command, _PerBufferJudge[ContextualFeedbackToolImpl[SourceSnapshot]]],
 ):
+    # Reviews each run-target buffer independently — against the properties that buffer claims — with its
+    # own persistent per-buffer judge (reached via _review), stamping feedback:<buffer>; the skip set is
+    # reviewed once as a standalone unit (see run()). With no run-target buffers there is nothing to review.
     __doc__ = FeedbackToolBase.__doc__
 
     @override
-    async def _get_feedback(
-        self, spec: str, skipped: list[SkippedProperty]
-    ) -> PropertyFeedbackProtocol:
-        with self.tool_deps() as judge:
-            assert "vfs" in self.state
-            snap = SourceSnapshot(
-                vfs=self.state["vfs"],
-                version_history=self.state["version_history"],
+    async def run(self) -> Command:
+        buffers = self.state.get("buffers") or {}
+        targets = run_targets(buffers)
+        if not targets:
+            return tool_return(self.tool_call_id, "No run-target buffers to review yet.")
+
+        # Review each run-target buffer whose feedback stamp is missing or stale (its text, an import, or
+        # its claimed properties changed) in isolation, scored against the properties it claims, and stamp
+        # feedback:<buffer> per approved buffer — so an approved, unchanged buffer is never re-reviewed and
+        # the hard buffer is reviewed alone. The claimed properties are part of the feedback digest
+        # (include_claim), so re-assigning a property re-triggers review even with unchanged CVL. Skips are
+        # NOT reviewed here; they are reviewed once, below, since a skip belongs to no single buffer.
+        skipped = self.state["skipped"]
+        skipped_pairs = [(str(s.property_title), str(s.reason)) for s in skipped]
+        vh = self._version_history()
+        validations = self.state["validations"]
+        all_props = self._all_properties()
+
+        def digest(name: str) -> str:
+            return buffer_state_digest(
+                buffers, name, version_history=vh, config=self.state["config"], include_claim=True,
             )
-            return await judge(snap, spec, skipped, self.rebuttals, self.tool_call_id)
+
+        new_stamps: dict[str, str] = {}
+        blocks: list[str] = []
+
+        for b in [b for b in targets if validations.get(f"feedback:{b.name}") != digest(b.name)]:
+            claimed = [p for p in all_props if str(p.title) in b.property_rules]
+            verdict = await self._review_buffer(b.name, buffer_review_text(buffers, b.name), claimed)
+            blocks.append(f"=== buffer {b.name} ===\nGood? {verdict.good}\nFeedback {verdict.feedback}")
+            if verdict.good:
+                new_stamps[f"feedback:{b.name}"] = digest(b.name)
+
+        # Skip quality is a whole-spec concern, so review the skip set ONCE (a skip is owned by no
+        # buffer; scrutinizing it in every buffer's judge would make any skip change re-review every
+        # buffer). The judge sees the whole spec (a skip's justification can rest on the code) and only
+        # the skips, with no per-buffer claim to cover.
+        skips_digest = skips_review_digest(buffers, skipped=skipped_pairs, version_history=vh)
+        if skipped and validations.get(SKIPS_VALIDATION_KEY) != skips_digest:
+            verdict = await self._review_skips(combined_buffers_view(buffers), skipped)
+            blocks.append(f"=== skipped properties ===\nGood? {verdict.good}\nFeedback {verdict.feedback}")
+            if verdict.good:
+                new_stamps[SKIPS_VALIDATION_KEY] = skips_digest
+
+        if not blocks:
+            return tool_return(
+                self.tool_call_id, "All buffers already reviewed and approved at their current state."
+            )
+        return tool_state_update(self.tool_call_id, "\n\n".join(blocks), validations=new_stamps)
+
+    async def _run_judge(
+        self, judge: ContextualFeedbackToolImpl[SourceSnapshot], name: str, spec: str,
+        skipped: list[SkippedProperty],
+    ) -> PropertyFeedbackProtocol:
+        assert "vfs" in self.state
+        snap = SourceSnapshot(
+            vfs=self.state["vfs"],
+            version_history=self.state["version_history"],
+        )
+        # A unit's judge sees only the rebuttals filed against its own feedback.
+        rebuttals = [r for r in self.rebuttals if r.buffer == name]
+        return await judge(snap, spec, skipped, rebuttals, self.tool_call_id)
+
+    async def _review_buffer(
+        self, name: str, spec: str, claimed: list[PropertyFormulation],
+    ) -> PropertyFeedbackProtocol:
+        with self.tool_deps() as judges:
+            return await self._run_judge(judges.for_buffer(name, claimed), name, spec, [])
+
+    async def _review_skips(
+        self, spec: str, skipped: list[SkippedProperty],
+    ) -> PropertyFeedbackProtocol:
+        with self.tool_deps() as judges:
+            return await self._run_judge(judges.for_skips(), SKIPS_VALIDATION_KEY, spec, skipped)
+
+    def _all_properties(self) -> list[PropertyFormulation]:
+        # The batch's full property set, for resolving a unit's claimed subset.
+        with self.tool_deps() as judges:
+            return judges.properties
 
     @override
     def _version_history(self) -> Sequence[str]:
         return self.state["version_history"]
 
+    @override
+    async def _get_feedback(
+        self, spec: str, skipped: list[SkippedProperty]
+    ) -> PropertyFeedbackProtocol:
+        # run() reviews per unit through _review; this single-spec entry is unreachable (curr_spec is
+        # always None in buffer mode, and run() handles the no-buffers case directly). Present only to
+        # satisfy the abstract base.
+        raise AssertionError("buffer feedback uses per-unit _review, not _get_feedback")
+
 
 _PropertyGenTemplate = TypedTemplate[PropertyGenParams]("property_generation_prompt.j2")
 
-_PROPERTY_GEN_SYS_PROMPT = "property_generation_system_prompt.j2"
 
 #: The prover's tool extension: contributions come from plugins deriving
 #: ``CertoraProverTools``, dispatched via their ``certora_prover_tools`` hook.
@@ -674,7 +816,8 @@ _PROVER_TOOLS = InjectingToolExtension(
 
 @dataclass
 class ProverTool:
-    lg_tool: BaseTool
+    #: The async multi-buffer tools (submit_buffer / collect_results) the agent verifies with.
+    buffer_tools: list[BaseTool]
     options: ProverOptions
 
 @dataclass
@@ -793,16 +936,18 @@ async def batch_cvl_generation(
     })
 
     sys_prompt : list[RawPromptInput | type[CacheMarker]] = [
-        lambda load: load(_PROPERTY_GEN_SYS_PROMPT)
+        lambda load: load("property_generation_system_prompt.j2"),
+        f"\nCreate at most {max_spec_buffers()} run-target buffers; fold further properties into "
+        f"existing ones.",
     ]
 
     added_tools : list[BaseTool] = []
     task_host = TaskHost()
     kit = editing_tools.editing
-    # The same run-root strategy verify_spec uses (see ProjectDirectory): an
-    # empty working copy is read in-situ, a non-empty one against a temporary
-    # materialization whose lifetime is the contributed tool's invocation.
-    project_directory = materializing_project(source.project_root, kit.live.mat)
+    # Run-root strategy (see ProjectDirectory): an empty working copy is read
+    # in-situ, a non-empty one against a temporary materialization whose lifetime
+    # is the contributed tool's invocation.
+    project_directory = materializing_project(kit.live.mat)
 
     @asynccontextmanager
     async def yield_state(
@@ -827,7 +972,7 @@ async def batch_cvl_generation(
         async with project_directory(st.get("vfs") or {}) as run_root:
             yield CVLAuthorState(
                 working_dir=pathlib.Path(run_root),
-                curr_spec=st["curr_spec"],
+                buffers=st.get("buffers") or {},
                 prover_runner=WrappedProverRunner(
                     st["config"],
                     prover_tool.options,
@@ -864,11 +1009,17 @@ async def batch_cvl_generation(
         "source_editing": True,
     })
     protected = focus.protected if focus is not None else ()
-    judge_impl = source_feedback_judge(
-        judge_ctx, _LiveJudgeHost(env, editing), judge_prompt, props
+    # One persistent judge per buffer, bound to that buffer's claimed properties, on its own child
+    # context (memory scoped to the buffer, and kept across a rebuild when the claim changes).
+    judge_host = _LiveJudgeHost(env, editing)
+    source_judges = _PerBufferJudge(
+        build=lambda name, claimed: source_feedback_judge(
+            judge_ctx.child(CacheKey[CVLJudge, CVLJudge](name)), judge_host, judge_prompt, claimed
+        ),
+        properties=props,
     )
     feedback_suite = [
-        EditorAwareFeedbackTool.bind(judge_impl).as_tool("feedback_tool"),
+        EditorAwareFeedbackTool.bind(source_judges).as_tool("feedback_tool"),
         *skip_tools(titles, protected=protected),
     ]
 
@@ -886,8 +1037,18 @@ async def batch_cvl_generation(
     ).with_tools(
         generate_edit_management_tools(ctx, env, editing.store, editing.live)
     )
+    # Multi-buffer authoring is the only mode: the agent writes CVL through the buffer tools and
+    # verifies each run-target buffer with the async submit_buffer / collect_results pair. Guidance-only
+    # CVL tools are bound (no put_cvl/edit_cvl).
+    buffer_authoring: list[BaseTool] = [
+        put_buffer(SourceCVLGenerationState), get_buffer(SourceCVLGenerationState),
+        edit_buffer(SourceCVLGenerationState), remap_buffer(SourceCVLGenerationState),
+        list_buffers(SourceCVLGenerationState), delete_buffer(SourceCVLGenerationState),
+    ]
     task_graph = b.with_tools(
-        static_tools()
+        cvl_guidance_tools()
+    ).with_tools(
+        buffer_authoring
     ).with_tools(
         # Prover-only: the natspec author shares ``static_tools()`` but has no
         # prover and so no counterexample to remediate.
@@ -895,7 +1056,7 @@ async def batch_cvl_generation(
     ).with_tools(
         feedback_suite
     ).with_tools(
-        [prover_tool.lg_tool,
+        [*prover_tool.buffer_tools,
          ExpectRulePassage.as_tool("expect_rule_passage"),
          ExpectRuleFailure.as_tool("expect_rule_failure"),
          give_up_tool(name="give_up", description=_GIVE_UP_DESCRIPTION, label="CVL generation")
@@ -969,6 +1130,7 @@ async def batch_cvl_generation(
                 vfs=restored_vfs,
                 version_history=restored_history,
                 spec_stem=spec_stem,
+                buffers={},
                 plugin_tools=[t.name for inj in tools for t in inj.tools],
             )
         )
@@ -994,8 +1156,7 @@ async def batch_cvl_generation(
             # unformalizable" judgment — it's the budget talking. Keep the agent's account.
             return Curtailed(None, detail=res_state["result"])
         return GaveUp(reason=res_state["result"])
-    d = res_state["curr_spec"]
-    assert d is not None
+    _buffers = res_state.get("buffers") or {}
     applied_edits: list[AppliedEdit] = []
     for edit_id in res_state["version_history"]:
         rec = await editing.store.read(edit_id)
@@ -1009,19 +1170,32 @@ async def batch_cvl_generation(
     # hit (which skips the prover) can still reconstruct certora/confs and retain the link.
 
     assert "vfs" in res_state
+    # Every run link that composes the buffers at their final digests (verdicts spread across
+    # striped/per-buffer runs are all reachable) -> the spec it verified.
+    run_link_specs = completing_run_specs(
+        res_state["prover_history"], res_state.get("buffers") or {},
+        version_history=res_state["version_history"], config=res_state["config"],
+        slug=component.slugified_name,
+    )
     generated = GeneratedCVL(
         commentary=res_state["result"],
-        cvl=d,
         skipped=res_state["skipped"],
-        property_rules=res_state["property_rules"],
+        property_rules=[
+            PropertyRuleMapping(
+                property_title=PropertyTitle(p),
+                rules=[RuleName(rn) for rn in rs],
+                spec_file=buffer_spec_path(component.slugified_name, b.name).relative_to(SPECS_DIR).as_posix(),
+            )
+            for b in run_targets(_buffers) for p, rs in b.property_rules.items()
+        ],
         config=res_state["config"],
-        final_link=res_state.get("prover_link"),
+        # A representative per-component link; the per-rule links live in run_link_specs.
+        final_link=(run_link_specs[0][0] if run_link_specs else None),
+        run_link_specs=run_link_specs,
         vfs=res_state["vfs"],
         applied_edits=applied_edits,
-        covering_links=covering_run_links(
-            res_state["prover_history"],
-            spec_digest(d, res_state["skipped"], res_state["version_history"]),
-        ),
+        spec_files={name: b.cvl for name, b in _buffers.items()},
+        entrypoint_specs=[b.name for b in run_targets(_buffers)],
     )
     if res_state["budget_curtailed"]:
         # Published under lifted gates: hand it back as an explicitly unreliable partial.
