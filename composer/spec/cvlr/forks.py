@@ -50,17 +50,12 @@ _log = logging.getLogger(__name__)
 class ForkOverride:
     """A repository of verification-oriented forks, and the crates in it a target may need.
 
-    ``crates`` is more than one name because a fork is a workspace. ``Certora/anchor`` publishes
-    ``anchor-lang`` and ``anchor-spl`` from one branch, and a target that uses both needs both
-    redirected. Patching only ``anchor-lang`` clears [3006] (the boxing is in
-    ``anchor_lang::error``) and leaves ``anchor-spl`` upstream. Its ``TokenAccount`` and ``Mint``
-    are newtypes with a private field. The fork adds ``new_unchecked`` for those, so a harness can
-    build a token account.
+    ``crates`` is more than one name because a fork is a workspace: ``Certora/anchor`` publishes
+    ``anchor-lang`` and ``anchor-spl`` from one branch. A target has every one of them it uses
+    redirected, or the ones left out stay upstream.
 
-    ``branches`` maps an exact resolved version to a branch name. The names follow a pattern, but a
-    missing branch is the case that matters: deriving one would produce a plausible name, cargo
-    would fail to fetch it, and the error would be about git. Listing the versions that exist
-    makes that case a message about coverage.
+    ``branches`` maps an exact resolved version to a branch name, listed rather than derived; see
+    the module docstring.
     """
 
     repo: str
