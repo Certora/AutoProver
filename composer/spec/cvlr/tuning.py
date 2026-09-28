@@ -27,14 +27,14 @@ A pattern that matches nothing is not an error. The directive does not apply, an
 with a different configuration than the file appears to describe. Most of the care taken below
 is about that failure.
 
-Each file is split into layers. The two starting layers live only under :data:`ENV_DIR`. The
-rest are in the target's ``envs/`` directory::
+Each file is split into layers. The starting layers live only under :data:`ENV_DIR`. The rest
+are in the target's ``envs/`` directory::
 
     <stem>_core.txt           starting configuration: the Rust runtime and the Solana platform
-    <stem>_anchor.txt         starting configuration: the Anchor framework
+    <stem>_anchor.txt         starting configuration: the Anchor framework (inlining only)
     <stem>_<unit>_run.txt     one unit's own directives
-    <stem>.txt                generated from the first two, named by the package
-    <stem>_<unit>.txt         generated from all three, named by one unit's conf
+    <stem>.txt                generated from the starting layers, named by the package
+    <stem>_<unit>.txt         generated from those plus the unit's, named by one unit's conf
 
 When to change which layer:
 
@@ -65,22 +65,18 @@ ENV_DIR = Path(__file__).parent / "envs"
 
 @dataclass(frozen=True)
 class EnvFamily:
-    """One tuning file, split into layers.
-
-    ``core`` and ``anchor`` are the starting layers. The composite is generated from the two.
-    """
+    """One tuning file, split into layers."""
 
     stem: str
     #: What the file's directives are, as prose.
     kind: str
+    #: The starting layers, in composition order, each named ``<stem>_<layer>.txt``.
+    layers: tuple[str, ...]
 
     @property
-    def core(self) -> str:
-        return f"{self.stem}_core.txt"
-
-    @property
-    def anchor(self) -> str:
-        return f"{self.stem}_anchor.txt"
+    def starting(self) -> tuple[str, ...]:
+        """The starting layers' file names, in the order the composite carries them."""
+        return tuple(f"{self.stem}_{layer}.txt" for layer in self.layers)
 
     @property
     def composite(self) -> str:
@@ -97,27 +93,26 @@ class EnvFamily:
         return f"{self.stem}_{unit}_run.txt"
 
     def unit_composite(self, unit: str) -> str:
-        """The file one unit's conf names. Generated from all three layers."""
+        """The file one unit's conf names. Generated from the starting layers and the unit's."""
         return f"{self.stem}_{unit}.txt"
 
 
 #: Which calls the Prover analyzes through their bodies. Declared as ``solana_inlining``.
-INLINING = EnvFamily("cvlr_inlining", kind="Inlining directives")
+INLINING = EnvFamily("cvlr_inlining", kind="Inlining directives", layers=("core", "anchor"))
 #: What the pointer analysis may assume about the memory an opaque call writes. Declared as
 #: ``solana_summaries``.
-SUMMARIES = EnvFamily("cvlr_summaries", kind="Points-to summaries")
+SUMMARIES = EnvFamily("cvlr_summaries", kind="Points-to summaries", layers=("core",))
 ENV_FAMILIES = (INLINING, SUMMARIES)
 
 #: The starting layers — one content for every target, as against the per-unit layer.
-STARTING_ENVS = tuple(name for f in ENV_FAMILIES for name in (f.core, f.anchor))
+STARTING_ENVS = tuple(name for f in ENV_FAMILIES for name in f.starting)
 
 
 _GENERATED_HEADER = """;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Generated — this is the file the build reports to the prover.
 ;;; Rewritten on every run. Composed, in order, from AutoProver's
 ;;; starting configuration:
-;;;   {core}
-;;;   {anchor}
+{layers}
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 """
 
@@ -141,7 +136,7 @@ def compose_env(
     :meth:`EnvFamily.unit_layer`). Those are the project's own symbols, so the dialect leaves them
     alone.
     """
-    header = _GENERATED_HEADER.format(core=family.core, anchor=family.anchor)
+    header = _GENERATED_HEADER.format(layers="\n".join(f";;;   {name}" for name in family.starting))
     parts = [header]
     if dialect.aliases:
         # Said in the file, so a reader comparing it with the starting layers can see that paths
@@ -150,10 +145,7 @@ def compose_env(
             f";;; Platform paths rewritten for this target's generation "
             f"({len(dialect.aliases)} aliases) — see composer/spec/cvlr/env_paths.py\n"
         )
-    parts += [
-        starting_env(family.core, dialect),
-        starting_env(family.anchor, dialect),
-    ]
+    parts += [starting_env(name, dialect) for name in family.starting]
     if unit_layer.strip():
         parts.append(unit_layer)
     return "\n".join(p.rstrip("\n") for p in parts) + "\n"
