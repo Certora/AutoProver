@@ -55,7 +55,7 @@ class FakeToolchain:
         self._prep_facts = prep_facts
         self.calls: list[dict[str, Any]] = []
 
-    def source_unit(self, _source: SourceFields) -> dict[str, Any]:
+    async def source_unit(self, _source: SourceFields) -> dict[str, Any]:
         return self._source_unit
 
     async def prepare(self, plan, input, *, source, sandbox, timeout_s) -> dict[str, Any]:
@@ -150,7 +150,7 @@ async def test_a_plan_needing_an_unregistered_toolchain_fails_loudly(tmp_path, m
 
 async def test_the_source_unit_comes_from_the_chains_toolchain(tmp_path, monkeypatch):
     _register(monkeypatch, source_unit=SOURCE_UNIT)
-    assert source_unit_of(SOLANA, _source(tmp_path)) == SOURCE_UNIT
+    assert await source_unit_of(SOLANA, _source(tmp_path)) == SOURCE_UNIT
 
 
 async def test_an_unresolved_source_unit_is_empty_rather_than_an_error(tmp_path, monkeypatch):
@@ -158,8 +158,8 @@ async def test_an_unresolved_source_unit_is_empty_rather_than_an_error(tmp_path,
     # such unit (Solidity), and a layout the toolchain couldn't read — because the wheel does the
     # same thing with all three: fall back to its own convention.
     monkeypatch.delitem(PROJECT_TOOLCHAINS, "solana", raising=False)
-    assert source_unit_of(SOLANA, _source(tmp_path)) == {}
-    assert source_unit_of(EVM, _source(tmp_path)) == {}
+    assert await source_unit_of(SOLANA, _source(tmp_path)) == {}
+    assert await source_unit_of(EVM, _source(tmp_path)) == {}
 
     _register(monkeypatch, source_unit={})
-    assert source_unit_of(SOLANA, _source(tmp_path)) == {}
+    assert await source_unit_of(SOLANA, _source(tmp_path)) == {}

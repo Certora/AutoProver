@@ -263,7 +263,7 @@ async def rust_entry_point(
         program=str(contract_name),
         source_path=relative_path,
         system_doc=args.system_doc or None,
-        source_unit=source_unit_of(app.ecosystem, init_source),
+        source_unit=await source_unit_of(app.ecosystem, init_source),
         declared=declared_args,
     )
 
