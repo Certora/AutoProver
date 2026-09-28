@@ -11,7 +11,15 @@ from pathlib import Path
 import pytest
 
 from composer.cargo.manifest import Dependency, MalformedManifest, parse_manifest
-from composer.cargo.metadata import CargoMetadataJson, Workspace, parse_metadata
+from composer.cargo.metadata import (
+    CargoMetadataJson,
+    GitBranch,
+    GitRev,
+    GitSource,
+    GitTag,
+    Workspace,
+    parse_metadata,
+)
 from composer.prover import conf as prover_conf
 from composer.spec.cvlr import conf as cvlr_conf
 from composer.spec.cvlr.crates import Absent, resolve
@@ -112,6 +120,37 @@ def test_an_older_cargo_that_reports_only_kind_still_names_the_lib_target():
     lend = _workspace(payload).member("example-lending")
     assert lend is not None and lend.lib is not None
     assert lend.lib.builds_shared_object
+
+
+def test_a_git_source_is_split_into_repository_reference_and_commit():
+    source = GitSource.parse(
+        "git+https://github.com/Certora/anchor.git?branch=certora-v0.31.1#3ebe7595"
+    )
+    assert source.repository == "https://github.com/Certora/anchor.git"
+    assert source.reference == GitBranch("certora-v0.31.1")
+    assert source.commit == "3ebe7595"
+
+
+@pytest.mark.parametrize(
+    ("query", "reference"),
+    [("?tag=v1", GitTag("v1")), ("?rev=abc", GitRev("abc")), ("", None)],
+    ids=["tag", "rev", "default-branch"],
+)
+def test_every_git_reference_cargo_spells_is_recognized(query, reference):
+    source = GitSource.parse(f"git+https://github.com/o/r{query}#deadbeef")
+    assert source.reference == reference
+    assert source.repository == "https://github.com/o/r"
+
+
+def test_one_repository_is_recognized_across_its_spellings():
+    source = GitSource.parse("git+ssh://git@github.com/Certora/Anchor#3ebe7595")
+    assert source.is_from("https://github.com/certora/anchor.git")
+    assert source.is_from("https://github.com/Certora/anchor/")
+
+
+def test_a_repository_whose_name_extends_another_is_a_different_repository():
+    source = GitSource.parse("git+https://github.com/Certora/anchor-extras.git#3ebe7595")
+    assert not source.is_from("https://github.com/Certora/anchor.git")
 
 
 def test_the_owning_crate_is_the_deepest_one_containing_the_file():

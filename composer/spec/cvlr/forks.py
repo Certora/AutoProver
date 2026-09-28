@@ -96,9 +96,7 @@ class AlreadySourced:
 
     @property
     def points_at_fork(self) -> bool:
-        return isinstance(self.source, GitSource) and _repo_key(self.fork_repo) in _repo_key(
-            self.source.spelling
-        )
+        return isinstance(self.source, GitSource) and self.source.is_from(self.fork_repo)
 
     @property
     def origin(self) -> str:
@@ -133,16 +131,6 @@ class AlreadyRedirected:
 #: What the planner reports when a crate is already in the manifest's patch table but not yet in the
 #: resolved graph — the graph is a snapshot, and it can predate the table.
 type LeftAlone = AlreadySourced | AlreadyRedirected
-
-
-def _repo_key(url: str) -> str:
-    """A git URL reduced to the part two spellings of one repository share.
-
-    ``cargo metadata`` reports a patched dependency as
-    ``git+https://github.com/Certora/anchor.git?branch=certora-v0.31.1#<sha>``. The comparison
-    drops the scheme prefix, the query, and the fragment.
-    """
-    return url.removeprefix("git+").split("?")[0].split("#")[0].removesuffix(".git").lower()
 
 
 @dataclass(frozen=True)

@@ -20,6 +20,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
@@ -105,11 +106,69 @@ class RegistrySource:
 
 
 @dataclass(frozen=True)
+class GitBranch:
+    name: str
+
+
+@dataclass(frozen=True)
+class GitTag:
+    name: str
+
+
+@dataclass(frozen=True)
+class GitRev:
+    rev: str
+
+
+type GitReference = GitBranch | GitTag | GitRev
+
+
+@dataclass(frozen=True)
 class GitSource:
-    """A package from a git repository, spelled
-    ``git+<url>?branch=<branch>#<commit>`` by cargo."""
+    """A package from a git repository.
+
+    cargo spells it ``git+<url>[?branch=<b>|?tag=<t>|?rev=<r>][#<commit>]``.
+    """
 
     spelling: str
+    #: The repository URL as the manifest named it, without the reference or the commit.
+    repository: str
+    #: ``None`` when the manifest names no reference and cargo follows the default branch.
+    reference: GitReference | None
+    #: The commit the build resolved to.
+    commit: str | None
+
+    @classmethod
+    def parse(cls, spelling: str) -> "GitSource":
+        parts = urlsplit(spelling.removeprefix("git+"))
+        query = parse_qs(parts.query)
+        reference: GitReference | None = None
+        if branch := query.get("branch"):
+            reference = GitBranch(branch[0])
+        elif tag := query.get("tag"):
+            reference = GitTag(tag[0])
+        elif rev := query.get("rev"):
+            reference = GitRev(rev[0])
+        return cls(
+            spelling=spelling,
+            repository=urlunsplit(parts._replace(query="", fragment="")),
+            reference=reference,
+            commit=parts.fragment or None,
+        )
+
+    def is_from(self, repository: str) -> bool:
+        """Whether this is ``repository``, however the two URLs spell it.
+
+        The scheme, a user, a trailing ``.git`` or ``/``, and case are ignored: ``https://`` and
+        ``ssh://git@`` reach the same repository, and GitHub paths are case-insensitive.
+        """
+        return _repository_key(self.repository) == _repository_key(repository)
+
+
+def _repository_key(url: str) -> tuple[str, str]:
+    parts = urlsplit(url)
+    path = parts.path.rstrip("/").removesuffix(".git")
+    return (parts.hostname or "", path.lower())
 
 
 @dataclass(frozen=True)
@@ -129,7 +188,7 @@ def _package_source(spelling: str | None) -> PackageSource | None:
     if spelling.startswith("registry+"):
         return RegistrySource(spelling)
     if spelling.startswith("git+"):
-        return GitSource(spelling)
+        return GitSource.parse(spelling)
     return OtherSource(spelling)
 
 

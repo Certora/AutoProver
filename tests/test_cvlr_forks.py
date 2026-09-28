@@ -125,7 +125,7 @@ def test_a_project_already_patched_to_the_fork_is_recognized_as_such(tmp_path):
     patched = _package(
         "anchor-lang",
         "0.31.1",
-        source=GitSource(
+        source=GitSource.parse(
             "git+https://github.com/Certora/anchor.git?branch=certora-v0.31.1#3ebe7595"
         ),
     )
@@ -144,7 +144,7 @@ def test_a_project_sourcing_anchor_from_some_other_fork_is_left_alone_and_said_s
     other = _package(
         "anchor-lang",
         "0.31.1",
-        source=GitSource("git+https://github.com/someone/anchor.git?branch=main"),
+        source=GitSource.parse("git+https://github.com/someone/anchor.git?branch=main"),
     )
     plan = plan_overrides(_workspace(tmp_path, other))
     (already,) = plan.already
