@@ -63,10 +63,11 @@ crate as long as the *type* is this crate's own, which is true of everything you
 genuinely cannot receive — and it is also how a rule becomes vacuous, passing because no state
 satisfies its preconditions at all. Two contradicting assumptions make every assertion true.
 
-So: assume the *least* you can get away with. Vacuity is reported rather than mistaken for success
-whenever the conf sets `rule_sanity` — check the conf your run was given, because one that omits it
-gets no such report and a vacuous rule reads as a clean pass. If a rule passes immediately and you
-are surprised, check for vacuity before believing it.
+So: assume the *least* you can get away with. Every conf this backend builds sets `rule_sanity`,
+so a rule whose assumptions leave no state at all is reported as vacuous rather than as a pass. That
+check catches only the extreme. Assumptions that leave a sliver of states pass it and still cover
+almost nothing, so if a rule passes immediately and you are surprised, read what it assumed before
+believing it.
 
 ## Nondeterminism is the quantifier
 
