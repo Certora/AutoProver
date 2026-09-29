@@ -271,6 +271,22 @@ def test_a_package_that_builds_no_loadable_object_is_refused_rather_than_patched
     assert not (tmp_path / "src" / "certora").exists()
 
 
+def test_a_library_source_that_does_not_exist_is_refused_rather_than_created(tmp_path):
+    # cargo metadata reports `[lib] path = "src/missing.rs"` without checking it. Appending the
+    # harness declaration there would create a lib with no program in it, and it would build.
+    workspace, package = _project(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
+    assert package.lib is not None
+    missing = replace(package, lib=replace(package.lib, src_path=tmp_path / "src" / "missing.rs"))
+    plan = plan_scaffold(workspace, missing, SOLANA)
+    assert [b.problem for b in plan.blocked] == [
+        "prog's library source, src/missing.rs, does not exist, so there is no crate to add the "
+        "harness to"
+    ]
+    with pytest.raises(ScaffoldBlocked):
+        apply(plan, workspace.root)
+    assert not (tmp_path / "src" / "missing.rs").exists()
+
+
 def test_a_certora_feature_that_means_something_else_is_refused(tmp_path):
     # A project can legitimately have a feature by that name; extending it would change what their
     # build does. Distinguishable from an already-set-up project only by whether CVLR is a dep.

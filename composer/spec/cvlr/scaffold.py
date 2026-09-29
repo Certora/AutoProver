@@ -743,8 +743,22 @@ def _plan_harness(
 
     if package.lib is not None:
         lib_rel = _project_relative(package.lib.src_path, package.root)
-        source = package.lib.src_path.read_text() if package.lib.src_path.is_file() else ""
-        if _MOD_CERTORA.search(source):
+        # cargo metadata reports a `[lib] path` without checking the file exists.
+        if not package.lib.src_path.is_file():
+            plan.add_blocked(
+                Blocked(
+                    path=relative / "Cargo.toml",
+                    problem=(
+                        f"{package.name}'s library source, {relative / lib_rel}, does not exist, "
+                        f"so there is no crate to add the harness to"
+                    ),
+                    resolution=(
+                        "point `[lib] path` at the program's source, or scaffold the package that "
+                        "has it"
+                    ),
+                )
+            )
+        elif _MOD_CERTORA.search(package.lib.src_path.read_text()):
             plan.add_satisfied(f"{relative / lib_rel} already declares the harness module")
         else:
             plan.add_change(
