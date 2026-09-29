@@ -381,18 +381,18 @@ def _check_platform(workspace: Workspace, reference: ChainReference, plan: _Plan
                 Blocked(
                     path=Path("Cargo.toml"),
                     problem=(
-                        f"this project builds {witness.name} {builds}, but the CVLR releases the "
-                        f"reference set names are bound to {reference.platform.label} — and each "
+                        f"this project builds {witness.name} {builds}, but the CVLR line this "
+                        f"build supports, {reference.line()}, is bound to "
+                        f"{reference.platform.label} — and each "
                         f"generation has its own AccountInfo type, so the pairing does not "
                         f"compile rather than merely warning. The scaffold itself would still "
                         f"build; what fails is the first authored rule that hands one of this "
                         f"project's accounts to a CVLR helper"
                     ),
                     resolution=(
-                        f"either move the project to {witness.name} {witness.line}, or move the "
-                        f"reference set (composer/spec/cvlr/reference.py) to the CVLR line that "
-                        f"matches {builds} — picking one of those is a decision about the "
-                        f"project, not about the scaffold"
+                        f"move the project to {witness.name} {witness.line}. This build "
+                        f"supports no other platform generation, so a project that stays on "
+                        f"{builds} needs an AutoProver build on a CVLR line bound to it"
                     ),
                 )
             )
@@ -472,9 +472,8 @@ def _check_pins(
             f"pins, the specializations and the env files the scaffold writes are all that line's"
         )
         fix = (
-            f"either move the project to {release.name} {release.version}, or move the reference "
-            f"set (composer/spec/cvlr/reference.py) to the line this project is on — which line "
-            f"is supported is not a scaffold's call, and not a per-project one either"
+            f"move the project to {release.name} {release.version}. A project that stays on "
+            f"another release needs an AutoProver build pinned to that CVLR line"
         )
         off = [c.version for c in workspace.resolved(release.name) if c.version != release.version]
         if off:
@@ -514,9 +513,9 @@ def _check_pins(
                             f"pass a version it cannot see"
                         ),
                         resolution=(
-                            f"declare {release.name} as a registry dependency at "
-                            f"{release.version}, or move the reference set "
-                            f"(composer/spec/cvlr/reference.py) to whatever that checkout is"
+                            f"declare {release.name} {release.version} as a registry "
+                            f"dependency. A checkout of another release needs an AutoProver "
+                            f"build pinned to that CVLR line"
                         ),
                     )
                 )

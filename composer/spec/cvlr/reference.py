@@ -175,6 +175,13 @@ class ChainReference:
     specializations: tuple[CrateRelease, ...] = ()
     unpublished: tuple[UnpublishedCapability, ...] = ()
 
+    def line(self) -> str:
+        """The supported line as a refusal names it to a project author: core and chain crate."""
+        return (
+            f"{self.core.name} {self.core.version} with "
+            f"{self.chain_crate.name} {self.chain_crate.version}"
+        )
+
     def crates(self) -> tuple[CrateRelease, ...]:
         """Every CVLR crate in the reference set: the line this build supports."""
         return (self.core, self.chain_crate, *self.specializations)

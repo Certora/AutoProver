@@ -420,6 +420,43 @@ def test_a_cvlr_dependency_with_no_readable_version_is_refused(tmp_path):
     assert any("git dependency" in b.problem for b in plan.blocked)
 
 
+@pytest.mark.parametrize(
+    "manifest, overrides",
+    [
+        pytest.param(STANDALONE, {"platform": "1.18.26"}, id="platform"),
+        pytest.param(
+            ON_AN_OLDER_LINE,
+            {"cvlr_resolved": {"cvlr": "0.4.1", "cvlr-solana": "0.4.5"}},
+            id="pin",
+        ),
+        pytest.param(
+            STANDALONE.replace(
+                "[dependencies]\nsolana-program",
+                '[dependencies]\ncvlr = { git = "https://github.com/Certora/cvlr" }\n'
+                "solana-program",
+            ),
+            {},
+            id="unpinned",
+        ),
+    ],
+)
+def test_a_line_refusal_is_put_in_terms_the_project_author_can_act_on(
+    tmp_path, manifest, overrides
+):
+    """The reader is whoever owns the project. AutoProver's own source is not theirs to edit, so
+    a refusal names the release this build supports and what to change in the project."""
+    plan, _ = _plan(tmp_path, manifest=manifest, workspace_manifest=manifest, **overrides)
+    assert plan.blocked
+    for b in plan.blocked:
+        text = f"{b.problem} {b.resolution}"
+        assert "composer/" not in text and "reference set" not in text, text
+        names_a_release = any(f"{c.name} {c.version}" in b.resolution for c in SOLANA.crates())
+        names_a_platform = any(
+            f"{w.name} {w.line}" in b.resolution for w in SOLANA.platform.witnesses
+        )
+        assert names_a_release or names_a_platform, b.resolution
+
+
 def test_a_project_already_on_the_pinned_release_is_not_refused(tmp_path):
     # The idempotence case, and the one the gate must not catch: `=0.6.1` is what the scaffold
     # itself writes, and a bare `0.6.1` is the same release written by hand.
