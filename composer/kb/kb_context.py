@@ -208,17 +208,25 @@ CVLR_RECIPES = RecipeSet[CvlrChannel](
     index_template=KB_INDEX_TEMPLATE,
 )
 
-CVLR_BUNDLE = KnowledgeBundle[CvlrChannel](
-    label="CVLR",
-    recipes=CVLR_RECIPES,
-    specs=(
-        ContextSpec(
-            title="CVLR and the Certora Solana Prover",
-            loader=_resource_file_loader("cvlr_baseline_facts.md"),
-        ),
+_CVLR_SPECS = (
+    ContextSpec(
+        title="CVLR and the Certora Solana Prover",
+        loader=_resource_file_loader("cvlr_baseline_facts.md"),
     ),
 )
+
+#: For the agents that hold ``get_cvlr_recipe``: the author and the judge.
+CVLR_BUNDLE = KnowledgeBundle[CvlrChannel](label="CVLR", recipes=CVLR_RECIPES, specs=_CVLR_SPECS)
+
+#: The same facts without the recipe index, for a reader that cannot retrieve a recipe. The index
+#: says "retrieve the pointed file before acting", and its channels name the author's tools, so for
+#: any other reader it is an instruction it cannot follow about tools it does not have.
+CVLR_FACTS_BUNDLE = KnowledgeBundle[CvlrChannel](label="CVLR", specs=_CVLR_SPECS)
 
 
 def with_cvlr_context(prompt: "PromptInput") -> "PromptInput":
     return with_context(CVLR_BUNDLE, prompt)
+
+
+def with_cvlr_facts(prompt: "PromptInput") -> "PromptInput":
+    return with_context(CVLR_FACTS_BUNDLE, prompt)

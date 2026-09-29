@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 from graphcore.graph import Builder, FlowInput
 from graphcore.tools.schemas import WithInjectedId
 
-from composer.kb.kb_context import with_cvlr_context
+from composer.kb.kb_context import with_cvlr_facts
 from composer.spec.agent_index import (
     AgentIndex,
     AgentIndexConfig,
@@ -115,7 +115,7 @@ def _build_research_graph(
         .with_tools(corpus_tools)
         .with_tools(get_rough_draft_tools(_CvlrResearchST))
         .inject(lambda g: sys_templ.render_to(g.with_sys_prompt_template))
-        .with_initial_prompt(with_cvlr_context("Answer the following question"))
+        .with_initial_prompt(with_cvlr_facts("Answer the following question"))
         .compile_async()
     )
 
