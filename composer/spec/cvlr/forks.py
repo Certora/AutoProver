@@ -158,7 +158,6 @@ class ForkPlan:
     """What redirecting this target at the forks would change. Empty when nothing needs it."""
 
     overrides: tuple[Override, ...] = ()
-    blocked: tuple[Blocked, ...] = ()
     #: Crates the target does not resolve. Kept in the plan: "Anchor was not replaced" is what a
     #: reader of a [3006] failure needs, and omitting it looks like success.
     inapplicable: tuple[str, ...] = ()
@@ -176,12 +175,15 @@ class ForkPlan:
         ]
 
 
-class ForkBlocked(RuntimeError):
-    """A blocked plan was applied. Carries every reason, not the first."""
+@dataclass(frozen=True)
+class ForkRefused:
+    """Why this target cannot be redirected at the forks: every reason, not the first.
 
-    def __init__(self, blocked: tuple[Blocked, ...]) -> None:
-        self.blocked = blocked
-        super().__init__("; ".join(f"{b.crate}: {b.problem}" for b in blocked))
+    Nothing is redirected. Replacing one crate while another stays upstream leaves a build whose
+    failure has two causes.
+    """
+
+    blocked: tuple[Blocked, ...]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -256,7 +258,7 @@ def plan_overrides(
     workspace: Workspace,
     overrides: tuple[ForkOverride, ...] = SOLANA_OVERRIDES,
     already_redirected: frozenset[str] = frozenset(),
-) -> ForkPlan:
+) -> ForkPlan | ForkRefused:
     """What redirecting ``workspace`` at the forks would change, without changing anything.
 
     Each crate lands in one of four outcomes:
@@ -270,6 +272,8 @@ def plan_overrides(
     * blocked — a version the fork has no branch for. Skipping it would leave the boxed error
       in the build.
     * overridden — redirected at the fork.
+
+    Any blocked crate makes the whole result a :class:`ForkRefused`.
     """
     resolved_overrides: list[Override] = []
     blocked: list[Blocked] = []
@@ -334,9 +338,9 @@ def plan_overrides(
                 )
             )
 
-    return ForkPlan(
-        tuple(resolved_overrides), tuple(blocked), tuple(inapplicable), tuple(already)
-    )
+    if blocked:
+        return ForkRefused(tuple(blocked))
+    return ForkPlan(tuple(resolved_overrides), tuple(inapplicable), tuple(already))
 
 
 _NOT_DEPLOYED = (
@@ -350,13 +354,10 @@ def patch_tables(plan: ForkPlan) -> tuple[tuple[Override, AddTable], ...]:
     """The ``[patch.crates-io.<crate>]`` table this plan adds to the workspace manifest for each
     override.
 
-    A blocked plan raises instead of adding some of them. Replacing one of two crates leaves a
-    build whose failure has two causes. Each fork's reason is written once, in the table of its
+    Each fork's reason is written once, in the table of its
     first crate: crates from one fork share one reason, and repeating it under each reads like
     two unrelated edits. The first table also says what these replacements are.
     """
-    if plan.blocked:
-        raise ForkBlocked(plan.blocked)
     tables: list[tuple[Override, AddTable]] = []
     preamble = [Comment(line) for line in _wrapped(_NOT_DEPLOYED)] + [Comment("")]
     for why in dict.fromkeys(o.why for o in plan.overrides):

@@ -640,9 +640,9 @@ def _plan_package_manifest(
     ``inherit`` writes each dependency as ``workspace = true``. It is set when the root manifest
     has a ``[workspace]``, where :func:`_plan_workspace_manifest` puts the pins.
 
-    Two things stop the scaffold here: a package that builds no ``cdylib``, since the prover has no object to read, and a
-    ``certora`` feature that exists while no CVLR crate is a dependency, since the name then
-    means something the scaffold should not extend.
+    Two things stop the scaffold here: a package that builds no ``cdylib``, since the prover has
+    no object to read, and a ``certora`` feature that exists while no CVLR crate is a dependency,
+    since the name then means something the scaffold should not extend.
     """
     manifest_rel = relative / "Cargo.toml"
     manifest = plan.read(manifest_rel)
@@ -784,21 +784,22 @@ def _plan_forks(workspace: Workspace, plan: _PlanBuilder) -> None:
     source.
     """
     path = Path("Cargo.toml")
-    overrides = forks.plan_overrides(
+    match forks.plan_overrides(
         workspace, already_redirected=forks.already_patched(plan.read(path))
-    )
-    if overrides.blocked:
-        for b in overrides.blocked:
-            plan.add_blocked(Blocked(path=path, problem=b.problem, resolution=b.resolution))
-        return
-    for override, table in forks.patch_tables(overrides):
-        plan.add_manifest_edit(
-            path,
-            table,
-            f"verify {override.crate} {override.version} against {override.branch} of the fork",
-        )
-    for note in overrides.notes():
-        plan.add_satisfied(note)
+    ):
+        case forks.ForkRefused(blocked):
+            for b in blocked:
+                plan.add_blocked(Blocked(path=path, problem=b.problem, resolution=b.resolution))
+        case forks.ForkPlan() as overrides:
+            for override, table in forks.patch_tables(overrides):
+                plan.add_manifest_edit(
+                    path,
+                    table,
+                    f"verify {override.crate} {override.version} against {override.branch} of "
+                    f"the fork",
+                )
+            for note in overrides.notes():
+                plan.add_satisfied(note)
 
 
 def _plan_gitignore(workspace: Workspace, plan: _PlanBuilder) -> None:

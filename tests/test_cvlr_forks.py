@@ -24,7 +24,8 @@ from composer.cargo.metadata import (
 from composer.spec.cvlr.forks import (
     ANCHOR_FORK,
     SOLANA_OVERRIDES,
-    ForkBlocked,
+    ForkPlan,
+    ForkRefused,
     already_patched,
     patch_tables,
     plan_overrides,
@@ -53,8 +54,19 @@ def _package(name: str, version: str, source: PackageSource | None = REGISTRY) -
 _ROOT = '[workspace]\nmembers = ["."]\n'
 
 
-def _added(plan) -> str:
+def _planned(plan: ForkPlan | ForkRefused) -> ForkPlan:
+    assert isinstance(plan, ForkPlan), plan
+    return plan
+
+
+def _refused(plan: ForkPlan | ForkRefused) -> ForkRefused:
+    assert isinstance(plan, ForkRefused), plan
+    return plan
+
+
+def _added(plan: ForkPlan | ForkRefused) -> str:
     """The workspace manifest ``_ROOT`` once ``plan``'s overrides are added to it."""
+    plan = _planned(plan)
     manifest = ManifestEditor(_ROOT)
     for _, table in patch_tables(plan):
         manifest.apply(table, note="added by AutoProver")
@@ -66,8 +78,7 @@ def _added(plan) -> str:
 
 
 def test_a_covered_anchor_version_is_pointed_at_its_branch(tmp_path):
-    plan = plan_overrides(_workspace(tmp_path, _package("anchor-lang", "0.31.1")))
-    assert plan.blocked == ()
+    plan = _planned(plan_overrides(_workspace(tmp_path, _package("anchor-lang", "0.31.1"))))
     (override,) = plan.overrides
     assert override.branch == "certora-v0.31.1"
     assert override.repo == "https://github.com/Certora/anchor.git"
@@ -97,7 +108,7 @@ def test_a_branch_is_named_rather_than_a_commit_pinned(tmp_path):
 
 @pytest.mark.parametrize("version", list(ANCHOR_FORK.branches))
 def test_every_declared_version_maps_to_a_branch(tmp_path, version):
-    plan = plan_overrides(_workspace(tmp_path, _package("anchor-lang", version)))
+    plan = _planned(plan_overrides(_workspace(tmp_path, _package("anchor-lang", version))))
     assert plan.overrides and plan.overrides[0].branch == f"certora-v{version}"
 
 
@@ -108,21 +119,19 @@ def test_every_declared_version_maps_to_a_branch(tmp_path, version):
 def test_an_uncovered_version_blocks_rather_than_leaving_the_boxing_in(tmp_path):
     """The fork covers 0.30.1 and not 0.30.0, which is why versions are listed. A derived name
     would send cargo after a branch that does not exist, and the error would be about git."""
-    plan = plan_overrides(_workspace(tmp_path, _package("anchor-lang", "0.30.0")))
-    assert plan.overrides == ()
-    assert len(plan.blocked) == 1
-    assert "0.30.0" in plan.blocked[0].problem
-    assert "do not verify against the unforked crate" in plan.blocked[0].resolution
-    with pytest.raises(ForkBlocked):
-        _added(plan)
+    refused = _refused(plan_overrides(_workspace(tmp_path, _package("anchor-lang", "0.30.0"))))
+    (blocked,) = refused.blocked
+    assert "0.30.0" in blocked.problem
+    assert "do not verify against the unforked crate" in blocked.resolution
 
 
 def test_a_project_that_already_sources_anchor_itself_is_left_alone(tmp_path):
     """A path dependency means the project already decided where Anchor comes from. Overriding
     it would replace that choice."""
-    plan = plan_overrides(_workspace(tmp_path, _package("anchor-lang", "0.31.1", source=None)))
+    plan = _planned(
+        plan_overrides(_workspace(tmp_path, _package("anchor-lang", "0.31.1", source=None)))
+    )
     assert plan.overrides == ()
-    assert plan.blocked == ()
     assert [a.crate for a in plan.already] == ["anchor-lang"]
     assert not plan.already[0].points_at_fork
 
@@ -140,9 +149,8 @@ def test_a_project_already_patched_to_the_fork_is_recognized_as_such(tmp_path):
             "git+https://github.com/Certora/anchor.git?branch=certora-v0.31.1#3ebe7595"
         ),
     )
-    plan = plan_overrides(_workspace(tmp_path, patched))
+    plan = _planned(plan_overrides(_workspace(tmp_path, patched)))
     assert plan.overrides == ()
-    assert plan.blocked == ()
     (already,) = plan.already
     assert already.points_at_fork
     assert "nothing to do" in already.describe()
@@ -157,7 +165,7 @@ def test_a_project_sourcing_anchor_from_some_other_fork_is_left_alone_and_said_s
         "0.31.1",
         source=GitSource.parse("git+https://github.com/someone/anchor.git?branch=main"),
     )
-    plan = plan_overrides(_workspace(tmp_path, other))
+    plan = _planned(plan_overrides(_workspace(tmp_path, other)))
     (already,) = plan.already
     assert not already.points_at_fork
     assert "someone/anchor" in already.describe()
@@ -167,16 +175,19 @@ def test_a_project_sourcing_anchor_from_some_other_fork_is_left_alone_and_said_s
 def test_a_crate_resolved_twice_is_blocked_rather_than_half_redirected(tmp_path):
     """One ``[patch.crates-io]`` entry replaces one semver-compatible release. The other copy
     would stay upstream and keep [3006] in the build."""
-    plan = plan_overrides(
-        _workspace(tmp_path, _package("anchor-lang", "0.29.0"), _package("anchor-lang", "0.31.1"))
+    refused = _refused(
+        plan_overrides(
+            _workspace(
+                tmp_path, _package("anchor-lang", "0.29.0"), _package("anchor-lang", "0.31.1")
+            )
+        )
     )
-    assert not plan.overrides
-    (blocked,) = [b for b in plan.blocked if b.crate == "anchor-lang"]
+    (blocked,) = [b for b in refused.blocked if b.crate == "anchor-lang"]
     assert "0.29.0" in blocked.problem and "0.31.1" in blocked.problem
 
 
 def test_a_target_that_is_not_an_anchor_program_needs_nothing(tmp_path):
-    plan = plan_overrides(_workspace(tmp_path, _package("solana-program", "2.3.0")))
+    plan = _planned(plan_overrides(_workspace(tmp_path, _package("solana-program", "2.3.0"))))
     assert not plan
     assert _added(plan) == _ROOT
     # Reported rather than dropped: "Anchor was not replaced" is what a reader of a [3006] failure
@@ -216,9 +227,11 @@ def test_the_anchor_fork_covers_both_crates_it_publishes(tmp_path):
     are newtypes with a private field. The fork adds ``new_unchecked`` for those, so a harness
     can build a token account. Both crates are redirected to the same branch."""
     assert set(ANCHOR_FORK.crates) == {"anchor-lang", "anchor-spl"}
-    plan = plan_overrides(
-        _workspace(
-            tmp_path, _package("anchor-lang", "0.31.1"), _package("anchor-spl", "0.31.1")
+    plan = _planned(
+        plan_overrides(
+            _workspace(
+                tmp_path, _package("anchor-lang", "0.31.1"), _package("anchor-spl", "0.31.1")
+            )
         )
     )
     assert {o.crate: o.branch for o in plan.overrides} == {
@@ -245,7 +258,7 @@ def test_one_forks_two_crates_share_one_reason_in_the_manifest(tmp_path):
 def test_the_fixed_fork_is_planned_from_the_version_the_corpus_pins(tmp_path):
     """The known release is ``fixed`` 1.23.1 on ``certora-v1.23.1``. One branch is listed because
     that is the release the fork is known to cover."""
-    plan = plan_overrides(_workspace(tmp_path, _package("fixed", "1.23.1")))
+    plan = _planned(plan_overrides(_workspace(tmp_path, _package("fixed", "1.23.1"))))
     (override,) = plan.overrides
     assert override.repo == "https://github.com/Certora/fixed.git"
     assert override.branch == "certora-v1.23.1"
@@ -288,9 +301,11 @@ def test_a_crate_the_table_already_names_is_left_alone(tmp_path):
     """The graph is what cargo computed, but a snapshot taken before the patch table was applied
     still shows the registry. A second entry for a key TOML already has is a manifest cargo
     refuses."""
-    plan = plan_overrides(
-        _workspace(tmp_path, _package("anchor-lang", "0.31.1")),
-        already_redirected=frozenset({"anchor-lang"}),
+    plan = _planned(
+        plan_overrides(
+            _workspace(tmp_path, _package("anchor-lang", "0.31.1")),
+            already_redirected=frozenset({"anchor-lang"}),
+        )
     )
     assert plan.overrides == ()
     (already,) = plan.already
