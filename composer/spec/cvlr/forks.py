@@ -215,8 +215,8 @@ ANCHOR_FORK = ForkOverride(
         "hard to analyze."
     ),
     upstream_failure=(
-        "its error type boxes a stack value, which the Prover rejects as [3006] in the entry "
-        "point and in every handler that returns an error"
+        "upstream Anchor's error type boxes a stack value, which the Prover rejects as [3006] in "
+        "the entry point and in every handler that returns an error"
     ),
 )
 
@@ -232,8 +232,8 @@ FIXED_FORK = ForkOverride(
         "From<u64> for FixedU64, which verification code needs to build fixed-point values."
     ),
     upstream_failure=(
-        "it lacks the conversions, such as From<u64> for FixedU64, that harness code uses to "
-        "build fixed-point values, so that code does not compile"
+        "upstream fixed lacks the conversions, such as From<u64> for FixedU64, that harness code "
+        "uses to build fixed-point values, so that code does not compile"
     ),
 )
 
@@ -335,7 +335,8 @@ def plan_overrides(
                         resolution=(
                             f"pin {crate} to a covered version, or ask for a branch covering "
                             f"{resolved.version} on the fork and add it here — do not verify "
-                            f"against the unforked crate: {fork.upstream_failure}"
+                            f"against {crate} {resolved.version} from crates.io: "
+                            f"{fork.upstream_failure}"
                         ),
                     )
                 )

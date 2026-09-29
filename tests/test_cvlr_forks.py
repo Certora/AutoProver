@@ -122,7 +122,7 @@ def test_an_uncovered_version_blocks_rather_than_leaving_the_boxing_in(tmp_path)
     refused = _refused(plan_overrides(_workspace(tmp_path, _package("anchor-lang", "0.30.0"))))
     (blocked,) = refused.blocked
     assert "0.30.0" in blocked.problem
-    assert "do not verify against the unforked crate" in blocked.resolution
+    assert "do not verify against anchor-lang 0.30.0 from crates.io" in blocked.resolution
 
 
 @pytest.mark.parametrize("fork", SOLANA_OVERRIDES, ids=lambda f: f.crates[0])
@@ -130,6 +130,7 @@ def test_an_uncovered_version_names_that_forks_failure_not_another(tmp_path, for
     """``fixed`` has no boxing; skipping its fork costs the harness its conversions."""
     refused = _refused(plan_overrides(_workspace(tmp_path, _package(fork.crates[0], "0.0.1"))))
     (blocked,) = refused.blocked
+    assert f"against {fork.crates[0]} 0.0.1 from crates.io" in blocked.resolution
     assert fork.upstream_failure in blocked.resolution
     for other in SOLANA_OVERRIDES:
         if other is not fork:
