@@ -1,8 +1,8 @@
 #!/bin/bash
 # Ingest the two CVLR corpora.
 #
-#   cvlr_kb      the Solana manual (solana.html, from gen_docs.sh) plus any practice manifests
-#                found. Prose, hand-written, allowed to lag the crates.
+#   cvlr_kb      the Solana manual (solana.html, from gen_docs.sh). Prose and methodology,
+#                hand-written, allowed to lag the crates.
 #   cvlr_api_kb  the CVLR API, generated here by composer.scripts.cvlr_api_docs from rustdoc over
 #                the releases composer/spec/cvlr_reference.py pins.
 #
@@ -11,10 +11,13 @@
 # land; all missing is an error.
 #
 # Manifest resolution, in order:
-#   1. paths given before `--`, which skip both generation and discovery
+#   1. paths given before `--`, which skip generation
 #   2. the generated cvlr_api_kb manifest
-#   3. $CVLR_KB_REPO/src/certora_cvlr_kb/data/*.rag.json
-#   4. the installed certora_cvlr_kb package
+#
+# There is no third source. `cvlr_kb` was once filled from manifests built in certora-cvlr-kb -- a
+# crate reference that cvlr_api_kb now replaces and does better, and practice entries that moved to
+# the always-in-context bundle and the recipes (cvlr-knowledge-plan.md §4). Discovering them here
+# would find nothing, or find a stale crate reference to contradict the generated one.
 #
 # --crate-source PATH (repeatable) generates cvlr_api_kb from a local CVLR checkout instead of the
 # published crates, which is how documentation gets read before it is released. The pin still says
@@ -111,46 +114,17 @@ if [[ ${#manifests[@]} -eq 0 ]]; then
 fi
 
 if [[ ${#manifests[@]} -eq 0 ]]; then
-    if [[ -n "${CVLR_KB_REPO:-}" ]]; then
-        kb_data="${CVLR_KB_REPO%/}/src/certora_cvlr_kb/data"
-        for f in "$kb_data"/*.rag.json; do
-            manifests+=("$f")
-        done
-        [[ -d "$kb_data" ]] || echo "  CVLR_KB_REPO is set but $kb_data does not exist" >&2
-    fi
-
-    # The installed package, only if a checkout did not supply them, so a checkout you are
-    # editing wins over an older installed copy.
-    if [[ ${#manifests[@]} -eq 0 ]]; then
-        probe='
-try:
-    from certora_cvlr_kb import manifests
-    print("\n".join(str(p) for p in manifests()))
-except Exception:
-    pass
-'
-        while IFS= read -r line; do
-            [[ -n "$line" ]] && manifests+=("$line")
-        done < <(cd "$parent" && uv run --no-sync python -c "$probe" 2>/dev/null || true)
-    fi
-fi
-
-if [[ ${#manifests[@]} -eq 0 ]]; then
     if ingest_manual; then
-        echo "No manifest found; ingested the manual alone." >&2
+        echo "The API corpus could not be generated; ingested the manual alone." >&2
         exit 0
     fi
     cat >&2 <<'MSG'
-Error: nothing to ingest -- the API corpus could not be generated, no practice manifest was found,
-and there is no local manual.
+Error: nothing to ingest -- the API corpus could not be generated and there is no local manual.
 
   cvlr_api_kb  needs a nightly toolchain and a warm cargo registry; see the error above.
-  cvlr_kb      needs ./gen_docs.sh for the manual. Practice manifests, where an install still has
-               them, ship in the certora-cvlr-kb package (set CVLR_KB_REPO, or pip install it) --
-               that repo is being wound down as a corpus source, so an install without them is
-               expected rather than broken.
+  cvlr_kb      needs ./gen_docs.sh for the manual.
 
-Pass manifest paths explicitly to skip generation and discovery.
+Pass manifest paths explicitly to skip generation.
 MSG
     exit 1
 fi

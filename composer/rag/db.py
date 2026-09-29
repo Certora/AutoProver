@@ -65,8 +65,8 @@ CVLR_API_DEFAULT_CONNECTION: str = (
 # The two CVLR corpora are deliberately separate, and which one answered a question is the whole
 # of how an agent knows what to trust (docs/cvlr-api-docs-plan.md §4.1):
 #
-# * `cvlr_kb` — the Solana manual built here (scripts/gen_docs.sh, ingested by ragbuild), plus
-#   whatever practice manifests an install carries. Prose. Allowed to lag the crates.
+# * `cvlr_kb` — the Solana manual, built here (scripts/gen_docs.sh, ingested by ragbuild) and
+#   nothing else. Prose and methodology. Allowed to lag the crates.
 # * `cvlr_api_kb` — generated from the CVLR crates by `composer.scripts.cvlr_api_docs`, at the
 #   releases `composer.spec.cvlr_reference` pins. Authoritative on what exists.
 #
