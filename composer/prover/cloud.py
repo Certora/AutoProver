@@ -20,6 +20,8 @@ import aiohttp
 from prover_output_utility import ProverOutputAPI
 from prover_output_utility.models import JobStatus, convert_job_status
 
+from composer.prover.results import ALERT_REPORT
+
 logger = logging.getLogger("composer.spec")
 
 
@@ -159,6 +161,25 @@ def _results_api() -> ProverOutputAPI:
     return ProverOutputAPI(enable_cache=False)
 
 
+async def _fetch_alert_report(job_id: str, dest: Path) -> None:
+    """Save the job's alert report where a local run would have it, ``Reports/alertReport.json``.
+
+    Best-effort. It carries warnings the verdicts do not, such as the functions the Prover treated
+    as external (:func:`composer.prover.results.external_functions`), but a job's results stand
+    without it, so failing to fetch it must not fail the run.
+    """
+    try:
+        text = await asyncio.to_thread(
+            _results_api().fetch_output_file, job_id, ALERT_REPORT.name
+        )
+    except Exception as exc:  # noqa: BLE001 — optional artifact; the verdicts are what matter
+        logger.warning("Cloud job %s: no alert report (%s)", job_id[:8], exc)
+        return
+    target = dest / ALERT_REPORT
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text)
+
+
 @asynccontextmanager
 async def cloud_results(
     run_result_link: str,
@@ -205,4 +226,5 @@ async def cloud_results(
         await asyncio.to_thread(
             _results_api().fetch_sources_and_treeview_files, cloud_job.job_id, dest
         )
+        await _fetch_alert_report(cloud_job.job_id, dest)
         yield (dest, runtime_ms)

@@ -693,6 +693,20 @@ function that *writes* state a rule asserts over, not only one whose result it r
     The same warning still names `AccountInfo::try_borrow_lamports` and
     `solana_system_interface::instruction::transfer` as external for this probe. Both look like
     path-rename gaps in the starting layer; they belong to the "surface the warning" item.
+  * **The Prover's "treated as external" warning now reaches the agents.** `cloud_results` fetches
+    the job's `Reports/alertReport.json` beside the tree view, and
+    `composer.prover.results.external_functions` reads the `Summarization` alerts. `verify_rules`
+    shows the list to the author after the verdicts, and it reaches the judge's briefing through
+    state. It is not a gate: external is the starting layer's default for most platform code. The
+    alerts do not name their rule, so the list is the job's union.
+    **TODO, report:** the run report has no place for a unit's assumptions. Munges reach it through
+    `source_edits`, but summaries, `optimistic_loop` and the external list do not. Give it one
+    channel for all of them, rather than a field per kind.
+    **TODO, after the tuning-file rework (separate branch):** an `inline_for_prover` tool, so the
+    author can act on the list itself instead of only working around it. This widens the action
+    space (a channel in the recipe legend, the author and judge prompts), so it should wait until
+    the report shows which gaps recur. Inlining can also crash the whole job (CERT-10184), so the
+    tool needs a way back.
   * **Found on the way, fixed:** a rule the Prover decides by static analysis arrives as a bare
     tree-view root, and `composer/prover/results.py` dropped it. The CVLR gate counts only the rules
     it gets verdicts for, so a statically FAILED rule would have let a draft be stamped with "every

@@ -48,7 +48,7 @@ from prover_output_utility import cloud_server_for_env
 from composer.prover.analysis import analyze_cex_raw
 from composer.prover.cloud import CloudJobError, cloud_results
 from composer.prover.ptypes import RuleResult, RulePath, StatusCodes
-from composer.prover.results import read_and_format_run_result
+from composer.prover.results import external_functions, read_and_format_run_result
 from composer.templates.loader import load_jinja_template
 from composer.certora_env import ProverApp
 from composer.prover.prover_protocol import ProverResult
@@ -169,6 +169,10 @@ class ProverReport:
     result_str: str
     link: str
     certora_run_stdout: str
+    #: Functions the Prover treated as external, from the job's alert report
+    #: (:func:`composer.prover.results.external_functions`). Empty when there were none or the
+    #: report was not available; the verdicts never say which.
+    external_functions: tuple[str, ...] = ()
 
     @property
     def rule_status(self) -> dict[str, bool]:
@@ -772,6 +776,7 @@ async def run_prover(
 
             if isinstance(parsed, str):
                 return f"Failed to parse prover results: {parsed}"
+            externals = external_functions(emv_path)
 
             # 9. Notify runtime + prover_result callbacks
             if runtime_ms is not None:
@@ -822,6 +827,7 @@ async def run_prover(
 
     return ProverReport(
         raw_rule_status=raw_rule_results,
+        external_functions=externals,
         result_str=result_str,
         link=run_result["link"],
         certora_run_stdout=stdout,

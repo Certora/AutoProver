@@ -139,6 +139,18 @@ def test_a_raised_loop_bound_alone_is_nothing_to_weigh():
     assert "nothing to weigh" in briefing
 
 
+def test_the_last_runs_external_functions_reach_the_judge():
+    """A verdict over an external call is conditional on writes the model dropped, and nothing in
+    the draft, the summaries or the munges shows it."""
+    external = "anchor_lang::system_program::transfer"
+    briefing = _text(HarnessAssumptions(summaries=(), munges=(), external_functions=(external,)))
+    assert external in briefing and "treated these functions as external" in briefing
+    assert "no points-to summaries" not in briefing
+    state = {"summaries": [], "munges": [], "prover_settings": ProverSettings(),
+             "external_functions": (external,)}
+    assert harness_assumptions(state).external_functions == (external,)  # type: ignore[arg-type]
+
+
 def test_optimistic_loop_is_read_from_the_state_the_tool_writes():
     state = {"summaries": [], "munges": [], "prover_settings": _LOOPS_FINISH}
     assert harness_assumptions(state).settings == _LOOPS_FINISH  # type: ignore[arg-type]
