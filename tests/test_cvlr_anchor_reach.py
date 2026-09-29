@@ -37,7 +37,7 @@ from pathlib import Path
 
 import pytest
 
-from composer.cargo.metadata import read_workspace
+from composer.cargo.metadata import Workspace, read_workspace
 from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, Built, platform_tools_installed
 from composer.cargo.session import CargoSession, Warmed
 from composer.prover.core import make_prover_options
@@ -105,7 +105,7 @@ def project(tmp_path: Path) -> Path:
 
 async def test_a_rule_that_reaches_an_anchor_program_can_be_analyzed(project, capsys):
     workspace = await read_workspace(project)
-    assert workspace is not None, f"cargo reported no workspace at {project}"
+    assert isinstance(workspace, Workspace), workspace
     package = workspace.member(PACKAGE)
     assert package is not None, f"no {PACKAGE} member in {project}"
 

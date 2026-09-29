@@ -39,7 +39,7 @@ from typing import override
 
 import pytest
 
-from composer.cargo.metadata import read_workspace
+from composer.cargo.metadata import Workspace, read_workspace
 from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, Built, platform_tools_installed
 from composer.cargo.session import CargoSession, Warmed
 from composer.prover.core import (
@@ -181,7 +181,7 @@ def _violation(results: list[RuleResult], rule: str) -> RuleResult:
 
 async def test_raising_the_loop_bound_is_what_turns_the_rule_green(project, capsys):
     workspace = await read_workspace(project)
-    assert workspace is not None, f"cargo reported no workspace at {project}"
+    assert isinstance(workspace, Workspace), workspace
     package = workspace.member(PACKAGE)
     assert package is not None, f"no {PACKAGE} member in {project}"
 
