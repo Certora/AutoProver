@@ -24,7 +24,7 @@ import pytest
 
 from composer.authoring.state import SkippedProperty, make_validation_stamper, spec_digest
 from composer.prover.conf import SelectRules
-from composer.spec.cvlr.conf import ProverSettings, RunOverlay, solana_conf
+from composer.spec.cvlr.conf import OptimisticLoop, ProverSettings, RunOverlay, solana_conf
 from composer.spec.cvlr.prover import Submission as CvlrSubmission
 from composer.spec.cvlr.harness import (
     DELIVERABLE_DIR,
@@ -421,7 +421,10 @@ def test_optimistic_loop_goes_on_and_the_whole_conf_comes_back():
 
     out = _adjust(_verify_state(DRAFT), [SetOptimisticLoop(type="optimistic_loop", enabled=True)])
     assert not isinstance(out, str), out
-    assert out.update["prover_settings"].optimistic_loop
+    # The setting keeps the call's `why`: it is what the judge is shown to weigh the setting by.
+    assert out.update["prover_settings"].optimistic_loop == OptimisticLoop(
+        why="tried bounding the operands first"
+    )
     # Unchanged, because the two are answers to different halves of the same symptom.
     assert out.update["prover_settings"].loop_iter == 2
     assert '"optimistic_loop": true' in out.update["messages"][0].content
@@ -430,9 +433,18 @@ def test_optimistic_loop_goes_on_and_the_whole_conf_comes_back():
 def test_optimistic_loop_already_on_is_refused():
     from composer.spec.cvlr.verify import SetOptimisticLoop
 
-    state = {**_verify_state(DRAFT), "prover_settings": ProverSettings(optimistic_loop=True)}
+    state = {**_verify_state(DRAFT), "prover_settings": ProverSettings(optimistic_loop=OptimisticLoop(why="w"))}
     out = _adjust(state, [SetOptimisticLoop(type="optimistic_loop", enabled=True)])
     assert isinstance(out, str) and "already on" in out
+
+
+def test_optimistic_loop_goes_off_and_takes_its_reason_with_it():
+    from composer.spec.cvlr.verify import SetOptimisticLoop
+
+    state = {**_verify_state(DRAFT), "prover_settings": ProverSettings(optimistic_loop=OptimisticLoop(why="w"))}
+    out = _adjust(state, [SetOptimisticLoop(type="optimistic_loop", enabled=False)])
+    assert not isinstance(out, str), out
+    assert out.update["prover_settings"] == ProverSettings()
 
 
 def test_the_edits_apply_together_or_not_at_all():
@@ -446,7 +458,9 @@ def test_the_edits_apply_together_or_not_at_all():
          SetOptimisticLoop(type="optimistic_loop", enabled=True)],
     )
     assert not isinstance(out, str), out
-    assert out.update["prover_settings"] == ProverSettings(loop_iter=4, optimistic_loop=True)
+    assert out.update["prover_settings"] == ProverSettings(
+        loop_iter=4, optimistic_loop=OptimisticLoop(why="tried bounding the operands first")
+    )
 
 
 def test_an_unexplained_config_change_is_refused():

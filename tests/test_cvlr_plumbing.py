@@ -264,7 +264,7 @@ def test_every_conf_checks_vacuity():
     verified. No setting turns it off."""
     for settings in (
         cvlr_conf.ProverSettings(),
-        cvlr_conf.ProverSettings(loop_iter=5, optimistic_loop=True),
+        cvlr_conf.ProverSettings(loop_iter=5, optimistic_loop=cvlr_conf.OptimisticLoop(why="w")),
     ):
         assert cvlr_conf.settings_conf(settings)["rule_sanity"] == "basic"
 
@@ -278,8 +278,17 @@ def test_a_conf_change_invalidates_a_stamp_earned_before_it():
     another."""
     default = cvlr_conf.conf_history(cvlr_conf.ProverSettings())
     assert default != cvlr_conf.conf_history(cvlr_conf.ProverSettings(loop_iter=3))
-    assert default != cvlr_conf.conf_history(cvlr_conf.ProverSettings(optimistic_loop=True))
+    on = cvlr_conf.ProverSettings(optimistic_loop=cvlr_conf.OptimisticLoop(why="first reason"))
+    assert default != cvlr_conf.conf_history(on)
     assert default == cvlr_conf.conf_history(cvlr_conf.ProverSettings())
+
+
+def test_rewording_the_reason_for_optimistic_loop_keeps_the_stamp():
+    """The justification is for the reviewer and is not in the conf, so a verdict earned under
+    the setting stays a verdict under it whatever the account of it says."""
+    first = cvlr_conf.ProverSettings(optimistic_loop=cvlr_conf.OptimisticLoop(why="first reason"))
+    second = cvlr_conf.ProverSettings(optimistic_loop=cvlr_conf.OptimisticLoop(why="second"))
+    assert cvlr_conf.conf_history(first) == cvlr_conf.conf_history(second)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -489,7 +498,7 @@ def _unconfined(tmp_path: Path) -> CargoSession:
 @pytest.mark.asyncio
 async def test_an_authors_conf_edits_reach_the_file_the_prover_is_handed(tmp_path):
     """What `adjust_prover_config` is for, checked at the far end of the wire."""
-    edited = cvlr_conf.ProverSettings(loop_iter=4, optimistic_loop=True)
+    edited = cvlr_conf.ProverSettings(loop_iter=4, optimistic_loop=cvlr_conf.OptimisticLoop(why="w"))
     conf_path = await write_submission(
         _unconfined(tmp_path),
         Submission(manifest_path=tmp_path / "Cargo.toml", settings=edited, stem="unit"),

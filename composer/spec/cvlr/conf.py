@@ -45,6 +45,18 @@ BASE_CONF: Conf = {
 
 
 @dataclass(frozen=True)
+class OptimisticLoop:
+    """``optimistic_loop`` switched on, with the author's account of why.
+
+    The account travels with the setting because the setting is unsound: every verdict in the unit
+    is conditional on it, and a reviewer can weigh it only against the argument for it. The account
+    is not part of the conf, so rewording it does not invalidate a stamp.
+    """
+
+    why: str
+
+
+@dataclass(frozen=True)
 class ProverSettings:
     """The conf settings the author may change. The defaults are where every unit starts."""
 
@@ -56,7 +68,7 @@ class ProverSettings:
     #: count first, then summarize or munge the code that holds the loop, then raise ``loop_iter``,
     #: and finally turn it on only for a trip count that no bound discharges. Once it is on, every
     #: rule in the submission is verified under that assumption.
-    optimistic_loop: bool = False
+    optimistic_loop: OptimisticLoop | None = None
 
 
 def settings_conf(settings: ProverSettings) -> Conf:
@@ -64,7 +76,7 @@ def settings_conf(settings: ProverSettings) -> Conf:
     return {
         **BASE_CONF,
         "loop_iter": str(settings.loop_iter),
-        "optimistic_loop": settings.optimistic_loop,
+        "optimistic_loop": settings.optimistic_loop is not None,
     }
 
 
