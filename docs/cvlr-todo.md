@@ -614,6 +614,47 @@ runs.
 
 ---
 
+## Leads from the certora-cvlr-kb ledger
+
+certora-cvlr-kb is being retired once it has nothing left to teach AutoProver. Of its 102 open
+questions (`ledger/open/`, generated 2026-08-28), these 16 could still change AutoProver and are not
+already answered here. The other 86 were dropped: 47 are about client verdicts, 9 are subsumed by
+**U16**, and 30 are answered by `BASE_CONF`, the bundle, the judge or the munge charter, or cannot
+arise under the cvlr 0.6.1 pin. Each lead names the ledger ids that raised it. The questions and
+their evidence are in the ledger files, and the soundness argument each one proposes is worth
+reading before starting. An investigation ends in an AutoProver change or a line saying why none is
+needed, never in a ledger answer.
+
+**L1. Is the starting layer sound?** These files apply to every target.
+
+* `^solana_program::account_info::AccountInfo::realloc$` is **summarized** in
+  `cvlr_summaries_core.txt` (`#[type((*i32)(r1+0):num)]`), so the Prover never sees a resize. The
+  field inlines it instead. This is the most concrete of the leads (`effe7d1caff92b7f`).
+* The soft-float intrinsics (`__gedf2`, `__gtdf2`, `__floatundidf`, …) are summarized as independent
+  `num`s, so `a >= b` and `b > a` can both hold. Can a rule over floats pass or fail spuriously
+  (`e4b3d31a079972bb`)?
+* `std::io::error::Error::new` returns an unconstrained `ptr_heap` (`34b2226ecc95cff4`).
+* `alloc::fmt::format::format_inner` (`3563dea21f5bfe17`), and the blanket `#[inline(never)]` over
+  `anchor_lang` with its exceptions (`0dd8abe704fdc789`). What does an Anchor function missing from
+  the exceptions hide?
+* The bare `^memhavoc_c$` line: what does a pattern with no directive do (`0d76447c4278fcc2`)?
+* `core::result::unwrap_failed`: five clients handle it and we do not (`fb74138083b7dd75`).
+
+**L2. Solana analysis flags the field sets and `BASE_CONF` does not.** Prover runs are cheap, so try
+each against a known run and compare verdicts, [3308]s and timeouts.
+`-solanaAggressiveGlobalDetection` (every surveyed project, `2113326f62f1c94c`),
+`-solanaSlicerIter` (`ad3312b1f8f38d8a`), `-solanaCpiAnalysis` (`438da9c1a8d623b6`),
+`-solanaTACPromoteOverflow` (`2dac056d3177d2f7`), `-solanaEntrypoint`, perhaps for non-Anchor
+programs (`6a668f8f967d09ad`), `-solanaRemoveCFGDiamonds` (all normative projects set it; the newest
+template dropped it, `b7ac5b4bb88a4c09`), and `precise_bitwise_ops` (`81d1e4b18ef4272f`,
+`3e74f320e0f197ff`), which may bear on recipe K2's bitmask fold.
+
+**L3. `-solanaCvlrVacuity`** (`16b18e109eb8f1b6`). Recipe K1's triage dropped "end every rule with
+`cvlr_vacuity_check!`" because it is gated on a cargo feature we never enable. This flag may be the
+other half of that. Does it give per-rule vacuity beyond `rule_sanity: basic`?
+
+---
+
 ## Blocked on upstream
 
 **1. A summarized CPI havocs the caller's deserialized `Account<T>`.**
