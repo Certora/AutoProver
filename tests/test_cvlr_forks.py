@@ -134,21 +134,19 @@ def test_an_uncovered_version_blocks_rather_than_leaving_the_boxing_in(tmp_path)
     )
     (blocked,) = refused.blocked
     assert "0.30.0" in blocked.problem
-    assert "do not verify against anchor-lang 0.30.0 from crates.io" in blocked.resolution
+    assert "0.30.1" in blocked.resolution
 
 
 @pytest.mark.parametrize("fork", SOLANA.forks, ids=lambda f: f.crates[0])
-def test_an_uncovered_version_names_that_forks_failure_not_another(tmp_path, fork):
-    """``fixed`` has no boxing; skipping its fork costs the harness its conversions."""
+def test_an_uncovered_version_names_the_releases_that_fork_covers(tmp_path, fork):
     refused = _refused(
         plan_overrides(_workspace(tmp_path, _package(fork.crates[0], "0.0.1")), SOLANA.forks)
     )
     (blocked,) = refused.blocked
-    assert f"against {fork.crates[0]} 0.0.1 from crates.io" in blocked.resolution
-    assert fork.upstream_failure in blocked.resolution
+    assert fork.covered() in blocked.resolution
     for other in SOLANA.forks:
         if other is not fork:
-            assert other.upstream_failure not in blocked.resolution
+            assert other.covered() not in blocked.resolution
 
 
 def test_a_project_that_already_sources_anchor_itself_is_left_alone(tmp_path):

@@ -263,8 +263,7 @@ def test_a_package_that_builds_no_loadable_object_is_refused_rather_than_patched
         tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE, crate_types=("lib",)
     )
     assert [b.problem for b in plan.blocked] == [
-        "prog builds no cdylib, so cargo produces no loadable object and the prover has nothing "
-        "to read"
+        "prog builds no cdylib, so there is no program for the prover to read"
     ]
     with pytest.raises(ScaffoldBlocked):
         apply(plan, workspace.root)

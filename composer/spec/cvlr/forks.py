@@ -56,16 +56,12 @@ class ForkOverride:
 
     ``branches`` maps an exact resolved version to a branch name, listed rather than derived; see
     the module docstring.
-
-    ``upstream_failure`` is what goes wrong when the target is verified against the crates.io
-    release instead, quoted when a version the fork does not cover blocks the plan.
     """
 
     repo: str
     crates: tuple[str, ...]
     branches: Mapping[str, str]
     why: str
-    upstream_failure: str
 
     def branch_for(self, version: str) -> str | None:
         return self.branches.get(version)
@@ -214,10 +210,6 @@ ANCHOR_FORK = ForkOverride(
         "Use the Certora fork of Anchor. It avoids the boxing the official library does, which is "
         "hard to analyze."
     ),
-    upstream_failure=(
-        "upstream Anchor's error type boxes a stack value, which the Prover rejects as [3006] in "
-        "the entry point and in every handler that returns an error"
-    ),
 )
 
 #: The fixed-point crate. The fork adds conversions verification code needs and upstream does not
@@ -230,10 +222,6 @@ FIXED_FORK = ForkOverride(
     why=(
         "Use the Certora fork of fixed. It adds conversions the official library lacks, such as "
         "From<u64> for FixedU64, which verification code needs to build fixed-point values."
-    ),
-    upstream_failure=(
-        "upstream fixed lacks the conversions, such as From<u64> for FixedU64, that harness code "
-        "uses to build fixed-point values, so that code does not compile"
     ),
 )
 
@@ -279,7 +267,7 @@ def plan_overrides(
       (:func:`already_patched`) covers a snapshot taken before the patch table was applied.
     * blocked — resolved more than once, since one patch entry redirects one of the copies; or
       resolved at a version the fork has no branch for, since skipping the fork leaves the
-      failure it exists to fix (:attr:`ForkOverride.upstream_failure`).
+      failure it exists to fix.
     * overridden — redirected at the fork.
 
     Any blocked crate makes the whole result a :class:`ForkRefused`.
@@ -305,13 +293,9 @@ def plan_overrides(
                         crate=crate,
                         problem=(
                             f"this project resolves {crate} more than once "
-                            f"({_copies(copies)}), and one patch entry redirects one of them — "
-                            f"the build would still link the other"
+                            f"({_copies(copies)}), and {fork.repo} can replace only one of them"
                         ),
-                        resolution=(
-                            f"unify the project on one {crate} release, then re-run — which "
-                            f"dependent moves is a decision about the project"
-                        ),
+                        resolution=f"move the project onto one {crate} release",
                     )
                 )
                 continue
@@ -326,14 +310,12 @@ def plan_overrides(
                     Blocked(
                         crate=crate,
                         problem=(
-                            f"this project resolves {crate} {resolved.version}, and {fork.repo} "
-                            f"has no branch recorded for it (have: {fork.covered()})"
+                            f"this project resolves {crate} {resolved.version}, which "
+                            f"{fork.repo} has no branch for"
                         ),
                         resolution=(
-                            f"pin {crate} to a covered version, or ask for a branch covering "
-                            f"{resolved.version} on the fork and add it here — do not verify "
-                            f"against {crate} {resolved.version} from crates.io: "
-                            f"{fork.upstream_failure}"
+                            f"move the project to a {crate} release the fork covers: "
+                            f"{fork.covered()}"
                         ),
                     )
                 )

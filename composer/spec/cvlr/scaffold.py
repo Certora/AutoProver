@@ -459,25 +459,15 @@ def _check_pins(
     has no use for, and refusing it would refuse every project this scaffold exists to set up.
     """
     for release in reference.crates():
-        supported = (
-            f"this build supports {release.name} {release.version} and no other release: the "
-            f"pins, the specializations and the env files the scaffold writes are all that line's"
-        )
-        fix = (
-            f"move the project to {release.name} {release.version}. A project that stays on "
-            f"another release needs an AutoProver build pinned to that CVLR line"
-        )
+        supported = f"this build supports only {release.name} {release.version}"
+        fix = f"move the project to {release.name} {release.version}"
         off = [c.version for c in workspace.resolved(release.name) if c.version != release.version]
         if off:
             builds = ", ".join(off)
             plan.add_blocked(
                 Blocked(
                     path=Path("Cargo.toml"),
-                    problem=(
-                        f"this project builds {release.name} {builds}, and {supported}, "
-                        f"so pinning them beside {builds} would put two CVLR "
-                        f"generations in one graph"
-                    ),
+                    problem=f"this project builds {release.name} {builds}, and {supported}",
                     resolution=fix,
                 )
             )
@@ -488,9 +478,7 @@ def _check_pins(
                     Blocked(
                         path=Path("Cargo.toml"),
                         problem=(
-                            f"this project declares {release.name} {requirement}, which no member "
-                            f"depends on yet, so cargo has not resolved it — but the member this "
-                            f"scaffold sets up is about to inherit it, and {supported}"
+                            f"this project declares {release.name} {requirement}, and {supported}"
                         ),
                         resolution=fix,
                     )
@@ -500,14 +488,11 @@ def _check_pins(
                     Blocked(
                         path=Path("Cargo.toml"),
                         problem=(
-                            f"this project declares {release.name} {how}, so which release it is "
-                            f"cannot be read from the manifest, and {supported} — a gate cannot "
-                            f"pass a version it cannot see"
+                            f"this project declares {release.name} {how}, so its release cannot "
+                            f"be checked, and {supported}"
                         ),
                         resolution=(
-                            f"declare {release.name} {release.version} as a registry "
-                            f"dependency. A checkout of another release needs an AutoProver "
-                            f"build pinned to that CVLR line"
+                            f"declare {release.name} {release.version} as a registry dependency"
                         ),
                     )
                 )
@@ -643,14 +628,12 @@ def _plan_package_manifest(
             Blocked(
                 path=manifest_rel,
                 problem=(
-                    f"{package.name} builds no {SHARED_OBJECT_TYPE}, so cargo produces no loadable "
-                    f"object and the prover has nothing to read"
+                    f"{package.name} builds no {SHARED_OBJECT_TYPE}, so there is no program for "
+                    f"the prover to read"
                 ),
                 resolution=(
-                    f'add `[lib]` with `crate-type = ["{SHARED_OBJECT_TYPE}"]` if this package '
-                    f"really is the on-chain program, or scaffold the package that is — changing a "
-                    f"library's crate type changes how it builds everywhere, which is not a "
-                    f"scaffold's call"
+                    f'add `crate-type = ["{SHARED_OBJECT_TYPE}"]` to `[lib]` if this package is '
+                    f"the on-chain program, or scaffold the package that is"
                 ),
             )
         )
@@ -675,9 +658,7 @@ def _plan_package_manifest(
                         f"dependency, so the name means something else in this package"
                     ),
                     resolution=(
-                        "rename that feature, or add the CVLR dependencies to it by hand and "
-                        "re-run — extending a feature that already has a meaning is not a "
-                        "scaffold's call"
+                        "rename that feature, or add the CVLR dependencies to it by hand and re-run"
                     ),
                 )
             )

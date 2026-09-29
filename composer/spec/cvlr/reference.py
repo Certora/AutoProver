@@ -222,7 +222,8 @@ SOLANA = ChainReference(
     ),
     forks=(ANCHOR_FORK, FIXED_FORK),
     platform=PlatformGeneration(
-        label="solana-program 2.x (the last monolithic line)",
+        # The last line published as one ``solana-program`` crate. v3 is only the split crates.
+        label="solana-program 2.x",
         sdk_crates=(CrateRequirement("solana-program", "2.2"),),
         # ``solana-account-info`` first: it defines ``AccountInfo`` and exists on both 2.x and 3.x.
         # ``solana-program`` is the fallback for 1.18, which predates the split and defines the
