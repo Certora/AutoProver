@@ -62,13 +62,14 @@ leaves open are five decisions it cannot make on its own — the duplicate retry
 tape belongs in the repository, when the graphcore pin moves, the order against the open findings
 PR, and whether any of wave 1 changes EVM behaviour.
 
-**U6. The published-docs half is decided; the rest of the corpus is not.**
-The CVLR corpus is produced outside this repo, in the private
-[certora-cvlr-kb](https://github.com/Certora/certora-cvlr-kb), by three producers that emit a
-self-describing `<kb>.rag.json` and hand it to the generic importer — a deliberate producer/importer
-split, argued for in [rag-import-format.md](./rag-import-format.md) §6-7. CVL content is produced two
+**U6. Where each piece of CVLR knowledge comes from is decided; how certora-cvlr-kb relates to certorag is not.**
+The CVLR corpus was first planned to come from outside this repo: the private
+[certora-cvlr-kb](https://github.com/Certora/certora-cvlr-kb) would run three producers, each
+emitting a self-describing `<kb>.rag.json` for the generic importer. That producer/importer split is
+argued for in [rag-import-format.md](./rag-import-format.md) §6-7. CVL content is produced two
 other ways: in-tree by [ragbuild.py](../composer/scripts/ragbuild.py), which parses sphinx HTML and
-writes the DB itself, and separately by [certorag](https://github.com/Certora/certorag).
+writes the DB itself, and separately by [certorag](https://github.com/Certora/certorag). All three
+CVLR pieces now have a settled home, and two of them are built here.
 
 **Done: the Solana Prover manual is generated here, as it already was.**
 [gen_docs.sh](../scripts/gen_docs.sh) has always built `solana.html` alongside `cvl.html` — four
@@ -82,12 +83,29 @@ gave is the cost to watch: three manifests built in three places can be three vi
 corpus carries one tag that hides the seam. The `PROVENANCE` stamp beside the built HTML is what
 answers that for the half now built here.
 
-**Still open: the other two manifests.** The crate reference and the project-derived practice
-corpus are genuinely expensive to build — an API key, cargo, a model — and nothing about this
-decision says where they belong. Nor does it say how any of it relates to `certorag`. The remaining
-questions are whether that generator adopts the manifest-and-importer split, whether what is left of
-the CVLR corpus belongs in it rather than its own repo, and — if they stay apart — what the boundary
-is.
+**Done: the crate reference is generated here too, into its own corpus.**
+`composer.scripts.cvlr_api_docs` builds `cvlr_api_kb` from the crates' rustdoc, at the releases
+`composer.spec.cvlr_reference` pins. It replaces certora-cvlr-kb's `cvlr-crates.rag.json`, which
+came from a regex scan plus a model. It is a separate corpus rather than a second root in `cvlr_kb`,
+so an agent can tell which one answered ([cvlr-api-docs-plan.md](./cvlr-api-docs-plan.md) §4). It
+still goes through the manifest and the importer, so the split survives with the producer in this
+repo. Since `f1da5e4f`, `cvlr_kb` is the manual and nothing else (§4.6 there).
+
+**Done: the practice knowledge is not a corpus at all.** It is a hand-authored bundle, as CVL's is:
+`CVLR_BUNDLE` in [kb_context.py](../composer/kb/kb_context.py), always in context for every CVLR
+agent, plus a trigger-indexed recipe set behind `get_cvlr_recipe`. certora-cvlr-kb's 83 entries are
+no longer a product. Its output is the ledger and the evidence behind it: what the bundle's author
+should write about, with recurrence counts and disagreements attached. The argument, and the triage
+that left two recipes out of 27 `rule_shape` entries, are in the CVLR knowledge plan
+(`certorag: docs/cvlr-knowledge-plan.md`) Part I.
+
+**Still open: the boundary between certora-cvlr-kb and certorag.** Nothing either repo produces
+reaches a corpus here any more. What still ties them together is the Solana property corpus (the
+knowledge plan's Part II), which would reuse certora-cvlr-kb's project inventory, `locate.py` and
+the deterministic parsers in `extract.py`. Whether those move into certorag, or stay put with the
+project manifest as a schema-stable interface, is the remaining question. There is also one loose
+end: certora-cvlr-kb's `tools/publish.py` still hard-codes `KNOWLEDGE_BASE = "cvlr_kb"`, so retired
+content can still be pushed into the manual's corpus, even though nothing here discovers it.
 
 **U7. A partial tree-view fetch reports itself as complete.**
 POU's `fetch_job_treeview` downloads each output file in a thread pool and *swallows* per-file
