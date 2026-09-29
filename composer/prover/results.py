@@ -232,6 +232,15 @@ def flatten_tree_view(
             counterexample=None,
             status=stat
         )]
+    if not r.children:
+        # A rule the Prover decides by static analysis alone arrives as a bare root with no
+        # subchecks. Recursing into its children would drop its verdict, and a missing verdict
+        # reads as nothing rather than as a failure.
+        return [RuleResult(
+            path=effective_path,
+            counterexample=None,
+            status=stat
+        )]
     return _flat_yield(
         r.children, lambda c: flatten_tree_view(context, c, effective_path, shape, r.nodeType)
     )
