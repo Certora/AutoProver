@@ -80,7 +80,7 @@ def conf_history(tunable: TunableConf) -> tuple[str, ...]:
 #: The platform-tools release every build uses. The prover does not apply ``cargo_tools_version``
 #: itself: it reaches ``cargo certora-sbf`` only on the CLI's own build path, and this backend owns
 #: the build. One release serves every target because the reference set pins one platform
-#: generation (:class:`~composer.spec.cvlr_reference.PlatformGeneration`).
+#: generation (:class:`~composer.spec.cvlr.reference.PlatformGeneration`).
 PLATFORM_TOOLS_VERSION = "v1.43"
 
 

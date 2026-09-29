@@ -24,7 +24,7 @@ import pytest
 
 from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.preflight import gate_workspace, prepare_workspace, select_package
-from composer.spec.cvlr_reference import SOLANA
+from composer.spec.cvlr.reference import SOLANA
 
 pytestmark = [pytest.mark.expensive, pytest.mark.asyncio]
 

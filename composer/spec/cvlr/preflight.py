@@ -30,7 +30,7 @@ from composer.spec.cvlr.scaffold import (
     apply,
     plan_scaffold,
 )
-from composer.spec.cvlr_reference import ChainReference
+from composer.spec.cvlr.reference import ChainReference
 
 _log = logging.getLogger(__name__)
 

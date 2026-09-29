@@ -1,4 +1,4 @@
-"""The CVLR reference set (``composer.spec.cvlr_reference``).
+"""The CVLR reference set (``composer.spec.cvlr.reference``).
 
 Compiling a probe crate per chain is what checks that the versions resolve. That needs cargo and
 a network, so it is not run here. These tests cover what a wrong edit can break without cargo
@@ -8,7 +8,7 @@ that travels with the chain crate.
 
 import pytest
 
-from composer.spec import cvlr_reference as ref
+from composer.spec.cvlr import reference as ref
 
 
 def test_the_chains_are_exactly_the_pipelines_rust_chains():

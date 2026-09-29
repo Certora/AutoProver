@@ -22,7 +22,7 @@ from composer.spec.cvlr.tuning import (
     compose_env,
     starting_env,
 )
-from composer.spec.cvlr_reference import SOLANA, SOROBAN, NamespacePattern, PathAlias
+from composer.spec.cvlr.reference import SOLANA, SOROBAN, NamespacePattern, PathAlias
 
 #: Every crate the post-split Solana platform layer is spread across, as a target resolves them.
 SPLIT_CRATES = (

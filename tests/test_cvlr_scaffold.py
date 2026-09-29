@@ -36,7 +36,7 @@ from composer.spec.cvlr.scaffold import (
     plan_scaffold,
 )
 from composer.spec.cvlr.tuning import ENV_FAMILIES, INLINING, SUMMARIES
-from composer.spec.cvlr_reference import SOLANA
+from composer.spec.cvlr.reference import SOLANA
 
 PROGRAM = """\
 use solana_program::account_info::AccountInfo;

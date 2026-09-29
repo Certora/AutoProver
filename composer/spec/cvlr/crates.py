@@ -4,7 +4,7 @@ The version comes from the resolved graph. ``RUST_FORBIDDEN_READ`` hides ``Cargo
 agents, and source for a different version than the build compiles is worse than no source.
 :meth:`CvlrSources.of` reports each crate together with the directory it came from.
 
-:mod:`composer.spec.cvlr_reference` records the one CVLR line this build supports.
+:mod:`composer.spec.cvlr.reference` records the one CVLR line this build supports.
 :meth:`CvlrSources.gaps` reports where a project's graph and that line disagree, which
 :mod:`composer.spec.cvlr.scaffold` refuses over before anything is written. It runs again after the
 scaffold as a backstop: a :class:`Mismatched` at that point means a release reached the graph some
@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Self
 
 from composer.cargo.metadata import CratePackage, Workspace
-from composer.spec.cvlr_reference import ChainReference
+from composer.spec.cvlr.reference import ChainReference
 
 #: The crate-name prefix that spells the CVLR family. Its members are not declared anywhere — ``cvlr``
 #: pulls in ``cvlr-asserts``, ``cvlr-log``, ``cvlr-nondet``, ``cvlr-mathint`` and more as ordinary
@@ -95,7 +95,7 @@ class CvlrSources:
 
         Only crates the reference set names are compared. A dependency the reference does not
         mention is not a disagreement. A capability with no published crate is recorded on the
-        reference itself, as :class:`~composer.spec.cvlr_reference.UnpublishedCapability`.
+        reference itself, as :class:`~composer.spec.cvlr.reference.UnpublishedCapability`.
         A crate the graph resolves more than once is one :class:`Mismatched` per copy off the
         reference.
         """

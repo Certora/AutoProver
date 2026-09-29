@@ -28,7 +28,7 @@ from composer.cargo.metadata import (
 from composer.prover import conf as prover_conf
 from composer.spec.cvlr import conf as cvlr_conf
 from composer.spec.cvlr.crates import Absent, CvlrSources
-from composer.spec.cvlr_reference import SOLANA
+from composer.spec.cvlr.reference import SOLANA
 
 
 # --------------------------------------------------------------------------------------------

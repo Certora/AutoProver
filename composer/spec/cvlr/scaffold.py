@@ -67,7 +67,7 @@ from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.env_paths import PathDialect, dialect_for
 from composer.spec.cvlr import forks
 from composer.spec.cvlr.tuning import ENV_FAMILIES, INLINING, SUMMARIES, compose_env
-from composer.spec.cvlr_reference import ChainReference
+from composer.spec.cvlr.reference import ChainReference
 
 #: Where the harness module goes in the target package.
 HARNESS_DIR = Path("src") / "certora"
@@ -360,7 +360,7 @@ def _check_platform(workspace: Workspace, reference: ChainReference, plan: _Plan
     A target on ``solana-program`` 1.18 given ``cvlr-solana`` 0.5.0 does not warn. It fails to
     compile, because the two generations have different ``AccountInfo`` types and the chain
     crate's helpers return the other one. The reference set already records which generation a
-    chain crate requires (:class:`~composer.spec.cvlr_reference.PlatformGeneration`). This is
+    chain crate requires (:class:`~composer.spec.cvlr.reference.PlatformGeneration`). This is
     where a project that is on a different one is caught, and it has to be caught before the pin
     is written.
 
@@ -390,7 +390,7 @@ def _check_platform(workspace: Workspace, reference: ChainReference, plan: _Plan
                     ),
                     resolution=(
                         f"either move the project to {witness.name} {witness.line}, or move the "
-                        f"reference set (composer/spec/cvlr_reference.py) to the CVLR line that "
+                        f"reference set (composer/spec/cvlr/reference.py) to the CVLR line that "
                         f"matches {builds} — picking one of those is a decision about the "
                         f"project, not about the scaffold"
                     ),
@@ -449,7 +449,7 @@ def _check_pins(
 ) -> None:
     """Refuse a project that is on a CVLR release other than the one this build is pinned to.
 
-    One line is supported at a time — the one :mod:`composer.spec.cvlr_reference` names — and
+    One line is supported at a time — the one :mod:`composer.spec.cvlr.reference` names — and
     everything this scaffold writes belongs to it: the pins, the specializations added beside
     them, and the env files :mod:`composer.spec.cvlr.tuning` composes. A project already on
     another line cannot be given those without putting two CVLR generations in one graph, which
@@ -473,7 +473,7 @@ def _check_pins(
         )
         fix = (
             f"either move the project to {release.name} {release.version}, or move the reference "
-            f"set (composer/spec/cvlr_reference.py) to the line this project is on — which line "
+            f"set (composer/spec/cvlr/reference.py) to the line this project is on — which line "
             f"is supported is not a scaffold's call, and not a per-project one either"
         )
         off = [c.version for c in workspace.resolved(release.name) if c.version != release.version]
@@ -516,7 +516,7 @@ def _check_pins(
                         resolution=(
                             f"declare {release.name} as a registry dependency at "
                             f"{release.version}, or move the reference set "
-                            f"(composer/spec/cvlr_reference.py) to whatever that checkout is"
+                            f"(composer/spec/cvlr/reference.py) to whatever that checkout is"
                         ),
                     )
                 )

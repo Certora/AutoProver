@@ -6,7 +6,7 @@ re-exports. A demangled symbol carries the path of the crate that defines the it
 (``solana_account_info::AccountInfo``), so a directive in the old spelling matches nothing. It
 does not fail. It does not apply.
 
-:class:`~composer.spec.cvlr_reference.PathAlias` pairs a canonical spelling with this generation's
+:class:`~composer.spec.cvlr.reference.PathAlias` pairs a canonical spelling with this generation's
 spellings. This module applies those pairs.
 
 One concept can have more than one spelling. ``solana-program`` kept its own
@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from collections.abc import Iterable
 
 from composer.cargo.metadata import Workspace
-from composer.spec.cvlr_reference import ChainReference, NamespacePattern, PathAlias
+from composer.spec.cvlr.reference import ChainReference, NamespacePattern, PathAlias
 
 _log = logging.getLogger(__name__)
 
