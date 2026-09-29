@@ -158,12 +158,12 @@ async def test_which_writes_the_model_drops(project, capsys):
         "rule_invoke_transfer_can_succeed": True,
         "rule_canary_invoke_transfer_moves_nothing": True,
         "rule_invoke_transfer_debits_the_payer": False,
-        # Anchor's `system_program::transfer` is external under the `anchor_lang` blanket and never
-        # succeeds, so both of its assertions hold vacuously. The Prover's log names it as
-        # "neither inlined nor summarized".
-        "rule_anchor_transfer_can_succeed": False,
+        # Anchor's `system_program::transfer`: inlined by the Anchor layer, so reachable, and then
+        # dropped like any `invoke`. (External under the `anchor_lang` blanket, it never succeeded
+        # and both of its assertions held vacuously.)
+        "rule_anchor_transfer_can_succeed": True,
         "rule_canary_anchor_transfer_moves_nothing": True,
-        "rule_anchor_transfer_debits_the_payer": True,
+        "rule_anchor_transfer_debits_the_payer": False,
     }
     changed = {rule: observed[rule] for rule in RULES if observed[rule] != expected[rule]}
     assert changed == {}, (

@@ -45,3 +45,11 @@
 #[inline] ^<.+ as anchor_lang::AccountDeserialize>::try_deserialize_unchecked$
 #[inline] ^anchor_lang::accounts::interface_account::InterfaceAccount<T>::try_from(_\d+)?$
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; The system-program CPI helper, as the Prover's own warning recommends. Left external, it never
+;;; returns Ok, so nothing after `system_program::transfer(..)?` is reachable and every assertion
+;;; there passes vacuously. Inlined, it reaches `invoke`.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+#[inline] ^anchor_lang::system_program::transfer$
+#[inline] ^core::ptr::drop_in_place<core::result::Result<\(\),anchor_lang::error::Error>>$
+
