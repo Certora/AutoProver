@@ -237,9 +237,6 @@ FIXED_FORK = ForkOverride(
     ),
 )
 
-#: The forks written into a Solana project's workspace manifest.
-SOLANA_OVERRIDES: tuple[ForkOverride, ...] = (ANCHOR_FORK, FIXED_FORK)
-
 
 # ---------------------------------------------------------------------------------------------
 # planning
@@ -268,7 +265,7 @@ def _copies(copies: tuple[CratePackage, ...]) -> str:
 
 def plan_overrides(
     workspace: Workspace,
-    overrides: tuple[ForkOverride, ...] = SOLANA_OVERRIDES,
+    overrides: tuple[ForkOverride, ...],
     already_redirected: frozenset[str] = frozenset(),
 ) -> ForkPlan | ForkRefused:
     """What redirecting ``workspace`` at the forks would change, without changing anything.

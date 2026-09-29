@@ -32,6 +32,8 @@ the tuning files.
 
 from dataclasses import dataclass
 
+from composer.spec.cvlr.forks import ANCHOR_FORK, FIXED_FORK, ForkOverride
+
 
 @dataclass(frozen=True)
 class CrateRelease:
@@ -158,6 +160,9 @@ class ChainReference:
     #: The cvlr chain crate every project on this chain declares.
     chain_crate: CrateRelease
     platform: PlatformGeneration
+    #: Certora's forks of crates this chain's programs depend on, which a target is redirected at
+    #: when it resolves them (:mod:`composer.spec.cvlr.forks`). Empty for a chain with none.
+    forks: tuple[ForkOverride, ...]
     #: Chain crates that model one on-chain program rather than the chain itself: the SPL token
     #: account model, the stake program's state. Narrower than :attr:`chain_crate`, and still
     #: declared. :meth:`scaffold_crates` includes them.
@@ -208,6 +213,7 @@ SOLANA = ChainReference(
         # summaries. On crates.io at 0.5.0, the same version as the chain crate it was split from.
         CrateRelease("cvlr-spl-token", "0.5.0"),
     ),
+    forks=(ANCHOR_FORK, FIXED_FORK),
     platform=PlatformGeneration(
         label="solana-program 2.x (the last monolithic line)",
         sdk_crates=(CrateRequirement("solana-program", "2.2"),),
@@ -262,6 +268,7 @@ SOROBAN = ChainReference(
     # The derive crate is a companion of the chain crate. A target uses it when it writes the
     # attribute macros. It is declared the same way as a specialization.
     specializations=(CrateRelease("cvlr-soroban-derive", "0.4.0"),),
+    forks=(),
     platform=PlatformGeneration(
         label="soroban-sdk 22.x",
         sdk_crates=(CrateRequirement("soroban-sdk", "22"),),

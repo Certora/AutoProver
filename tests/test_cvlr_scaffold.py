@@ -36,7 +36,7 @@ from composer.spec.cvlr.scaffold import (
     plan_scaffold,
 )
 from composer.spec.cvlr.tuning import ENV_FAMILIES, INLINING, SUMMARIES
-from composer.spec.cvlr.reference import SOLANA
+from composer.spec.cvlr.reference import SOLANA, SOROBAN
 
 PROGRAM = """\
 use solana_program::account_info::AccountInfo;
@@ -797,3 +797,20 @@ def test_a_non_anchor_target_gets_no_patch_section(tmp_path):
     plan = plan_scaffold(workspace, package, SOLANA)
     assert not [a for a in _additions(plan) if a.table[0] == "patch"]
     assert any("anchor-lang is not a dependency" in note for note in plan.satisfied)
+
+
+def test_the_forks_planned_are_the_reference_chains_own(tmp_path):
+    """Soroban has no forks, so an Anchor release in its graph is neither redirected nor refused,
+    even one the Anchor fork does not cover."""
+    workspace, package = _project(
+        tmp_path,
+        manifest=ANCHOR_MANIFEST.replace("0.31.1", "0.30.0"),
+        workspace_manifest='[workspace]\nmembers = ["."]\n',
+        platform="22.0.0",
+        platform_crate="soroban-sdk",
+        cvlr_resolved={"anchor-lang": "0.30.0"},
+    )
+    plan = plan_scaffold(workspace, package, SOROBAN)
+    assert not [a for a in _additions(plan) if a.table[0] == "patch"]
+    assert not [b for b in plan.blocked if "anchor-lang" in b.problem], plan.blocked
+    assert not [note for note in plan.satisfied if "anchor" in note]

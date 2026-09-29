@@ -770,12 +770,12 @@ def _plan_harness(
             )
 
 
-def _plan_forks(workspace: Workspace, plan: _PlanBuilder) -> None:
-    """Add ``[patch.crates-io]`` entries for the verification forks.
+def _plan_forks(workspace: Workspace, reference: ChainReference, plan: _PlanBuilder) -> None:
+    """Add ``[patch.crates-io]`` entries for the chain's verification forks.
 
     The table is workspace-level, so it goes on the workspace manifest with the rest of the plan.
-    Without the Anchor fork, a rule that reaches a handler cannot be analyzed
-    (:mod:`composer.spec.cvlr.forks`). A version the fork does not cover becomes a
+    What each fork fixes is on the fork (:mod:`composer.spec.cvlr.forks`). A version the fork
+    does not cover becomes a
     :class:`Blocked` on that manifest. The run stops instead of building a project that later
     fails with a pointer-analysis error.
 
@@ -785,7 +785,7 @@ def _plan_forks(workspace: Workspace, plan: _PlanBuilder) -> None:
     """
     path = Path("Cargo.toml")
     match forks.plan_overrides(
-        workspace, already_redirected=forks.already_patched(plan.read(path))
+        workspace, reference.forks, already_redirected=forks.already_patched(plan.read(path))
     ):
         case forks.ForkRefused(blocked):
             for b in blocked:
@@ -837,7 +837,7 @@ def plan_scaffold(
     _plan_harness(package, relative, dialect, plan)
     _plan_gitignore(workspace, plan)
     _plan_feature_forwarding(workspace, package, reference, plan)
-    _plan_forks(workspace, plan)
+    _plan_forks(workspace, reference, plan)
     _plan_package_manifest(workspace, package, relative, reference, plan, inherit=inherit)
     # Unconditional, both of them: the scaffold always writes the reference-set pin now, so the
     # reference set's platform generation always describes what will be built.
