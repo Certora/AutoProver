@@ -222,12 +222,15 @@ def test_the_author_gets_a_worked_anchor_rule_rather_than_only_rules():
     assert "cvlr_assert!(ix.vault.balance == before + amount);" in prompt
 
 
-def test_the_author_is_told_a_cpi_is_a_stand_in_and_that_this_is_inherited():
-    """Flagged as inherited rather than measured, because it is: nothing here has tested a property
-    about a CPI's effect. Saying which claims are measured is what keeps the rest trustworthy."""
-    prompt = _author_system_prompt()
-    assert "not measured here" in prompt
-    assert "unconstrained stand-in" in prompt
+def test_the_author_is_told_a_cpi_moves_nothing_in_the_model():
+    """Measured by `tests/test_cvlr_dropped_writes.py`: after a successful `invoke` transfer the
+    payer's lamports are unchanged. The prompt used to call the CPI an "unconstrained stand-in",
+    which points the wrong way — it makes a property about the CPI's effect sound merely unprovable,
+    when it fails, and it hides that a property needing the lamports *not* to move passes unchecked."""
+    prompt = _flat(_author_system_prompt())
+    assert "a cross-program invocation is replaced by an unconstrained stand-in" not in prompt
+    assert "What a CPI does is not modelled" in prompt
+    assert "passes having checked nothing" in prompt
 
 
 # --------------------------------------------------------------------------------------------
@@ -290,10 +293,9 @@ def test_descending_below_the_handler_is_allowed_only_into_the_program_s_own_cod
 
     That rule was written to stop rules driving a harness-authored *copy* of a handler, and it did —
     but it also forbade the move every shipped verification project makes when a CPI is in the way:
-    drive the program's own accounting core with nondet domain structs. The prover's CPI stand-in
-    havocs the caller's deserialized ``Account<T>`` (``docs/upstream-defects.md`` P6), so a post-state
-    property cannot be carried at handler level at all, and forbidding the descent leaves the author
-    with only bad options.
+    drive the program's own accounting core with nondet domain structs. The prover does not model
+    what a CPI does, so a post-state property across one is often out of reach at handler level, and
+    forbidding the descent leaves the author with only bad options.
 
     What matters is authorship, not depth: ``crate::<module>::<fn>`` narrows scope honestly, a ``fn``
     in the spec module verifies the author. So the prompt must keep prefering the handler, permit the

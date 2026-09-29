@@ -917,11 +917,11 @@ class ImportSwap:
     munge that changed one expression and not its neighbour would be a rewrite of the program's
     behaviour wearing an edit's clothes.
 
-    **What a CPI stand-in may claim.** The Prover's own replacement for a cross-program call havocs
-    the caller's deserialized accounts (``docs/upstream-defects.md`` P6), which is what defeats a
-    property about the program's own bookkeeping after a transfer. A stand-in that returns ``Ok(())``
-    drops the *callee's* effect and keeps the caller analysable, so a property about the program's
-    accounting is provable and a property about the moved lamports is not. Which of those the batch
+    **What a CPI stand-in may claim.** The Prover's own model of a cross-program call already moves
+    nothing (``tests/test_cvlr_dropped_writes.py``), so a stand-in that returns ``Ok(())`` drops the
+    *callee's* effect at no cost against it, and gets the rule past the call and the
+    instruction-building loop no bound discharges. A property about the program's accounting is then
+    provable and a property about the moved lamports is not. Which of those the batch
     holds is the author's to know and :attr:`why` is where it is written down.
 
     Creates no file, unlike :class:`ModuleRedirect`: the stand-in is an item in the harness, which is
