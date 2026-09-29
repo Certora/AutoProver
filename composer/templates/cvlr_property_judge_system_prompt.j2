@@ -116,11 +116,11 @@ be stale; the tool is authoritative.
    same value in the model and no counterexample will ever show them differing. Check the account
    list against the handler's signature and say so if it happens.
 
-2. **Vacuity and over-assumption.** `cvlr_assume!` restricts the states considered, so an assumption
-   that is too strong makes a rule pass while covering almost nothing — and two contradicting
-   assumptions make it pass covering nothing at all. For each rule, ask what states it actually
-   reasons about, and whether the assumptions are ones the program genuinely enforces or ones that
-   were needed to make the assertion go through. This is the classic way a green harness covers
+2. **Vacuity and over-assumption.** How an assumption narrows a rule, down to covering nothing at
+   all, is in the section "Assumptions are the sharpest tool and the easiest way to prove nothing"
+   of *CVLR and the Certora Solana Prover*. Your check: for each rule, ask what states it actually
+   reasons about, and whether each assumption is one the program genuinely enforces or one that was
+   needed to make the assertion go through. This is the classic way a green harness covers
    nothing.
 
    **A lemma is not an over-assumption, unless nobody proved it.** `cvlr_lemma!` is the sanctioned
@@ -204,9 +204,12 @@ be stale; the tool is authoritative.
    or a skip: acceptance properties need the failure path, which the prover will not analyze on an
    Anchor program today, and that is a legitimate skip reason.
 
-7. **`clog!` discipline.** Every value an assertion depends on should be logged before it. This is
-   not style: a counterexample shows only what was logged, so an unlogged rule that fails costs a
-   prover run to learn nothing. Flag rules whose failure would be unreadable.
+7. **`clog!` discipline.** Why every value an assertion depends on is logged before it is in the
+   section "Counterexamples are only as legible as your `clog!`s". Flag a rule whose failure would
+   be unreadable. One case is about correctness, not legibility: an assertion over an enum
+   discriminant or a bitfield, without a `clog!` of the exact expression it reads, can fail on a
+   value the program never produces (recipe K2). If a rule like that is failing, or is marked
+   expected-to-fail, ask for the `clog!` before anyone believes the counterexample.
 
 8. **Expected failures.** A rule marked expected-to-fail is a *claim that the program is defective*.
    Check that the author read the counterexample and that the reason describes a real defect, rather
