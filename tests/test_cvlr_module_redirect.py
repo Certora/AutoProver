@@ -358,12 +358,12 @@ def test_a_unit_scoped_munge_is_not_marked_that_way():
 
 def test_a_units_own_run_global_munge_is_not_shown_twice():
     """The recording unit has it in its own state *and* sees it in the run-global set."""
-    from composer.spec.cvlr.conf import DEFAULT_FEATURE
+    from composer.spec.cvlr.conf import DEFAULT_FEATURE, ProverSettings
     from composer.spec.cvlr.state import harness_assumptions
 
     shared = _redirect(module="safe_math", path="crates/library/src/math/mod.rs",
                        feature=DEFAULT_FEATURE)
-    state = {"munges": [shared], "summaries": []}
+    state = {"munges": [shared], "summaries": [], "prover_settings": ProverSettings()}
 
     got = harness_assumptions(state, None, (shared,))  # type: ignore[arg-type]
 

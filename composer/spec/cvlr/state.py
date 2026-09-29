@@ -19,8 +19,9 @@ the validation stamps and the digest gate. What is CVLR's own:
   and carried into the report through the shared ``source_edits`` hook: a property proved against
   munged source is a property of the munged program.
 
-Those last two are also what the feedback judge is shown beyond the draft
-(:class:`HarnessAssumptions`), since neither leaves a mark in the harness source it reads.
+Those last two, and an ``optimistic_loop`` in ``prover_settings``, are also what the feedback judge
+is shown beyond the draft (:class:`HarnessAssumptions`), since none of them leaves a mark in the
+harness source it reads.
 
 **The ground truth is the buffer, not the run.** ``validate_check_mapping``'s docstring notes that
 forge names every test it ran and a backend whose checker does not is passed ``None``; the prover
@@ -236,9 +237,9 @@ def tuning_history(state: CvlrGenerationExtra) -> tuple[str, ...]:
 
 @dataclasses.dataclass(frozen=True)
 class HarnessAssumptions:
-    """The author's two unsound instruments, as a reviewer has to be shown them.
+    """The author's three unsound instruments, as a reviewer has to be shown them.
 
-    Both change what a green rule means and neither leaves a mark in the harness source, so a judge
+    Each changes what a green rule means and none leaves a mark in the harness source, so a judge
     handed only the draft is reviewing the wrong artifact. The empty case is carried too: the
     judge's system prompt instructs it to weigh the summaries, and silence answers that instruction
     with "go and look", which points it at tuning files holding the scaffold's directives and every
@@ -252,16 +253,30 @@ class HarnessAssumptions:
     #: EVM's munge reviewer has always had and this one did not — a description is the editor's
     #: account, and reviewing an account is how a change nobody described slips through.
     diff: str = ""
+    #: The whole settings rather than only ``optimistic_loop``: what the assumption covers is "every
+    #: loop finishes within ``loop_iter``", and the bound is half of that sentence.
+    settings: ProverSettings = ProverSettings()
 
     def briefing(self) -> list[str]:
         """Input parts stating what a verdict on this harness would be conditional on."""
-        if not self.summaries and not self.munges:
+        optimistic = self.settings.optimistic_loop
+        if not self.summaries and not self.munges and optimistic is None:
             return [
-                "The author has added no points-to summaries and has not munged any of the "
-                "program's functions. The verdicts this harness earns are conditional on nothing "
-                "beyond the harness itself, so there is nothing to weigh on that axis."
+                "The author has added no points-to summaries, has not munged any of the "
+                "program's functions, and has left `optimistic_loop` off. The verdicts this "
+                "harness earns are conditional on nothing beyond the harness itself, so there is "
+                "nothing to weigh on that axis."
             ]
         parts: list[str] = []
+        if optimistic is not None:
+            parts.append(
+                "The author has turned on `optimistic_loop`, with a loop bound of "
+                f"{self.settings.loop_iter}. Every rule in this harness was verified assuming each "
+                "loop finishes within that bound, so a violation reachable only on a later "
+                "iteration is never reported and the rule comes back verified anyway. This is set "
+                "in the conf, not in the harness source you are reading.\n"
+                f"    Author's justification: {optimistic.why}"
+            )
         if self.summaries:
             parts.append(
                 "The author has told the prover to stop analyzing these symbols. Inside a "
@@ -306,7 +321,7 @@ def harness_assumptions(
     pristine: Path | None = None,
     run_global: tuple[Munge, ...] = (),
 ) -> HarnessAssumptions:
-    """The judge-facing read of the pair :func:`tuning_history` reads for the digest.
+    """The judge-facing read of what :func:`tuning_history` reads for the digest.
 
     ``pristine`` is the developer's project, and giving it turns the munge briefing from a list of
     descriptions into a diff. Optional because the diff is derived from the records — no working tree
@@ -325,6 +340,7 @@ def harness_assumptions(
         summaries=tuple(state["summaries"]),
         munges=munges,
         diff=munge_diff(pristine, munges) if pristine is not None and munges else "",
+        settings=state["prover_settings"],
     )
 
 

@@ -17,6 +17,7 @@ No cargo, no network, no prover, no model.
 
 from composer.authoring.judge import JudgeInput
 from composer.spec.cvlr.author import with_assumptions
+from composer.spec.cvlr.conf import OptimisticLoop, ProverSettings
 from composer.spec.cvlr.munge import EarlyPanic, FunctionMunge, MockFn
 from composer.spec.cvlr.state import HarnessAssumptions, harness_assumptions
 from composer.spec.cvlr.tuning import SummaryDirective
@@ -100,6 +101,39 @@ def test_having_used_neither_is_stated_rather_than_left_silent():
     briefing = _text(HarnessAssumptions(summaries=(), munges=()))
     assert briefing.strip()
     assert "no points-to summaries" in briefing
+    assert "`optimistic_loop` off" in briefing
+
+
+_LOOPS_FINISH = ProverSettings(
+    loop_iter=3,
+    optimistic_loop=OptimisticLoop(
+        why="bound 2 reported iteration 3 and bound 3 reported iteration 4, in transfer's Vec build"
+    ),
+)
+
+
+def test_optimistic_loop_reaches_the_judge_with_the_bound_and_the_argument_for_it():
+    """The setting conditions every verdict in the unit and is written only in the conf, which
+    the judge never reads. What it assumes is "every loop finishes within the bound", so the
+    bound is shown with it, and the author's account is the only thing to weigh it against."""
+    briefing = _text(HarnessAssumptions(summaries=(), munges=(), settings=_LOOPS_FINISH))
+    assert "`optimistic_loop`" in briefing
+    assert "loop bound of 3" in briefing
+    assert _LOOPS_FINISH.optimistic_loop is not None
+    assert _LOOPS_FINISH.optimistic_loop.why in briefing
+    assert "no points-to summaries" not in briefing
+
+
+def test_a_raised_loop_bound_alone_is_nothing_to_weigh():
+    """The bound is sound with `optimistic_loop` off: too low a bound fails the rule rather than
+    passing it. So it does not make a verdict conditional on anything."""
+    briefing = _text(HarnessAssumptions(summaries=(), munges=(), settings=ProverSettings(loop_iter=6)))
+    assert "nothing to weigh" in briefing
+
+
+def test_optimistic_loop_is_read_from_the_state_the_tool_writes():
+    state = {"summaries": [], "munges": [], "prover_settings": _LOOPS_FINISH}
+    assert harness_assumptions(state).settings == _LOOPS_FINISH  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -107,14 +141,14 @@ def test_having_used_neither_is_stated_rather_than_left_silent():
 
 
 def test_the_assumptions_are_read_from_the_state_the_tools_write():
-    state = {"summaries": [_DISPLAY], "munges": [_PANIC]}
+    state = {"summaries": [_DISPLAY], "munges": [_PANIC], "prover_settings": ProverSettings()}
     assumptions = harness_assumptions(state)  # type: ignore[arg-type]
     assert assumptions.summaries == (_DISPLAY,)
     assert assumptions.munges == (_PANIC,)
 
 
 def test_a_run_that_used_neither_instrument_reads_as_empty():
-    assert harness_assumptions({"summaries": [], "munges": []}) == HarnessAssumptions((), ())  # type: ignore[arg-type]
+    assert harness_assumptions({"summaries": [], "munges": [], "prover_settings": ProverSettings()}) == HarnessAssumptions((), ())  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -171,7 +205,7 @@ def test_the_judge_is_shown_the_diff_and_not_only_a_description(tmp_path):
     )
     briefing = _text(
         harness_assumptions(
-            {"summaries": [], "munges": [munge]},  # type: ignore[arg-type]
+            {"summaries": [], "munges": [munge], "prover_settings": ProverSettings()},  # type: ignore[arg-type]
             tmp_path,
         )
     )
@@ -186,7 +220,7 @@ def test_a_briefing_without_a_project_still_describes_the_munges(tmp_path):
         path="p.rs", function="f", kind=EarlyPanic(), why="w", feature="unit_vault"
     )
     briefing = _text(
-        harness_assumptions({"summaries": [], "munges": [munge]})  # type: ignore[arg-type]
+        harness_assumptions({"summaries": [], "munges": [munge], "prover_settings": ProverSettings()})  # type: ignore[arg-type]
     )
     assert "f (p.rs)" in briefing
     assert "@@" not in briefing

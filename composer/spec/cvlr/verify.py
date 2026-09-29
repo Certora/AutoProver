@@ -66,7 +66,12 @@ from composer.prover.ptypes import (
     classify_violation,
 )
 from composer.prover.conf import SelectRules, dump_conf
-from composer.spec.cvlr.conf import DEFAULT_FEATURE, PLATFORM_TOOLS_VERSION, settings_conf
+from composer.spec.cvlr.conf import (
+    DEFAULT_FEATURE,
+    PLATFORM_TOOLS_VERSION,
+    OptimisticLoop,
+    settings_conf,
+)
 from composer.spec.cvlr.munge import (
     AlreadyMunged,
     EarlyPanic,
@@ -864,13 +869,15 @@ class AdjustProverConfig(
                         return f"`loop_iter` is already {n}."
                     settings = dataclasses.replace(settings, loop_iter=n)
                 case SetOptimisticLoop(enabled=on):
-                    if settings.optimistic_loop == on:
+                    if (settings.optimistic_loop is not None) == on:
                         return (
                             "`optimistic_loop` is already "
                             + ("on" if on else "off")
                             + " in this conf."
                         )
-                    settings = dataclasses.replace(settings, optimistic_loop=on)
+                    settings = dataclasses.replace(
+                        settings, optimistic_loop=OptimisticLoop(why=self.why) if on else None
+                    )
         return tool_state_update(
             self.tool_call_id,
             "Prover config updated; the prover stamp is invalidated, so re-run `verify_rules`.\n\n"
