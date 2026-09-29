@@ -32,24 +32,36 @@ AutoProver's files are rewritten whenever they differ from what the scaffold wou
 (:class:`Write`), so a harness left by an earlier run or by hand is replaced, and a newer
 starting configuration reaches the build. Nothing else under ``src/certora/`` is touched.
 
-The project's files are edited, never replaced. Manifest edits are text insertions into the parsed
-file, and each is planned only when what it adds is missing, so a second run changes nothing.
-Reserializing the manifest would rewrite the project's comments to make one edit. Re-opening an
-existing table is a duplicate-table error, so an existing ``[features]`` table is edited in place.
+The project's files are edited, never replaced. Each edit is planned only when what it adds is
+missing, so a second run changes nothing. A manifest is edited as a TOML document
+(:class:`~composer.cargo.manifest.ManifestEditor`): keys go into the tables that already hold
+them, and everything the scaffold does not add comes back as it was, comments included.
 
 ``sources`` includes ``Cargo.toml``. ``.certora_sources`` is what the report and the counterexample
 analyzer read, and a source tree with no manifest cannot be rebuilt. CVLR versions come from the
 reference set.
 """
 
-import json
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from importlib.resources import files
 from pathlib import Path
-from typing import Sequence
 
 from composer.cargo.features import CargoFeature
-from composer.cargo.manifest import Dependency, read_manifest
+from composer.cargo.manifest import (
+    AddEntries,
+    AddTable,
+    Comment,
+    Dependency,
+    Manifest,
+    ManifestAddition,
+    ManifestConflict,
+    ManifestEditor,
+    TableItem,
+    TomlValue,
+    read_manifest,
+)
 from composer.cargo.metadata import CratePackage, Workspace
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.env_paths import PathDialect, dialect_for
@@ -106,23 +118,26 @@ class AppendSection:
 
 
 @dataclass(frozen=True)
-class InsertInTable:
-    """Keys to add to a TOML table that already exists.
+class Addition:
+    """One thing the plan adds to a manifest, and why."""
 
-    The one change append cannot make. Re-opening ``[features]`` at the end of a manifest is a
-    duplicate-table error, so a package that already has the table gets the key inserted into it.
-    ``header`` is matched as a whole line and must appear exactly once. :func:`apply` checks that.
-    This is a text edit of a file that was only parsed, and a miss has to fail instead of landing
-    in the wrong table.
-    """
-
-    path: Path
-    header: str
-    contents: str
+    edit: ManifestAddition
     why: str
 
 
-type Change = Write | AppendSection | InsertInTable
+@dataclass(frozen=True)
+class EditManifest:
+    """One of the project's manifests, with every addition the plan makes to it, in order.
+
+    :func:`apply` makes them against the file as it is then, so a change to it since planning is
+    kept. One that already has something the plan adds is :class:`ScaffoldStale`.
+    """
+
+    path: Path
+    additions: tuple[Addition, ...]
+
+
+type Change = Write | AppendSection | EditManifest
 
 
 @dataclass(frozen=True)
@@ -154,11 +169,20 @@ class ScaffoldPlan:
     def describe(self) -> str:
         lines = [f"CVLR scaffold for {self.package}:"]
         for change in self.changes:
-            verb = {Write: "write", AppendSection: "extend", InsertInTable: "edit"}[type(change)]
-            lines.append(f"  {verb} {change.path} — {change.why}")
+            match change:
+                case Write(path=path, why=why):
+                    lines.append(f"  write {path} — {why}")
+                case AppendSection(path=path, why=why):
+                    lines.append(f"  extend {path} — {why}")
+                case EditManifest(path=path, additions=additions):
+                    lines += [f"  edit {path} {a.edit.describe()} — {a.why}" for a in additions]
         lines += [f"  ok {note}" for note in self.satisfied]
         lines += [f"  BLOCKED {b.path}: {b.problem} — {b.resolution}" for b in self.blocked]
         return "\n".join(lines)
+
+
+class ScaffoldStale(RuntimeError):
+    """A manifest the plan edits gained, after planning, something the plan adds."""
 
 
 class ScaffoldBlocked(RuntimeError):
@@ -176,28 +200,42 @@ class ScaffoldBlocked(RuntimeError):
 # the content
 
 
-#: ``specs`` is ``pub``. ``cvlr::mock_fn(with = crate::certora::specs::…)`` expands in the
-#: program's own file, outside ``certora``, so the path has to be visible from there. ``certora``
-#: itself stays private. Under the feature gate the module exists only in a verification build,
-#: and it adds nothing to the crate's public API.
-_HARNESS_ROOT = (
-    "//! Certora verification harness.\n"
-    "//!\n"
-    "//! Compiled only under the `certora` feature, which `lib.rs` gates this module on.\n"
-    "\n"
-    "pub mod specs;\n"
-)
+#: What the scaffold writes on every line it adds to a manifest.
+_ADDED = "added by AutoProver"
 
-#: Written empty so the module exists before any rule file does. A module created later is one a
-#: later step can forget to declare.
-_SPECS_ROOT = "//! The rules. One module per property group; declare each one here.\n"
+
+def _harness_source(relative: Path) -> str:
+    """What the scaffold writes at ``relative`` under :data:`HARNESS_DIR`.
+
+    Kept under ``harness_files/`` at the same path, named ``<stem>.template.rs``: copied into a
+    project as it is, never compiled as part of AutoProver.
+    """
+    template = relative.with_name(f"{relative.stem}.template{relative.suffix}")
+    return files(__package__).joinpath("harness_files", *template.parts).read_text()
 
 
 def _harness_files(dialect: PathDialect) -> tuple[Write, ...]:
-    """AutoProver's files, with paths relative to the package root."""
+    """AutoProver's files, with paths relative to the package root.
+
+    ``mod.rs`` declares ``specs`` as ``pub``. ``cvlr::mock_fn(with = crate::certora::specs::…)``
+    expands in the program's own file, outside ``certora``, so the path has to be visible from
+    there. ``certora`` itself stays private. Under the feature gate the module exists only in a
+    verification build, and it adds nothing to the crate's public API.
+
+    ``specs/mod.rs`` is written empty so the module exists before any rule file does. A module
+    created later is one a later step can forget to declare.
+    """
     return (
-        Write(path=HARNESS_DIR / "mod.rs", contents=_HARNESS_ROOT, why="the harness module root"),
-        Write(path=SPECS_DIR / "mod.rs", contents=_SPECS_ROOT, why="where authored rules land"),
+        Write(
+            path=HARNESS_DIR / "mod.rs",
+            contents=_harness_source(Path("mod.rs")),
+            why="the harness module root",
+        ),
+        Write(
+            path=SPECS_DIR / "mod.rs",
+            contents=_harness_source(Path("specs") / "mod.rs"),
+            why="where authored rules land",
+        ),
         *(
             Write(
                 path=ENVS_DIR / family.composite,
@@ -217,15 +255,15 @@ def _lib_declaration() -> str:
     return f'\n#[cfg(feature = "{DEFAULT_FEATURE}")]\nmod certora;\n'
 
 
-def _metadata_section(*, inlining: Path, summaries: Path) -> str:
-    """Tuning-file paths are relative to the package root."""
+def _metadata_table(*, inlining: Path, summaries: Path) -> tuple[TableItem, ...]:
+    """``[package.metadata.certora]``. Tuning-file paths are relative to the package root."""
     return (
-        "[package.metadata.certora]\n"
-        '# "Cargo.toml" is included: `.certora_sources` is what the report and the\n'
-        "# counterexample analyzer read, and a source tree with no manifest cannot be rebuilt.\n"
-        'sources = ["Cargo.toml", "src/**/*.rs"]\n'
-        f'solana_inlining = ["{inlining}"]\n'
-        f'solana_summaries = ["{summaries}"]\n'
+        Comment('"Cargo.toml" is included: `.certora_sources` is what the report and the'),
+        Comment("counterexample analyzer read, and a source tree with no manifest cannot be"),
+        Comment("rebuilt."),
+        ("sources", ["Cargo.toml", "src/**/*.rs"]),
+        ("solana_inlining", [str(inlining)]),
+        ("solana_summaries", [str(summaries)]),
     )
 
 
@@ -234,10 +272,6 @@ def _metadata_section(*, inlining: Path, summaries: Path) -> str:
 
 
 _MOD_CERTORA = re.compile(r"^[ \t]*(?:pub[ \t]+)?mod[ \t]+certora[ \t]*;", re.MULTILINE)
-
-
-def _section_banner() -> str:
-    return "\n\n# === Certora CVLR — added by AutoProver ===\n"
 
 
 def _project_relative(path: Path, root: Path) -> Path:
@@ -257,22 +291,39 @@ class ScaffoldOutsideProject(RuntimeError):
     """A path in the plan is outside the project root."""
 
 
-def _toml_array(values: list[str]) -> str:
-    """A TOML array of strings.
+def _dependency(*, inherit: bool, version: str) -> Mapping[str, str | bool]:
+    """A CVLR dependency entry. ``optional`` is what makes ``dep:`` usable in the feature, and
+    what keeps CVLR out of a release build."""
+    pin: dict[str, str | bool] = {"workspace": True} if inherit else {"version": f"={version}"}
+    return {**pin, "optional": True}
 
-    JSON's string syntax is TOML's, so this is ``json.dumps`` rather than hand-rolled quoting.
-    Hand-rolled quoting is how a crate name with an odd character lands unquoted."""
-    return json.dumps(values)
 
+class _Manifests:
+    """The manifests a plan reads and adds to, keyed by project-relative path.
 
-def _dependency_stanza(crate: str, *, inherit: bool, version: str) -> str:
-    """A ``[dependencies.<crate>]`` sub-table.
+    Several steps can add to one file: a package at the workspace root gets the workspace pins,
+    the forks, and its own entries in one ``Cargo.toml``. Each file becomes one
+    :class:`EditManifest`.
+    """
 
-    A sub-table can be appended to a manifest that already has ``[dependencies]``. Re-opening
-    that table is a duplicate-table error. ``optional`` is what makes ``dep:`` usable in the
-    feature, and what keeps CVLR out of a release build."""
-    pin = "workspace = true" if inherit else f'version = "={version}"'
-    return f"[dependencies.{crate}]\n{pin}\noptional = true\n"
+    def __init__(self, root: Path) -> None:
+        self._root = root
+        self._read: dict[Path, Manifest] = {}
+        self._additions: dict[Path, list[Addition]] = {}
+
+    def read(self, relative: Path) -> Manifest:
+        if relative not in self._read:
+            self._read[relative] = read_manifest(self._root / relative)
+        return self._read[relative]
+
+    def add(self, relative: Path, edit: ManifestAddition, why: str) -> None:
+        self._additions.setdefault(relative, []).append(Addition(edit, why))
+
+    def changes(self) -> list[Change]:
+        return [
+            EditManifest(path=relative, additions=tuple(additions))
+            for relative, additions in self._additions.items()
+        ]
 
 
 def _generation(version: str) -> str:
@@ -456,16 +507,16 @@ def _check_pins(
     return blocked
 
 
-def _plan_workspace_manifest(
-    workspace: Workspace, package: CratePackage, reference: ChainReference
-) -> tuple[list[Change], list[str]]:
+def _plan_workspace_manifest(manifests: _Manifests, reference: ChainReference) -> list[str]:
     """Pins in ``[workspace.dependencies]``, when the root manifest has a ``[workspace]``."""
-    root = read_manifest(workspace.root / "Cargo.toml")
+    path = Path("Cargo.toml")
+    root = manifests.read(path)
     if root.workspace is None:
-        return [], []
+        return []
 
     declared = root.workspace.dependencies
-    stanzas, satisfied = [], []
+    pins: list[tuple[str, TomlValue]] = []
+    satisfied = []
     for crate in reference.scaffold_crates():
         if crate.name in declared:
             satisfied.append(
@@ -473,16 +524,14 @@ def _plan_workspace_manifest(
                 f"_check_pins has already refused anything else, so this is left as it is"
             )
             continue
-        stanzas.append(f'[workspace.dependencies.{crate.name}]\nversion = "={crate.version}"\n')
-    if not stanzas:
-        return [], satisfied
-    return [
-        AppendSection(
-            path=Path("Cargo.toml"),
-            contents=_section_banner() + "\n".join(stanzas),
-            why="pin the CVLR releases the reference set names, for the whole workspace",
+        pins.append((crate.name, {"version": f"={crate.version}"}))
+    if pins:
+        manifests.add(
+            path,
+            AddEntries(("workspace", "dependencies"), tuple(pins)),
+            "pin the CVLR releases the reference set names, for the whole workspace",
         )
-    ], satisfied
+    return satisfied
 
 
 def local_dependencies(workspace: Workspace, package: CratePackage) -> tuple[CratePackage, ...]:
@@ -500,8 +549,8 @@ def local_dependencies(workspace: Workspace, package: CratePackage) -> tuple[Cra
 
 
 def _plan_feature_forwarding(
-    workspace: Workspace, package: CratePackage, reference: ChainReference
-) -> tuple[list[Change], list[str]]:
+    workspace: Workspace, package: CratePackage, reference: ChainReference, manifests: _Manifests
+) -> list[str]:
     """Give every local path dependency a ``certora`` feature.
 
     A verification-only edit inside a dependency has to be gated on a feature that dependency
@@ -514,15 +563,11 @@ def _plan_feature_forwarding(
     Declared up front. Adding a feature to a second crate after a build has resolved the graph
     does not change the feature set that build used.
     """
-    changes: list[Change] = []
     satisfied: list[str] = []
-    forwards: list[str] = []
     for dep in local_dependencies(workspace, package):
-        forwards.append(f"{dep.name}/{DEFAULT_FEATURE}")
-        rel = dep.root.resolve().relative_to(workspace.root.resolve())
-        manifest = read_manifest(dep.root / "Cargo.toml")
-        features = manifest.features
-        if DEFAULT_FEATURE in features:
+        path = dep.root.resolve().relative_to(workspace.root.resolve()) / "Cargo.toml"
+        manifest = manifests.read(path)
+        if DEFAULT_FEATURE in manifest.features:
             satisfied.append(f"{dep.name} already declares a `{DEFAULT_FEATURE}` feature")
             continue
         wanted = reference.scaffold_crates()
@@ -530,38 +575,22 @@ def _plan_feature_forwarding(
         enables = [f"dep:{c.name}" for c in wanted]
         if NO_ENTRYPOINT_FEATURE in dep.features:
             enables.insert(0, NO_ENTRYPOINT_FEATURE)
-        entry = f"{DEFAULT_FEATURE} = {_toml_array(enables)}\n"
-        why = (
+        manifests.add(
+            path,
+            AddEntries(("features",), ((DEFAULT_FEATURE, enables),)),
             f"so a verification-only edit inside {dep.name} can be gated — the program's "
-            f"`{DEFAULT_FEATURE}` forwards to it"
+            f"`{DEFAULT_FEATURE}` forwards to it",
         )
-        if features:
-            changes.append(
-                InsertInTable(
-                    path=rel / "Cargo.toml", header="[features]", contents=entry, why=why
-                )
-            )
-        else:
-            changes.append(
-                AppendSection(
-                    path=rel / "Cargo.toml",
-                    contents=_section_banner() + f"[features]\n{entry}",
-                    why=why,
-                )
-            )
         if missing:
-            changes.append(
-                AppendSection(
-                    path=rel / "Cargo.toml",
-                    contents=_section_banner()
-                    + "\n".join(
-                        _dependency_stanza(c.name, inherit=False, version=c.version)
-                        for c in missing
-                    ),
-                    why=f"the CVLR crates {dep.name}'s `{DEFAULT_FEATURE}` feature enables",
-                )
+            manifests.add(
+                path,
+                AddEntries(
+                    ("dependencies",),
+                    tuple((c.name, _dependency(inherit=False, version=c.version)) for c in missing),
+                ),
+                f"the CVLR crates {dep.name}'s `{DEFAULT_FEATURE}` feature enables",
             )
-    return changes, satisfied
+    return satisfied
 
 
 def _plan_package_manifest(
@@ -569,16 +598,14 @@ def _plan_package_manifest(
     package: CratePackage,
     relative: Path,
     reference: ChainReference,
+    manifests: _Manifests,
     *,
     inherit: bool,
-) -> tuple[list[Change], list[str], list[Blocked]]:
+) -> tuple[list[str], list[Blocked]]:
     manifest_rel = relative / "Cargo.toml"
-    manifest = read_manifest(package.root / "Cargo.toml")
-    changes: list[Change] = []
+    manifest = manifests.read(manifest_rel)
     satisfied: list[str] = []
     blocked: list[Blocked] = []
-    #: Appended to the manifest as one block, so the banner appears once whatever else happens.
-    appended: list[str] = []
 
     if package.lib is None or not package.lib.builds_shared_object:
         blocked.append(
@@ -632,37 +659,37 @@ def _plan_package_manifest(
         enables += [
             f"{dep.name}/{DEFAULT_FEATURE}" for dep in local_dependencies(workspace, package)
         ]
-        entry = f"{DEFAULT_FEATURE} = {_toml_array(enables)}\n"
-        why = f"the feature that compiles the harness in ({', '.join(enables)})"
-        if features:
-            changes.append(
-                InsertInTable(path=manifest_rel, header="[features]", contents=entry, why=why)
-            )
-        else:
-            appended.append(f"[features]\n{entry}")
+        manifests.add(
+            manifest_rel,
+            AddEntries(("features",), ((DEFAULT_FEATURE, enables),)),
+            f"the feature that compiles the harness in ({', '.join(enables)})",
+        )
 
-    appended += [
-        _dependency_stanza(c.name, inherit=inherit, version=c.version) for c in missing
-    ]
+    if missing:
+        manifests.add(
+            manifest_rel,
+            AddEntries(
+                ("dependencies",),
+                tuple((c.name, _dependency(inherit=inherit, version=c.version)) for c in missing),
+            ),
+            "the CVLR dependencies a verification build compiles",
+        )
 
     if "certora" in manifest.package_metadata:
         satisfied.append("[package.metadata.certora] already declares sources and tuning files")
     else:
-        appended.append(
-            _metadata_section(
-                inlining=ENVS_DIR / INLINING.composite, summaries=ENVS_DIR / SUMMARIES.composite
-            )
+        manifests.add(
+            manifest_rel,
+            AddTable(
+                ("package", "metadata", "certora"),
+                _metadata_table(
+                    inlining=ENVS_DIR / INLINING.composite,
+                    summaries=ENVS_DIR / SUMMARIES.composite,
+                ),
+            ),
+            "the sources and tuning files the prover reads",
         )
-
-    if appended:
-        changes.append(
-            AppendSection(
-                path=manifest_rel,
-                contents=_section_banner() + "\n".join(appended),
-                why="the dependencies, feature and metadata a verification build reads",
-            )
-        )
-    return changes, satisfied, blocked
+    return satisfied, blocked
 
 
 def _plan_harness(
@@ -693,8 +720,8 @@ def _plan_harness(
     return changes, satisfied
 
 
-def _plan_forks(workspace: Workspace) -> tuple[list[Change], list[str], list[Blocked]]:
-    """Append ``[patch.crates-io]`` entries for the verification forks.
+def _plan_forks(workspace: Workspace, manifests: _Manifests) -> tuple[list[str], list[Blocked]]:
+    """Add ``[patch.crates-io]`` entries for the verification forks.
 
     The table is workspace-level, so it goes on the workspace manifest with the rest of the plan.
     Without the Anchor fork, a rule that reaches a handler cannot be analyzed
@@ -706,30 +733,22 @@ def _plan_forks(workspace: Workspace) -> tuple[list[Change], list[str], list[Blo
     patch table. The resolved graph is checked too, because a redirect shows up there as a git
     source.
     """
+    path = Path("Cargo.toml")
     plan = forks.plan_overrides(
-        workspace,
-        already_redirected=forks.already_patched(read_manifest(workspace.root / "Cargo.toml")),
+        workspace, already_redirected=forks.already_patched(manifests.read(path))
     )
     blocked = [
-        Blocked(path=Path("Cargo.toml"), problem=b.problem, resolution=b.resolution)
-        for b in plan.blocked
+        Blocked(path=path, problem=b.problem, resolution=b.resolution) for b in plan.blocked
     ]
-    if blocked or not plan.overrides:
-        return [], [] if blocked else plan.notes(), blocked
-    return (
-        [
-            AppendSection(
-                path=Path("Cargo.toml"),
-                contents=forks.manifest_additions(plan),
-                why=(
-                    "verify against the forks that can be analyzed: "
-                    + ", ".join(f"{o.crate} {o.version} -> {o.branch}" for o in plan.overrides)
-                ),
-            )
-        ],
-        plan.notes(),
-        [],
-    )
+    if blocked:
+        return [], blocked
+    for override, table in forks.patch_tables(plan):
+        manifests.add(
+            path,
+            table,
+            f"verify {override.crate} {override.version} against {override.branch} of the fork",
+        )
+    return plan.notes(), []
 
 
 def _plan_gitignore(workspace: Workspace) -> tuple[list[Change], list[str]]:
@@ -758,26 +777,25 @@ def plan_scaffold(
     Every path is relative to ``workspace.root``, which is also what :func:`apply` writes under.
     """
     relative = _project_relative(package.root, workspace.root)
-    inherit = read_manifest(workspace.root / "Cargo.toml").workspace is not None
+    manifests = _Manifests(workspace.root)
+    inherit = manifests.read(Path("Cargo.toml")).workspace is not None
     dialect = dialect_for(workspace, reference)
 
     changes: list[Change] = []
-    satisfied: list[str] = []
+    satisfied = _plan_workspace_manifest(manifests, reference)
     for planned, notes in (
-        _plan_workspace_manifest(workspace, package, reference),
         _plan_harness(package, relative, dialect),
         _plan_gitignore(workspace),
-        _plan_feature_forwarding(workspace, package, reference),
     ):
         changes += planned
         satisfied += notes
+    satisfied += _plan_feature_forwarding(workspace, package, reference, manifests)
 
-    fork_changes, fork_notes, fork_blocked = _plan_forks(workspace)
-    changes += fork_changes
+    fork_notes, fork_blocked = _plan_forks(workspace, manifests)
     satisfied += fork_notes
 
-    manifest_changes, manifest_notes, blocked = _plan_package_manifest(
-        workspace, package, relative, reference, inherit=inherit
+    manifest_notes, blocked = _plan_package_manifest(
+        workspace, package, relative, reference, manifests, inherit=inherit
     )
     # Unconditional, both of them: the scaffold always writes the reference-set pin now, so the
     # reference set's platform generation always describes what will be built.
@@ -787,7 +805,7 @@ def plan_scaffold(
 
     return ScaffoldPlan(
         package=package.name,
-        changes=tuple(changes + manifest_changes),
+        changes=tuple(changes + manifests.changes()),
         satisfied=tuple(satisfied + manifest_notes),
         blocked=tuple(blocked),
         dialect=dialect,
@@ -796,27 +814,6 @@ def plan_scaffold(
 
 # ---------------------------------------------------------------------------------------------
 # applying
-
-
-def _insert_in_table(text: str, header: str, addition: str) -> str:
-    """``addition`` placed immediately after ``header``'s line.
-
-    ``header`` must appear exactly once. This edits the text of a file that was parsed.
-    Reserializing the manifest would rewrite its comments and ordering to make one change."""
-    lines = text.splitlines(keepends=True)
-    at = [i for i, line in enumerate(lines) if line.strip() == header]
-    if len(at) != 1:
-        raise ScaffoldBlocked(
-            (
-                Blocked(
-                    path=Path("Cargo.toml"),
-                    problem=f"{header} appears {len(at)} times, so there is no one place to add to",
-                    resolution=f"add the entry to {header} by hand and re-run",
-                ),
-            )
-        )
-    index = at[0] + 1
-    return "".join(lines[:index]) + addition + "".join(lines[index:])
 
 
 def declare_unit_features(
@@ -831,16 +828,12 @@ def declare_unit_features(
 
     A feature that is already declared is left as it is.
     """
-    declared = read_manifest(manifest).features
-    wanted = [f for f in dict.fromkeys(features) if f not in declared]
+    edited = ManifestEditor.read(manifest)
+    wanted = [f for f in dict.fromkeys(features) if f not in edited.manifest.features]
     if not wanted:
         return ()
-    entries = "".join(f"{feature} = []\n" for feature in wanted)
-    text = manifest.read_text()
-    if declared:
-        manifest.write_text(_insert_in_table(text, "[features]", entries))
-    else:
-        manifest.write_text(text + _section_banner() + f"[features]\n{entries}")
+    edited.apply(AddEntries(("features",), tuple((f, []) for f in wanted)), note=_ADDED)
+    manifest.write_text(edited.text())
     return tuple(wanted)
 
 
@@ -868,7 +861,15 @@ def apply(plan: ScaffoldPlan, root: Path) -> tuple[Path, ...]:
                 existing = target.read_text() if target.is_file() else ""
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(existing + contents)
-            case InsertInTable(header=header, contents=contents):
-                target.write_text(_insert_in_table(target.read_text(), header, contents))
+            case EditManifest(additions=additions):
+                edited = ManifestEditor.read(target)
+                for addition in additions:
+                    try:
+                        edited.apply(addition.edit, note=_ADDED)
+                    except ManifestConflict as exc:
+                        raise ScaffoldStale(
+                            f"{change.path} changed after the scaffold was planned: {exc}"
+                        ) from exc
+                target.write_text(edited.text())
         touched.append(change.path)
     return tuple(touched)

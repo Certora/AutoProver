@@ -34,7 +34,7 @@ import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from composer.cargo.manifest import Manifest
+from composer.cargo.manifest import AddTable, Comment, Manifest, TableItem
 from composer.cargo.metadata import (
     CratePackage,
     GitSource,
@@ -144,17 +144,13 @@ class Override:
     branch: str
     why: str
 
-    def manifest_addition(self) -> str:
-        """The ``[patch.crates-io]`` entry that redirects the graph at the fork.
+    def redirect(self) -> tuple[TableItem, ...]:
+        """The ``[patch.crates-io.<crate>]`` body that points the graph at the fork.
 
         A branch, not a commit. The lockfile records the commit, so the build stays reproducible
-        without editing this file every time the fork moves.
+        without editing the manifest every time the fork moves.
         """
-        return (
-            f"\n[patch.crates-io.{self.crate}]\n"
-            f'git = "{self.repo}"\n'
-            f'branch = "{self.branch}"\n'
-        )
+        return (("git", self.repo), ("branch", self.branch))
 
 
 @dataclass(frozen=True)
@@ -343,32 +339,35 @@ def plan_overrides(
     )
 
 
-def manifest_additions(plan: ForkPlan) -> str:
-    """The ``[patch.crates-io]`` section this plan needs in the workspace manifest.
+_NOT_DEPLOYED = (
+    "Verification-only dependency replacements. These are NOT the deployed program's "
+    "dependencies: a property proved against a fork is a property of the fork, and whether it "
+    "carries over is a judgement about the specific difference."
+)
 
-    A blocked plan raises instead of emitting a partial section. Replacing one of two crates
-    leaves a build whose failure has two causes.
+
+def patch_tables(plan: ForkPlan) -> tuple[tuple[Override, AddTable], ...]:
+    """The ``[patch.crates-io.<crate>]`` table this plan adds to the workspace manifest for each
+    override.
+
+    A blocked plan raises instead of adding some of them. Replacing one of two crates leaves a
+    build whose failure has two causes. Each fork's reason is written once, in the table of its
+    first crate: crates from one fork share one reason, and repeating it under each reads like
+    two unrelated edits. The first table also says what these replacements are.
     """
     if plan.blocked:
         raise ForkBlocked(plan.blocked)
-    if not plan.overrides:
-        return ""
-    header = (
-        "\n# === Certora CVLR — added by AutoProver ===\n"
-        "# Verification-only dependency replacements. These are NOT the deployed program's\n"
-        "# dependencies: a property proved against a fork is a property of the fork, and whether it\n"
-        "# carries over is a judgement about the specific difference.\n"
-    )
-    # Crates from one fork share one reason. Repeating the paragraph under each of them
-    # reads like two unrelated edits.
-    reasons = ""
+    tables: list[tuple[Override, AddTable]] = []
+    preamble = [Comment(line) for line in _wrapped(_NOT_DEPLOYED)] + [Comment("")]
     for why in dict.fromkeys(o.why for o in plan.overrides):
-        redirects = [o for o in plan.overrides if o.why == why]
-        reasons += "#\n" + "".join(
-            f"# {o.crate} {o.version} -> {o.branch}\n" for o in redirects
-        )
-        reasons += "".join(f"#   {line}\n" for line in _wrapped(why))
-    return header + reasons + "".join(o.manifest_addition() for o in plan.overrides)
+        first, *rest = [o for o in plan.overrides if o.why == why]
+        explanation = [Comment(f"{o.crate} {o.version} -> {o.branch}") for o in (first, *rest)]
+        explanation += [Comment(f"  {line}") for line in _wrapped(why)]
+        body = (*preamble, *explanation, *first.redirect())
+        tables.append((first, AddTable(("patch", "crates-io", first.crate), body)))
+        preamble = []
+        tables += [(o, AddTable(("patch", "crates-io", o.crate), o.redirect())) for o in rest]
+    return tuple(tables)
 
 
 def _wrapped(text: str, width: int = 88) -> list[str]:

@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from composer.cargo.manifest import AddEntries, AddTable, ManifestAddition
 from composer.cargo.metadata import (
     CargoFailed,
     CargoMetadataJson,
@@ -28,8 +29,7 @@ from composer.cargo.metadata import (
 from composer.spec.cvlr import preflight, scaffold, tuning
 from composer.spec.cvlr.scaffold import (
     HARNESS_DIR,
-    AppendSection,
-    InsertInTable,
+    EditManifest,
     ScaffoldBlocked,
     Write,
     apply,
@@ -165,6 +165,16 @@ def _plan(root: Path, **kwargs):
     return plan_scaffold(workspace, package, SOLANA), workspace
 
 
+def _additions(plan, path: Path = Path("Cargo.toml")) -> list[ManifestAddition]:
+    """What ``plan`` adds to the manifest at ``path``, in order."""
+    return [
+        a.edit
+        for c in plan.changes
+        if isinstance(c, EditManifest) and c.path == path
+        for a in c.additions
+    ]
+
+
 def test_a_fresh_project_gets_the_whole_shape_and_a_second_run_gets_nothing(tmp_path):
     # Idempotence is the property, and it has to hold through *apply*, not just through planning:
     # the second plan is computed against the files the first one wrote.
@@ -209,7 +219,7 @@ def test_a_feature_table_that_exists_is_edited_rather_than_reopened(tmp_path):
     # Appending `[features]` to a manifest that has one is a duplicate-table error, so this is the
     # one change that cannot be an append — and the project's comment must survive it.
     plan, workspace = _plan(tmp_path, manifest=WITH_FEATURES, workspace_manifest=WITH_FEATURES)
-    assert any(isinstance(c, InsertInTable) for c in plan.changes)
+    assert any(isinstance(c, EditManifest) for c in plan.changes)
     apply(plan, workspace.root)
 
     text = (tmp_path / "Cargo.toml").read_text()
@@ -226,8 +236,9 @@ def test_a_feature_table_that_exists_is_edited_rather_than_reopened(tmp_path):
 
 def test_a_package_with_no_entrypoint_feature_does_not_get_one_invented(tmp_path):
     plan, _ = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
-    entry = next(c for c in plan.changes if "dep:cvlr" in c.contents)
-    assert "no-entrypoint" not in entry.contents
+    (features,) = [a for a in _additions(plan) if a.table == ("features",)]
+    assert isinstance(features, AddEntries)
+    assert "no-entrypoint" not in dict(features.entries)["certora"]
 
 
 def test_a_workspace_gets_the_pins_and_its_member_inherits_them(tmp_path):
@@ -427,11 +438,9 @@ def test_a_reference_set_crate_the_project_does_not_name_is_not_a_refusal(tmp_pa
         cvlr_resolved={"cvlr": "0.6.1", "cvlr-solana": "0.5.0"},
     )
     assert not plan.blocked
-    written = "".join(
-        c.contents for c in plan.changes if getattr(c, "path", None) == Path("Cargo.toml")
-    )
-    assert "cvlr-solana-stake" in written
-    assert "cvlr-spl-token" in written
+    (dependencies,) = [a for a in _additions(plan) if a.table == ("dependencies",)]
+    assert isinstance(dependencies, AddEntries)
+    assert [key for key, _ in dependencies.entries] == ["cvlr-solana-stake", "cvlr-spl-token"]
 
 
 def test_a_partly_pinned_project_is_still_checked(tmp_path):
@@ -530,11 +539,31 @@ def test_a_missing_gitignore_is_created(tmp_path):
     ]
 
 
-def test_an_ambiguous_table_header_stops_the_edit(tmp_path):
-    # The insert is a text edit to a parsed file, so it has to fail loudly rather than land in
-    # whichever of two tables comes first.
-    with pytest.raises(ScaffoldBlocked):
-        scaffold._insert_in_table("[features]\na = []\n[features]\nb = []\n", "[features]", "c=[]\n")
+def test_the_projects_manifest_keeps_every_line_it_had(tmp_path):
+    # The manifest is edited as a document, not reserialized: every line the project wrote is
+    # still there, in its order, with the additions between them.
+    plan, workspace = _plan(tmp_path, manifest=WITH_FEATURES, workspace_manifest=WITH_FEATURES)
+    apply(plan, workspace.root)
+    edited = iter((tmp_path / "Cargo.toml").read_text().splitlines())
+    assert all(line in edited for line in WITH_FEATURES.splitlines())
+
+
+def test_a_manifest_edited_after_planning_keeps_the_edit(tmp_path):
+    plan, workspace = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
+    (tmp_path / "Cargo.toml").write_text(STANDALONE + "\n# edited meanwhile\n")
+    apply(plan, workspace.root)
+    text = (tmp_path / "Cargo.toml").read_text()
+    assert "# edited meanwhile" in text
+    assert "certora = [" in text
+
+
+def test_a_manifest_that_gained_what_the_plan_adds_is_not_written_over(tmp_path):
+    plan, workspace = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
+    meanwhile = STANDALONE + '\n[features]\ncertora = ["dep:something-else"]\n'
+    (tmp_path / "Cargo.toml").write_text(meanwhile)
+    with pytest.raises(scaffold.ScaffoldStale, match="already has certora"):
+        apply(plan, workspace.root)
+    assert (tmp_path / "Cargo.toml").read_text() == meanwhile
 
 
 def test_the_lib_target_reports_where_cargo_says_its_source_is(tmp_path):
@@ -702,17 +731,10 @@ def test_an_anchor_target_is_redirected_at_the_verification_fork(tmp_path):
     )
     plan = plan_scaffold(workspace, package, SOLANA)
     assert plan.blocked == ()
-    appended = [
-        c
-        for c in plan.changes
-        if isinstance(c, AppendSection)
-        and c.path == Path("Cargo.toml")
-        and "patch.crates-io" in c.contents
-    ]
-    assert len(appended) == 1, [type(c).__name__ for c in plan.changes]
-    contents = appended[0].contents
-    assert 'branch = "certora-v0.31.1"' in contents
-    assert 'git = "https://github.com/Certora/anchor.git"' in contents
+    tables = {a.table: a for a in _additions(plan) if isinstance(a, AddTable)}
+    patch = tables[("patch", "crates-io", "anchor-lang")]
+    assert ("branch", "certora-v0.31.1") in patch.body
+    assert ("git", "https://github.com/Certora/anchor.git") in patch.body
 
 
 def test_redirecting_twice_is_a_no_op(tmp_path):
@@ -728,7 +750,7 @@ def test_redirecting_twice_is_a_no_op(tmp_path):
 
     workspace, package = _project(tmp_path, **kwargs)
     again = plan_scaffold(workspace, package, SOLANA)
-    assert not [c for c in again.changes if "patch.crates-io" in getattr(c, "contents", "")]
+    assert not [a for a in _additions(again) if a.table[0] == "patch"]
     assert any("already redirected" in note for note in again.satisfied)
     assert (tmp_path / "Cargo.toml").read_text().count("[patch.crates-io.anchor-lang]") == 1
     tomllib.loads((tmp_path / "Cargo.toml").read_text())
@@ -756,5 +778,5 @@ def test_a_non_anchor_target_gets_no_patch_section(tmp_path):
         tmp_path, manifest=STANDALONE, workspace_manifest='[workspace]\nmembers = ["."]\n'
     )
     plan = plan_scaffold(workspace, package, SOLANA)
-    assert not [c for c in plan.changes if "patch.crates-io" in getattr(c, "contents", "")]
+    assert not [a for a in _additions(plan) if a.table[0] == "patch"]
     assert any("anchor-lang is not a dependency" in note for note in plan.satisfied)

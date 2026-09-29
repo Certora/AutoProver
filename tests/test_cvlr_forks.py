@@ -13,7 +13,7 @@ No cargo and no network. ``Workspace`` objects are built in the test.
 import pytest
 from pathlib import Path
 
-from composer.cargo.manifest import parse_manifest
+from composer.cargo.manifest import ManifestEditor, parse_manifest
 from composer.cargo.metadata import (
     CratePackage,
     GitSource,
@@ -26,7 +26,7 @@ from composer.spec.cvlr.forks import (
     SOLANA_OVERRIDES,
     ForkBlocked,
     already_patched,
-    manifest_additions,
+    patch_tables,
     plan_overrides,
 )
 
@@ -50,6 +50,17 @@ def _package(name: str, version: str, source: PackageSource | None = REGISTRY) -
     )
 
 
+_ROOT = '[workspace]\nmembers = ["."]\n'
+
+
+def _added(plan) -> str:
+    """The workspace manifest ``_ROOT`` once ``plan``'s overrides are added to it."""
+    manifest = ManifestEditor(_ROOT)
+    for _, table in patch_tables(plan):
+        manifest.apply(table, note="added by AutoProver")
+    return manifest.text()
+
+
 # ---------------------------------------------------------------------------------------------
 # what it writes
 
@@ -63,7 +74,7 @@ def test_a_covered_anchor_version_is_pointed_at_its_branch(tmp_path):
 
 
 def test_the_manifest_addition_redirects_the_graph_at_the_fork(tmp_path):
-    addition = manifest_additions(plan_overrides(_workspace(tmp_path, _package("anchor-lang", "0.31.1"))))
+    addition = _added(plan_overrides(_workspace(tmp_path, _package("anchor-lang", "0.31.1"))))
     assert "[patch.crates-io.anchor-lang]" in addition
     assert 'git = "https://github.com/Certora/anchor.git"' in addition
     assert 'branch = "certora-v0.31.1"' in addition
@@ -72,7 +83,7 @@ def test_the_manifest_addition_redirects_the_graph_at_the_fork(tmp_path):
 def test_the_manifest_says_these_are_not_the_deployed_dependencies(tmp_path):
     """A property proved against a fork is a property of the fork. The patch section says so,
     next to the dependency it replaces."""
-    addition = manifest_additions(plan_overrides(_workspace(tmp_path, _package("anchor-lang", "0.31.1"))))
+    addition = _added(plan_overrides(_workspace(tmp_path, _package("anchor-lang", "0.31.1"))))
     assert "NOT the deployed program's" in addition
     assert "Certora fork of Anchor" in addition
 
@@ -80,7 +91,7 @@ def test_the_manifest_says_these_are_not_the_deployed_dependencies(tmp_path):
 def test_a_branch_is_named_rather_than_a_commit_pinned(tmp_path):
     """The lockfile records the commit, so the build stays reproducible without editing this
     manifest every time the fork moves."""
-    addition = manifest_additions(plan_overrides(_workspace(tmp_path, _package("anchor-lang", "0.31.1"))))
+    addition = _added(plan_overrides(_workspace(tmp_path, _package("anchor-lang", "0.31.1"))))
     assert "rev =" not in addition
 
 
@@ -103,7 +114,7 @@ def test_an_uncovered_version_blocks_rather_than_leaving_the_boxing_in(tmp_path)
     assert "0.30.0" in plan.blocked[0].problem
     assert "do not verify against the unforked crate" in plan.blocked[0].resolution
     with pytest.raises(ForkBlocked):
-        manifest_additions(plan)
+        _added(plan)
 
 
 def test_a_project_that_already_sources_anchor_itself_is_left_alone(tmp_path):
@@ -167,7 +178,7 @@ def test_a_crate_resolved_twice_is_blocked_rather_than_half_redirected(tmp_path)
 def test_a_target_that_is_not_an_anchor_program_needs_nothing(tmp_path):
     plan = plan_overrides(_workspace(tmp_path, _package("solana-program", "2.3.0")))
     assert not plan
-    assert manifest_additions(plan) == ""
+    assert _added(plan) == _ROOT
     # Reported rather than dropped: "Anchor was not replaced" is what a reader of a [3006] failure
     # needs to know, and silence looks the same as success.
     assert set(plan.inapplicable) == {"anchor-lang", "anchor-spl", "fixed"}
@@ -219,7 +230,7 @@ def test_the_anchor_fork_covers_both_crates_it_publishes(tmp_path):
 def test_one_forks_two_crates_share_one_reason_in_the_manifest(tmp_path):
     """Two crates from one fork share one explanation. Repeating it under each reads like two
     unrelated edits."""
-    addition = manifest_additions(
+    addition = _added(
         plan_overrides(
             _workspace(
                 tmp_path, _package("anchor-lang", "0.31.1"), _package("anchor-spl", "0.31.1")
