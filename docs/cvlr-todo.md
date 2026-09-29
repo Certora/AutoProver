@@ -653,11 +653,17 @@ function that *writes* state a rule asserts over, not only one whose result it r
   call gets a *canary* (asserts nothing changed, false of the real program), a *companion* (asserts
   what really happens), and a `cvlr_satisfy!` that its success branch is reachable at all. The test
   now asserts these results as tripwires.
-  * **`AccountInfo::realloc`: the write is dropped.** Reachable, canary VERIFIED, companion
-    VIOLATED: `new_len` 3, `data_len()` still 2. The starting layer's summary
-    (`#[type((*i32)(r1+0):num)]`) is unsound for anything that reads the length or the data after a
-    resize. **Open:** inline it instead, as other projects do. That needs a run to show the pointer
-    analysis copes (`effe7d1caff92b7f`).
+  * **`AccountInfo::realloc`: the write was dropped; fixed by inlining.** Under the summary it was
+    reachable, the canary VERIFIED and the companion was VIOLATED (`new_len` 3, `data_len()` still
+    2). The starting layer now inlines `realloc` and `original_data_len` instead, and the probe shows
+    the model matching the program: canary VIOLATED, companion VERIFIED.
+    **`resize` is still dropped, deliberately.** It is `realloc(n, true)`, and inlining it crashes
+    the Prover's memory partitioning on the zero-fill: "unknown offset for r1" at `sol_memset_`, a
+    `TACTranslationError` that fails the whole job, so every rule in the submission loses its
+    verdict. Left external, it is reachable, and its writes are dropped (canary VERIFIED, companion
+    VIOLATED), as `realloc`'s were. A direct `realloc(n, true)` now reaches the same crash, where
+    before it passed silently. **Open:** report the crash upstream. A write-up is ready; it needs
+    a ticket number.
   * **A lamport transfer by `invoke`: the write is dropped.** Reachable, canary VERIFIED, companion
     VIOLATED: after a successful transfer of 2, the payer still has `2^64 - 1`. This is broader than
     the starting layer. `invoke_signed_unchecked` is summarized as its `Result`, and the syscall

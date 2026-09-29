@@ -55,12 +55,14 @@ PACKAGE = "vault"
 #: Canary and companion, per call probed.
 PAIRS = (
     ("rule_canary_realloc_keeps_the_old_length", "rule_realloc_sets_the_new_length"),
+    ("rule_canary_resize_keeps_the_old_length", "rule_resize_sets_the_new_length"),
     ("rule_canary_invoke_transfer_moves_nothing", "rule_invoke_transfer_debits_the_payer"),
     ("rule_canary_anchor_transfer_moves_nothing", "rule_anchor_transfer_debits_the_payer"),
 )
 #: Satisfy rules: whether each call's success branch is reachable at all.
 REACHABLE = (
     "rule_realloc_can_succeed",
+    "rule_resize_can_succeed",
     "rule_invoke_transfer_can_succeed",
     "rule_anchor_transfer_can_succeed",
 )
@@ -142,10 +144,16 @@ async def test_which_writes_the_model_drops(project, capsys):
     # Prover or the starting layer changed, and `docs/cvlr-todo.md` L1 says what depends on it.
     observed = {rule: status[rule] for rule in RULES}
     expected = {
-        # `realloc`: reachable, and the resize is dropped. The length stays the old one.
+        # `realloc`: inlined by the starting layer, and modelled faithfully. (Under the summary it
+        # replaced, the canary verified: the length stayed the old one.)
         "rule_realloc_can_succeed": True,
-        "rule_canary_realloc_keeps_the_old_length": True,
-        "rule_realloc_sets_the_new_length": False,
+        "rule_canary_realloc_keeps_the_old_length": False,
+        "rule_realloc_sets_the_new_length": True,
+        # `resize`: reachable, and the resize is dropped. It is not inlined, because inlining its
+        # zero-fill crashes the Prover's memory partitioning and ends the whole job.
+        "rule_resize_can_succeed": True,
+        "rule_canary_resize_keeps_the_old_length": True,
+        "rule_resize_sets_the_new_length": False,
         # `invoke`: reachable, and the transfer is dropped. The payer keeps its lamports.
         "rule_invoke_transfer_can_succeed": True,
         "rule_canary_invoke_transfer_moves_nothing": True,

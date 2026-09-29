@@ -16,13 +16,51 @@ use cvlr_solana::cvlr_deserialize_nondet_accounts;
 /// The largest growth `realloc` permits in one instruction is 10 KiB; stay well inside it.
 const GROWTH: usize = 1024;
 
-fn grown(info: &AccountInfo) -> Option<(usize, usize)> {
+/// Grow `info` by a nondet amount, returning the old and new lengths on success.
+fn grown_by(
+    info: &AccountInfo,
+    grow: impl FnOnce(&AccountInfo, usize) -> std::result::Result<(), ProgramError>,
+) -> Option<(usize, usize)> {
     let old = info.data_len();
     let new_len: usize = nondet();
     cvlr_assume!(new_len > old && new_len <= old + GROWTH);
+    grow(info, new_len).is_ok().then_some((old, new_len))
+}
+
+fn grown(info: &AccountInfo) -> Option<(usize, usize)> {
     #[allow(deprecated)]
-    let resized = info.realloc(new_len, false);
-    resized.is_ok().then_some((old, new_len))
+    grown_by(info, |info, n| info.realloc(n, false))
+}
+
+/// `resize` is `realloc(n, true)`: the same writes plus a zero-fill of the grown tail.
+fn resized(info: &AccountInfo) -> Option<(usize, usize)> {
+    grown_by(info, |info, n| info.resize(n))
+}
+
+#[rule]
+pub fn rule_canary_resize_keeps_the_old_length() {
+    let accounts = Box::new(cvlr_deserialize_nondet_accounts());
+    let info = &accounts[0];
+    if let Some((old, _)) = resized(info) {
+        clog!(old, info.data_len());
+        cvlr_assert!(info.data_len() == old);
+    }
+}
+
+#[rule]
+pub fn rule_resize_sets_the_new_length() {
+    let accounts = Box::new(cvlr_deserialize_nondet_accounts());
+    let info = &accounts[0];
+    if let Some((_, new_len)) = resized(info) {
+        clog!(new_len, info.data_len());
+        cvlr_assert!(info.data_len() == new_len);
+    }
+}
+
+#[rule]
+pub fn rule_resize_can_succeed() {
+    let accounts = Box::new(cvlr_deserialize_nondet_accounts());
+    cvlr_satisfy!(resized(&accounts[0]).is_some());
 }
 
 #[rule]
