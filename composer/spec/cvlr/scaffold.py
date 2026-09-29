@@ -687,7 +687,7 @@ def _plan_package_manifest(
             "the CVLR dependencies a verification build compiles",
         )
 
-    if "certora" in manifest.package_metadata:
+    if manifest.certora_metadata is not None:
         plan.add_satisfied("[package.metadata.certora] already declares sources and tuning files")
     else:
         plan.add_manifest_edit(

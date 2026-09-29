@@ -248,6 +248,15 @@ def test_a_bare_version_string_is_a_version_requirement():
     assert manifest.dependencies["local"] == Dependency(path="../local", version="0.1")
 
 
+def test_the_certora_metadata_table_is_read_as_present_or_absent():
+    assert parse_manifest('[package]\nname = "p"\n').certora_metadata is None
+    assert parse_manifest("[workspace]\n").certora_metadata is None
+    other_tool = '[package]\nname = "p"\n\n[package.metadata.docs.rs]\nall-features = true\n'
+    assert parse_manifest(other_tool).certora_metadata is None
+    declared = '[package]\nname = "p"\n\n[package.metadata.certora]\nsources = ["src/**/*.rs"]\n'
+    assert parse_manifest(declared).certora_metadata is not None
+
+
 def test_an_empty_workspace_table_still_makes_a_workspace_root():
     assert parse_manifest("[workspace]\n").workspace is not None
     assert parse_manifest('[package]\nname = "p"\n').workspace is None

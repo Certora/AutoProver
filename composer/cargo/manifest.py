@@ -49,9 +49,19 @@ class Dependency(_ManifestModel):
         return {"version": data} if isinstance(data, str) else data
 
 
+class CertoraMetadata(_ManifestModel):
+    """``[package.metadata.certora]``, the prover's build settings. Its keys are not read here."""
+
+
+class PackageMetadata(_ManifestModel):
+    """``[package.metadata]``. Free-form: cargo passes it to tools without reading it, so only the
+    tool tables something here consults are declared."""
+
+    certora: CertoraMetadata | None = None
+
+
 class PackageTable(_ManifestModel):
-    #: ``[package.metadata]`` is free-form; cargo passes it to tools without reading it.
-    metadata: dict[str, object] = {}
+    metadata: PackageMetadata = PackageMetadata()
 
 
 class WorkspaceTable(_ManifestModel):
@@ -74,8 +84,8 @@ class Manifest(_ManifestModel):
         return self.workspace.dependencies if self.workspace is not None else {}
 
     @property
-    def package_metadata(self) -> dict[str, object]:
-        return self.package.metadata if self.package is not None else {}
+    def certora_metadata(self) -> CertoraMetadata | None:
+        return self.package.metadata.certora if self.package is not None else None
 
 
 _UNPARSEABLE = (TOMLKitError, ValidationError)
