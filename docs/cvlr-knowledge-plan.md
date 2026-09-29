@@ -35,9 +35,9 @@ agent's system prompt, unreachable by the other CVLR agents — and (b) any prop
 whatsoever.
 
 **Status (2026-09-29).** (a) has landed on `eric/solanaProver`: the bundle exists, the author's
-prompt was factored into it, every CVLR agent reads it, and the first two recipes are in. What is
-left of Part I is P1-3's de-duplication, more recipes, and P1-5 in certora-cvlr-kb (§13). (b) is
-Part II and has not started.
+prompt was factored into it, each CVLR agent that can use it reads it, the judge cites it instead
+of restating it, and the first two recipes are in. What is left of Part I is more recipes (with
+their compile gate) and P1-5 in certora-cvlr-kb (§13). (b) is Part II and has not started.
 
 ---
 
@@ -187,9 +187,15 @@ there rather than inherited.
   `rag_env.py` only builds corpus search tools, and those now go to the researcher rather than to
   the author.
 
-Consumers: `with_cvlr_context` is the initial prompt of the author (`cvlr/author.py`), the judge
-(the same file), the munge editor and its reviewer (`cvlr/editor.py`), and `cvlr_research`. The
-counterexample analysis needs no wiring of its own. `TrivialFanoutCexHandler` analyzes a
+Consumers, as P1-3 left them. Each reader gets what it can act on, which is why there are two
+bundles. `with_cvlr_context` (`CVLR_BUNDLE`, facts plus the recipe index) is the initial prompt of
+the author and the judge in `cvlr/author.py`, the two agents holding `get_cvlr_recipe`.
+`with_cvlr_facts` (`CVLR_FACTS_BUNDLE`, the facts alone) is for the munge reviewer and
+`cvlr_research`, which have no recipe tool. The index tells its reader to retrieve a file, and its
+channels name the author's tools. The munge editor gets no bundle at all: its charter forbids
+reasoning about the Prover's internals, which are the bundle's subject, and the legend's `EDIT`
+channel told it to hand the problem to `code_editor`, which is itself. The counterexample analysis
+needs no wiring of its own. `TrivialFanoutCexHandler` analyzes a
 counterexample over the author's live message list, and the bundle is already at the head of that
 list.
 
@@ -223,7 +229,9 @@ then can.
 The knowledge tests (`tests/test_cvlr_knowledge.py`, `tests/test_cvlr_bundle.py`) read the bundle
 and the prompt together. What they assert is what the author knows, not which file says it.
 
-The test in the first paragraph above has **not** been met yet. That is P1-3's remaining work (§13).
+P1-3 met the test in the first paragraph above in its intended sense: the munge editor no longer
+reads the bundle, and the judge cites the bundle instead of restating it. It did not always make
+the prompts shorter (§13).
 
 **certora-cvlr-kb's role here is review input, not source text.** Run the entry set against the
 factored document and ask, per entry, one of: *the document already says this* (drop), *the document
@@ -723,7 +731,7 @@ the same time.
 |---|---|---|---|
 | P1-1 | Generalize `kb_context.py` into `KnowledgeBundle`; `CVL_BUNDLE` is a no-op refactor | every existing CVL agent's rendered prompt is byte-identical | **Done**, `560e2327`. P1-4 later made one deliberate change to what CVL agents see: the channel legend now renders (§4.1). |
 | P1-2 | Factor `cvlr_property_generation_system_prompt.j2` → `cvlr_baseline_facts.md` + a slimmer prompt; add `with_cvlr_context`; wire the author | the CVLR authoring run is unchanged in behavior | **Done**, `0ad9d826`. 754 → 423 prompt lines + 388 bundle lines. Two places where the split differs from §4.2 are recorded there. |
-| P1-3 | Wire the bundle into the munge editor, the judge and the feedback graph; delete what they restate | each prompt shrinks; no new knowledge is invented | **Half done.** The wiring is done: judge, munge editor, munge reviewer and `cvlr_research` all use `with_cvlr_context`. The de-duplication has started with loops. Item 5 now cites the bundle's loop section instead of restating it, and keeps only the reviewer's checks: a trip-count assumption must be stated, and an `optimistic_loop` justification must show that the bound was moved. It also says the setting reaches every rule. The judge's input now shows the setting with the author's `why` (`HarnessAssumptions.settings`), which it previously could not see. Its sections on vacuity and over-assumption (item 2) and `clog!` (item 7) are still to do. Some of that is the judge's contract, stated as review criteria, and some restates the bundle. |
+| P1-3 | Wire the bundle into the other CVLR agents that can use it; delete what they restate | no fact is stated in two places, and every citation of a bundle section names a heading the bundle has; no new knowledge is invented | **Done.** The judge's items 2, 5 and 7 cite the bundle's sections and keep only the reviewer's checks. Item 5 gained the `optimistic_loop` checks, and item 7 gained recipe K2's case. The judge's input shows `optimistic_loop` with the author's `why` (`HarnessAssumptions.settings`). The munge reviewer and `cvlr_research` get the facts without the recipe index; the munge editor gets no bundle (§4.1). A test checks each cited heading against the bundle. The gate originally read "each prompt shrinks"; item 5 grew, because it gained checks it had been missing, so the gate now names what it was for. |
 | P1-4 | `cvlr_recipes_index.yaml` + `get_cvlr_recipe`, channels from §4.3's table | an index with real triggers; recipe bodies compile under the §4.4 gate | **Started**, `0cd4c530`. The index, the tool, the channels and two recipes (K1, K2) are in. The compile half of the gate has not run: nothing compiles the recipe examples. The `env_summaries` triage is still open. |
 | P1-5 | In certora-cvlr-kb: retire 52 entries to ledger evidence; re-aim the ledger at the P1-2 document | the ledger's questions name sections of that document | Not checked from AutoProver. |
 
