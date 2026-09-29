@@ -298,32 +298,52 @@ def _dependency(*, inherit: bool, version: str) -> Mapping[str, str | bool]:
     return {**pin, "optional": True}
 
 
-class _Manifests:
-    """The manifests a plan reads and adds to, keyed by project-relative path.
+class _PlanBuilder:
+    """A :class:`ScaffoldPlan` as the planning steps assemble it.
 
-    Several steps can add to one file: a package at the workspace root gets the workspace pins,
-    the forks, and its own entries in one ``Cargo.toml``. Each file becomes one
-    :class:`EditManifest`.
+    Each step records into one builder what it would change, what it found already in place, and
+    what stops the scaffold. Manifests are keyed by project-relative path. Several steps can add
+    to one file: a package at the workspace root gets the workspace pins, the forks, and its own
+    entries in one ``Cargo.toml``. Each file becomes one :class:`EditManifest`.
     """
 
     def __init__(self, root: Path) -> None:
         self._root = root
         self._read: dict[Path, Manifest] = {}
         self._additions: dict[Path, list[Addition]] = {}
+        self._changes: list[Change] = []
+        self._satisfied: list[str] = []
+        self._blocked: list[Blocked] = []
 
     def read(self, relative: Path) -> Manifest:
         if relative not in self._read:
             self._read[relative] = read_manifest(self._root / relative)
         return self._read[relative]
 
-    def add(self, relative: Path, edit: ManifestAddition, why: str) -> None:
+    def add_manifest_edit(self, relative: Path, edit: ManifestAddition, why: str) -> None:
         self._additions.setdefault(relative, []).append(Addition(edit, why))
 
-    def changes(self) -> list[Change]:
-        return [
+    def add_change(self, change: Change) -> None:
+        self._changes.append(change)
+
+    def add_satisfied(self, note: str) -> None:
+        self._satisfied.append(note)
+
+    def add_blocked(self, blocked: Blocked) -> None:
+        self._blocked.append(blocked)
+
+    def build(self, package: str, dialect: PathDialect) -> ScaffoldPlan:
+        manifest_edits = [
             EditManifest(path=relative, additions=tuple(additions))
             for relative, additions in self._additions.items()
         ]
+        return ScaffoldPlan(
+            package=package,
+            changes=tuple(self._changes + manifest_edits),
+            satisfied=tuple(self._satisfied),
+            blocked=tuple(self._blocked),
+            dialect=dialect,
+        )
 
 
 def _generation(version: str) -> str:
@@ -334,7 +354,7 @@ def _generation(version: str) -> str:
     return version.split(".", maxsplit=1)[0]
 
 
-def _check_platform(workspace: Workspace, reference: ChainReference) -> list[Blocked]:
+def _check_platform(workspace: Workspace, reference: ChainReference, plan: _PlanBuilder) -> None:
     """Refuse to pin a CVLR release the project's platform generation cannot use.
 
     A target on ``solana-program`` 1.18 given ``cvlr-solana`` 0.5.0 does not warn. It fails to
@@ -355,29 +375,28 @@ def _check_platform(workspace: Workspace, reference: ChainReference) -> list[Blo
         if not copies:
             continue
         off = [c.version for c in copies if _generation(c.version) != _generation(witness.line)]
-        if not off:
-            return []
-        builds = ", ".join(off)
-        return [
-            Blocked(
-                path=Path("Cargo.toml"),
-                problem=(
-                    f"this project builds {witness.name} {builds}, but the CVLR "
-                    f"releases the reference set names are bound to {reference.platform.label} — "
-                    f"and each generation has its own AccountInfo type, so the pairing does not "
-                    f"compile rather than merely warning. The scaffold itself would still build; "
-                    f"what fails is the first authored rule that hands one of this project's "
-                    f"accounts to a CVLR helper"
-                ),
-                resolution=(
-                    f"either move the project to {witness.name} {witness.line}, or move the "
-                    f"reference set (composer/spec/cvlr_reference.py) to the CVLR line that "
-                    f"matches {builds} — picking one of those is a decision about the "
-                    f"project, not about the scaffold"
-                ),
+        if off:
+            builds = ", ".join(off)
+            plan.add_blocked(
+                Blocked(
+                    path=Path("Cargo.toml"),
+                    problem=(
+                        f"this project builds {witness.name} {builds}, but the CVLR releases the "
+                        f"reference set names are bound to {reference.platform.label} — and each "
+                        f"generation has its own AccountInfo type, so the pairing does not "
+                        f"compile rather than merely warning. The scaffold itself would still "
+                        f"build; what fails is the first authored rule that hands one of this "
+                        f"project's accounts to a CVLR helper"
+                    ),
+                    resolution=(
+                        f"either move the project to {witness.name} {witness.line}, or move the "
+                        f"reference set (composer/spec/cvlr_reference.py) to the CVLR line that "
+                        f"matches {builds} — picking one of those is a decision about the "
+                        f"project, not about the scaffold"
+                    ),
+                )
             )
-        ]
-    return []
+        return
 
 
 @dataclass(frozen=True)
@@ -426,8 +445,8 @@ def _declaration(
 
 
 def _check_pins(
-    workspace: Workspace, package: CratePackage, reference: ChainReference
-) -> list[Blocked]:
+    workspace: Workspace, package: CratePackage, reference: ChainReference, plan: _PlanBuilder
+) -> None:
     """Refuse a project that is on a CVLR release other than the one this build is pinned to.
 
     One line is supported at a time — the one :mod:`composer.spec.cvlr_reference` names — and
@@ -447,7 +466,6 @@ def _check_pins(
     :class:`~composer.spec.cvlr.crates.Absent`, the ordinary state of a specialization the project
     has no use for, and refusing it would refuse every project this scaffold exists to set up.
     """
-    blocked: list[Blocked] = []
     for release in reference.crates():
         supported = (
             f"this build supports {release.name} {release.version} and no other release: the "
@@ -461,7 +479,7 @@ def _check_pins(
         off = [c.version for c in workspace.resolved(release.name) if c.version != release.version]
         if off:
             builds = ", ".join(off)
-            blocked.append(
+            plan.add_blocked(
                 Blocked(
                     path=Path("Cargo.toml"),
                     problem=(
@@ -475,7 +493,7 @@ def _check_pins(
             continue
         match _declaration(workspace, package, release.name):
             case _Pinned(requirement) if requirement.removeprefix("=") != release.version:
-                blocked.append(
+                plan.add_blocked(
                     Blocked(
                         path=Path("Cargo.toml"),
                         problem=(
@@ -487,7 +505,7 @@ def _check_pins(
                     )
                 )
             case _Unpinned(how):
-                blocked.append(
+                plan.add_blocked(
                     Blocked(
                         path=Path("Cargo.toml"),
                         problem=(
@@ -504,34 +522,31 @@ def _check_pins(
                 )
             case _:
                 pass
-    return blocked
 
 
-def _plan_workspace_manifest(manifests: _Manifests, reference: ChainReference) -> list[str]:
+def _plan_workspace_manifest(reference: ChainReference, plan: _PlanBuilder) -> None:
     """Pins in ``[workspace.dependencies]``, when the root manifest has a ``[workspace]``."""
     path = Path("Cargo.toml")
-    root = manifests.read(path)
+    root = plan.read(path)
     if root.workspace is None:
-        return []
+        return
 
     declared = root.workspace.dependencies
     pins: list[tuple[str, TomlValue]] = []
-    satisfied = []
     for crate in reference.scaffold_crates():
         if crate.name in declared:
-            satisfied.append(
+            plan.add_satisfied(
                 f"{crate.name} is already a workspace dependency, so it is left as it is — "
                 f"whether it names the supported release is checked separately (_check_pins)"
             )
             continue
         pins.append((crate.name, {"version": f"={crate.version}"}))
     if pins:
-        manifests.add(
+        plan.add_manifest_edit(
             path,
             AddEntries(("workspace", "dependencies"), tuple(pins)),
             "pin the CVLR releases the reference set names, for the whole workspace",
         )
-    return satisfied
 
 
 def local_dependencies(workspace: Workspace, package: CratePackage) -> tuple[CratePackage, ...]:
@@ -549,8 +564,8 @@ def local_dependencies(workspace: Workspace, package: CratePackage) -> tuple[Cra
 
 
 def _plan_feature_forwarding(
-    workspace: Workspace, package: CratePackage, reference: ChainReference, manifests: _Manifests
-) -> list[str]:
+    workspace: Workspace, package: CratePackage, reference: ChainReference, plan: _PlanBuilder
+) -> None:
     """Give each library crate the program depends on its own ``certora`` feature.
 
     A cargo feature is a named on/off switch that a crate (a Rust package) declares. Code marked
@@ -574,26 +589,25 @@ def _plan_feature_forwarding(
     are on when a build starts, so a feature added to a library after that is not seen by that
     build.
     """
-    satisfied: list[str] = []
     for dep in local_dependencies(workspace, package):
         path = dep.root.resolve().relative_to(workspace.root.resolve()) / "Cargo.toml"
-        manifest = manifests.read(path)
+        manifest = plan.read(path)
         if DEFAULT_FEATURE in manifest.features:
-            satisfied.append(f"{dep.name} already declares a `{DEFAULT_FEATURE}` feature")
+            plan.add_satisfied(f"{dep.name} already declares a `{DEFAULT_FEATURE}` feature")
             continue
         wanted = reference.scaffold_crates()
         missing = [c for c in wanted if c.name not in manifest.dependencies]
         enables = [f"dep:{c.name}" for c in wanted]
         if NO_ENTRYPOINT_FEATURE in dep.features:
             enables.insert(0, NO_ENTRYPOINT_FEATURE)
-        manifests.add(
+        plan.add_manifest_edit(
             path,
             AddEntries(("features",), ((DEFAULT_FEATURE, enables),)),
             f"so a verification-only edit inside {dep.name} can be gated — the program's "
             f"`{DEFAULT_FEATURE}` forwards to it",
         )
         if missing:
-            manifests.add(
+            plan.add_manifest_edit(
                 path,
                 AddEntries(
                     ("dependencies",),
@@ -601,7 +615,6 @@ def _plan_feature_forwarding(
                 ),
                 f"the CVLR crates {dep.name}'s `{DEFAULT_FEATURE}` feature enables",
             )
-    return satisfied
 
 
 def _plan_package_manifest(
@@ -609,12 +622,11 @@ def _plan_package_manifest(
     package: CratePackage,
     relative: Path,
     reference: ChainReference,
-    manifests: _Manifests,
+    plan: _PlanBuilder,
     *,
     inherit: bool,
-) -> tuple[list[str], list[Blocked]]:
-    """Plan the edits to the scaffolded package's own ``Cargo.toml``, recording them in
-    ``manifests``.
+) -> None:
+    """Plan the edits to the scaffolded package's own ``Cargo.toml``.
 
     Three things go there, each skipped when the manifest already has it:
 
@@ -628,18 +640,15 @@ def _plan_package_manifest(
     ``inherit`` writes each dependency as ``workspace = true``. It is set when the root manifest
     has a ``[workspace]``, where :func:`_plan_workspace_manifest` puts the pins.
 
-    Returns what was already in place, and what stops the scaffold. Two things stop it: a
-    package that builds no ``cdylib``, since the prover has no object to read, and a
+    Two things stop the scaffold here: a package that builds no ``cdylib``, since the prover has no object to read, and a
     ``certora`` feature that exists while no CVLR crate is a dependency, since the name then
     means something the scaffold should not extend.
     """
     manifest_rel = relative / "Cargo.toml"
-    manifest = manifests.read(manifest_rel)
-    satisfied: list[str] = []
-    blocked: list[Blocked] = []
+    manifest = plan.read(manifest_rel)
 
     if package.lib is None or not package.lib.builds_shared_object:
-        blocked.append(
+        plan.add_blocked(
             Blocked(
                 path=manifest_rel,
                 problem=(
@@ -657,17 +666,17 @@ def _plan_package_manifest(
 
     wanted = reference.scaffold_crates()
     missing = [c for c in wanted if c.name not in manifest.dependencies]
-    satisfied += [
-        f"{c.name} is already a dependency of {package.name}" for c in wanted if c not in missing
-    ]
+    for crate in wanted:
+        if crate not in missing:
+            plan.add_satisfied(f"{crate.name} is already a dependency of {package.name}")
 
     features = manifest.features
     if DEFAULT_FEATURE in features:
-        satisfied.append(
+        plan.add_satisfied(
             f"the `{DEFAULT_FEATURE}` feature already exists as {features[DEFAULT_FEATURE]!r}"
         )
         if len(missing) == len(wanted):
-            blocked.append(
+            plan.add_blocked(
                 Blocked(
                     path=manifest_rel,
                     problem=(
@@ -690,14 +699,14 @@ def _plan_package_manifest(
         enables += [
             f"{dep.name}/{DEFAULT_FEATURE}" for dep in local_dependencies(workspace, package)
         ]
-        manifests.add(
+        plan.add_manifest_edit(
             manifest_rel,
             AddEntries(("features",), ((DEFAULT_FEATURE, enables),)),
             f"the feature that compiles the harness in ({', '.join(enables)})",
         )
 
     if missing:
-        manifests.add(
+        plan.add_manifest_edit(
             manifest_rel,
             AddEntries(
                 ("dependencies",),
@@ -707,9 +716,9 @@ def _plan_package_manifest(
         )
 
     if "certora" in manifest.package_metadata:
-        satisfied.append("[package.metadata.certora] already declares sources and tuning files")
+        plan.add_satisfied("[package.metadata.certora] already declares sources and tuning files")
     else:
-        manifests.add(
+        plan.add_manifest_edit(
             manifest_rel,
             AddTable(
                 ("package", "metadata", "certora"),
@@ -720,38 +729,34 @@ def _plan_package_manifest(
             ),
             "the sources and tuning files the prover reads",
         )
-    return satisfied, blocked
 
 
 def _plan_harness(
-    package: CratePackage, relative: Path, dialect: PathDialect
-) -> tuple[list[Change], list[str]]:
-    changes: list[Change] = []
-    satisfied: list[str] = []
+    package: CratePackage, relative: Path, dialect: PathDialect, plan: _PlanBuilder
+) -> None:
     for file in _harness_files(dialect):
         on_disk = package.root / file.path
         if on_disk.is_file() and on_disk.read_text() == file.contents:
-            satisfied.append(f"{relative / file.path} is current")
+            plan.add_satisfied(f"{relative / file.path} is current")
         else:
-            changes.append(replace(file, path=relative / file.path))
+            plan.add_change(replace(file, path=relative / file.path))
 
     if package.lib is not None:
         lib_rel = _project_relative(package.lib.src_path, package.root)
         source = package.lib.src_path.read_text() if package.lib.src_path.is_file() else ""
         if _MOD_CERTORA.search(source):
-            satisfied.append(f"{relative / lib_rel} already declares the harness module")
+            plan.add_satisfied(f"{relative / lib_rel} already declares the harness module")
         else:
-            changes.append(
+            plan.add_change(
                 AppendSection(
                     path=relative / lib_rel,
                     contents=_lib_declaration(),
                     why="pull the harness into the crate, gated on the feature",
                 )
             )
-    return changes, satisfied
 
 
-def _plan_forks(workspace: Workspace, manifests: _Manifests) -> tuple[list[str], list[Blocked]]:
+def _plan_forks(workspace: Workspace, plan: _PlanBuilder) -> None:
     """Add ``[patch.crates-io]`` entries for the verification forks.
 
     The table is workspace-level, so it goes on the workspace manifest with the rest of the plan.
@@ -765,31 +770,32 @@ def _plan_forks(workspace: Workspace, manifests: _Manifests) -> tuple[list[str],
     source.
     """
     path = Path("Cargo.toml")
-    plan = forks.plan_overrides(
-        workspace, already_redirected=forks.already_patched(manifests.read(path))
+    overrides = forks.plan_overrides(
+        workspace, already_redirected=forks.already_patched(plan.read(path))
     )
-    blocked = [
-        Blocked(path=path, problem=b.problem, resolution=b.resolution) for b in plan.blocked
-    ]
-    if blocked:
-        return [], blocked
-    for override, table in forks.patch_tables(plan):
-        manifests.add(
+    if overrides.blocked:
+        for b in overrides.blocked:
+            plan.add_blocked(Blocked(path=path, problem=b.problem, resolution=b.resolution))
+        return
+    for override, table in forks.patch_tables(overrides):
+        plan.add_manifest_edit(
             path,
             table,
             f"verify {override.crate} {override.version} against {override.branch} of the fork",
         )
-    return plan.notes(), []
+    for note in overrides.notes():
+        plan.add_satisfied(note)
 
 
-def _plan_gitignore(workspace: Workspace) -> tuple[list[Change], list[str]]:
+def _plan_gitignore(workspace: Workspace, plan: _PlanBuilder) -> None:
     path = workspace.root / ".gitignore"
     existing = path.read_text() if path.is_file() else None
     ignored = {line.strip() for line in (existing or "").splitlines()}
     absent = [line for line in GITIGNORE_LINES if line not in ignored]
     if not absent:
-        return [], ["prover build output is already gitignored"]
-    return [
+        plan.add_satisfied("prover build output is already gitignored")
+        return
+    plan.add_change(
         AppendSection(
             path=Path(".gitignore"),
             contents=("" if existing is None else "\n")
@@ -797,7 +803,7 @@ def _plan_gitignore(workspace: Workspace) -> tuple[list[Change], list[str]]:
             + "".join(f"{line}\n" for line in absent),
             why=f"ignore {', '.join(absent)}",
         )
-    ], []
+    )
 
 
 def plan_scaffold(
@@ -808,39 +814,21 @@ def plan_scaffold(
     Every path is relative to ``workspace.root``, which is also what :func:`apply` writes under.
     """
     relative = _project_relative(package.root, workspace.root)
-    manifests = _Manifests(workspace.root)
-    inherit = manifests.read(Path("Cargo.toml")).workspace is not None
+    plan = _PlanBuilder(workspace.root)
+    inherit = plan.read(Path("Cargo.toml")).workspace is not None
     dialect = dialect_for(workspace, reference)
 
-    changes: list[Change] = []
-    satisfied = _plan_workspace_manifest(manifests, reference)
-    for planned, notes in (
-        _plan_harness(package, relative, dialect),
-        _plan_gitignore(workspace),
-    ):
-        changes += planned
-        satisfied += notes
-    satisfied += _plan_feature_forwarding(workspace, package, reference, manifests)
-
-    fork_notes, fork_blocked = _plan_forks(workspace, manifests)
-    satisfied += fork_notes
-
-    manifest_notes, blocked = _plan_package_manifest(
-        workspace, package, relative, reference, manifests, inherit=inherit
-    )
+    _plan_workspace_manifest(reference, plan)
+    _plan_harness(package, relative, dialect, plan)
+    _plan_gitignore(workspace, plan)
+    _plan_feature_forwarding(workspace, package, reference, plan)
+    _plan_forks(workspace, plan)
+    _plan_package_manifest(workspace, package, relative, reference, plan, inherit=inherit)
     # Unconditional, both of them: the scaffold always writes the reference-set pin now, so the
     # reference set's platform generation always describes what will be built.
-    blocked += _check_pins(workspace, package, reference)
-    blocked += _check_platform(workspace, reference)
-    blocked += fork_blocked
-
-    return ScaffoldPlan(
-        package=package.name,
-        changes=tuple(changes + manifests.changes()),
-        satisfied=tuple(satisfied + manifest_notes),
-        blocked=tuple(blocked),
-        dialect=dialect,
-    )
+    _check_pins(workspace, package, reference, plan)
+    _check_platform(workspace, reference, plan)
+    return plan.build(package.name, dialect)
 
 
 # ---------------------------------------------------------------------------------------------
