@@ -725,6 +725,7 @@ function that *writes* state a rule asserts over, not only one whose result it r
 
 **L2. Solana analysis flags the field sets and `BASE_CONF` does not.** Prover runs are cheap, so try
 each against a known run and compare verdicts, [3308]s and timeouts.
+*Deferred (2026-09-29) until we have more experience with real specs; this applies to L3 too.*
 `-solanaAggressiveGlobalDetection` (every surveyed project, `2113326f62f1c94c`),
 `-solanaSlicerIter` (`ad3312b1f8f38d8a`),
 `-solanaTACPromoteOverflow` (`2dac056d3177d2f7`), `-solanaEntrypoint`, perhaps for non-Anchor
