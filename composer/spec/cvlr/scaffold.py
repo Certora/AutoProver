@@ -381,19 +381,11 @@ def _check_platform(workspace: Workspace, reference: ChainReference, plan: _Plan
                 Blocked(
                     path=Path("Cargo.toml"),
                     problem=(
-                        f"this project builds {witness.name} {builds}, but the CVLR line this "
-                        f"build supports, {reference.line()}, is bound to "
-                        f"{reference.platform.label} — and each "
-                        f"generation has its own AccountInfo type, so the pairing does not "
-                        f"compile rather than merely warning. The scaffold itself would still "
-                        f"build; what fails is the first authored rule that hands one of this "
-                        f"project's accounts to a CVLR helper"
+                        f"this project builds {witness.name} {builds}, and the CVLR line this "
+                        f"build supports ({reference.line()}) requires "
+                        f"{reference.platform.label}"
                     ),
-                    resolution=(
-                        f"move the project to {witness.name} {witness.line}. This build "
-                        f"supports no other platform generation, so a project that stays on "
-                        f"{builds} needs an AutoProver build on a CVLR line bound to it"
-                    ),
+                    resolution=f"move the project to {witness.name} {witness.line}",
                 )
             )
         return
