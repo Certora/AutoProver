@@ -16,14 +16,11 @@ dependency graph, which needs a warm cache or the network; see
 
 import asyncio
 import json
-import logging
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NotRequired, TypedDict
-
-_log = logging.getLogger(__name__)
 
 #: Crate types that make a target the library of its package. Bins, tests, and
 #: examples are never the verification target.
@@ -34,7 +31,42 @@ METADATA_TIMEOUT_S = 300
 
 
 class CargoUnavailable(RuntimeError):
-    """``cargo`` is not on ``PATH``."""
+    """``cargo`` is not on ``PATH``, or could not be started."""
+
+
+@dataclass(frozen=True)
+class CargoFailed:
+    """``cargo metadata`` exited non-zero. ``stderr`` is cargo's own explanation."""
+
+    stderr: str
+
+    def describe(self) -> str:
+        return self.stderr.strip()
+
+
+@dataclass(frozen=True)
+class CargoTimedOut:
+    seconds: int
+
+    def describe(self) -> str:
+        return (
+            f"cargo metadata did not finish within {self.seconds}s; on a first read it may still "
+            f"have been downloading dependencies"
+        )
+
+
+@dataclass(frozen=True)
+class UnreadableMetadata:
+    """``cargo metadata`` succeeded but printed output this module cannot read."""
+
+    error: str
+
+    def describe(self) -> str:
+        return f"cargo metadata printed output that could not be read: {self.error}"
+
+
+#: Why :func:`read_workspace` has no workspace to return.
+type MetadataFailure = CargoFailed | CargoTimedOut | UnreadableMetadata
 
 
 class CargoTargetJson(TypedDict):
@@ -217,7 +249,7 @@ def parse_metadata(payload: CargoMetadataJson) -> Workspace:
 
 def _cargo_metadata(
     project_root: Path, *, offline: bool, features: tuple[str, ...], timeout_s: int
-) -> CargoMetadataJson | None:
+) -> CargoMetadataJson | MetadataFailure:
     if shutil.which("cargo") is None:
         raise CargoUnavailable(
             "cargo is not on PATH; a Rust chain's toolchain cannot be resolved without it"
@@ -232,24 +264,15 @@ def _cargo_metadata(
             args, cwd=project_root, capture_output=True, text=True, timeout=timeout_s
         )
     except subprocess.TimeoutExpired:
-        _log.warning("cargo metadata in %s timed out after %ss", project_root, timeout_s)
-        return None
+        return CargoTimedOut(timeout_s)
     except OSError as exc:
-        _log.warning("cargo metadata in %s could not run: %r", project_root, exc)
-        return None
+        raise CargoUnavailable(f"cargo could not be started: {exc}") from exc
     if completed.returncode != 0:
-        _log.warning(
-            "cargo metadata in %s failed (%s): %s",
-            project_root,
-            completed.returncode,
-            completed.stderr.strip(),
-        )
-        return None
+        return CargoFailed(completed.stderr)
     try:
         return json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
-        _log.warning("cargo metadata in %s printed unreadable JSON: %r", project_root, exc)
-        return None
+        return UnreadableMetadata(f"not JSON ({exc})")
 
 
 def _read_workspace(
@@ -258,17 +281,16 @@ def _read_workspace(
     offline: bool = False,
     features: tuple[str, ...] = (),
     timeout_s: int = METADATA_TIMEOUT_S,
-) -> Workspace | None:
+) -> Workspace | MetadataFailure:
     payload = _cargo_metadata(
         project_root, offline=offline, features=features, timeout_s=timeout_s
     )
-    if payload is None:
-        return None
+    if isinstance(payload, CargoFailed | CargoTimedOut | UnreadableMetadata):
+        return payload
     try:
         return parse_metadata(payload)
     except KeyError as exc:
-        _log.warning("cargo metadata in %s omitted %s", project_root, exc)
-        return None
+        return UnreadableMetadata(f"no {exc} field")
 
 
 async def read_workspace(
@@ -277,13 +299,13 @@ async def read_workspace(
     offline: bool = False,
     features: tuple[str, ...] = (),
     timeout_s: int = METADATA_TIMEOUT_S,
-) -> Workspace | None:
-    """The workspace containing ``project_root``, or ``None`` if there is none.
+) -> Workspace | MetadataFailure:
+    """The workspace containing ``project_root``, or why there is none.
 
-    ``None`` covers no manifest, an unparseable one, or a graph that will not
-    resolve — :func:`composer.rustapp.toolchain.source_unit` treats an empty
-    answer as a supported state. The cargo diagnostic is logged, not raised.
-    Missing cargo raises: that is a machine problem, not a project problem.
+    A failure covers no manifest, an unparseable one, or a graph that will not
+    resolve, and carries cargo's own explanation; whether that is fatal is the
+    caller's decision. Missing cargo raises: that is a machine problem, not a
+    project problem.
 
     ``offline`` passes ``--offline``. Pass it when a warm cache is guaranteed;
     leave it off for the first read of an unseen project.

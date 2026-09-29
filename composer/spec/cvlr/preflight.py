@@ -143,12 +143,9 @@ async def _workspace_at(root: Path, *, features: tuple[str, ...] = ()) -> Worksp
         workspace = await read_workspace(root, features=features)
     except CargoUnavailable as exc:
         raise PreflightFailed(str(exc)) from exc
-    if workspace is None:
+    if not isinstance(workspace, Workspace):
         raise PreflightFailed(
-            f"cargo could not resolve a workspace at {root}. What cargo said is logged as a "
-            f"warning by composer.cargo.metadata — most often a manifest that does not parse, a "
-            f"`workspace = true` dependency the root does not declare, or a graph that needs the "
-            f"network"
+            f"Could not read the Cargo project at {root}:\n{workspace.describe()}"
         )
     return workspace
 
