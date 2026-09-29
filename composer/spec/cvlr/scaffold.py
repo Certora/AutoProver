@@ -512,8 +512,8 @@ def _plan_workspace_manifest(reference: ChainReference, plan: _PlanBuilder) -> N
     for crate in reference.scaffold_crates():
         if crate.name in declared:
             plan.add_satisfied(
-                f"{crate.name} is already a workspace dependency, so it is left as it is — "
-                f"whether it names the supported release is checked separately (_check_pins)"
+                f"{crate.name} is already a workspace dependency, so it is left as it is; its "
+                f"release is checked on its own"
             )
             continue
         pins.append((crate.name, {"version": f"={crate.version}"}))
