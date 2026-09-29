@@ -6,17 +6,22 @@ submission adds.
 """
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from composer.cargo.manifest import Dependency, MalformedManifest, parse_manifest
+from composer.cargo import metadata
 from composer.cargo.metadata import (
+    CargoFailed,
     CargoMetadataJson,
+    CargoTimedOut,
     GitBranch,
     GitRev,
     GitSource,
     GitTag,
+    UnreadableMetadata,
     Workspace,
     parse_metadata,
 )
@@ -189,6 +194,43 @@ def test_every_copy_of_a_crate_the_graph_resolves_twice_is_reported():
     older.update(id=f"{older['source']}#cvlr@0.4.1", version="0.4.1")
     payload["packages"].append(older)
     assert [c.version for c in _workspace(payload).resolved("cvlr")] == ["0.6.1", "0.4.1"]
+
+
+def _cargo_answers(monkeypatch, answer):
+    """``cargo metadata`` as a stub: ``answer`` is returned, or raised if it is an exception."""
+
+    def run(args, **_kwargs):
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(metadata.shutil, "which", lambda _name: "/usr/bin/cargo")
+    monkeypatch.setattr(metadata.subprocess, "run", run)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_cargo_metadata_carries_cargos_explanation(monkeypatch):
+    stderr = (
+        "error: failed to parse manifest at `/w/Cargo.toml`\n\nCaused by:\n  TOML parse error\n"
+    )
+    _cargo_answers(monkeypatch, subprocess.CompletedProcess([], 101, stdout="", stderr=stderr))
+    failure = await Workspace.read(Path("/w"))
+    assert failure == CargoFailed(stderr)
+    assert failure.describe().startswith("error: failed to parse manifest")
+
+
+@pytest.mark.asyncio
+async def test_a_cargo_metadata_that_runs_out_of_time_says_so(monkeypatch):
+    _cargo_answers(monkeypatch, subprocess.TimeoutExpired(["cargo"], 7))
+    assert await Workspace.read(Path("/w"), timeout_s=7) == CargoTimedOut(7)
+
+
+@pytest.mark.asyncio
+async def test_cargo_output_that_does_not_validate_is_a_failure_not_an_exception(monkeypatch):
+    _cargo_answers(monkeypatch, subprocess.CompletedProcess([], 0, stdout="{}", stderr=""))
+    failure = await Workspace.read(Path("/w"))
+    assert isinstance(failure, UnreadableMetadata)
+    assert "packages" in failure.describe()
 
 
 # --------------------------------------------------------------------------------------------

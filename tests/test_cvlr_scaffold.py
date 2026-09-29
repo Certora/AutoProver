@@ -16,9 +16,11 @@ from pathlib import Path
 import pytest
 
 from composer.cargo.metadata import (
+    CargoFailed,
     CargoMetadataJson,
     CratePackage,
     LibTarget,
+    MetadataFailure,
     RegistrySource,
     Workspace,
     parse_metadata,
@@ -585,7 +587,7 @@ class _FakeCargo:
     not show that.
     """
 
-    def __init__(self, workspace: Workspace) -> None:
+    def __init__(self, workspace: Workspace | MetadataFailure) -> None:
         self.workspace = workspace
         self.calls: list[tuple[Path, tuple[str, ...]]] = []
 
@@ -596,7 +598,7 @@ class _FakeCargo:
 
 @pytest.fixture
 def fake_cargo(monkeypatch):
-    def install(workspace: Workspace) -> _FakeCargo:
+    def install(workspace: Workspace | MetadataFailure) -> _FakeCargo:
         fake = _FakeCargo(workspace)
         monkeypatch.setattr(Workspace, "read", fake)
         return fake
@@ -621,6 +623,16 @@ async def test_preflight_resolves_the_verification_graph_from_the_packages_own_d
     assert fake.calls[0] == (tmp_path, ())
     assert fake.calls[-1] == (package.root, ("certora",))
     assert result.artifact_stem == "prog"
+
+
+@pytest.mark.asyncio
+async def test_preflight_reports_what_cargo_said_when_the_project_cannot_be_read(
+    tmp_path, fake_cargo
+):
+    fake_cargo(CargoFailed("error: failed to parse manifest at `Cargo.toml`\n"))
+    with pytest.raises(preflight.PreflightFailed, match="failed to parse manifest") as caught:
+        await preflight.prepare_workspace(tmp_path, reference=SOLANA)
+    assert str(caught.value).startswith(f"Could not read the Cargo project at {tmp_path}:")
 
 
 @pytest.mark.asyncio

@@ -145,12 +145,9 @@ async def _workspace_at(root: Path, *, features: tuple[str, ...] = ()) -> Worksp
         workspace = await Workspace.read(root, features=features)
     except CargoUnavailable as exc:
         raise PreflightFailed(str(exc)) from exc
-    if workspace is None:
+    if not isinstance(workspace, Workspace):
         raise PreflightFailed(
-            f"Could not read the Cargo project at {root}. Common causes: a Cargo.toml with a "
-            f"syntax error, a dependency marked `workspace = true` that the workspace's "
-            f"Cargo.toml does not list, or dependencies that need downloading while the network "
-            f"is unavailable. Running `cargo metadata` in that directory shows cargo's error."
+            f"Could not read the Cargo project at {root}:\n{workspace.describe()}"
         )
     return workspace
 
