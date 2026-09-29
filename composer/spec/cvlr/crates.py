@@ -80,10 +80,16 @@ class CvlrSources:
         """Every CVLR crate in ``workspace``'s resolved graph, in name order.
 
         Cargo's order is not stable. This list is written into run metadata, where a shuffle looks
-        like a change.
+        like a change. One version can resolve twice, from two sources or two paths, so the
+        manifest path, which is unique per package, breaks the tie.
         """
         return cls(
-            tuple(sorted(workspace.family(CVLR_PREFIX), key=lambda c: (c.name, c.version)))
+            tuple(
+                sorted(
+                    workspace.family(CVLR_PREFIX),
+                    key=lambda c: (c.name, c.version, c.manifest_path),
+                )
+            )
         )
 
     def roots(self) -> tuple[Path, ...]:

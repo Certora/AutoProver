@@ -7,6 +7,7 @@ submission adds.
 
 import json
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -17,10 +18,12 @@ from composer.cargo.metadata import (
     CargoFailed,
     CargoMetadataJson,
     CargoTimedOut,
+    CratePackage,
     GitBranch,
     GitRev,
     GitSource,
     GitTag,
+    RegistrySource,
     UnreadableMetadata,
     Workspace,
     parse_metadata,
@@ -291,6 +294,30 @@ def test_the_cvlr_source_roots_are_the_crate_directories_the_build_resolved():
         Path("/home/u/.cargo/registry/src/idx/cvlr-0.6.1"),
         Path("/home/u/.cargo/registry/src/idx/cvlr-log-0.6.1"),
     )
+
+
+def test_two_copies_of_one_version_are_ordered_the_same_whatever_order_cargo_lists_them():
+    """A registry release and a git checkout of it both resolve as ``cvlr 0.6.1``."""
+    registry = CratePackage(
+        name="cvlr",
+        version="0.6.1",
+        manifest_path=Path("/home/u/.cargo/registry/src/idx/cvlr-0.6.1/Cargo.toml"),
+        lib=None,
+        features=(),
+        source=RegistrySource("registry+https://github.com/rust-lang/crates.io-index"),
+    )
+    checkout = replace(
+        registry,
+        manifest_path=Path("/home/u/.cargo/git/checkouts/cvlr-1a2b/3c4d/cvlr/Cargo.toml"),
+        source=GitSource.parse("git+https://github.com/Certora/cvlr.git?branch=main#3c4d5e6f"),
+    )
+    orders = [
+        CvlrSources.of(
+            Workspace(root=Path("/p"), target_directory=Path("/p/target"), members=(), packages=p)
+        ).crates
+        for p in ((registry, checkout), (checkout, registry))
+    ]
+    assert orders[0] == orders[1]
 
 
 def test_a_project_on_the_reference_core_but_without_the_chain_crate_reports_that_gap():
