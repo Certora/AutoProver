@@ -662,8 +662,7 @@ function that *writes* state a rule asserts over, not only one whose result it r
     `TACTranslationError` that fails the whole job, so every rule in the submission loses its
     verdict. Left external, it is reachable, and its writes are dropped (canary VERIFIED, companion
     VIOLATED), as `realloc`'s were. A direct `realloc(n, true)` now reaches the same crash, where
-    before it passed silently. **Open:** report the crash upstream. A write-up is ready; it needs
-    a ticket number.
+    before it passed silently. Reported as **CERT-10184**.
   * **A lamport transfer by `invoke`: the write is dropped.** Reachable, canary VERIFIED, companion
     VIOLATED: after a successful transfer of 2, the payer still has `2^64 - 1`. This is broader than
     the starting layer. `invoke_signed_unchecked` is summarized as its `Result`, and the syscall
