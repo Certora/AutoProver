@@ -533,9 +533,15 @@ So `cvlr_kb` becomes **exactly the sphinx manual**, produced by `gen_docs.sh` an
 already in this repo. Its tool docstrings should be edited to say so and to state its position in
 the ordering: methodology and prose, allowed to lag, not authority on what exists.
 
-This is the one migration step that deletes existing corpus content. It needs a maintainer's
-confirmation that nothing hand-written of value is only in those rows — and the practice half of
-that question is `cvlr-knowledge-plan.md`'s W4 triage, not ours.
+This was billed as the one migration step that deletes existing corpus content, needing a
+maintainer's confirmation that nothing hand-written of value was only in those rows. **It deletes
+nothing.** Checked against the live database on 2026-09-29: all 169 manual sections and all 248
+embedded documents in `cvlr_kb` sit under the single root `solana`, which is `solana.html`. The
+crate reference and the practice entries are not there and were not there for either corpus-only
+run — so run #2's "manual corpus" arm was purely the manual, which makes that comparison cleaner
+than this section assumed. What is left is code that fetches nothing and docstrings that describe
+a corpus this one is not. The practice question remains `cvlr-knowledge-plan.md`'s W4, on its own
+schedule.
 
 ### 4.7 The gates, and what rustdoc does to them
 
@@ -877,12 +883,17 @@ guarantee rather than an assumption. Step 5 now has one precondition left instea
    completed prover jobs. Their drafts survive in the build tree. This is the same class of failure
    that cost the baseline recording a unit, and it is what 2½-hour-lived units over a streaming API
    are exposed to. The pipeline degraded correctly: one unit published, the report ran, exit 0.
-6. **Re-scope `cvlr_kb` to the manual** (§4.6): drop the crate-reference manifest, drop
-   `populate_cvlr_rag.sh`'s discovery of manifests built elsewhere, and restate `cvlr_rag.py`'s
-   docstrings. Deliberately *after* (5): while both channels are live, a duplicated crate reference
-   is harmless, and retiring it early would leave a window where neither corpus answers an API
-   question well. The practice-entry half of this is `cvlr-knowledge-plan.md`'s W4 and moves on its
-   own schedule.
+6. **Re-scope `cvlr_kb` to the manual** (§4.6). ✅ **Done.** Smaller than this plan assumed: the
+   database holds only the manual, so nothing was deleted and the "deliberately after (5)"
+   reasoning — that a duplicated crate reference is harmless while both channels are live — was
+   moot, because there was no duplicate. What landed is the removal of code that could only ever
+   have fetched a stale crate reference (`populate_cvlr_rag.sh`'s `CVLR_KB_REPO` and installed-
+   package discovery) and docstrings that advertised the wrong thing: `cvlr_manual_search` claimed
+   to cover "the CVLR API (what a macro does, what a helper's signature is)", which is now exactly
+   the wrong reason to reach for it, and `cvlr_keyword_search` sent callers there for identifiers.
+   Both now say what the manual is for — methodology, idiom, pitfalls — and name `cvlr_api_lookup`
+   for what exists. The practice-entry half is `cvlr-knowledge-plan.md`'s W4 and moves on its own
+   schedule.
 7. **Re-record the tape**, re-run the gate, re-take the census.
 
    **The re-recording turns the corpus on**, which is an edit to `composer/testing/cvlr_tape.py`
