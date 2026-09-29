@@ -56,12 +56,16 @@ class ForkOverride:
 
     ``branches`` maps an exact resolved version to a branch name, listed rather than derived; see
     the module docstring.
+
+    ``upstream_failure`` is what goes wrong when the target is verified against the crates.io
+    release instead, quoted when a version the fork does not cover blocks the plan.
     """
 
     repo: str
     crates: tuple[str, ...]
     branches: Mapping[str, str]
     why: str
+    upstream_failure: str
 
     def branch_for(self, version: str) -> str | None:
         return self.branches.get(version)
@@ -210,6 +214,10 @@ ANCHOR_FORK = ForkOverride(
         "Use the Certora fork of Anchor. It avoids the boxing the official library does, which is "
         "hard to analyze."
     ),
+    upstream_failure=(
+        "its error type boxes a stack value, which the Prover rejects as [3006] in the entry "
+        "point and in every handler that returns an error"
+    ),
 )
 
 #: The fixed-point crate. The fork adds conversions verification code needs and upstream does not
@@ -222,6 +230,10 @@ FIXED_FORK = ForkOverride(
     why=(
         "Use the Certora fork of fixed. It adds conversions the official library lacks, such as "
         "From<u64> for FixedU64, which verification code needs to build fixed-point values."
+    ),
+    upstream_failure=(
+        "it lacks the conversions, such as From<u64> for FixedU64, that harness code uses to "
+        "build fixed-point values, so that code does not compile"
     ),
 )
 
@@ -264,13 +276,13 @@ def plan_overrides(
     Each crate lands in one of four outcomes:
 
     * inapplicable — not in the resolved graph.
-    * blocked — resolved more than once. One patch entry redirects one of the copies.
     * already sourced — a workspace member, a path dependency, a git dependency, or a crate named
       in ``already_redirected``. Overriding it would replace a choice, which may already be this
       fork. The graph is what cargo computed. ``already_redirected``
       (:func:`already_patched`) covers a snapshot taken before the patch table was applied.
-    * blocked — a version the fork has no branch for. Skipping it would leave the boxed error
-      in the build.
+    * blocked — resolved more than once, since one patch entry redirects one of the copies; or
+      resolved at a version the fork has no branch for, since skipping the fork leaves the
+      failure it exists to fix (:attr:`ForkOverride.upstream_failure`).
     * overridden — redirected at the fork.
 
     Any blocked crate makes the whole result a :class:`ForkRefused`.
@@ -323,7 +335,7 @@ def plan_overrides(
                         resolution=(
                             f"pin {crate} to a covered version, or ask for a branch covering "
                             f"{resolved.version} on the fork and add it here — do not verify "
-                            f"against the unforked crate, which cannot analyze an Anchor handler"
+                            f"against the unforked crate: {fork.upstream_failure}"
                         ),
                     )
                 )

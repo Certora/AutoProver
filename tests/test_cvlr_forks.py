@@ -125,6 +125,17 @@ def test_an_uncovered_version_blocks_rather_than_leaving_the_boxing_in(tmp_path)
     assert "do not verify against the unforked crate" in blocked.resolution
 
 
+@pytest.mark.parametrize("fork", SOLANA_OVERRIDES, ids=lambda f: f.crates[0])
+def test_an_uncovered_version_names_that_forks_failure_not_another(tmp_path, fork):
+    """``fixed`` has no boxing; skipping its fork costs the harness its conversions."""
+    refused = _refused(plan_overrides(_workspace(tmp_path, _package(fork.crates[0], "0.0.1"))))
+    (blocked,) = refused.blocked
+    assert fork.upstream_failure in blocked.resolution
+    for other in SOLANA_OVERRIDES:
+        if other is not fork:
+            assert other.upstream_failure not in blocked.resolution
+
+
 def test_a_project_that_already_sources_anchor_itself_is_left_alone(tmp_path):
     """A path dependency means the project already decided where Anchor comes from. Overriding
     it would replace that choice."""
