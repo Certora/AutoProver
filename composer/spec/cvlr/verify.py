@@ -712,10 +712,12 @@ class SummarizeForProver(
     analyzable.
 
     **A summary is unsound, and it does not fail loudly.** The prover stops reasoning about the
-    function and assumes anything could happen inside it, so summarizing the code your property is
-    actually about produces a rule that passes having checked nothing — with no trace in the
-    harness. Summarize only what your properties do not depend on. Never summarize a handler, or a
-    function that computes a value you assert over.
+    function: the call returns an unconstrained value and writes nothing beyond the locations
+    ``returns`` names, so every other store the real function makes is dropped. Summarizing the code your property is actually about can produce a
+    rule that passes having checked nothing — state the function should have changed keeps its old
+    value — with no trace in the harness. Summarize only what your properties do not depend on.
+    Never summarize a handler, a function that writes state you assert over, or one that computes a
+    value you assert over.
 
     Adding one invalidates the prover stamp, because the previous run's verdicts were about a
     different build: re-run ``verify_rules`` afterwards.

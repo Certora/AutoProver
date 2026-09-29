@@ -279,10 +279,12 @@ class HarnessAssumptions:
             )
         if self.summaries:
             parts.append(
-                "The author has told the prover to stop analyzing these symbols. Inside a "
-                "summarized symbol the prover assumes anything could happen, so a rule whose "
-                "assertion depends on one is green having checked nothing. None of this appears "
-                "in the harness source you are reading:"
+                "The author has told the prover to stop analyzing these symbols. A summarized "
+                "call returns an arbitrary value and writes nothing beyond the locations its "
+                "summary names: every other store the real function makes is dropped. A rule "
+                "asserting over state one of these functions writes is green having checked "
+                "nothing, because that state keeps its old value. None of this appears in the "
+                "harness source you are reading:"
             )
             parts += [
                 f"  {d.pattern}\n"
