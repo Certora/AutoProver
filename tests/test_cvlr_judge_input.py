@@ -50,6 +50,14 @@ def test_a_summary_reaches_the_judge_with_the_argument_for_it():
     assert _DISPLAY.why in briefing
 
 
+def test_the_briefing_says_a_summary_drops_writes():
+    """What makes a summary unsound is the writes it drops, not the value it returns: state the
+    real function would have changed keeps its old value, and an invariant over it holds trivially."""
+    briefing = _text(HarnessAssumptions(summaries=(_DISPLAY,), munges=()))
+    assert "writes nothing" in briefing and "keeps its old value" in briefing
+    assert "anything could happen" not in briefing
+
+
 def test_an_unconstrained_return_is_said_rather_than_left_blank():
     """`returns=None` is the common case and it is the *worse* one — the prover assumes anything
     about the value. Rendering it as an empty field reads like a detail nobody filled in."""

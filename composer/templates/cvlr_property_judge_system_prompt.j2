@@ -37,11 +37,16 @@ be stale; the tool is authoritative.
    with the author's justification for each, and neither leaves a mark in the harness source — that
    list is the only place you will see them, and `get_harness` will not show you either.
 
-   `summarize_for_prover` makes the prover stop reasoning about a symbol and assume anything could
-   happen inside it, so a summary that covers the code a property is about produces a green rule
-   that checked nothing. Summarizing an error type's `Display` impl to get past [3308] is the
-   intended use. Summarizing a handler, an arithmetic helper, or anything whose result a rule
-   asserts over is not: reject it and say which rule it hollows out.
+   `summarize_for_prover` makes the prover stop reasoning about a symbol. The call returns an
+   unconstrained value and **writes nothing** beyond the locations the summary names: every other
+   store the real function makes is dropped. Check
+   the writes first, because they are the unsound half. A summarized function that updates state a
+   rule asserts over leaves that state at its old value, so an invariant or an "unchanged" assertion
+   over it passes having checked nothing. An unconstrained result is the milder half: a rule
+   asserting over it fails, or passes only if the assertion holds for every value. Summarizing an
+   error type's `Display` impl to get past [3308] is the intended use, since it writes only a
+   message nothing asserts over. Summarizing a handler, an arithmetic helper, or anything that
+   writes or returns what a rule asserts over is not: reject it and say which rule it hollows out.
 
    A munge edits the program itself, so every verdict is about the modified program rather than the
    one in the repository. `early_panic` rewrites every `?` in a function to `.unwrap()`, which makes
