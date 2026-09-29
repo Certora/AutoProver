@@ -396,6 +396,40 @@ def test_the_judge_weighs_summaries_the_same_way_it_weighs_mirrors():
     assert "hollows out" in item_one
 
 
+def _judge_loop_item() -> str:
+    return _flat(_judge_system_prompt()).split("5. **What the loops")[1].split("6. **A satisfy")[0]
+
+
+def test_the_judges_loop_check_cites_a_section_the_bundle_has():
+    """The judge defers to the bundle for the loop ladder rather than restating it, which is what
+    let its own copy go stale when `optimistic_loop` became an author tool. A deferral to a heading
+    that was renamed is the same failure again, so the heading is checked against the bundle."""
+    from importlib.resources import files
+
+    heading = "Loops are bounded, and the bound is not assumed away"
+    assert heading in _judge_loop_item()
+    bundle = (files("composer.kb") / "resources" / "cvlr_baseline_facts.md").read_text()
+    assert f"## {heading}" in bundle
+
+
+def test_the_judge_is_told_where_optimistic_loop_is_and_what_justifies_it():
+    """The setting is in the conf, which the judge never reads. What justifies it is one
+    observation — the reported iteration rising with the bound — and anything short of that leaves
+    the sound remedies open."""
+    item = _judge_loop_item()
+    assert "listed at the end of your input" in item
+    assert "the reported iteration rose with it" in item
+    assert "Reject it and say which remedy to try" in item
+
+
+def test_the_judge_is_told_optimistic_loop_reaches_every_rule_in_the_unit():
+    """The author turns it on for one loop and every rule in the submission inherits it; a judge
+    checking only the rule that hit the loop passes the rest unexamined."""
+    item = _judge_loop_item()
+    assert "every rule in the unit" in item
+    assert "`record_skip` naming the loop" in item
+
+
 def test_the_judge_is_told_the_instruments_are_in_its_input_and_nowhere_else():
     """The gap this closed. The prompt instructed a review of the summaries and ``input_parts``
     handed the judge only the draft, the rules, the skips and the rebuttals — so the instruction
