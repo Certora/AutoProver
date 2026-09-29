@@ -520,8 +520,8 @@ def _plan_workspace_manifest(manifests: _Manifests, reference: ChainReference) -
     for crate in reference.scaffold_crates():
         if crate.name in declared:
             satisfied.append(
-                f"{crate.name} is already a workspace dependency at the supported release — "
-                f"_check_pins has already refused anything else, so this is left as it is"
+                f"{crate.name} is already a workspace dependency, so it is left as it is — "
+                f"whether it names the supported release is checked separately (_check_pins)"
             )
             continue
         pins.append((crate.name, {"version": f"={crate.version}"}))
@@ -551,17 +551,28 @@ def local_dependencies(workspace: Workspace, package: CratePackage) -> tuple[Cra
 def _plan_feature_forwarding(
     workspace: Workspace, package: CratePackage, reference: ChainReference, manifests: _Manifests
 ) -> list[str]:
-    """Give every local path dependency a ``certora`` feature.
+    """Give each library crate the program depends on its own ``certora`` feature.
 
-    A verification-only edit inside a dependency has to be gated on a feature that dependency
-    declares. Forwarding per-unit features (``unit_x = ["library/unit_x"]``) would give every
-    dependency a different feature set per unit. Those features are empty so they do not do that
-    (:func:`declare_unit_features`). Forwarding the one shared ``certora`` feature keeps a single
-    resolved feature set. An edit gated that way is then on for every unit, not only the one that
-    needed it.
+    A cargo feature is a named on/off switch that a crate (a Rust package) declares. Code marked
+    with a feature is compiled only when that feature is on. The libraries in question are the
+    crates in this project that the program uses by folder path, not ones downloaded from a
+    registry.
 
-    Declared up front. Adding a feature to a second crate after a build has resolved the graph
-    does not change the feature set that build used.
+    Sometimes verification needs to change code inside one of those libraries. That change must
+    not end up in a normal build, so it is marked with a feature, and it has to be a feature that
+    library declares itself. Turning on the program's ``certora`` feature turns on each library's
+    ``certora`` feature too.
+
+    Each verification unit also has its own feature (``unit_x``). Those features are empty and
+    affect only the program's own code (:func:`declare_unit_features`). If they were passed down
+    to the libraries (``unit_x = ["library/unit_x"]``), every unit would build the libraries with
+    different switches, so cargo would recompile them for each unit. Passing down only the shared
+    ``certora`` feature means every unit builds the libraries the same way. The trade-off is that
+    a library change marked this way is on for every unit, not only the one that needed it.
+
+    This runs at setup, not when the first library change is made. Cargo decides which features
+    are on when a build starts, so a feature added to a library after that is not seen by that
+    build.
     """
     satisfied: list[str] = []
     for dep in local_dependencies(workspace, package):
@@ -602,6 +613,26 @@ def _plan_package_manifest(
     *,
     inherit: bool,
 ) -> tuple[list[str], list[Blocked]]:
+    """Plan the edits to the scaffolded package's own ``Cargo.toml``, recording them in
+    ``manifests``.
+
+    Three things go there, each skipped when the manifest already has it:
+
+    - the CVLR crates, as optional dependencies, so a release build does not compile them;
+    - the ``certora`` feature, which turns those dependencies on, along with ``no-entrypoint``
+      when the package declares it and every local dependency's own ``certora`` feature
+      (:func:`_plan_feature_forwarding`);
+    - ``[package.metadata.certora]``, which tells the prover where the sources and tuning files
+      are.
+
+    ``inherit`` writes each dependency as ``workspace = true``. It is set when the root manifest
+    has a ``[workspace]``, where :func:`_plan_workspace_manifest` puts the pins.
+
+    Returns what was already in place, and what stops the scaffold. Two things stop it: a
+    package that builds no ``cdylib``, since the prover has no object to read, and a
+    ``certora`` feature that exists while no CVLR crate is a dependency, since the name then
+    means something the scaffold should not extend.
+    """
     manifest_rel = relative / "Cargo.toml"
     manifest = manifests.read(manifest_rel)
     satisfied: list[str] = []
