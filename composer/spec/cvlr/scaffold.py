@@ -48,6 +48,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Sequence
 
+from composer.cargo.features import CargoFeature
 from composer.cargo.manifest import Dependency, read_manifest
 from composer.cargo.metadata import CratePackage, Workspace
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
@@ -76,7 +77,7 @@ SHARED_OBJECT_TYPE = "cdylib"
 #: installs, out of the build. Enabled by ``certora`` when the package already has it. Not added
 #: when it does not: a package with no entrypoint to suppress does not need one. The examples'
 #: ``first_example`` has ``certora = []``.
-NO_ENTRYPOINT_FEATURE = "no-entrypoint"
+NO_ENTRYPOINT_FEATURE = CargoFeature("no-entrypoint")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -818,7 +819,9 @@ def _insert_in_table(text: str, header: str, addition: str) -> str:
     return "".join(lines[:index]) + addition + "".join(lines[index:])
 
 
-def declare_unit_features(manifest: Path, features: Sequence[str]) -> tuple[str, ...]:
+def declare_unit_features(
+    manifest: Path, features: Sequence[CargoFeature]
+) -> tuple[CargoFeature, ...]:
     """Declare one empty cargo feature per name, and return the ones this call added.
 
     ``--features certora,unit_x`` fails with "Package does not contain this feature" unless

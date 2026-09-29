@@ -18,6 +18,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+from composer.cargo.features import CargoFeature
 from composer.cargo.metadata import CargoUnavailable, CratePackage, Workspace
 from composer.cargo.session import CargoSession, CompileFailed, Compiled, WarmFailed
 from composer.sandbox.config import SandboxConfig
@@ -140,7 +141,7 @@ async def select_package(
     )
 
 
-async def _workspace_at(root: Path, *, features: tuple[str, ...] = ()) -> Workspace:
+async def _workspace_at(root: Path, *, features: tuple[CargoFeature, ...] = ()) -> Workspace:
     try:
         workspace = await Workspace.read(root, features=features)
     except CargoUnavailable as exc:
@@ -212,7 +213,7 @@ async def gate_workspace(
     pre: CvlrPreflight,
     *,
     sandbox: SandboxConfig,
-    features: tuple[str, ...] = (DEFAULT_FEATURE,),
+    features: tuple[CargoFeature, ...] = (DEFAULT_FEATURE,),
 ) -> None:
     """Check that the scaffolded project compiles with the harness in, or fail the run.
 

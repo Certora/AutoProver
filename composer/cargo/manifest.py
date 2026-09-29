@@ -13,6 +13,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
+from composer.cargo.features import CargoFeature
+
 
 class MalformedManifest(RuntimeError):
     """A ``Cargo.toml`` could not be read, parsed, or does not have cargo's shape."""
@@ -59,7 +61,7 @@ class Manifest(_ManifestModel):
     #: the manifest a workspace root.
     workspace: WorkspaceTable | None = None
     dependencies: dict[str, Dependency] = {}
-    features: dict[str, list[str]] = {}
+    features: dict[CargoFeature, list[str]] = {}
     #: Keyed by the source being patched (``crates-io``, or a registry or git URL), then by crate.
     patch: dict[str, dict[str, Dependency]] = {}
 

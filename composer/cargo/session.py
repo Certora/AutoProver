@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from composer.cargo.features import CargoFeature
 from composer.sandbox.command import CommandResult, run_local_command
 from composer.sandbox.config import SandboxConfig
 from composer.sandbox.recipes import sandbox_cargo_home
@@ -197,7 +198,7 @@ class CargoSession:
         self,
         *,
         package: str | None = None,
-        features: tuple[str, ...] = (),
+        features: tuple[CargoFeature, ...] = (),
         manifest_dir: Path | None = None,
         timeout_s: int = CHECK_TIMEOUT_S,
     ) -> CompileRun:

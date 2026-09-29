@@ -19,6 +19,7 @@ import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from composer.cargo.features import CargoFeature
 from composer.prover.conf import Conf, InheritRules, RuleSelection, dump_conf, safe_msg
 
 #: Conf keys no author or run changes.
@@ -86,7 +87,7 @@ PLATFORM_TOOLS_VERSION = "v1.43"
 #: The cargo feature that compiles the verification module into the program. The scaffold writes
 #: this name (``certora = ["no-entrypoint", "dep:cvlr", …]``), and preflight passes it to
 #: ``cargo check``.
-DEFAULT_FEATURE = "certora"
+DEFAULT_FEATURE = CargoFeature("certora")
 
 
 @dataclass(frozen=True)

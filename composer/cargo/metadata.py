@@ -23,6 +23,8 @@ from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
+from composer.cargo.features import CargoFeature
+
 #: Crate types that make a target the library of its package. Bins, tests, and
 #: examples are never the verification target.
 _LIB_CRATE_TYPES = frozenset({"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"})
@@ -91,7 +93,7 @@ class CargoPackageJson(_CargoJson):
     version: str
     manifest_path: Path
     targets: tuple[CargoTargetJson, ...] = ()
-    features: dict[str, list[str]] = {}
+    features: dict[CargoFeature, list[str]] = {}
     source: str | None = None
 
 
@@ -230,7 +232,7 @@ class CratePackage:
     version: str
     manifest_path: Path
     lib: LibTarget | None
-    features: tuple[str, ...]
+    features: tuple[CargoFeature, ...]
     #: ``None`` for a workspace member or a path dependency.
     source: PackageSource | None
 
@@ -257,7 +259,7 @@ class Workspace:
         project_root: Path,
         *,
         offline: bool = False,
-        features: tuple[str, ...] = (),
+        features: tuple[CargoFeature, ...] = (),
         timeout_s: int = METADATA_TIMEOUT_S,
     ) -> "Workspace | MetadataFailure":
         """The workspace containing ``project_root``, or why there is none.
@@ -352,7 +354,7 @@ def parse_metadata(payload: CargoMetadataJson) -> Workspace:
 
 
 def _cargo_metadata(
-    project_root: Path, *, offline: bool, features: tuple[str, ...], timeout_s: int
+    project_root: Path, *, offline: bool, features: tuple[CargoFeature, ...], timeout_s: int
 ) -> CargoMetadataJson | MetadataFailure:
     if shutil.which("cargo") is None:
         raise CargoUnavailable(
