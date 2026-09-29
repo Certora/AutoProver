@@ -639,8 +639,8 @@ could happen". The unsound case is a dropped write to memory that already held a
 sees the old value, so an invariant over that state passes trivially. Six places in AutoProver
 describe a summary the other way, as "anything could happen": `cvlr_property_generation_prompt.j2:105`,
 `cvlr_property_judge_system_prompt.j2:40`, `verify.py:715`, `state.py:283`, and `tuning.py:13` and
-`:62`. **Open: correct all six**, including what the judge should look for (a summarized function that
-*writes* state a rule asserts over, not only one whose result it reads).
+`:62`. **Done: all six corrected**, and the judge now checks writes before results (a summarized
+function that *writes* state a rule asserts over, not only one whose result it reads).
 
 * **Closed, no change.** `core::result::unwrap_failed` is on the Prover's built-in abort list
   (`sbf/callgraph/AbortFunctions.kt`), as is borsh's `unexpected_eof…`, so our files cannot affect it.

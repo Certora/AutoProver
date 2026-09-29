@@ -10,7 +10,9 @@ file is a regular expression over demangled symbol names.
 Inlining (:data:`INLINING`)
     One directive per line, ``#[inline] <pattern>`` or ``#[inline(never)] <pattern>``. An inlined
     call is analyzed through its body. Any other call is opaque. The Prover does not look inside
-    it, and it knows nothing about what the call wrote. The starting configuration leaves
+    it: the call's return value is unconstrained, and it writes nothing, so everything the real
+    function would have written keeps the value it had before the call. A summary (below) names
+    the few locations it does write. The starting configuration leaves
     ``core``, ``std``, ``alloc``, ``solana_program`` and ``anchor_lang`` opaque by default. The
     exceptions are the functions whose effects a rule depends on: the ``AccountInfo`` accessors,
     ``invoke``, error conversions, and Anchor's account loaders.
@@ -59,8 +61,9 @@ Summaries the authoring loop adds (:class:`SummaryDirective`, written by :class:
     ``require!`` and every ``?`` in a handler can reach. A rule that reaches such a path gets no
     verdict. The remedy is a summary in the unit layer.
 
-    A summary is unsound. It replaces a function with "anything could have happened", so
-    summarizing the wrong thing does not fail. It produces a green rule that checked less than it
+    A summary is unsound. It replaces a function with one that returns an unconstrained value and
+    writes only the locations the summary names, dropping every other write, so summarizing the
+    wrong thing does not fail. It produces a green rule that checked less than it
     appears to. So every directive carries a ``why``, which the judge and the report both get, and
     adding one invalidates the prover stamp (:func:`summary_history`). Nothing here checks that a
     summary does not cover the code under test, because a regex cannot be matched against symbols

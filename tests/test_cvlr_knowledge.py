@@ -444,6 +444,16 @@ def test_the_judge_is_told_optimistic_loop_reaches_every_rule_in_the_unit():
     assert "`record_skip` naming the loop" in item
 
 
+def test_the_judge_is_told_a_summary_drops_writes_rather_than_allowing_anything():
+    """The Prover models a summarized call as returning an arbitrary value and writing nothing
+    beyond the cells the summary names (`sbf/tac/TACDefaultSummarizer.kt`). The prompt used to say
+    "assume anything could happen", which points the judge at the milder half — a result a rule
+    reads — and away from the unsound one: a dropped write, whose state keeps its old value."""
+    item_one = _flat(_judge_system_prompt()).split("2. **Vacuity")[0]
+    assert "anything could happen" not in item_one
+    assert "writes nothing" in item_one and "Check the writes first" in item_one
+
+
 def test_the_judge_is_told_the_instruments_are_in_its_input_and_nowhere_else():
     """The gap this closed. The prompt instructed a review of the summaries and ``input_parts``
     handed the judge only the draft, the rules, the skips and the rebuttals — so the instruction

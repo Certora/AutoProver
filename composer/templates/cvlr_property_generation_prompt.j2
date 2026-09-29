@@ -101,10 +101,15 @@ Read the outcome:
     program genuinely excludes it, or assert something strictly weaker, and say so;
   - **skip the property** with the error code and what you tried.
 
-  A summary is the sharp tool here: the prover stops reasoning about what you summarize and assumes
-  anything could happen inside it, so summarizing the code a property is *about* gives you a rule
-  that passes having checked nothing, with no trace in the harness. Summarize the formatting path,
-  never the handler and never a function whose result you assert over.
+  A summary is the sharp tool here. The prover stops reasoning about what you summarize: the call
+  returns an unconstrained value and **writes nothing** beyond the locations its `returns` names —
+  every other store the real function makes, to its arguments, to account data, to anything
+  reachable, is dropped. So summarizing the code a
+  property is *about* can give you a rule that passes having checked nothing, with no trace in the
+  harness: state the function should have changed keeps its old value, and an assertion that it is
+  unchanged, or still within bounds, holds trivially. Summarize the formatting path, never the
+  handler, never a function that writes state you assert over, and never one whose result you assert
+  over.
 
   **Do not respond by moving the rule onto code the prover finds easier.** Calling a private helper
   instead of the handler, or writing your own copy of the handler's body, makes the run green and
