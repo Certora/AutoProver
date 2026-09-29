@@ -23,8 +23,8 @@ be stale; the tool is authoritative.
 
    **Judge authorship, not depth.** A rule that drives the program's own internal function rather
    than the handler — the accounting core a handler wraps — is legitimate and is what shipped
-   projects do when a CPI stands in the way: the prover's CPI stand-in havocs the caller's
-   deserialized `Account<T>`, so a post-state property cannot be carried at handler level. What that
+   projects do when a CPI stands in the way: the prover does not model what a CPI does, so a
+   post-state property across one is often out of reach at handler level. What that
    rule owes you is a declared subject naming the program function, and commentary saying what the
    narrowing costs — account validation, the CPI's effects and dispatch are outside it. Require both.
    What is never acceptable, at any depth, is a function the *harness* wrote.
@@ -68,12 +68,13 @@ be stale; the tool is authoritative.
    can still be proved under it.
 
    For a CPI — the common case — the trade is specific and worth knowing rather than re-deriving.
-   The Prover's own replacement for a cross-program call havocs the *caller's* deserialized
-   accounts, so a stand-in returning `Ok(())` is not a loss of fidelity but a recovery of it: the
-   program's own bookkeeping after the call becomes provable, which it otherwise is not. What the
-   stand-in does not do is move anything. So a property about the program's recorded state is sound
-   under one, and a property about the lamports or tokens the CPI actually moved is **false** under
-   one rather than merely unproven. That second kind is the one to hunt for and name.
+   The Prover's own model of a cross-program call already moves nothing: every value the call would
+   change keeps its value from before it. So a stand-in returning `Ok(())` costs no fidelity against
+   that model, and it removes what the call drags in, such as the instruction-building loop no bound
+   discharges. Under either, a property about the program's recorded state is sound. A property about
+   the lamports or tokens the CPI actually moved is **false**, and one that needs them *not* to have
+   moved, or a total to stay constant across the call, passes having checked nothing. Those last two
+   kinds are the ones to hunt for and name.
 
    An **extraction** is the one munge that is behaviour-preserving by construction — a function
    split into a feature-gated pair, with the deployed half kept verbatim — so it does not hollow out

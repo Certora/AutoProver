@@ -668,9 +668,19 @@ function that *writes* state a rule asserts over, not only one whose result it r
     the starting layer. `invoke_signed_unchecked` is summarized as its `Result`, and the syscall
     below it writes only `r0`, so **no CPI moves lamports in the model**. A property like "the vault
     never pays out more than X" can pass while the program pays it. The author prompt's claim that a
-    CPI *havocs* the caller's `Account<T>` is not what this shows for lamports. **Open:** reconcile
-    the two, and decide what the author and judge are told. `-solanaCpiAnalysis` (L2) models only
-    Token and Token-2022 CPIs.
+    CPI *havocs* the caller's `Account<T>` is not reproduced either: a direct probe shows the
+    deserialized copy untouched across an `invoke` (`upstream-defects.md` P6, now marked so). The
+    handler form it was first seen in could not be measured, because the vault `deposit` path hits
+    [3308] in `#[error_code]` formatting that is inlined where no summary reaches. **Done:** the
+    author prompt, the judge, the munge editor and reviewer, and two docstrings now say what was
+    measured. A CPI moves nothing, so a property about its effect fails, and one that needs it not to
+    move anything passes unchecked. **Open:** a faithful model of a system transfer (debit the
+    payer, credit the payee); `-solanaCpiAnalysis` (L2) models only Token and Token-2022 CPIs.
+    **Lead:** the [3308]'s failing store is to absolute address 1, the dangling pointer of an empty
+    `Vec`. That fits a dropped write in an external `alloc` growth call (the `^<?alloc::.*$`
+    blanket). If so, some [3308]s blamed on formatting are this effect.
+    **Lead:** a `SummaryDirective` renders at most one `#[type]` line, so an author cannot write a
+    sound summary for a function returning a multi-field value such as a `String`.
   * **Anchor's `system_program::transfer`: never succeeded; fixed by inlining it.** Under the
     `^.*anchor_lang.*$` blanket it was external, and its success branch was statically unreachable
     (the satisfy rule FAILed by static analysis), so everything after `system_program::transfer(…)?`

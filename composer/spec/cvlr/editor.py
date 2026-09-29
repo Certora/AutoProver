@@ -1175,11 +1175,11 @@ class SwapImport(
       resolves to the stand-in, including calls the author's property says nothing about. If the file
       calls `invoke` four times and the property is about one of them, the other three are mocked
       too, and `why` has to say so.
-    * **A stand-in for a cross-program call drops the callee's effect.** That is the point of it — the
-      Prover's own replacement for a CPI havocs the caller's deserialized accounts, which is what
-      defeats a property about the program's bookkeeping *after* a transfer. A stand-in that returns
-      `Ok(())` keeps the caller analysable and the program's own accounting provable; it does not make
-      a property about the moved lamports provable, and one written against it would be false. Say
+    * **A stand-in for a cross-program call drops the callee's effect.** The Prover's own model of a
+      CPI drops it too, so nothing is lost against that model. What the stand-in buys is getting past
+      the call, whose instruction-building loop no bound discharges. A stand-in that returns `Ok(())`
+      keeps the caller analysable and the program's own accounting provable; it does not make a
+      property about the moved lamports provable, and one written against it would be false. Say
       which of the two the batch holds.
 
     You do not write the stand-in — the author does, in the harness, and passes you its path. If the

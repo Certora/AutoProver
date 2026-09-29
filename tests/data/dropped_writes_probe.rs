@@ -184,3 +184,35 @@ pub fn rule_anchor_transfer_can_succeed() {
     let (from, to, system, amount, _) = transfer_setup(&accounts[..]);
     cvlr_satisfy!(anchor_transfer(from, to, system, amount));
 }
+
+// Does a CPI disturb the caller's deserialized `Account<T>`? It cannot in the real program: the
+// deserialized copy is the caller's own memory, and a CPI reaches only the account bytes. The
+// author's prompt said the Prover's CPI stand-in havocs it. Through the `deposit` handler, where
+// that was first observed, this program cannot be analyzed at all ([3308] in its `#[error_code]`
+// formatting, inlined where no summary reaches), so the question is asked directly.
+
+#[rule]
+pub fn rule_account_field_survives_an_invoke() {
+    let accounts = Box::new(cvlr_deserialize_nondet_accounts());
+    let vault: Account<crate::VaultState> = Account::try_from(&accounts[0]).unwrap();
+    let before = vault.balance;
+    let (from, to, system) = (&accounts[1], &accounts[0], &accounts[2]);
+    cvlr_assume!(from.key != to.key);
+    let amount: u64 = nondet();
+    cvlr_assume!(amount > 0);
+    if invoke_transfer(from, to, system, amount) {
+        clog!(before, vault.balance);
+        cvlr_assert!(vault.balance == before);
+    }
+}
+
+#[rule]
+pub fn rule_account_field_across_an_invoke_is_reachable() {
+    let accounts = Box::new(cvlr_deserialize_nondet_accounts());
+    let _vault: Account<crate::VaultState> = Account::try_from(&accounts[0]).unwrap();
+    let (from, to, system) = (&accounts[1], &accounts[0], &accounts[2]);
+    cvlr_assume!(from.key != to.key);
+    let amount: u64 = nondet();
+    cvlr_assume!(amount > 0);
+    cvlr_satisfy!(invoke_transfer(from, to, system, amount));
+}
