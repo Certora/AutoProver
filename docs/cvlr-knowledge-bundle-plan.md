@@ -1,6 +1,6 @@
 # Plan — a CVLR knowledge bundle, and how it lands
 
-Implements Part I of `certora-cvlr-kb:certorag/docs/cvlr-knowledge-plan.md` — W1, W2 and W3, which
+Implements Part I of [cvlr-knowledge-plan.md](./cvlr-knowledge-plan.md) — W1, W2 and W3, which
 are AutoProver work. W4 is disposition inside `certora-cvlr-kb` and is not planned here; the only
 thing this side needs from it is the triage that feeds W3.
 
