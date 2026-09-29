@@ -155,12 +155,12 @@ class ChainReference:
     """What current CVLR means for one chain."""
 
     core: CrateRelease
-    #: The chain crate every project on this chain declares.
-    chain: CrateRelease
+    #: The cvlr chain crate every project on this chain declares.
+    chain_crate: CrateRelease
     platform: PlatformGeneration
     #: Chain crates that model one on-chain program rather than the chain itself: the SPL token
-    #: account model, the stake program's state. Narrower than :attr:`chain`, and still declared.
-    #: :meth:`scaffold_crates` includes them.
+    #: account model, the stake program's state. Narrower than :attr:`chain_crate`, and still
+    #: declared. :meth:`scaffold_crates` includes them.
     #:
     #: They are optional crates behind the ``certora`` feature, so a project that never calls them
     #: pays one extra compile. They are still pinned here. The scaffold is what writes
@@ -172,7 +172,7 @@ class ChainReference:
 
     def crates(self) -> tuple[CrateRelease, ...]:
         """Every CVLR crate in the reference set: the line this build supports."""
-        return (self.core, self.chain, *self.specializations)
+        return (self.core, self.chain_crate, *self.specializations)
 
     def scaffold_crates(self) -> tuple[CrateRelease, ...]:
         """What a fresh project declares in its ``Cargo.toml``.
@@ -201,7 +201,7 @@ _CORE = CrateRelease("cvlr", "0.6.1")
 
 SOLANA = ChainReference(
     core=_CORE,
-    chain=CrateRelease("cvlr-solana", "0.5.0"),
+    chain_crate=CrateRelease("cvlr-solana", "0.5.0"),
     specializations=(
         CrateRelease("cvlr-solana-stake", "0.5.0"),
         # The SPL token account model: nondet token accounts and mints, and the token instruction
@@ -258,7 +258,7 @@ SOLANA = ChainReference(
 
 SOROBAN = ChainReference(
     core=_CORE,
-    chain=CrateRelease("cvlr-soroban", "0.4.0"),
+    chain_crate=CrateRelease("cvlr-soroban", "0.4.0"),
     # The derive crate is a companion of the chain crate. A target uses it when it writes the
     # attribute macros. It is declared the same way as a specialization.
     specializations=(CrateRelease("cvlr-soroban-derive", "0.4.0"),),

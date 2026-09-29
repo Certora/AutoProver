@@ -52,7 +52,7 @@ def test_the_dependency_block_carries_the_platform_too():
 def test_the_solana_choice_records_the_platform_it_implies():
     # cvlr-solana 0.5.0 requires solana-program 2.2, and each Solana generation has its own
     # AccountInfo. Changing the chain crate without changing this label pairs the wrong types.
-    assert ref.SOLANA.chain == ref.CrateRelease("cvlr-solana", "0.5.0")
+    assert ref.SOLANA.chain_crate == ref.CrateRelease("cvlr-solana", "0.5.0")
     assert "2.x" in ref.SOLANA.platform.label
 
 
