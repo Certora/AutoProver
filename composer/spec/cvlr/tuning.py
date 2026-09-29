@@ -55,12 +55,23 @@ When to change which layer:
 """
 
 from dataclasses import dataclass
-from pathlib import Path
+from importlib.resources import files
 
 from composer.spec.cvlr.env_paths import PathDialect
 
 #: The starting layers, shipped in the wheel. Every composite is built from these.
-ENV_DIR = Path(__file__).parent / "envs"
+ENV_DIR = files(__package__) / "envs"
+
+
+@dataclass(frozen=True)
+class StartingLayer:
+    """One starting layer of a tuning file."""
+
+    #: The ``<layer>`` in ``<stem>_<layer>.txt``.
+    name: str
+    #: What the layer's directives cover, as prose. The composite names its layers by this, since
+    #: the layer files themselves are not in the target.
+    covers: str
 
 
 @dataclass(frozen=True)
@@ -71,12 +82,12 @@ class EnvFamily:
     #: What the file's directives are, as prose.
     kind: str
     #: The starting layers, in composition order, each named ``<stem>_<layer>.txt``.
-    layers: tuple[str, ...]
+    layers: tuple[StartingLayer, ...]
 
     @property
     def starting(self) -> tuple[str, ...]:
         """The starting layers' file names, in the order the composite carries them."""
-        return tuple(f"{self.stem}_{layer}.txt" for layer in self.layers)
+        return tuple(f"{self.stem}_{layer.name}.txt" for layer in self.layers)
 
     @property
     def composite(self) -> str:
@@ -97,11 +108,17 @@ class EnvFamily:
         return f"{self.stem}_{unit}.txt"
 
 
+_CORE = StartingLayer("core", "the Rust runtime and the Solana platform")
+
 #: Which calls the Prover analyzes through their bodies. Declared as ``solana_inlining``.
-INLINING = EnvFamily("cvlr_inlining", kind="Inlining directives", layers=("core", "anchor"))
+INLINING = EnvFamily(
+    "cvlr_inlining",
+    kind="Inlining directives",
+    layers=(_CORE, StartingLayer("anchor", "the Anchor framework")),
+)
 #: What the pointer analysis may assume about the memory an opaque call writes. Declared as
 #: ``solana_summaries``.
-SUMMARIES = EnvFamily("cvlr_summaries", kind="Points-to summaries", layers=("core",))
+SUMMARIES = EnvFamily("cvlr_summaries", kind="Points-to summaries", layers=(_CORE,))
 ENV_FAMILIES = (INLINING, SUMMARIES)
 
 #: The starting layers — one content for every target, as against the per-unit layer.
@@ -110,8 +127,8 @@ STARTING_ENVS = tuple(name for f in ENV_FAMILIES for name in f.starting)
 
 _GENERATED_HEADER = """;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Generated — this is the file the build reports to the prover.
-;;; Rewritten on every run. Composed, in order, from AutoProver's
-;;; starting configuration:
+;;; Rewritten on every run, so an edit made here is lost. Composed,
+;;; in order, from AutoProver's starting configuration for:
 {layers}
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 """
@@ -127,25 +144,27 @@ def starting_env(name: str, dialect: PathDialect = PathDialect()) -> str:
 
 
 def compose_env(
-    family: EnvFamily, *, unit_layer: str = "", dialect: PathDialect = PathDialect()
+    family: EnvFamily, *, unit_layer: str | None = None, dialect: PathDialect = PathDialect()
 ) -> str:
     """The generated composite: header, then the layers, in order.
 
-    The scaffold writes the package-level composite, where ``unit_layer`` is empty. A non-empty
-    layer is one unit's directives, so they are not applied to another unit's submission (see
+    The scaffold writes the package-level composite, which has no ``unit_layer``. A unit layer is
+    one unit's directives, so they are not applied to another unit's submission (see
     :meth:`EnvFamily.unit_layer`). Those are the project's own symbols, so the dialect leaves them
     alone.
     """
-    header = _GENERATED_HEADER.format(layers="\n".join(f";;;   {name}" for name in family.starting))
+    header = _GENERATED_HEADER.format(
+        layers="\n".join(f";;;   {layer.covers}" for layer in family.layers)
+    )
     parts = [header]
     if dialect.aliases:
-        # Said in the file, so a reader comparing it with the starting layers can see that paths
-        # were rewritten.
+        # Said in the file, so a reader who knows the upstream ``solana_program::`` paths is not
+        # surprised to find other crates' paths in their place.
         parts.append(
-            f";;; Platform paths rewritten for this target's generation "
-            f"({len(dialect.aliases)} aliases) — see composer/spec/cvlr/env_paths.py\n"
+            f";;; {len(dialect.aliases)} solana_program path prefixes respelled for the "
+            f"crates this project resolves\n"
         )
     parts += [starting_env(name, dialect) for name in family.starting]
-    if unit_layer.strip():
+    if unit_layer is not None and unit_layer.strip():
         parts.append(unit_layer)
     return "\n".join(p.rstrip("\n") for p in parts) + "\n"

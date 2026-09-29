@@ -488,16 +488,17 @@ def test_an_existing_harness_declaration_is_not_added_twice(tmp_path):
     assert any("already declares the harness module" in note for note in plan.satisfied)
 
 
-def test_the_composite_env_file_carries_every_starting_layer_and_names_it(tmp_path):
+def test_the_composite_env_file_carries_every_starting_layer_and_says_what_it_covers(tmp_path):
     plan, workspace = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
     apply(plan, workspace.root)
 
     composite = (tmp_path / "src" / "certora" / "envs" / INLINING.composite).read_text()
-    # The generated file names the layers it was built from, so a reader who wants to change a
-    # directive can tell which of them carries it.
-    for layer in INLINING.starting:
-        assert layer in composite
-        marker = tuning.starting_env(layer).strip().splitlines()[-1]
+    # The layer files are not in the target, so the composite describes each one by what it covers
+    # rather than naming a file the reader cannot open.
+    for layer, name in zip(INLINING.layers, INLINING.starting, strict=True):
+        assert layer.covers in composite
+        assert name not in composite
+        marker = tuning.starting_env(name).strip().splitlines()[-1]
         assert marker in composite
 
 
