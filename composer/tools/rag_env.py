@@ -10,8 +10,8 @@ application fork (the tool classes live in ``composer/tools/<corpus>_rag.py``, s
 (:mod:`composer.scripts.rag_import`) targets, so a corpus is imported and searched under one name.
 
 Two corpora are registered, and they are separate on purpose (``docs/cvlr-api-docs-plan.md``
-§4.1): ``cvlr_kb`` (:mod:`composer.tools.cvlr_rag`), the CVLR manual and verification practice,
-and ``cvlr_api_kb`` (:mod:`composer.tools.cvlr_api_rag`), the API generated from the crates. A
+§4.1): ``cvlr_kb`` (:mod:`composer.tools.cvlr_rag`), the Solana Prover manual, and
+``cvlr_api_kb`` (:mod:`composer.tools.cvlr_api_rag`), the API generated from the crates. A
 retrieval hit carries no provenance, so which tool set answered is how an agent knows which of the
 two it is holding. Both halves of a corpus — a ``composer/tools/<corpus>_rag.py`` and
 its ``KNOWLEDGE_BASES`` connection — must land together: a half-registration (a tag whose tools
