@@ -381,6 +381,29 @@ def _unaccounted(
     )
 
 
+def _externals_note(externals: Sequence[str]) -> str | None:
+    """What the author is told about the functions this run treated as external, if there were any.
+
+    Not a gate: an external call is how the starting configuration keeps most of a platform's code
+    out of the analysis, and nothing in the author's action space inlines one. What the author can
+    do is know where its verdicts stop meaning what they say.
+    """
+    if not externals:
+        return None
+    _log.info("prover treated %d function(s) as external: %s", len(externals), ", ".join(externals))
+    listed = "\n".join(f"  {name}" for name in externals)
+    return (
+        "The prover treated these functions as external, neither analyzed nor summarized:\n"
+        f"{listed}\n"
+        "An external call returns an arbitrary value and writes nothing else, so any state it "
+        "would change keeps its old value, and one that returns its result through memory may "
+        "never succeed, which leaves the code after it unreachable. None of this shows in a "
+        "verdict. If a rule's property depends on what one of these does, say so in the rule's "
+        "commentary, drive the program's own code below the call, or skip the property. You "
+        "cannot add inlining directives."
+    )
+
+
 def _unverdicted(declared: Sequence[str], status: Mapping[str, bool]) -> list[str]:
     """Declared rules the report gave no verdict for.
 
@@ -684,15 +707,21 @@ class VerifyRules(
                         f"Not accounted for: {', '.join(unaccounted)}. Fix the rule, or mark it "
                         "with expect_rule_failure and say why the failure is real."
                     )
+                if (externals := _externals_note(report.external_functions)) is not None:
+                    lines.append(externals)
                 if unaccounted or unverdicted:
                     return tool_state_update(
-                        self.tool_call_id, "\n\n".join(lines) + drift, prover_link=report.link
+                        self.tool_call_id,
+                        "\n\n".join(lines) + drift,
+                        prover_link=report.link,
+                        external_functions=report.external_functions,
                     )
                 return tool_state_update(
                     self.tool_call_id,
                     "\n\n".join([*lines, "Every rule is accounted for. This draft is stamped."])
                     + drift,
                     prover_link=report.link,
+                    external_functions=report.external_functions,
                     validations=stamper(self.state, tuning_history(self.state)),
                 )
 

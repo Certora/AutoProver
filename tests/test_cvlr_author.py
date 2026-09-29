@@ -45,7 +45,7 @@ from composer.spec.cvlr.state import (
 from composer.spec.cvlr.tuning import SummaryDirective
 from composer.spec.cvlr import author
 from composer.spec.cvlr import verify as verify_mod
-from composer.spec.cvlr.verify import _unaccounted, _unverdicted, _wrongly_expected
+from composer.spec.cvlr.verify import _externals_note, _unaccounted, _unverdicted, _wrongly_expected
 
 _DRAFT_NO_RULES = "//! Every property blocked; see the skips.\n"
 
@@ -312,6 +312,17 @@ def test_a_declared_rule_the_report_gives_no_verdict_for_blocks_the_gate():
     status = {"rule_a": True}
     assert _unverdicted(["rule_a", "rule_b"], status) == ["rule_b"]
     assert _unaccounted(status, {}) == []
+
+
+def test_the_author_is_told_which_functions_were_external_and_what_that_means():
+    """Not a gate: the starting configuration keeps most platform code external on purpose. But a
+    verdict over one of these is conditional on dropped writes, and the author cannot see that
+    from the verdict."""
+    assert _externals_note(()) is None
+    note = _externals_note(("solana_account_info::AccountInfo::resize",))
+    assert note is not None
+    assert "solana_account_info::AccountInfo::resize" in note
+    assert "writes nothing else" in note and "cannot add inlining directives" in note
 
 
 def test_a_rule_marked_expected_to_fail_that_verifies_is_reported():

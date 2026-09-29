@@ -198,6 +198,9 @@ class CvlrGenerationExtra(AuthoringExtra):
     #: and writes the whole settings, so two writes in one graph step are two complete settings and
     #: the later is the live one. Without a reducer that step dies with ``InvalidUpdateError``.
     prover_settings: Annotated[ProverSettings, _latest_settings]
+    #: The functions the last prover run treated as external: neither analyzed nor summarized, so
+    #: their writes were dropped. Absent until a run has reported.
+    external_functions: NotRequired[tuple[str, ...]]
     expected_failures: Annotated[dict[CheckName, str], merge_expected_failures]
     #: The job link from the most recent prover run that produced results, whether or not it was
     #: all green — a link to a failing run is still the most useful thing a report can offer.
@@ -256,11 +259,19 @@ class HarnessAssumptions:
     #: The whole settings rather than only ``optimistic_loop``: what the assumption covers is "every
     #: loop finishes within ``loop_iter``", and the bound is half of that sentence.
     settings: ProverSettings = ProverSettings()
+    #: What the last prover run treated as external. Not an instrument the author chose, but the
+    #: same kind of fact: a verdict over one of these is conditional on writes the model dropped.
+    external_functions: tuple[str, ...] = ()
 
     def briefing(self) -> list[str]:
         """Input parts stating what a verdict on this harness would be conditional on."""
         optimistic = self.settings.optimistic_loop
-        if not self.summaries and not self.munges and optimistic is None:
+        if (
+            not self.summaries
+            and not self.munges
+            and optimistic is None
+            and not self.external_functions
+        ):
             return [
                 "The author has added no points-to summaries, has not munged any of the "
                 "program's functions, and has left `optimistic_loop` off. The verdicts this "
@@ -315,6 +326,15 @@ class HarnessAssumptions:
                     "above: the summary is the editor's account of its own work."
                 )
                 parts.append(self.diff)
+        if self.external_functions:
+            parts.append(
+                "The last prover run treated these functions as external, neither analyzed nor "
+                "summarized. Each returns an arbitrary value and writes nothing else, so state it "
+                "would change keeps its old value, and one that returns through memory may never "
+                "succeed, which makes the code after it unreachable. A rule whose property depends "
+                "on one of these can be green having checked nothing:"
+            )
+            parts += [f"  {name}" for name in self.external_functions]
         return parts
 
 
@@ -343,6 +363,7 @@ def harness_assumptions(
         munges=munges,
         diff=munge_diff(pristine, munges) if pristine is not None and munges else "",
         settings=state["prover_settings"],
+        external_functions=state.get("external_functions", ()),
     )
 
 
