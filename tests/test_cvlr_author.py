@@ -45,7 +45,7 @@ from composer.spec.cvlr.state import (
 from composer.spec.cvlr.tuning import SummaryDirective
 from composer.spec.cvlr import author
 from composer.spec.cvlr import verify as verify_mod
-from composer.spec.cvlr.verify import _unaccounted, _wrongly_expected
+from composer.spec.cvlr.verify import _unaccounted, _unverdicted, _wrongly_expected
 
 _DRAFT_NO_RULES = "//! Every property blocked; see the skips.\n"
 
@@ -304,6 +304,14 @@ def test_a_marked_rule_does_not_block_the_gate_but_an_unmarked_failure_does():
     expected = {"rule_b": "the program really does underflow here"}
     # rule_b is a finding the author took responsibility for; rule_c is unfinished work.
     assert _unaccounted(status, expected) == ["rule_c"]
+
+
+def test_a_declared_rule_the_report_gives_no_verdict_for_blocks_the_gate():
+    """The roll-up sees only the rules the report names. A declared rule missing from it would
+    otherwise leave the draft stamped as if every rule had been checked."""
+    status = {"rule_a": True}
+    assert _unverdicted(["rule_a", "rule_b"], status) == ["rule_b"]
+    assert _unaccounted(status, {}) == []
 
 
 def test_a_rule_marked_expected_to_fail_that_verifies_is_reported():
