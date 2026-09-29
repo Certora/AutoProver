@@ -626,7 +626,7 @@ reading before starting. An investigation ends in an AutoProver change or a line
 needed, never in a ledger answer.
 
 **L1. Is the starting layer sound?** *Investigated 2026-09-29 by reading the Prover
-(`EVMVerifier`, `origin/master` a852161573). Three items closed, two open, one Prover bug
+(`EVMVerifier`, `origin/master` a852161573). Three items closed, three measured by a Prover run (below), one Prover bug
 (CERT-10183).*
 
 **The finding every item turned on.** An opaque call, with or without a `#[type]` summary, is
@@ -649,21 +649,37 @@ function that *writes* state a rule asserts over, not only one whose result it r
   heap memory is unconstrained. The bare `^memhavoc_c$` line only silences the unsupported-call
   warning. `memhavoc_c` is a no-op in the Prover, and its one cvlr caller, `alloc_havoced`, applies it
   to fresh memory, which is what the bundle recommends.
-* **Open: `AccountInfo::realloc`.** The starting layer summarizes it as `#[type((*i32)(r1+0):num)]`,
-  that is, its `Result` and nothing else. So after a resize the model still has the old data length
-  and the old slice. Anything reading either afterwards is wrong, in the unsound direction for "the
-  account is still at most N bytes". The field inlines it instead. Needs a Prover run: does the
-  pointer analysis cope with it inlined on the current release (`effe7d1caff92b7f`)?
-* **Open: the `^.*anchor_lang.*$` blanket.** It matches any symbol *containing* `anchor_lang`,
-  including the program's own generated `<prog::X as anchor_lang::Accounts<…>>::try_accounts` and
-  `…AccountsExit>::exit`. By the finding above, an Anchor function outside the exception list is
-  sound only if it writes nothing a rule later reads. Reads come back unconstrained, which is
-  imprecise but sound. Writes are dropped. Suspects: CPI helpers such as
-  `anchor_lang::system_program::transfer` (the lamports would not move), `exit` / `try_serialize`,
-  `close`, `set_inner`, `reload`. This is tied to L2's `-solanaCpiAnalysis`, which is how the Prover
-  models a CPI at all (`0dd8abe704fdc789`). It also leaves unexplained the author prompt's claim that
-  a CPI stand-in *havocs* the caller's `Account<T>`: a dropped write keeps a value rather than
-  havocking it.
+* **Measured 2026-09-29** (`tests/test_cvlr_dropped_writes.py`, one cloud job, no model calls). Each
+  call gets a *canary* (asserts nothing changed, false of the real program), a *companion* (asserts
+  what really happens), and a `cvlr_satisfy!` that its success branch is reachable at all. The test
+  now asserts these results as tripwires.
+  * **`AccountInfo::realloc`: the write is dropped.** Reachable, canary VERIFIED, companion
+    VIOLATED: `new_len` 3, `data_len()` still 2. The starting layer's summary
+    (`#[type((*i32)(r1+0):num)]`) is unsound for anything that reads the length or the data after a
+    resize. **Open:** inline it instead, as other projects do. That needs a run to show the pointer
+    analysis copes (`effe7d1caff92b7f`).
+  * **A lamport transfer by `invoke`: the write is dropped.** Reachable, canary VERIFIED, companion
+    VIOLATED: after a successful transfer of 2, the payer still has `2^64 - 1`. This is broader than
+    the starting layer. `invoke_signed_unchecked` is summarized as its `Result`, and the syscall
+    below it writes only `r0`, so **no CPI moves lamports in the model**. A property like "the vault
+    never pays out more than X" can pass while the program pays it. The author prompt's claim that a
+    CPI *havocs* the caller's `Account<T>` is not what this shows for lamports. **Open:** reconcile
+    the two, and decide what the author and judge are told. `-solanaCpiAnalysis` (L2) models only
+    Token and Token-2022 CPIs.
+  * **Anchor's `system_program::transfer`: never succeeds.** Under the `^.*anchor_lang.*$`
+    blanket it is external, and its success branch is statically unreachable (the satisfy rule
+    FAILs by static analysis), so the canary and companion both VERIFY vacuously. Everything after
+    `system_program::transfer(…)?` is dead in the model, and `rule_sanity: basic` cannot see it,
+    because the rule still reaches its end through the error path. The Prover's log says so on
+    every run: "neither inlined nor summarized. They are treated as external. This is likely to
+    affect soundness", with the `#[inline]` line to add. **Open:** inline Anchor's CPI helpers in
+    the Anchor layer (reachable, though then subject to the `invoke` finding). Also surface that
+    warning to the author. AutoProver does not read it today (`0dd8abe704fdc789`).
+  * **Found on the way, fixed:** a rule the Prover decides by static analysis arrives as a bare
+    tree-view root, and `composer/prover/results.py` dropped it. The CVLR gate counts only the rules
+    it gets verdicts for, so a statically FAILED rule would have let a draft be stamped with "every
+    rule is accounted for". The parser now keeps such rules, and `verify_rules` refuses to stamp
+    while a declared rule has no verdict.
 * **Prover bug, soft-float comparisons.** The float lines in our summaries file hardly matter in TAC,
   because `SummarizeCompilerRt` takes precedence (`sbf/tac/SbfCFGToTAC.kt`, `translateCall`). The
   built-in model is where the problem is. `summarizeBinRel` (`TACFPCompilerRtSummarizer.kt`, which
