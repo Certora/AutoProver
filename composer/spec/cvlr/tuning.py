@@ -165,6 +165,6 @@ def compose_env(
             f"crates this project resolves\n"
         )
     parts += [starting_env(name, dialect) for name in family.starting]
-    if unit_layer is not None and unit_layer.strip():
+    if unit_layer is not None:
         parts.append(unit_layer)
     return "\n".join(p.rstrip("\n") for p in parts) + "\n"

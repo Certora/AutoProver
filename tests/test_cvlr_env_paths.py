@@ -404,6 +404,13 @@ def test_the_dialect_measurably_restores_coverage_and_costs_none(split: PathDial
         assert cb <= ca, f"{name} lost coverage of {sorted(cb - ca)}"
 
 
+def test_a_unit_layer_is_appended_after_the_starting_layers() -> None:
+    layer = "#[inline] ^prog::handler$\n"
+    composite = compose_env(INLINING, unit_layer=layer)
+    assert composite.startswith(compose_env(INLINING).rstrip("\n"))
+    assert composite.endswith(layer)
+
+
 # ---------------------------------------------------------------------------------------------
 # ProgramError::from is inlined
 
