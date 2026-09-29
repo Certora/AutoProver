@@ -176,6 +176,12 @@ async def test_which_writes_the_model_drops(project, capsys):
         "rule_account_field_across_an_invoke_is_reachable": True,
         "rule_account_field_survives_an_invoke": True,
     }
+    # `resize` is external by design (CERT-10184), so the job's alert report must name it. This is
+    # also what shows the alert report was fetched with the results.
+    assert "solana_account_info::AccountInfo::resize" in report.external_functions, (
+        f"external functions reported: {report.external_functions}. Report: {report.link}"
+    )
+
     changed = {rule: observed[rule] for rule in RULES if observed[rule] != expected[rule]}
     assert changed == {}, (
         f"the model's handling of these calls changed: {changed}. A canary that stops verifying "
