@@ -80,10 +80,11 @@ is a verdict on prose.
    call while three others are now mocked, `why` has to say so or it goes back. Third, and this is
    the one that matters for a CPI, **`why` must separate what the stand-in drops from what it
    keeps.** A stand-in for `invoke` that returns `Ok(())` keeps the caller analysable — which is the
-   whole point, since the Prover's own replacement havocs the caller's deserialized accounts — and
-   drops everything the callee did. "So the CPI stops havocing the vault" is the goal, not the
-   dropped behaviour; "the lamport transfer does not happen, so no property about account balances
-   holds under this" is the sentence the judge needs.
+   whole point, since the real call drags in an instruction-building loop no bound discharges — and
+   drops everything the callee did. The Prover's own model of the call drops that too, so nothing is
+   lost against it, but the `why` must still say it. "So the rule gets past the CPI" is the goal, not
+   the dropped behaviour; "the lamport transfer does not happen, so no property about account
+   balances holds under this" is the sentence the judge needs.
 6. **On a `swap_derive`: does the deployed build still derive what it derived, and is the cascade
    whole?** Two checks the tool cannot make. First, read the `cfg_attr(not(..))` line against the
    original derive list: every derive that left the ungated `derive` must reappear there, or a build

@@ -51,6 +51,7 @@ pytestmark = [pytest.mark.expensive, pytest.mark.asyncio]
 SCENARIO = Path(__file__).parent.parent / "test_scenarios" / "solana_vault_idl"
 PROBE = Path(__file__).parent / "data" / "dropped_writes_probe.rs"
 PACKAGE = "vault"
+STEM = "dropped_writes"
 
 #: Canary and companion, per call probed.
 PAIRS = (
@@ -66,7 +67,13 @@ REACHABLE = (
     "rule_invoke_transfer_can_succeed",
     "rule_anchor_transfer_can_succeed",
 )
-RULES = tuple(rule for pair in PAIRS for rule in pair) + REACHABLE
+#: The caller's deserialized `Account<T>` across a CPI, with its reachability rule. The assertion is
+#: true of the real program.
+ACROSS_A_CPI = (
+    "rule_account_field_survives_an_invoke",
+    "rule_account_field_across_an_invoke_is_reachable",
+)
+RULES = tuple(rule for pair in PAIRS for rule in pair) + REACHABLE + ACROSS_A_CPI
 
 
 @pytest.fixture
@@ -107,7 +114,7 @@ async def test_which_writes_the_model_drops(project, capsys):
         Submission(
             manifest_path=package.root / "Cargo.toml",
             rules=SelectRules(RULES),
-            stem="dropped_writes",
+            stem=STEM,
             msg="AutoProver dropped-writes probe",
         ),
     )
@@ -164,6 +171,10 @@ async def test_which_writes_the_model_drops(project, capsys):
         "rule_anchor_transfer_can_succeed": True,
         "rule_canary_anchor_transfer_moves_nothing": True,
         "rule_anchor_transfer_debits_the_payer": False,
+        # The caller's deserialized `Account<T>` is untouched by an `invoke`, as in the program.
+        # (The author's prompt said a CPI havocs it; that is not what the model does.)
+        "rule_account_field_across_an_invoke_is_reachable": True,
+        "rule_account_field_survives_an_invoke": True,
     }
     changed = {rule: observed[rule] for rule in RULES if observed[rule] != expected[rule]}
     assert changed == {}, (

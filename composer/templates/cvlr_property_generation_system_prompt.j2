@@ -177,13 +177,17 @@ is cheaper and is the shape the extraction guidance asks for. Build the accounts
 **Start at the handler, and descend only for a reason you can name.** A rule that drives the handler
 has the best fidelity: real account validation, the real `Context`, the real target. Prefer it.
 
-But a handler that performs a CPI and then updates its own state currently cannot carry a post-state
-property at all. The prover replaces a cross-program invocation with an unconstrained stand-in, and
-today that stand-in also havocs the *caller's* deserialized `Account<T>` — not just the account bytes
-the CPI could really reach. So fields the handler never writes come back changed, and any assertion
-comparing state across the call fails against a correct program. If you see a counterexample where a
-field the handler does not touch has changed across a CPI, that is this, and no assumption you add
-will fix it.
+But a handler that performs a CPI rarely carries a post-state property at handler level. The prover
+does not model what a CPI does: it keeps every value the call would change as it was before the call.
+That is measured for lamports, and the same mechanism covers token balances and account data. Building
+the call's instruction also runs a loop that no loop bound discharges, so a rule through it stops on
+the unwinding assertion unless loops are assumed to finish. And a handler's error paths often reach
+formatting code the pointer analysis refuses ([3308]).
+
+Earlier runs reported a CPI changing fields of the caller's deserialized `Account<T>` that the handler
+never writes. A direct probe does not reproduce that: the deserialized copy is untouched across an
+`invoke`. If a counterexample shows it, report what the counterexample shows rather than assuming that
+cause.
 
 When that happens you have two moves, and they trade fidelity against reach.
 
@@ -217,13 +221,14 @@ Three conditions on it, and they are what separate this from the failure it rese
 
 The second is to keep the handler and take the CPI out from under it, by asking the editor for a
 `swap_import` on the name the call goes through. You write a stand-in with `invoke`'s signature and
-return `Ok(())` from it; the editor points the program's `use` at it behind your feature. The
-unconstrained stand-in is gone, so the caller's `Account<T>` is no longer havoced and the handler's
-own bookkeeping is provable — with real account validation and the real `Context`, which is what
-descending gives up.
+return `Ok(())` from it; the editor points the program's `use` at it behind your feature. The call is
+gone, and its instruction-building loop with it, so the handler's own bookkeeping is provable — with
+real account validation and the real `Context`, which is what descending gives up.
 
-What it costs is the other half: your stand-in does not move the lamports, so a property about what
-the transfer *did* is false under it rather than unprovable, which is worse. Split the batch on that
+What neither move gives you is the transfer itself. Your stand-in does not move the lamports, and
+neither does the prover's own model of the call. So a property about what the transfer *did* fails at
+handler level whichever way you reach it, and a property that needs the lamports *not* to have moved,
+or a total to stay constant across the call, passes having checked nothing. Split the batch on that
 line. "The vault's recorded balance rises by exactly `amount`" is the handler's own bookkeeping and
 belongs here; "the depositor's lamports fall by exactly `amount`" is the CPI's effect and belongs in
 neither — it is a skip, and saying so is the right outcome.
@@ -407,10 +412,11 @@ account's bytes directly, so a handler's writes through its own loader are visib
 no write-back involved. Retain the loader before the call — `let reserve = ix.reserve.clone();` — and
 `load()` it before and after.
 
-**One inherited caution, not measured here:** a cross-program invocation is replaced by an
-unconstrained stand-in, so a property about what the CPI *did* — lamports actually moved, a token
-balance actually changed — is an assumption your rule makes rather than something it checks. Assert
-over the program's own recorded state, which is the part it is responsible for.
+**What a CPI does is not modelled.** The prover keeps every value a cross-program invocation would
+change as it was before the call. So a property about what the CPI *did* — lamports actually moved, a
+token balance actually changed — fails against a correct program, and a property that needs the CPI
+*not* to have moved something passes having checked nothing. Assert over the program's own recorded
+state, which is the part it is responsible for.
 
 ## When a rule should fail
 

@@ -44,7 +44,7 @@ the write-up gives the line number rather than the name.
 | [P3](#p3) | `solanaOptimisticJoinWithStackPtr` is documented as a conf key and is not one | minor |
 | [P4](#p4) | `-solanaAggressiveGlobalDetection` does not fix the [3308] it is recommended for, and neither does any summary | minor — **not** blocking; see the correction |
 | [P5](#p5) | A [3308] in the generated vacuity check is reported as a clean `VERIFIED` when `rule_sanity` is off | **critical** |
-| [P6](#p6) | A summarized CPI havocs the caller's *deserialized* `Account<T>`, not just the account buffer | **blocking** for any handler with a CPI |
+| [P6](#p6) | A summarized CPI havocs the caller's *deserialized* `Account<T>`, not just the account buffer | **not reproduced** by a direct probe; the handler form is unmeasured |
 | [P7](#p7) | A checked `i128` multiply is rejected outright — `__muloti4` is not modelled | **major** — fix in flight (CERT-10103) |
 | [P8](#p8) | `-solanaTACSoundSignedMath` disables most of `-solanaTACMathInt`; together they turn a 7-minute green run into a 2-hour timeout | **major** — blocks adopting the flag (CERT-10061) |
 | [P9](#p9) | Binding a handler's `Result` makes the rule vacuous, so an *acceptance* property is unstatable | **major** |
@@ -424,6 +424,17 @@ applies across branches.
 ## P6
 
 ### A summarized CPI havocs the caller's deserialized `Account<T>`, not just the account buffer
+
+**Measured 2026-09-29, and not reproduced.** `tests/test_cvlr_dropped_writes.py` deserializes an
+`Account<VaultState>`, performs a successful `invoke` transfer with `invoke_signed_unchecked`
+summarized, as below, and asserts the deserialized `balance` is unchanged. It VERIFIES, with the
+branch reachable. The same probe shows what the CPI stand-in does do: it moves nothing. The payer's
+lamports are unchanged after a successful transfer, so the stand-in is not "unconstrained" as this
+entry says. It drops the call's writes, and a property about what the CPI did fails rather than
+being out of reach. The handler form this entry was observed in could not be measured on the vault
+scenario, because its `deposit` path hits [3308] in `#[error_code]` formatting that is inlined where no
+summary reaches. So what this entry describes is either specific to that path or had a different
+cause. The account of it below is the run's own, and its mechanism was inferred, not measured.
 
 The blocker that replaced [3308] once the idiom in P4 was fixed. It cost **six of seven** properties
 in one component of an end-to-end run, and unlike P4 it is not ours.

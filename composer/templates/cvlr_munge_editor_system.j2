@@ -218,9 +218,10 @@ method or the module's items are entangled.
 ### `swap_import`, the kind for code the program calls but does not own
 
 The commonest instance is a CPI. `vault_program::deposit` calls
-`invoke(&system_instruction::transfer(..), ..)`; the Prover replaces the cross-program call with
-something unconstrained, and that havocs the caller's own deserialized accounts — so a property
-about what the *program* recorded after the transfer cannot be stated at all. None of the eight
+`invoke(&system_instruction::transfer(..), ..)`, and building that instruction runs a loop no loop
+bound discharges, so a rule through the handler stops before it reaches what the *program* recorded
+after the transfer. (The Prover's own model of the call moves nothing, so the stand-in costs nothing
+against it.) None of the eight
 kinds above reaches it: `invoke` belongs to `solana_program`, a munge may not touch a dependency,
 the call is an expression rather than an item, and the optimizer has usually inlined the chain so
 there is no symbol left to summarize either.
