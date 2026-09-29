@@ -675,7 +675,7 @@ function that *writes* state a rule asserts over, not only one whose result it r
     author prompt, the judge, the munge editor and reviewer, and two docstrings now say what was
     measured. A CPI moves nothing, so a property about its effect fails, and one that needs it not to
     move anything passes unchecked. **Open:** a faithful model of a system transfer (debit the
-    payer, credit the payee); `-solanaCpiAnalysis` (L2) models only Token and Token-2022 CPIs.
+    payer, credit the payee); `-solanaCpiAnalysis` is no route to one (L2: it covers only Token CPIs and never worked well).
     **Lead:** the [3308]'s failing store is to absolute address 1, the dangling pointer of an empty
     `Vec`. That fits a dropped write in an external `alloc` growth call (the `^<?alloc::.*$`
     blanket). If so, some [3308]s blamed on formatting are this effect.
@@ -726,11 +726,15 @@ function that *writes* state a rule asserts over, not only one whose result it r
 **L2. Solana analysis flags the field sets and `BASE_CONF` does not.** Prover runs are cheap, so try
 each against a known run and compare verdicts, [3308]s and timeouts.
 `-solanaAggressiveGlobalDetection` (every surveyed project, `2113326f62f1c94c`),
-`-solanaSlicerIter` (`ad3312b1f8f38d8a`), `-solanaCpiAnalysis` (`438da9c1a8d623b6`; off by default. It replaces a CPI to the Token or Token-2022 program with cvlr's token mocks, `sbf/analysis/cpis/CpisSubstitutionMap.kt`, and bears on L1's Anchor item),
+`-solanaSlicerIter` (`ad3312b1f8f38d8a`),
 `-solanaTACPromoteOverflow` (`2dac056d3177d2f7`), `-solanaEntrypoint`, perhaps for non-Anchor
 programs (`6a668f8f967d09ad`), `-solanaRemoveCFGDiamonds` (all normative projects set it; the newest
 template dropped it, `b7ac5b4bb88a4c09`), and `precise_bitwise_ops` (`81d1e4b18ef4272f`,
 `3e74f320e0f197ff`), which may bear on recipe K2's bitmask fold.
+**Dropped: `-solanaCpiAnalysis`** (`438da9c1a8d623b6`). Experimental and off by default. It
+replaces an `invoke`/`invoke_signed` it can resolve to one of five Token or Token-2022 instructions
+with a `cvlr_spl_token` mock, and every other CPI with `assert(false)` ("Unresolved CPI call").
+One of the feature's original developers says it never worked well, so we are not pursuing it.
 
 **L3. `-solanaCvlrVacuity`** (`16b18e109eb8f1b6`). Recipe K1's triage dropped "end every rule with
 `cvlr_vacuity_check!`" because it is gated on a cargo feature we never enable. This flag may be the
