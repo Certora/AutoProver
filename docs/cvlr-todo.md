@@ -671,15 +671,18 @@ function that *writes* state a rule asserts over, not only one whose result it r
     CPI *havocs* the caller's `Account<T>` is not what this shows for lamports. **Open:** reconcile
     the two, and decide what the author and judge are told. `-solanaCpiAnalysis` (L2) models only
     Token and Token-2022 CPIs.
-  * **Anchor's `system_program::transfer`: never succeeds.** Under the `^.*anchor_lang.*$`
-    blanket it is external, and its success branch is statically unreachable (the satisfy rule
-    FAILs by static analysis), so the canary and companion both VERIFY vacuously. Everything after
-    `system_program::transfer(…)?` is dead in the model, and `rule_sanity: basic` cannot see it,
-    because the rule still reaches its end through the error path. The Prover's log says so on
-    every run: "neither inlined nor summarized. They are treated as external. This is likely to
-    affect soundness", with the `#[inline]` line to add. **Open:** inline Anchor's CPI helpers in
-    the Anchor layer (reachable, though then subject to the `invoke` finding). Also surface that
-    warning to the author. AutoProver does not read it today (`0dd8abe704fdc789`).
+  * **Anchor's `system_program::transfer`: never succeeded; fixed by inlining it.** Under the
+    `^.*anchor_lang.*$` blanket it was external, and its success branch was statically unreachable
+    (the satisfy rule FAILed by static analysis), so everything after `system_program::transfer(…)?`
+    was dead and every assertion there passed vacuously. `rule_sanity: basic` cannot see this,
+    because the rule still reaches its end through the error path. The Anchor layer now inlines it,
+    and the `drop_in_place<Result<(), anchor_lang::error::Error>>` beside it, as the Prover's
+    "neither inlined nor summarized" warning recommends. It is now reachable, and dropped like any
+    `invoke`. **The Prover's suggested line for the `drop_in_place` never matches:** it is a regex,
+    so `Result<(),…>` has to be written `Result<\(\),…>`. That is worth telling the Prover team.
+    The same warning still names `AccountInfo::try_borrow_lamports` and
+    `solana_system_interface::instruction::transfer` as external for this probe. Both look like
+    path-rename gaps in the starting layer; they belong to the "surface the warning" item.
   * **Found on the way, fixed:** a rule the Prover decides by static analysis arrives as a bare
     tree-view root, and `composer/prover/results.py` dropped it. The CVLR gate counts only the rules
     it gets verdicts for, so a statically FAILED rule would have let a draft be stamped with "every
