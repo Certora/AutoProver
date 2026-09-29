@@ -625,25 +625,60 @@ their evidence are in the ledger files, and the soundness argument each one prop
 reading before starting. An investigation ends in an AutoProver change or a line saying why none is
 needed, never in a ledger answer.
 
-**L1. Is the starting layer sound?** These files apply to every target.
+**L1. Is the starting layer sound?** *Investigated 2026-09-29 by reading the Prover
+(`EVMVerifier`, `origin/master` a852161573). Three items closed, two open, one Prover bug
+(CERT-10183).*
 
-* `^solana_program::account_info::AccountInfo::realloc$` is **summarized** in
-  `cvlr_summaries_core.txt` (`#[type((*i32)(r1+0):num)]`), so the Prover never sees a resize. The
-  field inlines it instead. This is the most concrete of the leads (`effe7d1caff92b7f`).
-* The soft-float intrinsics (`__gedf2`, `__gtdf2`, `__floatundidf`, …) are summarized as independent
-  `num`s, so `a >= b` and `b > a` can both hold. Can a rule over floats pass or fail spuriously
-  (`e4b3d31a079972bb`)?
-* `std::io::error::Error::new` returns an unconstrained `ptr_heap` (`34b2226ecc95cff4`).
-* `alloc::fmt::format::format_inner` (`3563dea21f5bfe17`), and the blanket `#[inline(never)]` over
-  `anchor_lang` with its exceptions (`0dd8abe704fdc789`). What does an Anchor function missing from
-  the exceptions hide?
-* The bare `^memhavoc_c$` line: what does a pattern with no directive do (`0d76447c4278fcc2`)?
-* `core::result::unwrap_failed`: five clients handle it and we do not (`fb74138083b7dd75`).
+**The finding every item turned on.** An opaque call, with or without a `#[type]` summary, is
+modelled as writing *nothing* except `r0` and the cells its summary names
+(`sbf/tac/TACDefaultSummarizer.kt`: `summarizeCall` havocs those and returns; a `num` on non-stack
+memory does not even write memory). Every other write the real function makes is dropped. cvlr says
+the same of `memhavoc_c` ("the bytes keep whatever the Prover already knew about them"). So a
+summary's effects are an **under-approximation**. It fakes a return value; it does not say "anything
+could happen". The unsound case is a dropped write to memory that already held a value. The rule then
+sees the old value, so an invariant over that state passes trivially. Six places in AutoProver
+describe a summary the other way, as "anything could happen": `cvlr_property_generation_prompt.j2:105`,
+`cvlr_property_judge_system_prompt.j2:40`, `verify.py:715`, `state.py:283`, and `tuning.py:13` and
+`:62`. **Open: correct all six**, including what the judge should look for (a summarized function that
+*writes* state a rule asserts over, not only one whose result it reads).
+
+* **Closed, no change.** `core::result::unwrap_failed` is on the Prover's built-in abort list
+  (`sbf/callgraph/AbortFunctions.kt`), as is borsh's `unexpected_eof…`, so our files cannot affect it.
+  `std::io::error::Error::new` (`r0:ptr_heap`) and `alloc::fmt::format::format_inner` (all three
+  `String` fields named) are sound. Each summary names everything the real function writes, and fresh
+  heap memory is unconstrained. The bare `^memhavoc_c$` line only silences the unsupported-call
+  warning. `memhavoc_c` is a no-op in the Prover, and its one cvlr caller, `alloc_havoced`, applies it
+  to fresh memory, which is what the bundle recommends.
+* **Open: `AccountInfo::realloc`.** The starting layer summarizes it as `#[type((*i32)(r1+0):num)]`,
+  that is, its `Result` and nothing else. So after a resize the model still has the old data length
+  and the old slice. Anything reading either afterwards is wrong, in the unsound direction for "the
+  account is still at most N bytes". The field inlines it instead. Needs a Prover run: does the
+  pointer analysis cope with it inlined on the current release (`effe7d1caff92b7f`)?
+* **Open: the `^.*anchor_lang.*$` blanket.** It matches any symbol *containing* `anchor_lang`,
+  including the program's own generated `<prog::X as anchor_lang::Accounts<…>>::try_accounts` and
+  `…AccountsExit>::exit`. By the finding above, an Anchor function outside the exception list is
+  sound only if it writes nothing a rule later reads. Reads come back unconstrained, which is
+  imprecise but sound. Writes are dropped. Suspects: CPI helpers such as
+  `anchor_lang::system_program::transfer` (the lamports would not move), `exit` / `try_serialize`,
+  `close`, `set_inner`, `reload`. This is tied to L2's `-solanaCpiAnalysis`, which is how the Prover
+  models a CPI at all (`0dd8abe704fdc789`). It also leaves unexplained the author prompt's claim that
+  a CPI stand-in *havocs* the caller's `Account<T>`: a dropped write keeps a value rather than
+  havocking it.
+* **Prover bug, soft-float comparisons.** The float lines in our summaries file hardly matter in TAC,
+  because `SummarizeCompilerRt` takes precedence (`sbf/tac/SbfCFGToTAC.kt`, `translateCall`). The
+  built-in model is where the problem is. `summarizeBinRel` (`TACFPCompilerRtSummarizer.kt`, which
+  `__ltdf2`, `__ledf2` and `__gedf2` use) tests `isf64NaN(arg1) or isf64NaN(arg1)` and
+  `isf64Zero(arg1) and isf64Zero(arg1)`. That is `arg1` twice both times, so "both zero" fires when
+  `arg1` alone is zero: `0.0 >= 5.0` is modelled as true and `0.0 < 5.0` as false, both precisely and
+  wrongly. Independently of the typo, the zero cases assume non-negative operands (`x >= 0.0` is
+  "true" for x = -3), and `__gtdf2`'s switch does the same. Present on `origin/master` since the
+  float support landed (`fea2e0b4f10`, 2025-09-05). **Reported as CERT-10183.** The `Rent` float path
+  is the first place to look for impact (`e4b3d31a079972bb`).
 
 **L2. Solana analysis flags the field sets and `BASE_CONF` does not.** Prover runs are cheap, so try
 each against a known run and compare verdicts, [3308]s and timeouts.
 `-solanaAggressiveGlobalDetection` (every surveyed project, `2113326f62f1c94c`),
-`-solanaSlicerIter` (`ad3312b1f8f38d8a`), `-solanaCpiAnalysis` (`438da9c1a8d623b6`),
+`-solanaSlicerIter` (`ad3312b1f8f38d8a`), `-solanaCpiAnalysis` (`438da9c1a8d623b6`; off by default. It replaces a CPI to the Token or Token-2022 program with cvlr's token mocks, `sbf/analysis/cpis/CpisSubstitutionMap.kt`, and bears on L1's Anchor item),
 `-solanaTACPromoteOverflow` (`2dac056d3177d2f7`), `-solanaEntrypoint`, perhaps for non-Anchor
 programs (`6a668f8f967d09ad`), `-solanaRemoveCFGDiamonds` (all normative projects set it; the newest
 template dropped it, `b7ac5b4bb88a4c09`), and `precise_bitwise_ops` (`81d1e4b18ef4272f`,
