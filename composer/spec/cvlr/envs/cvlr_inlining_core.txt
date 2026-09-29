@@ -130,7 +130,7 @@
 ;; A resize writes the account's length twice, into the serialized data and into the borrowed
 ;; slice. A call the Prover does not analyze drops both writes, so the length would read as the
 ;; old one afterwards. `resize` is not inlined: it zero-fills, and the Prover's memory partitioning
-;; fails on that `sol_memset_` with an internal error that ends the whole job.
+;; fails on that `sol_memset_` with an internal error that ends the whole job (CERT-10184).
 #[inline] ^solana_program::account_info::AccountInfo::realloc$
 #[inline] ^solana_program::account_info::AccountInfo::original_data_len$
 #[inline] ^solana_program::incinerator::check_id$
