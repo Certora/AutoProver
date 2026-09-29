@@ -400,16 +400,30 @@ def _judge_loop_item() -> str:
     return _flat(_judge_system_prompt()).split("5. **What the loops")[1].split("6. **A satisfy")[0]
 
 
-def test_the_judges_loop_check_cites_a_section_the_bundle_has():
-    """The judge defers to the bundle for the loop ladder rather than restating it, which is what
-    let its own copy go stale when `optimistic_loop` became an author tool. A deferral to a heading
-    that was renamed is the same failure again, so the heading is checked against the bundle."""
+def test_every_bundle_section_the_judge_cites_exists():
+    """The judge defers to the bundle rather than restating it, which is what let its own copy of
+    the loop ladder go stale when `optimistic_loop` became an author tool. A deferral to a heading
+    that was renamed is the same failure again, so every cited heading is checked against the
+    bundle."""
+    import re
     from importlib.resources import files
 
-    heading = "Loops are bounded, and the bound is not assumed away"
-    assert heading in _judge_loop_item()
+    cited = re.findall(r'the section "([^"]+)"', _flat(_judge_system_prompt()))
     bundle = (files("composer.kb") / "resources" / "cvlr_baseline_facts.md").read_text()
-    assert f"## {heading}" in bundle
+    headings = set(re.findall(r"^## (.+)$", bundle, re.MULTILINE))
+    assert len(cited) == 3  # vacuity (2), loops (5), clog! (7)
+    assert set(cited) <= headings, set(cited) - headings
+
+
+def test_the_judge_is_told_a_missing_clog_can_make_a_counterexample_wrong():
+    """Recipe K2's case, which the bundle's `clog!` section does not cover: without the log the
+    rule can fail on a value the program never produces, so an expected failure resting on such a
+    counterexample is a finding nobody should believe yet."""
+    from composer.kb.kb_context import CVLR_RECIPES, _kb_model
+
+    item = _flat(_judge_system_prompt()).split("7. **`clog!` discipline")[1].split("8. **")[0]
+    assert "recipe K2" in item and "expected-to-fail" in item
+    assert "K2" in {r.id for r in _kb_model(CVLR_RECIPES).recipes}
 
 
 def test_the_judge_is_told_where_optimistic_loop_is_and_what_justifies_it():
