@@ -355,7 +355,7 @@ entry in `composer/rag/db.py`, a `_FACTORIES` entry in `composer/tools/rag_env.p
 ### 4.2 Where the producer lives, and what it reads
 
 `certora-cvlr-kb` is being wound down as a source of RAG content. Its own plan
-(`certorag/docs/cvlr-knowledge-plan.md` §4) already decided that its 83 abstracted entries are the
+([cvlr-knowledge-plan.md](./cvlr-knowledge-plan.md) §4) already decided that its 83 abstracted entries are the
 wrong output shape and that **its deliverable is the ledger and the evidence behind it, not corpus
 rows** — CVLR practice knowledge is hand-authored and delivered through the bundle
 (`with_cvlr_context`) and the recipes, both of which live here. That plan's §4.4 carved out one

@@ -97,7 +97,7 @@ agent, plus a trigger-indexed recipe set behind `get_cvlr_recipe`. certora-cvlr-
 no longer a product. Its output is the ledger and the evidence behind it: what the bundle's author
 should write about, with recurrence counts and disagreements attached. The argument, and the triage
 that left two recipes out of 27 `rule_shape` entries, are in the CVLR knowledge plan
-(`certorag: docs/cvlr-knowledge-plan.md`) Part I.
+([cvlr-knowledge-plan.md](./cvlr-knowledge-plan.md)) Part I.
 
 **Still open: the boundary between certora-cvlr-kb and certorag.** Nothing either repo produces
 reaches a corpus here any more. What still ties them together is the Solana property corpus (the
