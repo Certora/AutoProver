@@ -381,6 +381,15 @@ def _unaccounted(
     )
 
 
+def _unverdicted(declared: Sequence[str], status: Mapping[str, bool]) -> list[str]:
+    """Declared rules the report gave no verdict for.
+
+    Counted against the draft, not ignored: the verdict roll-up only sees rules the report names,
+    so a rule missing from it would otherwise leave "every rule is accounted for" true.
+    """
+    return sorted(set(declared) - status.keys())
+
+
 def _wrongly_expected(status: dict[str, bool], expected_failures: dict[CheckName, str]) -> list[str]:
     """Rules marked as expected failures that in fact verified.
 
@@ -527,6 +536,7 @@ class VerifyRules(
                 outcome,
                 deps,
                 capture.incomplete if capture is not None else {},
+                declared=declared,
                 drift=_drift_note(reconciled),
             )
 
@@ -605,6 +615,7 @@ class VerifyRules(
         deps: VerifyDeps,
         incomplete: Mapping[str, str],
         *,
+        declared: Sequence[str],
         drift: str = "",
     ) -> Command | str:
         """What the gate says, with any replay drift appended.
@@ -637,6 +648,7 @@ class VerifyRules(
             case Checked(build=build, report=report):
                 status = report.rule_status
                 unaccounted = _unaccounted(status, expected, incomplete)
+                unverdicted = _unverdicted(declared, status)
                 surprising = _wrongly_expected(status, expected)
                 lines = [report.result_str]
                 if (inert := self._inert_summaries(build)) is not None:
@@ -660,11 +672,19 @@ class VerifyRules(
                         "of these with expect_rule_failure: that claims a real defect, and none "
                         "has been shown."
                     )
+                if unverdicted:
+                    lines.append(
+                        f"No verdict came back for: {', '.join(unverdicted)}. The prover's report "
+                        "does not name them, so they have not been checked, and this draft cannot "
+                        "be stamped until they are. Run verify_rules again; if they are still "
+                        "missing, the run's link is where to look."
+                    )
                 if unaccounted:
                     lines.append(
                         f"Not accounted for: {', '.join(unaccounted)}. Fix the rule, or mark it "
                         "with expect_rule_failure and say why the failure is real."
                     )
+                if unaccounted or unverdicted:
                     return tool_state_update(
                         self.tool_call_id, "\n\n".join(lines) + drift, prover_link=report.link
                     )
