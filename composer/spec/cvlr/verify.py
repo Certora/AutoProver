@@ -183,6 +183,17 @@ class HarnessTarget:
         """
         return self.tree.pristine_of(relative)
 
+    def in_package(self, pristine: Path) -> bool:
+        """Whether a file :meth:`pristine_source` answered with belongs to the package under
+        verification.
+
+        Asked on the pristine side because that is where :meth:`pristine_source` points, while
+        :attr:`package_root` names the package inside the tree — comparing one against the other
+        finds every file of the package foreign to it.
+        """
+        pristine_package = self.tree.pristine / self.package_root.relative_to(self.tree.root)
+        return pristine.resolve().is_relative_to(pristine_package.resolve())
+
     async def stage(
         self,
         draft: str,
