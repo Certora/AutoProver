@@ -315,6 +315,18 @@ def exhausted_constraint() -> ConstraintType | None:
     return next((r.sort for r in _get_constraints() if r.overbudget()), None)
 
 
+def raise_if_budget_exhausted() -> None:
+    """Raise ``BudgetExceeded`` when an active constraint is past 100%.
+
+    The check a caller makes on every tick of a long external wait (a cloud
+    prover job, a subprocess), where the agent's monitor gets no turn. Quiet
+    when no budget is installed or none is spent, so it is safe to call from
+    code that also runs unbudgeted.
+    """
+    if (sort := exhausted_constraint()) is not None:
+        raise_budget_exceeded(sort)
+
+
 def pressure_abort_monitor() -> StateMonitor[MessagesState]:
     """Monitor for auxiliary agents (feedback judges) that should not outlive
     the main agent's wrap-up window: raises ``BudgetPressureAbort`` between

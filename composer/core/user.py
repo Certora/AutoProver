@@ -1,11 +1,22 @@
 import os
 
+#: The environment variable that names the tenant a run works for. The cloud
+#: sets it on every job; a local run leaves it unset.
+USER_ID_ENV = "AUTOPROVER_USER_ID"
+
+#: The tenant a run without ``USER_ID_ENV`` works for.
+ANONYMOUS_UID = "_anonymous"
+
+
+def get_uid_or_none() -> str | None:
+    """The tenant named by ``USER_ID_ENV``, or ``None`` when it is unset or
+    blank. For callers that must refuse to run without a tenant rather than
+    fall back to the anonymous one."""
+    return os.environ.get(USER_ID_ENV) or None
+
 
 def get_uid() -> str:
-    uid = os.environ.get("AUTOPROVER_USER_ID")
-    if not uid:
-        uid = "_anonymous"
-    return uid
+    return get_uid_or_none() or ANONYMOUS_UID
 
 
 def user_data_ns(uid: str | None = None) -> tuple[str, ...]:
