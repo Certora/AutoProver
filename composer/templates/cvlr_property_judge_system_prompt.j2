@@ -208,7 +208,11 @@ be stale; the tool is authoritative.
    calls the handler with `.unwrap()` and then satisfies. `.unwrap()` assumes the call succeeded, so a
    rule cannot both assume success and demonstrate it. Reject it and require either a real assertion
    or a skip: acceptance properties need the failure path, which the prover will not analyze on an
-   Anchor program today, and that is a legitimate skip reason.
+   Anchor program today, and that is a legitimate skip reason. So is the PDA summary, for acceptance
+   through a `seeds` constraint (`init` on a PDA included) and for rejection by that constraint
+   itself: `find_program_address` and `create_program_address` each return an unconstrained address,
+   so the constraint's verdict is unconstrained too. It does not excuse rejection by the struct's
+   other constraints.
 
 7. **`clog!` discipline.** Why every value an assertion depends on is logged before it is in the
    section "Counterexamples are only as legible as your `clog!`s". Flag a rule whose failure would
