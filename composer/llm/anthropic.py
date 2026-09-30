@@ -5,6 +5,7 @@ from typing import Literal, TypeGuard, Any, TYPE_CHECKING, override, cast
 from io import BytesIO
 from dataclasses import dataclass, field
 import asyncio
+import logging
 from functools import cache
 
 import anthropic
@@ -268,6 +269,54 @@ class AnthropicService(ProviderServiceBase):
             return payload_error_type(exc.body) in RETRYABLE_ERROR_TYPES
         return False
 
+_logger = logging.getLogger(__name__)
+
+
+def _log_refusal(event: object) -> None:
+    delta = getattr(event, "delta", None)
+    details = getattr(delta, "stop_details", None)
+    if details is not None and getattr(details, "type", None) == "refusal":
+        _logger.warning(
+            "Anthropic streaming refusal: category=%s: %s",
+            getattr(details, "category", None), getattr(details, "explanation", None),
+        )
+
+
+def _observe_event(event: object) -> None:
+    _log_refusal(event)
+
+
+def _tee_events(stream):  # type: ignore[no-untyped-def]
+    for event in stream:
+        _observe_event(event)
+        yield event
+
+
+async def _atee_events(stream):  # type: ignore[no-untyped-def]
+    async for event in stream:
+        _observe_event(event)
+        yield event
+
+
+@cache
+def _instrumented_chat_anthropic() -> type:
+    # Tee the raw message stream to observe fields langchain_anthropic drops.
+    from langchain_anthropic import ChatAnthropic
+
+    class InstrumentedChatAnthropic(ChatAnthropic):
+        @override
+        def _create(self, payload: dict) -> Any:
+            result = super()._create(payload)
+            return _tee_events(result) if payload.get("stream") else result
+
+        @override
+        async def _acreate(self, payload: dict) -> Any:
+            result = await super()._acreate(payload)
+            return _atee_events(result) if payload.get("stream") else result
+
+    return InstrumentedChatAnthropic
+
+
 @dataclass
 class AnthropicModelProvider:
     """``ModelProvider`` for Anthropic. Probes ``model_name`` once at
@@ -298,8 +347,6 @@ class AnthropicModelProvider:
     def builder_for(
         self, *, cache_level: CacheLevel = CacheLevel.NONE, disable_thinking: bool = False
     ) -> "BaseChatModel":
-        from langchain_anthropic import ChatAnthropic
-
         opts = self.options
         thinking: dict[str, Any] | None
         if opts.thinking_tokens is None or disable_thinking:
@@ -324,7 +371,7 @@ class AnthropicModelProvider:
             {"cache_control": {"type": "ephemeral", "ttl": ttl}} if ttl is not None else {}
         )
 
-        return ChatAnthropic(
+        return _instrumented_chat_anthropic()(
             model_name=self.model_name,
             max_tokens_to_sample=opts.tokens,
             # An explicit None DISABLES the SDK's timeouts (None != not-given), so a
