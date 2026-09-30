@@ -44,6 +44,12 @@ def test_a_generic_argument_list_is_not_split_on_its_own_commas(tmp_path):
     assert external_functions(root) == (drop, "solana_account_info::AccountInfo::resize")
 
 
+def test_a_name_with_an_array_type_keeps_the_names_before_it(tmp_path):
+    drop = "core::ptr::drop_in_place<[solana_account_info::AccountInfo; 3]>"
+    root = _write(tmp_path, [_alert(f"anchor_lang::error::ErrorCode::name, {drop}")])
+    assert external_functions(root) == ("anchor_lang::error::ErrorCode::name", drop)
+
+
 def test_no_report_means_nothing_to_say(tmp_path):
     assert external_functions(tmp_path) == ()
     (tmp_path / ALERT_REPORT).parent.mkdir(parents=True)
