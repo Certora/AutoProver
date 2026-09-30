@@ -175,6 +175,15 @@ async def test_autoprove_counter_runs_end_to_end(scenario_provider, langgraph_db
     assert job_info["run_id"] == summary.run_id
     assert "token_usage" in job_info and "prover_usage" in job_info
 
+    # The component published its run-target buffer (it did not give up): the buffer's
+    # own spec is on disk, under its component's specs dir rather than the shared
+    # summaries dir. This is what keeps the run meaningful rather than vacuous.
+    run_target_specs = [
+        p for p in (scenario_dir / "certora" / "specs").rglob("*.spec")
+        if p.parent.name != "summaries"
+    ]
+    assert run_target_specs, "no run-target buffer spec published — the component gave up"
+
 
 async def test_autoprove_dumps_job_info_when_pipeline_crashes(scenario_provider, langgraph_db, monkeypatch):
     """The core guarantee: job_info.json is written even when the run crashes. Patch the
