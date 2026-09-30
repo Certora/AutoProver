@@ -115,6 +115,7 @@
 #[inline] ^solana_program::account_info::AccountInfo::new$
 #[inline] ^solana_program::account_info::AccountInfo::lamports$
 #[inline] ^solana_program::account_info::AccountInfo::try_borrow_mut_lamports$
+#[inline] ^solana_program::account_info::AccountInfo::try_borrow_lamports$
 #[inline] ^solana_program::account_info::AccountInfo::data_len$
 #[inline] ^solana_program::account_info::AccountInfo::try_data_len$
 #[inline] ^solana_program::account_info::AccountInfo::try_borrow_data$
