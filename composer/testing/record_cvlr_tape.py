@@ -23,6 +23,7 @@ captured" at exit, after the run has been paid for.
 
 import composer.bind as _  # noqa: F401  — must precede every other composer import
 
+import argparse
 import asyncio
 import sys
 import tempfile
@@ -34,7 +35,7 @@ from composer.rustapp.frontend import GenericRustConsoleHandler
 from composer.testing.cvlr_tape import SCENARIO_NAME, run_scenario, stage_scenario
 
 
-async def _main() -> int:
+async def _main(cache_ns: str | None) -> int:
     # A fresh directory per recording, and printed rather than cleaned up: the run's deliverables
     # — the harness, the conf, report.json — are what a reader checks a recording against, and the
     # tape's curation pass needs them. Removing it would delete the evidence.
@@ -43,7 +44,9 @@ async def _main() -> int:
     print(f"[record] staged {SCENARIO_NAME} at {project}", file=sys.stderr)
 
     summary = RunSummary()
-    result = await run_scenario(project, summary, GenericRustConsoleHandler(set()).make_handler)
+    result = await run_scenario(
+        project, summary, GenericRustConsoleHandler(set()).make_handler, cache_ns=cache_ns
+    )
 
     print(f"\n{'=' * 60}")
     print(summary.format())
@@ -79,7 +82,13 @@ async def _main() -> int:
 
 
 def main() -> int:
-    return asyncio.run(_main())
+    parser = argparse.ArgumentParser(description="Record the CVLR smoke tape.")
+    parser.add_argument(
+        "--cache-ns", default=None,
+        help="Cache namespace for the recording. Must be one no run has written to: a cache hit "
+             "skips an LLM call the replay will make.",
+    )
+    return asyncio.run(_main(parser.parse_args().cache_ns))
 
 
 if __name__ == "__main__":

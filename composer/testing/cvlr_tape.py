@@ -147,7 +147,7 @@ def tape_argv(project: Path) -> list[str]:
     ]
 
 
-def tape_args(project: Path) -> CvlrArgs:
+def tape_args(project: Path, cache_ns: str | None = None) -> CvlrArgs:
     """:func:`tape_argv` through the shipped parser, so the recording and the replay are configured
     by the same code a user's ``console-solana`` invocation is — defaults included.
 
@@ -156,14 +156,22 @@ def tape_args(project: Path) -> CvlrArgs:
     ``memory_tool`` is part of the model-options surface but the parser exposes no switch for it,
     and it defaults to on. See the module docstring for what it actually selects — the Anthropic
     context-management beta, not the ``memory`` tool — and why a taped run wants it off.
+
+    ``cache_ns`` is for the recording only and is deliberately not part of :func:`tape_argv`: a
+    cache *hit* while recording skips an LLM call the replay will make, so a recording is only
+    faithful under a namespace nothing has been written to yet.
     """
     args = build_parser().parse_args(tape_argv(project))
     args.memory_tool = False
+    args.cache_ns = cache_ns
     return cast(CvlrArgs, args)
 
 
 async def run_scenario(
-    project: Path, summary: RunSummary, handler: HandlerFactory[CvlrPhase, None]
+    project: Path,
+    summary: RunSummary,
+    handler: HandlerFactory[CvlrPhase, None],
+    cache_ns: str | None = None,
 ) -> CvlrPipelineResult:
     """Drive the scenario through the shipped entry point.
 
@@ -173,5 +181,5 @@ async def run_scenario(
     confinement default and the artifact store's placement — everything the expensive gate builds
     for itself and therefore cannot check.
     """
-    async with cvlr_executor(tape_args(project), summary) as run:
+    async with cvlr_executor(tape_args(project, cache_ns), summary) as run:
         return await run(handler)
