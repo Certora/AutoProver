@@ -1025,7 +1025,7 @@ class RedirectModule(
             # that it is in force for every unit of the run, not only the one that asked; the
             # editor's report says so and every unit's judge is shown it.
             # (docs/who-edits-the-program.md §11.3 for why the per-unit alternative was rejected.)
-            crate_local = resolved.resolve().is_relative_to(target.package_root.resolve())
+            crate_local = target.in_package(resolved)
             dependency: str | None = None
             if crate_local:
                 feature = self.state["feature"]
