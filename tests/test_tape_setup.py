@@ -21,6 +21,7 @@ from composer.diagnostics.budget import BUDGET_PRESSURE_THRESHOLD
 import composer.pipeline.cli as pipeline_cli
 from composer.pipeline.cli import parse_budget_file
 from composer.layout import INTERNAL_DIR
+from composer.spec.cvlr.entry import build_parser
 from composer.spec.cvlr.pipeline import WORK_DIR
 from composer.spec.cvlr.scaffold import HARNESS_DIR
 from composer.testing import cvlr_tape
@@ -107,10 +108,11 @@ def test_the_recorded_run_does_not_ask_for_the_context_management_beta():
     assert cvlr_tape.tape_args(Path("/proj")).memory_tool is False
 
 
-def test_the_recorded_run_depends_on_no_corpus():
-    """A corpus is optional and degrades to no search tools, so a tape recorded with one would
-    replay differently on a machine that has it than on a machine that does not."""
-    assert cvlr_tape.tape_args(Path("/proj")).rag_corpus == "none"
+def test_the_recorded_run_uses_the_shipping_corpus():
+    """The corpus is the author's only CVLR reference, so a tape recorded without one smoke-tests a
+    configuration nobody runs. The shipping corpus is whatever the parser defaults to, so the check
+    is against that default rather than a name that could fall behind it."""
+    assert cvlr_tape.tape_args(Path("/proj")).rag_corpus == build_parser().get_default("rag_corpus")
 
 
 def test_the_recording_is_bounded():
