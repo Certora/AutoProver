@@ -97,6 +97,21 @@ for name, config in _DATABASE_CONFIGS.items():
         )
 PY
 
+# The recording runs with the shipping corpus, and the research tools open it lazily: an absent or
+# empty corpus is first noticed at the author's first search, well into a paid run, and reads to it
+# as a reference with no entries rather than as a missing database.
+uv run --no-sync python - <<'PY' || exit 1
+import sys
+from pathlib import Path
+from composer.testing.cvlr_tape import missing_corpora, tape_args
+
+if missing := missing_corpora(tape_args(Path("."))):
+    sys.exit(
+        f"record_cvlr_tape: corpus {', '.join(missing)} is unreachable or empty. Populate it:\n"
+        f"  scripts/populate_cvlr_rag.sh"
+    )
+PY
+
 # The Certora access token expires (~days) and only the *results* path notices: submission still
 # works on CERTORAKEY, then fetch_sources_and_treeview_files falls back to an interactive browser
 # PKCE flow and burns its 300s deadline per attempt in a headless run. Calling login() here renews

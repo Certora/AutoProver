@@ -25,14 +25,22 @@ divergence rather than merely a symptom:
   per-unit child of it), empty at the start of the recording and of the replay alike, so the same
   sequence of operations sees the same store.
 
-  The tape does not rely on that argument. Curation removes every ``memory`` call instead — 47
-  turns whose only tool call was one, and the call alone from two that batched it with real work.
+  The tape does not rely on that argument. Curation removes every ``memory`` call instead — 52
+  turns whose only tool call was one, and the call alone from three that batched it with real work.
   What those calls do is keep the agent's own scratchpad; nothing downstream reads them and no
   assertion in the gate depends on them. So retaining them buys coverage of a tool this gate is not
   for, in exchange for carrying the one divergence that is documented to exhaust a lane.
-* **The corpus is off.** ``--rag-corpus none``, the same choice the expensive gate makes: a corpus
-  is documented as optional and degrades to no search tools, so a tape that depends on one would
-  replay differently on a machine that has it than on a machine that does not.
+* **The corpus is the shipping one.** ``--rag-corpus`` is left at its default, so the author gets
+  the research sub-agent over ``cvlr_kb`` and ``cvlr_api_kb``, the only CVLR reference it has
+  (``docs/cvlr-api-docs-plan.md`` §8 step 7). A tape recorded under ``none`` smoke-tests an author
+  holding nothing but the baseline facts and the recipes, which is not a configuration anybody runs.
+
+  That makes both corpora a prerequisite of the recording and of the replay alike, checked by
+  :func:`missing_corpora`. The research tools open their pool lazily, so an absent or empty corpus
+  is not noticed when the tools are built; it surfaces at the first search, which on a recording is
+  after the run has been paid for, and on a replay is a tool error the tape never saw. The embedder
+  stays mocked on replay: the researcher's dominant traffic is keyword-then-fetch, which does not
+  depend on it.
 * **The scenario is staged as a copy, without the generated directories.** A run scaffolds the
   crate, writes a harness into ``src/certora`` and a working tree into ``.cvlr_work``; recording
   against a tree that already has them would record a run that skipped the scaffold.
@@ -47,10 +55,16 @@ import shutil
 from pathlib import Path
 from typing import cast
 
+import psycopg
+from psycopg.errors import Error as PsycopgError
+
 from composer.diagnostics.timing import RunSummary
 from composer.io.multi_job import HandlerFactory
 from composer.layout import INTERNAL_DIR
-from composer.spec.cvlr.entry import CvlrArgs, CvlrPipelineResult, build_parser, cvlr_executor
+from composer.rag.db import KNOWLEDGE_BASES
+from composer.spec.cvlr.entry import (
+    CVLR_API_CORPUS, CvlrArgs, CvlrPipelineResult, build_parser, cvlr_executor,
+)
 from composer.spec.cvlr.pipeline import WORK_DIR, CvlrPhase
 from composer.spec.cvlr.scaffold import HARNESS_DIR
 
@@ -139,8 +153,6 @@ def tape_argv(project: Path) -> list[str]:
         MAIN_PROGRAM,
         str(project / "system.md"),
         "--max-bug-rounds", str(MAX_BUG_ROUNDS),
-        # See the module docstring: both of these remove a class of replay divergence.
-        "--rag-corpus", "none",
         # Inert on replay — the tape decides what the run costs, which is nothing — and the whole
         # point on a recording. See :data:`BUDGET`.
         "--budget", str(BUDGET),
@@ -166,6 +178,29 @@ def tape_args(project: Path, cache_ns: str | None = None) -> CvlrArgs:
     args.cache_ns = cache_ns
     return cast(CvlrArgs, args)
 
+
+
+def missing_corpora(args: CvlrArgs) -> list[str]:
+    """The corpora a run configured by ``args`` searches that cannot be read here, or are empty.
+
+    Opened directly rather than through the run's research tools, whose pool is lazy and so reports
+    nothing until the first search. Empty counts as missing: a database the schema was created in
+    but nothing was ingested into answers every search with nothing, which the author reads as the
+    reference having no entry rather than as the corpus being absent.
+    """
+    if args.rag_corpus == "none":
+        return []
+    missing = []
+    for corpus in (args.rag_corpus, CVLR_API_CORPUS):
+        try:
+            with psycopg.connect(KNOWLEDGE_BASES[corpus]) as conn:
+                row = conn.execute("SELECT count(*) FROM manual_sections").fetchone()
+        except PsycopgError:
+            missing.append(corpus)
+            continue
+        if row is None or row[0] == 0:
+            missing.append(corpus)
+    return missing
 
 async def run_scenario(
     project: Path,

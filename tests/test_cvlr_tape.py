@@ -24,11 +24,14 @@ Run with::
 
 Re-record with ``scripts/record_cvlr_tape.sh`` when the pipeline's shape changes on purpose.
 
-**This tape is stale and this test is expected to fail.** It records 176 ``cvlr_source_*`` calls
-against a mount that ``docs/cvlr-api-docs-plan.md`` §8 step 5 removed, so the replay hits a tool
-that no longer exists and the lane exhausts. Step 7 of that plan is the re-recording, and it is
-also where the recording's ``--rag-corpus none`` has to flip — the corpus is the only CVLR channel
-now, so a tape recorded without one would smoke-test a configuration nobody ships.
+**The checked-in tape predates the corpus.** It was recorded under ``--rag-corpus none``, before the
+scenario moved to the shipping corpus (``docs/cvlr-api-docs-plan.md`` §8 step 7), so its author
+never calls the research sub-agent. It replays under the corpus configuration unchanged, since a tool
+the tape never calls costs no lane; what it does not cover is the researcher. The next
+re-recording carries the researcher's turns as lanes.
+
+Both corpora are a prerequisite here as they are for the recording: a replayed search against an
+absent or empty corpus is a tool result the recording never saw.
 """
 
 import importlib
@@ -46,7 +49,9 @@ from composer.rustapp.frontend import GenericRustConsoleHandler
 from composer.spec.cvlr.conf import PLATFORM_TOOLS_VERSION
 from composer.spec.cvlr.harness import DELIVERABLE_DIR
 from composer.spec.cvlr.rules import rule_names
-from composer.testing.cvlr_tape import TAPE_NAME, run_scenario, stage_scenario
+from composer.testing.cvlr_tape import (
+    TAPE_NAME, missing_corpora, run_scenario, stage_scenario, tape_args,
+)
 
 from tests.conftest import MockSentenceTransformer, needs_postgres
 
@@ -82,6 +87,8 @@ def project(tmp_path: Path) -> Path:
     wanted = PLATFORM_TOOLS_VERSION
     if not platform_tools_installed(wanted):
         pytest.skip(f"Solana platform tools {wanted} are not installed under {PLATFORM_TOOLS_ROOT}")
+    if missing := missing_corpora(tape_args(tmp_path)):
+        pytest.skip(f"corpus {', '.join(missing)} is unreachable or empty — scripts/populate_cvlr_rag.sh")
     return stage_scenario(tmp_path)
 
 
