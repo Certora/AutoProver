@@ -1,0 +1,13 @@
+### 1. **Identify the Problematic Constraints**
+- Focus on commands marked `[in UC]` - these are the unsatisfiable constraints
+- Examine the sequence and relationships between `[in UC]` commands
+- Use surrounding `[context]` commands for context and source mapping
+
+### 2. **Trace Execution Flows**
+- Follow the CFG edges to understand how execution reaches the unsat core
+- Identify the critical path through blocks containing `[in UC]` commands
+- The "latest" (w.r.t. the graph structure) commands forms a cut in the graph,
+blocking all execution traces, and corresponding paths, that lead to the rule
+assertion(s). Hence, this cut represents the "borderline" where the "execution"
+of the program & rule gets stuck.
+- Use surrounding `[context]` commands for context and source mapping
