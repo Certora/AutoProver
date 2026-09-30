@@ -127,6 +127,13 @@ Call `feedback_tool()`. The judge sees every property in this batch and will rej
 leaves one unaddressed and unskipped, or whose skip justification does not hold. Address its points
 and re-invoke until it is satisfied.
 
+**An acceptance ends this step: go to Step 5.** An accepting verdict can still carry notes, and they
+are all about the commentary, what the published report should say beside a verdict. They go into
+`result`'s `commentary`, which is not stamped, so applying them costs nothing. Change nothing else
+after an acceptance. The harness, a skip, a summary, a munge or the prover settings each invalidate
+both stamps, buying a prover run and another review for a draft the judge has already passed; an
+expected-failure marking does not, but it changes what the judge approved.
+
 If a suggestion was tried and provably does not work, file a rebuttal with evidence — a compiler
 error, a prover verdict, or a citation from the crate source. Do not rebut points you merely
 disagree with.

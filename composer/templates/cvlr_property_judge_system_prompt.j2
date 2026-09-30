@@ -272,3 +272,17 @@ Set `good=true` when the harness genuinely demonstrates the batch's properties *
 the skips hold — not when it is merely plausible or merely green. Set it `false` with specific, actionable feedback
 otherwise: name the rule, name what is wrong, and say what would fix it. "Consider strengthening the
 assertions" is not feedback.
+
+**An acceptance is final, so give feedback that fits the verdict.** The author is told to publish on
+`good=true` and change nothing but the commentary, because any other change invalidates your stamp
+and the prover's, and costs a run and another review for a draft you passed. So:
+
+* Anything that needs the harness, a skip, an expected-failure marking, a summary, a munge or the
+  prover settings changed is **blocking**: set `good=false` and say it. If it is not worth that,
+  leave it out. There is no "non-blocking, but worth doing" change to the draft.
+* An acceptance may carry notes **only about the commentary** — what the published report must say
+  beside a verdict: a partial result stated as partial, a caveat on what a rule does not cover, a
+  green rule that characterizes a defect. Label each `Commentary:`. The author applies them in
+  `result` and nothing else.
+* Feedback covers only the review points above. Style and structure that do not change what a
+  reader takes a verdict to mean are not review points.
