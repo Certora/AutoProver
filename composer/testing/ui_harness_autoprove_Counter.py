@@ -116,8 +116,8 @@ def _ai(text: str = "", *tool_calls: ToolCall) -> AIMessage:
 
 
 # Intentionally malformed surface-syntax CVL. Triggers the Typechecker.jar
-# rejection path on a ``put_cvl_raw`` call (Q5's tool-coverage turn); the
-# tape's next turn resubmits valid CVL.
+# rejection path on Q5's malformed ``put_buffer`` (a tool-coverage turn); the
+# put is rejected and creates no buffer.
 BROKEN_PARSE_CVL = """\
 invariant not_valid_cvl()
     this is definitely not valid CVL syntax;
@@ -701,11 +701,11 @@ _CVL_TAPE: list[BaseMessage] = [
         ),
     ),
 
-    # Q5 — intentionally malformed CVL via put_cvl_raw. Typechecker.jar rejects
-    # the parse and the tool returns the error text without mutating curr_spec.
+    # Q5 — intentionally malformed CVL via put_buffer. Typechecker.jar rejects
+    # the parse, so the tool returns the error text and creates no buffer.
     _ai(
-        "Drafting the component spec.",
-        _tc("put_cvl_raw", cvl_file=BROKEN_PARSE_CVL),
+        "Drafting a scratch buffer.",
+        _tc("put_buffer", name="scratch", cvl=BROKEN_PARSE_CVL),
     ),
 
     # Q6 — exercise get_cvl + record_skip against a real batch title.
