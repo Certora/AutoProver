@@ -493,7 +493,14 @@ class CompilationWorkaroundManager:
         # An explicit compiler pin can arrive as the scalar "solc" or already
         # folded into a compiler_map (e.g. precomputed from build artifacts);
         # the bare "solc" binary is the environment default and needs no fallback.
-        solc_pinned = compilation_config.get("solc", "solc") != "solc" or any(
+        #
+        # _seed_compile_maps below pins every contract to the same default it
+        # computes here, so the gate reads that effective value rather than only
+        # what the conf arrived with. A conf carrying neither a scalar nor a map
+        # still ends up pinned to solc_default_version, and a run that is pinned
+        # in fact needs the substitution workaround that this flag enables.
+        effective_default = compilation_config.get("solc") or self.solc_default_version
+        solc_pinned = effective_default != "solc" or any(
             version != "solc"
             for version in compilation_config.get("compiler_map", {}).values()
         )
