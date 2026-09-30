@@ -717,6 +717,24 @@ final counterexample shows validation **accepting** an execution in which `depos
 in that slot. Nothing in `#[account(mut)] pub depositor: Signer<'info>` can disable either. What has
 failed is the ability to observe the validation's outcome, not the validation.
 
+**That paragraph — corrected: it describes our configuration, not the encoding.** Until
+`efd870b5` the Anchor inlining layer's `^.*anchor_lang.*$` blanket matched every
+`<… as anchor_lang::Accounts<…>>::try_accounts`, the program's own included, so
+`Deposit::try_accounts` was external. It returned an arbitrary `Result` and wrote nothing into the
+struct it handed back, which is what the counterexample shows: validation "accepting" with both
+`is_signer` and `is_writable` zero. An external call's arbitrary output is also free to change from
+one build to the next, which accounts for the drift. The externals report added in `b669601d` is what
+made this visible. With validation inlined, the vault re-recording of 2026-09-29 validated through
+`Withdraw::try_accounts(..).unwrap()` and asserted the signer and `has_one` constraints on the struct
+it returned, and both rules verified. Validation's outcome is observable, so this paragraph is no
+evidence for the mechanism below. The run's own author had localized it: "every rule that avoids
+`crate::Deposit::try_accounts` verifies; every rule that uses it is unstable."
+
+The handler half above is untouched by this. Those rules build `Deposit` by hand with
+`Account`/`Signer`/`Program::try_from`, never calling `try_accounts`, and reach the system program
+through a `swap_import` stand-in for `invoke`, not through Anchor's `system_program::transfer`. The
+control group and the `forget` experiment stand, and so does the mechanism, as a suspicion.
+
 **Suspected mechanism, and why it is uncomfortable.** `Result<T, anchor_lang::error::Error>` is
 niche-encoded, and this workspace depends on `Certora/anchor`, whose `Error` is **unboxed** — so the
 discriminant lives among the fields of an inlined `AnchorError`, which carries `String`s. Every
@@ -727,10 +745,13 @@ also what makes the handler's `Result` unobservable, then the two entries are ab
 choice with effects in both directions, and that is the shape of the question to put upstream.
 
 **What it costs us.** Every acceptance or reachability property, on every Anchor program — the class
-that answers "is this guard over-strict?", which is half of what an audit is for. Also every
-property enforced by Anchor's generated account validation rather than by the handler body: the
-signer check, `#[account(mut)]`, `seeds`/`bump`, `has_one`. On the vault those were properties 4, 5
-and 9 of nine.
+that answers "is this guard over-strict?", which is half of what an audit is for.
+
+This previously went on to claim every property enforced by Anchor's generated account validation —
+the signer check, `#[account(mut)]`, `seeds`/`bump`, `has_one`, on the vault properties 4, 5 and 9 of
+nine. That was the external `try_accounts` above. Stated as "validation succeeds implies the
+constraint held", the signer, `mut`, `has_one` and owner constraints are provable. `seeds` is still
+out of reach, for the PDA-summary reason below.
 
 **Two lesser limits recorded alongside it**, both real and neither previously written down.
 `find_program_address` — the only way to speak of the *canonical* bump rather than the stored one —
@@ -738,6 +759,16 @@ iterates up to 255 times, far past a `loop_iter` of 2, so a property worded in t
 PDA is out of reach and only the stored-bump form is statable. And that form re-invokes
 `Pubkey::create_program_address` inside the rule, which needs the Prover to relate two invocations of
 the `sol_create_program_address` syscall; the run's vacuity left that unconfirmed.
+
+**Corrected: neither function is analyzed at all.** The core summaries file has carried points-to
+summaries for `find_program_address` and `create_program_address`, in both the `solana_program` and
+`solana_pubkey` spellings, since `ac30e217`, before this run. Each call is an opaque one whose
+result is typed `num`, which makes it an unconstrained address independent of every other call. So
+the 255-iteration loop is not what the model sees, and the two invocations are unrelated by
+construction rather than unconfirmed. That is why a `seeds` constraint's verdict is unconstrained,
+in either direction: it compares the account against an address the constraint derives for itself.
+The author and judge prompts name it as a skip reason (`ae782f71`). Lifting it means modelling the
+derivation, which is a question for the Prover rather than for this backend.
 
 ---
 
