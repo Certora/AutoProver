@@ -37,8 +37,15 @@ as `crate::…`, and a path rooted anywhere else names a dependency.
 Which is the trap worth naming. A rule can drive a *library* function, verify cleanly, and read like
 a verification of the program. `cvlr_assume!(!accounts[1].is_signer); cvlr_assert!(Signer::try_from(&accounts[1]).is_err());`
 demonstrates that Anchor rejects a non-signer — true, and nothing whatever about the program you were
-given. If a property is enforced by a dependency or by Anchor's account validation rather than by the
-program's own code, that is a skip with that reason, not a rule about the dependency.
+given. If a property is enforced by a dependency rather than by the program's own code, that is a skip
+with that reason, not a rule about the dependency.
+
+The program's own account validation is not a dependency. `#[derive(Accounts)]` generates
+`try_accounts` for each accounts struct *inside the program's crate*, from the program's own
+`#[account(...)]` declarations, and it is reachable as `crate::<AccountsStruct>::try_accounts`. A
+property enforced by those declarations — the signer, `mut`, `has_one`, owner — is a property of the
+program, and the rule for it drives that function. A rule that builds the accounts struct by hand
+never runs validation at all, so it cannot demonstrate one.
 
 If you cannot reach the program's own code, that is a result to report — see the escalation ladder
 in the task prompt. It is never a reason to move the rule onto something you can reach.
