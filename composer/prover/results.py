@@ -270,9 +270,11 @@ def external_functions(results_root: Path) -> tuple[str, ...]:
     found: set[str] = set()
     for alert in alerts:
         message = alert.get("message") if isinstance(alert, dict) else None
-        if not isinstance(message, str) or _EXTERNALS_ALERT not in message:
+        if not isinstance(message, str) or (prefix := message.find(_EXTERNALS_ALERT)) == -1:
             continue
-        start, end = message.rfind("["), message.rfind("]")
+        # The first bracket after the prefix, not the last in the message: a name can carry its own,
+        # as in ``core::ptr::drop_in_place<[solana_account_info::AccountInfo; 3]>``.
+        start, end = message.find("[", prefix), message.rfind("]")
         if start == -1 or end < start:
             continue
         found.update(_split_top_level(message[start + 1 : end]))
