@@ -75,8 +75,30 @@ Read the outcome:
     `expect_rule_failure(rule_name, reason)`, saying why you believe the violation is real, and
     re-run. Marked rules are excluded from the gate, so a run can be complete with a genuine
     violation in it. **Do not invert the rule so that it passes.**
-* **A rule reported vacuous / sanity-failing** → your assumptions contradict, so the rule proves
-  nothing. Weaken them.
+* **A rule reported vacuous / sanity-failing** → no execution reaches the end of the rule, so it
+  proves nothing. The vacuity check assumes every assertion on the way holds, and that includes
+  ones you did not write: a token model's own `cvlr_assert!`, and the prover's loop-unwinding
+  assertion, which is on every path through a loop it cannot bound. So the cause is either your
+  assumptions contradicting each other or the program, or an assertion that fails on every path.
+  Find out which before weakening anything.
+
+  **Diagnose with `cvlr_assert!(false)`, not `cvlr_satisfy!`.** A satisfy rule also turns every
+  assertion into an assumption, so it assumes away exactly the one causing the vacuity and reports
+  the path reachable while the real rule stays vacuous. Measured: three submissions of satisfy
+  diagnostics, every one VERIFIED, on a rule whose every path hit the unwinding assertion inside a
+  CPI's instruction encoder; the first diagnostic ending in `cvlr_assert!(false)` came back
+  VIOLATED with the loop in its trace. Copy the real rule, replace its final assertion with
+  `cvlr_assert!(false)`, and `clog!` the values the assertion reads:
+  - VIOLATED on `false` → the path is live, and the trace shows a concrete execution. If a
+    generated assertion fired first, that is the cause; if the logged values satisfy your
+    postcondition, the vacuity comes from how the assertion is stated, not from the program.
+  - Still vacuous → add the rule's assumptions back into the copy one at a time; the one that makes
+    it vacuous is the contradiction.
+
+  Measured once, cause unknown: `(a as u128) + (f as u128) <= (b as u128)` as the precondition and
+  assertion left two true rules vacuous, and the same relation over `u64` with no sum —
+  `f <= b && a <= b - f` — verified them. When the trace says the path is live and the property holds
+  on it, restate the relation that way before concluding anything else.
 * **A timeout** → the rule is too hard as stated. Bound a loop, split the rule, or summarize a call
   the property does not depend on. Re-running an unchanged timing-out rule will time out again.
 * **A rule the prover could not analyze** → an *error* rather than a verdict, so it comes back as

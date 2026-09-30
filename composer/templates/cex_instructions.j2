@@ -3,6 +3,11 @@ for {{ rule_name }} in mind. When possible, summarize the root cause of the fail
 in the original implementation. If you are uncertain as the exact cause, indicate this. If you have multiple theories,
 list those theories.
 
+Make no claim that this counterexample does not show. That includes claims about other rules: you are
+shown this rule's counterexample and no other, and a rule you were shown none for may have verified,
+been vacuous (SANITY_FAILED), timed out, or failed to run. None of those supports your diagnosis, so
+do not cite another rule as passing or as a control unless the conversation reports it VERIFIED.
+
 Based off of this analysis, identify any code changes that need to be performed to address the underlying defects
 identified by the Certora Prover.
 
