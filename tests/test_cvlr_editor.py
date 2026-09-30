@@ -31,6 +31,7 @@ from composer.spec.cvlr.editor import (
     EditsProposed,
     ExtractFunction,
     MungeFunction,
+    RedirectModule,
     RequestReview,
     SubmitEdits,
     kind_of,
@@ -176,6 +177,43 @@ async def test_a_munge_of_a_dependency_is_refused(tmp_path: Path):
         why="w",
     )
     assert isinstance(answer, str) and INTERNAL_DIR.name in answer
+
+
+@pytest.mark.asyncio
+async def test_a_redirect_of_the_program_s_own_module_is_gated_on_the_unit(tmp_path: Path):
+    """In a run the developer's project and the tree are different directories, and the file a munge
+    names is read from the former while the package root names the latter. A check that compared
+    the two found every module of the program foreign to it, and refused the redirect for want of a
+    `certora` feature forwarding to the program itself."""
+    from composer.spec.cvlr.verify import HarnessTarget
+
+    pristine, root = tmp_path / "project", tmp_path / "project" / ".cvlr_work" / "build"
+    src = pristine / "programs" / "p" / "src" / "processor"
+    src.mkdir(parents=True)
+    (src / "mod.rs").write_text("pub mod spl_token_utils;\n")
+    (src / "spl_token_utils.rs").write_text("pub fn transfer() {}\n")
+    target = HarnessTarget(
+        session=SimpleNamespace(workdir=root),  # type: ignore[arg-type]
+        module_path=root / "programs/p/src/certora/specs/vault.rs",
+        package="p",
+        package_root=root / "programs" / "p",
+        tuning=SimpleNamespace(),  # type: ignore[arg-type]
+        unit=HarnessModule("vault"),
+        tree=SharedTree(pristine=pristine, root=root),
+        build_sem=asyncio.Semaphore(1),
+    )
+    result = await _run(
+        RedirectModule,
+        target,
+        _editor_state(),
+        path="programs/p/src/processor/mod.rs",
+        module="spl_token_utils",
+        substitute="pub fn transfer() {}\n",
+        why="the real module's instruction encoder loops; the stand-in builds the same payload",
+    )
+    assert not isinstance(result, str), result
+    (record,) = result.update["proposed"]
+    assert record.feature == target.unit.feature
 
 
 @pytest.mark.asyncio
