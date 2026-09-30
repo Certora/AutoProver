@@ -34,7 +34,7 @@ from composer.ui.autoprove_console import AutoProveConsoleHandler
 from tests.conftest import (
     SPEC_DECL_RE, conf_of_prover_call, needs_postgres, spec_of_prover_conf,
 )
-from tests.test_autoprove_integration import _install_mocks, _make_args
+from tests.test_autoprove_integration import _install_mocks, _make_args, _read_report
 
 pytestmark = [pytest.mark.expensive, needs_postgres, pytest.mark.asyncio]
 
@@ -89,12 +89,8 @@ async def test_cvl_tape_buffers_flow(scenario_provider, langgraph_db, monkeypatc
     ) as run:
         await run(AutoProveConsoleHandler().make_handler)
 
-    # The run-target buffer must have been PUBLISHED (not given up): its own spec on
-    # disk (buffer name "core"), NOT just the shared summaries spec.
-    specs = list((scenario_dir / "certora" / "specs").rglob("*.spec"))
-    print(f"\nPUBLISHED SPECS: {[str(p.relative_to(scenario_dir)) for p in specs]}")
-    run_target = [p for p in specs if p.parent.name != "summaries" and p.name == "core.spec"]
-    assert run_target, (
-        f"no published run-target core.spec — the component gave up (tape diverged). "
-        f"Only found: {[str(p.relative_to(scenario_dir)) for p in specs]}"
-    )
+    # The component must have been DELIVERED (not given up) and formalized its
+    # properties — from the report's own accounting, not the filesystem.
+    report = _read_report(scenario_dir)
+    assert report["gave_up_components"] == [], f"component(s) gave up: {report['gave_up_components']}"
+    assert report["properties"], "no properties formalized — the tape diverged"
