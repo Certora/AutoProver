@@ -53,3 +53,17 @@
 #[inline] ^anchor_lang::system_program::transfer$
 #[inline] ^core::ptr::drop_in_place<core::result::Result<\(\),anchor_lang::error::Error>>$
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Account validation. A program's `#[derive(Accounts)]` struct names `anchor_lang::Accounts` in
+;;; its trait path, so the blanket above makes its generated `try_accounts` external, along with
+;;; the per-field `Signer`/`Account<T>`/`Program<T>` impls it delegates to. External, it returns an
+;;; arbitrary `Result` and binds arbitrary accounts, so no signer, `mut`, `seeds`, `has_one` or
+;;; `init` constraint is checked. `init` reaches the system-program helpers below, which left
+;;; external never return Ok, the same trap as `transfer`. Anchor generates the `init` block as an
+;;; `#[inline(never)]` closure inside `try_accounts`, and that closure binds the new account.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+#[inline] ^<.+ as anchor_lang::Accounts<.+>>::try_accounts(::\{\{closure\}\})?$
+#[inline] ^anchor_lang::system_program::create_account$
+#[inline] ^anchor_lang::system_program::allocate$
+#[inline] ^anchor_lang::system_program::assign$
+
