@@ -14,13 +14,29 @@ from pathlib import Path
 from typing import override
 
 from composer.diagnostics.timing import RunSummary
-from composer.spec.artifacts import ArtifactStore
+from composer.spec.artifacts import ArtifactStore, QUARANTINE_SUFFIX
 from composer.spec.cvl_generation import GeneratedCVL
 from composer.spec.gen_types import (
-    AP_REPORT_DIR, AUTOPROVE_INTERNAL_DIR, CERTORA_DIR, under_project,
+    AP_REPORT_DIR, AUTOPROVE_INTERNAL_DIR, CERTORA_DIR, buffer_spec_path, component_specs_dir,
+    under_project,
 )
 from composer.spec.source.prover import prover_config_overlay
 from composer.spec.util import ensure_dir
+
+
+def _write_checked(path: Path, content: str) -> None:
+    """Write ``content`` to ``path`` (creating parents). If ``path`` already holds DIFFERENT content,
+    raise: the deliverable is materialized from many buffers (and, across the run, many components) into
+    one tree, so an overwrite that changes content means two sources disagree on a file — a bug, never a
+    silent clobber. Identical re-writes are idempotent no-ops."""
+    if path.exists():
+        if path.read_text() != content:
+            raise AssertionError(
+                f"deliverable overwrite of {path} with different content — two sources disagree on it"
+            )
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
 
 _log = logging.getLogger(__name__)
 
@@ -42,7 +58,16 @@ class ComponentSpec:
     def run_key(self) -> str:
         """Key under which this spec's prover run is recorded in the run-link map."""
         return self.slug
-    
+
+    @property
+    def specs_dir(self) -> Path:
+        """Project-relative dir this component's buffers occupy."""
+        return component_specs_dir(self.slug)
+
+    def buffer_spec_rel(self, name: str) -> str:
+        """Project-relative path of buffer ``name``'s ``.spec`` under this component's spec dir."""
+        return buffer_spec_path(self.slug, name).as_posix()
+
     @property
     def artifact_file(self) -> str:
         return self.spec_filename
@@ -68,26 +93,42 @@ class ProverArtifactStore(ArtifactStore[ComponentSpec, GeneratedCVL]):
 
     @override
     def write_artifact(self, i: ComponentSpec, artifact: GeneratedCVL) -> Path:
-        written_spec = super().write_artifact(i, artifact)
-        self._write_conf(i, artifact.config, written_spec)
-        return written_spec
-
-    def _write_conf(
-        self, spec: ComponentSpec, base_config: dict | None, spec_path: Path,
-    ) -> None:
-        """The prover conf for the run: the generation's final ``state["config"]`` plus
-        the fixed run overlay (shared with the live ``verify_spec`` run). No-op if no
-        base config."""
-        if base_config is None:
-            _log.warning("no base config for %s; skipping conf dump", spec.stem)
-            return
-        conf = prover_config_overlay(
-            base_config,
-            main_contract=self._main_contract,
-            verify_target=f"{self._main_contract}:{spec_path}",
+        specs_root = under_project(self._project_root, i.specs_dir)
+        # Every spec -- entrypoints and the shared specs they import -- as its own file.
+        for name, cvl in artifact.spec_files.items():
+            _write_checked(under_project(self._project_root, i.buffer_spec_rel(name)), cvl)
+        if artifact.config is not None:
+            confs_root = ensure_dir(self._deliverable_dir() / "confs" / i.slug)
+            # A runnable .conf for each entrypoint (shared specs are imported, not run directly).
+            for name in artifact.entrypoint_specs:
+                conf = prover_config_overlay(
+                    artifact.config,
+                    main_contract=self._main_contract,
+                    verify_target=f"{self._main_contract}:{i.buffer_spec_rel(name)}",
+                )
+                _write_checked(confs_root / f"verify_{name}.conf", json.dumps(conf, indent=2))
+        else:
+            _log.warning("no base config for %s; skipping conf dump", i.stem)
+        self._write_commentary(i.stem, artifact.commentary)
+        self._write_property_map(
+            i.stem, self._property_suffix, {k: v for (k, v) in artifact.property_checks()},
         )
-        confs_dir = ensure_dir(self._deliverable_dir() / "confs")
-        (confs_dir / f"{spec.stem}.conf").write_text(json.dumps(conf, indent=2))
+        # Which spec file verifies each property.
+        (self._properties_dir() / f"{i.stem}.property_specs.json").write_text(
+            json.dumps({str(m.property_title): m.spec_file for m in artifact.property_rules}, indent=2)
+        )
+        return specs_root.relative_to(self._project_root)
+
+    @override
+    def write_quarantined(self, i: ComponentSpec, artifact: GeneratedCVL) -> Path:
+        """Persist a budget-curtailed component for inspection: each buffer under a poisoned
+        ``.spec.unverified`` name, no conf. Returns the component's spec directory."""
+        specs_root = under_project(self._project_root, i.specs_dir)
+        for name, cvl in artifact.spec_files.items():
+            _write_checked(
+                under_project(self._project_root, i.buffer_spec_rel(name) + QUARANTINE_SUFFIX), cvl
+            )
+        return specs_root.relative_to(self._project_root)
 
     # -- run-level ----------------------------------------------------------
 

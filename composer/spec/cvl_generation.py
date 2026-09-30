@@ -48,6 +48,7 @@ class PropertyRuleMapping(BaseModel):
     """The rules/invariants in the spec that verify a given property."""
     property_title: PropertyTitle = Field(description="The unique snake_case title of the property (from the batch listing) that these rules verify")
     rules: list[RuleName] = Field(description="The names of the rules/invariants in the spec that verify this property")
+    spec_file: str = Field(description="Project-relative spec file (`<component>/<buffer>.spec`, relative to the specs dir) whose rules verify this property")
 
 class Rebuttal(RebuttalBase):
     """A rebuttal to a specific piece of feedback from a prior round, backed by evidence.
@@ -57,6 +58,14 @@ class Rebuttal(RebuttalBase):
     etc. Do NOT file rebuttals for feedback you merely disagree with; address those by
     revising the spec.
     """
+    buffer: str = Field(
+        description=(
+            "The name of the review unit whose feedback this rebuts — a buffer name, or "
+            '"skips_review" for the shared skip review. Each unit is reviewed by its own judge, so a '
+            "rebuttal reaches only that unit's judge; file it under the unit the prior-round feedback "
+            "was about."
+        )
+    )
     evidence_type: Literal[
         "typecheck_failure",
         "counterexample",
@@ -86,7 +95,6 @@ class AppliedEdit(BaseModel):
 
 class GeneratedCVL(BaseModel):
     commentary: str
-    cvl: str
     skipped: list[SkippedProperty] = Field(default_factory=list)
     property_rules: list[PropertyRuleMapping] = Field(default_factory=list)
     # The base prover config (state["config"]) at completion, persisted so a cache hit
@@ -96,6 +104,10 @@ class GeneratedCVL(BaseModel):
     # The last prover-run link (URL or local results dir), persisted for the report and so a
     # cache hit retains it. None when the prover never produced a link.
     final_link: str | None = Field(default=None)
+    # (run link, the spec it verified) for every run whose results compose the buffers at their final
+    # digests, newest first; empty when no run-target buffer has a completed run. Rule-striping runs a
+    # buffer's rules across several jobs, so this holds all of them.
+    run_link_specs: list[tuple[str, str]] = Field(default_factory=list)
     # The author's working copy at completion: the edited source files the proof
     # actually ran against (empty when no edits were applied — always the case
     # outside the editing-enabled source pipeline), and the provenance of each
@@ -108,6 +120,13 @@ class GeneratedCVL(BaseModel):
     # the last link alone does not account for every rule. Empty for a cache entry written
     # before the field existed, or when no run produced a link.
     covering_links: list[str] = Field(default_factory=list)
+    # The per-buffer specs the run proved: buffer name -> its CVL text. A name may contain "/" (a subdir
+    # under the component's spec dir) — that is its file-path stem. Empty for a cache entry written
+    # before the field existed.
+    spec_files: dict[str, str] = Field(default_factory=dict)
+    # The names in ``spec_files`` that are verification entrypoints — each is delivered with its own
+    # ``.conf``; the rest are imported by them, not run directly.
+    entrypoint_specs: list[str] = Field(default_factory=list)
 
     def property_checks(self) -> list[tuple[PropertyTitle, list[RuleName]]]:
         """Property title -> the CVL rule names that verify it (the report's `ReportableResult`
@@ -116,7 +135,10 @@ class GeneratedCVL(BaseModel):
     
     @property
     def artifact_text(self) -> str:
-        return self.cvl
+        """The per-buffer specs concatenated under headers, as one text."""
+        return "\n\n".join(
+            f"// ===== {name} =====\n{cvl.rstrip()}" for name, cvl in self.spec_files.items()
+        )
 
     @property
     def output_link(self) -> str | None:
@@ -288,16 +310,24 @@ class VanillaFeedbackTool(
     def _version_history(self) -> Sequence[str]:
         return ()
 
+def cvl_guidance_tools() -> list[BaseTool]:
+    """The dependency-free CVL *guidance* tools — no spec-writing tools. Used by the buffer-authoring
+    agent, which writes CVL through the buffer tools (put_buffer / edit_buffer) rather than put_cvl."""
+    return [
+        ERC20TokenGuidance.as_tool("erc20_guidance"),
+        UnresolvedCallGuidance.as_tool("unresolved_call_guidance"),
+    ]
+
+
 def static_tools() -> list[BaseTool]:
-    """The dependency-free CVL authoring tools. The property-management suite
-    (feedback / skip tools) is NOT here — it carries runtime deps; see
+    """The dependency-free CVL authoring tools — the single-``curr_spec`` writing tools plus guidance.
+    The property-management suite (feedback / skip tools) is NOT here — it carries runtime deps; see
     :func:`skip_tools` and :class:`FeedbackToolBase`."""
     return [
         put_cvl, put_cvl_raw,
         get_cvl(CVLGenerationState),
         edit_cvl(CVLGenerationState),
-        ERC20TokenGuidance.as_tool("erc20_guidance"),
-        UnresolvedCallGuidance.as_tool("unresolved_call_guidance"),
+        *cvl_guidance_tools(),
     ]
 
 

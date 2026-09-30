@@ -6,12 +6,11 @@ Translates ProverOutputUtility's per-rule `CheckResult`s into the report's backe
 """
 import asyncio
 import logging
-from pathlib import Path
 
 from prover_output_utility import ProverOutputAPI
 from prover_output_utility.models import CheckResult, NodeStatus
 
-from composer.spec.cvl_generation import GeneratedCVL
+from composer.spec.cvl_generation import GeneratedCVL, _output_link
 from composer.spec.source.report.collect import Formalized, Verdict, VerdictFetcher
 from composer.spec.source.report.schema import Outcome, RuleName
 
@@ -29,8 +28,14 @@ _NODE_TO_OUTCOME: dict[NodeStatus, Outcome] = {
 }
 
 
-def _fetch(api: ProverOutputAPI, link: str) -> dict[RuleName, Verdict]:
-    """rule_name -> rolled-up `Verdict` for one prover run. Best-effort: any POU failure -> {}."""
+def _fetch(api: ProverOutputAPI, link: str, spec_file: str | None) -> dict[RuleName, Verdict]:
+    """rule_name -> rolled-up `Verdict` for one prover run, each stamped with ``spec_file`` (the spec that
+    run verified — constant for the run). Best-effort: any POU failure -> {}.
+
+    A run link is a raw ``/jobStatus/`` job URL; POU (and the report's own links) want the ``/output/``
+    view, so normalize before the call and stamp the normalized link onto the verdict.
+    """
+    link = _output_link(link) or link
     try:
         checks: list[CheckResult] = api.get_all_checks(link)
     except Exception:
@@ -43,7 +48,7 @@ def _fetch(api: ProverOutputAPI, link: str) -> dict[RuleName, Verdict]:
             _NODE_TO_OUTCOME.get(c.status, Outcome.UNKNOWN),
             loc.line if loc else None,
             c.duration or None,
-            Path(loc.file).name if (loc and loc.file) else None,
+            spec_file,
             link=link,
         )
         name = RuleName(c.rule_name)
@@ -52,22 +57,21 @@ def _fetch(api: ProverOutputAPI, link: str) -> dict[RuleName, Verdict]:
 
 
 def _fetch_covering(
-    api: ProverOutputAPI, newest_first: list[str]
+    api: ProverOutputAPI, run_link_specs: list[tuple[str, str]]
 ) -> dict[RuleName, Verdict]:
-    """rule_name -> `Verdict` across the runs that account for one spec.
+    """rule_name -> `Verdict` across the runs that compose the component's buffers.
 
-    ``newest_first`` must be ordered newest run first, which is the order
-    `composer.spec.source.prover.covering_run_links` returns: it walks the author's history
-    backwards. The whole result rests on that order, because the first verdict found for a rule
-    is the one kept.
+    ``run_link_specs`` is (link, the spec that run verified) newest run first — the order
+    `composer.spec.source.prover.completing_run_specs` produces, walking each buffer's history backwards.
+    The whole result rests on that order, because the first verdict found for a rule is the one kept.
 
     Newest run wins per rule, not the most terminal outcome: a rule that timed out in one run
     and verified in a later scoped re-run is verified. Within a single run the rollup stays
     `Verdict.merge`'s, which is where "most terminal wins" is the right answer.
     """
     verdicts: dict[RuleName, Verdict] = {}
-    for link in newest_first:
-        for name, v in _fetch(api, link).items():
+    for link, spec_file in run_link_specs:
+        for name, v in _fetch(api, link, spec_file).items():
             # First writer wins, and the newest run is read first, so a later run's verdict
             # never overwrites it.
             verdicts.setdefault(name, v)
@@ -76,15 +80,19 @@ def _fetch_covering(
 
 def make_prover_fetcher(api: ProverOutputAPI | None = None) -> VerdictFetcher[GeneratedCVL]:
     """A `VerdictFetcher` that pulls per-rule verdicts from ProverOutputUtility, reading every
-    run that accounts for the component's published spec. POU calls run off the event loop (one
-    blocking call per run). Only ever invoked for delivered results (collect skips gave-up /
-    curtailed inputs)."""
+    prover run that composes the component's buffers (``GeneratedCVL.run_link_specs``). With buffers +
+    rule-striping one component's rules are run across several jobs, so a fetch keyed on a single link
+    would report every rule whose verdict came from another run as UNKNOWN; ``_fetch_covering`` unions
+    them newest-run-first, so a rule re-proved in a later scoped run wins over its earlier verdict. Each
+    rule is stamped with the spec its run verified, taken from ``run_link_specs``. POU calls run off the
+    event loop (one blocking call per run). Only ever invoked for delivered results (collect skips
+    gave-up / curtailed inputs)."""
     api = api or ProverOutputAPI()
 
     async def fetch(formalized: Formalized[GeneratedCVL]) -> dict[RuleName, Verdict]:
-        newest_first = formalized.result.covering_output_links
-        if not newest_first:
+        run_link_specs = formalized.result.run_link_specs
+        if not run_link_specs:
             return {}
-        return await asyncio.to_thread(_fetch_covering, api, newest_first)
+        return await asyncio.to_thread(_fetch_covering, api, run_link_specs)
 
     return fetch
