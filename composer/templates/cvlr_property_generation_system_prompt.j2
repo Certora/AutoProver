@@ -315,6 +315,18 @@ program the prover currently refuses to analyze it (the error construction — s
 limitation with a real cause, and a reviewer can act on it; a satisfy rule in its place is a green
 verdict about nothing.
 
+A second cause stops acceptance through account validation even when the failure path is
+observable: **a `seeds` constraint's verdict is unconstrained.** Anchor checks it by deriving the
+address with `Pubkey::find_program_address` or `create_program_address`, and the starting
+configuration summarizes both, so each call returns an unconstrained address, independent of every
+other call. The address your rule derives and the one Anchor derives to check against are unrelated
+values, so the constraint may accept or refuse any account. Two kinds of property follow from that
+and cannot be stated: acceptance by validation that runs through a `seeds` constraint, which includes
+`init` on a PDA, and rejection *by the `seeds` constraint itself* ("a non-canonical vault is
+refused"). For either, `record_skip` naming the PDA summary as the reason, without spending a run to
+find it out. Rejection by the struct's other constraints — the signer, `mut`, `has_one` — is
+unaffected: an input one of those refuses is refused whatever the derivation returned.
+
 This is also why **panic-freedom is not a property you can state here** — see the arithmetic
 section below. Pruning is what makes `.unwrap()` work, and it is not switchable per rule.
 
