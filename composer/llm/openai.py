@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from functools import cache
 import asyncio
 
+import httpx
 import openai
 
 from composer.input.files import UploaderBase, ContentRenderer
@@ -151,8 +152,10 @@ class OpenAIService(ProviderServiceBase):
         408/409/429/5xx statuses are transient; 400-class request errors are
         deterministic and excluded. When the status cannot speak for the error,
         because the server reported it inside an already-open stream, the
-        payload's ``error.type`` decides instead."""
-        if isinstance(exc, openai.APIConnectionError):
+        payload's ``error.type`` decides instead. A transport failure while the body
+        streams arrives as a raw ``httpx.TransportError``, which the SDK does not wrap as
+        ``APIConnectionError``, so it is matched directly."""
+        if isinstance(exc, (httpx.TransportError, openai.APIConnectionError)):
             return True
         if isinstance(exc, openai.APIStatusError):
             if exc.status_code in (408, 409, 429) or exc.status_code >= 500:
