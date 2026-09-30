@@ -33,6 +33,15 @@ be stale; the tool is authoritative.
    `crate::<module>::<fn>` is narrowing scope. A rule reaching a `fn` defined in the spec module is
    verifying the author.
 
+   **A property the accounts struct's constraints enforce needs a rule that runs them.** The
+   signer, `mut`, `has_one` and owner checks live in the struct's generated
+   `crate::<AccountsStruct>::try_accounts`, which is the program's code, built from its own
+   `#[account(...)]` declarations. A rule that constructs the struct field by field never calls it,
+   so mapped to such a property it demonstrates nothing, however it verifies. Require the rule to
+   validate through `try_accounts` and assert what an accepted execution guarantees, or a skip
+   whose reason is one this prompt accepts. The author has been told that validation is analyzable,
+   so "account validation is outside the model" is no longer one.
+
    **Then the summaries and the munges, the same way.** Both are listed at the end of your input
    with the author's justification for each, and neither leaves a mark in the harness source — that
    list is the only place you will see them, and `get_harness` will not show you either.

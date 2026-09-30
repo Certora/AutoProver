@@ -175,7 +175,8 @@ is cheaper and is the shape the extraction guidance asks for. Build the accounts
 `crate::<program_module>::<handler>(ctx, ..)`.
 
 **Start at the handler, and descend only for a reason you can name.** A rule that drives the handler
-has the best fidelity: real account validation, the real `Context`, the real target. Prefer it.
+has the best fidelity: the real `Context`, the real target, and real account validation when the
+struct comes from `try_accounts` (below). Prefer it.
 
 But a handler that performs a CPI rarely carries a post-state property at handler level. The prover
 does not model what a CPI does: it keeps every value the call would change as it was before the call.
@@ -223,7 +224,8 @@ The second is to keep the handler and take the CPI out from under it, by asking 
 `swap_import` on the name the call goes through. You write a stand-in with `invoke`'s signature and
 return `Ok(())` from it; the editor points the program's `use` at it behind your feature. The call is
 gone, and its instruction-building loop with it, so the handler's own bookkeeping is provable — with
-real account validation and the real `Context`, which is what descending gives up.
+the real `Context`, and validation if the struct comes from `try_accounts`, which is what descending
+gives up.
 
 What neither move gives you is the transfer itself. Your stand-in does not move the lamports, and
 neither does the prover's own model of the call. So a property about what the transfer *did* fails at
@@ -393,6 +395,31 @@ all come from the program you are given.
 {% endif %}
 `Context::new(program_id, &mut accounts, remaining_accounts, bumps)`. The context borrows the
 accounts struct, so the borrow ends with the call and the struct is yours to read afterwards.
+
+**A struct built by hand has skipped validation.** Every `#[account(...)]` constraint on it — the
+signer, `mut`, `has_one`, the owner — is checked in the struct's generated `try_accounts`, and the
+shape above never calls it. That is right for a property of the handler body. For a property the
+*constraints* enforce, validate first and state it as "success implies":
+
+```rust
+use anchor_lang::Accounts as _;          // the trait `try_accounts` is on
+use std::collections::BTreeSet;
+
+let accounts = Box::new(cvlr_deserialize_nondet_accounts());
+let mut rest: &[AccountInfo] = &accounts[..];
+let mut bumps = crate::{% if example %}{{ example.bumps_type }}{% else %}DepositBumps{% endif %}::default();
+let mut reallocs: BTreeSet<Pubkey> = BTreeSet::new();
+let mut ix = crate::{% if example %}{{ example.accounts_struct }}{% else %}Deposit{% endif %}::try_accounts(&crate::ID, &mut rest, &[], &mut bumps, &mut reallocs).unwrap();
+
+{% set signers = (example.accounts | selectattr("constructor", "equalto", "Signer") | map(attribute="name") | list) if example else [] %}let signed = ix.{% if signers %}{{ signers[0] }}{% elif example %}/* a Signer field */{% else %}depositor{% endif %}.is_signer;   // what the constraint promised, read through the validated struct
+clog!(signed as u64);
+cvlr_assert!(signed);
+```
+
+The assertion holds on every execution validation accepts, which is the rejection property read the
+other way round, and `.unwrap()` keeps the failure path pruned, so the `[3308]` above does not arise. Declare the rule's subject as `crate::<AccountsStruct>::try_accounts`, or as the handler if
+the rule goes on to call it with that `ix`. One constraint is out of reach this way: a `seeds`
+constraint's verdict is unconstrained under the PDA summary (see acceptance properties above).
 
 ### The names Anchor generates, and the one that looks right and is not
 
