@@ -74,6 +74,25 @@ def fetch_verdicts(api: ProverOutputAPI, link: str) -> dict[RuleName, Verdict]:
     return verdicts
 
 
+def fetch_unsat_cores(api: ProverOutputAPI, link: str, rule: str) -> tuple[str, ...]:
+    """The text of every unsat core the run at ``link`` wrote for ``rule``'s checks.
+
+    Only a run with ``coverage_info`` on writes any. The job's ``unsat_core_map.json`` keys a core by
+    check — the rule itself, or a sub-check such as ``<rule>-Assertions`` — so a rule's cores are
+    those under its own name or a name it prefixes with ``-``, which no rule name can contain.
+    """
+    job = job_input(link)
+    names = sorted(
+        {
+            name
+            for check, files in api.unsat_core_map(job).items()
+            if check == rule or check.startswith(f"{rule}-")
+            for name in files
+        }
+    )
+    return tuple(api.fetch_output_file(job, name) for name in names)
+
+
 def make_prover_fetcher(api: ProverOutputAPI | None = None) -> VerdictFetcher[ReportableResult]:
     """A `VerdictFetcher` that pulls per-rule verdicts from ProverOutputUtility, keyed by each
     component's run link. POU calls run off the event loop (one blocking call per run). Only ever

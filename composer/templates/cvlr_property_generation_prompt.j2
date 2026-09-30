@@ -82,9 +82,15 @@ Read the outcome:
   assumptions contradicting each other or the program, or an assertion that fails on every path.
   Find out which before weakening anything.
 
-  **Diagnose with `cvlr_assert!(false)`, not `cvlr_satisfy!`.** A satisfy rule also turns every
-  assertion into an assumption, so it assumes away exactly the one causing the vacuity and reports
-  the path reachable while the real rule stays vacuous. Measured: three submissions of satisfy
+  **Start with `explain_vacuity(rule)`.** It reruns that one rule with the vacuity check off, about
+  as fast as an ordinary run, and reads the unsat core of the proof. Its first line settles the
+  question above: if the rule's own assertion is not in the core, the core's constraints contradict
+  each other and the analysis names them; if it is, your assumptions are not the cause and weakening
+  them will not help.
+
+  If you need to go further, **diagnose with `cvlr_assert!(false)`, not `cvlr_satisfy!`.** A
+  satisfy rule also turns every assertion into an assumption, so it assumes away exactly the one
+  causing the vacuity and reports the path reachable while the real rule stays vacuous. Measured: three submissions of satisfy
   diagnostics, every one VERIFIED, on a rule whose every path hit the unwinding assertion inside a
   CPI's instruction encoder; the first diagnostic ending in `cvlr_assert!(false)` came back
   VIOLATED with the loop in its trace. Copy the real rule, replace its final assertion with

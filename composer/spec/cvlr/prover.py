@@ -40,6 +40,8 @@ from composer.prover.conf import InheritRules, RuleSelection, dump_conf
 from composer.spec.cvlr.conf import (
     DEFAULT_FEATURE,
     PLATFORM_TOOLS_VERSION,
+    CheckVerdicts,
+    ConfPurpose,
     ProverSettings,
     RunOverlay,
     solana_conf,
@@ -111,6 +113,7 @@ class Submission:
     #: Points-to summary files this submission reads, workdir-relative. One per unit; see
     #: :class:`~composer.spec.cvlr.conf.RunOverlay`.
     summaries: tuple[Path, ...] = ()
+    purpose: ConfPurpose = CheckVerdicts()
 
     def resolved_features(self) -> tuple[str, ...]:
         return self.features or (DEFAULT_FEATURE,)
@@ -151,6 +154,7 @@ async def write_submission(
             rules=submission.rules,
             msg=submission.msg,
             summaries=submission.summaries,
+            purpose=submission.purpose,
         ),
     )
     conf_path = session.workdir / CONF_DIR / f"{submission.stem}.conf"

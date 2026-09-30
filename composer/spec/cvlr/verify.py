@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import (
     Annotated,
     AsyncIterator,
+    Callable,
     Container,
     Literal,
     Mapping,
@@ -35,6 +36,7 @@ from typing import (
 )
 
 from langchain_core.tools import BaseTool
+from prover_output_utility import ProverOutputAPI
 from pydantic import BaseModel, Discriminator, Field
 
 from graphcore.graph import LLM, tool_return, tool_state_update
@@ -52,6 +54,7 @@ from composer.diagnostics.timing import get_run_summary
 from composer.cargo.sbf import Built, PlatformToolsMissing, SbfRun
 from composer.cargo.session import CargoSession, CompileFailed, Compiled
 from composer.cargo.symbols import defined_functions, nearest, unmatched
+from composer.prover.cloud import results_api
 from composer.prover.core import (
     CexHandler,
     ProverCallbacks,
@@ -69,6 +72,7 @@ from composer.prover.conf import SelectRules, dump_conf
 from composer.spec.cvlr.conf import (
     DEFAULT_FEATURE,
     PLATFORM_TOOLS_VERSION,
+    CollectUnsatCore,
     OptimisticLoop,
     settings_conf,
 )
@@ -88,6 +92,7 @@ from composer.spec.cvlr.prover import (
     BuildRejected,
     Checked,
     CvlrOutcome,
+    Prepared,
     Submission,
     SubmissionFailed,
     prepare_submission,
@@ -102,7 +107,9 @@ from composer.spec.cvlr.state import (
 )
 from composer.spec.cvlr.tree import NotInWorkdir, Reconciled, SharedTree, UnitEdits
 from composer.spec.cvlr.tuning import SummaryDirective, TuningFiles
+from composer.spec.cvlr.vacuity import VacuityAnalyzer, core_finding
 from composer.spec.source.cex_capture import CexAnalysisStore
+from composer.spec.source.report_prover import fetch_unsat_cores
 from composer.spec.types import CheckName
 from composer.ui.tool_display import tool_display
 
@@ -496,6 +503,34 @@ class CargoCheck(
                 )
 
 
+def _submission_for(
+    deps: VerifyDeps, state: CvlrGenerationState, rules: Sequence[str]
+) -> Submission:
+    """The unit's submission, checking ``rules`` under the author's current prover settings.
+
+    The settings come from state, not from ``deps``: the conf is the author's to change, and a
+    submission built from the run's starting copy would send the old settings while
+    ``version_history`` recorded the new ones.
+    """
+    return dataclasses.replace(
+        deps.submission, rules=SelectRules(tuple(rules)), settings=state["prover_settings"]
+    )
+
+
+async def _stage_and_prepare(
+    deps: VerifyDeps, state: CvlrGenerationState, draft: str, submission: Submission
+) -> tuple[Reconciled, BuildRejected | Prepared]:
+    """Stage ``draft`` with the unit's summaries and munges, then build and write the conf.
+
+    The permit covers staging and the local build only. The prover run that follows is outside it,
+    because it waits on a cloud job and a sibling's edits meanwhile are inert for this build
+    (docs/single-working-tree.md §2.4).
+    """
+    async with deps.target.build_slot():
+        reconciled = await deps.target.stage(draft, state["summaries"], state["munges"])
+        return reconciled, await prepare_submission(deps.target.session, submission)
+
+
 @tool_display("Running the Solana Prover", "Prover")
 class VerifyRules(
     WithInjectedState[CvlrGenerationState],
@@ -529,30 +564,14 @@ class VerifyRules(
             async with deps.lock:
                 analysis = deps.analysis
                 capture = analysis.callbacks() if analysis else None
-                # The permit covers staging and the local build; the prover run below is outside
-                # it, because it waits on a cloud job and a sibling's edits meanwhile are inert for
-                # this build (docs/single-working-tree.md §2.4).
-                async with deps.target.build_slot():
-                    reconciled = await deps.target.stage(
-                        draft, self.state["summaries"], self.state["munges"]
-                    )
-                    prepared = await prepare_submission(
-                        deps.target.session,
-                        # Name exactly the rules this draft declares. Not a refinement: a conf with
-                        # no `rule` entry makes the cloud job end in FAILED, with no report and
-                        # nothing on disk to read, so *every* submission this backend made failed
-                        # until this line named them. Not every rule either — a build compiles this
-                        # unit's module and the artifact declares every unit's rules, so this unit
-                        # would be graded on its siblings' drafts.
-                        dataclasses.replace(
-                            deps.submission,
-                            rules=SelectRules(tuple(declared)),
-                            # From state, not from `deps`: the conf is the author's to change, and
-                            # a submission built from the run's starting copy would send the old
-                            # settings while `version_history` recorded the new ones.
-                            settings=self.state["prover_settings"],
-                        ),
-                    )
+                # Name exactly the rules this draft declares. Not a refinement: a conf with no
+                # `rule` entry makes the cloud job end in FAILED, with no report and nothing on disk
+                # to read, so *every* submission this backend made failed until this line named
+                # them. Not every rule either — a build compiles this unit's module and the artifact
+                # declares every unit's rules, so this unit would be graded on its siblings' drafts.
+                reconciled, prepared = await _stage_and_prepare(
+                    deps, self.state, draft, _submission_for(deps, self.state, declared)
+                )
                 if isinstance(prepared, BuildRejected):
                     outcome: CvlrOutcome = prepared
                 else:
@@ -737,7 +756,140 @@ class VerifyRules(
                 )
 
 
-def gate_tools(target: HarnessTarget, deps: VerifyDeps) -> list[BaseTool]:
+class _DiagnosticAccounting(_RunAccounting):
+    """Prover bookkeeping for a diagnostic run: its time is counted, its link is not recorded.
+
+    The link recorded for a task is the one its report points at, and that has to stay the run the
+    author's draft was stamped by rather than a rerun made to explain one of its rules.
+    """
+
+    @override
+    async def on_prover_link(self, link: str) -> None:
+        pass
+
+
+@dataclasses.dataclass(frozen=True)
+class VacuityDeps:
+    """What ``explain_vacuity`` needs beyond the gate's own dependencies."""
+
+    verify: VerifyDeps
+    analyzer: VacuityAnalyzer
+    #: Deferred because constructing the client logs in.
+    results: Callable[[], ProverOutputAPI]
+
+
+@tool_display(lambda p: f"Explaining why `{p['rule']}` is vacuous", "Vacuity")
+class ExplainVacuity(
+    WithInjectedState[CvlrGenerationState],
+    WithInjectedId,
+    WithAsyncDependencies[str, VacuityDeps],
+):
+    """Explain why a rule ``verify_rules`` reported vacuous (``SANITY_FAILED``).
+
+    Reruns that one rule of your current draft with the vacuity check off and unsat cores on — about
+    as long as an ordinary run — and has an analyst read the core against your harness and the
+    program. The answer starts with the one question that decides what to do next: whether the
+    rule's own assertion is in the core.
+
+    * **Not in the core**: the constraints in it contradict each other with no help from the
+      assertion — your assumptions, the handler, or a model's own assumptions — and the analysis
+      names them.
+    * **In the core**: the proof needed the assertion, so the assumptions are not what makes the rule
+      vacuous, and weakening them will not help. Look at how the assertion or its precondition is
+      stated.
+
+    Use it on a rule that came back ``SANITY_FAILED``, before changing the rule. It stamps nothing.
+    """
+
+    rule: str = Field(description="The rule reported SANITY_FAILED, as your draft declares it.")
+
+    @override
+    async def run(self) -> str:
+        draft = self.state["curr_spec"]
+        if draft is None:
+            return "No harness written yet — put a draft first."
+        declared = rule_names(draft)
+        if self.rule not in declared:
+            return (
+                f"Your draft declares no rule `{self.rule}`. It declares: "
+                f"{', '.join(declared) or 'none'}."
+            )
+        with self.tool_deps() as deps:
+            verify = deps.verify
+            if verify.lock.locked():
+                return (
+                    "A prover run for this unit is already in flight. Wait for it rather than "
+                    "starting a second one."
+                )
+            async with verify.lock:
+                submission = dataclasses.replace(
+                    _submission_for(verify, self.state, (self.rule,)),
+                    purpose=CollectUnsatCore(),
+                    # Its own conf file: the unit's is part of the deliverable.
+                    stem=f"{verify.submission.stem}_unsat_core",
+                )
+                reconciled, prepared = await _stage_and_prepare(
+                    verify, self.state, draft, submission
+                )
+                if isinstance(prepared, BuildRejected):
+                    return (
+                        "The chain build failed, so nothing was submitted. Run verify_rules to see "
+                        "the compiler's diagnostics." + _drift_note(reconciled)
+                    )
+                outcome = await run_submission(
+                    verify.target.session,
+                    prepared,
+                    prover_opts=verify.prover_opts,
+                    callbacks=_DiagnosticAccounting(),
+                    cex=UnanalyzedCexHandler(),
+                    tool_call_id=self.tool_call_id,
+                )
+            match outcome:
+                case BuildRejected():
+                    return "The chain build failed, so nothing was submitted."
+                case SubmissionFailed(reason=reason):
+                    return f"The diagnostic run did not produce results: {reason}"
+                case Checked(report=report):
+                    pass
+            unproved = sorted(
+                {
+                    f"{path.rule}: {status}"
+                    for path, status in report.raw_rule_status.items()
+                    if path.rule == self.rule and status != "VERIFIED"
+                }
+            )
+            if unproved:
+                return (
+                    f"With the vacuity check off, `{self.rule}` did not verify "
+                    f"({'; '.join(unproved)}), so there is no proof and no unsat core to read. "
+                    "Run verify_rules and read what it reports for the rule."
+                )
+            cores = await asyncio.to_thread(
+                fetch_unsat_cores, deps.results(), report.link, self.rule
+            )
+            if not cores:
+                return (
+                    f"`{self.rule}` verified with the vacuity check off, but the run wrote no unsat "
+                    f"core for it, so there is nothing to analyze. The run: {report.link}"
+                )
+            core = cores[0]
+            finding = core_finding(core)
+            analysis = await deps.analyzer.explain(
+                rule=self.rule,
+                finding=finding,
+                core=core,
+                harness=draft,
+                conf=settings_conf(self.state["prover_settings"]),
+                within_tool=self.tool_call_id,
+            )
+            return "\n\n".join(
+                [finding.summary(), analysis.format(), f"The diagnostic run: {report.link}"]
+            )
+
+
+def gate_tools(
+    target: HarnessTarget, deps: VerifyDeps, analyzer: VacuityAnalyzer
+) -> list[BaseTool]:
     """The gate tools and the one tool that changes what they check, named as the prompt refers to
     them.
 
@@ -748,6 +900,7 @@ def gate_tools(target: HarnessTarget, deps: VerifyDeps) -> list[BaseTool]:
     return [
         CargoCheck.bind(target).as_tool("cargo_check"),
         VerifyRules.bind(deps).as_tool("verify_rules"),
+        ExplainVacuity.bind(VacuityDeps(deps, analyzer, results_api)).as_tool("explain_vacuity"),
         SummarizeForProver.bind(target.tuning).as_tool("summarize_for_prover"),
         AdjustProverConfig.as_tool("adjust_prover_config"),
     ]
