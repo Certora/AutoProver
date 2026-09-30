@@ -1,7 +1,7 @@
 import os
 
-#: The environment variable that names the tenant a run works for. The cloud
-#: sets it on every job; a local run leaves it unset.
+#: The environment variable that names the tenant a run works for.
+#: Unset in local runs.
 USER_ID_ENV = "AUTOPROVER_USER_ID"
 
 #: The tenant a run without ``USER_ID_ENV`` works for.
