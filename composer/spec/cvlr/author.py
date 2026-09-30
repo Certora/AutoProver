@@ -93,6 +93,7 @@ from composer.spec.cvlr.state import (
     validate_rule_subjects,
 )
 from composer.spec.cvlr.tree import SharedTree
+from composer.spec.cvlr.vacuity import vacuity_analyzer
 from composer.spec.cvlr.verify import (
     ExpectRuleFailure,
     ExpectRulePassage,
@@ -712,7 +713,15 @@ async def batch_cvlr_generation(
                 ),
                 ExpectRuleFailure.as_tool("expect_rule_failure"),
                 ExpectRulePassage.as_tool("expect_rule_passage"),
-                *gate_tools(target, verify),
+                *gate_tools(
+                    target,
+                    verify,
+                    vacuity_analyzer(
+                        env.models,
+                        (*env.source_tools, *env.rag_tools),
+                        recursion_limit=ctx.recursion_limit,
+                    ),
+                ),
                 *editor_tools(
                     ctx, env, target=target, pristine=pristine, read_tools=env.source_tools
                 ),
