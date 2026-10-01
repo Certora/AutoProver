@@ -46,7 +46,7 @@ from graphcore.utils import ainvoke
 from prover_output_utility import cloud_server_for_env
 
 from composer.prover.analysis import analyze_cex_raw
-from composer.prover.cloud import CloudJobError, cloud_results
+from composer.prover.cloud import CloudJobError, CloudResultsUnavailable, cloud_results
 from composer.prover.ptypes import RuleResult, RulePath, StatusCodes
 from composer.prover.results import external_functions, read_and_format_run_result
 from composer.templates.loader import load_jinja_template
@@ -778,6 +778,15 @@ async def run_prover(
         return (
             f"Prover cloud job did not produce results (status {exc.status.value}). "
             f"The job and its failure output are at {exc.link}"
+        )
+    except CloudResultsUnavailable as exc:
+        # Returned rather than raised, like the subprocess timeout: raising ends the whole
+        # formalization over a read the next submission will very likely complete.
+        _logger.error("Cloud job results unavailable: %s", exc)
+        return (
+            f"The prover job finished, but its results could not be downloaded ({exc.cause}). "
+            f"This is an infrastructure failure, not a problem with the specification; the "
+            f"verdicts are at {exc.link}. Retrying may succeed."
         )
 
     prover_report: dict[str, bool] = {}

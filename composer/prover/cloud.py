@@ -42,6 +42,19 @@ class CloudJobError(RuntimeError):
         self.link = link
 
 
+class CloudResultsUnavailable(RuntimeError):
+    """Raised when a cloud job succeeded but its results could not be downloaded, after retrying.
+
+    The verdicts exist on the server; only the read failed. Carries the prover ``link`` so the
+    reader can see them anyway.
+    """
+
+    def __init__(self, link: str, cause: ProverAPIError | OSError) -> None:
+        super().__init__(f"Cloud job results could not be downloaded: {cause}")
+        self.link = link
+        self.cause = cause
+
+
 # Terminal cloud job statuses (the job is no longer running). A status outside
 # this set means the job is still in progress.
 _TERMINAL_STATUSES = frozenset({
@@ -167,9 +180,9 @@ def results_api() -> ProverOutputAPI:
 
 #: A fetch failure here is a *transport* fault, not a bad job: by the time we download documents
 #: the job has already polled ``SUCCEEDED``. Re-fetching the same completed job is cheap; re-running
-#: the whole proof (what the caller does if this context raises) throws away a finished — often
-#: hours-long — verification. So retry the fetch itself a few times with exponential backoff before
-#: giving up. POU retries at the individual-request level; this covers a whole-fetch failure that
+#: the whole proof throws away a finished — often hours-long — verification. So retry the fetch
+#: itself a few times with exponential backoff before giving up, and give up with
+#: :class:`CloudResultsUnavailable`, which ``run_prover`` reports rather than raises. POU retries at the individual-request level; this covers a whole-fetch failure that
 #: outlives those (e.g. a mid-transfer reset that exhausts the request-level retries on one file).
 _FETCH_MAX_ATTEMPTS = 3
 _FETCH_BACKOFF_BASE_S = 2.0
@@ -180,7 +193,7 @@ _FETCH_BACKOFF_BASE_S = 2.0
 _PERMANENT_FETCH_ERRORS = (AuthenticationError, InvalidJobError, JobNotFoundError, ParseError)
 
 
-async def _fetch_results(job_id: str, dest: Path) -> None:
+async def _fetch_results(job_id: str, dest: Path, link: str) -> None:
     """Download a completed job's sources + tree view into ``dest``, retrying a transient failure.
 
     Each attempt starts from an empty ``dest`` so a partially-written archive from a failed attempt
@@ -195,8 +208,10 @@ async def _fetch_results(job_id: str, dest: Path) -> None:
         # ``requests`` failures that escape POU's wrapping are OSErrors (RequestException is an
         # IOError), so the two clauses together cover the transport.
         except (ProverAPIError, OSError) as exc:
-            if isinstance(exc, _PERMANENT_FETCH_ERRORS) or attempt == _FETCH_MAX_ATTEMPTS:
+            if isinstance(exc, _PERMANENT_FETCH_ERRORS):
                 raise
+            if attempt == _FETCH_MAX_ATTEMPTS:
+                raise CloudResultsUnavailable(link, exc) from exc
             backoff = _FETCH_BACKOFF_BASE_S * 2 ** (attempt - 1)
             logger.warning(
                 "Fetching results for completed job %s failed (attempt %d/%d): %s. "
@@ -206,6 +221,8 @@ async def _fetch_results(job_id: str, dest: Path) -> None:
             for child in dest.iterdir():
                 shutil.rmtree(child) if child.is_dir() else child.unlink()
             await asyncio.sleep(backoff)
+
+
 async def _fetch_alert_report(job_id: str, dest: Path) -> None:
     """Save the job's alert report where a local run would have it, ``Reports/alertReport.json``.
 
@@ -268,6 +285,6 @@ async def cloud_results(
         # tens of gigabytes on real jobs and used to exhaust the disk; across the
         # jobs measured here these two subtrees are ~3% of the archive. POU writes
         # them in the same layout the archive had, so the parse is unchanged.
-        await _fetch_results(cloud_job.job_id, dest)
+        await _fetch_results(cloud_job.job_id, dest, run_result_link)
         await _fetch_alert_report(cloud_job.job_id, dest)
         yield (dest, runtime_ms)

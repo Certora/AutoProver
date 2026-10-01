@@ -8,6 +8,8 @@ import pytest
 import composer.prover.cloud as cloud
 from prover_output_utility.exceptions import JobNotFoundError
 
+_LINK = "https://prover.certora.com/output/1/deadbeefcafebabe"
+
 
 class _FakeAPI:
     """Stand-in for the POU results client whose fetch fails ``fail_times`` times, then succeeds."""
@@ -35,7 +37,7 @@ def _no_backoff_wait(monkeypatch):
 
 def _fetch(fake: _FakeAPI, dest: Path, monkeypatch) -> None:
     monkeypatch.setattr(cloud, "results_api", lambda: fake)
-    asyncio.run(cloud._fetch_results("deadbeefcafebabe", dest))
+    asyncio.run(cloud._fetch_results("deadbeefcafebabe", dest, _LINK))
 
 
 def test_succeeds_after_transient_failures(tmp_path, monkeypatch):
@@ -48,9 +50,12 @@ def test_succeeds_after_transient_failures(tmp_path, monkeypatch):
 
 def test_gives_up_after_max_attempts(tmp_path, monkeypatch):
     fake = _FakeAPI(fail_times=99, files=["a.json"])
-    with pytest.raises(ConnectionResetError):
+    with pytest.raises(cloud.CloudResultsUnavailable) as raised:
         _fetch(fake, tmp_path, monkeypatch)
     assert fake.calls == cloud._FETCH_MAX_ATTEMPTS  # capped — it never loops forever
+    # reported with the job's link, so the verdicts can still be read on the server
+    assert raised.value.link == _LINK
+    assert isinstance(raised.value.cause, ConnectionResetError)
 
 
 class _PermanentFailAPI:
@@ -68,5 +73,5 @@ def test_permanent_error_is_not_retried(tmp_path, monkeypatch):
     fake = _PermanentFailAPI()
     monkeypatch.setattr(cloud, "results_api", lambda: fake)
     with pytest.raises(JobNotFoundError):
-        asyncio.run(cloud._fetch_results("deadbeefcafebabe", tmp_path))
+        asyncio.run(cloud._fetch_results("deadbeefcafebabe", tmp_path, _LINK))
     assert fake.calls == 1  # surfaced at once — no backoff spent re-failing identically
