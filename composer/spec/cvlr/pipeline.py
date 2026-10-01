@@ -154,8 +154,9 @@ class SharedBuild:
 
     tree: SharedTree
     session: CargoSession
-    #: One permit for the whole run. Held across staging and the local cargo invocation, and not
-    #: across a prover run — see :meth:`composer.spec.cvlr.verify.HarnessTarget.build_slot`.
+    #: One permit for the whole run. Held across staging, the local cargo invocation and the
+    #: Prover's rebuild and upload, and not across the cloud job — see
+    #: :meth:`composer.spec.cvlr.verify.HarnessTarget.build_slot`.
     build_sem: asyncio.Semaphore
     warm_failure: str | None = None
 

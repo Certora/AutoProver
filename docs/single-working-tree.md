@@ -122,7 +122,8 @@ implements, is in §7 below; it belongs in a revision of
 
 ### 2.4 The build permit
 
-One `asyncio.Semaphore(1)` for the run, held across staging and the local cargo invocation.
+One `asyncio.Semaphore(1)` for the run, held across staging and the local cargo invocation, and, for
+a submission, until the Prover has uploaded what it built.
 
 Note what it is *not* for. Concurrent `cargo` invocations against one `target/` already serialize on
 cargo's build-directory lock, so the serialization happens either way. The permit buys:
@@ -132,7 +133,8 @@ cargo's build-directory lock, so the serialization happens either way. The permi
 * not having N sandboxed processes parked holding grants and file descriptors;
 * one place to put ordering and fairness if a unit ever starves.
 
-It does **not** make the shared tree correct. §2.1 and §2.2 do that.
+For a cargo check it does **not** make the shared tree correct. §2.1 and §2.2 do that. For a
+submission it does; see the last paragraph.
 
 **The permit stops at the prover run, and that needed a decision the plan had not reached.**
 `certoraSolanaProver` executes the build script, so cargo runs again inside the submission — but the
@@ -142,9 +144,20 @@ to be held, because of what a sibling can actually change underneath an in-fligh
 unit's harness module, which rustc never reads because it is `cfg`'d out, and a munged file, whose
 new line is a `cfg_attr` on a feature this build does not enable. Both are inert. The one thing that
 is *not* safe is a half-written file, so every derived write is `os.replace`-atomic and a concurrent
-reader sees the old file or the new one and nothing else. [`submit`](../composer/spec/cvlr/prover.py)
-is split into `prepare_submission` and `run_submission` so the loop can hold the permit across the
-first and not the second.
+reader sees the old file or the new one and nothing else.
+
+**That analysis missed the artifact, and the permit now reaches the upload.** It covered what a
+sibling *writes into the tree*, and all of that is inert. It did not cover what a sibling's build
+*writes into the target directory*. Every SBF build of the crate produces the same `.so`, and
+`certoraSolanaProver`'s local phase rebuilds it and then uploads it. A sibling building for its own
+feature in between replaces the file this unit's job uploads, so the job verifies the wrong
+program. That was found reviewing #258. A target directory per unit fixes it too, and was tried and
+backed out: it costs a cold dependency build and about 1 GB of disk per unit. So
+`_stage_and_submit` (`composer/spec/cvlr/verify.py`) holds the permit from staging until the job's
+link arrives, which `certoraRun` reports after the upload, or until `run_submission` returns
+without one. What is serialized is each submission's local phase, a warm program-crate rebuild plus
+the upload. The cloud job's minutes stay concurrent, which was the trade this paragraph's first half
+was protecting.
 
 ---
 
@@ -270,8 +283,8 @@ correctness.
    munging is found from the tree's own note of what it derived, since nothing in state names it.
 2. **Content-compare before writing.** Cargo fingerprints on mtime, so rewriting identical bytes
    forces a rebuild and would make every resume a cold one. Read, compare, write only on difference —
-   and replace atomically, because §2.4 leaves the prover's own build script reading these files
-   outside the permit.
+   and replace atomically. That mattered while §2.4 left the prover's own build script reading these
+   files outside the permit, and it costs nothing now that the permit covers that read.
 3. **Surface the drift, do not log it.** Now `Reconciled.drifted`, appended to whatever the gate
    tells the author, on every branch — a munge that did not reach the build is as much a part of why
    a rule failed as of what a passing rule means. Reconstruction is a function of the *pristine

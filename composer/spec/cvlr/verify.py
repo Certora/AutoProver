@@ -119,6 +119,29 @@ from composer.ui.tool_display import tool_display
 _log = logging.getLogger(__name__)
 
 
+class BuildPermit:
+    """The run's build permit, held by one unit, which can give it up before its slot ends.
+
+    A submission holds it past its own build: the Prover's local phase rebuilds the crate and uploads
+    the ``.so``, and every build of the crate writes the same one. It is released as soon as that
+    upload is done, rather than when the cloud job finishes.
+    """
+
+    def __init__(self, sem: asyncio.Semaphore) -> None:
+        self._sem = sem
+        self._held = False
+
+    async def acquire(self) -> None:
+        await self._sem.acquire()
+        self._held = True
+
+    def release(self) -> None:
+        """Give the permit up. Releasing one already given up does nothing."""
+        if self._held:
+            self._held = False
+            self._sem.release()
+
+
 @dataclasses.dataclass(frozen=True)
 class HarnessTarget:
     """Where a draft is staged so the crate compiles with it in.
@@ -149,9 +172,9 @@ class HarnessTarget:
     unit: HarnessModule
     #: The run's one working copy, shared with every sibling unit.
     tree: SharedTree
-    #: One permit for the whole run, held across staging and the local cargo invocation. Not held
-    #: across a prover run: that waits on a cloud job for minutes, and the derived files a sibling
-    #: might rewrite meanwhile are inert for any build but its own.
+    #: One permit for the whole run, held across staging, the local cargo invocation and, for a
+    #: submission, the Prover's own rebuild and upload. Not across the cloud job: that waits for
+    #: minutes, and the files a sibling rewrites meanwhile are behind its own feature.
     build_sem: asyncio.Semaphore
 
     @property
@@ -167,17 +190,27 @@ class HarnessTarget:
         return self.package_root.relative_to(self.session.workdir)
 
     @asynccontextmanager
-    async def build_slot(self) -> AsyncIterator[None]:
+    async def build_slot(self) -> AsyncIterator[BuildPermit]:
         """Serialize staging and the cargo invocation that follows it.
 
-        Concurrent cargo runs against one ``target/`` already serialize on cargo's own build-
-        directory lock, so this is not what makes the shared tree correct — the per-unit feature is
-        (``docs/single-working-tree.md`` §2.4). What the permit buys is a queue the host can see
-        instead of a silent stall inside cargo, and not having several sandboxed builds parked
+        For a cargo check, concurrent runs against one ``target/`` would serialize on cargo's own
+        build-directory lock anyway, and the per-unit feature is what keeps the shared tree correct
+        (``docs/single-working-tree.md`` §2.4). What the permit buys there is a queue the host can
+        see instead of a silent stall inside cargo, and not having several sandboxed builds parked
         holding grants.
+
+        For a submission the permit is load-bearing. Every SBF build of the crate writes the same
+        ``.so``, and the Prover's local phase rebuilds it and uploads it, so a sibling's build in
+        between would replace it with one built for the sibling's feature. See
+        :func:`_stage_and_submit`, which releases the permit through the yielded
+        :class:`BuildPermit` once the upload is done.
         """
-        async with self.build_sem:
-            yield
+        permit = BuildPermit(self.build_sem)
+        await permit.acquire()
+        try:
+            yield permit
+        finally:
+            permit.release()
 
     def pristine_source(self, relative: str) -> Path | NotInWorkdir | NotProjectSource:
         """The developer's copy of a file a munge names, or why the path is not one it may name.
@@ -252,6 +285,12 @@ class _RunAccounting(ProverCallbacks):
     def __init__(self) -> None:
         super().__init__()
         self._started_mono: float | None = None
+        self._upload_permit: BuildPermit | None = None
+
+    def release_on_upload(self, permit: BuildPermit) -> None:
+        """Give ``permit`` up when the Prover reports the job's link, which is after its local
+        rebuild and upload. Until then a sibling's build could replace the ``.so`` it uploads."""
+        self._upload_permit = permit
 
     @override
     async def on_prover_run(self, args: list[str]) -> None:
@@ -259,6 +298,11 @@ class _RunAccounting(ProverCallbacks):
 
     @override
     async def on_prover_link(self, link: str) -> None:
+        if self._upload_permit is not None:
+            self._upload_permit.release()
+        self._record_link(link)
+
+    def _record_link(self, link: str) -> None:
         get_run_summary().record_prover_link(link)
 
     @override
@@ -552,18 +596,41 @@ def _submission_for(
     )
 
 
-async def _stage_and_prepare(
-    deps: VerifyDeps, state: CvlrGenerationState, draft: str, submission: Submission
-) -> tuple[Reconciled, BuildRejected | Prepared]:
-    """Stage ``draft`` with the unit's summaries and munges, then build and write the conf.
+async def _stage_and_submit(
+    deps: VerifyDeps,
+    state: CvlrGenerationState,
+    draft: str,
+    submission: Submission,
+    *,
+    callbacks: _RunAccounting,
+    cex: CexHandler,
+    tool_call_id: str,
+) -> tuple[Reconciled, CvlrOutcome]:
+    """Stage ``draft`` with the unit's summaries and munges, build it, and submit it.
 
-    The permit covers staging and the local build only. The prover run that follows is outside it,
-    because it waits on a cloud job and a sibling's edits meanwhile are inert for this build
-    (docs/single-working-tree.md §2.4).
+    One build permit covers all of it until the Prover has uploaded. ``run_submission`` rebuilds the
+    crate into the target directory every build shares and uploads that ``.so``, so a sibling must
+    not build between this unit's gate build and that upload
+    (:func:`composer.spec.cvlr.prover.prepare_submission`). The permit is released when the job's
+    link arrives, which is after the upload, or when ``run_submission`` returns without one. The
+    cloud job's minutes are not covered: the files a sibling stages meanwhile are behind its own
+    feature (``docs/single-working-tree.md`` §2.4).
     """
-    async with deps.target.build_slot():
+    async with deps.target.build_slot() as permit:
         reconciled = await deps.target.stage(draft, state["summaries"], state["munges"])
-        return reconciled, await prepare_submission(deps.target.session, submission)
+        prepared = await prepare_submission(deps.target.session, submission)
+        if isinstance(prepared, BuildRejected):
+            return reconciled, prepared
+        callbacks.release_on_upload(permit)
+        outcome = await run_submission(
+            deps.target.session,
+            prepared,
+            prover_opts=deps.prover_opts,
+            callbacks=callbacks,
+            cex=cex,
+            tool_call_id=tool_call_id,
+        )
+    return reconciled, outcome
 
 
 @tool_display("Running the Solana Prover", "Prover")
@@ -604,22 +671,15 @@ class VerifyRules(
                 # to read, so *every* submission this backend made failed until this line named
                 # them. Not every rule either — a build compiles this unit's module and the artifact
                 # declares every unit's rules, so this unit would be graded on its siblings' drafts.
-                reconciled, prepared = await _stage_and_prepare(
-                    deps, self.state, draft, _submission_for(deps, self.state, declared)
+                reconciled, outcome = await _stage_and_submit(
+                    deps,
+                    self.state,
+                    draft,
+                    _submission_for(deps, self.state, declared),
+                    callbacks=capture if capture is not None else _RunAccounting(),
+                    cex=analysis.handler(self.state) if analysis else UnanalyzedCexHandler(),
+                    tool_call_id=self.tool_call_id,
                 )
-                if isinstance(prepared, BuildRejected):
-                    outcome: CvlrOutcome = prepared
-                else:
-                    outcome = await run_submission(
-                        deps.target.session,
-                        prepared,
-                        prover_opts=deps.prover_opts,
-                        callbacks=capture if capture is not None else _RunAccounting(),
-                        cex=(
-                            analysis.handler(self.state) if analysis else UnanalyzedCexHandler()
-                        ),
-                        tool_call_id=self.tool_call_id,
-                    )
             return self._report(
                 outcome,
                 deps,
@@ -807,7 +867,7 @@ class _DiagnosticAccounting(_RunAccounting):
     """
 
     @override
-    async def on_prover_link(self, link: str) -> None:
+    def _record_link(self, link: str) -> None:
         pass
 
 
@@ -871,25 +931,21 @@ class ExplainVacuity(
                     # Its own conf file: the unit's is part of the deliverable.
                     stem=f"{verify.submission.stem}_unsat_core",
                 )
-                reconciled, prepared = await _stage_and_prepare(
-                    verify, self.state, draft, submission
-                )
-                if isinstance(prepared, BuildRejected):
-                    return (
-                        "The chain build failed, so nothing was submitted. Run verify_rules to see "
-                        "the compiler's diagnostics." + _drift_note(reconciled)
-                    )
-                outcome = await run_submission(
-                    verify.target.session,
-                    prepared,
-                    prover_opts=verify.prover_opts,
+                reconciled, outcome = await _stage_and_submit(
+                    verify,
+                    self.state,
+                    draft,
+                    submission,
                     callbacks=_DiagnosticAccounting(),
                     cex=UnanalyzedCexHandler(),
                     tool_call_id=self.tool_call_id,
                 )
             match outcome:
                 case BuildRejected():
-                    return "The chain build failed, so nothing was submitted."
+                    return (
+                        "The chain build failed, so nothing was submitted. Run verify_rules to see "
+                        "the compiler's diagnostics." + _drift_note(reconciled)
+                    )
                 case SubmissionFailed(reason=reason):
                     return f"The diagnostic run did not produce results: {reason}"
                 case Checked(report=report):
