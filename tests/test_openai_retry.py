@@ -34,6 +34,15 @@ def _services():
 
 
 @pytest.mark.parametrize("svc", _services(), ids=["openai", "openrouter"])
+@pytest.mark.parametrize("exc", [
+    httpx.RemoteProtocolError("peer closed connection without sending complete message body"),
+    httpx.ReadTimeout(""),
+], ids=["dropped", "stalled"])
+def test_mid_stream_transport_failure_is_retryable(svc, exc):
+    assert svc.should_retry(exc) is True
+
+
+@pytest.mark.parametrize("svc", _services(), ids=["openai", "openrouter"])
 def test_mid_stream_server_error_is_retryable(svc):
     assert svc.should_retry(_stream_error("server_error")) is True
 
