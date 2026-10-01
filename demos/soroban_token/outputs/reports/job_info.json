@@ -1,0 +1,102 @@
+{
+  "user_id": "_anonymous",
+  "run_id": "75fbf5e1884846669c66f5f7643f96ab",
+  "token_usage": {
+    "totals": {
+      "input": 1049,
+      "output": 167328,
+      "cache_read": 8151531,
+      "cache_write": 1098685
+    },
+    "by_model": {
+      "claude-sonnet-5": {
+        "input": 58,
+        "output": 14474,
+        "cache_read": 138207,
+        "cache_write": 38513
+      },
+      "claude-opus-5": {
+        "input": 991,
+        "output": 152854,
+        "cache_read": 8013324,
+        "cache_write": 1060172
+      }
+    },
+    "by_phase": [
+      {
+        "task_id": "doc-finder",
+        "phase": "DISCOVER_DESIGN_DOC",
+        "input": 8,
+        "output": 789,
+        "cache_read": 15128,
+        "cache_write": 7251
+      },
+      {
+        "task_id": "system-analysis",
+        "phase": "ANALYSIS",
+        "input": 16,
+        "output": 10740,
+        "cache_read": 92920,
+        "cache_write": 21044
+      },
+      {
+        "task_id": "extract-0",
+        "phase": "EXTRACTION",
+        "input": 84,
+        "output": 13735,
+        "cache_read": 348244,
+        "cache_write": 55862
+      },
+      {
+        "task_id": "extract-1",
+        "phase": "EXTRACTION",
+        "input": 432,
+        "output": 17769,
+        "cache_read": 2598454,
+        "cache_write": 73991
+      },
+      {
+        "task_id": "extract-3",
+        "phase": "EXTRACTION",
+        "input": 130,
+        "output": 10088,
+        "cache_read": 1324825,
+        "cache_write": 39460
+      },
+      {
+        "task_id": "extract-2",
+        "phase": "EXTRACTION",
+        "input": 111,
+        "output": 13374,
+        "cache_read": 614739,
+        "cache_write": 42728
+      },
+      {
+        "task_id": "formalize-0",
+        "phase": "FORMALIZATION",
+        "input": 188,
+        "output": 93259,
+        "cache_read": 3157221,
+        "cache_write": 837656
+      },
+      {
+        "task_id": "report",
+        "phase": "REPORT",
+        "input": 80,
+        "output": 7574,
+        "cache_read": 0,
+        "cache_write": 20693
+      }
+    ]
+  },
+  "prover_usage": {
+    "total_ms": 36412,
+    "by_phase": [
+      {
+        "task_id": "formalize-0",
+        "phase": "FORMALIZATION",
+        "ms": 36412
+      }
+    ]
+  }
+}

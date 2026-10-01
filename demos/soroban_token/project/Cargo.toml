@@ -1,0 +1,49 @@
+[package]
+name = "certora-meridian24-token"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+soroban-sdk = { version = "22.0.7" }
+
+[dev-dependencies]
+soroban-sdk = { version = "22.0.7", features = ["testutils"] }
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+debug-assertions = false
+panic = "abort"
+codegen-units = 1
+lto = true
+
+[profile.release-with-logs]
+inherits = "release"
+debug-assertions = true
+
+
+# === Certora CVLR — added by AutoProver ===
+[features]
+unit_admin_setup = []
+certora = ["dep:cvlr", "dep:cvlr-soroban", "dep:cvlr-soroban-derive"]
+
+[dependencies.cvlr]
+git = "https://github.com/Certora/cvlr"
+branch = "main"
+default-features = false
+optional = true
+
+[dependencies.cvlr-soroban]
+git = "https://github.com/Certora/cvlr-soroban"
+branch = "soroban-22.0.8"
+optional = true
+
+[dependencies.cvlr-soroban-derive]
+git = "https://github.com/Certora/cvlr-soroban"
+branch = "soroban-22.0.8"
+optional = true

@@ -1,0 +1,255 @@
+{
+  "schema_version": "3.2",
+  "backend": "prover",
+  "contract_name": "Token",
+  "run_timestamp_utc": "2026-09-30T23:13:34.308078+00:00",
+  "prover_links": {
+    "Admin Setup": "https://prover.certora.com/jobStatus/33158/f6379ea60d3d408ea6f64d4ad332e156?anonymousKey=2eb78cace9487137f6d67b5d2c0a63d25b216d13"
+  },
+  "properties": [
+    {
+      "sort": "attack_vector",
+      "description": "`initialize(admin)` writes the persistent \"ADMIN\" entry without calling `require_auth` on anything — neither on the address currently stored under \"ADMIN\" nor on the new `admin` argument — so in the call sequence initialize(A), initialize(B) any caller can install an address it controls as admin and then call `mint(to, amount)` to create unlimited balance for itself; the consequence is complete, unauthorized inflation of the token and loss of the admin role.",
+      "title": "unauthenticated_admin_overwrite_enables_unlimited_mint",
+      "component": "Admin Setup",
+      "rule_refs": [
+        [
+          "admin_setup.rs",
+          "unauthenticated_admin_overwrite_enables_unlimited_mint"
+        ]
+      ]
+    },
+    {
+      "sort": "safety_property",
+      "description": "`initialize` must be one-shot: if the persistent \"ADMIN\" entry already exists before the call, a subsequent `initialize(b)` must not succeed, and in particular the \"ADMIN\" entry must still hold its prior value after the call; a violation means the admin (and therefore the mint privilege) can be silently reassigned by anyone at any time.",
+      "title": "initialize_is_one_shot",
+      "component": "Admin Setup",
+      "rule_refs": [
+        [
+          "admin_setup.rs",
+          "initialize_is_one_shot"
+        ]
+      ]
+    },
+    {
+      "sort": "safety_property",
+      "description": "If `initialize(b)` succeeds at a point where the persistent \"ADMIN\" entry already holds some address A, then A must have authorized that invocation — i.e. any admin rotation through `initialize` must be authorized by the currently stored admin; a violation means an unauthorized party can take over the mint privilege.",
+      "title": "admin_rotation_requires_current_admin_auth",
+      "component": "Admin Setup",
+      "rule_refs": [
+        [
+          "admin_setup.rs",
+          "admin_rotation_requires_current_admin_auth"
+        ]
+      ]
+    },
+    {
+      "sort": "safety_property",
+      "description": "After a successful `initialize(a)` made when no admin was set, the persistent \"ADMIN\" entry holds exactly `a`, stored under the same key and in the same storage durability that `mint` reads, so that the subsequent two-call sequence initialize(a) then mint(to, amount) both succeeds for `a` and requires `a`'s authorization; a violation (wrong key, wrong storage kind, or wrong value written) either bricks minting through `mint`'s unwrap of the missing entry or hands mint power to an address other than the one supplied.",
+      "title": "initialize_persists_admin_readable_by_mint",
+      "component": "Admin Setup",
+      "rule_refs": [
+        [
+          "admin_setup.rs",
+          "initialize_persists_admin"
+        ],
+        [
+          "admin_setup.rs",
+          "initialize_then_mint_uses_stored_admin"
+        ]
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "name": "admin_rotation_requires_current_admin_auth",
+      "spec_file": "admin_setup.rs",
+      "outcome": "BAD",
+      "line": null,
+      "duration_seconds": 1.0,
+      "prover_link": "https://prover.certora.com/jobStatus/33158/f6379ea60d3d408ea6f64d4ad332e156?anonymousKey=2eb78cace9487137f6d67b5d2c0a63d25b216d13",
+      "message": null
+    },
+    {
+      "name": "initialize_is_one_shot",
+      "spec_file": "admin_setup.rs",
+      "outcome": "BAD",
+      "line": null,
+      "duration_seconds": 1.0,
+      "prover_link": "https://prover.certora.com/jobStatus/33158/f6379ea60d3d408ea6f64d4ad332e156?anonymousKey=2eb78cace9487137f6d67b5d2c0a63d25b216d13",
+      "message": null
+    },
+    {
+      "name": "initialize_persists_admin",
+      "spec_file": "admin_setup.rs",
+      "outcome": "GOOD",
+      "line": null,
+      "duration_seconds": 1.0,
+      "prover_link": "https://prover.certora.com/jobStatus/33158/f6379ea60d3d408ea6f64d4ad332e156?anonymousKey=2eb78cace9487137f6d67b5d2c0a63d25b216d13",
+      "message": null
+    },
+    {
+      "name": "initialize_then_mint_uses_stored_admin",
+      "spec_file": "admin_setup.rs",
+      "outcome": "GOOD",
+      "line": null,
+      "duration_seconds": 3.0,
+      "prover_link": "https://prover.certora.com/jobStatus/33158/f6379ea60d3d408ea6f64d4ad332e156?anonymousKey=2eb78cace9487137f6d67b5d2c0a63d25b216d13",
+      "message": null
+    },
+    {
+      "name": "unauthenticated_admin_overwrite_enables_unlimited_mint",
+      "spec_file": "admin_setup.rs",
+      "outcome": "BAD",
+      "line": null,
+      "duration_seconds": 4.0,
+      "prover_link": "https://prover.certora.com/jobStatus/33158/f6379ea60d3d408ea6f64d4ad332e156?anonymousKey=2eb78cace9487137f6d67b5d2c0a63d25b216d13",
+      "message": null
+    }
+  ],
+  "groups": [
+    {
+      "slug": "admin-initialization-one-shot-integrity",
+      "title": "Admin initialization is a protected one-time operation",
+      "description": "The admin role must be set exactly once via initialize, and any later attempt to re-initialize or rotate the admin must be rejected unless properly authorized by the current admin. This prevents silent or unauthorized takeover of the privileged admin role that controls minting.",
+      "status": "BAD",
+      "members": [
+        [
+          "Admin Setup",
+          "initialize_is_one_shot"
+        ],
+        [
+          "Admin Setup",
+          "admin_rotation_requires_current_admin_auth"
+        ]
+      ]
+    },
+    {
+      "slug": "admin-storage-consistency-for-mint",
+      "title": "Admin identity is persisted and readable consistently for minting",
+      "description": "Once initialization succeeds, the admin address must be stored under the exact key and storage type that the mint function expects to read, ensuring mint authorization checks correctly match the intended admin and the contract does not brick or misassign mint privileges.",
+      "status": "GOOD",
+      "members": [
+        [
+          "Admin Setup",
+          "initialize_persists_admin_readable_by_mint"
+        ]
+      ]
+    },
+    {
+      "slug": "unauthorized-admin-overwrite-enables-mint-takeover",
+      "title": "Missing authorization checks allow admin hijack and unlimited minting",
+      "description": "Because initialize does not require authorization from either the existing admin or the new admin candidate, any caller can overwrite the admin role and subsequently mint unlimited tokens to themselves, representing a critical attack vector that undermines the token's supply integrity.",
+      "status": "BAD",
+      "members": [
+        [
+          "Admin Setup",
+          "unauthenticated_admin_overwrite_enables_unlimited_mint"
+        ]
+      ]
+    }
+  ],
+  "skipped": [],
+  "gave_up_components": [],
+  "curtailed_components": [],
+  "source_edits": [],
+  "verification_artifacts": [],
+  "coverage": {
+    "total_properties": 4,
+    "total_rules": 5,
+    "total_groups": 3,
+    "properties_per_group_min": 1,
+    "properties_per_group_max": 2,
+    "property_coverage_complete": true,
+    "properties_in_no_group": [],
+    "rules_spanning_multiple_groups": [],
+    "skipped_count": 0,
+    "gave_up_component_count": 0,
+    "curtailed_component_count": 0,
+    "dropped_orphan_rules": 0,
+    "warnings": []
+  },
+  "findings": [
+    {
+      "title": "Unauthenticated, unguarded `Token::initialize` lets anyone overwrite the stored ADMIN and seize mint privileges",
+      "severity": "critical",
+      "content": {
+        "summary": "`Token::initialize` unconditionally writes the caller-supplied address into the persistent `\"ADMIN\"` slot with no re-initialization guard and no `require_auth()` on either the incumbent or the incoming admin. The Certora Prover produced a concrete counterexample in which the stored admin `a` authorized nothing, yet `initialize(b)` with `b != a` completed and replaced the admin with `b`, refuting `admin_rotation_requires_current_admin_auth`.",
+        "description": "The contract implements admin setup as:\n\n```rust\npub fn initialize(e: Env, admin: Address) {\n    e.storage().persistent().set(&\"ADMIN\", &admin);\n}\n```\n\nThis is an unconditional, unauthenticated write to the privileged admin slot. The trace confirms the function body contains exactly two operations — conversion of the `\"ADMIN\"` key via `IntoVal` and a single `put_contract_data`. There is no `has_internal` on the key (so no one-shot/re-initialization guard), no `get_internal` (so the incumbent admin is never consulted), and no `require_auth` host frame at all.\n\nThe counterexample is non-vacuous and every precondition is discharged live:\n\n1. `admin_is_set(&e)` is assumed true — the prover selected a pre-state where the persistent `\"ADMIN\"` entry already exists and holds incumbent admin `a`.\n2. `Persistent::get::<&str, Address>` reads `a`; `Address::ne` discharges the assumption `a != b`, so the incoming address is genuinely different.\n3. `cvlr_soroban::auth::is_auth` records `current_admin_authorized` for the stored admin `a`.\n4. `Token::initialize(b)` runs to completion — nothing traps, nothing is rolled back.\n5. The post-state read shows `rotated == true`.\n6. `cvlr_assert!(!rotated || current_admin_authorized)` fails, which is only possible when `rotated == true` and `current_admin_authorized == false`.\n\nBecause the Soroban host rejects an invocation only when that invocation calls `require_auth` on an address that has not signed, a function that calls none is effectively authorized by everyone. Whatever the transaction's auth set contains, the rotation goes through. Note that the asserted property is the *weakened, conditional* form — one that a contract silently no-op'ing on re-initialization would satisfy — and it still fails, so the violation is not an artifact of an over-strong specification.\n\nThe prover also notes the same single defect is the root cause of two sibling violations: `initialize_is_one_shot` (missing `has` guard) and `unauthenticated_admin_overwrite_enables_unlimited_mint`, where the attacker installs itself as admin and then `mint` — which does correctly authorize against the stored admin — authorizes against the attacker, enabling unbounded supply inflation. The key-modelling concern is closed: `initialize_persists_admin` VERIFIED using the same `&\"ADMIN\"` key spelling, so the `rotated == true` read-back is trustworthy.",
+        "impact": "Any address can call `initialize` at any point in the contract's life and install itself as admin, displacing the legitimate incumbent without that incumbent's consent. Since the admin slot gates minting (and `mint` correctly authorizes against whatever is stored under `\"ADMIN\"`), the attacker immediately gains unauthorized control of the mint privilege and can inflate token supply without bound, destroying the value of all outstanding holdings. Conversely, an arbitrary third party can be named admin without its consent, and the legitimate deployer can be front-run at deployment time.",
+        "attack_path": "1. The contract is deployed and `initialize(a)` is called, storing legitimate admin `a` under the persistent key `\"ADMIN\"`.\n2. An attacker controlling address `b` (with `b != a`) calls the public `initialize(b)`. No signature or authorization from `a` is presented — in the counterexample `is_auth(a)` is false.\n3. `initialize` performs no `has(&\"ADMIN\")` check and no `require_auth()` on either `a` or `b`; it simply executes `put_contract_data`, overwriting the slot with `b`. The call returns normally.\n4. The post-state read confirms the admin has been rotated to `b` (`rotated == true`) with `current_admin_authorized == false`.\n5. The attacker now calls `mint`, which does `require_auth()` against the stored admin — now `b` — and therefore succeeds, allowing unbounded minting to any account.",
+        "assumptions_and_uncertainties": "The counterexample assumes the persistent `\"ADMIN\"` entry is already populated (i.e. the contract has been initialized at least once), which is the normal operating state. It relies on the standard Soroban host semantics that an invocation is rejected only when it explicitly calls `require_auth` on an unsigned address; the prover explicitly considered and rejected the alternative reading that `is_auth` is merely under-constrained, since `initialize` contains no `require_auth` frame for the host to evaluate. The exploit's ultimate impact assumes that `mint` is gated on the stored `\"ADMIN\"` value, which the prover's analysis of the sibling rule `unauthenticated_admin_overwrite_enables_unlimited_mint` supports.",
+        "proof_of_concept": "<counterexample><assert>Failed property in cvt::assert</assert><message>admin_rotation_requires_current_admin_auth()</message><child><message>function start: $certora_meridian24_token::certora::specs::admin_setup::admin_is_set </message><child><message>function start: $<&str as soroban_sdk::env::IntoVal<soroban_sdk::env::Env, soroban_env_common::val::Val>>::into_val </message></child><child><message>function start: $<soroban_sdk::storage::Storage>::has_internal </message></child></child><child><message>user assume: CERTORA_assume_c: requiring read value to be 1</message></child><child><message>function start: $<soroban_sdk::storage::Persistent>::get::<&str, soroban_sdk::address::Address> </message><child><message>function start: $<&str as soroban_sdk::env::IntoVal<soroban_sdk::env::Env, soroban_env_common::val::Val>>::into_val </message></child><child><message>function start: $<soroban_sdk::storage::Storage>::has_internal </message></child><child><message>function start: $<soroban_sdk::storage::Storage>::get_internal </message></child></child><child><message>function start: $<soroban_sdk::address::Address as core::cmp::PartialEq>::ne </message><child><message>function start: $<soroban_sdk::address::Address as core::cmp::PartialEq>::eq </message></child></child><child><message>user assume: CERTORA_assume_c: requiring read value to be 1</message></child><child><message>function start: $cvlr_soroban::auth::is_auth </message></child><child><message>function start: $<certora_meridian24_token::Token>::initialize </message><child><message>function start: $<&str as soroban_sdk::env::IntoVal<soroban_sdk::env::Env, soroban_env_common::val::Val>>::into_val </message></child><child><message>function start: $<soroban_sdk::env::Env as soroban_env_common::env::Env>::put_contract_data </message></child></child><child><message>function start: $<soroban_sdk::storage::Persistent>::get::<&str, soroban_sdk::address::Address> </message><child><message>function start: $<&str as soroban_sdk::env::IntoVal<soroban_sdk::env::Env, soroban_env_common::val::Val>>::into_val </message></child><child><message>function start: $<soroban_sdk::storage::Storage>::has_internal </message></child><child><message>function start: $<soroban_sdk::storage::Storage>::get_internal </message></child></child><child><message>function start: $<core::option::Option<&soroban_sdk::address::Address> as core::cmp::PartialEq>::eq </message><child><message>function start: $<soroban_sdk::address::Address as core::cmp::PartialEq>::eq </message></child></child><child><message>user assert: CERTORA_assert_c: expecting read value to be 1, got 0</message></child></counterexample>",
+        "references": [
+          "https://prover.certora.com/jobStatus/33158/f6379ea60d3d408ea6f64d4ad332e156?anonymousKey=2eb78cace9487137f6d67b5d2c0a63d25b216d13"
+        ]
+      },
+      "provenance": {
+        "rule_name": "admin_rotation_requires_current_admin_auth",
+        "spec_file": "admin_setup.rs",
+        "outcome": "BAD",
+        "group_slugs": [
+          "admin-initialization-one-shot-integrity"
+        ],
+        "prover_link": "https://prover.certora.com/jobStatus/33158/f6379ea60d3d408ea6f64d4ad332e156?anonymousKey=2eb78cace9487137f6d67b5d2c0a63d25b216d13",
+        "impact": "high",
+        "likelihood": "high",
+        "risk_reasoning": "The counterexample requires nothing but an already-initialized contract and a single public `initialize` call from an arbitrary address — no privileged access, no special ordering, no narrow window, since the slot stays freely rewritable for the contract's whole life. The consequence is unauthorized control of the privileged mint role and unbounded supply inflation, which is direct loss of value for all token holders."
+      }
+    },
+    {
+      "title": "Unguarded, unauthenticated `initialize` lets anyone overwrite the ADMIN slot and seize the mint privilege",
+      "severity": "critical",
+      "content": {
+        "summary": "`Token::initialize` writes the persistent `\"ADMIN\"` entry unconditionally, with no already-initialized guard and no `require_auth` call. The Certora Prover produced a counterexample in which an admin was already installed, an arbitrary caller invoked `initialize(b)`, and the stored admin changed from the incumbent to `b` — breaking the one-shot initialization property and handing the caller the mint privilege.",
+        "description": "The implementation of the initializer is:\n\n```rust\npub fn initialize(e: Env, admin: Address) {\n    e.storage().persistent().set(&\"ADMIN\", &admin);\n}\n```\n\nIt performs exactly two operations: convert the `\"ADMIN\"` key and call `put_contract_data`. There is no `has` check against the existing entry, no read of the incumbent admin, and no `require_auth` on any address. In Soroban, the host only rejects an invocation when that invocation actually calls `require_auth` on an address that has not signed; a function that calls none is effectively authorized by everybody. Consequently `initialize` is a permanently open, permissionless write to the admin slot.\n\nThe prover's counterexample for `initialize_is_one_shot` walks precisely this path and is fully reachable:\n\n1. The precondition `admin_is_set(&e)` is *discharged*, not contradicted — the prover selected a genuine pre-state where the persistent `\"ADMIN\"` entry exists, so the rule is not vacuous.\n2. `Persistent::get::<&str, Address>` reads the incumbent admin into `before`; its frame shows `has_internal` followed by a successful `get_internal`, so `before` is a real stored address, not a default.\n3. `Token::initialize` is called with an arbitrary `b` from an arbitrary caller. Its trace frame contains only the key conversion and `put_contract_data` — no guard, no incumbent read, no authorization host call. The call returns normally; nothing traps and nothing is rolled back.\n4. The post-state is re-read through the same helpers, and the `Address::eq` comparison of the before/after admin returns **false**.\n\nThe failing assertion of substance is `unchanged`: two addresses genuinely retrieved from the same key, before and after the call, differ. (The companion `still_set` assertion is trivially satisfied by any implementation that writes at all and carries no weight here.) A key-modelling artifact is ruled out because the sibling rule `initialize_persists_admin` reads back through the same freshly converted `\"ADMIN\"` key and VERIFIED in the same run — the storage model is faithful and is not keying on host-object identity.\n\nThis single missing guard is the common root cause of the other observed violations as well: `admin_rotation_requires_current_admin_auth` (rotation with nobody's consent) and `unauthenticated_admin_overwrite_enables_unlimited_mint` (takeover followed by unbounded inflation, since `mint` derives its entire authority from this very slot).\n\nRemediation requires both controls the initializer currently lacks: (1) a one-time-initialization guard that panics if `e.storage().persistent().has(&\"ADMIN\")` is already true, so a second `initialize` traps and the host rolls back every write it made; and (2) `admin.require_auth()` so an address cannot be installed as admin without its own consent, which also prevents an unwitting third party from being named admin and blocks front-running of the initializer. If admin rotation is intended to be supported, it must live in a separate `set_admin` entry point that reads the incumbent and calls `current.require_auth()` before overwriting — mirroring the pattern `mint` already uses correctly — and must never be reachable through the initializer.",
+        "impact": "Any unprivileged account can overwrite the stored admin at any time, including long after deployment, and thereby take unauthorized control of the privileged role that gates `mint`. The attacker can then mint unbounded token supply, destroying the value of all existing holdings, and can permanently lock the legitimate admin out of the role. This is total, permissionless takeover of the contract's privileged functionality.",
+        "attack_path": "1. The contract is deployed and legitimately initialized, so the persistent `\"ADMIN\"` entry holds address `A` (the state the prover's discharged precondition selects).\n2. An arbitrary, unprivileged attacker calls `initialize(b)` with `b` = an address they control (any `b != A`).\n3. `initialize` converts the `\"ADMIN\"` key and calls `put_contract_data` unconditionally — it never checks whether the slot is populated and never invokes `require_auth`, so the host has no basis to reject the invocation. The call returns normally.\n4. The persistent `\"ADMIN\"` entry now holds `b`; a post-call read confirms the stored admin changed (`Address::eq(before, after) == false`).\n5. The attacker, now the recorded admin, calls `mint` — which derives its entire authority from this slot — to issue arbitrary token amounts to themselves.",
+        "assumptions_and_uncertainties": "The finding assumes the contract has already been initialized (an admin is installed), which the prover confirmed as a reachable, satisfiable pre-state rather than a vacuous one. It also relies on Soroban's authorization semantics: the host rejects an invocation only if that invocation calls `require_auth` on a non-signing address, so a function with no such call is callable by anyone. The prover explicitly ruled out havoc, unresolved-call artifacts, unwinding conditions, and over-strong assertions as competing explanations, and the sibling rule `initialize_persists_admin` verifying in the same run closes the key-modelling concern.",
+        "proof_of_concept": "<counterexample><assert>Failed property in cvt::assert</assert><message>initialize_is_one_shot()</message><child><message>function start: $certora_meridian24_token::certora::specs::admin_setup::admin_is_set </message><child><message>function start: $<&str as soroban_sdk::env::IntoVal<soroban_sdk::env::Env, soroban_env_common::val::Val>>::into_val </message></child><child><message>function start: $<soroban_sdk::storage::Storage>::has_internal </message></child></child><child><message>user assume: CERTORA_assume_c: requiring read value to be 1</message></child><child><message>function start: $<soroban_sdk::storage::Persistent>::get::<&str, soroban_sdk::address::Address> </message><child><message>function start: $<&str as soroban_sdk::env::IntoVal<soroban_sdk::env::Env, soroban_env_common::val::Val>>::into_val </message></child><child><message>function start: $<soroban_sdk::storage::Storage>::has_internal </message></child><child><message>function start: $<soroban_sdk::storage::Storage>::get_internal </message></child></child><child><message>function start: $<certora_meridian24_token::Token>::initialize </message><child><message>function start: $<&str as soroban_sdk::env::IntoVal<soroban_sdk::env::Env, soroban_env_common::val::Val>>::into_val </message></child><child><message>function start: $<soroban_sdk::env::Env as soroban_env_common::env::Env>::put_contract_data </message></child></child><child><message>function start: $certora_meridian24_token::certora::specs::admin_setup::admin_is_set </message><child><message>function start: $<&str as soroban_sdk::env::IntoVal<soroban_sdk::env::Env, soroban_env_common::val::Val>>::into_val </message></child><child><message>function start: $<soroban_sdk::storage::Storage>::has_internal </message></child></child><child><message>function start: $<soroban_sdk::storage::Persistent>::get::<&str, soroban_sdk::address::Address> </message><child><message>function start: $<&str as soroban_sdk::env::IntoVal<soroban_sdk::env::Env, soroban_env_common::val::Val>>::into_val </message></child><child><message>function start: $<soroban_sdk::storage::Storage>::has_internal </message></child><child><message>function start: $<soroban_sdk::storage::Storage>::get_internal </message></child></child><child><message>function start: $<core::option::Option<&soroban_sdk::address::Address> as core::cmp::PartialEq>::eq </message><child><message>function start: $<soroban_sdk::address::Address as core::cmp::PartialEq>::eq </message></child></child><child><message>user assert: CERTORA_assert_c: expecting read value to be 1, got 0</message></child><child><message>user assert: CERTORA_assert_c: expecting read value to be 1, got 0</message></child></counterexample>",
+        "references": [
+          "https://prover.certora.com/jobStatus/33158/f6379ea60d3d408ea6f64d4ad332e156?anonymousKey=2eb78cace9487137f6d67b5d2c0a63d25b216d13"
+        ]
+      },
+      "provenance": {
+        "rule_name": "initialize_is_one_shot",
+        "spec_file": "admin_setup.rs",
+        "outcome": "BAD",
+        "group_slugs": [
+          "admin-initialization-one-shot-integrity"
+        ],
+        "prover_link": "https://prover.certora.com/jobStatus/33158/f6379ea60d3d408ea6f64d4ad332e156?anonymousKey=2eb78cace9487137f6d67b5d2c0a63d25b216d13",
+        "impact": "high",
+        "likelihood": "high",
+        "risk_reasoning": "The counterexample requires nothing but an already-initialized contract — the normal post-deployment state — and an ordinary external call to a public function with an attacker-chosen argument; the trace shows no `require_auth` and no guard on the write path, so no privilege, ordering, or timing window is needed. The consequence is direct capture of the mint authority, which the prover's related rule shows leads to unlimited inflation."
+      }
+    },
+    {
+      "title": "Unauthenticated `initialize` lets any caller overwrite the ADMIN slot and mint unlimited tokens",
+      "severity": "critical",
+      "content": {
+        "summary": "`Token::initialize(admin)` writes the persistent `\"ADMIN\"` entry with no `require_auth` on either the incumbent admin or the incoming admin, and with no one-time-initialization guard. Any caller can therefore re-initialize the contract with an address it controls and then call `mint`, whose authority is derived from that same slot, to create unbounded balance for itself while permanently stripping the legitimate admin of its role.",
+        "description": "The whole body of `initialize` is a single unguarded storage write:\n\n```rust\npub fn initialize(e: Env, admin: Address) {\n    e.storage().persistent().set(&\"ADMIN\", &admin);\n}\n```\n\nTwo controls that an admin slot requires are both absent:\n\n1. **No authorization check.** The function never calls `require_auth()` on the incoming `admin`, and — decisively — never reads the address currently stored under `\"ADMIN\"` in order to call `require_auth()` on it. In Soroban, the host rejects an invocation only when the invocation itself calls `require_auth` on an address that has not signed; a function that calls none is effectively authorized by everybody.\n2. **No one-shot guard.** It never tests `has(&\"ADMIN\")` before writing, so the admin slot remains freely rewritable for the contract's entire lifetime.\n\n`mint` derives its entire authority from that same slot: it does `get::<_, Address>(&\"ADMIN\").unwrap()` followed by `admin.require_auth()`. Once an attacker has installed an address it controls, `mint`'s authorization check is satisfied by the attacker itself.\n\nThe rule `unauthenticated_admin_overwrite_enables_unlimited_mint` asserted that, starting from a state where `\"ADMIN\"` already holds some address `a`, if an attacker (`attacker != a`) calls `initialize(attacker)` and then `mint(to, amount)` with `amount > 0` and no overflow, then any execution in which `to`'s balance grew must have carried `a`'s authorization:\n\n```rust\ncvlr_assert!(bal_after == bal_before || standing_admin_authorized);\n```\n\nThe prover refuted it with an end-to-end trace in which every step is reachable. The pre-state genuinely has an admin installed (`admin_is_set` → `has_internal`, assume discharged); the incumbent `a` is read back; `Address::ne` confirms the attacker is a distinct principal (second assume discharged — two satisfied assumes on one path, so the rule is not vacuous); `amount > 0` and `checked_add(...).is_some()` are discharged. The `Token::initialize` frame then contains **exactly two operations** — key `into_val` and `put_contract_data`. There is no `has_internal` (no re-initialization guard), no `get_internal` (it never consults the incumbent), and no `require_auth` host call anywhere. The call returns normally; nothing traps and nothing is rolled back. `Token::mint` then passes `check_nonnegative_amount`, reads back the *freshly overwritten* `\"ADMIN\"` — now the attacker's address — satisfies its own `require_auth` against that attacker address, and credits `to` via `receive_balance` → `write_balance` → `put_contract_data`. The final `balance` read yields `bal_after = bal_before + amount > bal_before`, so the left disjunct is false and the prover was forced to select `standing_admin_authorized == false`. The witness is precisely the attack: supply grew and the address that held the mint privilege when the sequence began authorized nothing.\n\nNotably, the trace shows no unwinding condition, no havoc from an unresolved call, and no vacuity report — the contract functions are fully inlined down to the host calls, and the failed assertion is the property's own. The alternative reading that `is_auth` is merely under-constrained does not rescue the property: `initialize` never consults authorization at all, so there is no `require_auth` frame to be satisfied or violated, and `mint`'s `require_auth` is satisfied by the attacker regardless of the auth set's contents.\n\nThe same missing pair of checks is also the single root cause behind the companion violations `initialize_is_one_shot` (missing `has` guard) and `admin_rotation_requires_current_admin_auth` (missing incumbent consent).\n\n**Recommended fixes:** (1) add a one-time-initialization guard — test `e.storage().persistent().has(&\"ADMIN\")` before writing and panic/error if the entry already exists, which cuts this attack at the second `initialize` call; (2) call `admin.require_auth()` on the incoming admin so an address cannot be installed without its own consent, preventing both an unwitting third party from being named admin and the initializer from being front-run; (3) if admin rotation is intended at all, give it a dedicated `set_admin(new_admin)` entry point that first reads the stored admin and calls `current_admin.require_auth()` — mirroring the pattern `mint` already uses correctly. Rotation must never be reachable through an unguarded initializer.",
+        "impact": "Complete compromise of the token: an arbitrary caller seizes the admin role permanently (the legitimate admin loses it with no recovery path, since there is no guarded rotation function) and can then mint unbounded balance to any address. With no supply cap and no recipient validation, this is unlimited unauthorized inflation, destroying supply integrity and rendering every existing holder's balance worthless.",
+        "attack_path": "1. The contract is deployed and legitimately initialized, so the persistent `\"ADMIN\"` entry holds the rightful admin address `a`.\n2. An attacker with an address `attacker != a` calls `initialize(attacker)`. The function performs `into_val` on the `\"ADMIN\"` key and `put_contract_data` — no `has` check, no `get` of the incumbent, no `require_auth`. The write succeeds and `\"ADMIN\"` now holds the attacker's address.\n3. The attacker calls `mint(to, amount)` with `amount > 0`. `check_nonnegative_amount` passes, `mint` loads `\"ADMIN\"` (now the attacker) and calls `require_auth()` on it — satisfied by the attacker's own signature.\n4. `receive_balance` → `write_balance` credits `to` with `amount`. Final balance read shows `bal_after = bal_before + amount`, with no authorization ever obtained from the original admin `a`.\n5. The attacker repeats step 3 arbitrarily; the original admin has no way to reclaim the role.",
+        "assumptions_and_uncertainties": "The rule's only assumptions are that an admin is already installed, that the attacker is a distinct address, that `amount > 0`, and that the balance addition does not overflow — all discharged on the counterexample path, so the rule is not vacuous. The finding assumes standard Soroban host semantics, under which an invocation is unconstrained unless it itself calls `require_auth`. Whether the contract is ever intended to support admin rotation is unclear from the code; either way, rotation should not be reachable through an unguarded initializer.",
+        "proof_of_concept": "<counterexample><assert>Failed property in cvt::assert</assert><message>unauthenticated_admin_overwrite_enables_unlimited_mint()</message><child><message>function start: $certora_meridian24_token::certora::specs::admin_setup::admin_is_set </message><child><message>function start: $<&str as soroban_sdk::env::IntoVal<soroban_sdk::env::Env, soroban_env_common::val::Val>>::into_val </message></child><child><message>function start: $<soroban_sdk::storage::Storage>::has_internal </message></child></child><child><message>user assume: CERTORA_assume_c: requiring read value to be 1</message></child><child><message>function start: $<soroban_sdk::storage::Persistent>::get::<&str, soroban_sdk::address::Address> </message><child><message>function start: $<&str as soroban_sdk::env::IntoVal<soroban_sdk::env::Env, soroban_env_common::val::Val>>::into_val </message></child><child><message>function start: $<soroban_sdk::storage::Storage>::has_internal </message></child><child><message>function start: $<soroban_sdk::storage::Storage>::get_internal </message></child></child><child><message>function start: $<soroban_sdk::address::Address as core::cmp::PartialEq>::ne </message><child><message>function start: $<soroban_sdk::address::Address as core::cmp::PartialEq>::eq </message></child></child><child><message>user assume: CERTORA_assume_c: requiring read value to be 1</message></child><child><message>function start: $cvlr_soroban::auth::is_auth </message></child><child><message>function start: $cvlr_soroban::auth::is_auth </message></child><child><message>function start: $<certora_meridian24_token::Token>::balance </message><child><message>function start: $certora_meridian24_token::read_balance </message><child><message>function start: $<soroban_sdk::storage::Storage>::has_internal </message></child><child><message>function start: $<soroban_sdk::storage::Storage>::get_internal </message></child><child><message>function start: $<i64 as soroban_env_common::convert::TryFromVal<soroban_sdk::env::Env, soroban_env_common::val::Val>>::try_from_val </message></child></child></child><child><message>user assume: CERTORA_assume_c: requiring read value to be 1</message></child><child><message>user assume: CERTORA_assume_c: requiring read value to be 1</message></child><child><message>function start: $<certora_meridian24_token::Token>::initialize </message><child><message>function start: $<&str as soroban_sdk::env::IntoVal<soroban_sdk::env::Env, soroban_env_common::val::Val>>::into_val </message></child><child><message>function start: $<soroban_sdk::env::Env as soroban_env_common::env::Env>::put_contract_data </message></child></child><child><message>function start: $<certora_meridian24_token::Token>::mint </message><child><message>function start: $certora_meridian24_token::check_nonnegative_amount </message></child><child><message>function start: $<soroban_sdk::storage::Persistent>::get::<&str, soroban_sdk::address::Address> </message><child><message>function start: $<&str as soroban_sdk::env::IntoVal<soroban_sdk::env::Env, soroban_env_common::val::Val>>::into_val </message></child><child><message>function start: $<soroban_sdk::storage::Storage>::has_internal </message></child><child><message>function start: $<soroban_sdk::storage::Storage>::get_internal </message></child></child><child><message>function start: $certora_meridian24_token::receive_balance </message><child><message>function start: $certora_meridian24_token::read_balance </message><child><message>function start: $<soroban_sdk::storage::Storage>::has_internal </message></child><child><message>function start: $<soroban_sdk::storage::Storage>::get_internal </message></child><child><message>function start: $<i64 as soroban_env_common::convert::TryFromVal<soroban_sdk::env::Env, soroban_env_common::val::Val>>::try_from_val </message></child></child><child><message>function start: $certora_meridian24_token::write_balance </message><child><message>function start: $<i64 as soroban_sdk::env::IntoVal<soroban_sdk::env::Env, soroban_env_common::val::Val>>::into_val </message></child><child><message>function start: $<soroban_sdk::env::Env as soroban_env_common::env::Env>::put_contract_data </message></child></child></child></child><child><message>function start: $<certora_meridian24_token::Token>::balance </message><child><message>function start: $certora_meridian24_token::read_balance </message><child><message>function start: $<soroban_sdk::storage::Storage>::has_internal </message></child><child><message>function start: $<soroban_sdk::storage::Storage>::get_internal </message></child><child><message>function start: $<i64 as soroban_env_common::convert::TryFromVal<soroban_sdk::env::Env, soroban_env_common::val::Val>>::try_from_val </message></child></child></child><child><message>user assert: CERTORA_assert_c: expecting read value to be 1, got 0</message></child></counterexample>",
+        "references": [
+          "https://prover.certora.com/jobStatus/33158/f6379ea60d3d408ea6f64d4ad332e156?anonymousKey=2eb78cace9487137f6d67b5d2c0a63d25b216d13"
+        ]
+      },
+      "provenance": {
+        "rule_name": "unauthenticated_admin_overwrite_enables_unlimited_mint",
+        "spec_file": "admin_setup.rs",
+        "outcome": "BAD",
+        "group_slugs": [
+          "unauthorized-admin-overwrite-enables-mint-takeover"
+        ],
+        "prover_link": "https://prover.certora.com/jobStatus/33158/f6379ea60d3d408ea6f64d4ad332e156?anonymousKey=2eb78cace9487137f6d67b5d2c0a63d25b216d13",
+        "impact": "high",
+        "likelihood": "high",
+        "risk_reasoning": "The counterexample requires nothing but a public call to `initialize` followed by `mint` — no privileged access, no special ordering beyond \"after deployment\", and the prover discharged every assumption on a fully inlined, non-vacuous path. The consequence is unauthorized control of privileged functionality plus unbounded minting, i.e. direct theft of value from all holders."
+      }
+    }
+  ]
+}

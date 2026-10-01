@@ -1,0 +1,29 @@
+{
+  "cwd": "/private/tmp/claude-501/-Users-chandrakananandi-research-AutoProver/77167112-ef59-402d-bdde-52af0f1797a5/scratchpad/run2/token/.cvlr_work/build",
+  "argv_prefix": [],
+  "argv": [
+    "cargo",
+    "rustc",
+    "--lib",
+    "--target",
+    "wasm32-unknown-unknown",
+    "--release",
+    "--manifest-path",
+    "/private/tmp/claude-501/-Users-chandrakananandi-research-AutoProver/77167112-ef59-402d-bdde-52af0f1797a5/scratchpad/run2/token/.cvlr_work/build/Cargo.toml",
+    "--features",
+    "certora unit_admin_setup"
+  ],
+  "rustc_args": [
+    "-C",
+    "link-arg=--allow-undefined"
+  ],
+  "manifest": {
+    "project_directory": "/private/tmp/claude-501/-Users-chandrakananandi-research-AutoProver/77167112-ef59-402d-bdde-52af0f1797a5/scratchpad/run2/token/.cvlr_work/build",
+    "executables": "target/wasm32-unknown-unknown/release/certora_meridian24_token.wasm",
+    "sources": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "**/*.rs"
+    ]
+  }
+}
