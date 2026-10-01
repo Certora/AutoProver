@@ -28,7 +28,11 @@ import os
 import stat
 import time
 from dataclasses import dataclass
+from importlib.resources import files
 from pathlib import Path
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, BeforeValidator, ConfigDict, ValidationError
 
 from composer.cargo.session import CargoSession, CompileFailed, WarmFailed
 
@@ -38,9 +42,8 @@ _log = logging.getLogger(__name__)
 #: and prints the build manifest.
 SBF_SUBCOMMAND = "certora-sbf"
 
-#: Same default as the tool, and the read-only grant in
-#: :func:`composer.sandbox.recipes.rust_build_policy`. Override with the same
-#: environment variable the tool reads.
+#: Same default and override variable as the tool. Both the build's argv and its
+#: read-only grant are taken from this one value.
 PLATFORM_TOOLS_ROOT = Path(
     os.environ.get("CERTORA_PLATFORM_TOOLS_ROOT", Path.home() / ".cache" / "solana")
 )
@@ -48,10 +51,7 @@ PLATFORM_TOOLS_ROOT = Path(
 BUILD_TIMEOUT_S = 1800
 
 #: Under the workdir (the only path the confinement policy grants read-write).
-#: The script reads the command file from next to itself.
 BUILD_DIR = Path(".certora_build")
-BUILD_SCRIPT_NAME = "confined_build.py"
-BUILD_COMMAND_NAME = "confined_build.json"
 
 
 class PlatformToolsMissing(RuntimeError):
@@ -100,8 +100,21 @@ async def sbf_subcommand_version() -> str:
     return stdout.decode().strip()
 
 
-@dataclass(frozen=True)
-class BuildManifest:
+def _one_or_many(value: object) -> object:
+    """``certoraParseBuildScript.add_solana_files_to_context`` reads a string as one path."""
+    if value is None or value == "":
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, list):
+        return tuple(value)
+    return value
+
+
+type _SolanaFiles = Annotated[tuple[str, ...], BeforeValidator(_one_or_many)]
+
+
+class BuildManifest(BaseModel):
     """Output of ``cargo certora-sbf --json``, checked against what the prover requires.
 
     Paths are as cargo printed them: ``project_directory`` absolute, everything
@@ -109,11 +122,15 @@ class BuildManifest:
     ``project_directory``, so rewriting them here would add a second convention.
     """
 
+    model_config = ConfigDict(frozen=True, extra="ignore", strict=True)
+
+    #: The prover refuses a manifest that reports a failed build.
+    success: Literal[True]
     project_directory: Path
     executables: str
     sources: tuple[str, ...]
-    solana_inlining: tuple[str, ...] = ()
-    solana_summaries: tuple[str, ...] = ()
+    solana_inlining: _SolanaFiles = ()
+    solana_summaries: _SolanaFiles = ()
 
     @property
     def artifact(self) -> Path:
@@ -125,29 +142,15 @@ class MalformedBuildManifest(ValueError):
 
 
 def parse_manifest(stdout: str) -> BuildManifest:
-    """Parse the build JSON. Requires the same keys ``certoraParseBuildScript`` requires.
+    """Parse the build JSON into the shape ``certoraParseBuildScript`` accepts.
 
-    Checked here so a missing key is a build-tool error next to the build, not a
+    Checked here so a bad manifest is a build-tool error next to the build, not a
     ``CertoraUserInputError`` inside a prover run that has already started.
     """
     try:
-        payload = json.loads(stdout)
-    except json.JSONDecodeError as exc:
-        raise MalformedBuildManifest(f"build did not print JSON: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise MalformedBuildManifest(f"build printed {type(payload).__name__}, not an object")
-    missing = [k for k in ("success", "project_directory", "sources", "executables") if k not in payload]
-    if missing:
-        raise MalformedBuildManifest(f"build JSON is missing {', '.join(missing)}")
-    if not payload["success"]:
-        raise MalformedBuildManifest("build JSON reports success: false")
-    return BuildManifest(
-        project_directory=Path(payload["project_directory"]),
-        executables=payload["executables"],
-        sources=tuple(payload["sources"]),
-        solana_inlining=tuple(payload.get("solana_inlining") or ()),
-        solana_summaries=tuple(payload.get("solana_summaries") or ()),
-    )
+        return BuildManifest.model_validate_json(stdout)
+    except ValidationError as exc:
+        raise MalformedBuildManifest(f"unusable build manifest: {exc}") from exc
 
 
 @dataclass(frozen=True)
@@ -185,9 +188,7 @@ def sbf_argv(
     ``$CERTORA_PLATFORM_TOOLS_ROOT``. The confined child never sees that
     variable: the launcher keeps only
     :data:`~composer.sandbox.recipes.DEFAULT_ENV_PASSTHROUGH`, which does not
-    include it. If the toolchains are not in the tool's default location, the
-    confinement grant and the build would disagree, and the build would try to
-    download offline.
+    include it. The build and the build script grant the same root read-only.
     """
     args = [
         SBF_SUBCOMMAND,
@@ -269,7 +270,9 @@ async def sbf_build(
         await _warm_for_the_build_cargo(session, tools_version, manifest_path)
     argv = sbf_argv(manifest_path=manifest_path, features=features, tools_version=tools_version)
     started = time.perf_counter()
-    built = await session.run_confined("cargo", argv, timeout_s=timeout_s)
+    built = await session.run_confined(
+        "cargo", argv, timeout_s=timeout_s, extra_ro=(PLATFORM_TOOLS_ROOT,)
+    )
     elapsed = int((time.perf_counter() - started) * 1000)
     if built.exit_code != 0:
         return SbfRun(
@@ -289,38 +292,15 @@ async def sbf_build(
     return SbfRun(elapsed, Built(manifest), session.confined)
 
 
-_SCRIPT_TEMPLATE = '''\
-#!/usr/bin/env python3
-"""Generated by composer.cargo.sbf — do not edit.
-
-certoraSolanaProver runs this as its `build_script` and reads the build manifest
-from stdout.
-"""
-
-import json
-import pathlib
-import subprocess
-import sys
-
-command = json.loads(pathlib.Path(__file__).with_name({command_name!r}).read_text())
-argv = [*command["argv_prefix"], *command["argv"]]
-
-# Certora passes --json and -l; those flags do nothing here. --cargo_features
-# is how the prover adds features, and ignoring it would build the wrong crate.
-extra = sys.argv[sys.argv.index("--cargo_features") + 1:] if "--cargo_features" in sys.argv else []
-if extra:
-    argv += ["--features", " ".join(extra)]
-
-result = subprocess.run(argv, capture_output=True, text=True, cwd=command["cwd"])
-sys.stderr.write(result.stderr)
-sys.stdout.write(result.stdout)
-sys.exit(result.returncode)
-'''
+def build_command_path(script: Path) -> Path:
+    """The command file a build script reads, which sits beside it."""
+    return script.with_suffix(".json")
 
 
 async def write_build_script(
     session: CargoSession,
     *,
+    name: str,
     manifest_path: Path,
     features: tuple[str, ...] = (),
     tools_version: str | None = None,
@@ -328,14 +308,16 @@ async def write_build_script(
 ) -> Path:
     """Write the ``build_script`` the conf points at, and return its path.
 
-    Confinement is an opaque ``argv_prefix`` from
-    :meth:`SandboxConfig.backend_spec` (``docs/command-sandbox.md`` §4). If the
-    provider cannot confine, that call raises before anything runs.
+    ``name`` keeps scripts apart when several submissions share one workdir.
+    Confinement is an opaque ``argv_prefix`` from :meth:`CargoSession.backend_spec`
+    (``docs/command-sandbox.md`` §4). If the provider cannot confine, that call
+    raises before anything runs.
     """
-    spec = await session.sandbox.backend_spec(session.workdir, timeout_s=timeout_s)
+    spec = await session.backend_spec(timeout_s=timeout_s, extra_ro=(PLATFORM_TOOLS_ROOT,))
     build_dir = session.workdir / BUILD_DIR
     build_dir.mkdir(parents=True, exist_ok=True)
-    (build_dir / BUILD_COMMAND_NAME).write_text(
+    script = build_dir / f"{name}.py"
+    build_command_path(script).write_text(
         json.dumps(
             {
                 "cwd": str(session.workdir),
@@ -352,8 +334,7 @@ async def write_build_script(
             indent=2,
         )
     )
-    script = build_dir / BUILD_SCRIPT_NAME
-    script.write_text(_SCRIPT_TEMPLATE.format(command_name=BUILD_COMMAND_NAME))
+    script.write_text((files("composer.cargo") / "sbf_build_script.py").read_text())
     # certoraRun execs the script directly, so the shebang needs the execute bit.
     script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return script

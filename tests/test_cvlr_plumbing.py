@@ -36,6 +36,7 @@ from composer.spec.cvlr.reference import SOLANA
 from composer.cargo.sbf import (
     MalformedBuildManifest,
     Built,
+    build_command_path,
     parse_manifest as parse_build_manifest,
     platform_tools_cargos,
     PLATFORM_TOOLS_ROOT,
@@ -491,11 +492,8 @@ def test_warming_is_tracked_per_binary_not_per_session(tmp_path):
     assert not session.already_warmed("cargo"), "the host cargo is a separate cache"
 
 
-def test_the_certora_feature_is_the_default_only_when_no_features_are_named():
-    named = Submission(manifest_path=Path("/w/C.toml"), features=("verify",))
-    bare = Submission(manifest_path=Path("/w/C.toml"))
-    assert named.resolved_features() == ("verify",)
-    assert bare.resolved_features() == ("certora",)
+def test_the_certora_feature_is_the_default():
+    assert Submission(manifest_path=Path("/w/C.toml")).features == ("certora",)
 
 
 def test_the_build_never_touches_rustup():
@@ -537,8 +535,28 @@ def test_a_build_that_reports_failure_is_not_read_as_a_manifest():
 
 
 def test_a_build_that_printed_no_json_says_so():
-    with pytest.raises(MalformedBuildManifest, match="did not print JSON"):
+    with pytest.raises(MalformedBuildManifest, match="Invalid JSON"):
         parse_build_manifest("error: could not compile `first_example`")
+
+
+_VALID = {"success": True, "project_directory": "/w", "sources": [], "executables": "x.so"}
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [("executables", ["x.so"]), ("sources", "p/src/lib.rs"), ("solana_inlining", 3)],
+)
+def test_a_manifest_field_of_the_wrong_type_is_rejected_here(field, value):
+    with pytest.raises(MalformedBuildManifest, match=field):
+        parse_build_manifest(json.dumps({**_VALID, field: value}))
+
+
+def test_a_single_env_file_is_read_as_one_path_the_way_the_prover_reads_it():
+    manifest = parse_build_manifest(
+        json.dumps({**_VALID, "solana_inlining": "envs/inlining.txt", "solana_summaries": ""})
+    )
+    assert manifest.solana_inlining == ("envs/inlining.txt",)
+    assert manifest.solana_summaries == ()
 
 
 def test_the_manifest_keeps_cargos_own_paths():
@@ -563,9 +581,9 @@ async def test_the_generated_build_script_reruns_the_gates_command(tmp_path):
     the artifact the gate approved."""
     session = CargoSession(workdir=tmp_path, sandbox=SandboxConfig(provider="none"))
     script = await write_build_script(
-        session, manifest_path=tmp_path / "Cargo.toml", features=("certora",)
+        session, name="unit", manifest_path=tmp_path / "Cargo.toml", features=("certora",)
     )
-    command = json.loads((script.parent / "confined_build.json").read_text())
+    command = json.loads(build_command_path(script).read_text())
     assert command["argv"][1:] == sbf_argv(
         manifest_path=tmp_path / "Cargo.toml", features=("certora",)
     )
@@ -573,12 +591,39 @@ async def test_the_generated_build_script_reruns_the_gates_command(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_the_build_script_grants_the_platform_tools_root_its_argv_names(tmp_path, monkeypatch):
+    """A root outside ``rust_build_policy``'s defaults, as ``$CERTORA_PLATFORM_TOOLS_ROOT`` names."""
+    from composer.cargo import sbf
+    from composer.sandbox import config as config_mod
+    from composer.sandbox.launcher import LauncherProvider
+
+    async def _available(provider):
+        return None
+
+    root = tmp_path / "tools"
+    root.mkdir()
+    monkeypatch.setattr(sbf, "PLATFORM_TOOLS_ROOT", root)
+    monkeypatch.setattr(SandboxConfig, "resolve_provider", lambda self: LauncherProvider(binary="rc"))
+    monkeypatch.setattr(config_mod, "ensure_available", _available)
+    workdir = tmp_path / "w"
+    workdir.mkdir()
+    session = CargoSession(workdir=workdir, sandbox=SandboxConfig(provider="launcher"))
+
+    script = await write_build_script(session, name="unit", manifest_path=workdir / "Cargo.toml")
+
+    command = json.loads(build_command_path(script).read_text())
+    prefix, argv = command["argv_prefix"], command["argv"]
+    assert argv[argv.index("--platform-tools-root") + 1] == str(root)
+    assert any(a == "--ro" and b == str(root.resolve()) for a, b in zip(prefix, prefix[1:]))
+
+
+@pytest.mark.asyncio
 async def test_an_unconfined_session_produces_a_build_script_with_no_wrapper(tmp_path):
     """The macOS development carve-out: ``provider="none"`` is a passthrough, and the script runs
     the command directly rather than pretending to confine it."""
     session = CargoSession(workdir=tmp_path, sandbox=SandboxConfig(provider="none"))
-    script = await write_build_script(session, manifest_path=tmp_path / "Cargo.toml")
-    assert json.loads((script.parent / "confined_build.json").read_text())["argv_prefix"] == []
+    script = await write_build_script(session, name="unit", manifest_path=tmp_path / "Cargo.toml")
+    assert json.loads(build_command_path(script).read_text())["argv_prefix"] == []
 
 
 @pytest.mark.asyncio
@@ -586,7 +631,7 @@ async def test_the_build_script_is_executable(tmp_path):
     """``certoraParseBuildScript`` execs it directly rather than through an interpreter, so without
     the execute bit the shebang means nothing and ``validate_exec_file`` rejects the conf."""
     session = CargoSession(workdir=tmp_path, sandbox=SandboxConfig(provider="none"))
-    script = await write_build_script(session, manifest_path=tmp_path / "Cargo.toml")
+    script = await write_build_script(session, name="unit", manifest_path=tmp_path / "Cargo.toml")
     assert script.stat().st_mode & stat.S_IXUSR
 
 
@@ -625,29 +670,40 @@ async def test_the_written_conf_names_the_build_script_written_beside_it(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_two_units_sharing_a_tree_write_separate_confs(tmp_path):
-    """One working tree per run, one conf per unit (`docs/single-working-tree.md` §2.1). Units are
-    prepared under a shared build permit and submitted concurrently, so a shared stem would have the
-    second unit's conf replace the first's while the first is still in flight — and the loop bound
-    one author raised would arrive on another's rules."""
+async def test_two_units_sharing_a_tree_write_separate_confs_and_build_scripts(tmp_path):
+    """Units sharing a working tree are submitted concurrently. A file they shared would carry the
+    second unit's loop bound or features into the first unit's job."""
     session = _unconfined(tmp_path)
     manifest = tmp_path / "Cargo.toml"
     solvency = await write_submission(
         session,
         Submission(
-            manifest_path=manifest, settings=cvlr_conf.TunableConf(loop_iter=3), stem="solvency"
+            manifest_path=manifest,
+            settings=cvlr_conf.TunableConf(loop_iter=3),
+            stem="solvency",
+            features=("certora", "solvency"),
         ),
     )
     access = await write_submission(
         session,
         Submission(
-            manifest_path=manifest, settings=cvlr_conf.TunableConf(loop_iter=7), stem="access"
+            manifest_path=manifest,
+            settings=cvlr_conf.TunableConf(loop_iter=7),
+            stem="access",
+            features=("certora", "access"),
         ),
     )
 
-    assert solvency != access
-    assert json.loads(solvency.read_text())["loop_iter"] == "3"
-    assert json.loads(access.read_text())["loop_iter"] == "7"
+    confs = {unit: json.loads(path.read_text()) for unit, path in (("solvency", solvency), ("access", access))}
+    assert confs["solvency"]["loop_iter"] == "3"
+    assert confs["access"]["loop_iter"] == "7"
+
+    def features(conf: dict) -> str:
+        argv = json.loads(build_command_path(Path(conf["build_script"])).read_text())["argv"]
+        return argv[argv.index("--features") + 1]
+
+    assert features(confs["solvency"]) == "certora solvency"
+    assert features(confs["access"]) == "certora access"
 
 
 def test_a_failed_compile_carries_the_compilers_own_words():

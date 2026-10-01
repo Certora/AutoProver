@@ -1,25 +1,18 @@
 """Submitting a CVLR artifact to the Certora Solana Prover.
 
-The whole point of this module is how little is in it. ``docs/cvlr-backend-plan.md`` §5.3 says half
-of counterexample handling is free because ``certoraSolanaProver`` produces the same treeView
-reports as ``certoraRun``; this is where that claim gets cashed. Cloud polling
+``certoraSolanaProver`` produces the same treeView reports as ``certoraRun``, so cloud polling
 (:mod:`composer.prover.cloud`), the treeView parse (:mod:`composer.prover.results`) and the rule
-roll-up (:func:`composer.prover.core.run_prover`) are already chain-neutral and are reused verbatim.
-What Solana adds is which CLI takes the conf — one field on
-:class:`~composer.prover.core.ProverOptions` — and what has to exist before the conf is written.
+roll-up (:func:`composer.prover.core.run_prover`) are reused as they are. What Solana adds is which
+CLI takes the conf, one field on :class:`~composer.prover.core.ProverOptions`, and what has to
+exist before the conf is written.
 
-That last part is the substance. A submission is three ordered steps, and the order is the design:
+A submission is three ordered steps:
 
-1. **Build**, confined, as the pre-submission gate (:mod:`composer.cargo.sbf`). A build failure is a
-   compiler error with a span in it; the same failure discovered during submission is a
-   ``CertoraUserInputError`` from inside a prover run, which is strictly worse to read and arrives
-   after the upload.
-2. **Write the build script and the conf**, so the prover reruns exactly the build that just passed.
-3. **Submit**, and let the shared machinery do the rest.
-
-Nothing here is LLM-shaped. The authoring loop (§7.5) will wrap this, but the plumbing is complete
-and testable without it, which is what makes phase 1b's exit criterion — a hand-written CVLR rule
-in, verdicts out — checkable with no agent involved.
+1. **Build**, confined, as the pre-submission gate (:mod:`composer.cargo.sbf`). A build failure
+   here is a compiler error with a span in it; the same failure during submission is a
+   ``CertoraUserInputError`` from inside a prover run, after the upload.
+2. **Write the build script and the conf**, so the prover reruns exactly the build that passed.
+3. **Submit**.
 """
 
 import dataclasses
@@ -51,7 +44,6 @@ _log = logging.getLogger(__name__)
 #: convention (``docs/formalization-abstraction.md`` §6), kept because the deliverable layout is
 #: shared and a reader who knows one backend should not have to learn a second place to look.
 CONF_DIR = Path("certora") / "confs"
-
 
 
 @dataclasses.dataclass(frozen=True)
@@ -100,20 +92,15 @@ class Submission:
     settings: TunableConf = TunableConf()
     rules: RuleSelection = dataclasses.field(default_factory=InheritRules)
     msg: str = ""
-    #: Conf file stem, which is also this submission's identity on disk.
+    #: This submission's identity on disk: it names the conf and the build script, so
+    #: submissions sharing a workdir do not overwrite each other's files.
     stem: str = "cvlr"
-    #: Cargo features for the build. Empty means ``certora`` — resolved in
-    #: :func:`prepare_submission` so the gate build and the prover's rerun cannot end up with
-    #: different feature sets. An authoring run always names two: the
-    #: harness feature and the unit's own, which is what selects one unit's rules out of a shared
-    #: crate (``docs/single-working-tree.md`` §2.1).
-    features: tuple[str, ...] = ()
+    #: Cargo features for both the gate build and the prover's rerun of it. Submissions that share
+    #: a crate select different rules from it by naming different features.
+    features: tuple[str, ...] = (DEFAULT_FEATURE,)
     #: Points-to summary files this submission reads, workdir-relative. One per unit; see
     #: :class:`~composer.spec.cvlr.conf.RunOverlay`.
     summaries: tuple[Path, ...] = ()
-
-    def resolved_features(self) -> tuple[str, ...]:
-        return self.features or (DEFAULT_FEATURE,)
 
 
 async def build_for_submission(
@@ -123,7 +110,7 @@ async def build_for_submission(
     return await sbf_build(
         session,
         manifest_path=submission.manifest_path,
-        features=submission.resolved_features(),
+        features=submission.features,
         tools_version=PLATFORM_TOOLS_VERSION,
         timeout_s=timeout_s,
     )
@@ -134,13 +121,12 @@ async def write_submission(
 ) -> Path:
     """Write the build script and the conf, and return the conf's path.
 
-    Split out from :func:`submit` because it is the whole deliverable of a dry run: the pair of
-    files is what a developer reruns by hand, and what the artifact store persists alongside the
-    generated Rust."""
+    The pair of files is what a developer reruns by hand, so it is useful without a submission."""
     script = await write_build_script(
         session,
+        name=submission.stem,
         manifest_path=submission.manifest_path,
-        features=submission.resolved_features(),
+        features=submission.features,
         tools_version=PLATFORM_TOOLS_VERSION,
         timeout_s=timeout_s,
     )
@@ -172,11 +158,9 @@ async def prepare_submission(
 ) -> BuildRejected | Prepared:
     """The local half: build the program with the harness in, then write the conf that checks it.
 
-    Split from :func:`run_submission` because only this half touches the working tree, and the two
-    halves want different concurrency. Every unit of a run shares one tree and one ``target/``, so
-    this is what a caller holds the run's build permit across
-    (``docs/single-working-tree.md`` §2.4); the other half waits on a cloud job for minutes and
-    holding a permit across it would serialize the whole run behind one prover.
+    Separate from :func:`run_submission` because only this half touches the working tree. A caller
+    sharing one tree between submissions serializes this half and runs the other, which waits on a
+    cloud job for minutes, concurrently.
     """
     build = await build_for_submission(session, submission, timeout_s=timeout_s)
     if not isinstance(build.verdict, Built):
@@ -195,14 +179,10 @@ async def run_submission(
 ) -> CvlrOutcome:
     """The remote half: hand the conf to the prover and shape what comes back.
 
-    ``prover_opts.app`` must select the Solana CLI; it is not forced here, because forcing it would
-    hide the one case where a caller legitimately disagrees (a Soroban submission reaching this same
-    code once §7.9 lands), and a mismatched app fails loudly at the first conf key the wrong CLI does
-    not recognize.
+    ``prover_opts.app`` must select the Solana CLI. A mismatched app fails at the first conf key
+    the wrong CLI does not recognize.
 
-    ``cex`` defaults to the no-analysis handler: a caller with no LLM is the normal case at this
-    layer, and the alternative — requiring one to get verdicts — is what would make the plumbing
-    untestable without an agent.
+    ``cex`` defaults to the no-analysis handler, so verdicts need no LLM.
     """
     result = await run_prover(
         session.workdir,
@@ -227,12 +207,8 @@ async def submit(
     tool_call_id: str = "cvlr-submit",
     build_timeout_s: int = BUILD_TIMEOUT_S,
 ) -> CvlrOutcome:
-    """Build, configure, and verify — the deterministic half of the CVLR backend, end to end.
-
-    The two halves in one call, for a caller with no working tree to share: the deterministic gates
-    and the anchor-reach probe both own their workspace outright. The authoring loop calls the
-    halves separately so it can hold the run's build permit across the first and not the second.
-    """
+    """:func:`prepare_submission` then :func:`run_submission`, for a caller that does not share its
+    working tree."""
     prepared = await prepare_submission(session, submission, timeout_s=build_timeout_s)
     if isinstance(prepared, BuildRejected):
         return prepared

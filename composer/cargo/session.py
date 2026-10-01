@@ -16,13 +16,13 @@ The fast tier is a host-target ``cargo check``, not the chain build.
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 
 from composer.cargo.features import CargoFeature
 from composer.sandbox.command import CommandResult, run_local_command
-from composer.sandbox.config import SandboxConfig
+from composer.sandbox.config import BackendSpec, SandboxConfig
 from composer.sandbox.recipes import sandbox_cargo_home
 
 _log = logging.getLogger(__name__)
@@ -121,22 +121,41 @@ class CargoSession:
         """
         return sandbox_cargo_home(self.workdir) if self.sandbox.enabled else None
 
+    def _sandbox_granting(self, extra_ro: tuple[Path, ...]) -> SandboxConfig:
+        return replace(self.sandbox, extra_ro=(*self.sandbox.extra_ro, *extra_ro))
+
     async def run_confined(
-        self, program: str, args: list[str], *, timeout_s: int
+        self,
+        program: str,
+        args: list[str],
+        *,
+        timeout_s: int,
+        extra_ro: tuple[Path, ...] = (),
     ) -> CommandResult:
-        """Run a command in the workdir under this session's confinement.
+        """Run a command in the workdir under this session's confinement, plus
+        read-only access to ``extra_ro``.
 
         If the configured provider cannot confine, this raises instead of falling
         back.
         """
+        sandbox = self._sandbox_granting(extra_ro)
         return await run_local_command(
             program,
             args,
             {},
             workdir=self.workdir,
             timeout_s=timeout_s,
-            provider=self.sandbox.resolve_provider() if self.sandbox.enabled else None,
-            policy=self.sandbox.build_policy(self.workdir),
+            provider=sandbox.resolve_provider() if sandbox.enabled else None,
+            policy=sandbox.build_policy(self.workdir),
+        )
+
+    async def backend_spec(
+        self, *, timeout_s: int, extra_ro: tuple[Path, ...] = ()
+    ) -> BackendSpec:
+        """The confinement :meth:`run_confined` applies, as an argv prefix for a
+        command something else launches later."""
+        return await self._sandbox_granting(extra_ro).backend_spec(
+            self.workdir, timeout_s=timeout_s
         )
 
     async def run_unconfined(

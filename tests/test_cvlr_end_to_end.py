@@ -1,12 +1,9 @@
-"""Phase 1b's exit criterion, as a test: a hand-written CVLR rule in, verdicts out.
+"""A hand-written CVLR rule in, verdicts out, with the latency of both compile tiers.
 
-``docs/cvlr-backend-plan.md`` §7.2 asks for exactly this — "given the Phase 1a reference project and
-a hand-written CVLR rule, the system produces verdicts, with measured latency for both compile
-tiers" — and the fixture makes it checkable rather than merely observable. `Certora/SolanaExamples
-<https://github.com/Certora/SolanaExamples>`_ ships two minimal CVLR projects, each with a conf and
-an **expected-verdict file** its own CI compares against. So the assertion is not "the plumbing
-returned something"; it is "the plumbing returned what the project's authors say is correct",
-including the rule that is meant to fail and the one that is meant to fail *sanity*.
+`Certora/SolanaExamples <https://github.com/Certora/SolanaExamples>`_ ships minimal CVLR projects,
+each with a conf and an **expected-verdict file** its own CI compares against. So the assertion is
+not "the plumbing returned something"; it is "the plumbing returned what the project's authors say
+is correct", including the rule that is meant to fail and the one that is meant to fail *sanity*.
 
 Marked ``expensive``: it submits a real cloud job. It also needs a real Rust + Solana platform
 toolchain, and it skips — naming the missing piece — rather than failing when one is absent, since a
@@ -24,11 +21,14 @@ from pathlib import Path
 
 import json5
 import pytest
+import pytest_asyncio
 
 from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, Built, platform_tools_installed
 from composer.cargo.session import CargoSession, Warmed
 from composer.prover.core import make_prover_options
 from composer.prover.conf import dump_conf
+from composer.sandbox.config import SandboxConfig
+from composer.sandbox.policy import SandboxUnavailable, ensure_available
 from composer.spec.cvlr.conf import PLATFORM_TOOLS_VERSION
 from composer.spec.cvlr.prover import (
     BuildRejected,
@@ -84,6 +84,17 @@ def _examples_root() -> Path:
             f"https://github.com/Certora/SolanaExamples and set ${EXAMPLES_ENV}"
         )
     return root
+
+
+@pytest_asyncio.fixture
+async def cvlr_confinement() -> SandboxConfig:
+    """The production sandbox, or a skip naming why it cannot confine here."""
+    config = SandboxConfig(provider="launcher")
+    try:
+        await ensure_available(config.resolve_provider())
+    except SandboxUnavailable as exc:
+        pytest.skip(str(exc))
+    return config
 
 
 @pytest.fixture
