@@ -1,0 +1,164 @@
+"""Phase 1b's exit criterion, as a test: a hand-written CVLR rule in, verdicts out.
+
+``docs/cvlr-backend-plan.md`` §7.2 asks for exactly this — "given the Phase 1a reference project and
+a hand-written CVLR rule, the system produces verdicts, with measured latency for both compile
+tiers" — and the fixture makes it checkable rather than merely observable. `Certora/SolanaExamples
+<https://github.com/Certora/SolanaExamples>`_ ships two minimal CVLR projects, each with a conf and
+an **expected-verdict file** its own CI compares against. So the assertion is not "the plumbing
+returned something"; it is "the plumbing returned what the project's authors say is correct",
+including the rule that is meant to fail and the one that is meant to fail *sanity*.
+
+Marked ``expensive``: it submits a real cloud job. It also needs a real Rust + Solana platform
+toolchain, and it skips — naming the missing piece — rather than failing when one is absent, since a
+machine without the toolchain is not a machine with a broken backend.
+
+Confinement is the one thing it does *not* skip over: the build runs under production's sandbox
+(``cvlr_confinement``), because the whole point of this gate is the plumbing, and an unconfined
+build exercises a different one.
+"""
+
+import json
+import os
+import shutil
+from pathlib import Path
+
+import json5
+import pytest
+
+from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, Built, platform_tools_installed
+from composer.cargo.session import CargoSession, Warmed
+from composer.prover.core import make_prover_options
+from composer.prover.conf import dump_conf
+from composer.spec.cvlr.conf import PLATFORM_TOOLS_VERSION
+from composer.spec.cvlr.prover import (
+    BuildRejected,
+    Checked,
+    Submission,
+    prepare_submission,
+    run_submission,
+)
+
+pytestmark = [pytest.mark.expensive, pytest.mark.asyncio]
+
+#: Where the public examples repo is checked out. An env var rather than a vendored fixture: the
+#: repo is the upstream artifact this test is *about*, and a copy in this tree would silently stop
+#: tracking it.
+EXAMPLES_ENV = "SOLANA_EXAMPLES_REPO"
+DEFAULT_EXAMPLES = Path("~/src/SolanaExamples").expanduser()
+
+#: The example whose conf ships an expected-verdict file covering all three outcomes that matter.
+EXAMPLE = Path("cvlr_by_example/first_example")
+
+#: ``Reports/output.json``'s vocabulary — what an expected-verdict file is written in — against the
+#: treeView vocabulary the shared result parser produces. Two names for one outcome, and the
+#: translation lives here because the expected file is the *fixture's* format, not the backend's.
+EXPECTED_TO_TREEVIEW = {
+    "SUCCESS": "VERIFIED",
+    "FAIL": "VIOLATED",
+    "SANITY_FAIL": "SANITY_FAILED",
+}
+
+
+def _shipped_cli_only() -> None:
+    """Refuse to run against a Certora source checkout.
+
+    ``$CERTORA`` makes :func:`composer.certora_env.import_prover_entry` import the CLI from a local
+    Prover build (:mod:`composer.certora_env`'s documented policy), and such a build reports itself
+    as "no package installed" — so the run is rejected before upload unless it also names a
+    ``prover_version``. That is a real developer setting for EVM work and incidental here, but the
+    resulting failure names neither this variable nor the expected-verdict file it would invalidate:
+    a local Prover branch need not agree with the release the fixture's verdicts were recorded
+    against. Skipping names it instead."""
+    if os.environ.get("CERTORA"):
+        pytest.skip(
+            "$CERTORA points this run at a Prover source checkout, whose verdicts need not match "
+            "the fixture's expected file. Rerun with `env -u CERTORA` to gate the shipped CLI."
+        )
+
+
+def _examples_root() -> Path:
+    root = Path(os.environ.get(EXAMPLES_ENV, DEFAULT_EXAMPLES)).expanduser()
+    if not (root / EXAMPLE / "Cargo.toml").is_file():
+        pytest.skip(
+            f"no SolanaExamples checkout at {root}; clone "
+            f"https://github.com/Certora/SolanaExamples and set ${EXAMPLES_ENV}"
+        )
+    return root
+
+
+@pytest.fixture
+def workdir(tmp_path: Path) -> Path:
+    """A throwaway copy of the examples repo.
+
+    A copy rather than the checkout itself because a session's workdir is written to — the private
+    ``CARGO_HOME``, the build script, the conf, ``target/`` — and a test that dirties a developer's
+    working tree is a test they learn to avoid running.
+    """
+    _shipped_cli_only()
+    root = _examples_root()
+    if shutil.which("cargo") is None:
+        pytest.skip("cargo is not on PATH")
+    destination = tmp_path / "SolanaExamples"
+    shutil.copytree(root, destination, ignore=shutil.ignore_patterns(".git", "target"))
+    return destination
+
+
+async def test_the_examples_project_verifies_exactly_as_its_authors_expect(
+    workdir, cvlr_confinement, capsys
+):
+    # The authors' own conf, since their expectations were recorded under it. JSON5: it has comments
+    # and trailing commas.
+    authors_conf = json5.loads(
+        (workdir / EXAMPLE / "certora" / "conf" / "Default.conf").read_text()
+    )
+    expected = json.loads(
+        (workdir / EXAMPLE / "certora" / "conf" / "expectedDefault.json").read_text()
+    )["rules"]
+
+    wanted_tools = PLATFORM_TOOLS_VERSION
+    if not platform_tools_installed(wanted_tools):
+        pytest.skip(
+            f"Solana platform tools {wanted_tools} are not installed under {PLATFORM_TOOLS_ROOT}"
+        )
+
+    session = CargoSession(workdir=workdir, sandbox=cvlr_confinement)
+    assert isinstance(await session.warm(manifest_dirs=(EXAMPLE,)), Warmed)
+
+    # The fast tier, measured against the same crate the slow tier builds — the two numbers side by
+    # side are what open question 1 is decided on, and the ratio is the whole argument for two tiers.
+    fast = await session.check(package="first_example", features=("certora",))
+    assert fast.ok, fast.verdict
+
+    submission = Submission(
+        manifest_path=workdir / EXAMPLE / "Cargo.toml",
+        stem="first_example",
+        msg="AutoProver CVLR plumbing gate",
+    )
+    prepared = await prepare_submission(session, submission)
+    assert not isinstance(prepared, BuildRejected), prepared
+    # Our build script and message on the authors' settings. `files` names their prebuilt `.so`,
+    # which the prover refuses beside a build script.
+    ours = json.loads(prepared.conf_path.read_text())
+    conf = {
+        **{k: v for k, v in authors_conf.items() if k != "files"},
+        "build_script": ours["build_script"],
+        "msg": ours["msg"],
+    }
+    prepared.conf_path.write_text(dump_conf(conf))
+    outcome = await run_submission(
+        session, prepared, prover_opts=make_prover_options(cloud=True, app="solana")
+    )
+    assert isinstance(outcome, Checked), outcome
+    assert isinstance(outcome.build.verdict, Built)
+
+    with capsys.disabled():
+        print(
+            f"\ncompile tiers (confined={session.confined}): "
+            f"fast {fast.duration_ms} ms, slow {outcome.build.duration_ms} ms"
+            f"\nprover run: {outcome.link}"
+        )
+
+    actual = {path.rule: status for path, status in outcome.report.raw_rule_status.items()}
+    assert actual == {
+        rule: EXPECTED_TO_TREEVIEW[verdict] for rule, verdict in expected.items()
+    }

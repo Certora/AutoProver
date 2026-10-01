@@ -376,6 +376,37 @@ class TrivialFanoutCexHandler(CexHandler):
         return report
 
 
+class UnanalyzedCexHandler(CexHandler):
+    """Renders the result set as-is. No LLM, no analysis, no summarization.
+
+    For runs whose consumer is a *program* rather than an agent: a deterministic gate that asserts
+    verdicts against a checked-in expected file, a plumbing test, a CLI mode that only wants the
+    outcomes. ``run_prover``'s handler hook is otherwise the one place an LLM is unavoidable, and
+    those callers have nothing for it to do.
+
+    It renders the counterexample dump verbatim rather than reusing ``flat_rule_feedback.j2``: that
+    template says "analyzing the counterexample yielded no results" when handed no explanation,
+    which is a false account of a run that never asked.
+    """
+
+    @override
+    async def analyze(
+        self,
+        all_results: list[RuleResult],
+        tool_call_id: str,
+        callbacks: CexProgressCallbacks,
+        report_dir: Path,
+    ) -> str:
+        lines: list[str] = []
+        for r in all_results:
+            lines.append(f"{r.name}: {r.status}")
+            for message in r.error_messages or ():
+                lines.append(f"  {message}")
+            if r.cex_dump:
+                lines.append(f"  {r.cex_dump}")
+        return "\n".join(lines)
+
+
 # Compatibility alias for the legacy name. New code should reach for
 # TrivialFanoutCexHandler directly; the agentic codegen handler lives
 # elsewhere.

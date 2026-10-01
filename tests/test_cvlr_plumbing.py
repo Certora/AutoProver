@@ -6,6 +6,7 @@ submission adds.
 """
 
 import json
+import stat
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -32,6 +33,18 @@ from composer.prover import conf as prover_conf
 from composer.spec.cvlr import conf as cvlr_conf
 from composer.spec.cvlr.crates import Absent, CvlrSources
 from composer.spec.cvlr.reference import SOLANA
+from composer.cargo.sbf import (
+    MalformedBuildManifest,
+    Built,
+    parse_manifest as parse_build_manifest,
+    platform_tools_cargos,
+    PLATFORM_TOOLS_ROOT,
+    sbf_argv,
+    write_build_script,
+)
+from composer.cargo.session import CargoSession, CompileFailed
+from composer.sandbox.config import SandboxConfig
+from composer.spec.cvlr.prover import Submission, write_submission
 
 
 # --------------------------------------------------------------------------------------------
@@ -430,3 +443,216 @@ def test_the_env_files_are_left_for_the_build_manifest_to_supply():
 def test_a_units_summary_file_is_named_when_the_run_passes_one():
     conf = _submission(summaries=(Path("envs/cvlr_summaries_vault.txt"),))
     assert conf["solana_summaries"] == ["envs/cvlr_summaries_vault.txt"]
+
+
+def test_the_build_warms_with_the_cargo_it_will_actually_run(tmp_path):
+    """A cache is only warm for the cargo that filled it.
+
+    Cargo hashes a git source into a directory name and the hash is not stable across versions: the
+    host's cargo 1.89 fetched ``Certora/anchor`` into ``git/db/anchor-8a7e45e4c93a95b5`` while the
+    cargo 1.79 inside platform-tools v1.43 looked for ``git/db/anchor-1f3eb14fb7b4e8f1``, found
+    nothing, and — confined and therefore offline — called it a network failure. Measured, not
+    inferred: both directories exist side by side after fetching with each.
+    """
+    for flavour in ("platform-tools-certora", "platform-tools"):
+        binary = tmp_path / "v1.43" / flavour / "rust" / "bin" / "cargo"
+        binary.parent.mkdir(parents=True)
+        binary.write_text("#!/bin/sh\n")
+
+    found = platform_tools_cargos("v1.43", root=tmp_path)
+
+    assert [p.parent.parent.parent.name for p in found] == [
+        "platform-tools-certora", "platform-tools"
+    ], "both flavours are warmed, since which one the build picks is the tool's business"
+
+
+def test_a_version_with_no_toolchain_yields_nothing_to_warm(tmp_path):
+    """Not an error: an unconfined build is not forced offline and fetches what it lacks, and a
+    confined one already fails at :class:`PlatformToolsMissing` with an operator action named."""
+    assert platform_tools_cargos("v1.43", root=tmp_path) == ()
+
+
+def test_a_directory_without_the_binary_is_not_offered(tmp_path):
+    """A half-extracted toolchain directory exists; warming with a path that is not there would
+    fail the fetch and report it as the project's problem."""
+    (tmp_path / "v1.43" / "platform-tools" / "rust" / "bin").mkdir(parents=True)
+
+    assert platform_tools_cargos("v1.43", root=tmp_path) == ()
+
+
+def test_warming_is_tracked_per_binary_not_per_session(tmp_path):
+    """Two cargos do not share a git cache, so one having warmed says nothing about the other."""
+    session = CargoSession(workdir=tmp_path, sandbox=SandboxConfig())
+
+    assert not session.already_warmed("/tools/v1.43/rust/bin/cargo")
+    session._warmed.add("/tools/v1.43/rust/bin/cargo")
+
+    assert session.already_warmed("/tools/v1.43/rust/bin/cargo")
+    assert not session.already_warmed("cargo"), "the host cargo is a separate cache"
+
+
+def test_the_certora_feature_is_the_default_only_when_no_features_are_named():
+    named = Submission(manifest_path=Path("/w/C.toml"), features=("verify",))
+    bare = Submission(manifest_path=Path("/w/C.toml"))
+    assert named.resolved_features() == ("verify",)
+    assert bare.resolved_features() == ("certora",)
+
+
+def test_the_build_never_touches_rustup():
+    """``cargo certora-sbf`` registers a toolchain link around each build, which writes to
+    ``RUSTUP_HOME`` — read-only under confinement. Dropping ``--no-rustup`` fails the build for a
+    reason that names neither rustup nor the sandbox."""
+    assert "--no-rustup" in sbf_argv(manifest_path=Path("/w/Cargo.toml"))
+
+
+def test_the_build_is_told_where_the_platform_tools_are():
+    """The tool reads ``$CERTORA_PLATFORM_TOOLS_ROOT`` too, and the confined child never sees it:
+    the launcher scrubs the environment down to a chain-neutral passthrough list that does not carry
+    it. A deployment whose toolchains are not in the tool's default location — the container, whose
+    default location is under a world-writable ``$HOME`` — would otherwise grant one root read-only
+    and build against another."""
+    argv = sbf_argv(manifest_path=Path("/w/Cargo.toml"))
+    assert argv[argv.index("--platform-tools-root") + 1] == str(PLATFORM_TOOLS_ROOT)
+
+
+def test_features_reach_the_build_as_one_space_separated_value():
+    argv = sbf_argv(manifest_path=Path("/w/Cargo.toml"), features=("certora", "mocks"))
+    assert argv[argv.index("--features") + 1] == "certora mocks"
+
+
+def test_a_manifest_missing_what_the_prover_requires_is_rejected_here():
+    """The same key missing at submission time is a ``CertoraUserInputError`` from inside a run that
+    has already started."""
+    with pytest.raises(MalformedBuildManifest, match="executables"):
+        parse_build_manifest(json.dumps({"success": True, "project_directory": "/w", "sources": []}))
+
+
+def test_a_build_that_reports_failure_is_not_read_as_a_manifest():
+    with pytest.raises(MalformedBuildManifest, match="success"):
+        parse_build_manifest(
+            json.dumps(
+                {"success": False, "project_directory": "/w", "sources": [], "executables": "x.so"}
+            )
+        )
+
+
+def test_a_build_that_printed_no_json_says_so():
+    with pytest.raises(MalformedBuildManifest, match="did not print JSON"):
+        parse_build_manifest("error: could not compile `first_example`")
+
+
+def test_the_manifest_keeps_cargos_own_paths():
+    manifest = parse_build_manifest(
+        json.dumps(
+            {
+                "success": True,
+                "project_directory": "/w",
+                "sources": ["p/Cargo.toml", "p/src/**/*.rs"],
+                "executables": "target/sbf-solana-solana/release/p.so",
+                "solana_inlining": ["p/../envs/cvlr_inlining_core.txt"],
+            }
+        )
+    )
+    assert manifest.artifact == Path("/w/target/sbf-solana-solana/release/p.so")
+    assert manifest.solana_inlining == ("p/../envs/cvlr_inlining_core.txt",)
+
+
+@pytest.mark.asyncio
+async def test_the_generated_build_script_reruns_the_gates_command(tmp_path):
+    """The prover's build has to be the build that already passed, or the artifact it reports is not
+    the artifact the gate approved."""
+    session = CargoSession(workdir=tmp_path, sandbox=SandboxConfig(provider="none"))
+    script = await write_build_script(
+        session, manifest_path=tmp_path / "Cargo.toml", features=("certora",)
+    )
+    command = json.loads((script.parent / "confined_build.json").read_text())
+    assert command["argv"][1:] == sbf_argv(
+        manifest_path=tmp_path / "Cargo.toml", features=("certora",)
+    )
+    assert command["cwd"] == str(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_an_unconfined_session_produces_a_build_script_with_no_wrapper(tmp_path):
+    """The macOS development carve-out: ``provider="none"`` is a passthrough, and the script runs
+    the command directly rather than pretending to confine it."""
+    session = CargoSession(workdir=tmp_path, sandbox=SandboxConfig(provider="none"))
+    script = await write_build_script(session, manifest_path=tmp_path / "Cargo.toml")
+    assert json.loads((script.parent / "confined_build.json").read_text())["argv_prefix"] == []
+
+
+@pytest.mark.asyncio
+async def test_the_build_script_is_executable(tmp_path):
+    """``certoraParseBuildScript`` execs it directly rather than through an interpreter, so without
+    the execute bit the shebang means nothing and ``validate_exec_file`` rejects the conf."""
+    session = CargoSession(workdir=tmp_path, sandbox=SandboxConfig(provider="none"))
+    script = await write_build_script(session, manifest_path=tmp_path / "Cargo.toml")
+    assert script.stat().st_mode & stat.S_IXUSR
+
+
+def _unconfined(tmp_path: Path) -> CargoSession:
+    """No cargo and no network: `provider="none"` makes the build script a passthrough, so the
+    conf-writing half is reachable without a toolchain."""
+    return CargoSession(workdir=tmp_path, sandbox=SandboxConfig(provider="none"))
+
+
+@pytest.mark.asyncio
+async def test_a_tuned_conf_reaches_the_file_the_prover_is_handed(tmp_path):
+    """The settings an author may change, checked at the far end of the wire."""
+    edited = cvlr_conf.TunableConf(loop_iter=4, optimistic_loop=True)
+    conf_path = await write_submission(
+        _unconfined(tmp_path),
+        Submission(manifest_path=tmp_path / "Cargo.toml", settings=edited, stem="unit"),
+    )
+
+    written = json.loads(conf_path.read_text())
+    assert written["loop_iter"] == "4"
+    assert written["optimistic_loop"] is True
+
+
+@pytest.mark.asyncio
+async def test_the_written_conf_names_the_build_script_written_beside_it(tmp_path):
+    """`write_submission` writes two files and the conf points at the other one. Nothing else
+    checks that they agree, and a conf naming a script that is not there is rejected inside
+    `certoraRun`'s own validation — after the upload, in its vocabulary rather than ours."""
+    conf_path = await write_submission(
+        _unconfined(tmp_path), Submission(manifest_path=tmp_path / "Cargo.toml")
+    )
+
+    script = Path(json.loads(conf_path.read_text())["build_script"])
+    assert script.is_file()
+    assert script.stat().st_mode & stat.S_IXUSR, "certoraRun execs it directly"
+
+
+@pytest.mark.asyncio
+async def test_two_units_sharing_a_tree_write_separate_confs(tmp_path):
+    """One working tree per run, one conf per unit (`docs/single-working-tree.md` §2.1). Units are
+    prepared under a shared build permit and submitted concurrently, so a shared stem would have the
+    second unit's conf replace the first's while the first is still in flight — and the loop bound
+    one author raised would arrive on another's rules."""
+    session = _unconfined(tmp_path)
+    manifest = tmp_path / "Cargo.toml"
+    solvency = await write_submission(
+        session,
+        Submission(
+            manifest_path=manifest, settings=cvlr_conf.TunableConf(loop_iter=3), stem="solvency"
+        ),
+    )
+    access = await write_submission(
+        session,
+        Submission(
+            manifest_path=manifest, settings=cvlr_conf.TunableConf(loop_iter=7), stem="access"
+        ),
+    )
+
+    assert solvency != access
+    assert json.loads(solvency.read_text())["loop_iter"] == "3"
+    assert json.loads(access.read_text())["loop_iter"] == "7"
+
+
+def test_a_failed_compile_carries_the_compilers_own_words():
+    """The consumer is an authoring agent, and rustc's human-format output — span, note, suggestion
+    — is the most actionable form it can be given."""
+    failed = CompileFailed(diagnostics="error[E0599]: no method named `cvlr_assert`", exit_code=101)
+    assert not isinstance(failed, Built)
+    assert "E0599" in failed.diagnostics
