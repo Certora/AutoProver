@@ -85,6 +85,16 @@ be stale; the tool is authoritative.
    moved, or a total to stay constant across the call, passes having checked nothing. Those last two
    kinds are the ones to hunt for and name.
 
+   **That holds with no munge at all, and it is the case nothing will list for you.** A rule that
+   drives a handler through its real `invoke` or `invoke_signed` reasons under that same model. So
+   for every rule asserting over a value a CPI changes — a token account's balance, a mint's supply,
+   lamports — find what moves it: a stand-in whose body calls an effect-preserving model, such as
+   `cvlr_solana::token::spl_token_transfer`, `spl_mint_to` or `spl_burn`. If nothing does, the rule
+   is hollow whatever its verdict, and a green one is the dangerous half: a conservation, "backing is
+   never spent" or "no holder is diluted" assertion holds because nothing moved. Name the rule and
+   require the stand-in before you accept it. A rule asserting only over the program's recorded
+   state, or over the instruction the program built as a recording stand-in captured it, needs none.
+
    An **extraction** is the one munge that is behaviour-preserving by construction — a function
    split into a feature-gated pair, with the deployed half kept verbatim — so it does not hollow out
    a rule the way the two above can. What it does instead is narrow one: it manufactures a boundary
