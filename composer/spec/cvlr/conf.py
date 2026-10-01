@@ -15,12 +15,12 @@ every other unit. The run names a per-unit file, composed from the starting laye
 own. Naming any value stops the prover from also applying the package's own declaration.
 """
 
-import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from composer.cargo.features import CargoFeature
 from composer.prover.conf import Conf, InheritRules, RuleSelection, dump_conf, safe_msg
+from composer.spec.util import string_hash
 
 #: Conf keys no author or run changes.
 #:
@@ -73,8 +73,7 @@ def conf_history(tunable: TunableConf) -> tuple[str, ...]:
     under one conf does not apply to another. The token hashes the rendered conf rather than the
     ``tunable``, so a change to the fixed part invalidates a stamp too.
     """
-    digest = hashlib.sha256(dump_conf(tunable_conf(tunable)).encode()).hexdigest()[:16]
-    return (f"conf:{digest}",)
+    return (f"conf:{string_hash(dump_conf(tunable_conf(tunable)))}",)
 
 
 #: The platform-tools release every build uses. The prover does not apply ``cargo_tools_version``

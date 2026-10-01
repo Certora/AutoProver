@@ -539,6 +539,15 @@ def local_dependencies(workspace: Workspace, package: CratePackage) -> tuple[Cra
     )
 
 
+def _certora_feature(package: CratePackage, reference: ChainReference) -> list[str]:
+    """What ``package``'s ``certora`` feature turns on within ``package`` itself: the CVLR
+    crates, and ``no-entrypoint`` when the package declares it."""
+    enables = [f"dep:{c.name}" for c in reference.scaffold_crates()]
+    if NO_ENTRYPOINT_FEATURE in package.features:
+        enables.insert(0, NO_ENTRYPOINT_FEATURE)
+    return enables
+
+
 def _plan_feature_forwarding(
     workspace: Workspace, package: CratePackage, reference: ChainReference, plan: _PlanBuilder
 ) -> None:
@@ -571,14 +580,10 @@ def _plan_feature_forwarding(
         if DEFAULT_FEATURE in manifest.features:
             plan.add_satisfied(f"{dep.name} already declares a `{DEFAULT_FEATURE}` feature")
             continue
-        wanted = reference.scaffold_crates()
-        missing = [c for c in wanted if c.name not in manifest.dependencies]
-        enables = [f"dep:{c.name}" for c in wanted]
-        if NO_ENTRYPOINT_FEATURE in dep.features:
-            enables.insert(0, NO_ENTRYPOINT_FEATURE)
+        missing = [c for c in reference.scaffold_crates() if c.name not in manifest.dependencies]
         plan.add_manifest_edit(
             path,
-            AddEntries(("features",), ((DEFAULT_FEATURE, enables),)),
+            AddEntries(("features",), ((DEFAULT_FEATURE, _certora_feature(dep, reference)),)),
             f"so a verification-only edit inside {dep.name} can be gated — the program's "
             f"`{DEFAULT_FEATURE}` forwards to it",
         )
@@ -663,12 +668,9 @@ def _plan_package_manifest(
                 )
             )
     else:
-        enables = [f"dep:{c.name}" for c in wanted]
-        if NO_ENTRYPOINT_FEATURE in package.features:
-            enables.insert(0, NO_ENTRYPOINT_FEATURE)
-        # Forwarded so an edit inside a local dependency has a feature to gate on.
-        # See :func:`_plan_feature_forwarding` for why this is the shared feature.
-        enables += [
+        # Cargo features don't cross crate boundaries: the program's `certora` turns on a
+        # library's only by naming it here. See :func:`_plan_feature_forwarding`.
+        enables = _certora_feature(package, reference) + [
             f"{dep.name}/{DEFAULT_FEATURE}" for dep in local_dependencies(workspace, package)
         ]
         plan.add_manifest_edit(
