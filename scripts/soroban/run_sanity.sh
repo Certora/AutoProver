@@ -6,9 +6,13 @@ MY_DIR=$(realpath $(dirname $0))
 
 MY_TMP_DIR=$(mktemp -d)
 
-cp -r $1 $MY_TMP_DIR/`basename $1`
+PROJECT_TMP=$MY_TMP_DIR/`basename $1`
 
-. $MY_DIR/process.sh $MY_TMP_DIR/`basename $1` $2
+cp -r $1 $PROJECT_TMP
+
+shift; shift
+
+. $MY_DIR/process.sh -c $CVLR_DIR "$@" $PROJECT_TMP 
 
 cargo update
 

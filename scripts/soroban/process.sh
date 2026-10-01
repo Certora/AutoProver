@@ -1,6 +1,30 @@
 #!/bin/bash
 
-CVLR_DIR=$2
+UPDATE=""
+while getopts ":c:ea" opt; do
+  case "${opt}" in
+    e)
+      UPDATE="ethnum"
+      ;;
+    a)
+      UPDATE="all"
+      ;;
+    c)
+      CVLR_DIR="${OPTARG}"
+      echo Using $CVLR_DIR	
+      ;;
+    \?)
+      echo "Error: Invalid option ${opt}" >&2
+      exit 1
+      ;;
+    :)
+      echo "Error: Option ${opt} requires an argument." >&2
+      exit 1
+      ;;
+  esac
+done
+
+shift $((OPTIND -1))
 
 MY_DIR=$(realpath $(dirname $0))
 
@@ -15,12 +39,18 @@ fi
 echo Using $DIR
 cd $DIR
 
+if [[ "$UPDATE" == "all" ]]; then
+    cargo update
+fi
+
 python $MY_DIR/soroban_sdk_versions.py $DIR --json > $SDK_USAGE_JSON
 
 export SDK_VERSION=$(jq -r '.["latest_version"]' $SDK_USAGE_JSON)
 echo using SDK $SDK_VERSION
 
-cargo update -p ethnum
+if [[ "$UPDATE" == "ethnum" ]]; then
+    cargo update -p ethnum
+fi
 
 SDKS=$(jq '.["lock_versions"] | length' $SDK_USAGE_JSON)
 if [[ "$SDKS" -gt 1 ]]; then
