@@ -46,11 +46,11 @@ from graphcore.utils import ainvoke
 from prover_output_utility import cloud_server_for_env
 
 from composer.prover.analysis import analyze_cex_raw
-from composer.certora_env import ProverApp
 from composer.prover.cloud import CloudJobError, cloud_results
 from composer.prover.ptypes import RuleResult, RulePath, StatusCodes
-from composer.prover.results import read_and_format_run_result
+from composer.prover.results import external_functions, read_and_format_run_result
 from composer.templates.loader import load_jinja_template
+from composer.certora_env import ProverApp
 from composer.prover.prover_protocol import ProverResult
 
 _logger = logging.getLogger(__name__)
@@ -139,6 +139,10 @@ class ProverReport:
     result_str: str
     link: str
     certora_run_stdout: str
+    #: Functions the Prover treated as external, from the job's alert report
+    #: (:func:`composer.prover.results.external_functions`). Empty when there were none or the
+    #: report was not available; the verdicts never say which.
+    external_functions: tuple[str, ...] = ()
 
     @property
     def rule_status(self) -> dict[str, bool]:
@@ -374,6 +378,37 @@ class TrivialFanoutCexHandler(CexHandler):
         if failed_count > self.summarization_threshold:
             return await _report_to_todo_list(self.llm, report)
         return report
+
+
+class UnanalyzedCexHandler(CexHandler):
+    """Renders the result set as-is. No LLM, no analysis, no summarization.
+
+    For runs whose consumer is a *program* rather than an agent: a deterministic gate that asserts
+    verdicts against a checked-in expected file, a plumbing test, a CLI mode that only wants the
+    outcomes. ``run_prover``'s handler hook is otherwise the one place an LLM is unavoidable, and
+    those callers have nothing for it to do.
+
+    It renders the counterexample dump verbatim rather than reusing ``flat_rule_feedback.j2``: that
+    template says "analyzing the counterexample yielded no results" when handed no explanation,
+    which is a false account of a run that never asked.
+    """
+
+    @override
+    async def analyze(
+        self,
+        all_results: list[RuleResult],
+        tool_call_id: str,
+        callbacks: CexProgressCallbacks,
+        report_dir: Path,
+    ) -> str:
+        lines: list[str] = []
+        for r in all_results:
+            lines.append(f"{r.name}: {r.status}")
+            for message in r.error_messages or ():
+                lines.append(f"  {message}")
+            if r.cex_dump:
+                lines.append(f"  {r.cex_dump}")
+        return "\n".join(lines)
 
 
 # Compatibility alias for the legacy name. New code should reach for
@@ -707,6 +742,7 @@ async def run_prover(
 
             if isinstance(parsed, str):
                 return f"Failed to parse prover results: {parsed}"
+            externals = external_functions(emv_path)
 
             # 9. Notify runtime + prover_result callbacks
             if runtime_ms is not None:
@@ -733,7 +769,16 @@ async def run_prover(
                     diagnoses=[],
                 )
     except CloudJobError as exc:
-        return f"Prover cloud job did not produce results (status {exc.status.value})."
+        # The link is the whole diagnosis. A job that fails server-side leaves nothing on disk —
+        # no report, no treeView, and certoraRun's own debug log stops after collecting sources —
+        # so a status with no link tells the reader only that something went wrong somewhere they
+        # cannot look. An authoring agent given that will assume its own draft is at fault and
+        # simplify until the harness is a tautology, which fails identically; a human given it has
+        # to reproduce the run just to obtain a URL the failure already had in hand.
+        return (
+            f"Prover cloud job did not produce results (status {exc.status.value}). "
+            f"The job and its failure output are at {exc.link}"
+        )
 
     prover_report: dict[str, bool] = {}
     for i in parsed.values():
@@ -748,6 +793,7 @@ async def run_prover(
 
     return ProverReport(
         raw_rule_status=raw_rule_results,
+        external_functions=externals,
         result_str=result_str,
         link=run_result["link"],
         certora_run_stdout=stdout,

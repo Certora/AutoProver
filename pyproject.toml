@@ -23,7 +23,7 @@ authors = [
 ]
 
 dependencies = [
-    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@85be3db958274752faf2356690db8ba61f8279d0",
+    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@9f4e9fca49e370dace2c9cdfdb58aa87d59f1a30",
     "aiohttp>=3.13",
     "attrs>=26.1",
     "Jinja2>=3.1",
@@ -174,6 +174,7 @@ explicit = true
 [tool.pytest.ini_options]
 markers = [
     "expensive: hits the real prover / network — deselect with -m 'not expensive'",
+    "measurement: produces a one-off number rather than guarding an invariant; also `expensive`, and excluded from sweeping selections so it is paid for only when someone asks for it by name",
     "fuzz: fuzz tests",
     "wire: Rust/Python wire-protocol round trips — build a cargo binary at test time"
 ]
@@ -188,6 +189,8 @@ console-autoprove = "composer.cli.console_autoprove:main"
 tui-autoprove = "composer.cli.tui_autoprove:main"
 console-foundry = "composer.cli.console_foundry:main"
 tui-foundry = "composer.cli.tui_foundry:main"
+console-solana = "composer.cli.console_solana:main"
+tui-solana = "composer.cli.tui_solana:main"
 # console-crucible / tui-crucible land in PR3, together with the `composer.crucible_launch`
 # module they name — an entry point pointing at a module that doesn't exist installs happily
 # and only fails, as an ImportError, when someone runs it.

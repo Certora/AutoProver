@@ -56,9 +56,6 @@
 #[type(r0:ptr_external)]
 ^([^:]+::)*CVT_nondet_pointer_usize$
 
-#[type((*i32)(r1+0):num)]
-^solana_program::account_info::AccountInfo::realloc$
-
 ;; Result<Pubkey, PubkeyError>
 #[type((*i8)(r1+0):num)]
 #[type((*i64)(r1+1):num)]

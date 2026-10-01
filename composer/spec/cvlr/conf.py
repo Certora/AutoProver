@@ -43,6 +43,18 @@ BASE_CONF: Conf = {
 
 
 @dataclass(frozen=True)
+class OptimisticLoop:
+    """``optimistic_loop`` switched on, with the author's account of why.
+
+    The account travels with the setting because the setting is unsound: every verdict in the unit
+    is conditional on it, and a reviewer can weigh it only against the argument for it. The account
+    is not part of the conf, so rewording it does not invalidate a stamp.
+    """
+
+    why: str
+
+
+@dataclass(frozen=True)
 class TunableConf:
     """The conf settings the author may change. The defaults are where every unit starts."""
 
@@ -54,7 +66,7 @@ class TunableConf:
     #: count first, then summarize or munge the code that holds the loop, then raise ``loop_iter``,
     #: and finally turn it on only for a trip count that no bound discharges. Once it is on, every
     #: rule in the submission is verified under that assumption.
-    optimistic_loop: bool = False
+    optimistic_loop: OptimisticLoop | None = None
 
 
 def tunable_conf(tunable: TunableConf) -> Conf:
@@ -62,7 +74,7 @@ def tunable_conf(tunable: TunableConf) -> Conf:
     return {
         **BASE_CONF,
         "loop_iter": str(tunable.loop_iter),
-        "optimistic_loop": tunable.optimistic_loop,
+        "optimistic_loop": tunable.optimistic_loop is not None,
     }
 
 
@@ -90,6 +102,25 @@ DEFAULT_FEATURE = CargoFeature("certora")
 
 
 @dataclass(frozen=True)
+class CheckVerdicts:
+    """An ordinary submission: every rule's verdict, with vacuity checked."""
+
+
+@dataclass(frozen=True)
+class CollectUnsatCore:
+    """A diagnostic submission for a rule reported vacuous: the vacuity check off, unsat cores on.
+
+    With ``rule_sanity`` off, a vacuous rule verifies, and ``coverage_info`` makes the prover write
+    the core that proof rests on (``Reports/UnsatCoreTAC-<rule>-<n>.txt``). ``basic`` rather than the
+    ``advanced`` CVL's sanity reruns use: on a Solana rule ``basic`` took the same 25s as the
+    ordinary run, and ``advanced`` had not finished after 25 minutes.
+    """
+
+
+type ConfPurpose = CheckVerdicts | CollectUnsatCore
+
+
+@dataclass(frozen=True)
 class RunOverlay:
     """What one submission adds to the conf its :class:`TunableConf` describes.
 
@@ -104,6 +135,7 @@ class RunOverlay:
     #: Empty leaves the key unset, so the package's ``[package.metadata.certora]`` declaration
     #: still applies.
     summaries: tuple[Path, ...] = ()
+    purpose: ConfPurpose = CheckVerdicts()
 
 
 def solana_conf(tunable: TunableConf, run: RunOverlay) -> Conf:
@@ -115,4 +147,10 @@ def solana_conf(tunable: TunableConf, run: RunOverlay) -> Conf:
     }
     if run.summaries:
         conf["solana_summaries"] = [str(s) for s in run.summaries]
+    match run.purpose:
+        case CheckVerdicts():
+            pass
+        case CollectUnsatCore():
+            conf["rule_sanity"] = "none"
+            conf["coverage_info"] = "basic"
     return run.rules.apply_to(conf)
