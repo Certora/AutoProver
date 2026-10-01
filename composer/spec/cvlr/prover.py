@@ -92,19 +92,12 @@ type CvlrOutcome = BuildRejected | SubmissionFailed | Checked
 class Submission:
     """One submission, apart from the session it runs in.
 
-    ``manifest_path`` is the program's ``Cargo.toml``. ``cargo certora-sbf``
-    builds one package's library, not the workspace.
-
-    ``target_directory`` is the workspace cargo target directory
-    (:attr:`~composer.cargo.metadata.Workspace.target_directory`). The build
-    writes ``<target_directory>/certora/<stem>``.
-
-    Both paths are under the session's workdir. That is the only tree the build
-    may write.
+    ``manifest_path`` is the program's ``Cargo.toml``, under the session's workdir, which is the
+    only tree the build may write. ``cargo certora-sbf`` builds one package's library, not the
+    workspace.
     """
 
     manifest_path: Path
-    target_directory: Path
     settings: TunableConf = TunableConf()
     rules: RuleSelection = dataclasses.field(default_factory=InheritRules)
     msg: str = ""
@@ -123,7 +116,6 @@ def _sbf_build(session: CargoSession, submission: Submission) -> SbfBuild:
     """The ``SbfBuild`` used for the pre-submission build and the prover's rerun."""
     return SbfBuild(
         manifest_path=session.workdir / submission.manifest_path,
-        target_dir=session.workdir / submission.target_directory / "certora" / submission.stem,
         features=submission.features,
         tools_version=PLATFORM_TOOLS_VERSION,
     )
@@ -175,13 +167,14 @@ async def prepare_submission(
 ) -> BuildRejected | Prepared:
     """Build the program, harness included, then write the conf that checks it.
 
-    Split from :func:`run_submission` so a caller that shares one tree can run
-    this part one submission at a time, and run the cloud part of several
-    submissions at once. :func:`run_submission` rebuilds from the sources as of
-    that call, into this submission's own target directory, so it does not
-    replace another submission's ``.so``. Leave the sources unchanged until
-    :meth:`~composer.prover.core.ProverCallbacks.on_prover_link` fires, which
-    is when the prover has uploaded them.
+    Split from :func:`run_submission` so a caller that shares one tree can wait
+    on several submissions' cloud jobs at once. The two halves are not
+    independent, though. :func:`run_submission` reruns this build, from the tree
+    as it is then and into the target directory every build of the crate shares,
+    and uploads what it built. So from the start of this call until
+    :meth:`~composer.prover.core.ProverCallbacks.on_prover_link` fires, nothing
+    else may build the crate or change the tree. If ``run_submission`` returns
+    first, the CLI failed before uploading, and the tree is free again.
     """
     build = await build_for_submission(session, submission, timeout_s=timeout_s)
     if not isinstance(build.verdict, Built):

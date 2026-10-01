@@ -9,10 +9,14 @@ runs the build and writes a script that reruns the same command, confined the
 same way.
 
 The prover reruns the build. A saved manifest goes stale when sources move,
-and the prover can then upload the wrong sources or a missing artifact. The
-rerun compiles nothing new when that target directory already holds the
-build. Each :class:`SbfBuild` has its own target directory, so two builds of
-one crate with different features do not replace each other's ``.so``.
+and the prover can then upload the wrong sources or a missing artifact.
+
+Every build of a crate uses the workspace's own target directory, so the
+dependencies are compiled once for all of them. That makes the ``.so`` shared
+too: a build with other features replaces it. A caller that runs several
+builds of one crate must not start another until the prover's rerun of the
+last one has uploaded its artifact. See
+:func:`composer.spec.cvlr.prover.prepare_submission`.
 
 The conf names a build script. On that path, ``set_rust_build_directory``
 copies the Rust sources into ``.certora_sources``. With ``files``, it copies
@@ -171,44 +175,25 @@ class SbfRun:
 
 @dataclass(frozen=True)
 class SbfBuild:
-    """One ``cargo certora-sbf`` build. The gate runs it, and the build script reruns it.
-
-    ``target_dir`` is absolute and under the workspace root. The tool reports
-    the artifact relative to that root. A relative target directory is resolved
-    against the working directory by ``cargo metadata`` and against the package
-    directory by the build, so the reported path is not the file that was built.
-    """
+    """One ``cargo certora-sbf`` build. The gate runs it, and the build script reruns it."""
 
     manifest_path: Path
-    target_dir: Path
     features: tuple[str, ...] = ()
     tools_version: str | None = None
 
-    def __post_init__(self) -> None:
-        if not self.target_dir.is_absolute():
-            raise ValueError(f"target_dir must be absolute, not {self.target_dir}")
-
     def argv(self) -> list[str]:
         """The full command line, program included.
-
-        The target directory is ``CARGO_TARGET_DIR`` on the argv.
-        ``cargo certora-sbf`` has no flag for it, and it reads the artifact
-        path from its own ``cargo metadata`` call, which ``--cargo-args`` does
-        not reach. The launcher keeps only
-        :data:`~composer.sandbox.recipes.DEFAULT_ENV_PASSTHROUGH`, so the same
-        variable in the child's environment is dropped.
 
         ``--no-rustup`` is required. Without it the tool registers a
         ``certora-solana`` rustup toolchain and writes ``RUSTUP_HOME``, which
         is read-only under confinement.
 
-        ``--platform-tools-root`` is on the argv. The launcher would drop
+        ``--platform-tools-root`` is on the argv. The launcher keeps only
+        :data:`~composer.sandbox.recipes.DEFAULT_ENV_PASSTHROUGH`, so it would drop
         ``$CERTORA_PLATFORM_TOOLS_ROOT``. The build and the build script grant
         that root read-only.
         """
         args = [
-            "env",
-            f"CARGO_TARGET_DIR={self.target_dir}",
             "cargo",
             SBF_SUBCOMMAND,
             "--json",
@@ -322,7 +307,7 @@ async def write_build_script(
     (``docs/command-sandbox.md`` §4). If the provider cannot confine, that
     call raises before anything is written.
 
-    The command file names the workdir, the target directory, and the
+    The command file names the workdir, the manifest, and the
     confinement grants by absolute path. The script runs only in the tree it
     was written for.
     """

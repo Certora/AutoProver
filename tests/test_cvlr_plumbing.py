@@ -498,12 +498,12 @@ def test_warming_is_tracked_per_binary_not_per_session(tmp_path):
 
 
 def test_the_certora_feature_is_the_default():
-    assert Submission(manifest_path=Path("/w/C.toml"), target_directory=Path("/w/target")).features == ("certora",)
+    assert Submission(manifest_path=Path("/w/C.toml")).features == ("certora",)
 
 
 def _build(**overrides) -> SbfBuild:
     return replace(
-        SbfBuild(manifest_path=Path("/w/Cargo.toml"), target_dir=Path("/w/target/certora/unit")),
+        SbfBuild(manifest_path=Path("/w/Cargo.toml")),
         **overrides,
     )
 
@@ -659,7 +659,6 @@ async def test_a_tuned_conf_reaches_the_file_the_prover_is_handed(tmp_path):
         _unconfined(tmp_path),
         Submission(
             manifest_path=tmp_path / "Cargo.toml",
-            target_directory=tmp_path / "target",
             settings=edited,
             stem="unit",
         ),
@@ -678,7 +677,7 @@ async def test_the_written_conf_names_the_build_script_written_beside_it(tmp_pat
     """
     conf_path = await write_submission(
         _unconfined(tmp_path),
-        Submission(manifest_path=tmp_path / "Cargo.toml", target_directory=tmp_path / "target"),
+        Submission(manifest_path=tmp_path / "Cargo.toml"),
     )
 
     named = Path(json.loads(conf_path.read_text())["build_script"])
@@ -701,7 +700,6 @@ async def test_two_units_sharing_a_tree_write_separate_confs_and_build_scripts(t
         session,
         Submission(
             manifest_path=manifest,
-            target_directory=tmp_path / "target",
             settings=cvlr_conf.TunableConf(loop_iter=3),
             stem="solvency",
             features=("certora", "solvency"),
@@ -711,7 +709,6 @@ async def test_two_units_sharing_a_tree_write_separate_confs_and_build_scripts(t
         session,
         Submission(
             manifest_path=manifest,
-            target_directory=tmp_path / "target",
             settings=cvlr_conf.TunableConf(loop_iter=7),
             stem="access",
             features=("certora", "access"),
@@ -730,15 +727,6 @@ async def test_two_units_sharing_a_tree_write_separate_confs_and_build_scripts(t
 
     assert features(confs["solvency"]) == "certora solvency"
     assert features(confs["access"]) == "certora access"
-
-    # Separate target directories. One directory would let each rerun replace the other's `.so`.
-    target_dirs = {
-        next(a for a in argv(conf) if a.startswith("CARGO_TARGET_DIR=")) for conf in confs.values()
-    }
-    assert target_dirs == {
-        f"CARGO_TARGET_DIR={tmp_path / 'target' / 'certora' / 'solvency'}",
-        f"CARGO_TARGET_DIR={tmp_path / 'target' / 'certora' / 'access'}",
-    }
 
 
 def _stub_command(script: Path) -> None:
@@ -784,13 +772,6 @@ async def test_a_build_script_moved_with_its_tree_refuses_to_build_the_original(
     assert ran.returncode != 0
     assert ran.stdout == ""
     assert "Regenerate it here" in ran.stderr
-
-
-def test_a_relative_target_directory_is_refused():
-    """``cargo certora-sbf`` resolves a relative target directory against the working
-    directory and against the package directory."""
-    with pytest.raises(ValueError):
-        SbfBuild(manifest_path=Path("/w/Cargo.toml"), target_dir=Path("target"))
 
 
 def test_a_failed_compile_carries_the_compilers_own_words():
