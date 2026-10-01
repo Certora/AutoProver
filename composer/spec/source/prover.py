@@ -50,7 +50,7 @@ from composer.diagnostics.stream import (
 )
 from composer.authoring.state import make_validation_stamper, spec_digest
 from composer.spec.cvl_generation import CVLGenerationState
-from composer.diagnostics.budget import budget_pressure, exhausted_constraint, raise_if_budget_exhausted
+from composer.diagnostics.budget import budget_pressure, exhausted_constraint, raise_budget_exceeded
 from composer.diagnostics.timing import RunSummary, get_run_summary
 from graphcore.graph import tool_state_update
 from composer.spec.util import temp_certora_file
@@ -482,7 +482,7 @@ class _SpecCallbacks(ProverEventCallbacks):
                 f"budget exhausted while polling tool_call={self._tool_call_id} "
                 f"sort={sort} elapsed={elapsed:.1f}s"
             )
-        raise_if_budget_exhausted()
+            raise_budget_exceeded(sort)
         await super().on_cloud_poll(
             status, message
         )
