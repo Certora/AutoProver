@@ -226,7 +226,7 @@ rides the first PR that uses it:
 | `CvlrSources.roots()` removed, along with the CVLR source mount | `crates.py` | **master now**, with the fix above. Nothing on master calls it either |
 | `OptimisticLoop` (the author's reason for switching it on), and the `CollectUnsatCore` purpose | `conf.py` | **P3b**: `state` and `verify` read them |
 | `SummaryDirective`, `TuningFiles`, and the rest of the tuning layer | `tuning.py` | **P3b**, as planned |
-| Starting-directive additions: Anchor account validation, `system_program::transfer`, `try_borrow_lamports`, and `realloc` moved from summarized to inlined | `envs/*.txt`, `tests/test_cvlr_env_paths.py` | **P2**: the first PR that submits a build, where a directive changes a verdict |
+| Starting-directive additions: Anchor account validation, `system_program::transfer`, `try_borrow_lamports`, and `realloc` moved from summarized to inlined | `envs/*.txt`, `tests/test_cvlr_env_paths.py` | **Held** on the branch, and submitted together later (see *Deferred: the starting tuning directives*) |
 | `ProgramModel`, `models` / `companions` replacing `specializations`, and `withholding` (`67f2215e`, `eb18bc80`) | `reference.py`, `tests/test_cvlr_reference.py` | **P7**: `entry.py`'s `--withhold-crate` is the caller |
 | The build, conf and submission cases | `tests/test_cvlr_plumbing.py` | **P2** / **P3b**, as planned |
 
@@ -265,6 +265,10 @@ Review also took `UnanalyzedCexHandler` out. `run_submission` now requires its c
 counterexample handler instead of defaulting to one that skips analysis. The end-to-end test,
 which reads only verdicts, passes a local stub. The handler's first production caller is P3b's
 unsat-core diagnostic run, so it lands there. P2 no longer changes `composer/prover/`.
+
+The tuning-directive additions came out as well. Nothing in P2 reads the starting tuning files: they
+reach a build only through the scaffold, and nothing in P2 scaffolds. They are held instead (see
+*Deferred: the starting tuning directives*).
 
 Marked `expensive` and skipping, named, when there is no toolchain — so the routine gate still
 passes on a machine without one.
@@ -487,6 +491,33 @@ unsat-core template fragments split out of `sanity_tool_prompt.j2` (the vacuity 
 **P3b**); and `make_run_link_fetcher` and the give-up reason (**P7**).
 
 ---
+
+## Deferred: the starting tuning directives
+
+The starting inlining and summary files (`composer/spec/cvlr/envs/`) landed with P1. The branch
+has since changed them four times: Anchor's account validation, Anchor's
+`system_program::transfer`, and `AccountInfo::try_borrow_lamports` are now inlined, and
+`AccountInfo::realloc` is inlined instead of summarized. More changes are certain to follow,
+because each real target the branch is pointed at turns up another call the Prover's model handles
+badly.
+
+**They are held on the branch and submitted together, in one PR, at a time of our choosing.** No
+slice needs them. A target is verified with whatever starting directives master has, and a missing
+directive costs a precise verdict, not a working backend. Submitting them one PR per discovery
+would give a reviewer a stream of one-line regex changes, each with its own story. One PR that
+covers the lot can show the measurement for all of them together.
+
+That measurement exists for two of the four so far. `tests/test_cvlr_dropped_writes.py`, with
+`tests/data/dropped_writes_probe.rs`, scaffolds a probe program, so it reads the starting files.
+It submits canary rules that verify only if the model drops a write the real program makes. That
+covers `realloc` and `system_program::transfer`. It is the PR's usage, and it travels with it,
+together with `rules.py` if P3b has not landed it by then, since the test reads `rule_names`. The
+other two directives have no test on the branch, only their commit messages (`efd870b5`,
+`e070d019`). Each wants a canary before it is submitted, or the PR description has to argue for it
+instead.
+
+While they are held, `tests/test_cvlr_env_paths.py`'s directive counts on the branch differ from
+master's. They travel with the directives.
 
 ## Deferred: pinned runs
 
@@ -763,7 +794,7 @@ already local to the functions that need them.
 | S4 *(closed)* | nothing: the give-up reason goes to P7, `job_input` to P3b, the fetcher to P7 |
 | P1 *(merged)* | `composer/cargo/{__init__,features,manifest,metadata,session}.py` `composer/spec/cvlr/{__init__,conf,crates,env_paths,forks,preflight,reference,scaffold,tuning}.py` `composer/spec/cvlr/envs/` `composer/spec/cvlr/harness_files/` `composer/prover/conf.py` `composer/spec/source/{prover,author,artifacts}.py` *(hunks)* `composer/spec/natspec/task_description.py` *(hunks)* `tests/test_cvlr_{env_paths,forks,plumbing,preflight,reference,scaffold}.py` `tests/test_prover_conf.py` `tests/test_rules_striping.py` *(hunks)* `tests/test_stuck_rule_warnings.py` *(hunks)* `tests/data/vault_sbf_symbols.txt` `pyproject.toml` `uv.lock` |
 | P1 follow-up, to master now | `composer/spec/cvlr/preflight.py` *(hunk: `check(manifest_dir=…)`)* `composer/spec/cvlr/crates.py` *(hunk: drop `roots()`)* — plus the regression test, still to write |
-| P2 | `composer/cargo/sbf.py` `composer/spec/cvlr/prover.py` `composer/spec/cvlr/envs/` *(hunks: the directives added since P1)* `tests/test_cvlr_env_paths.py` *(hunk: the directive counts)* `tests/test_cvlr_end_to_end.py` `tests/test_cvlr_plumbing.py` *(split: `sbf_argv`, the build script, `write_submission`)* |
+| P2 | `composer/cargo/sbf.py` `composer/spec/cvlr/prover.py` `tests/test_cvlr_end_to_end.py` `tests/test_cvlr_plumbing.py` *(split: `sbf_argv`, the build script, `write_submission`)* |
 | P3a | `composer/spec/cvlr/{rust_source,munge,tree}.py` `graphcore` `pyproject.toml` `tests/test_cvlr_munge.py` *(split: the source half, less the three `CvlrFormalizer` cases)* `tests/test_cvlr_module_redirect.py` `tests/test_cvlr_import_swap.py` `tests/test_cvlr_anchor_reach.py` `tests/data/anchor_reach_probe.rs` |
 | P3b | `composer/spec/cvlr/{state,harness,verify,rules}.py` `tests/test_cvlr_rules.py` `composer/prover/core.py` *(hunk: `UnanalyzedCexHandler`)* `composer/spec/cvlr/tuning.py` *(split: `SummaryDirective`, `TuningFiles`, appended to what P1 landed)* `composer/spec/cvlr/conf.py` *(hunks: `OptimisticLoop`, `CollectUnsatCore`)* `composer/spec/source/report_prover.py` *(hunks: `job_input`, `fetch_unsat_cores`)* `composer/cargo/symbols.py` `tests/test_cvlr_symbols.py` `tests/test_cvlr_tuning.py` `tests/test_cvlr_tree.py` `tests/test_cvlr_plumbing.py` *(split: `_CaptureCallbacks`, `_RunAccounting`)* |
 | P4 | `composer/spec/cvlr/{anchor_surface,example,guidance}.py` `tests/test_cvlr_anchor_surface.py` `tests/test_cvlr_worked_example.py` |
