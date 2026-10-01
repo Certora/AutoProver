@@ -17,7 +17,10 @@ with a fix in flight, which makes it the only entry in this group with a known l
 nothing today and blocks a change we wanted**: two shipped flags that defeat each other, measured
 rather than argued, and named by a TODO in the prover's own source. **P9 blocks a whole shape of
 property** — anything that asserts a handler *succeeds* — and it is the uncomfortable one, because
-the mechanism it points at is the fork P1 says we depend on.
+the mechanism it points at is the fork P1 says we depend on. **P10 makes true rules vacuous**
+whenever the compiler happens to emit a loop after the rule's last assertion, which every harness
+invites by dropping its nondet account array; worked around in the author prompt, and possibly the
+real cause of P9.
 
 **Group U — `prover_output_utility`.** The library the report stack reads verdicts through. One
 entry, and unlike the others it was corrupting our own output rather than merely obstructing us;
@@ -48,6 +51,7 @@ the write-up gives the line number rather than the name.
 | [P7](#p7) | A checked `i128` multiply is rejected outright — `__muloti4` is not modelled | **major** — fix in flight (CERT-10103) |
 | [P8](#p8) | `-solanaTACSoundSignedMath` disables most of `-solanaTACMathInt`; together they turn a 7-minute green run into a 2-hour timeout | **major** — blocks adopting the flag (CERT-10061) |
 | [P9](#p9) | Binding a handler's `Result` makes the rule vacuous, so an *acceptance* property is unstatable | **major** |
+| [P10](#p10) | The vacuity check's `satisfy` sits after the rule's drop glue, so a loop there makes a verified rule `SANITY_FAILED` | **major**, worked around |
 | [U1](#u1) | `extract_job_id_from_url` cannot parse a Solana Prover job link | **major**, worked around |
 | [T1](#t1) | Tuning files are spelled for pre-2.2 `solana-program` paths | major |
 | [T2](#t2) | A canonical tuning file names one specific on-chain program | hygiene |
@@ -769,6 +773,55 @@ construction rather than unconfirmed. That is why a `seeds` constraint's verdict
 in either direction: it compares the account against an address the constraint derives for itself.
 The author and judge prompts name it as a skip reason (`ae782f71`). Lifting it means modelling the
 derivation, which is a question for the Prover rather than for this backend.
+
+---
+
+## P10
+
+### The vacuity check's `satisfy` sits after the rule's drop glue, so a loop there makes a verified rule `SANITY_FAILED`
+
+Found 2026-09-30 on a native `solana-program` SPL-token vault, by comparing the two programs the
+Prover builds for one rule with `ctac`. Three jobs reproduce it; each has the rule's own program
+(`SbfToTac-<rule>.tac`) and its vacuity check's (`SbfToTac-<rule>-rule_not_vacuous_cvlr.tac`) in its
+outputs.
+
+**What happens.** `rule_not_vacuous_cvlr` is compiled as a separate program whose `satisfy` is at the
+very end of the rule function, after the function's locals are dropped. Every harness holds its
+accounts as `Box::new(cvlr_deserialize_nondet_accounts())`, a 16-element `AccountInfo` array, and
+dropping it is a loop: a 48-byte stride to 768, decrementing each account's `Rc`s. Under the
+conf's `loop_iter: 2` and `optimistic_loop: false`, the third iteration is `assert false
+"Unwinding condition in a loop"`, so no path reaches the `satisfy`. The presolver folds the whole
+vacuity program to a single `NopCmd`, and the rule is reported `SANITY_FAILED` while its assertion
+check — whose `assert` comes before the drop — is `VERIFIED`. Neither the treeView node
+(`"assertMessage": null`) nor the alert report says why.
+
+**The evidence is three jobs and one line.**
+
+| job | rule | unwinding asserts in the vacuity program | verdict |
+|---|---|---|---|
+| `2837f59e` | assets backed by the token balance, stated with `u128` sums | 2 | `SANITY_FAILED` |
+| `8d1f457e` | the same property, stated over `u64` | 0 | `VERIFIED` |
+| `b84a2576` | vault shares equal the shares mint's supply | 1 | `SANITY_FAILED` |
+| `c0e99f74` | the same harness as `b84a2576`, ending in `core::mem::forget(accounts);` | — | `VERIFIED`, vacuity check passing |
+
+**Whether the loop appears is the compiler's choice**, which is what made it hard to find. The `u64`
+restatement verified because it changed how the drop compiled, not because of anything about the
+relation; the `u128` form was blamed for a day, and the shares rule went through three
+"encoding" fixes that changed nothing. The rule's unsat core cannot show the cause either: with the
+vacuity check off, the core is of the assertion's proof, and the loop is after the assertion.
+
+**Workaround.** End every rule with `core::mem::forget(accounts);`, so the array is never dropped.
+The author prompt and its worked examples now say so. Raising `loop_iter` to 16 would also work,
+soundly, at the cost of unrolling every loop in the unit that far.
+
+**What to ask upstream.** The `satisfy` belongs where the rule's last assertion is, not after its
+epilogue: code after the last assertion cannot affect whether that assertion was reachable. Failing
+that, a vacuity verdict that names the unwinding assertion it ran into would have made this a
+five-minute diagnosis.
+
+**This may be [P9](#p9).** P9's control group differs in binding the handler's `Result` rather than
+`.unwrap()`ing it, which changes the rule function's codegen; its `forget` experiment forgot the
+`Result`, not the account array. Its jobs' vacuity programs would show an unwinding assert if so.
 
 ---
 

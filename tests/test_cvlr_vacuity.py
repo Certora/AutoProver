@@ -75,8 +75,9 @@ def test_an_ordinary_run_is_unchanged():
 
 
 def test_a_core_that_needs_the_assertion_is_recognized():
-    """Measured on certora-vault-tutorial: a rule SANITY_FAILED under `u128` sums whose core, with the
-    check off, contains its own assertion — and which verified once restated over `u64`."""
+    """Measured on certora-vault-tutorial: a rule SANITY_FAILED whose core, with the check off,
+    contains its own assertion. The vacuity was in its vacuity check's program, not its proof: the
+    nondet account array's drop loop sat between the assertion and the check's satisfy."""
     finding = core_finding(_CORE)
     assert isinstance(finding, AssertionInCore)
     assert "ASSERT B548:bool" in finding.line
