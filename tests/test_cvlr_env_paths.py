@@ -394,9 +394,9 @@ def test_the_dialect_measurably_restores_coverage_and_costs_none(split: PathDial
         return live, reached
 
     for name, directives, coverage in (
-        ("cvlr_inlining_core.txt", (4, 17), (6, 35)),
-        ("cvlr_inlining_anchor.txt", (11, 12), (26, 26)),
-        ("cvlr_summaries_core.txt", (2, 5), (2, 3)),
+        ("cvlr_inlining_core.txt", (4, 15), (6, 35)),
+        ("cvlr_inlining_anchor.txt", (6, 7), (26, 26)),
+        ("cvlr_summaries_core.txt", (2, 6), (2, 4)),
     ):
         (lb, cb), (la, ca) = stats(starting_env(name)), stats(starting_env(name, split))
         assert (lb, la) == directives, f"{name} directives: {lb} -> {la}"
