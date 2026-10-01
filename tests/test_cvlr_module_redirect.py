@@ -363,7 +363,7 @@ def test_a_units_own_run_global_munge_is_not_shown_twice():
 
     shared = _redirect(module="safe_math", path="crates/library/src/math/mod.rs",
                        feature=DEFAULT_FEATURE)
-    state = {"munges": [shared], "summaries": [], "prover_settings": ProverSettings()}
+    state = {"munges": [shared], "summaries": [], "expected_failures": {}, "prover_settings": ProverSettings()}
 
     got = harness_assumptions(state, None, (shared,))  # type: ignore[arg-type]
 
