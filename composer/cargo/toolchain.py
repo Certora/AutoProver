@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from composer.cargo.metadata import Workspace
-from composer.cargo.sbf import Built, sbf_build
+from composer.cargo.sbf import Built, SbfBuild, sbf_build
 from composer.cargo.session import CargoSession, WarmFailed
 from composer.sandbox.config import SandboxConfig
 from composer.spec.context import SourceFields
@@ -146,7 +146,7 @@ class SolanaToolchain:
                 f"at {workdir}"
             )
         built = await sbf_build(
-            session, manifest_path=package.manifest_path, timeout_s=timeout_s
+            session, SbfBuild(manifest_path=package.manifest_path), timeout_s=timeout_s
         )
         if not isinstance(built.verdict, Built):
             raise ToolchainRequestUnsupported(

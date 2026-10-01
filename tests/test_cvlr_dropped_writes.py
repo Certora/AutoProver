@@ -31,7 +31,7 @@ from composer.cargo.metadata import Workspace
 from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, Built, platform_tools_installed
 from composer.cargo.session import CargoSession, Warmed
 from composer.prover.conf import SelectRules, dump_conf
-from composer.prover.core import make_prover_options
+from composer.prover.core import UnanalyzedCexHandler, make_prover_options
 from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.conf import PLATFORM_TOOLS_VERSION
 from composer.spec.cvlr.prover import (
@@ -128,7 +128,10 @@ async def test_which_writes_the_model_drops(project, capsys):
         conf = {**json.loads(prepared.conf_path.read_text()), "optimistic_loop": True}
         prepared.conf_path.write_text(dump_conf(conf))
         outcome = await run_submission(
-            session, prepared, prover_opts=make_prover_options(cloud=True, app="solana")
+            session,
+            prepared,
+            prover_opts=make_prover_options(cloud=True, app="solana"),
+            cex=UnanalyzedCexHandler(),
         )
     match outcome:
         case BuildRejected(build=build):

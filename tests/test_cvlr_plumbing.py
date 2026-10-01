@@ -1,8 +1,10 @@
 """CVLR metadata and the prover conf, with no toolchain, network, or LLM.
 
 Nothing here shells out to cargo or submits a job. What is checked is the parse of
-``cargo metadata`` and ``Cargo.toml``, the conf a tunable conf renders to, and the keys one
-submission adds.
+``cargo metadata`` and ``Cargo.toml``, the conf a tunable conf renders to and the keys one
+submission adds, the argument vector a build is given, and the build script handed to the prover.
+``tests/test_cvlr_end_to_end.py`` submits a real build and compares the verdicts against a
+checked-in file. It is ``expensive``.
 """
 
 import json
@@ -14,6 +16,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from langgraph.store.memory import InMemoryStore
 
 from composer.cargo.manifest import Dependency, MalformedManifest, parse_manifest
 from composer.cargo import metadata
@@ -48,8 +51,18 @@ from composer.cargo.sbf import (
     write_build_script,
 )
 from composer.cargo.session import CargoSession, CompileFailed
+from composer.cargo.toolchain import SolanaToolchain, ToolchainRequestUnsupported
+from composer.diagnostics.timing import (
+    RunSummary,
+    install_run_summary,
+    set_current_task_id,
+)
 from composer.sandbox.config import SandboxConfig
+from composer.spec.context import SourceFields
 from composer.spec.cvlr.prover import Submission, write_submission
+from composer.spec.cvlr.verify import CexAnalysis, _CaptureCallbacks, _RunAccounting
+from composer.spec.source.cex_capture import CexAnalysisStore
+from composer.spec.system_model import SolidityIdentifier
 
 
 # --------------------------------------------------------------------------------------------
@@ -302,16 +315,13 @@ def test_a_manifest_cargo_would_refuse_is_malformed(text):
 # --------------------------------------------------------------------------------------------
 
 
-def test_the_cvlr_source_roots_are_the_crate_directories_the_build_resolved():
+def test_the_resolved_cvlr_crates_are_the_family_the_build_pulled_in():
+    """``cvlr`` is a facade — ``cvlr_assert!`` expands in ``cvlr-asserts`` — so the family is what
+    matters and it is recognized by name rather than declared anywhere."""
     sources = CvlrSources.of(_workspace(_METADATA))
-    assert [(c.name, c.version) for c in sources.crates] == [
-        ("cvlr", "0.6.1"),
-        ("cvlr-log", "0.6.1"),
-    ]
-    assert sources.roots() == (
-        Path("/home/u/.cargo/registry/src/idx/cvlr-0.6.1"),
-        Path("/home/u/.cargo/registry/src/idx/cvlr-log-0.6.1"),
-    )
+    assert [(c.name, c.version) for c in sources.crates] == [("cvlr", "0.6.1"), ("cvlr-log", "0.6.1")]
+
+
 
 
 def test_two_copies_of_one_version_are_ordered_the_same_whatever_order_cargo_lists_them():
@@ -448,6 +458,14 @@ def test_the_env_files_are_left_for_the_build_manifest_to_supply():
 def test_a_units_summary_file_is_named_when_the_run_passes_one():
     conf = _submission(summaries=(Path("envs/cvlr_summaries_vault.txt"),))
     assert conf["solana_summaries"] == ["envs/cvlr_summaries_vault.txt"]
+
+
+def test_rewording_the_reason_for_optimistic_loop_keeps_the_stamp():
+    """The justification is for the reviewer and is not in the conf, so a verdict earned under
+    the setting stays a verdict under it whatever the account of it says."""
+    first = cvlr_conf.TunableConf(optimistic_loop=cvlr_conf.OptimisticLoop(why="first reason"))
+    second = cvlr_conf.TunableConf(optimistic_loop=cvlr_conf.OptimisticLoop(why="second"))
+    assert cvlr_conf.conf_history(first) == cvlr_conf.conf_history(second)
 
 
 def test_the_build_warms_with_the_cargo_it_will_actually_run(tmp_path):
@@ -682,7 +700,7 @@ def test_a_directory_beside_the_workdir_is_out_of_the_confined_builds_reach(tmp_
 @pytest.mark.asyncio
 async def test_a_tuned_conf_reaches_the_file_the_prover_is_handed(tmp_path):
     """Author settings are written into the conf the prover is given."""
-    edited = cvlr_conf.TunableConf(loop_iter=4, optimistic_loop=True)
+    edited = cvlr_conf.TunableConf(loop_iter=4, optimistic_loop=cvlr_conf.OptimisticLoop(why="w"))
     conf_path = await write_submission(
         _unconfined(tmp_path),
         Submission(
@@ -844,7 +862,106 @@ async def test_a_build_past_its_timeout_is_stopped_with_everything_it_started(tm
     assert _is_gone(child)
 
 
+def _source(root: Path) -> SourceFields:
+    return SourceFields(
+        project_root=str(root),
+        contract_name=SolidityIdentifier("lend"),
+        relative_path="src/lib.rs",
+        forbidden_read=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_project_that_is_not_a_cargo_workspace_resolves_no_source_unit(tmp_path):
+    """The empty answer the seam documents as "apply your own convention" — not an exception, because
+    it is a state the wheel already handles."""
+    assert await SolanaToolchain().source_unit(_source(tmp_path)) == {}
+
+
+@pytest.mark.asyncio
+async def test_a_prep_asking_for_an_idl_is_refused_before_any_work(tmp_path):
+    """Refusing up front is the point: today an unregistered chain fails immediately, and a partial
+    registration that failed after a multi-minute build would be a regression."""
+    from composer.rustapp.wire import WorkspacePrep
+
+    plan = WorkspacePrep(files={}, toolchain_request={"idl_dest": "fuzz/idls/lend.json"})
+    with pytest.raises(ToolchainRequestUnsupported, match="IDL"):
+        await SolanaToolchain().prepare(
+            plan, None, source=_source(tmp_path), sandbox=None, timeout_s=60  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_prep_key_nothing_acts_on_is_refused_rather_than_ignored(tmp_path):
+    """A request nothing acts on is a plan that believes work happened."""
+    from composer.rustapp.wire import WorkspacePrep
+
+    plan = WorkspacePrep(files={}, toolchain_request={"transmute_program": True})
+    with pytest.raises(ToolchainRequestUnsupported, match="transmute_program"):
+        await SolanaToolchain().prepare(
+            plan, None, source=_source(tmp_path), sandbox=None, timeout_s=60  # type: ignore[arg-type]
+        )
+
+
 def test_a_failed_compile_carries_the_compilers_own_words():
     failed = CompileFailed(diagnostics="error[E0599]: no method named `cvlr_assert`", exit_code=101)
     assert not isinstance(failed, Built)
     assert "E0599" in failed.diagnostics
+
+
+@pytest.mark.asyncio
+async def test_a_prover_run_is_accounted_for():
+    """``ProverCallbacks``' defaults are no-ops, so a backend that overrides only the events it
+    cares about opts out of the run's prover accounting without saying so — which is what CVLR did
+    until this class existed. The consequence was not cosmetic: a run whose wall clock is mostly
+    cloud time reported none of it, in ``summary.format()`` and in ``job_info.json`` alike."""
+    summary = RunSummary()
+    install_run_summary(summary)
+    callbacks = _RunAccounting()
+
+    # A task has to be active for the per-task attribution to land anywhere: the link and the
+    # runtime are folded into that task's phase record when the phase closes.
+    with set_current_task_id("verify-deposits"):
+        await callbacks.on_prover_run(["certoraSolanaProver", "run.conf"])
+        await callbacks.on_prover_link("https://prover.certora.com/output/1/2")
+        await callbacks.on_prover_runtime(4200)
+        await callbacks.on_prover_result({})
+    summary.record_phase(
+        task_id="verify-deposits", label="deposits", phase="formalization",
+        wall_s=90.0, queue_wait_s=0.0,
+    )
+
+    assert summary.prover_usage_summary()["total_ms"] == 4200
+    assert summary.prover_total_calls == 1
+    assert summary.phases[0].final_link == "https://prover.certora.com/output/1/2"
+    assert summary.phases[0].prover_reported_ms == 4200
+
+
+@pytest.mark.asyncio
+async def test_capturing_evidence_does_not_replace_the_accounting():
+    """The capture callbacks override ``on_prover_result`` for their own reasons; the wall-clock
+    tally lives in the same event, so the override has to chain."""
+    summary = RunSummary()
+    install_run_summary(summary)
+    callbacks = _CaptureCallbacks(CexAnalysisStore(store=InMemoryStore(), namespace=("t",)))
+
+    await callbacks.on_prover_run([])
+    await callbacks.on_prover_result({})
+
+    assert summary.prover_total_calls == 1
+
+
+def test_counterexamples_are_explained_on_the_authors_bound_model():
+    """The analysis forks the author's conversation, and a model without the author's tools makes
+    every fork miss the cache on the whole of it: on the vault benchmark, two thirds of the first
+    44 minutes' spend. So there is no default model to fall back on, only the author's."""
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+    analysis = CexAnalysis(store=CexAnalysisStore(store=InMemoryStore(), namespace=("t",)))
+    state = {"messages": []}
+    with pytest.raises(RuntimeError, match="before the author's graph was built"):
+        analysis.handler(state)  # type: ignore[arg-type]
+
+    bound = FakeListChatModel(responses=["x"])
+    analysis.model.bind(bound)
+    assert analysis.handler(state).llm is bound  # type: ignore[arg-type, attr-defined]
