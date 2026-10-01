@@ -21,6 +21,7 @@ from composer.spec.cvlr.conf import OptimisticLoop, TunableConf
 from composer.spec.cvlr.munge import EarlyPanic, FunctionMunge, MockFn
 from composer.spec.cvlr.state import HarnessAssumptions, harness_assumptions
 from composer.spec.cvlr.tuning import SummaryDirective
+from composer.spec.types import CheckName
 
 _DISPLAY = SummaryDirective(
     pattern="^<vault::VaultError as core::fmt::Display>::fmt$",
@@ -146,13 +147,32 @@ def test_the_last_runs_external_functions_reach_the_judge():
     briefing = _text(HarnessAssumptions(summaries=(), munges=(), external_functions=(external,)))
     assert external in briefing and "treated these functions as external" in briefing
     assert "no points-to summaries" not in briefing
-    state = {"summaries": [], "munges": [], "prover_settings": TunableConf(),
+    state = {"summaries": [], "expected_failures": {}, "munges": [], "prover_settings": TunableConf(),
              "external_functions": (external,)}
     assert harness_assumptions(state).external_functions == (external,)  # type: ignore[arg-type]
 
 
+def test_an_expected_failure_reaches_the_judge_with_its_reason():
+    """The judge is told to weigh each expected-to-fail marking as a claim the program is defective,
+    and the marking is state, not source. Unshown, a judge on the vault benchmark blocked a draft
+    for not marking a rule the author had already marked, and cost a round to say so."""
+    rule = CheckName("rule_collect_fee_must_not_spend_share_backing_assets")
+    reason = "process_collect_fee pays the recorded fee without bounding it by the surplus"
+    state = {"summaries": [], "expected_failures": {rule: reason}, "munges": [],
+             "prover_settings": TunableConf()}
+    briefing = _text(harness_assumptions(state))  # type: ignore[arg-type]
+    assert rule in briefing and reason in briefing
+    assert "expected to fail" in briefing
+
+
+def test_no_marking_is_said_rather_than_left_out():
+    """Silence would read as "go and look", and there is nowhere in the draft to look."""
+    briefing = _text(HarnessAssumptions(summaries=(), munges=()))
+    assert "marked no rule as expected to fail" in briefing
+
+
 def test_optimistic_loop_is_read_from_the_state_the_tool_writes():
-    state = {"summaries": [], "munges": [], "prover_settings": _LOOPS_FINISH}
+    state = {"summaries": [], "expected_failures": {}, "munges": [], "prover_settings": _LOOPS_FINISH}
     assert harness_assumptions(state).settings == _LOOPS_FINISH  # type: ignore[arg-type]
 
 
@@ -161,14 +181,14 @@ def test_optimistic_loop_is_read_from_the_state_the_tool_writes():
 
 
 def test_the_assumptions_are_read_from_the_state_the_tools_write():
-    state = {"summaries": [_DISPLAY], "munges": [_PANIC], "prover_settings": TunableConf()}
+    state = {"summaries": [_DISPLAY], "expected_failures": {}, "munges": [_PANIC], "prover_settings": TunableConf()}
     assumptions = harness_assumptions(state)  # type: ignore[arg-type]
     assert assumptions.summaries == (_DISPLAY,)
     assert assumptions.munges == (_PANIC,)
 
 
 def test_a_run_that_used_neither_instrument_reads_as_empty():
-    assert harness_assumptions({"summaries": [], "munges": [], "prover_settings": TunableConf()}) == HarnessAssumptions((), ())  # type: ignore[arg-type]
+    assert harness_assumptions({"summaries": [], "expected_failures": {}, "munges": [], "prover_settings": TunableConf()}) == HarnessAssumptions((), ())  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -203,8 +223,10 @@ def test_the_rest_of_the_judges_input_survives_the_lift():
 def test_the_briefing_lands_after_what_input_parts_built():
     """Ordering is a claim about what the judge reads first: the artifact under review, then the
     caveats on it. Reversed, the review opens on a list of symbol patterns with no context."""
-    lifted = with_assumptions(_base(), HarnessAssumptions(summaries=(_DISPLAY,), munges=()))
-    assert _DISPLAY.pattern in str(lifted["input"][-1])
+    base = _base()
+    lifted = with_assumptions(base, HarnessAssumptions(summaries=(_DISPLAY,), munges=()))
+    assert lifted["input"][: len(base["input"])] == base["input"]
+    assert _DISPLAY.pattern in "\n".join(map(str, lifted["input"][len(base["input"]) :]))
 
 
 def test_the_judge_is_shown_the_diff_and_not_only_a_description(tmp_path):
@@ -225,7 +247,7 @@ def test_the_judge_is_shown_the_diff_and_not_only_a_description(tmp_path):
     )
     briefing = _text(
         harness_assumptions(
-            {"summaries": [], "munges": [munge], "prover_settings": TunableConf()},  # type: ignore[arg-type]
+            {"summaries": [], "expected_failures": {}, "munges": [munge], "prover_settings": TunableConf()},  # type: ignore[arg-type]
             tmp_path,
         )
     )
@@ -240,7 +262,7 @@ def test_a_briefing_without_a_project_still_describes_the_munges(tmp_path):
         path="p.rs", function="f", kind=EarlyPanic(), why="w", feature="unit_vault"
     )
     briefing = _text(
-        harness_assumptions({"summaries": [], "munges": [munge], "prover_settings": TunableConf()})  # type: ignore[arg-type]
+        harness_assumptions({"summaries": [], "expected_failures": {}, "munges": [munge], "prover_settings": TunableConf()})  # type: ignore[arg-type]
     )
     assert "f (p.rs)" in briefing
     assert "@@" not in briefing

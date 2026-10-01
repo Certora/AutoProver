@@ -247,6 +247,8 @@ class HarnessAssumptions:
     judge's system prompt instructs it to weigh the summaries, and silence answers that instruction
     with "go and look", which points it at tuning files holding the scaffold's directives and every
     sibling unit's.
+
+    Carried beside them, for the same reason: the rules the author has marked expected to fail.
     """
 
     summaries: tuple[SummaryDirective, ...]
@@ -262,9 +264,30 @@ class HarnessAssumptions:
     #: What the last prover run treated as external. Not an instrument the author chose, but the
     #: same kind of fact: a verdict over one of these is conditional on writes the model dropped.
     external_functions: tuple[str, ...] = ()
+    #: Rule name → the author's reason it is meant to fail. Not an assumption, but the same blind
+    #: spot: the marking is state, not source, and the judge is asked to weigh each one as a claim
+    #: that the program is defective.
+    expected_failures: tuple[tuple[CheckName, str], ...] = ()
 
     def briefing(self) -> list[str]:
-        """Input parts stating what a verdict on this harness would be conditional on."""
+        """Input parts stating what a verdict on this harness would be conditional on, and which
+        of its rules the author has recorded as meant to fail."""
+        return self._conditions() + self._expected_failure_parts()
+
+    def _expected_failure_parts(self) -> list[str]:
+        if not self.expected_failures:
+            return [
+                "The author has marked no rule as expected to fail: every rule in this harness "
+                "is claimed to verify."
+            ]
+        return [
+            "The author has recorded these rules as expected to fail, each a claim that the "
+            "program is defective. The marking is held outside the harness source, so you will "
+            "not find it there:",
+            *(f"  {rule}\n    Author's reason: {reason}" for rule, reason in self.expected_failures),
+        ]
+
+    def _conditions(self) -> list[str]:
         optimistic = self.settings.optimistic_loop
         if (
             not self.summaries
@@ -364,6 +387,7 @@ def harness_assumptions(
         diff=munge_diff(pristine, munges) if pristine is not None and munges else "",
         settings=state["prover_settings"],
         external_functions=state.get("external_functions", ()),
+        expected_failures=tuple(state["expected_failures"].items()),
     )
 
 
