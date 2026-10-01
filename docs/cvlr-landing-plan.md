@@ -314,6 +314,22 @@ them; this does not.
 The largest test set in the wave, for the reason the old plan already gave: this is the layer the
 earlier slices' tests were waiting on.
 
+**What P3b has to change on the branch, from #258's review.** Two submissions of one crate share
+its target directory, so they also share the `.so`, and the Prover's local phase rebuilds and
+uploads it. On the branch, `_stage_and_prepare` (`cvlr/verify.py`) holds the build permit only
+for staging and the gate build. `run_submission` runs outside it, on the reasoning that a sibling's
+edits are inert for this build. That holds for everything a sibling writes into the tree: harness
+modules and munges are behind per-unit features, and each unit has its own summaries file. It does
+not hold for the artifact. A sibling's build with other features can replace the `.so` before this
+job uploads it.
+
+#258 settled on one shared target directory. One directory per submission was tried and backed
+out: it costs a cold dependency build per unit, and about 1 GB of disk for each. So P3b must hold
+the permit from staging until `on_prover_link` fires, or until `run_submission` returns, if the
+CLI fails before uploading. `prepare_submission`'s docstring states this contract. That serializes
+each submission's local phase, a warm program-crate rebuild plus the upload, but not the cloud
+wait. The unsat-core diagnostic run takes the same permit.
+
 ### P4 — The Anchor surface and the worked example
 
 `composer/spec/cvlr/{anchor_surface,example,guidance}.py`.
