@@ -18,6 +18,7 @@ from urllib.parse import urlparse, parse_qs
 
 import aiohttp
 from prover_output_utility import ProverOutputAPI
+from prover_output_utility.exceptions import ProverAPIError
 from prover_output_utility.models import JobStatus, convert_job_status
 
 from composer.prover.results import ALERT_REPORT
@@ -36,6 +37,24 @@ class CloudJobError(RuntimeError):
         super().__init__(f"Cloud job ended with status {status.value}")
         self.status = status
         self.link = link
+
+
+class CloudResultsUnavailable(RuntimeError):
+    """Raised when a cloud job succeeded but its results could not be downloaded, after retrying.
+
+    The verdicts exist on the server; only the read failed. Carries the prover ``link`` so the
+    reader can see them anyway.
+    """
+
+    def __init__(self, link: str, cause: ProverAPIError) -> None:
+        super().__init__(f"Cloud job results could not be downloaded: {cause}")
+        self.link = link
+        self.cause = cause
+
+
+#: Pauses between attempts to download a finished job's results. The data API's read timeouts are
+#: transient, and the job they belong to cost a prover run and the author's work to get to.
+_RESULTS_FETCH_BACKOFF_S: tuple[float, ...] = (10.0, 30.0, 60.0)
 
 
 # Terminal cloud job statuses (the job is no longer running). A status outside
@@ -180,6 +199,22 @@ async def _fetch_alert_report(job_id: str, dest: Path) -> None:
     target.write_text(text)
 
 
+async def _fetch_results(job_id: str, dest: Path, link: str) -> None:
+    """Download the tree view and compiled sources into ``dest``, retrying a failed read."""
+    for delay in (*_RESULTS_FETCH_BACKOFF_S, None):
+        try:
+            await asyncio.to_thread(results_api().fetch_sources_and_treeview_files, job_id, dest)
+            return
+        except ProverAPIError as exc:
+            if delay is None:
+                raise CloudResultsUnavailable(link, exc) from exc
+            logger.warning(
+                "Cloud job %s: results download failed, retrying in %.0fs (%s)",
+                job_id[:8], delay, exc,
+            )
+            await asyncio.sleep(delay)
+
+
 @asynccontextmanager
 async def cloud_results(
     run_result_link: str,
@@ -223,8 +258,6 @@ async def cloud_results(
         # tens of gigabytes on real jobs and used to exhaust the disk; across the
         # jobs measured here these two subtrees are ~3% of the archive. POU writes
         # them in the same layout the archive had, so the parse is unchanged.
-        await asyncio.to_thread(
-            results_api().fetch_sources_and_treeview_files, cloud_job.job_id, dest
-        )
+        await _fetch_results(cloud_job.job_id, dest, run_result_link)
         await _fetch_alert_report(cloud_job.job_id, dest)
         yield (dest, runtime_ms)
