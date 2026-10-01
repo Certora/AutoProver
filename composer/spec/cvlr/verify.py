@@ -343,20 +343,44 @@ class _CaptureCallbacks(_RunAccounting):
                     _log.exception("cvlr: failed to capture cex analysis for %s", rule.name)
 
 
+class AuthorModel:
+    """The author's model as the author's graph binds it, tools included.
+
+    A counterexample analysis continues the author's conversation, so it must be sent with the
+    author's exact tools, system prompt and settings: those come first in the request, and any
+    difference there makes the provider's prompt cache miss the whole conversation behind them. The
+    graph binds the model only when it is built, which is after the tools that need it, so the author
+    binds it here once the graph exists.
+    """
+
+    def __init__(self) -> None:
+        self._llm: LLM | None = None
+
+    def bind(self, llm: LLM) -> None:
+        self._llm = llm
+
+    @property
+    def llm(self) -> LLM:
+        if self._llm is None:
+            raise RuntimeError("counterexample analysis ran before the author's graph was built")
+        return self._llm
+
+
 @dataclasses.dataclass(frozen=True)
 class CexAnalysis:
     """What turns a violated rule into a finding: something to explain it, somewhere to keep it.
 
-    Built per run rather than per submission, but the handler itself has to be built per *call* —
+    Built per unit rather than per submission, but the handler itself has to be built per *call* —
     it reads the author's live conversation as context for the explanation, which is exactly what
-    makes its account of a counterexample worth more than the trace alone.
+    makes its account of a counterexample worth more than the trace alone. It explains on the
+    author's own model, for the cache, and so on the author's tier.
     """
 
-    llm: LLM
     store: CexAnalysisStore
+    model: AuthorModel = dataclasses.field(default_factory=AuthorModel)
 
     def handler(self, state: CvlrGenerationState) -> CexHandler:
-        return TrivialFanoutCexHandler(self.llm, state)
+        return TrivialFanoutCexHandler(self.model.llm, state)
 
     def callbacks(self) -> "_CaptureCallbacks":
         return _CaptureCallbacks(self.store)
