@@ -70,17 +70,6 @@ def get_version(obj):
   y = get_version_tuple(get_version_string(obj))
 
 
-def check_muxed_address():
-  vs = sdk_version
-  if vs is not None:
-    if vs[0] >= 23:
-      print(vs.__str__() + " has MuxedAddress")
-      return True
-    else:
-      print(vs.__str__() + " doesn't have MuxedAddress")
-      return False
-
-
 def inherit_cvlr_stuff(t):
   t["dependencies"]["soroban-sdk"] = put_stuff( { "workspace": True, "default-features": False })
     
@@ -91,12 +80,7 @@ def inherit_cvlr_stuff(t):
   
 def put_dependencies(t):
   t["dependencies"]["cvlr"] = put_stuff({"git": "https://github.com/Certora/cvlr", "branch": "0.6.1-soroban-changes", "default-features": False})
-  
-  if check_muxed_address():
-    t["dependencies"]["cvlr-soroban"] = put_stuff({ "path": str(root / "cvlr-soroban/cvlr-soroban"), "default-features": False })
-  else:
-    t["dependencies"]["cvlr-soroban"] = put_stuff({ "path": str(root / "cvlr-soroban/cvlr-soroban"), "default-features": False, "features": ["nomuxedaddress"] })
-
+  t["dependencies"]["cvlr-soroban"] = put_stuff({ "path": str(root / "cvlr-soroban/cvlr-soroban"), "default-features": False })
   t["dependencies"]["cvlr-soroban-derive"] = put_stuff({ "path": str(root / "cvlr-soroban/cvlr-soroban-derive"), "default-features": False })
 
 
