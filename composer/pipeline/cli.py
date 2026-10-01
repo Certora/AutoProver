@@ -22,6 +22,7 @@ from composer.diagnostics.logging_setup import setup_autoprove_logging
 from composer.spec.context import SourceFields, WorkflowContext, SourceCode
 from composer.spec.service_host import ServiceHost
 from composer.workflow.services import IndexedConnections, standard_connections
+from composer.pipeline.pinned import PinnedRun
 from composer.pipeline.ptypes import (
     PipelineRun, BackendResult,
     CorePipelineResult, PhaseBudget, RunBudget
@@ -38,7 +39,7 @@ from .run_tags import AutoProveCacheTags, CACHE_ROOT_RECORD
 from composer.io.multi_job import HandlerFactory, run_task, TaskInfo
 from composer.diagnostics.timing import RunSummary, install_run_summary
 from composer.io.context import DefaultRetryPolicy, install_retry_policy
-from composer.llm.registry import get_provider_for
+import composer.llm.registry as llm_registry
 from composer.rag.models import get_model
 from composer.io.thread_logging import RunDataLogger, thread_logger, default_logging_ns
 from composer.rag.models import DefaultEmbedder
@@ -278,15 +279,24 @@ async def cli_pipeline[P: enum.Enum, H, App: BaseApplication, Main, U: FeatureUn
     ecosystem: Ecosystem[App, Main, U],
     at_exit: AtExit | None = None,
     run_mode: RunMode = RunMode.COMPREHENSIVE,
+    pinned: PinnedRun | None = None,
+    pin_to: pathlib.Path | None = None,
     **metadata
 ) -> AsyncIterator[tuple[StagedPipeline, Continuation[P, H, App, Main, U]]]:
+    """``pinned`` supplies the analysis and the properties, skipping the two phases that between
+    them dominate a real target's cost; ``pin_to`` writes that fixture from a full run. See
+    :mod:`composer.pipeline.pinned`."""
     project_root = pathlib.Path(args.project_root).resolve()
     main_contract_path, contract_name = args.main_contract.split(":", 1)
 
     # Resolve the budget up front so a malformed one fails before any services spin up.
     budget = resolve_budget(args.budget, args.budget_total)
 
-    full_contract_path = pathlib.Path(main_contract_path).resolve()
+    # A relative path is resolved against the *project root*, not the process's working directory.
+    # Both readings agree whenever the old one worked — running from inside the project makes them
+    # the same directory — and they diverge only where it used to fail outright, which is running
+    # the CLI from anywhere else. That is the normal case for a checkout you are not sitting in.
+    full_contract_path = (project_root / main_contract_path).resolve()
     if not full_contract_path.is_relative_to(project_root):
         raise ValueError(f"Invalid path: {full_contract_path} doesn't appear in project root {project_root}")
 
@@ -301,8 +311,14 @@ async def cli_pipeline[P: enum.Enum, H, App: BaseApplication, Main, U: FeatureUn
         project_root, relative_path, contract_name
     )
 
-    # Set up services
-    tiered = get_provider_for(tiered=args)
+    # Set up services.
+    #
+    # Reached through the module rather than a ``from … import get_provider_for``, and that is
+    # load-bearing rather than style: both the fake-LLM tape and the tape *recorder* install
+    # themselves by replacing ``composer.llm.registry.get_provider_for``, and a name bound here at
+    # import time keeps pointing at the original. The replay symptom is a real (paid) model in a
+    # test that believes it is taped; the recording symptom is "no LLM responses captured".
+    tiered = llm_registry.get_provider_for(tiered=args)
 
     semaphore = asyncio.Semaphore(args.max_concurrent)
     cpu_semaphore = asyncio.Semaphore(args.max_cpu_tasks)
@@ -465,6 +481,8 @@ async def cli_pipeline[P: enum.Enum, H, App: BaseApplication, Main, U: FeatureUn
                     budget=budget,
                     time_budget_s=args.time_budget,
                     ecosystem=ecosystem,
+                    pinned=pinned,
+                    pin_to=pin_to,
                 )
 
             yield (StagedPipeline(

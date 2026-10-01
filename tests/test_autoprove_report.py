@@ -42,7 +42,7 @@ from composer.spec.source.report.schema import (
     GaveUpComponent, GroupStatus, ImpactLevel, IssueContent, LikelihoodLevel, Outcome,
     PropertyGroup, RuleVerdict, SeverityTier, SkippedClaim,
 )
-from composer.spec.source.report_prover import make_prover_fetcher
+from composer.spec.source.report_prover import job_input, make_prover_fetcher, make_run_link_fetcher
 from composer.spec.source.report.collect import RuleEvidence
 from composer.spec.source.report.findings import FindingDraft, build_findings
 from composer.spec.source.cex_capture import CexAnalysisStore
@@ -248,9 +248,13 @@ async def test_collect_splits_skipped_property_into_gap():
 
 
 @pytest.mark.asyncio
-async def test_collect_none_result_is_a_gap():
-    """A component with no result (the caller maps both give-up and crash to ``None``) is a
-    formalization gap — all its properties unimplemented, no per-property reason."""
+async def test_collect_abandoned_result_is_a_gap_that_says_why():
+    """A component that produced nothing (gave up, or crashed) is a formalization gap — all its
+    properties unimplemented, no per-property reason.
+
+    Its *component*-level reason is carried, which it was not until a CVLR run gave up twice on one
+    prover limitation, diagnosed it exactly, named the tuning directive that would have fixed it,
+    and had all of that discarded at this boundary because the input type was `None`."""
     props = [_prop("p1", "d1")]
     properties, rules, skipped, gave_up, curtailed, dropped = await collect(
         [_input("C", "autospec_C.spec", props, None)], fetch_verdicts=_fetcher({}))
@@ -612,6 +616,31 @@ def _mini_report() -> AutoProverReport:
                             prover_links={"C": "https://prover.example/run/abc"},
                             properties=[p1, p2], rules=rules, groups=groups,
                             skipped=skipped, coverage=cov)
+
+
+def test_render_html_says_nothing_about_builds_it_was_not_told_about():
+    """A report with no ``build_environment`` is either an EVM backend's — nothing of the project
+    was compiled — or one written before the field existed. Neither is evidence of confinement, so
+    the render states nothing rather than implying the reassuring half."""
+    h = render_html(_mini_report())
+    assert "unconfined" not in h.lower()
+    assert "<dt>Builds</dt>" not in h
+
+
+def test_render_html_marks_an_unconfined_run():
+    """The whole point of the field: a result produced without confinement must not be mistaken for
+    a production one, and stderr on a machine nobody kept is not a record (§7.12 item 4)."""
+    h = render_html(_mini_report().model_copy(update={"build_environment": UnconfinedBuilds()}))
+    assert "<dt>Builds</dt>" in h
+    assert "Unconfined builds:" in h
+
+
+def test_render_html_names_the_mechanism_that_confined_a_run():
+    h = render_html(
+        _mini_report().model_copy(update={"build_environment": ConfinedBuilds(provider="launcher")})
+    )
+    assert "confined (launcher)" in h
+    assert "Unconfined builds:" not in h
 
 
 def test_render_html_shows_finding_message():
@@ -1169,6 +1198,7 @@ async def test_spec_callbacks_captures_cex_analysis():
     await cb.on_analysis_complete(_violated("no_reentrancy", "withdraw"), "root cause: CEI")
 
     recs = await store.for_rule("no_reentrancy")
+    # The stored counterexample is the rendered element, which is what an analysis prompt reads.
     assert [(r.label, r.analysis, r.counterexample) for r in recs] == [
         ("withdraw", "root cause: CEI", "<counterexample><cex/></counterexample>")]
     assert await store.for_rule("no_reentrancy for withdraw") == []   # not the pretty-printed form
@@ -1193,3 +1223,53 @@ async def test_parametric_instantiations_are_all_kept_and_purged_when_stale():
     await cb.on_prover_result({"r": _violated("r", "foo")})
     await cb.on_analysis_complete(_violated("r", "foo"), "foo still breaks")
     assert [(r.label, r.analysis) for r in await store.for_rule("r")] == [("foo", "foo still breaks")]
+
+
+# ---------------------------------------------------------------------------
+# Which link shapes reach POU
+#
+# The Solana Prover reports a job as `/jobStatus/<userId>/<jobHash>?anonymousKey=...`, and
+# `prover_output_utility` knows `/output/<user>/<job>` and `/job/<job>` and nothing else — so it
+# raised, `fetch_verdicts` swallowed the raise and returned {}, and every rule of every CVLR run
+# landed in the report as UNKNOWN. Silently: the run itself was green, the rules were VERIFIED in
+# the job, and only the deliverable said otherwise.
+#
+# The fix hands POU the job id, which it accepts directly. These tests pin the shapes rather than
+# the mechanism, because the mechanism is somebody else's regex.
+
+
+def test_the_solana_provers_link_yields_the_job_id():
+    assert job_input(
+        "https://prover.certora.com/jobStatus/37632/4e5cb4206b044212b2a15b09df996284"
+        "?anonymousKey=fe1aba47017d97a9be0483c7bac37030c8b5f1dc"
+    ) == "4e5cb4206b044212b2a15b09df996284"
+
+
+def test_the_anonymous_key_is_not_part_of_the_job_id():
+    """The whole failure was a parse, so the parse is worth checking at its edge: an anonymousKey
+    carried into the id would fetch nothing, the same symptom by a different route."""
+    assert "anonymousKey" not in job_input(
+        "https://prover.certora.com/jobStatus/1/abc123?anonymousKey=deadbeef"
+    )
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        "https://prover.certora.com/output/37632/4e5cb420/?anonymousKey=fe1aba47",
+        "https://prover.certora.com/job/4e5cb420",
+        "4e5cb4206b044212b2a15b09df996284",
+        "/some/local/emv-1-certora/path",
+    ],
+)
+def test_a_shape_pou_already_handles_is_passed_through_untouched(link):
+    """Deliberately not a second implementation of POU's extraction. Every shape it parses today —
+    including the local ``emv-`` path its offline mode wants — has to reach it verbatim, or fixing
+    the Solana link would break the EVM one."""
+    assert job_input(link) == link
+
+
+def test_the_run_link_fetcher_serves_any_reportable_result():
+    """It reads nothing but ``run_link``, so nothing about it is backend-specific."""
+    fetcher = make_run_link_fetcher(_FakeAPI({}))
+    assert callable(fetcher)

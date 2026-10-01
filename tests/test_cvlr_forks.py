@@ -7,7 +7,8 @@ The failure is quiet. A target left on the crates.io crate builds, submits, and 
 [3006], a pointer-analysis message with nothing about a fork. A version the fork does not cover
 has to block. A project that already chooses where Anchor comes from has to be left alone.
 
-No cargo and no network. ``Workspace`` objects are built in the test.
+No cargo and no network. ``Workspace`` objects are built in the test. That the fork builds is
+covered by ``tests/test_cvlr_anchor_reach.py``, which is expensive.
 """
 
 import pytest

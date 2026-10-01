@@ -215,13 +215,22 @@ def named_budget_or_nop(
 @contextmanager
 def token_cost_budget(
     total_cost: float,
-) -> Iterator[None]:
+) -> Iterator[BudgetCounter]:
+    """Open a one-off cost budget, yielding the counter it accrues into.
+
+    Yielding the counter rather than ``None`` so a caller can *read* what was spent, not only trip
+    on it: a producer script that reports its own bill needs the same number the hard stop uses, and
+    reconstructing it on the side is how two figures for one spend come about. The counter stays
+    live after the block exits, which is what makes it reportable.
+
+    Safe across ``asyncio.gather``: a spawned task copies the context *mapping*, so every copy still
+    points at this one counter object and its accruals land here."""
     if _budget_accumulator.get() is not None:
         raise RuntimeError("Nested budgets not supported")
     accum = BudgetCounter(total_budget=total_cost, curr_cost=0.0)
     prev = _budget_accumulator.set(accum)
     try:
-        yield
+        yield accum
     finally:
         _budget_accumulator.reset(prev)
 

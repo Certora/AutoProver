@@ -162,8 +162,11 @@ async def prepare_workspace(
     harness files under ``src/certora/`` are replaced by AutoProver's. The project's manifests
     and sources are only added to.
 
-    ``reference`` is the set rather than a chain name because every function this calls takes the
-    set.
+    ``reference`` is the set rather than a chain name because a run may narrow it, in exactly one
+    way: a target that *is* the program a :class:`~composer.spec.cvlr.reference.ProgramModel`
+    crate models must not be offered that model
+    (:meth:`~composer.spec.cvlr.reference.ChainReference.withholding`). Every function this calls
+    already takes the set, so passing it in removes a lookup rather than adding an argument.
     """
     workspace = await _workspace_at(project_root)
     member = _pick_package(workspace, package)
@@ -228,7 +231,7 @@ async def gate_workspace(
             f"could not fetch the dependency graph for {pre.workspace_root} "
             f"(exit {warmed.exit_code}):\n{warmed.diagnostics}"
         )
-    run = await session.check(package=pre.package, features=features)
+    run = await session.check(manifest_dir=pre.package_dir, features=features)
     _log.info(
         "preflight gate: %s in %dms%s",
         "ok" if run.ok else "FAILED",

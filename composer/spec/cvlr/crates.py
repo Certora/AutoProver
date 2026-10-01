@@ -12,7 +12,6 @@ way the scaffold's gate does not see, such as a ``[patch]`` table.
 """
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Self
 
 from composer.cargo.metadata import CratePackage, Workspace
@@ -91,10 +90,6 @@ class CvlrSources:
                 )
             )
         )
-
-    def roots(self) -> tuple[Path, ...]:
-        """The crate directories, one per family member."""
-        return tuple(c.root for c in self.crates)
 
     def gaps(self, reference: ChainReference) -> tuple[Divergence, ...]:
         """Where this build and the reference set disagree.

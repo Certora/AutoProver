@@ -1,3 +1,24 @@
+"""Search over ``cvlr_kb`` — the Solana Prover manual, and nothing else.
+
+Once the second CVLR corpus existed this one had to say what it is *not*. It is prose: methodology,
+idiom, why one shape of rule beats another, what a pitfall costs. It was written against particular
+releases and is allowed to lag them, so it is not authority on what exists — that is
+:mod:`composer.tools.cvlr_api_rag`, generated from the crates at the releases this build pins
+(``docs/cvlr-api-docs-plan.md`` §4.1, §4.6).
+
+The ordering is not stated in these docstrings for an agent to weigh, because these tools do not
+reach an agent that has to weigh it: they go to the ``cvlr_research`` sub-agent alone, which holds
+both corpora and is told which wins. What the docstrings have to do is stop *this* tool being
+reached for the questions the other one answers — the docstrings used to advertise "the CVLR API
+(what a macro does, what a helper's signature is)", which is now exactly the wrong reason to come
+here.
+
+``cvlr_kb`` once also carried a generated crate reference and project-derived practice entries.
+The first is what ``cvlr_api_kb`` replaces; the second moved to the always-in-context bundle and
+the trigger-indexed recipes (``cvlr-knowledge-plan.md`` §4), because corpus search is allowed to be
+absent at run time and nothing load-bearing may depend on it.
+"""
+
 from typing import Iterable
 
 from langchain_core.tools import BaseTool
@@ -10,9 +31,12 @@ from graphcore.tools.schemas import WithAsyncDependencies
 
 class CvlrKeywordSearch(WithAsyncDependencies[str, ComposerRAGDB]):
     """
-    Search the CVLR knowledge base by keyword (full text search). Use this when you know the
-    identifier you are looking for — a macro (`cvlr_assert`, `cvlr_assume`, `clog`), a derive
-    (`Nondet`, `CvlrLog`), a conf option (`solana_inlining`), or a cargo feature.
+    Search the CVLR manual by keyword (full text search). Use it to find *where the manual
+    discusses* a term — a conf option (`solana_inlining`), a cargo feature, a technique with a name
+    ("module redirect", "parametric rule").
+
+    Not for establishing that an item exists or what its signature is: this is hand-written prose
+    that lags the crates. `cvlr_api_lookup` answers that from the crates themselves.
 
     Returns matching section titles in relevance order; read one with `cvlr_get_section`.
     """
@@ -33,9 +57,13 @@ class CvlrKeywordSearch(WithAsyncDependencies[str, ComposerRAGDB]):
 
 class CvlrVectorSearch(WithAsyncDependencies[str, ComposerRAGDB]):
     """
-    Search the CVLR knowledge base with a natural-language question. Covers the CVLR API (what a
-    macro does, what a helper's signature is) and the methodology around it (how to mock an SDK
-    boundary, how to make a counterexample readable, when a rule should be parametric).
+    Search the Solana Prover manual with a natural-language question. It covers *methodology*: how
+    to mock an SDK boundary, how to make a counterexample readable, when a rule should be
+    parametric, which pitfalls cost people time.
+
+    It does not settle what exists. The manual was written against particular releases and is
+    allowed to be out of date about the CVLR surface; `cvlr_api_search` and `cvlr_api_lookup` read
+    the crates this build pins. Where the two disagree, the crates are right.
 
     Returns the section title, the relevant text, and a relevance score.
     """
@@ -62,7 +90,7 @@ class CvlrVectorSearch(WithAsyncDependencies[str, ComposerRAGDB]):
 
 class CvlrSectionGet(WithAsyncDependencies[str, ComposerRAGDB]):
     """
-    Retrieve a whole section of the CVLR knowledge base by its heading path.
+    Retrieve a whole section of the Solana Prover manual by its heading path.
     """
 
     section_names: list[str] = Field(description=(

@@ -21,9 +21,12 @@
 # it and compose refuses with "service autoprove depends on undefined service
 # run-confined-build", which names neither this file nor the profile it wants.
 #
-# Adding the sandbox to a FUTURE service: mirror the three keys added to
-# `autoprove` below (the `depends_on` completion gate, the `run_confined` mount,
-# and RUN_CONFINED_BIN).
+# Adding the sandbox to a FUTURE service: mirror the three keys added to `autoprove` below (the
+# `depends_on` completion gate, the `run_confined` mount, and RUN_CONFINED_BIN) — but put them in
+# that service's own overlay, not here. A service named in this file but defined in an overlay
+# someone leaves off is a body with no image, and compose rejects the whole project for it:
+# "service X has neither an image nor a build context specified". scripts/docker-compose.solana.yml
+# is the worked example.
 
 services:
   run-confined-build:
