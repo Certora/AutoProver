@@ -128,14 +128,9 @@ calling POU. That left each of S4's three parts somewhere else:
 
 The rebased branch shows the resolved shape of all three.
 
-Two unrelated fixes are still unlanded and go alone rather than riding a themed PR. One hunk in
-`cli.py` resolves a main contract path against the process's cwd rather than the project root; S1
-was merged without it. And `source/prover.py`'s `OVERLAY_OWNED_KEYS` docstring names the author's
-flag registry as `author.EDITABLE_FLAGS`, which has been `author._FLAG_KEYS` on master for some
-time — the only part of the former S5 that master can use today. Two one-line annotation
-tightenings ride along with them: `authoring/judge.py` and `spec/cvl_research.py` each type an
-ignored callback parameter `object` rather than `Any`. They belong to no CVLR PR and would
-otherwise be the only changed files on the branch that no row below accounts for.
+Two unrelated fixes and two annotation tightenings are still unlanded. They now live in
+[Miscellaneous](#miscellaneous-shared-changes-master-could-take), along with the other shared
+changes the branch has picked up since.
 
 **S6 has moved.** It was here on the reasoning that a `KnowledgeBundle` refactor is shared code with
 no CVLR dependency, which is true and is exactly what rule 5 now disqualifies: it would land a
@@ -453,6 +448,36 @@ section boundaries and each part rides the slice it describes; `munge-and-workin
 `the-tree-is-a-vfs.md` go with P3a; `who-edits-the-program.md` with P5;
 `application-abstraction.md`, `ecosystem-abstraction.md` and `formalization-abstraction.md` with
 P7. What is left in **D** is the material that describes the work rather than the code.
+
+---
+
+## Miscellaneous: shared changes master could take
+
+These are changes on the branch that touch shared code and that no CVLR slice needs in order to
+work. Each was found while building the backend. None mentions Solana except in its motivation,
+and each would read as an ordinary fix to someone who has never seen the branch. By rule 4 they
+belong on master, each as its own small PR. They are listed here so that they are not forgotten,
+and so that a CVLR PR does not quietly carry one.
+
+The list is of things to *consider*, not a queue. Some of these change EVM behaviour, and whether
+master wants that is its owners' call.
+
+| Change | Files | What it fixes | Notes |
+|---|---|---|---|
+| A statically decided rule keeps its verdict (`3a2c523f`) | `composer/prover/results.py` *(hunk: `flatten_tree_view`)*, `tests/test_tree_view_static_verdict.py` | A rule the Prover decides by static analysis arrives in the tree view as a bare root with no children. The parser recursed into the children, found none, and dropped the rule from the results. | The most valuable entry: a verdict silently disappears, on any chain. The test builds the node with `trace_shape("solana")`; for master it should use the EVM shape, or both. |
+| A cloud results download that still fails after retrying is reported, not raised (`3087e754`) | `composer/prover/cloud.py`, `composer/prover/core.py`, `tests/test_cloud_fetch_retry.py`, `tests/test_cloud_results_fetch.py` | Once #223's retries are used up, the error escaped `run_prover` and ended the whole formalization, although the job had succeeded. It is now `CloudResultsUnavailable`, returned to the agent with the job link. | The original commit also lengthened the backoff to 10s/30s/60s, after a failure that recovered "minutes later". The port kept #223's 2s/4s. Whether master wants the longer schedule is a separate question for #223's owners. |
+| A cloud job failure names its link | `composer/prover/core.py` *(hunk: the `CloudJobError` message)* | A job that fails server-side leaves nothing on disk, so the status alone tells the agent nothing it can act on. An authoring agent then blames its own draft and simplifies it toward a tautology. | One string. Visible on EVM runs. |
+| A counterexample analysis claims only what the counterexample shows (`bcfeaaaa`) | `composer/templates/cex_instructions.j2` | The single-shot analyzer called two sibling rules passing controls, inferring their verdict from the absence of a counterexample. Both were SANITY_FAILED. | A CVL prompt change, so it changes EVM runs' counterexample analysis. Its motivation was CVLR, but nothing in it is. |
+| A relative main-contract path resolves against the project root | `composer/pipeline/cli.py` *(hunk)* | Running the CLI from outside the project failed outright. | S1 was merged without it. Both readings agree wherever the old one worked. |
+| `cli_pipeline` reaches `get_provider_for` through its module | `composer/pipeline/cli.py` *(hunk)* | Both the fake-LLM tape and the tape recorder install themselves by replacing `composer.llm.registry.get_provider_for`. A name bound at import time keeps the original. | **Check master first.** Master's `harness_tape.py` and `record_tape.py` patch that attribute, while master's `cli.py` still binds it at import. If a taped test goes through `cli_pipeline`, it may be calling a real, paid model. P9 needs this regardless. |
+| `OVERLAY_OWNED_KEYS` names the right registry | `composer/spec/source/prover.py` *(docstring)* | It says `author.EDITABLE_FLAGS`; the registry has been `author._FLAG_KEYS` for some time. | From the former S5. |
+| Two ignored callback parameters typed `object` | `composer/authoring/judge.py`, `composer/spec/cvl_research.py` | `Any` where nothing reads the value. | Annotation only. Could ride with the docstring fix. |
+
+Changes that look shared but are not on this list, because a CVLR slice is their first reader:
+`prover/results.py`'s `external_functions` and the alert-report fetch in `cloud.py` (read by
+`verify` and carried in the judge's briefing by `state`, **P3b**); `UnanalyzedCexHandler` (the end-to-end test, **P2**); the shared
+unsat-core template fragments split out of `sanity_tool_prompt.j2` (the vacuity analysis,
+**P3b**); and `make_run_link_fetcher` and the give-up reason (**P7**).
 
 ---
 
