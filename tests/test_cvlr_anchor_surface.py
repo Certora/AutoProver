@@ -19,7 +19,7 @@ from composer.spec.cvlr.anchor_surface import (
     signature_params,
     source_files,
 )
-from composer.spec.cvlr.conf import ProverSettings, settings_conf
+from composer.spec.cvlr.conf import TunableConf, tunable_conf
 from composer.spec.cvlr.example import worked_example
 from composer.spec.solana.model import (
     AccountConstraint,
@@ -252,7 +252,7 @@ def _render(example) -> str:
         module="withdrawals",
         cvlr_versions="cvlr 0.6.1",
         example=example,
-        conf=settings_conf(ProverSettings()),
+        conf=tunable_conf(TunableConf()),
     )
 
 

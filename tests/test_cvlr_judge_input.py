@@ -17,7 +17,7 @@ No cargo, no network, no prover, no model.
 
 from composer.authoring.judge import JudgeInput
 from composer.spec.cvlr.author import with_assumptions
-from composer.spec.cvlr.conf import OptimisticLoop, ProverSettings
+from composer.spec.cvlr.conf import OptimisticLoop, TunableConf
 from composer.spec.cvlr.munge import EarlyPanic, FunctionMunge, MockFn
 from composer.spec.cvlr.state import HarnessAssumptions, harness_assumptions
 from composer.spec.cvlr.tuning import SummaryDirective
@@ -112,7 +112,7 @@ def test_having_used_neither_is_stated_rather_than_left_silent():
     assert "`optimistic_loop` off" in briefing
 
 
-_LOOPS_FINISH = ProverSettings(
+_LOOPS_FINISH = TunableConf(
     loop_iter=3,
     optimistic_loop=OptimisticLoop(
         why="bound 2 reported iteration 3 and bound 3 reported iteration 4, in transfer's Vec build"
@@ -135,7 +135,7 @@ def test_optimistic_loop_reaches_the_judge_with_the_bound_and_the_argument_for_i
 def test_a_raised_loop_bound_alone_is_nothing_to_weigh():
     """The bound is sound with `optimistic_loop` off: too low a bound fails the rule rather than
     passing it. So it does not make a verdict conditional on anything."""
-    briefing = _text(HarnessAssumptions(summaries=(), munges=(), settings=ProverSettings(loop_iter=6)))
+    briefing = _text(HarnessAssumptions(summaries=(), munges=(), settings=TunableConf(loop_iter=6)))
     assert "nothing to weigh" in briefing
 
 
@@ -146,7 +146,7 @@ def test_the_last_runs_external_functions_reach_the_judge():
     briefing = _text(HarnessAssumptions(summaries=(), munges=(), external_functions=(external,)))
     assert external in briefing and "treated these functions as external" in briefing
     assert "no points-to summaries" not in briefing
-    state = {"summaries": [], "munges": [], "prover_settings": ProverSettings(),
+    state = {"summaries": [], "munges": [], "prover_settings": TunableConf(),
              "external_functions": (external,)}
     assert harness_assumptions(state).external_functions == (external,)  # type: ignore[arg-type]
 
@@ -161,14 +161,14 @@ def test_optimistic_loop_is_read_from_the_state_the_tool_writes():
 
 
 def test_the_assumptions_are_read_from_the_state_the_tools_write():
-    state = {"summaries": [_DISPLAY], "munges": [_PANIC], "prover_settings": ProverSettings()}
+    state = {"summaries": [_DISPLAY], "munges": [_PANIC], "prover_settings": TunableConf()}
     assumptions = harness_assumptions(state)  # type: ignore[arg-type]
     assert assumptions.summaries == (_DISPLAY,)
     assert assumptions.munges == (_PANIC,)
 
 
 def test_a_run_that_used_neither_instrument_reads_as_empty():
-    assert harness_assumptions({"summaries": [], "munges": [], "prover_settings": ProverSettings()}) == HarnessAssumptions((), ())  # type: ignore[arg-type]
+    assert harness_assumptions({"summaries": [], "munges": [], "prover_settings": TunableConf()}) == HarnessAssumptions((), ())  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -225,7 +225,7 @@ def test_the_judge_is_shown_the_diff_and_not_only_a_description(tmp_path):
     )
     briefing = _text(
         harness_assumptions(
-            {"summaries": [], "munges": [munge], "prover_settings": ProverSettings()},  # type: ignore[arg-type]
+            {"summaries": [], "munges": [munge], "prover_settings": TunableConf()},  # type: ignore[arg-type]
             tmp_path,
         )
     )
@@ -240,7 +240,7 @@ def test_a_briefing_without_a_project_still_describes_the_munges(tmp_path):
         path="p.rs", function="f", kind=EarlyPanic(), why="w", feature="unit_vault"
     )
     briefing = _text(
-        harness_assumptions({"summaries": [], "munges": [munge], "prover_settings": ProverSettings()})  # type: ignore[arg-type]
+        harness_assumptions({"summaries": [], "munges": [munge], "prover_settings": TunableConf()})  # type: ignore[arg-type]
     )
     assert "f (p.rs)" in briefing
     assert "@@" not in briefing

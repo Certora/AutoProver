@@ -49,7 +49,7 @@ from composer.authoring.state import (
     validate_check_mapping,
 )
 from composer.spec.context import CacheKey, CvlrGeneration, CvlrJudge
-from composer.spec.cvlr.conf import DEFAULT_FEATURE, ProverSettings, conf_history
+from composer.spec.cvlr.conf import DEFAULT_FEATURE, TunableConf, conf_history
 from composer.spec.cvlr.munge import Munge, merge_munges, munge_history
 from composer.spec.cvlr.rules import rule_names
 from composer.spec.cvlr.tree import munge_diff
@@ -175,7 +175,7 @@ def validate_rule_subjects(subjects: list[RuleSubject], draft: str) -> str | Non
     return "\n".join(errors) if errors else None
 
 
-def _latest_settings(_current: ProverSettings, update: ProverSettings) -> ProverSettings:
+def _latest_settings(_current: TunableConf, update: TunableConf) -> TunableConf:
     """Last write wins. The settings edit tool writes every field, so there is nothing to merge."""
     return update
 
@@ -197,7 +197,7 @@ class CvlrGenerationExtra(AuthoringExtra):
     #: Reduced last-wins rather than plain: ``adjust_prover_config`` applies every edit in one call
     #: and writes the whole settings, so two writes in one graph step are two complete settings and
     #: the later is the live one. Without a reducer that step dies with ``InvalidUpdateError``.
-    prover_settings: Annotated[ProverSettings, _latest_settings]
+    prover_settings: Annotated[TunableConf, _latest_settings]
     #: The functions the last prover run treated as external: neither analyzed nor summarized, so
     #: their writes were dropped. Absent until a run has reported.
     external_functions: NotRequired[tuple[str, ...]]
@@ -258,7 +258,7 @@ class HarnessAssumptions:
     diff: str = ""
     #: The whole settings rather than only ``optimistic_loop``: what the assumption covers is "every
     #: loop finishes within ``loop_iter``", and the bound is half of that sentence.
-    settings: ProverSettings = ProverSettings()
+    settings: TunableConf = TunableConf()
     #: What the last prover run treated as external. Not an instrument the author chose, but the
     #: same kind of fact: a verdict over one of these is conditional on writes the model dropped.
     external_functions: tuple[str, ...] = ()

@@ -18,7 +18,7 @@ from composer.spec.cvlr import verify as verify_mod
 from composer.spec.cvlr.conf import (
     CheckVerdicts,
     CollectUnsatCore,
-    ProverSettings,
+    TunableConf,
     RunOverlay,
     solana_conf,
 )
@@ -57,14 +57,14 @@ def test_an_unsat_core_run_turns_the_vacuity_check_off_and_cores_on():
     `advanced` CVL's reruns use: on a Solana rule `advanced` ran over 25 minutes where `basic` took
     the ordinary 25s."""
     conf = solana_conf(
-        ProverSettings(), RunOverlay(build_script=Path("/w/b.py"), purpose=CollectUnsatCore())
+        TunableConf(), RunOverlay(build_script=Path("/w/b.py"), purpose=CollectUnsatCore())
     )
     assert conf["rule_sanity"] == "none"
     assert conf["coverage_info"] == "basic"
 
 
 def test_an_ordinary_run_is_unchanged():
-    conf = solana_conf(ProverSettings(), RunOverlay(build_script=Path("/w/b.py")))
+    conf = solana_conf(TunableConf(), RunOverlay(build_script=Path("/w/b.py")))
     assert conf["rule_sanity"] == "basic"
     assert "coverage_info" not in conf
     assert RunOverlay(build_script=Path("/w/b.py")).purpose == CheckVerdicts()
@@ -156,7 +156,7 @@ def _state(draft: str = _DRAFT) -> dict:
         "munges": [],
         "property_rules": [],
         "rule_subjects": [],
-        "prover_settings": ProverSettings(loop_iter=3),
+        "prover_settings": TunableConf(loop_iter=3),
         "required_validations": [],
         "validations": {},
         "failed": None,
@@ -240,7 +240,7 @@ async def test_the_probe_checks_one_rule_in_a_conf_of_its_own(monkeypatch):
     assert sub.purpose == CollectUnsatCore()
     assert sub.stem == "unit_x_unsat_core"
     assert sub.rules == SelectRules(("rule_backed",))
-    assert sub.settings == ProverSettings(loop_iter=3)
+    assert sub.settings == TunableConf(loop_iter=3)
 
 
 @pytest.mark.asyncio

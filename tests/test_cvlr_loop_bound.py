@@ -11,7 +11,7 @@ The circuit it closes, in the order the authoring loop walks it:
    and reports :class:`~composer.prover.ptypes.IncompleteCheck` — so it is explained to the author
    and kept out of the findings evidence, which is the split ``tests/test_cvlr_findings.py`` pins
    against recorded fixtures and this one pins against the prover.
-3. ``adjust_prover_config``'s edit, a :class:`~composer.spec.cvlr.conf.ProverSettings` with a
+3. ``adjust_prover_config``'s edit, a :class:`~composer.spec.cvlr.conf.TunableConf` with a
    raised ``loop_iter``, turns that into a verdict.
 
 Both arms verify **one artifact**: the program is built once and the two confs are written over it,
@@ -39,7 +39,7 @@ from typing import override
 
 import pytest
 
-from composer.cargo.metadata import Workspace, read_workspace
+from composer.cargo.metadata import Workspace
 from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, Built, platform_tools_installed
 from composer.cargo.session import CargoSession, Warmed
 from composer.prover.core import (
@@ -50,7 +50,7 @@ from composer.prover.core import (
 from composer.prover.ptypes import IncompleteCheck, RuleResult, classify_violation
 from composer.sandbox.config import SandboxConfig
 from composer.prover.conf import SelectRules, dump_conf
-from composer.spec.cvlr.conf import PLATFORM_TOOLS_VERSION, ProverSettings
+from composer.spec.cvlr.conf import PLATFORM_TOOLS_VERSION, TunableConf
 from composer.spec.cvlr.prover import (
     BuildRejected,
     Checked,
@@ -63,7 +63,7 @@ from composer.spec.cvlr.prover import (
 )
 from composer.spec.cvlr.rules import rule_names
 from composer.spec.cvlr.scaffold import SPECS_DIR, apply, plan_scaffold
-from composer.spec.cvlr_reference import SOLANA
+from composer.spec.cvlr.reference import SOLANA
 
 pytestmark = [pytest.mark.expensive, pytest.mark.asyncio]
 
@@ -180,7 +180,7 @@ def _violation(results: list[RuleResult], rule: str) -> RuleResult:
 
 
 async def test_raising_the_loop_bound_is_what_turns_the_rule_green(project, capsys):
-    workspace = await read_workspace(project)
+    workspace = await Workspace.read(project)
     assert isinstance(workspace, Workspace), workspace
     package = workspace.member(PACKAGE)
     assert package is not None, f"no {PACKAGE} member in {project}"
@@ -193,7 +193,7 @@ async def test_raising_the_loop_bound_is_what_turns_the_rule_green(project, caps
     declared = rule_names(PROBE.read_text())
     assert set(declared) == set(RULES), declared
 
-    default = ProverSettings()
+    default = TunableConf()
     assert default.loop_iter < 5, (
         f"the probe's measured loop takes five iterations to outrun the default bound, which is "
         f"now {default.loop_iter}. Raise the probe's trip count or this measures nothing."
@@ -211,7 +211,7 @@ async def test_raising_the_loop_bound_is_what_turns_the_rule_green(project, caps
     fast = await session.check(package=PACKAGE, features=("certora",))
     assert fast.ok, fast.verdict
 
-    def _submission(settings: ProverSettings, stem: str) -> Submission:
+    def _submission(settings: TunableConf, stem: str) -> Submission:
         return Submission(
             manifest_path=package.root / "Cargo.toml",
             settings=settings,

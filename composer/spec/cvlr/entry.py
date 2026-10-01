@@ -54,7 +54,7 @@ from composer.spec.context import SourceFields
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness
 from composer.spec.cvlr.pipeline import BUILD_DIR, WORK_DIR, CvlrBackend, CvlrPhase
 from composer.spec.cvlr.preflight import SelectedPackage, select_package
-from composer.spec.cvlr_reference import reference_for
+from composer.spec.cvlr.reference import reference_for
 from composer.spec.service_host import PureServiceHost
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.source_env import build_layered_source_tools, build_source_tools
@@ -72,7 +72,7 @@ _log = logging.getLogger(__name__)
 DEFAULT_CORPUS = "cvlr_kb"
 
 #: The generated API corpus. Not a CLI choice and not a default among alternatives: it describes
-#: the CVLR releases ``composer.spec.cvlr_reference`` pins, so a run either has it or does not.
+#: the CVLR releases ``composer.spec.cvlr.reference`` pins, so a run either has it or does not.
 CVLR_API_CORPUS = "cvlr_api_kb"
 
 #: The result a frontend renders.

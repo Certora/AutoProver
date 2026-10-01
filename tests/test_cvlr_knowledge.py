@@ -105,13 +105,13 @@ def _author_system_prompt() -> str:
         CvlrAuthorSystemParams,
         _PropertyGenSysTemplate,
     )
-    from composer.spec.cvlr.conf import ProverSettings, settings_conf
+    from composer.spec.cvlr.conf import TunableConf, tunable_conf
 
     params: CvlrAuthorSystemParams = {
         "cvlr_versions": "cvlr 0.6.1",
         "module": "spec",
         "example": None,
-        "conf": settings_conf(ProverSettings()),
+        "conf": tunable_conf(TunableConf()),
     }
     return "\n".join([
         *context_documents(CVLR_BUNDLE),

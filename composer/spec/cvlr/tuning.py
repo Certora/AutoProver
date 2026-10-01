@@ -72,6 +72,7 @@ Summaries the authoring loop adds (:class:`SummaryDirective`, written by :class:
 
 from dataclasses import dataclass
 from importlib.resources import files
+from pathlib import Path
 
 from composer.spec.cvlr.env_paths import PathDialect
 

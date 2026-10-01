@@ -27,6 +27,7 @@ from typing import override
 from pydantic import BaseModel, Field
 
 from composer.authoring.state import SkippedProperty
+from composer.cargo.features import CargoFeature
 from composer.diagnostics.timing import RunSummary
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.cvlr.munge import Munge
@@ -78,7 +79,7 @@ class HarnessModule:
         return f"cvlr_{self.module}"
 
     @property
-    def feature(self) -> str:
+    def feature(self) -> CargoFeature:
         """The cargo feature that compiles this unit — and only this unit — into the crate.
 
         The whole of ``docs/single-working-tree.md`` rests on this name. Every unit's module is
@@ -89,7 +90,7 @@ class HarnessModule:
         Prefixed rather than bare because it shares a namespace with the project's own features, and
         a component slug like ``serde`` or ``staging`` would otherwise silently mean something else.
         """
-        return f"unit_{self.module}"
+        return CargoFeature(f"unit_{self.module}")
 
     @property
     def artifact_file(self) -> str:

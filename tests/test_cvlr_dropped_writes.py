@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from composer.cargo.metadata import Workspace, read_workspace
+from composer.cargo.metadata import Workspace
 from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, Built, platform_tools_installed
 from composer.cargo.session import CargoSession, Warmed
 from composer.prover.conf import SelectRules, dump_conf
@@ -44,7 +44,7 @@ from composer.spec.cvlr.prover import (
 )
 from composer.spec.cvlr.rules import rule_names
 from composer.spec.cvlr.scaffold import SPECS_DIR, apply, plan_scaffold
-from composer.spec.cvlr_reference import SOLANA
+from composer.spec.cvlr.reference import SOLANA
 
 pytestmark = [pytest.mark.expensive, pytest.mark.asyncio]
 
@@ -89,7 +89,7 @@ def project(tmp_path: Path) -> Path:
 
 
 async def test_which_writes_the_model_drops(project, capsys):
-    workspace = await read_workspace(project)
+    workspace = await Workspace.read(project)
     assert isinstance(workspace, Workspace), workspace
     package = workspace.member(PACKAGE)
     assert package is not None, f"no {PACKAGE} member in {project}"

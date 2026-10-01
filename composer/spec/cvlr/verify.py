@@ -51,6 +51,7 @@ from graphcore.tools.schemas import (
 
 from composer.authoring.state import ValidationStamper, make_validation_stamper
 from composer.diagnostics.timing import get_run_summary
+from composer.cargo.features import CargoFeature
 from composer.cargo.sbf import Built, PlatformToolsMissing, SbfRun
 from composer.cargo.session import CargoSession, CompileFailed, Compiled
 from composer.cargo.symbols import defined_functions, nearest, unmatched
@@ -74,7 +75,7 @@ from composer.spec.cvlr.conf import (
     PLATFORM_TOOLS_VERSION,
     CollectUnsatCore,
     OptimisticLoop,
-    settings_conf,
+    tunable_conf,
 )
 from composer.spec.cvlr.munge import (
     AlreadyMunged,
@@ -152,7 +153,7 @@ class HarnessTarget:
     build_sem: asyncio.Semaphore
 
     @property
-    def features(self) -> tuple[str, ...]:
+    def features(self) -> tuple[CargoFeature, ...]:
         """The feature set every build of this unit uses — the harness, plus this unit's module."""
         return (DEFAULT_FEATURE, self.unit.feature)
 
@@ -879,7 +880,7 @@ class ExplainVacuity(
                 finding=finding,
                 core=core,
                 harness=draft,
-                conf=settings_conf(self.state["prover_settings"]),
+                conf=tunable_conf(self.state["prover_settings"]),
                 within_tool=self.tool_call_id,
             )
             return "\n\n".join(
@@ -1096,7 +1097,7 @@ class AdjustProverConfig(
         return tool_state_update(
             self.tool_call_id,
             "Prover config updated; the prover stamp is invalidated, so re-run `verify_rules`.\n\n"
-            f"```json\n{dump_conf(settings_conf(settings))}```",
+            f"```json\n{dump_conf(tunable_conf(settings))}```",
             prover_settings=settings,
         )
 

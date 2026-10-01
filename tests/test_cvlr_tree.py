@@ -11,6 +11,7 @@ No cargo, no network, no prover.
 """
 
 import asyncio
+import tomllib
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -321,7 +322,7 @@ def test_a_manifest_with_no_features_table_gets_one(tmp_path: Path):
     manifest = tmp_path / "Cargo.toml"
     manifest.write_text('[package]\nname = "p"\n')
     declare_unit_features(manifest, ["unit_a"])
-    assert "[features]\nunit_a = []" in manifest.read_text()
+    assert tomllib.loads(manifest.read_text())["features"] == {"unit_a": []}
 
 
 @pytest.mark.asyncio
