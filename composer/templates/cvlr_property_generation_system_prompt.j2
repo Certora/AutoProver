@@ -281,6 +281,14 @@ spelling of the nondet-accounts helper rather than guessing; it has changed acro
 The prover does not fully support stack-allocated arrays, and this one is large. The same advice
 applies anywhere a rule indexes a fixed-size array with a non-constant index: use `Vec` or `Box`.
 
+**And never let it drop: end every rule with `core::mem::forget(accounts);`.** The vacuity check
+(`rule_not_vacuous_cvlr`) is a separate program whose `satisfy` sits at the very end of the rule
+function, after its locals are dropped, and dropping the 16-account array is a 16-iteration loop. With
+`loop_iter: 2` no path finishes it, so the satisfy is unreachable and the rule is reported
+`SANITY_FAILED` while its assertion verifies. Whether the compiler emits that loop varies from build to
+build, so an unrelated edit can make the verdict come and go. Measured: one rule `SANITY_FAILED` in four
+submissions verified, vacuity check passing, with this one line and nothing else changed.
+
 And **do not annotate that array's lifetime.** The helper is generic over it; writing a wrapper that
 returns `[AccountInfo<'static>; 16]` forces the *borrow* to be `'static` too, and the struct literal
 below then fails with "does not live long enough". Let inference pick it.
@@ -357,6 +365,7 @@ clog!(before{% for arg in example.args %}, {{ arg.name }}{% endfor %});
 let ctx = Context::new(&crate::ID, &mut ix, &[], Default::default());
 crate::{{ example.program_module }}::{{ example.handler }}(ctx{% for arg in example.args %}, {{ arg.name }}{% endfor %}).unwrap();
 cvlr_assert!(/* the same state, through the same `ix` */);
+core::mem::forget(accounts);
 ```
 
 {% if example.provenance == "source" %}Those names are **this program's**, read from its own declarations — the accounts struct is the one
@@ -388,6 +397,7 @@ clog!(before, amount);
 let ctx = Context::new(&crate::ID, &mut ix, &[], Default::default());
 crate::vault_program::deposit(ctx, amount).unwrap();
 cvlr_assert!(ix.vault.balance == before + amount);       // and after, through the same struct
+core::mem::forget(accounts);
 ```
 
 The names in that example are the example's — the accounts struct, the program module and the handler
@@ -414,6 +424,7 @@ let mut ix = crate::{% if example %}{{ example.accounts_struct }}{% else %}Depos
 {% set signers = (example.accounts | selectattr("constructor", "equalto", "Signer") | map(attribute="name") | list) if example else [] %}let signed = ix.{% if signers %}{{ signers[0] }}{% elif example %}/* a Signer field */{% else %}depositor{% endif %}.is_signer;   // what the constraint promised, read through the validated struct
 clog!(signed as u64);
 cvlr_assert!(signed);
+core::mem::forget(accounts);
 ```
 
 The assertion holds on every execution validation accepts, which is the rejection property read the

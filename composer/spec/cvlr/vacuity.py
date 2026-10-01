@@ -47,8 +47,9 @@ class AssertionInCore:
             f"The rule's assertion is in the unsat core (`{self.line}`). The proof the prover found "
             "needs it, so the core does not show the rule's assumptions contradicting each other or "
             "the program: that is strong evidence the path to the assertion is live, and that the "
-            "vacuity comes from how the assertion or its precondition is stated, or from the "
-            "vacuity check itself. Weakening the rule's assumptions is not the fix."
+            "cause is after the assertion, where the core cannot see — the vacuity check's satisfy "
+            "sits at the end of the rule, after its locals drop. Check that the rule ends with "
+            "`core::mem::forget(accounts);`. Weakening the rule's assumptions is not the fix."
         )
 
 
