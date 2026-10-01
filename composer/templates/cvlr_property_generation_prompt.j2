@@ -72,9 +72,10 @@ Read the outcome:
 * **A rule VIOLATED** → read the counterexample. Then decide which of these it is:
   - your rule is wrong (over-strong assertion, missing assumption, wrong state read) — fix it;
   - the property does not hold and you have found a defect — mark the rule with
-    `expect_rule_failure(rule_name, reason)`, saying why you believe the violation is real, and
-    re-run. Marked rules are excluded from the gate, so a run can be complete with a genuine
-    violation in it. **Do not invert the rule so that it passes.**
+    `expect_rule_failure(rule_name, reason)`, saying why you believe the violation is real. Marked
+    rules are excluded from the gate, so a run can be complete with a genuine violation in it, and
+    marking the last unaccounted failure of an unchanged draft stamps it without another run.
+    **Do not invert the rule so that it passes.**
 * **A rule reported vacuous / sanity-failing** → no execution reaches the end of the rule, so it
   proves nothing. The vacuity check assumes every assertion on the way holds, and that includes
   ones you did not write: a token model's own `cvlr_assert!`, and the prover's loop-unwinding

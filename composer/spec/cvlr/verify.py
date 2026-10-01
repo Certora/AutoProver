@@ -100,9 +100,11 @@ from composer.spec.cvlr.prover import (
 )
 from composer.spec.cvlr.harness import HarnessModule
 from composer.spec.cvlr.rules import rule_names
+from composer.authoring.state import merge_expected_failures
 from composer.spec.cvlr.state import (
     PROVER_VALIDATION_KEY,
     CvlrGenerationState,
+    LastVerdicts,
     tuning_history,
 )
 from composer.spec.cvlr.tree import NotInWorkdir, Reconciled, SharedTree, UnitEdits
@@ -421,6 +423,14 @@ def _unaccounted(
         for name, ok in status.items()
         if not ok and (name not in expected_failures or name in incomplete)
     )
+
+
+def _stamp_under(last: LastVerdicts, expected: dict[CheckName, str]) -> dict[str, str]:
+    """The prover stamp ``last`` earns under the markings ``expected``: its own stamp when they
+    account for every failure it reported, otherwise a cleared one."""
+    if last.unverdicted or _unaccounted(last.status, expected, last.incomplete):
+        return {key: "" for key in last.stamp}
+    return last.stamp
 
 
 def _externals_note(externals: Sequence[str]) -> str | None:
@@ -763,12 +773,19 @@ class VerifyRules(
                     )
                 if (externals := _externals_note(report.external_functions)) is not None:
                     lines.append(externals)
+                last = LastVerdicts(
+                    status=status,
+                    incomplete=sorted(incomplete),
+                    unverdicted=unverdicted,
+                    stamp=stamper(self.state, tuning_history(self.state)),
+                )
                 if unaccounted or unverdicted:
                     return tool_state_update(
                         self.tool_call_id,
                         "\n\n".join(lines) + drift,
                         prover_link=report.link,
                         external_functions=report.external_functions,
+                        last_verdicts=last,
                     )
                 return tool_state_update(
                     self.tool_call_id,
@@ -776,7 +793,8 @@ class VerifyRules(
                     + drift,
                     prover_link=report.link,
                     external_functions=report.external_functions,
-                    validations=stamper(self.state, tuning_history(self.state)),
+                    last_verdicts=last,
+                    validations=last.stamp,
                 )
 
 
@@ -1125,13 +1143,40 @@ class AdjustProverConfig(
         )
 
 
+def _remarked(
+    state: CvlrGenerationState, tool_call_id: str, said: str, marking: dict[CheckName, str]
+) -> Command:
+    """Apply ``marking`` and re-decide the prover stamp against the last run's verdicts."""
+    last = state.get("last_verdicts")
+    if last is None:
+        return tool_state_update(tool_call_id, said, expected_failures=marking)
+    stamp = _stamp_under(last, merge_expected_failures(state["expected_failures"], marking))
+    current = prover_stamper()(state, tuning_history(state))
+    held = state["validations"].get(PROVER_VALIDATION_KEY) == current[PROVER_VALIDATION_KEY]
+    if stamp == current and not held:
+        said += (
+            " Every failure the last prover run reported is now accounted for, so this draft is "
+            "stamped without another run."
+        )
+    elif stamp != current and held:
+        said += (
+            " The last prover run's failures are no longer all accounted for, so this draft's "
+            "prover stamp is withdrawn."
+        )
+    return tool_state_update(tool_call_id, said, expected_failures=marking, validations=stamp)
+
+
 @tool_display(lambda p: f"Expecting rule `{p['rule_name']}` to fail", None)
-class ExpectRuleFailure(WithAsyncImplementation[Command], WithInjectedId):
+class ExpectRuleFailure(
+    WithInjectedState[CvlrGenerationState], WithAsyncImplementation[Command], WithInjectedId
+):
     """Declare that a rule is *meant* to fail because the program violates the property.
 
     This is how a real finding is recorded rather than argued away. The rule stays in the harness,
     the prover keeps reporting the violation, and ``verify_rules`` stops treating it as unfinished
-    work. Use it only when you have read the counterexample and believe the defect is real.
+    work. Use it only when you have read the counterexample and believe the defect is real. When
+    the marking accounts for the last failure of the last run, the draft is stamped as that run
+    would have stamped it, with no need to run again.
     """
 
     rule_name: str = Field(description="The name of the rule expected to fail")
@@ -1148,23 +1193,28 @@ class ExpectRuleFailure(WithAsyncImplementation[Command], WithInjectedId):
                 self.tool_call_id,
                 "A non-empty reason is required when marking a rule as expected to fail.",
             )
-        return tool_state_update(
+        return _remarked(
+            self.state,
             self.tool_call_id,
             f"Recorded: {self.rule_name} is expected to fail.",
-            expected_failures={CheckName(self.rule_name): self.reason},
+            {CheckName(self.rule_name): self.reason},
         )
 
 
 @tool_display(lambda p: f"Expecting rule `{p['rule_name']}` to pass", None)
-class ExpectRulePassage(WithAsyncImplementation[Command], WithInjectedId):
-    """Withdraw an ``expect_rule_failure`` marking, putting the rule back under the gate."""
+class ExpectRulePassage(
+    WithInjectedState[CvlrGenerationState], WithAsyncImplementation[Command], WithInjectedId
+):
+    """Withdraw an ``expect_rule_failure`` marking, putting the rule back under the gate. If the
+    last run reported the rule failing, the draft's prover stamp goes with it."""
 
     rule_name: str = Field(description="The name of the rule that should verify after all")
 
     @override
     async def run(self) -> Command:
-        return tool_state_update(
+        return _remarked(
+            self.state,
             self.tool_call_id,
             f"Withdrawn: {self.rule_name} must verify.",
-            expected_failures={CheckName(self.rule_name): ""},
+            {CheckName(self.rule_name): ""},
         )
