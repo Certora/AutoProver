@@ -169,12 +169,14 @@ async def prepare_submission(
 
     Split from :func:`run_submission` so a caller that shares one tree can wait
     on several submissions' cloud jobs at once. The two halves are not
-    independent, though. :func:`run_submission` reruns this build, from the tree
-    as it is then and into the target directory every build of the crate shares,
-    and uploads what it built. So from the start of this call until
-    :meth:`~composer.prover.core.ProverCallbacks.on_prover_link` fires, nothing
-    else may build the crate or change the tree. If ``run_submission`` returns
-    first, the CLI failed before uploading, and the tree is free again.
+    independent, though. :func:`run_submission` reruns this build, from the
+    sources as they are then and into the target directory every build of the
+    crate shares, and uploads the sources and the ``.so``. So from the start of
+    this call until :meth:`~composer.prover.core.ProverCallbacks.on_prover_link`
+    fires, nothing else may build the crate or change a file it compiles. The
+    conf is not one of those: the prover reads it, the build does not. If
+    ``run_submission`` returns first, the CLI failed before uploading, and the
+    crate is free again.
     """
     build = await build_for_submission(session, submission, timeout_s=timeout_s)
     if not isinstance(build.verdict, Built):
