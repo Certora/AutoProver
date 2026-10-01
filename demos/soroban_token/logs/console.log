@@ -1,0 +1,839 @@
+warning: `VIRTUAL_ENV=/Users/chandrakananandi/.pyenv/versions/3.11.13` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+/Users/chandrakananandi/research/AutoProver/.venv/lib/python3.13/site-packages/pydantic/_internal/_generate_schema.py:1463: UserWarning: Item 'curr_spec' on TypedDict class 'SpecBuffer' is using the `ReadOnly` qualifier. Pydantic will not protect items from any mutation on dictionary instances.
+  warnings.warn(
+cvlr: builds are UNCONFINED (COMPOSER_SANDBOX_PROVIDER=none) — this project's build.rs and proc-macros run with your full environment, and results from this run are development results, not production ones
+<All keys matched successfully>
+autoprove logs: /private/tmp/claude-501/-Users-chandrakananandi-research-AutoProver/77167112-ef59-402d-bdde-52af0f1797a5/scratchpad/run2/token/.certora_internal/autoProve/2026-09-30_15-14-41.cvlr_46e7c402e8ee.log
+           events: /private/tmp/claude-501/-Users-chandrakananandi-research-AutoProver/77167112-ef59-402d-bdde-52af0f1797a5/scratchpad/run2/token/.certora_internal/autoProve/2026-09-30_15-14-41.cvlr_46e7c402e8ee.events.jsonl
+Selected run id: 75fbf5e1884846669c66f5f7643f96ab
+
+────────────────────────────────────────────────────────────
+Phase: Design Doc Discovery
+────────────────────────────────────────────────────────────
+[Design Doc Discovery] start
+[Design Doc Discovery] at node: initial; tool calls: [list_files]
+[Design Doc Discovery] at node: tools
+[Design Doc Discovery] at node: tool_result; tool calls: [get_file, get_file]
+[Design Doc Discovery] at node: tools
+[Design Doc Discovery] at node: tool_result; tool calls: [get_file, get_file]
+[Design Doc Discovery] at node: tools
+[Design Doc Discovery] at node: tool_result; tool calls: [result]
+[Design Doc Discovery] at node: tools
+[Design Doc Discovery] end
+[Design Doc Discovery] ✓ done
+
+────────────────────────────────────────────────────────────
+Phase: System Analysis
+────────────────────────────────────────────────────────────
+[Component analysis] start
+
+────────────────────────────────────────────────────────────
+Phase: CVLR preflight
+────────────────────────────────────────────────────────────
+[Component analysis] at node: initial; tool calls: [memory]
+[Component analysis] at node: tools
+[Component analysis] at node: tool_result; tool calls: [list_files]
+[Component analysis] at node: tools
+[Component analysis] at node: tool_result; tool calls: [get_file]
+[Component analysis] at node: tools
+[Component analysis] at node: tool_result; tool calls: [memory]
+[Component analysis] at node: tools
+[CVLR preflight] ✓ done
+[Component analysis] at node: tool_result; tool calls: [write_rough_draft]
+[Component analysis] at node: tools
+[Component analysis] at node: tool_result; tool calls: [read_rough_draft]
+[Component analysis] at node: tools
+[Component analysis] at node: tool_result; tool calls: [result]
+[Component analysis] at node: tools
+[Component analysis] at node: tool_result; tool calls: [result]
+[Component analysis] at node: tools
+[Component analysis] end
+[System Analysis] ✓ done
+
+────────────────────────────────────────────────────────────
+Phase: Admin Setup
+────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────
+Phase: Balances and Transfers
+────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────
+Phase: Minting
+────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────
+Phase: Burning
+────────────────────────────────────────────────────────────
+[Property extraction (Round 1)] start
+[Property extraction (Round 1)] start
+[Property extraction (Round 1)] start
+[Property extraction (Round 1)] start
+[Property extraction (Round 1)] at node: initial
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: initial; tool calls: [list_files]
+[Property extraction (Round 1)] at node: tools
+[Property extraction (Round 1)] at node: initial; tool calls: [list_files]
+[Property extraction (Round 1)] at node: tools
+[Property extraction (Round 1)] at node: initial; tool calls: [list_files]
+[Property extraction (Round 1)] at node: tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result; tool calls: [get_file]
+[Property extraction (Round 1)] at node: tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result; tool calls: [get_file]
+[Property extraction (Round 1)] at node: tools
+[Property extraction (Round 1)] at node: tool_result; tool calls: [get_file]
+[Property extraction (Round 1)] at node: tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result; tool calls: [list_files]
+[Property extraction (Round 1)] at node: tools
+[Property extraction (Round 1)] at node: tool_result; tool calls: [get_file]
+[Property extraction (Round 1)] at node: tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result; tool calls: [get_file]
+[Property extraction (Round 1)] at node: tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result; tool calls: [write_rough_draft]
+[Property extraction (Round 1)] at node: tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result; tool calls: [read_rough_draft]
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tools
+[Property extraction (Round 1)] at node: tool_result; tool calls: [write_rough_draft]
+[Property extraction (Round 1)] at node: tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result; tool calls: [result]
+[Property extraction (Round 1)] at node: tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result; tool calls: [read_rough_draft]
+[Property extraction (Round 1)] at node: tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result; tool calls: [write_rough_draft]
+[Property extraction (Round 1)] at node: tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result; tool calls: [write_rough_draft]
+[Property extraction (Round 1)] at node: tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result; tool calls: [read_rough_draft]
+[Property extraction (Round 1)] at node: tools
+[Property extraction (Round 1)] at node: tool_result; tool calls: [read_rough_draft]
+[Property extraction (Round 1)] at node: tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result
+[Property extraction (Round 1)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result; tool calls: [result]
+[Property extraction (Round 1)] at node: tools
+[Property extraction (Round 1)] end
+[Property extraction (Round 2)] start
+[Property extraction (Round 2)] at node: initial; tool calls: [list_files]
+[Property extraction (Round 2)] at node: tools
+[Property extraction (Round 2)] at node: tool_result; tool calls: [get_file]
+[Property extraction (Round 2)] at node: tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 1)] at node: tool_result; tool calls: [result]
+[Property extraction (Round 1)] at node: tools
+[Property extraction (Round 1)] end
+[Property extraction (Round 2)] start
+[Property extraction (Round 1)] at node: tool_result; tool calls: [result]
+[Property extraction (Round 1)] at node: tools
+[Property extraction (Round 2)] at node: initial; tool calls: [list_files]
+[Property extraction (Round 2)] at node: tools
+[Property extraction (Round 2)] at node: tool_result; tool calls: [get_file]
+[Property extraction (Round 2)] at node: tools
+[Property extraction (Round 1)] at node: tool_result; tool calls: [result]
+[Property extraction (Round 1)] at node: tools
+[Property extraction (Round 1)] end
+[Property extraction (Round 2)] start
+[Property extraction (Round 2)] at node: initial; tool calls: [list_files]
+[Property extraction (Round 2)] at node: tools
+[Property extraction (Round 2)] at node: tool_result; tool calls: [get_file, get_file]
+[Property extraction (Round 2)] at node: tools
+[Property extraction (Round 1)] at node: tool_result; tool calls: [result]
+[Property extraction (Round 1)] at node: tools
+[Property extraction (Round 1)] end
+[Property extraction (Round 2)] start
+[Property extraction (Round 2)] at node: initial; tool calls: [list_files]
+[Property extraction (Round 2)] at node: tools
+[Property extraction (Round 2)] at node: tool_result; tool calls: [get_file]
+[Property extraction (Round 2)] at node: tools
+[Property extraction (Round 2)] at node: tool_result; tool calls: [write_rough_draft]
+[Property extraction (Round 2)] at node: tools
+[Property extraction (Round 2)] at node: tool_result; tool calls: [read_rough_draft]
+[Property extraction (Round 2)] at node: tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result; tool calls: [result]
+[Property extraction (Round 2)] at node: tools
+[Property extraction (Round 2)] end
+[Property extraction (Round 3)] start
+[Property extraction (Round 3)] at node: initial; tool calls: [list_files]
+[Property extraction (Round 3)] at node: tools
+[Property extraction (Round 3)] at node: tool_result; tool calls: [get_file]
+[Property extraction (Round 3)] at node: tools
+[Property extraction (Round 3)] at node: tool_result; tool calls: [write_rough_draft]
+[Property extraction (Round 3)] at node: tools
+[Property extraction (Round 3)] at node: tool_result; tool calls: [read_rough_draft]
+[Property extraction (Round 3)] at node: tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result; tool calls: [code_explorer]
+[Property extraction (Round 2) / Code Explorer: In src/lib.rs of this Soroban token, storage keys are constructed as `&addr` (an Address) for balances and `&"ADMIN"` (a &str literal) for the admin. Are there any other places in the crate (including src/certora/*) where persistent, instance, or temporary storage is written or read, and with what key expressions and value types?] start  (via tool: toolu_014fpgn4G7mR5aQXVp3xdRDA)
+[Property extraction (Round 2) / Code Explorer: In src/lib.rs of this Soroban token, storage keys are constructed as `&addr` (an Address) for balances and `&"ADMIN"` (a &str literal) for the admin. Are there any other places in the crate (including src/certora/*) where persistent, instance, or temporary storage is written or read, and with what key expressions and value types?] at node: initial; tool calls: [list_files]
+[Property extraction (Round 2) / Code Explorer: In src/lib.rs of this Soroban token, storage keys are constructed as `&addr` (an Address) for balances and `&"ADMIN"` (a &str literal) for the admin. Are there any other places in the crate (including src/certora/*) where persistent, instance, or temporary storage is written or read, and with what key expressions and value types?] at node: tools
+[Property extraction (Round 2) / Code Explorer: In src/lib.rs of this Soroban token, storage keys are constructed as `&addr` (an Address) for balances and `&"ADMIN"` (a &str literal) for the admin. Are there any other places in the crate (including src/certora/*) where persistent, instance, or temporary storage is written or read, and with what key expressions and value types?] at node: tool_result; tool calls: [get_file, get_file, get_file, get_file, get_file, get_file]
+[Property extraction (Round 2) / Code Explorer: In src/lib.rs of this Soroban token, storage keys are constructed as `&addr` (an Address) for balances and `&"ADMIN"` (a &str literal) for the admin. Are there any other places in the crate (including src/certora/*) where persistent, instance, or temporary storage is written or read, and with what key expressions and value types?] at node: tools
+[Property extraction (Round 2) / Code Explorer: In src/lib.rs of this Soroban token, storage keys are constructed as `&addr` (an Address) for balances and `&"ADMIN"` (a &str literal) for the admin. Are there any other places in the crate (including src/certora/*) where persistent, instance, or temporary storage is written or read, and with what key expressions and value types?] at node: tool_result; tool calls: [grep_files, grep_files, get_file]
+[Property extraction (Round 2) / Code Explorer: In src/lib.rs of this Soroban token, storage keys are constructed as `&addr` (an Address) for balances and `&"ADMIN"` (a &str literal) for the admin. Are there any other places in the crate (including src/certora/*) where persistent, instance, or temporary storage is written or read, and with what key expressions and value types?] at node: tools
+[Property extraction (Round 2) / Code Explorer: In src/lib.rs of this Soroban token, storage keys are constructed as `&addr` (an Address) for balances and `&"ADMIN"` (a &str literal) for the admin. Are there any other places in the crate (including src/certora/*) where persistent, instance, or temporary storage is written or read, and with what key expressions and value types?] at node: tool_result; tool calls: [get_file]
+[Property extraction (Round 2) / Code Explorer: In src/lib.rs of this Soroban token, storage keys are constructed as `&addr` (an Address) for balances and `&"ADMIN"` (a &str literal) for the admin. Are there any other places in the crate (including src/certora/*) where persistent, instance, or temporary storage is written or read, and with what key expressions and value types?] at node: tools
+[Property extraction (Round 3)] at node: tool_result; tool calls: [result]
+[Property extraction (Round 3)] at node: tools
+[Property extraction (Round 3)] end
+[Admin Setup] ✓ done
+[Property extraction (Round 2) / Code Explorer: In src/lib.rs of this Soroban token, storage keys are constructed as `&addr` (an Address) for balances and `&"ADMIN"` (a &str literal) for the admin. Are there any other places in the crate (including src/certora/*) where persistent, instance, or temporary storage is written or read, and with what key expressions and value types?] at node: tool_result; tool calls: [grep_files]
+[Property extraction (Round 2) / Code Explorer: In src/lib.rs of this Soroban token, storage keys are constructed as `&addr` (an Address) for balances and `&"ADMIN"` (a &str literal) for the admin. Are there any other places in the crate (including src/certora/*) where persistent, instance, or temporary storage is written or read, and with what key expressions and value types?] at node: tools
+[Property extraction (Round 2) / Code Explorer: In src/lib.rs of this Soroban token, storage keys are constructed as `&addr` (an Address) for balances and `&"ADMIN"` (a &str literal) for the admin. Are there any other places in the crate (including src/certora/*) where persistent, instance, or temporary storage is written or read, and with what key expressions and value types?] at node: tool_result; tool calls: [get_file]
+[Property extraction (Round 2) / Code Explorer: In src/lib.rs of this Soroban token, storage keys are constructed as `&addr` (an Address) for balances and `&"ADMIN"` (a &str literal) for the admin. Are there any other places in the crate (including src/certora/*) where persistent, instance, or temporary storage is written or read, and with what key expressions and value types?] at node: tools
+[Property extraction (Round 2) / Code Explorer: In src/lib.rs of this Soroban token, storage keys are constructed as `&addr` (an Address) for balances and `&"ADMIN"` (a &str literal) for the admin. Are there any other places in the crate (including src/certora/*) where persistent, instance, or temporary storage is written or read, and with what key expressions and value types?] at node: tool_result; tool calls: [result]
+[Property extraction (Round 2) / Code Explorer: In src/lib.rs of this Soroban token, storage keys are constructed as `&addr` (an Address) for balances and `&"ADMIN"` (a &str literal) for the admin. Are there any other places in the crate (including src/certora/*) where persistent, instance, or temporary storage is written or read, and with what key expressions and value types?] at node: tools
+[Property extraction (Round 2) / Code Explorer: In src/lib.rs of this Soroban token, storage keys are constructed as `&addr` (an Address) for balances and `&"ADMIN"` (a &str literal) for the admin. Are there any other places in the crate (including src/certora/*) where persistent, instance, or temporary storage is written or read, and with what key expressions and value types?] end
+[Property extraction (Round 2)] at node: tools
+[Property extraction (Round 2)] at node: tool_result; tool calls: [write_rough_draft]
+[Property extraction (Round 2)] at node: tools
+[Property extraction (Round 2)] at node: tool_result; tool calls: [read_rough_draft]
+[Property extraction (Round 2)] at node: tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result; tool calls: [result]
+[Property extraction (Round 2)] at node: tools
+[Property extraction (Round 2)] end
+[Property extraction (Round 3)] start
+[Property extraction (Round 3)] at node: initial; tool calls: [list_files]
+[Property extraction (Round 3)] at node: tools
+[Property extraction (Round 3)] at node: tool_result; tool calls: [get_file, get_file]
+[Property extraction (Round 3)] at node: tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result; tool calls: [write_rough_draft]
+[Property extraction (Round 3)] at node: tools
+[Property extraction (Round 3)] at node: tool_result; tool calls: [read_rough_draft]
+[Property extraction (Round 3)] at node: tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result
+[Property extraction (Round 3)] at node: no_tools
+[Property extraction (Round 3)] at node: tool_result; tool calls: [result]
+[Property extraction (Round 3)] at node: tools
+[Property extraction (Round 3)] end
+[Balances and Transfers] ✓ done
+[Property extraction (Round 2)] at node: tool_result; tool calls: [get_file]
+[Property extraction (Round 2)] at node: tools
+[Property extraction (Round 2)] at node: tool_result; tool calls: [get_file]
+[Property extraction (Round 2)] at node: tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools/Users/chandrakananandi/research/AutoProver/.venv/lib/python3.13/site-packages/pydantic/_internal/_generate_schema.py:1463: UserWarning: Item 'curr_spec' on TypedDict class 'SpecBuffer' is using the `ReadOnly` qualifier. Pydantic will not protect items from any mutation on dictionary instances.
+  warnings.warn(
+
+[Property extraction (Round 2)] at node: tool_result; tool calls: [write_rough_draft]
+[Property extraction (Round 2)] at node: tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result; tool calls: [read_rough_draft]
+[Property extraction (Round 2)] at node: tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result
+[Property extraction (Round 2)] at node: no_tools
+[Property extraction (Round 2)] at node: tool_result; tool calls: [result]
+[Property extraction (Round 2)] at node: tools
+[Property extraction (Round 2)] end
+[Burning] ✓ done
+[Property extraction (Round 2)] end
+[Property extraction (Round 2) (Retry 1)] start
+[Property extraction (Round 2) (Retry 1)] end
+[Property extraction (Round 2) (Retry 2)] start
+[Property extraction (Round 2) (Retry 2)] at node: tool_result; tool calls: [get_file]
+[Property extraction (Round 2) (Retry 2)] at node: tools
+[Property extraction (Round 2) (Retry 2)] at node: tool_result; tool calls: [get_file]
+[Property extraction (Round 2) (Retry 2)] at node: tools
+[Property extraction (Round 2) (Retry 2)] at node: tool_result; tool calls: [get_file]
+[Property extraction (Round 2) (Retry 2)] at node: tools
+[Property extraction (Round 2) (Retry 2)] at node: tool_result
+[Property extraction (Round 2) (Retry 2)] at node: no_tools
+[Property extraction (Round 2) (Retry 2)] at node: tool_result; tool calls: [write_rough_draft]
+[Property extraction (Round 2) (Retry 2)] at node: tools
+[Property extraction (Round 2) (Retry 2)] at node: tool_result
+[Property extraction (Round 2) (Retry 2)] at node: no_tools
+[Property extraction (Round 2) (Retry 2)] at node: tool_result; tool calls: [read_rough_draft]
+[Property extraction (Round 2) (Retry 2)] at node: tools
+[Property extraction (Round 2) (Retry 2)] at node: tool_result
+[Property extraction (Round 2) (Retry 2)] at node: no_tools
+[Property extraction (Round 2) (Retry 2)] at node: tool_result
+[Property extraction (Round 2) (Retry 2)] at node: no_tools
+[Property extraction (Round 2) (Retry 2)] at node: tool_result
+[Property extraction (Round 2) (Retry 2)] at node: no_tools
+[Property extraction (Round 2) (Retry 2)] at node: tool_result
+[Property extraction (Round 2) (Retry 2)] at node: no_tools
+[Property extraction (Round 2) (Retry 2)] at node: tool_result
+[Property extraction (Round 2) (Retry 2)] at node: no_tools
+[Property extraction (Round 2) (Retry 2)] at node: tool_result
+[Property extraction (Round 2) (Retry 2)] at node: no_tools
+[Property extraction (Round 2) (Retry 2)] at node: tool_result
+[Property extraction (Round 2) (Retry 2)] at node: no_tools
+[Property extraction (Round 2) (Retry 2)] at node: tool_result
+[Property extraction (Round 2) (Retry 2)] at node: no_tools
+[Property extraction (Round 2) (Retry 2)] at node: tool_result; tool calls: [result]
+[Property extraction (Round 2) (Retry 2)] at node: tools
+[Property extraction (Round 2) (Retry 2)] end
+[Minting] ✓ done
+
+────────────────────────────────────────────────────────────
+Phase: Admin Setup (4 properties)
+────────────────────────────────────────────────────────────
+[Admin Setup (4 properties) (hashed-model-forking-locally)] start
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: initial; tool calls: [memory]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [memory]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [list_files]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [get_file]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [get_file]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [get_file]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [get_file]Keyring not available, saving to file /Users/chandrakananandi/.certora/credentials.json
+
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [get_file]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [cvlr_source_files]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [cvlr_source_read]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [cvlr_source_read]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [cvlr_source_read]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [cvlr_source_read]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [cvlr_source_read]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [cvlr_source_read]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [get_file]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [cvlr_source_read]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [cvlr_source_read]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [put_harness]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [cargo_check]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [put_harness]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [cargo_check]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [memory]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [verify_rules]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [expect_rule_failure]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [expect_rule_failure]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [expect_rule_failure]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [memory]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [feedback_tool]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] start  (via tool: toolu_01XSxWMxfDVxZHpaR6geRdeg)
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: initial; tool calls: [memory]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [get_harness]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [list_files]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [get_file]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [get_file, get_file]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [get_file, get_file, get_file, get_file]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [cvlr_source_files, get_file, get_file, get_file]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [cvlr_source_read, cvlr_source_read, cvlr_source_read]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [grep_files, cvlr_source_read]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [cvlr_source_read, cvlr_source_read]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [cvlr_source_read]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [get_file]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [cvlr_source_read]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [memory]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [result]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [write_rough_draft]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [read_rough_draft]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [result]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] end
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [put_harness]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [cargo_check]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [memory]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [verify_rules]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [memory]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [feedback_tool]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] start  (via tool: toolu_01DEaqcQS3gmN9nmahXD74UU)
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: initial; tool calls: [memory]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [memory]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [get_harness]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [list_files, cvlr_source_search]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [get_file, get_file, get_file]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [get_file, get_file, get_file, get_file]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [get_file]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [cvlr_source_search]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [cvlr_source_read, cvlr_source_files]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [cvlr_source_read, cvlr_source_read]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [get_file, cvlr_source_read]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [get_file, get_file]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [memory]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [result]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [write_rough_draft]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [read_rough_draft]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [result]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] end
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [get_harness]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [put_harness]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [cargo_check]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [verify_rules]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [memory]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [feedback_tool]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] start  (via tool: toolu_01WC26o6Ne54TN9nDuF4CCsQ)
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: initial; tool calls: [memory]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [memory]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [get_harness]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [memory]Keyring not available, saving to file /Users/chandrakananandi/.certora/credentials.json
+
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [result]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [write_rough_draft]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [read_rough_draft]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tool_result; tool calls: [result]
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally) / CVLR harness feedback judge] end
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tool_result; tool calls: [result]
+[Admin Setup (4 properties) (hashed-model-forking-locally)] at node: tools
+[Admin Setup (4 properties) (hashed-model-forking-locally)] end
+[Admin Setup (4 properties)] ✓ done
+
+────────────────────────────────────────────────────────────
+Phase: Report Extraction
+────────────────────────────────────────────────────────────
+[Report Extraction] ✓ done
+
+============================================================
+Auto-prove complete in 58m 59.4s
+─────────────────────────────────────────────────────────────────────────────────────────
+Phase / Task                               Wall       Queue wait  Prover    Calls  Status
+─────────────────────────────────────────────────────────────────────────────────────────
+DISCOVER_DESIGN_DOC: Design Doc Discovery  14.2s      0ms         —         —      ok    
+PREFLIGHT: CVLR preflight                  30.3s      0ms         —         —      ok    
+ANALYSIS: System Analysis                  1m 29.6s   0ms         —         —      ok    
+EXTRACTION: Admin Setup                    3m 39.2s   0ms         —         —      ok    
+EXTRACTION: Balances and Transfers         9m 03.6s   0ms         —         —      ok    
+EXTRACTION: Burning                        11m 09.9s  0ms         —         —      ok    
+EXTRACTION: Minting                        34m 39.5s  0ms         —         —      ok    
+FORMALIZATION: Admin Setup (4 properties)  21m 55.5s  0ms         3m 32.3s  3      ok    
+REPORT: Report Extraction                  33.7s      0ms         —         —      ok    
+─────────────────────────────────────────────────────────────────────────────────────────
+Prover total: 3m 32.3s across 3 call(s)
+Prover runtime (reported): 0.6 min (36.4s)
+Tokens: in 1,049 · out 167,328 · cache_read 8,151,531 · cache_write 1,098,685
+  claude-sonnet-5  in 58 out 14,474 cache_r 138,207 cache_w 38,513
+  claude-opus-5  in 991 out 152,854 cache_r 8,013,324 cache_w 1,060,172
+
+Final prover runs:
+  Admin Setup (4 properties): https://prover.certora.com/jobStatus/33158/f6379ea60d3d408ea6f64d4ad332e156?anonymousKey=2eb78cace9487137f6d67b5d2c0a63d25b216d13
+
+  Components:    1
+  Properties:    4
+  Delivered:     1
+    - src/certora/specs/admin_setup.rs
+      https://prover.certora.com/jobStatus/33158/f6379ea60d3d408ea6f64d4ad332e156?anonymousKey=2eb78cace9487137f6d67b5d2c0a63d25b216d13
+============================================================
+exit=0

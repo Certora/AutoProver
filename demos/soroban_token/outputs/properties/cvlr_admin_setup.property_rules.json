@@ -1,0 +1,15 @@
+{
+  "unauthenticated_admin_overwrite_enables_unlimited_mint": [
+    "unauthenticated_admin_overwrite_enables_unlimited_mint"
+  ],
+  "initialize_is_one_shot": [
+    "initialize_is_one_shot"
+  ],
+  "admin_rotation_requires_current_admin_auth": [
+    "admin_rotation_requires_current_admin_auth"
+  ],
+  "initialize_persists_admin_readable_by_mint": [
+    "initialize_persists_admin",
+    "initialize_then_mint_uses_stored_admin"
+  ]
+}

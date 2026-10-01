@@ -1,0 +1,73 @@
+15:14:41 INFO    composer autoprove logging initialized: thread_id=cvlr_46e7c402e8ee text=/private/tmp/claude-501/-Users-chandrakananandi-research-AutoProver/77167112-ef59-402d-bdde-52af0f1797a5/scratchpad/run2/token/.certora_internal/autoProve/2026-09-30_15-14-41.cvlr_46e7c402e8ee.log events=/private/tmp/claude-501/-Users-chandrakananandi-research-AutoProver/77167112-ef59-402d-bdde-52af0f1797a5/scratchpad/run2/token/.certora_internal/autoProve/2026-09-30_15-14-41.cvlr_46e7c402e8ee.events.jsonl
+15:14:41 INFO    composer.pipeline task queued: phase=DISCOVER_DESIGN_DOC task_id=doc-finder label=Design Doc Discovery
+15:14:41 INFO    composer.pipeline task running: phase=DISCOVER_DESIGN_DOC task_id=doc-finder queue_wait=0.00s
+15:14:55 INFO    composer.spec.source.design_doc_finder no design doc found — proceeding source-only: The project contains only: src/lib.rs (the Token implementation itself), solutions/solution_specs.rs (a set of Certora/CVLR verification rules in Rust — an existing specification artifact, not a natural-language design doc, and explicitly out of scope per instructions), a justfile (build-only commands), and Cargo.toml (package manifest/build profile config). None of these is a prose document describing the system's intended architecture, behavior, or invariants; the justfile and Cargo.toml are pure build/tooling, and lib.rs is the implementation under test. No README, docs/, SPEC, or whitepaper file exists. Therefore no qualifying design document exists in this project.
+15:14:55 INFO    composer.pipeline task done: phase=DISCOVER_DESIGN_DOC task_id=doc-finder wall=14.22s queue_wait=0.00s
+15:14:55 INFO    composer.pipeline task queued: phase=ANALYSIS task_id=system-analysis label=System Analysis
+15:14:55 INFO    composer.pipeline task running: phase=ANALYSIS task_id=system-analysis queue_wait=0.00s
+15:14:56 DEBUG   composer.spec.cvlr.env_paths tuning-path dialect for soroban-sdk 22.x: 0 of 0 aliases usable
+15:14:56 INFO    composer.spec.cvlr.preflight CVLR scaffold for certora-meridian24-token:
+  create src/certora/mod.rs — the harness module root
+  create src/certora/nondet.rs — where this program's types become nondeterministic
+  create src/certora/log.rs — where this program's types become printable in a counterexample
+  create src/certora/specs/mod.rs — where authored rules land
+  create src/certora/mocks/mod.rs — where a simplified stand-in for real code goes
+  extend src/lib.rs — pull the harness into the crate, gated on the feature
+  create .gitignore — keep prover build output out of the project's history
+  extend Cargo.toml — the dependencies, feature and metadata a verification build reads
+15:14:57 INFO    composer.pipeline task queued: phase=PREFLIGHT task_id=cvlr-preflight label=CVLR preflight
+15:14:57 INFO    composer.pipeline task running: phase=PREFLIGHT task_id=cvlr-preflight queue_wait=0.00s
+15:14:57 WARNING composer.cargo.session cargo session in /private/tmp/claude-501/-Users-chandrakananandi-research-AutoProver/77167112-ef59-402d-bdde-52af0f1797a5/scratchpad/run2/token is UNCONFINED (COMPOSER_SANDBOX_PROVIDER=none): build scripts and proc-macros from the analyzed project run with this process's privileges. Development only — every result produced this way is marked unconfined.
+15:15:27 INFO    composer.spec.cvlr.preflight preflight gate: ok in 30153ms (UNCONFINED)
+15:15:27 INFO    composer.pipeline task done: phase=PREFLIGHT task_id=cvlr-preflight wall=30.32s queue_wait=0.00s
+15:16:25 INFO    composer.pipeline task done: phase=ANALYSIS task_id=system-analysis wall=89.57s queue_wait=0.00s
+15:16:25 INFO    composer.pipeline task queued: phase=EXTRACTION task_id=extract-0 label=Admin Setup
+15:16:25 INFO    composer.pipeline task running: phase=EXTRACTION task_id=extract-0 queue_wait=0.00s
+15:16:25 INFO    composer.pipeline task queued: phase=EXTRACTION task_id=extract-1 label=Balances and Transfers
+15:16:25 INFO    composer.pipeline task running: phase=EXTRACTION task_id=extract-1 queue_wait=0.00s
+15:16:25 INFO    composer.pipeline task queued: phase=EXTRACTION task_id=extract-2 label=Minting
+15:16:25 INFO    composer.pipeline task running: phase=EXTRACTION task_id=extract-2 queue_wait=0.00s
+15:16:25 INFO    composer.pipeline task queued: phase=EXTRACTION task_id=extract-3 label=Burning
+15:16:25 INFO    composer.pipeline task running: phase=EXTRACTION task_id=extract-3 queue_wait=0.00s
+15:20:04 INFO    composer.pipeline task done: phase=EXTRACTION task_id=extract-0 wall=219.23s queue_wait=0.00s
+15:25:29 INFO    composer.pipeline task done: phase=EXTRACTION task_id=extract-1 wall=543.57s queue_wait=0.00s
+15:27:35 INFO    composer.pipeline task done: phase=EXTRACTION task_id=extract-3 wall=669.90s queue_wait=0.00s
+15:51:04 INFO    composer.pipeline task done: phase=EXTRACTION task_id=extract-2 wall=2079.50s queue_wait=0.00s
+15:51:04 INFO    composer.pipeline.core property cap 4: authoring 4 of 31 extracted properties, across 1 of 4 components
+15:51:04 INFO    composer.spec.cvlr.pipeline cvlr: declared 1 harness module(s) in /private/tmp/claude-501/-Users-chandrakananandi-research-AutoProver/77167112-ef59-402d-bdde-52af0f1797a5/scratchpad/run2/token/src/certora/specs/mod.rs; added 1 cargo feature(s)
+15:51:04 INFO    composer.spec.cvlr.pipeline cvlr: re-synced Cargo.toml, src/certora/specs/mod.rs, src/certora/specs/admin_setup.rs into the working tree
+15:51:04 WARNING composer.cargo.session cargo session in /private/tmp/claude-501/-Users-chandrakananandi-research-AutoProver/77167112-ef59-402d-bdde-52af0f1797a5/scratchpad/run2/token/.cvlr_work/build is UNCONFINED (COMPOSER_SANDBOX_PROVIDER=none): build scripts and proc-macros from the analyzed project run with this process's privileges. Development only — every result produced this way is marked unconfined.
+15:51:05 INFO    composer.pipeline task queued: phase=FORMALIZATION task_id=formalize-0 label=Admin Setup (4 properties)
+15:51:05 INFO    composer.pipeline task running: phase=FORMALIZATION task_id=formalize-0 queue_wait=0.00s
+15:51:05 INFO    composer.mnemonic assigned mnemonic hashed-model-forking-locally to thread cvlr_46e7c402e8ee-soroban-properties-d46f1724c4c70533-312b9cf0251100f6
+15:54:37 INFO    composer.spec Cloud job submitted: 33158/0c6d0864f44247029d0c53935b690897
+15:54:37 INFO    composer.spec Cloud job 0c6d0864 status: POSTED
+15:54:48 INFO    composer.spec Cloud job 0c6d0864 status: QUEUED
+15:54:58 INFO    composer.spec Cloud job 0c6d0864 status: QUEUED
+15:55:08 INFO    composer.spec Cloud job 0c6d0864 status: QUEUED
+15:55:18 INFO    composer.spec Cloud job 0c6d0864 status: RUNNABLE
+15:55:28 INFO    composer.spec Cloud job 0c6d0864 status: RUNNABLE
+15:55:38 INFO    composer.spec Cloud job 0c6d0864 status: RUNNABLE
+15:55:49 INFO    composer.spec Cloud job 0c6d0864 status: STARTING
+15:55:59 INFO    composer.spec Cloud job 0c6d0864 status: RUNNING
+15:56:09 INFO    composer.spec Cloud job 0c6d0864 status: RUNNING
+15:56:19 INFO    composer.spec Cloud job 0c6d0864 status: SUCCEEDED
+16:03:33 INFO    composer.spec Cloud job submitted: 33158/a210ac39c2f14786a09618747738769d
+16:03:33 INFO    composer.spec Cloud job a210ac39 status: POSTED
+16:03:43 INFO    composer.spec Cloud job a210ac39 status: QUEUED
+16:03:53 INFO    composer.spec Cloud job a210ac39 status: RUNNABLE
+16:04:03 INFO    composer.spec Cloud job a210ac39 status: RUNNABLE
+16:04:14 INFO    composer.spec Cloud job a210ac39 status: STARTING
+16:04:24 INFO    composer.spec Cloud job a210ac39 status: SUCCEEDED
+16:10:14 INFO    composer.spec Cloud job submitted: 33158/f6379ea60d3d408ea6f64d4ad332e156
+16:10:14 INFO    composer.spec Cloud job f6379ea6 status: POSTED
+16:10:24 INFO    composer.spec Cloud job f6379ea6 status: QUEUED
+16:10:34 INFO    composer.spec Cloud job f6379ea6 status: RUNNABLE
+16:10:44 INFO    composer.spec Cloud job f6379ea6 status: RUNNABLE
+16:10:55 INFO    composer.spec Cloud job f6379ea6 status: RUNNING
+16:11:05 INFO    composer.spec Cloud job f6379ea6 status: SUCCEEDED
+16:13:00 INFO    composer.pipeline task done: phase=FORMALIZATION task_id=formalize-0 wall=1315.51s queue_wait=0.00s
+16:13:00 INFO    composer.pipeline task queued: phase=REPORT task_id=report label=Report Extraction
+16:13:00 INFO    composer.pipeline task running: phase=REPORT task_id=report queue_wait=0.00s
+16:13:34 INFO    composer.pipeline task done: phase=REPORT task_id=report wall=33.67s queue_wait=0.00s
+16:13:34 INFO    composer.spec.artifacts job info: wrote /private/tmp/claude-501/-Users-chandrakananandi-research-AutoProver/77167112-ef59-402d-bdde-52af0f1797a5/scratchpad/run2/token/certora/cvlr/reports/job_info.json

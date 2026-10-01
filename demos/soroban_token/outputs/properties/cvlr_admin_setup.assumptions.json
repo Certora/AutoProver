@@ -1,0 +1,31 @@
+{
+  "rule_subjects": [
+    {
+      "subject": "program_function",
+      "rule": "unauthenticated_admin_overwrite_enables_unlimited_mint",
+      "function": "crate::Token::initialize"
+    },
+    {
+      "subject": "program_function",
+      "rule": "initialize_is_one_shot",
+      "function": "crate::Token::initialize"
+    },
+    {
+      "subject": "program_function",
+      "rule": "admin_rotation_requires_current_admin_auth",
+      "function": "crate::Token::initialize"
+    },
+    {
+      "subject": "program_function",
+      "rule": "initialize_persists_admin",
+      "function": "crate::Token::initialize"
+    },
+    {
+      "subject": "program_function",
+      "rule": "initialize_then_mint_uses_stored_admin",
+      "function": "crate::Token::initialize"
+    }
+  ],
+  "summaries": [],
+  "munges": []
+}

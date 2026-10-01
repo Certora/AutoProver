@@ -1,0 +1,22 @@
+[
+  {
+    "sort": "attack_vector",
+    "description": "`initialize(admin)` writes the persistent \"ADMIN\" entry without calling `require_auth` on anything \u2014 neither on the address currently stored under \"ADMIN\" nor on the new `admin` argument \u2014 so in the call sequence initialize(A), initialize(B) any caller can install an address it controls as admin and then call `mint(to, amount)` to create unlimited balance for itself; the consequence is complete, unauthorized inflation of the token and loss of the admin role.",
+    "title": "unauthenticated_admin_overwrite_enables_unlimited_mint"
+  },
+  {
+    "sort": "safety_property",
+    "description": "`initialize` must be one-shot: if the persistent \"ADMIN\" entry already exists before the call, a subsequent `initialize(b)` must not succeed, and in particular the \"ADMIN\" entry must still hold its prior value after the call; a violation means the admin (and therefore the mint privilege) can be silently reassigned by anyone at any time.",
+    "title": "initialize_is_one_shot"
+  },
+  {
+    "sort": "safety_property",
+    "description": "If `initialize(b)` succeeds at a point where the persistent \"ADMIN\" entry already holds some address A, then A must have authorized that invocation \u2014 i.e. any admin rotation through `initialize` must be authorized by the currently stored admin; a violation means an unauthorized party can take over the mint privilege.",
+    "title": "admin_rotation_requires_current_admin_auth"
+  },
+  {
+    "sort": "safety_property",
+    "description": "After a successful `initialize(a)` made when no admin was set, the persistent \"ADMIN\" entry holds exactly `a`, stored under the same key and in the same storage durability that `mint` reads, so that the subsequent two-call sequence initialize(a) then mint(to, amount) both succeeds for `a` and requires `a`'s authorization; a violation (wrong key, wrong storage kind, or wrong value written) either bricks minting through `mint`'s unwrap of the missing entry or hands mint power to an address other than the one supplied.",
+    "title": "initialize_persists_admin_readable_by_mint"
+  }
+]
