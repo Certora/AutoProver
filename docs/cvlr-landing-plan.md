@@ -17,7 +17,7 @@ PRs unreachable until the last. Wave 2 is re-cut below so that each feature arri
 that uses it. Rule 5 states the criterion; the [old-name map](#appendix-the-old-partition-and-where-it-went)
 is the last appendix. The rules, the deferrals and the drops are otherwise unchanged.
 
-**Where it stands, 2026-10-01.** Wave 1 is down to S4. Of wave 2, **P1 has merged**
+**Where it stands, 2026-10-01.** Wave 1 is finished: S4 was closed and folded into P7. Of wave 2, **P1 has merged**
 ([#248](https://github.com/Certora/AutoProver/pull/248), `2eb4a391`), and the corpus half of P6
 merged ahead of it as [#244](https://github.com/Certora/AutoProver/pull/244). The branch has been
 rebased onto that master: 271 commits, 189 files, about 100,000 inserted lines. P1 changed a lot in
@@ -77,8 +77,8 @@ Three corollaries, because the rule is easy to over-apply:
 * *It applies per file, not per PR.* A capability whose tools are usable today can land while the
   one template that only a future prompt includes waits for that prompt — see **P6**.
 * *It has a floor.* A fifteen-line defensive parse called from the function above it does not get
-  held back for the caller that will exercise its new branch; `job_input` in **S4** is that case and
-  stays where it is.
+  held back for the caller that will exercise its new branch. `job_input` was planned as that case
+  in **S4**. Since #232 it has no caller on master at all (wave 1, below), so it waits for P3b.
 
 ## Wave 1 — shared code, no CVLR dependency
 
@@ -89,13 +89,14 @@ motivation. Sizes are insertions/deletions against master.
 |----|-------|------|------------|
 | **S1** Confined builds: one scratch directory, a readable git config, an unreadable output — [#239](https://github.com/Certora/AutoProver/pull/239), **merged** `27f2fe93` | 10 | +247 −37 | Three findings from making Rust builds run under the sandbox, and one story. `composer/layout.py` declares `CERTORA_DIR` / `INTERNAL_DIR` where `composer.sandbox` can name them without importing pydantic, which that package stays free of. The sandbox's scratch (`CARGO_HOME`, tmp) moves under `INTERNAL_DIR`; `RUST_FORBIDDEN_READ` withholds that directory — and the entry itself, so graphcore prunes the subtree instead of rejecting a 730 MB registry file by file — wherever it sits; and the rule is read off the ecosystem `cli_pipeline` is handed rather than passed beside it, so the two cannot disagree. And `git_config_ro_paths` grants the global git config, without which libgit2 refuses to open a fully warm cached git dependency and reports it as an offline-mode *network* error. |
 | **S3** The prover layer learns there is more than one chain — [#240](https://github.com/Certora/AutoProver/pull/240), **merged** `568ba02d` | 28 | +703 −164 | Three parts, two of them one seam. *Which CLI:* `ProverApp` names the three entry points `certora_cli` ships, `import_prover_entry` resolves one honouring `$CERTORA`, and `prover_app` narrows an untrusted string at the single boundary where one arrives. *Which frames:* a counterexample stops being a rendered string and becomes data — trace, assertion, source span — so `classify_violation` can decide whether a violation says anything about the program; `TraceShape` then says which frames of a chain's trace survive rendering. Between those two points nothing learns which chain ran, which is the claim `tests/data/solana_cex` measures. *How a run is configured:* `ProverOptions` carries the app, the server and the Prover's budget as fields, instead of a `list[str]` of CLI flags it read its own meaning back out of, and one `ProverOptions` reaches the codegen tool rather than being reassembled from parts. That part grew out of the review, and is most of the difference between the size this PR opened at and its size now. |
-| **S4** Report: what a component gave up on — [#241](https://github.com/Certora/AutoProver/pull/241), open, conflicts with #232 | 6 | +160 −32 | `Abandoned` replacing a `None` that discarded the reason, and `GaveUpComponent.reason` where it lands — the only change in wave 1 that alters an EVM run's output. Plus `make_prover_fetcher` typed at `ReportableResult` rather than at CVL, and `job_input`, the one part of the PR with no caller on master: POU cannot parse a Solana job link, and the best-effort fetch turns that into every rule UNKNOWN. |
+| **S4** Report: what a component gave up on — [#241](https://github.com/Certora/AutoProver/pull/241), **closed**, folded into P7 | 6 | +160 −32 | `Abandoned` replacing a `None` that discarded the reason, and `GaveUpComponent.reason` where it lands — the only change in wave 1 that alters an EVM run's output. Plus `make_prover_fetcher` typed at `ReportableResult` rather than at CVL, and `job_input`, the one part of the PR with no caller on master: POU cannot parse a Solana job link, and the best-effort fetch turns that into every rule UNKNOWN. |
 
 **Where the wave stands.** S1 and S3 merged on 2026-09-17, in that order, half an hour apart. S3
 answered a changes-requested review by absorbing the `ProverOptions` rework rather than by argument,
-which is most of why it nearly doubled between opening and merging. S2 is dropped (below). S4 is the
-one PR still open. It is unreviewed and now conflicts with master (below). S5 is gone: its mount is dropped (below), its one live function
-folds into P6, and its docstring fix goes to master on its own — so wave 1 ends with S4.
+which is most of why it nearly doubled between opening and merging. S2 is dropped (below). S4 was closed
+unreviewed on 2026-10-01, and its parts went to P3b and P7 (below). S5 is gone: its mount is
+dropped (below), its one live function folds into P6, and its docstring fix goes to master on its
+own. Wave 1 is therefore finished.
 
 Dependencies inside the wave: none — the one that remained was the CLI seam before the trace
 parser, and they were one PR. Merging the sandbox work into
@@ -103,25 +104,29 @@ one PR removed the wave's other ordering constraint, which had been an artefact 
 than of the code: the forbidden-read test imports the sandbox's own scratch-directory constants, so
 the two could never have been reviewed apart.
 
-**What master has left for S4 to rebase past.** #241 no longer merges cleanly. `git merge-tree`
-against `2eb4a391` conflicts in `report_prover.py`, and the cause is
-[#232](https://github.com/Certora/AutoProver/pull/232), merged 2026-09-20. #232 changed the CVL
-verdict fetch to read every run that covers a component's spec (`GeneratedCVL.run_link_specs`), and
-to rewrite a `/jobStatus/` link to its `/output/` view before calling POU. That changes two of
-S4's three parts:
+**Why S4 was folded rather than rebuilt.** By the time P1 merged, #241 conflicted with master in
+`report_prover.py`. The cause was [#232](https://github.com/Certora/AutoProver/pull/232), merged
+2026-09-20. #232 changed the CVL verdict fetch to read every run that covers a component's spec
+(`GeneratedCVL.run_link_specs`), and to rewrite a `/jobStatus/` link to its `/output/` view before
+calling POU. That left each of S4's three parts somewhere else:
 
-* *`job_input`* is no longer needed on the verdict path. A Solana job link is `/jobStatus/…`, so
-  #232's rewrite already turns it into a shape POU can parse. Its remaining caller is the
-  unsat-core fetch behind `explain_vacuity`, which takes the link as given. That is **P3b**, so
-  `job_input` moves there.
+* *`job_input`* is no longer needed on the verdict path. POU's `extract_job_id` rejects the raw
+  Solana link but parses the `/output/` form #232 produces; this was checked against the installed
+  POU. Its remaining caller is the unsat-core fetch behind `explain_vacuity`, which takes the link
+  as given. That is **P3b**.
 * *Retyping `make_prover_fetcher`* is no longer possible. The CVL fetcher now reads a field only
-  `GeneratedCVL` has. The rebased branch keeps it and adds `make_run_link_fetcher`, the
-  single-run fetcher S4's retype was meant to provide. Its only caller is `CvlrFormalizer`, so by
-  rule 5 it lands in **P7**.
-* *`Abandoned` and `GaveUpComponent.reason`* are untouched. They are what S4 should shrink to.
+  `GeneratedCVL` has. The rebased branch keeps it and adds `make_run_link_fetcher`. Its only caller
+  is `CvlrFormalizer`, so it lands in **P7**.
+* *`Abandoned` and `GaveUpComponent.reason`* merge cleanly, and master already has the callers that
+  would use them. The CVL author, foundry and the Rust wheel all return `GaveUp(reason=…)`, and
+  `pipeline/core.py` discards it. This part could have gone to master alone. It rides **P7**
+  instead, as a decision about review cost rather than a consequence of rule 5. P7 is where the
+  CVLR backend's own give-up first reaches a report. The cost is that a shared report-schema
+  change and an EVM-visible behaviour change sit inside the largest CVLR PR, and P7's body has to
+  say so. Meanwhile, the report package keeps moving under it ([#185](https://github.com/Certora/AutoProver/pull/185)
+  is open there).
 
-The rebased branch shows the resolved shape (`composer/spec/source/report_prover.py`). #241 should
-be rebuilt around it and re-gated before anyone reviews it.
+The rebased branch shows the resolved shape of all three.
 
 Two unrelated fixes are still unlanded and go alone rather than riding a themed PR. One hunk in
 `cli.py` resolves a main contract path against the process's cwd rather than the project root; S1
@@ -381,6 +386,10 @@ without the two pinned-run flags; see *Deferred: pinned runs*.
 It now also carries three things that were meant to land earlier: the `cvlr-preflight` script (still to
 write) and `entry.py`'s parser, both of which P1 merged without; `make_run_link_fetcher`, which S4 can no longer
 provide; and the reference set's `withholding`, which `--withhold-crate` is the only caller of.
+
+And it carries S4's give-up reason (`Abandoned`, `GaveUpComponent.reason`, `schema_version` 3.2).
+That one is not CVLR-specific: it changes every backend's report, EVM included, and P7's
+description has to say so rather than leave a reviewer to find it.
 
 ### Order, and what is forced
 
@@ -656,15 +665,16 @@ would pay the merge in each pair, so the order was worth deciding deliberately r
 discovering it.
 
 *What happened:* #228 merged on 2026-09-18 and #232 on 2026-09-20, both ahead of S4. #228's merge
-was mechanical. #232's was not, and it reshapes S4 (wave 1, *What master has left for S4*). Only
-#185 is still open.
+was mechanical. #232's was not, and it is why S4 was closed and folded into P7 (wave 1, *Why S4
+was folded rather than rebuilt*). Only #185 is still open, and P7 now inherits that pairing.
 
 **5. Is there an EVM-visible behaviour change anywhere in wave 1?** Two, and both PRs said so in
 their own bodies rather than leaving a reviewer to find it. **S3** was the larger and is now on
 master: every EVM trace renders through `TraceShape`, and `cex_dump` is a derived property whose
-text gained a `<counterexample>` envelope, which two report tests had to be updated for. **S4** is
+text gained a `<counterexample>` envelope, which two report tests had to be updated for. S4's was
 smaller and deliberate: a component that gives up now records its reason in the report, on EVM runs
-as much as any other. Everything else in the wave either defaults to today's value or is reached
+as much as any other. It now lands in **P7**, so P7 is the one wave-2 PR with an EVM-visible change.
+Everything else in the wave either defaults to today's value or is reached
 only by a caller that does not exist yet on master.
 
 **6. What happens to the two open PRs the re-cut dissolves?** Both are answerable without closing
@@ -718,7 +728,7 @@ already local to the functions that need them.
 |----|-------|
 | S1 *(merged)* | `composer/layout.py` `composer/spec/gen_types.py` `composer/sandbox/recipes.py` `composer/pipeline/ecosystem.py` `composer/foundry/entry.py` `composer/spec/source/autoprove_common.py` `tests/test_fs_forbidden_read.py` `tests/test_sandbox_config.py` `scripts/docker-compose.sandbox.yml` `composer/pipeline/cli.py` *(hunks)* |
 | S3 *(merged)* | `composer/certora_env.py` `composer/prover/{certoraRunWrapper,core,ptypes,results}.py` `analyzer/analysis.py` `composer/tools/{prover,thinking}.py` `composer/authoring/buffer.py` `composer/core/context.py` `composer/cvl/tools.py` `composer/workflow/executor.py` `composer/spec/source/{autoprove_common,harness}.py` `composer/spec/source/munge/compile_check.py` `tests/conftest.py` `tests/test_prover_app.py` `tests/test_prover_options.py` `tests/test_wrapped_prover_runner.py` `tests/test_solana_cex_trace.py` `tests/data/solana_cex/` `tests/test_tree_parsing.py` `tests/test_cex_analysis_failure_isolation.py` `tests/test_autoprove_report.py` *(hunks)* |
-| S4 | `composer/spec/source/report/{schema,collect,build}.py` `tests/test_autoprove_report.py` `composer/pipeline/core.py` *(hunks)* — `report_prover.py`'s `job_input` now goes to P3b and its fetcher to P7 |
+| S4 *(closed)* | nothing: the give-up reason goes to P7, `job_input` to P3b, the fetcher to P7 |
 | P1 *(merged)* | `composer/cargo/{__init__,features,manifest,metadata,session}.py` `composer/spec/cvlr/{__init__,conf,crates,env_paths,forks,preflight,reference,scaffold,tuning}.py` `composer/spec/cvlr/envs/` `composer/spec/cvlr/harness_files/` `composer/prover/conf.py` `composer/spec/source/{prover,author,artifacts}.py` *(hunks)* `composer/spec/natspec/task_description.py` *(hunks)* `tests/test_cvlr_{env_paths,forks,plumbing,preflight,reference,scaffold}.py` `tests/test_prover_conf.py` `tests/test_rules_striping.py` *(hunks)* `tests/test_stuck_rule_warnings.py` *(hunks)* `tests/data/vault_sbf_symbols.txt` `pyproject.toml` `uv.lock` |
 | P1 follow-up, to master now | `composer/spec/cvlr/preflight.py` *(hunk: `check(manifest_dir=…)`)* `composer/spec/cvlr/crates.py` *(hunk: drop `roots()`)* — plus the regression test, still to write |
 | P2 | `composer/cargo/sbf.py` `composer/spec/cvlr/{prover,rules}.py` `composer/spec/cvlr/envs/` *(hunks: the directives added since P1)* `tests/test_cvlr_env_paths.py` *(hunk: the directive counts)* `tests/test_cvlr_end_to_end.py` `tests/test_cvlr_rules.py` `tests/test_cvlr_loop_bound.py` `tests/data/loop_bound_probe.rs` `tests/test_cvlr_plumbing.py` *(split: `sbf_argv`, the build script, `write_submission`)* |
@@ -728,7 +738,7 @@ already local to the functions that need them.
 | K1 | `composer/kb/kb_context.py` `composer/kb/knowledge_base.py` `composer/kb/resources/cvlr_baseline_facts.md` `composer/templates/kb_index.j2` `composer/templates/cvl_kb_index.j2` `tests/test_kb_bundle.py` `tests/test_cvlr_bundle.py` |
 | P5 | `composer/spec/cvlr/editor.py` `composer/cargo/depinfo.py` `composer/templates/cvlr_munge_editor_system.j2` `composer/templates/cvlr_munge_review_system.j2` `tests/test_cvlr_editor.py` `tests/test_cvlr_derive_swap.py` |
 | P6 | `composer/spec/cvlr/{author,crate_mount,source_tools}.py` `composer/templates/cvlr_{feedback_prompt,property_generation_prompt,property_generation_system_prompt,property_judge_system_prompt,source_tools}.j2` `composer/spec/source/source_env.py` `template_manifest.json` `tests/test_cvlr_judge_input.py` `tests/test_cvlr_knowledge.py` `tests/data/cvlr_judge/` |
-| P7 | `composer/spec/cvlr/pipeline.py` `composer/spec/cvlr/entry.py` *(the whole file, now including the parser P1 did not take)* the `cvlr-preflight` console script *(new work, still to write)* `composer/spec/cvlr/reference.py` *(hunks: `ProgramModel`, `withholding`)* `tests/test_cvlr_reference.py` *(hunks)* `composer/spec/source/report_prover.py` *(hunk: `make_run_link_fetcher`)* `composer/cli/console_solana.py` `composer/cli/tui_solana.py` `composer/spec/context.py` `composer/spec/services.py` `composer/ui/tool_display.py` `composer/rustapp/toolchain.py` `tests/test_cvlr_entry.py` `tests/test_cvlr_findings.py` `tests/test_cvlr_author.py` `tests/test_cvlr_munge.py` *(split: the three `CvlrFormalizer` cases)* `tests/test_cvlr_judge_round_cost.py` `tests/test_cvlr_plumbing.py` *(the remainder)* `tests/test_autoprove_integration.py` `.github/workflows/integration-tests.yml` |
+| P7 | `composer/spec/source/report/{schema,collect,build}.py` *(hunks: `Abandoned`, `reason`, 3.2)* `composer/pipeline/core.py` *(hunks: `_abandonment`)* `tests/test_autoprove_report.py` *(hunks: the give-up cases)* `composer/spec/cvlr/pipeline.py` `composer/spec/cvlr/entry.py` *(the whole file, now including the parser P1 did not take)* the `cvlr-preflight` console script *(new work, still to write)* `composer/spec/cvlr/reference.py` *(hunks: `ProgramModel`, `withholding`)* `tests/test_cvlr_reference.py` *(hunks)* `composer/spec/source/report_prover.py` *(hunk: `make_run_link_fetcher`)* `composer/cli/console_solana.py` `composer/cli/tui_solana.py` `composer/spec/context.py` `composer/spec/services.py` `composer/ui/tool_display.py` `composer/rustapp/toolchain.py` `tests/test_cvlr_entry.py` `tests/test_cvlr_findings.py` `tests/test_cvlr_author.py` `tests/test_cvlr_munge.py` *(split: the three `CvlrFormalizer` cases)* `tests/test_cvlr_judge_round_cost.py` `tests/test_cvlr_plumbing.py` *(the remainder)* `tests/test_autoprove_integration.py` `.github/workflows/integration-tests.yml` |
 | P8 | `tests/test_cvlr_gate.py` `test_scenarios/solana_vault_idl/` `composer/diagnostics/budget.py` |
 | P9 | `composer/testing/` `scripts/record_cvlr_tape.sh` `tests/test_cvlr_tape.py` `tests/test_tape_setup.py` |
 | R3 | `scripts/Dockerfile` `scripts/Dockerfile.solana` `scripts/docker-compose.yml` `scripts/docker-compose.common.yml` `scripts/docker-compose.solana.yml` `scripts/autoprove-entrypoint.sh` `tests/test_cvlr_image.py` |
