@@ -255,9 +255,16 @@ expected-verdict files their own CI compares against — including the rule that
 the one that is meant to fail sanity. It imports exactly `cargo.sbf`, `cargo.session`, `cvlr.conf`
 and `cvlr.prover`, which is to say: exactly P1 and P2 and nothing else.
 
-`rules.py` (reading declared rule names out of harness source) joins them because
-`test_cvlr_loop_bound.py` needs it — that test builds a probe, submits it, and measures what a loop
-bound actually does, which is the same capability being exercised from the other side.
+`rules.py` (reading declared rule names out of harness source) was planned to join them, because
+`test_cvlr_loop_bound.py` needed it. That test built a probe, submitted it, and measured what a
+loop bound actually does. Review on #258 removed both. The test's scenario is not in this tree,
+and what it checks belongs to the authoring loop. Without it, `rules.py` has no caller in P2, so
+it moves to **P3b**, where `state` and `verify` read it.
+
+Review also took `UnanalyzedCexHandler` out. `run_submission` now requires its caller to choose a
+counterexample handler instead of defaulting to one that skips analysis. The end-to-end test,
+which reads only verdicts, passes a local stub. The handler's first production caller is P3b's
+unsat-core diagnostic run, so it lands there. P2 no longer changes `composer/prover/`.
 
 Marked `expensive` and skipping, named, when there is no toolchain — so the routine gate still
 passes on a machine without one.
@@ -475,7 +482,7 @@ master wants that is its owners' call.
 
 Changes that look shared but are not on this list, because a CVLR slice is their first reader:
 `prover/results.py`'s `external_functions` and the alert-report fetch in `cloud.py` (read by
-`verify` and carried in the judge's briefing by `state`, **P3b**); `UnanalyzedCexHandler` (the end-to-end test, **P2**); the shared
+`verify` and carried in the judge's briefing by `state`, **P3b**); `UnanalyzedCexHandler` (the unsat-core diagnostic run, **P3b**); the shared
 unsat-core template fragments split out of `sanity_tool_prompt.j2` (the vacuity analysis,
 **P3b**); and `make_run_link_fetcher` and the give-up reason (**P7**).
 
@@ -756,9 +763,9 @@ already local to the functions that need them.
 | S4 *(closed)* | nothing: the give-up reason goes to P7, `job_input` to P3b, the fetcher to P7 |
 | P1 *(merged)* | `composer/cargo/{__init__,features,manifest,metadata,session}.py` `composer/spec/cvlr/{__init__,conf,crates,env_paths,forks,preflight,reference,scaffold,tuning}.py` `composer/spec/cvlr/envs/` `composer/spec/cvlr/harness_files/` `composer/prover/conf.py` `composer/spec/source/{prover,author,artifacts}.py` *(hunks)* `composer/spec/natspec/task_description.py` *(hunks)* `tests/test_cvlr_{env_paths,forks,plumbing,preflight,reference,scaffold}.py` `tests/test_prover_conf.py` `tests/test_rules_striping.py` *(hunks)* `tests/test_stuck_rule_warnings.py` *(hunks)* `tests/data/vault_sbf_symbols.txt` `pyproject.toml` `uv.lock` |
 | P1 follow-up, to master now | `composer/spec/cvlr/preflight.py` *(hunk: `check(manifest_dir=…)`)* `composer/spec/cvlr/crates.py` *(hunk: drop `roots()`)* — plus the regression test, still to write |
-| P2 | `composer/cargo/sbf.py` `composer/spec/cvlr/{prover,rules}.py` `composer/spec/cvlr/envs/` *(hunks: the directives added since P1)* `tests/test_cvlr_env_paths.py` *(hunk: the directive counts)* `tests/test_cvlr_end_to_end.py` `tests/test_cvlr_rules.py` `tests/test_cvlr_loop_bound.py` `tests/data/loop_bound_probe.rs` `tests/test_cvlr_plumbing.py` *(split: `sbf_argv`, the build script, `write_submission`)* |
+| P2 | `composer/cargo/sbf.py` `composer/spec/cvlr/prover.py` `composer/spec/cvlr/envs/` *(hunks: the directives added since P1)* `tests/test_cvlr_env_paths.py` *(hunk: the directive counts)* `tests/test_cvlr_end_to_end.py` `tests/test_cvlr_plumbing.py` *(split: `sbf_argv`, the build script, `write_submission`)* |
 | P3a | `composer/spec/cvlr/{rust_source,munge,tree}.py` `graphcore` `pyproject.toml` `tests/test_cvlr_munge.py` *(split: the source half, less the three `CvlrFormalizer` cases)* `tests/test_cvlr_module_redirect.py` `tests/test_cvlr_import_swap.py` `tests/test_cvlr_anchor_reach.py` `tests/data/anchor_reach_probe.rs` |
-| P3b | `composer/spec/cvlr/{state,harness,verify}.py` `composer/spec/cvlr/tuning.py` *(split: `SummaryDirective`, `TuningFiles`, appended to what P1 landed)* `composer/spec/cvlr/conf.py` *(hunks: `OptimisticLoop`, `CollectUnsatCore`)* `composer/spec/source/report_prover.py` *(hunks: `job_input`, `fetch_unsat_cores`)* `composer/cargo/symbols.py` `tests/test_cvlr_symbols.py` `tests/test_cvlr_tuning.py` `tests/test_cvlr_tree.py` `tests/test_cvlr_plumbing.py` *(split: `_CaptureCallbacks`, `_RunAccounting`)* |
+| P3b | `composer/spec/cvlr/{state,harness,verify,rules}.py` `tests/test_cvlr_rules.py` `composer/prover/core.py` *(hunk: `UnanalyzedCexHandler`)* `composer/spec/cvlr/tuning.py` *(split: `SummaryDirective`, `TuningFiles`, appended to what P1 landed)* `composer/spec/cvlr/conf.py` *(hunks: `OptimisticLoop`, `CollectUnsatCore`)* `composer/spec/source/report_prover.py` *(hunks: `job_input`, `fetch_unsat_cores`)* `composer/cargo/symbols.py` `tests/test_cvlr_symbols.py` `tests/test_cvlr_tuning.py` `tests/test_cvlr_tree.py` `tests/test_cvlr_plumbing.py` *(split: `_CaptureCallbacks`, `_RunAccounting`)* |
 | P4 | `composer/spec/cvlr/{anchor_surface,example,guidance}.py` `tests/test_cvlr_anchor_surface.py` `tests/test_cvlr_worked_example.py` |
 | K1 | `composer/kb/kb_context.py` `composer/kb/knowledge_base.py` `composer/kb/resources/cvlr_baseline_facts.md` `composer/templates/kb_index.j2` `composer/templates/cvl_kb_index.j2` `tests/test_kb_bundle.py` `tests/test_cvlr_bundle.py` |
 | P5 | `composer/spec/cvlr/editor.py` `composer/cargo/depinfo.py` `composer/templates/cvlr_munge_editor_system.j2` `composer/templates/cvlr_munge_review_system.j2` `tests/test_cvlr_editor.py` `tests/test_cvlr_derive_swap.py` |
