@@ -26,7 +26,6 @@ from composer.prover.core import (
     ProverCallbacks,
     ProverOptions,
     ProverReport,
-    UnanalyzedCexHandler,
     run_prover,
 )
 from composer.prover.conf import InheritRules, RuleSelection, dump_conf
@@ -173,16 +172,14 @@ async def run_submission(
     prepared: Prepared,
     *,
     prover_opts: ProverOptions,
+    cex: CexHandler,
     callbacks: ProverCallbacks | None = None,
-    cex: CexHandler | None = None,
     tool_call_id: str = "cvlr-submit",
 ) -> CvlrOutcome:
     """The remote half: hand the conf to the prover and shape what comes back.
 
     ``prover_opts.app`` must select the Solana CLI. A mismatched app fails at the first conf key
     the wrong CLI does not recognize.
-
-    ``cex`` defaults to the no-analysis handler, so verdicts need no LLM.
     """
     result = await run_prover(
         session.workdir,
@@ -190,7 +187,7 @@ async def run_submission(
         tool_call_id,
         prover_opts,
         callbacks if callbacks is not None else ProverCallbacks(),
-        cex if cex is not None else UnanalyzedCexHandler(),
+        cex,
     )
     if isinstance(result, str):
         return SubmissionFailed(prepared.build, result)
@@ -202,8 +199,8 @@ async def submit(
     submission: Submission,
     *,
     prover_opts: ProverOptions,
+    cex: CexHandler,
     callbacks: ProverCallbacks | None = None,
-    cex: CexHandler | None = None,
     tool_call_id: str = "cvlr-submit",
     build_timeout_s: int = BUILD_TIMEOUT_S,
 ) -> CvlrOutcome:

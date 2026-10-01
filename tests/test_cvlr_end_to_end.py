@@ -25,7 +25,8 @@ import pytest_asyncio
 
 from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, Built, platform_tools_installed
 from composer.cargo.session import CargoSession, Warmed
-from composer.prover.core import make_prover_options
+from composer.prover.core import CexHandler, CexProgressCallbacks, make_prover_options
+from composer.prover.ptypes import RuleResult
 from composer.prover.conf import dump_conf
 from composer.sandbox.config import SandboxConfig
 from composer.sandbox.policy import SandboxUnavailable, ensure_available
@@ -39,6 +40,20 @@ from composer.spec.cvlr.prover import (
 )
 
 pytestmark = [pytest.mark.expensive, pytest.mark.asyncio]
+
+
+class _NoAnalysis(CexHandler):
+    """Explains nothing. The test reads verdicts, and the examples include a rule meant to fail, so
+    this is reached and must not need an LLM."""
+
+    async def analyze(
+        self,
+        all_results: list[RuleResult],
+        tool_call_id: str,
+        callbacks: CexProgressCallbacks,
+        report_dir: Path,
+    ) -> str:
+        return ""
 
 #: Where the public examples repo is checked out. An env var rather than a vendored fixture: the
 #: repo is the upstream artifact this test is *about*, and a copy in this tree would silently stop
@@ -157,7 +172,10 @@ async def test_the_examples_project_verifies_exactly_as_its_authors_expect(
     }
     prepared.conf_path.write_text(dump_conf(conf))
     outcome = await run_submission(
-        session, prepared, prover_opts=make_prover_options(cloud=True, app="solana")
+        session,
+        prepared,
+        prover_opts=make_prover_options(cloud=True, app="solana"),
+        cex=_NoAnalysis(),
     )
     assert isinstance(outcome, Checked), outcome
     assert isinstance(outcome.build.verdict, Built)
