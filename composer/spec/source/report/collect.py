@@ -81,14 +81,14 @@ class Verdict:
     #: a BAD, error text for an ERROR). Provenance/diagnostics only; ``None`` when the backend
     #: gives no detail (the prover/foundry fetchers don't).
     message: str | None = None
-    #: The run this verdict came from, when the backend runs the units of one component across
-    #: several runs and the component-level link would misattribute them. ``None`` leaves the
-    #: unit pointing at the component's run.
+    #: The run link this verdict came from — with striping a unit's verdicts are spread across
+    #: several runs, so the winning outcome's own link is kept (see `merge`). ``None`` when the
+    #: fetcher tracks no per-run link (foundry); the caller falls back to the component run link.
     link: str | None = None
 
     def merge(self, other: "Verdict | None") -> "Verdict":
         """Combine two results for one unit within a run: higher-priority outcome wins,
-        line/duration/unit_file/message/link kept from whichever side has them."""
+        line/duration/unit_file/message/link kept from whichever side has them (link from the winner)."""
         if other is None:
             return self
         hi, lo = (
@@ -250,8 +250,7 @@ async def collect[R: ReportableResult](
             if key not in rules_by_key:
                 rules_by_key[key] = RuleVerdict(
                     name=unit_name, spec_file=key[0], outcome=v.outcome, line=v.line,
-                    duration_seconds=v.duration_seconds, prover_link=v.link or run_link,
-                    message=v.message,
+                    duration_seconds=v.duration_seconds, prover_link=v.link or run_link, message=v.message,
                 )
 
     # A referenced unit with no verdict still needs an (UNKNOWN) entry to render.

@@ -14,6 +14,7 @@ import json
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
+from collections.abc import Mapping
 from typing import TypedDict, Unpack
 
 from pydantic import BaseModel
@@ -171,15 +172,9 @@ class ArtifactStore[I: ArtifactIdentifier, FormT: FormalResult](ABC):
     def _job_info_payload(
         self, summary: RunSummary, *, user_id: str, run_mode: str
     ) -> dict[str, object]:
-        """The manifest body shared by every workflow: the tenant ``user_id``, the run's
-        ``run_id``, its ``run_mode``, and the accumulated LLM ``token_usage``. Subclasses
-        extend it with any backend-specific usage they track."""
-        return {
-            "user_id": user_id,
-            "run_id": summary.run_id,
-            "run_mode": run_mode,
-            "token_usage": summary.token_usage_summary(),
-        }
+        """The job info body shared by every workflow (:func:`job_info_payload`).
+        Subclasses extend it with any backend-specific usage they track."""
+        return job_info_payload(summary, user_id=user_id, run_mode=run_mode)
 
     def write_job_info(self, summary: RunSummary, *, user_id: str, run_mode: str) -> None:
         """The run's identity + usage manifest → ``{report}/job_info.json``, next to
@@ -189,6 +184,29 @@ class ArtifactStore[I: ArtifactIdentifier, FormT: FormalResult](ABC):
         written on every path, crash included, and is what the cloud reads back to tell which
         mode a finished job ran under."""
         payload = self._job_info_payload(summary, user_id=user_id, run_mode=run_mode)
-        out = self._report_dir() / "job_info.json"
-        out.write_text(json.dumps(payload, indent=2) + "\n")
-        _log.info("job info: wrote %s", out)
+        write_job_info_file(self._report_dir(), payload)
+
+
+def job_info_payload(summary: RunSummary, *, user_id: str, run_mode: str) -> dict[str, object]:
+    """The job info body shared by every workflow: the tenant ``user_id``, the run's
+    ``run_id``, its ``run_mode``, and the accumulated LLM ``token_usage``. A workflow
+    adds the usage it tracks beyond that (prover time, for one) before writing."""
+    return {
+        "user_id": user_id,
+        "run_id": summary.run_id,
+        "run_mode": run_mode,
+        "token_usage": summary.token_usage_summary(),
+    }
+
+
+def write_job_info_file(report_dir: Path, payload: Mapping[str, object]) -> Path:
+    """Write a job info body to ``{report_dir}/job_info.json`` and return the path.
+
+    The cloud bills a run from this file, keyed by the report directory it sits in.
+    A command that is not a pipeline (an out-of-tree plugin's standalone entry point)
+    writes its job info through here with :func:`job_info_payload` as the body, without
+    an :class:`ArtifactStore` of its own."""
+    out = ensure_dir(report_dir) / "job_info.json"
+    out.write_text(json.dumps(dict(payload), indent=2) + "\n")
+    _log.info("job info: wrote %s", out)
+    return out
