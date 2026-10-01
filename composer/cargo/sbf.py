@@ -9,9 +9,12 @@ read that JSON from stdout" (``CertoraProver/certoraParseBuildScript.py``). The
 backend runs the build, reads the JSON, and gives the prover a
 :func:`build_script` that reruns the same command, confined the same way.
 
-The prover reruns the build instead of replaying a saved manifest. The second
-run is a warm cargo no-op. A saved manifest goes stale if anything moves, and
-the prover can then upload the wrong sources or a missing artifact.
+The prover reruns the build instead of replaying a saved manifest. A saved
+manifest goes stale if anything moves, and the prover can then upload the wrong
+sources or a missing artifact. The second run is a warm cargo no-op because
+each :class:`SbfBuild` has a target directory of its own: builds of one crate
+with different features would otherwise rebuild over each other's artifact,
+and the prover could upload a ``.so`` another build had just replaced.
 
 The conf uses a build script instead of handing over the finished ``.so`` via
 ``files``. ``set_rust_build_directory`` only copies the project's Rust sources
@@ -172,38 +175,61 @@ class SbfRun:
         return isinstance(self.verdict, Built)
 
 
-def sbf_argv(
-    *,
-    manifest_path: Path,
-    features: tuple[str, ...] = (),
-    tools_version: str | None = None,
-) -> list[str]:
-    """``cargo certora-sbf`` arguments, shared by the direct build and the build script.
+@dataclass(frozen=True)
+class SbfBuild:
+    """One ``cargo certora-sbf`` build: what the gate runs and the build script reruns.
 
-    ``--no-rustup`` is required under confinement. The tool otherwise registers a
-    ``certora-solana`` rustup toolchain and writes to ``RUSTUP_HOME``, which is
-    read-only.
-
-    ``--platform-tools-root`` is passed on the argv, not left to
-    ``$CERTORA_PLATFORM_TOOLS_ROOT``. The confined child never sees that
-    variable: the launcher keeps only
-    :data:`~composer.sandbox.recipes.DEFAULT_ENV_PASSTHROUGH`, which does not
-    include it. The build and the build script grant the same root read-only.
+    ``target_dir`` is absolute and lies under the crate's workspace root. The
+    tool reports the artifact relative to that root. It resolves a relative
+    target directory against the working directory for ``cargo metadata`` but
+    against the package directory for the build, so the artifact it reports
+    would not be the one it built.
     """
-    args = [
-        SBF_SUBCOMMAND,
-        "--json",
-        "--no-rustup",
-        "--platform-tools-root",
-        str(PLATFORM_TOOLS_ROOT),
-        "--manifest-path",
-        str(manifest_path),
-    ]
-    if tools_version is not None:
-        args += ["--tools-version", tools_version]
-    if features:
-        args += ["--features", " ".join(features)]
-    return args
+
+    manifest_path: Path
+    target_dir: Path
+    features: tuple[str, ...] = ()
+    tools_version: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.target_dir.is_absolute():
+            raise ValueError(f"target_dir must be absolute, not {self.target_dir}")
+
+    def argv(self) -> list[str]:
+        """The full command line, program included.
+
+        The target directory is set as ``CARGO_TARGET_DIR`` through ``env``
+        because ``cargo certora-sbf`` has no flag for it and reads the artifact
+        path from its own ``cargo metadata`` call, which ``--cargo-args`` does
+        not reach. Setting it in the argv rather than the child's environment
+        gets it past the launcher, which keeps only
+        :data:`~composer.sandbox.recipes.DEFAULT_ENV_PASSTHROUGH`.
+
+        ``--no-rustup`` is required under confinement. The tool otherwise
+        registers a ``certora-solana`` rustup toolchain and writes to
+        ``RUSTUP_HOME``, which is read-only.
+
+        ``--platform-tools-root`` is passed on the argv, not left to
+        ``$CERTORA_PLATFORM_TOOLS_ROOT``, for the same reason as the target
+        directory. The build and the build script grant the same root read-only.
+        """
+        args = [
+            "env",
+            f"CARGO_TARGET_DIR={self.target_dir}",
+            "cargo",
+            SBF_SUBCOMMAND,
+            "--json",
+            "--no-rustup",
+            "--platform-tools-root",
+            str(PLATFORM_TOOLS_ROOT),
+            "--manifest-path",
+            str(self.manifest_path),
+        ]
+        if self.tools_version is not None:
+            args += ["--tools-version", self.tools_version]
+        if self.features:
+            args += ["--features", " ".join(self.features)]
+        return args
 
 
 def platform_tools_installed(version: str, *, root: Path = PLATFORM_TOOLS_ROOT) -> bool:
@@ -251,12 +277,7 @@ async def _warm_for_the_build_cargo(
 
 
 async def sbf_build(
-    session: CargoSession,
-    *,
-    manifest_path: Path,
-    features: tuple[str, ...] = (),
-    tools_version: str | None = None,
-    timeout_s: int = BUILD_TIMEOUT_S,
+    session: CargoSession, build: SbfBuild, *, timeout_s: int = BUILD_TIMEOUT_S
 ) -> SbfRun:
     """Run the slow tier in ``session``'s workdir, confined.
 
@@ -264,14 +285,15 @@ async def sbf_build(
     the toolchain is missing: that is an operator problem, not a Rust error an
     authoring agent can fix.
     """
-    if tools_version is not None and session.confined and not platform_tools_installed(tools_version):
-        raise PlatformToolsMissing(tools_version, PLATFORM_TOOLS_ROOT)
+    tools_version = build.tools_version
     if tools_version is not None and session.confined:
-        await _warm_for_the_build_cargo(session, tools_version, manifest_path)
-    argv = sbf_argv(manifest_path=manifest_path, features=features, tools_version=tools_version)
+        if not platform_tools_installed(tools_version):
+            raise PlatformToolsMissing(tools_version, PLATFORM_TOOLS_ROOT)
+        await _warm_for_the_build_cargo(session, tools_version, build.manifest_path)
+    program, *args = build.argv()
     started = time.perf_counter()
     built = await session.run_confined(
-        "cargo", argv, timeout_s=timeout_s, extra_ro=(PLATFORM_TOOLS_ROOT,)
+        program, args, timeout_s=timeout_s, extra_ro=(PLATFORM_TOOLS_ROOT,)
     )
     elapsed = int((time.perf_counter() - started) * 1000)
     if built.exit_code != 0:
@@ -299,11 +321,9 @@ def build_command_path(script: Path) -> Path:
 
 async def write_build_script(
     session: CargoSession,
+    build: SbfBuild,
     *,
     name: str,
-    manifest_path: Path,
-    features: tuple[str, ...] = (),
-    tools_version: str | None = None,
     timeout_s: int = BUILD_TIMEOUT_S,
 ) -> Path:
     """Write the ``build_script`` the conf points at, and return its path.
@@ -312,6 +332,11 @@ async def write_build_script(
     Confinement is an opaque ``argv_prefix`` from :meth:`CargoSession.backend_spec`
     (``docs/command-sandbox.md`` §4). If the provider cannot confine, that call
     raises before anything runs.
+
+    The command file names the workdir, the target directory and the
+    confinement grants by absolute path, so it is valid only where it was
+    written. The script refuses to run from anywhere else rather than build the
+    tree it was written for.
     """
     spec = await session.backend_spec(timeout_s=timeout_s, extra_ro=(PLATFORM_TOOLS_ROOT,))
     build_dir = session.workdir / BUILD_DIR
@@ -320,16 +345,9 @@ async def write_build_script(
     build_command_path(script).write_text(
         json.dumps(
             {
-                "cwd": str(session.workdir),
+                "cwd": str(session.workdir.resolve()),
                 "argv_prefix": spec["argv_prefix"],
-                "argv": [
-                    "cargo",
-                    *sbf_argv(
-                        manifest_path=manifest_path,
-                        features=features,
-                        tools_version=tools_version,
-                    ),
-                ],
+                "argv": build.argv(),
             },
             indent=2,
         )

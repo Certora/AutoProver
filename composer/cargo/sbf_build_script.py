@@ -13,7 +13,15 @@ import sys
 
 
 def main() -> int:
-    command = json.loads(pathlib.Path(__file__).with_suffix(".json").read_text())
+    here = pathlib.Path(__file__).resolve()
+    command = json.loads(here.with_suffix(".json").read_text())
+    workdir = pathlib.Path(command["cwd"])
+    if here.parent.parent != workdir:
+        sys.stderr.write(
+            f"{here} was written for the working tree at {workdir}, and its command builds that "
+            f"tree. Regenerate it here instead of copying it.\n"
+        )
+        return 1
     argv = [*command["argv_prefix"], *command["argv"]]
 
     # Certora passes --json and -l; those flags do nothing here. --cargo_features
@@ -23,7 +31,7 @@ def main() -> int:
         if extra:
             argv += ["--features", " ".join(extra)]
 
-    result = subprocess.run(argv, capture_output=True, text=True, cwd=command["cwd"])
+    result = subprocess.run(argv, capture_output=True, text=True, cwd=workdir)
     sys.stderr.write(result.stderr)
     sys.stdout.write(result.stdout)
     return result.returncode

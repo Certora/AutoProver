@@ -23,6 +23,7 @@ import json5
 import pytest
 import pytest_asyncio
 
+from composer.cargo.metadata import Workspace
 from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, Built, platform_tools_installed
 from composer.cargo.session import CargoSession, Warmed
 from composer.prover.core import CexHandler, CexProgressCallbacks, make_prover_options
@@ -155,8 +156,11 @@ async def test_the_examples_project_verifies_exactly_as_its_authors_expect(
     fast = await session.check(package="first_example", features=("certora",))
     assert fast.ok, fast.verdict
 
+    workspace = await Workspace.read(workdir / EXAMPLE, offline=True)
+    assert isinstance(workspace, Workspace), workspace
     submission = Submission(
         manifest_path=workdir / EXAMPLE / "Cargo.toml",
+        target_directory=workspace.target_directory,
         stem="first_example",
         msg="AutoProver CVLR plumbing gate",
     )

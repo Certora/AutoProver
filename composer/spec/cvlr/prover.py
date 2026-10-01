@@ -19,8 +19,16 @@ import dataclasses
 import logging
 from pathlib import Path
 
-from composer.cargo.sbf import BUILD_TIMEOUT_S, Built, SbfRun, sbf_build, write_build_script
+from composer.cargo.sbf import (
+    BUILD_TIMEOUT_S,
+    Built,
+    SbfBuild,
+    SbfRun,
+    sbf_build,
+    write_build_script,
+)
 from composer.cargo.session import CargoSession
+from composer.layout import CERTORA_DIR
 from composer.prover.core import (
     CexHandler,
     ProverCallbacks,
@@ -42,7 +50,7 @@ _log = logging.getLogger(__name__)
 #: Where a run's conf lands inside the workdir. The CVL backend's ``certora/confs/<stem>.conf``
 #: convention (``docs/formalization-abstraction.md`` §6), kept because the deliverable layout is
 #: shared and a reader who knows one backend should not have to learn a second place to look.
-CONF_DIR = Path("certora") / "confs"
+CONF_DIR = CERTORA_DIR / "confs"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -85,9 +93,16 @@ class Submission:
 
     ``manifest_path`` names the crate to build — the program's ``Cargo.toml``, not the workspace's,
     since ``cargo certora-sbf`` builds one package's library.
+
+    ``target_directory`` is the workspace's cargo target directory, as
+    :attr:`~composer.cargo.metadata.Workspace.target_directory` reports it. Each submission builds
+    in its own subdirectory of it, named by ``stem``.
+
+    Both paths lie under the session's workdir, the only tree the build may write.
     """
 
     manifest_path: Path
+    target_directory: Path
     settings: TunableConf = TunableConf()
     rules: RuleSelection = dataclasses.field(default_factory=InheritRules)
     msg: str = ""
@@ -102,17 +117,21 @@ class Submission:
     summaries: tuple[Path, ...] = ()
 
 
+def _sbf_build(session: CargoSession, submission: Submission) -> SbfBuild:
+    """The build both the gate and the prover's rerun run."""
+    return SbfBuild(
+        manifest_path=session.workdir / submission.manifest_path,
+        target_dir=session.workdir / submission.target_directory / "certora" / submission.stem,
+        features=submission.features,
+        tools_version=PLATFORM_TOOLS_VERSION,
+    )
+
+
 async def build_for_submission(
     session: CargoSession, submission: Submission, *, timeout_s: int = BUILD_TIMEOUT_S
 ) -> SbfRun:
     """The slow tier."""
-    return await sbf_build(
-        session,
-        manifest_path=submission.manifest_path,
-        features=submission.features,
-        tools_version=PLATFORM_TOOLS_VERSION,
-        timeout_s=timeout_s,
-    )
+    return await sbf_build(session, _sbf_build(session, submission), timeout_s=timeout_s)
 
 
 async def write_submission(
@@ -120,19 +139,16 @@ async def write_submission(
 ) -> Path:
     """Write the build script and the conf, and return the conf's path.
 
-    The pair of files is what a developer reruns by hand, so it is useful without a submission."""
+    The pair of files is what a developer reruns by hand, from the workdir, so it is useful without
+    a submission. The conf names the script relative to the workdir, as a CVL conf names its spec.
+    """
     script = await write_build_script(
-        session,
-        name=submission.stem,
-        manifest_path=submission.manifest_path,
-        features=submission.features,
-        tools_version=PLATFORM_TOOLS_VERSION,
-        timeout_s=timeout_s,
+        session, _sbf_build(session, submission), name=submission.stem, timeout_s=timeout_s
     )
     conf = solana_conf(
         submission.settings,
         RunOverlay(
-            build_script=script,
+            build_script=script.relative_to(session.workdir),
             rules=submission.rules,
             msg=submission.msg,
             summaries=submission.summaries,
@@ -157,9 +173,12 @@ async def prepare_submission(
 ) -> BuildRejected | Prepared:
     """The local half: build the program with the harness in, then write the conf that checks it.
 
-    Separate from :func:`run_submission` because only this half touches the working tree. A caller
-    sharing one tree between submissions serializes this half and runs the other, which waits on a
-    cloud job for minutes, concurrently.
+    Separate from :func:`run_submission` so a caller sharing one tree between submissions can
+    serialize this half and run the other, which waits on a cloud job for minutes, concurrently.
+    The other half rebuilds too, from the tree's sources as they are then, but into this
+    submission's own target directory, so it cannot replace another submission's artifact. The
+    sources this submission was built from must stay as they are until the prover has uploaded
+    them, which is when :meth:`~composer.prover.core.ProverCallbacks.on_prover_link` fires.
     """
     build = await build_for_submission(session, submission, timeout_s=timeout_s)
     if not isinstance(build.verdict, Built):

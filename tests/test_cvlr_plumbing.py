@@ -6,8 +6,10 @@ submission adds.
 """
 
 import json
+import shutil
 import stat
 import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -40,7 +42,7 @@ from composer.cargo.sbf import (
     parse_manifest as parse_build_manifest,
     platform_tools_cargos,
     PLATFORM_TOOLS_ROOT,
-    sbf_argv,
+    SbfBuild,
     write_build_script,
 )
 from composer.cargo.session import CargoSession, CompileFailed
@@ -493,14 +495,21 @@ def test_warming_is_tracked_per_binary_not_per_session(tmp_path):
 
 
 def test_the_certora_feature_is_the_default():
-    assert Submission(manifest_path=Path("/w/C.toml")).features == ("certora",)
+    assert Submission(manifest_path=Path("/w/C.toml"), target_directory=Path("/w/target")).features == ("certora",)
+
+
+def _build(**overrides) -> SbfBuild:
+    return replace(
+        SbfBuild(manifest_path=Path("/w/Cargo.toml"), target_dir=Path("/w/target/certora/unit")),
+        **overrides,
+    )
 
 
 def test_the_build_never_touches_rustup():
     """``cargo certora-sbf`` registers a toolchain link around each build, which writes to
     ``RUSTUP_HOME`` — read-only under confinement. Dropping ``--no-rustup`` fails the build for a
     reason that names neither rustup nor the sandbox."""
-    assert "--no-rustup" in sbf_argv(manifest_path=Path("/w/Cargo.toml"))
+    assert "--no-rustup" in _build().argv()
 
 
 def test_the_build_is_told_where_the_platform_tools_are():
@@ -509,12 +518,12 @@ def test_the_build_is_told_where_the_platform_tools_are():
     it. A deployment whose toolchains are not in the tool's default location — the container, whose
     default location is under a world-writable ``$HOME`` — would otherwise grant one root read-only
     and build against another."""
-    argv = sbf_argv(manifest_path=Path("/w/Cargo.toml"))
+    argv = _build().argv()
     assert argv[argv.index("--platform-tools-root") + 1] == str(PLATFORM_TOOLS_ROOT)
 
 
 def test_features_reach_the_build_as_one_space_separated_value():
-    argv = sbf_argv(manifest_path=Path("/w/Cargo.toml"), features=("certora", "mocks"))
+    argv = _build(features=("certora", "mocks")).argv()
     assert argv[argv.index("--features") + 1] == "certora mocks"
 
 
@@ -580,14 +589,11 @@ async def test_the_generated_build_script_reruns_the_gates_command(tmp_path):
     """The prover's build has to be the build that already passed, or the artifact it reports is not
     the artifact the gate approved."""
     session = CargoSession(workdir=tmp_path, sandbox=SandboxConfig(provider="none"))
-    script = await write_build_script(
-        session, name="unit", manifest_path=tmp_path / "Cargo.toml", features=("certora",)
-    )
+    build = _build(features=("certora",))
+    script = await write_build_script(session, build, name="unit")
     command = json.loads(build_command_path(script).read_text())
-    assert command["argv"][1:] == sbf_argv(
-        manifest_path=tmp_path / "Cargo.toml", features=("certora",)
-    )
-    assert command["cwd"] == str(tmp_path)
+    assert command["argv"] == build.argv()
+    assert command["cwd"] == str(tmp_path.resolve())
 
 
 @pytest.mark.asyncio
@@ -609,7 +615,7 @@ async def test_the_build_script_grants_the_platform_tools_root_its_argv_names(tm
     workdir.mkdir()
     session = CargoSession(workdir=workdir, sandbox=SandboxConfig(provider="launcher"))
 
-    script = await write_build_script(session, name="unit", manifest_path=workdir / "Cargo.toml")
+    script = await write_build_script(session, _build(), name="unit")
 
     command = json.loads(build_command_path(script).read_text())
     prefix, argv = command["argv_prefix"], command["argv"]
@@ -622,7 +628,7 @@ async def test_an_unconfined_session_produces_a_build_script_with_no_wrapper(tmp
     """The macOS development carve-out: ``provider="none"`` is a passthrough, and the script runs
     the command directly rather than pretending to confine it."""
     session = CargoSession(workdir=tmp_path, sandbox=SandboxConfig(provider="none"))
-    script = await write_build_script(session, name="unit", manifest_path=tmp_path / "Cargo.toml")
+    script = await write_build_script(session, _build(), name="unit")
     assert json.loads(build_command_path(script).read_text())["argv_prefix"] == []
 
 
@@ -631,7 +637,7 @@ async def test_the_build_script_is_executable(tmp_path):
     """``certoraParseBuildScript`` execs it directly rather than through an interpreter, so without
     the execute bit the shebang means nothing and ``validate_exec_file`` rejects the conf."""
     session = CargoSession(workdir=tmp_path, sandbox=SandboxConfig(provider="none"))
-    script = await write_build_script(session, name="unit", manifest_path=tmp_path / "Cargo.toml")
+    script = await write_build_script(session, _build(), name="unit")
     assert script.stat().st_mode & stat.S_IXUSR
 
 
@@ -647,7 +653,12 @@ async def test_a_tuned_conf_reaches_the_file_the_prover_is_handed(tmp_path):
     edited = cvlr_conf.TunableConf(loop_iter=4, optimistic_loop=True)
     conf_path = await write_submission(
         _unconfined(tmp_path),
-        Submission(manifest_path=tmp_path / "Cargo.toml", settings=edited, stem="unit"),
+        Submission(
+            manifest_path=tmp_path / "Cargo.toml",
+            target_directory=tmp_path / "target",
+            settings=edited,
+            stem="unit",
+        ),
     )
 
     written = json.loads(conf_path.read_text())
@@ -661,10 +672,13 @@ async def test_the_written_conf_names_the_build_script_written_beside_it(tmp_pat
     checks that they agree, and a conf naming a script that is not there is rejected inside
     `certoraRun`'s own validation — after the upload, in its vocabulary rather than ours."""
     conf_path = await write_submission(
-        _unconfined(tmp_path), Submission(manifest_path=tmp_path / "Cargo.toml")
+        _unconfined(tmp_path),
+        Submission(manifest_path=tmp_path / "Cargo.toml", target_directory=tmp_path / "target"),
     )
 
-    script = Path(json.loads(conf_path.read_text())["build_script"])
+    named = Path(json.loads(conf_path.read_text())["build_script"])
+    assert not named.is_absolute(), "the prover resolves it against the workdir it runs in"
+    script = tmp_path / named
     assert script.is_file()
     assert script.stat().st_mode & stat.S_IXUSR, "certoraRun execs it directly"
 
@@ -679,6 +693,7 @@ async def test_two_units_sharing_a_tree_write_separate_confs_and_build_scripts(t
         session,
         Submission(
             manifest_path=manifest,
+            target_directory=tmp_path / "target",
             settings=cvlr_conf.TunableConf(loop_iter=3),
             stem="solvency",
             features=("certora", "solvency"),
@@ -688,6 +703,7 @@ async def test_two_units_sharing_a_tree_write_separate_confs_and_build_scripts(t
         session,
         Submission(
             manifest_path=manifest,
+            target_directory=tmp_path / "target",
             settings=cvlr_conf.TunableConf(loop_iter=7),
             stem="access",
             features=("certora", "access"),
@@ -698,12 +714,76 @@ async def test_two_units_sharing_a_tree_write_separate_confs_and_build_scripts(t
     assert confs["solvency"]["loop_iter"] == "3"
     assert confs["access"]["loop_iter"] == "7"
 
+    def argv(conf: dict) -> list[str]:
+        return json.loads(build_command_path(tmp_path / conf["build_script"]).read_text())["argv"]
+
     def features(conf: dict) -> str:
-        argv = json.loads(build_command_path(Path(conf["build_script"])).read_text())["argv"]
-        return argv[argv.index("--features") + 1]
+        return argv(conf)[argv(conf).index("--features") + 1]
 
     assert features(confs["solvency"]) == "certora solvency"
     assert features(confs["access"]) == "certora access"
+
+    # One crate, two feature sets: in one target directory, each unit's rerun would rebuild the
+    # artifact over the other's, and a prover could upload the `.so` the other unit just built.
+    target_dirs = {
+        next(a for a in argv(conf) if a.startswith("CARGO_TARGET_DIR=")) for conf in confs.values()
+    }
+    assert target_dirs == {
+        f"CARGO_TARGET_DIR={tmp_path / 'target' / 'certora' / 'solvency'}",
+        f"CARGO_TARGET_DIR={tmp_path / 'target' / 'certora' / 'access'}",
+    }
+
+
+def _stub_command(script: Path) -> None:
+    """Replace the build with a stand-in that reports where it ran and what it was given."""
+    command_file = build_command_path(script)
+    command = json.loads(command_file.read_text())
+    command["argv"] = [
+        sys.executable, "-c", "import json, os, sys; print(json.dumps([os.getcwd(), sys.argv[1:]]))",
+    ]
+    command_file.write_text(json.dumps(command))
+
+
+@pytest.mark.asyncio
+async def test_the_build_script_runs_its_command_in_the_workdir_with_the_provers_features(tmp_path):
+    """The script is what the prover execs, so it is run here rather than read."""
+    script = await write_build_script(_unconfined(tmp_path), _build(), name="unit")
+    _stub_command(script)
+
+    ran = subprocess.run(
+        [str(script), "--json", "--cargo_features", "a", "b"],
+        capture_output=True, text=True, check=True,
+    )
+
+    cwd, args = json.loads(ran.stdout)
+    assert Path(cwd) == tmp_path.resolve()
+    assert args == ["--features", "a b"]
+
+
+@pytest.mark.asyncio
+async def test_a_build_script_moved_with_its_tree_refuses_to_build_the_original(tmp_path):
+    """The command names the tree it was written in by absolute path. Run from a copy, it would
+    build the original and hand the prover that tree's artifact."""
+    original = tmp_path / "original"
+    original.mkdir()
+    script = await write_build_script(_unconfined(original), _build(), name="unit")
+    _stub_command(script)
+    moved = tmp_path / "moved"
+    shutil.copytree(original, moved)
+
+    ran = subprocess.run(
+        [str(moved / script.relative_to(original)), "--json"], capture_output=True, text=True
+    )
+
+    assert ran.returncode != 0
+    assert ran.stdout == ""
+    assert "Regenerate it here" in ran.stderr
+
+
+def test_a_relative_target_directory_is_refused():
+    """``cargo certora-sbf`` resolves one against two different directories."""
+    with pytest.raises(ValueError):
+        SbfBuild(manifest_path=Path("/w/Cargo.toml"), target_dir=Path("target"))
 
 
 def test_a_failed_compile_carries_the_compilers_own_words():
