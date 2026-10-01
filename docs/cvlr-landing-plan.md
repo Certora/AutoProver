@@ -17,6 +17,14 @@ PRs unreachable until the last. Wave 2 is re-cut below so that each feature arri
 that uses it. Rule 5 states the criterion; the [old-name map](#appendix-the-old-partition-and-where-it-went)
 is the last appendix. The rules, the deferrals and the drops are otherwise unchanged.
 
+**Where it stands, 2026-10-01.** Wave 1 is down to S4. Of wave 2, **P1 has merged**
+([#248](https://github.com/Certora/AutoProver/pull/248), `2eb4a391`), and the corpus half of P6
+merged ahead of it as [#244](https://github.com/Certora/AutoProver/pull/244). The branch has been
+rebased onto that master: 271 commits, 189 files, about 100,000 inserted lines. P1 changed a lot in
+review, and the branch carries 727 lines of later work on files P1 now owns. The
+[list below](#what-the-branch-carries-on-top-of-p1s-files) assigns each of those to the PR it rides.
+The next PR is **P2**.
+
 ---
 
 ## Five rules, two of them learned the expensive way
@@ -46,6 +54,16 @@ master as its own PR, and the branch then dropped it in a rebase at no cost. Tha
 Every shared fix that instead waits on this branch is a rebase conflict being saved up. The
 exception rule 5 carves out is a *refactor* with no second user, which is not a fix.
 
+The rebase is free only when the PR lands as it was cut. #240 and #248 did not: #248 merged after
+61 review commits. Replaying the branch's own history of those files onto the reviewed versions
+conflicts on every commit, and the conflicts mean nothing. What worked on 2026-10-01: replay every
+commit *without* its changes to files both sides touched, then bring those files up to date in one
+reconciling commit. For each file that commit is a three-way merge of master and the branch tip,
+based on whichever earlier version of the file is closest to the branch's copy. **Choose the base
+only from history that has merged.** One file's closest match was a commit on the still-open #241.
+Taking it as the base made the branch's S4 work look like history master had moved past, and the
+merge quietly dropped it.
+
 **5. A PR contains the usage that justifies it.** This is the one the review taught. A module lands
 in the first PR that calls it, and a PR that adds a seam, a parameter or an abstraction ships the
 caller that makes it the right seam. The test is not "does it have a caller somewhere on the
@@ -71,12 +89,12 @@ motivation. Sizes are insertions/deletions against master.
 |----|-------|------|------------|
 | **S1** Confined builds: one scratch directory, a readable git config, an unreadable output — [#239](https://github.com/Certora/AutoProver/pull/239), **merged** `27f2fe93` | 10 | +247 −37 | Three findings from making Rust builds run under the sandbox, and one story. `composer/layout.py` declares `CERTORA_DIR` / `INTERNAL_DIR` where `composer.sandbox` can name them without importing pydantic, which that package stays free of. The sandbox's scratch (`CARGO_HOME`, tmp) moves under `INTERNAL_DIR`; `RUST_FORBIDDEN_READ` withholds that directory — and the entry itself, so graphcore prunes the subtree instead of rejecting a 730 MB registry file by file — wherever it sits; and the rule is read off the ecosystem `cli_pipeline` is handed rather than passed beside it, so the two cannot disagree. And `git_config_ro_paths` grants the global git config, without which libgit2 refuses to open a fully warm cached git dependency and reports it as an offline-mode *network* error. |
 | **S3** The prover layer learns there is more than one chain — [#240](https://github.com/Certora/AutoProver/pull/240), **merged** `568ba02d` | 28 | +703 −164 | Three parts, two of them one seam. *Which CLI:* `ProverApp` names the three entry points `certora_cli` ships, `import_prover_entry` resolves one honouring `$CERTORA`, and `prover_app` narrows an untrusted string at the single boundary where one arrives. *Which frames:* a counterexample stops being a rendered string and becomes data — trace, assertion, source span — so `classify_violation` can decide whether a violation says anything about the program; `TraceShape` then says which frames of a chain's trace survive rendering. Between those two points nothing learns which chain ran, which is the claim `tests/data/solana_cex` measures. *How a run is configured:* `ProverOptions` carries the app, the server and the Prover's budget as fields, instead of a `list[str]` of CLI flags it read its own meaning back out of, and one `ProverOptions` reaches the codegen tool rather than being reassembled from parts. That part grew out of the review, and is most of the difference between the size this PR opened at and its size now. |
-| **S4** Report: what a component gave up on — [#241](https://github.com/Certora/AutoProver/pull/241), open | 6 | +160 −32 | `Abandoned` replacing a `None` that discarded the reason, and `GaveUpComponent.reason` where it lands — the only change in wave 1 that alters an EVM run's output. Plus `make_prover_fetcher` typed at `ReportableResult` rather than at CVL, and `job_input`, the one part of the PR with no caller on master: POU cannot parse a Solana job link, and the best-effort fetch turns that into every rule UNKNOWN. |
+| **S4** Report: what a component gave up on — [#241](https://github.com/Certora/AutoProver/pull/241), open, conflicts with #232 | 6 | +160 −32 | `Abandoned` replacing a `None` that discarded the reason, and `GaveUpComponent.reason` where it lands — the only change in wave 1 that alters an EVM run's output. Plus `make_prover_fetcher` typed at `ReportableResult` rather than at CVL, and `job_input`, the one part of the PR with no caller on master: POU cannot parse a Solana job link, and the best-effort fetch turns that into every rule UNKNOWN. |
 
 **Where the wave stands.** S1 and S3 merged on 2026-09-17, in that order, half an hour apart. S3
 answered a changes-requested review by absorbing the `ProverOptions` rework rather than by argument,
 which is most of why it nearly doubled between opening and merging. S2 is dropped (below). S4 is the
-one PR still open, unreviewed. S5 is gone: its mount is dropped (below), its one live function
+one PR still open. It is unreviewed and now conflicts with master (below). S5 is gone: its mount is dropped (below), its one live function
 folds into P6, and its docstring fix goes to master on its own — so wave 1 ends with S4.
 
 Dependencies inside the wave: none — the one that remained was the CLI seam before the trace
@@ -85,13 +103,25 @@ one PR removed the wave's other ordering constraint, which had been an artefact 
 than of the code: the forbidden-read test imports the sandbox's own scratch-directory constants, so
 the two could never have been reviewed apart.
 
-**What S1 and S3 left for S4 to rebase past.** Both landed in `pipeline/core.py` (S1's `ecosystem`
-parameter, a few lines from the give-up boundary S4 retypes) and in `tests/test_autoprove_report.py`
-(S3's `cex_dump` envelope, in a file S4 otherwise rewrites). `git merge-tree` says #241 still merges
-into master without textual conflict, but it has not been re-gated against the new head and should
-be before it is reviewed. The `autoprove_common.py` collision between S1 and S3 — the `EVM` argument
-to `cont` and `app=EVM.name` on the options built three lines above it — resolved itself in the
-merge order.
+**What master has left for S4 to rebase past.** #241 no longer merges cleanly. `git merge-tree`
+against `2eb4a391` conflicts in `report_prover.py`, and the cause is
+[#232](https://github.com/Certora/AutoProver/pull/232), merged 2026-09-20. #232 changed the CVL
+verdict fetch to read every run that covers a component's spec (`GeneratedCVL.run_link_specs`), and
+to rewrite a `/jobStatus/` link to its `/output/` view before calling POU. That changes two of
+S4's three parts:
+
+* *`job_input`* is no longer needed on the verdict path. A Solana job link is `/jobStatus/…`, so
+  #232's rewrite already turns it into a shape POU can parse. Its remaining caller is the
+  unsat-core fetch behind `explain_vacuity`, which takes the link as given. That is **P3b**, so
+  `job_input` moves there.
+* *Retyping `make_prover_fetcher`* is no longer possible. The CVL fetcher now reads a field only
+  `GeneratedCVL` has. The rebased branch keeps it and adds `make_run_link_fetcher`, the
+  single-run fetcher S4's retype was meant to provide. Its only caller is `CvlrFormalizer`, so by
+  rule 5 it lands in **P7**.
+* *`Abandoned` and `GaveUpComponent.reason`* are untouched. They are what S4 should shrink to.
+
+The rebased branch shows the resolved shape (`composer/spec/source/report_prover.py`). #241 should
+be rebuilt around it and re-gated before anyone reviews it.
 
 Two unrelated fixes are still unlanded and go alone rather than riding a themed PR. One hunk in
 `cli.py` resolves a main contract path against the process's cwd rather than the project root; S1
@@ -121,7 +151,7 @@ it is not.
 
 | PR | Code | Tests | What it can do when it lands |
 |----|------|-------|------------------------------|
-| **P1** Resolve the project — [#248](https://github.com/Certora/AutoProver/pull/248), open | +3,500 | +2,180 | Point it at a Cargo workspace: it names the package under verification, resolves which `cvlr` / `cvlr-solana` the build gets, writes the prover conf, and scaffolds a CVLR workspace into a project that has none. |
+| **P1** Resolve the project — [#248](https://github.com/Certora/AutoProver/pull/248), **merged** `2eb4a391` | +3,697 | +2,391 | Point it at a Cargo workspace: it names the package under verification, resolves which `cvlr` / `cvlr-solana` the build gets, writes the prover conf, and scaffolds a CVLR workspace into a project that has none. |
 | **P2** A hand-written rule in, verdicts out | +822 | +900 | Build a CVLR harness for SBF and submit it, and read the verdicts back. The deterministic submission path, end to end, with no agent in it. |
 | **P3a** The working copy and what may be changed in it | +2,048 | +1,310 | Materialize a per-unit working tree over the project and apply a source modification to it — the nine munge kinds, expressed over the Rust parsing primitives. |
 | **P3b** A generated harness, and what its verdict means | +1,919 | +1,180 | Take a generated harness module through tuning, build and submission, and decide what the run proved — including when a rule passed for a reason that says nothing about the program. |
@@ -132,6 +162,26 @@ it is not.
 | **P7** The backend, the pipeline and the CLI | +1,300 | +1,600 | `console-solana` / `tui-solana` on a real target. |
 
 ### P1 — Resolve the project
+
+**Merged 2026-10-01 as [#248](https://github.com/Certora/AutoProver/pull/248), `2eb4a391`:** 36
+files, +6,088 −41, after 61 review commits. It differs from the description below in five ways:
+
+* `cvlr_reference.py` became `composer/spec/cvlr/reference.py`. Its vocabulary changed too:
+  `chain` became `chain_crate`, and `PlatformGeneration.crates` became `sdk_crates`.
+* Two `composer/cargo/` modules were added. `manifest.py` validates `Cargo.toml` with pydantic,
+  and `features.py` names a feature as `CargoFeature`. `metadata.py` now validates
+  `cargo metadata` with pydantic as well. A workspace is read with `Workspace.read`, and the crates
+  are resolved with `CvlrSources.of`.
+* `ProverSettings` became `TunableConf`, and `with_rules` became `RuleSelection.apply_to`.
+* The scaffold writes its harness files from templates (`cvlr/harness_files/`). The empty Anchor
+  summaries layer was dropped, and so was the nonlinear solver portfolio.
+* `tests/data/vault_sbf_symbols.txt` came with it, so P3b no longer carries it.
+
+What did not land: the `cvlr-preflight` console script (which nobody has written yet) and the
+`entry.py` hunks. Both move to **P7**, which is where `entry.py` gets its first caller. Until then,
+`preflight` on master is reached only from its tests.
+
+As planned, P1 carried these files:
 
 `composer/cargo/{metadata,session}.py`, `composer/spec/cvlr_reference.py`, and
 `composer/spec/cvlr/{conf,crates,env_paths,forks,scaffold,preflight}.py` with the starting inlining
@@ -159,23 +209,38 @@ and `parse_main_program` land with it; `cvlr_executor` and `_entry_point`, which
 wait for P7. #248 as opened carries neither the script nor the `entry.py` hunks, so both are still
 to add, or to move to P7.
 
-`tests/test_cvlr_scaffold.py` has to be split: about a third of it reaches `harness`, which is P3b.
-The rest — workspace layout, the env files, the conf the scaffold writes — lands here, where the
-code it tests is.
+The test splits are done. `tests/test_cvlr_scaffold.py` and the P1 half of
+`tests/test_cvlr_plumbing.py` are on master. The plumbing file's P2 and P3b cases remain on the
+branch, appended to master's half.
 
-**A fix found after #248 was opened, which has to be carried forward rather than forgotten.**
-`6a8ef4c4` on `eric/solanaProver` stops the compile checks naming their package with a bare
-`--package <name>`. Cargo refuses that whenever the name is ambiguous, and it is ambiguous whenever
-the program under verification is *also* a published crate that one of its own dev-dependencies
-pulls back in — local and published copies then share a name at two versions. `--manifest-path`
-names exactly one package; passing it alongside `--package` does not help, measured.
+#### What the branch carries on top of P1's files
 
-It spans three PRs, so it cannot land on master as one commit: `preflight.py` here, `verify.py` in
-**P3b**, `editor.py` in **P5**. **Submit the `preflight.py` hunk to master once #248 lands**, and
-carry the other two with their own PRs. Nothing already on master exercises it — no corpus project
-is a published crate — which is why it survived this long; it was found by pointing preflight at the
-Solana stake program (`docs/stake-benchmark.md`). A regression test wants a fixture whose package
-name collides with its own graph, and is still to write.
+That is +727 −54 across 14 files P1 now owns. Before the rebase, these were edits to the branch's
+own copies of those files. After it they are edits to master's, made in the reconciling commit
+`69e20da0`. The commits that first made them are still on the branch, minus those hunks. Each one
+rides the first PR that uses it:
+
+| Change | Files | Rides |
+|---|---|---|
+| Name the package to build by its manifest (`2c852922`) | `preflight.py` | **master now** (below) |
+| `CvlrSources.roots()` removed, along with the CVLR source mount | `crates.py` | **master now**, with the fix above. Nothing on master calls it either |
+| `OptimisticLoop` (the author's reason for switching it on), and the `CollectUnsatCore` purpose | `conf.py` | **P3b**: `state` and `verify` read them |
+| `SummaryDirective`, `TuningFiles`, and the rest of the tuning layer | `tuning.py` | **P3b**, as planned |
+| Starting-directive additions: Anchor account validation, `system_program::transfer`, `try_borrow_lamports`, and `realloc` moved from summarized to inlined | `envs/*.txt`, `tests/test_cvlr_env_paths.py` | **P2**: the first PR that submits a build, where a directive changes a verdict |
+| `ProgramModel`, `models` / `companions` replacing `specializations`, and `withholding` (`67f2215e`, `eb18bc80`) | `reference.py`, `tests/test_cvlr_reference.py` | **P7**: `entry.py`'s `--withhold-crate` is the caller |
+| The build, conf and submission cases | `tests/test_cvlr_plumbing.py` | **P2** / **P3b**, as planned |
+
+**The manifest-path fix is now one hunk for master.** `2c852922` stops the compile checks naming
+their package with a bare `--package <name>`. Cargo refuses that whenever the name is ambiguous. It
+is ambiguous whenever the program under verification is *also* a published crate that one of its own
+dev-dependencies pulls back in: the local and published copies then share a name at two versions.
+`--manifest-path` names exactly one package. Passing it alongside `--package` does not help; that
+was measured. #248 landed the `manifest_dir` parameter on `CargoSession.check`, but master's
+`preflight.py` still calls `check(package=...)`. The rebased branch's one-line hunk is the fix. The
+`verify.py` and `editor.py` halves ride **P3b** and **P5**. Nothing on master exercises the fix,
+because no corpus project is a published crate. It was found by pointing preflight at the Solana
+stake program (`docs/stake-benchmark.md`). A regression test needs a fixture whose package name
+collides with its own graph, and that test is still to write.
 
 ### P2 — A hand-written rule in, verdicts out
 
@@ -293,11 +358,15 @@ prompt and the fragment are the same PR and the constraint disappears. `crate_mo
 `tests/test_cvlr_knowledge.py` is what exercises them and what they are *for* is the author's
 context.
 
-What to do with [#244](https://github.com/Certora/AutoProver/pull/244), which is open: **keep it,
-minus `cvlr_rag_tools.j2`.** The corpus and the three search tools are a complete capability — build
-the database from the Solana manual this repo already generates, and query it — and a reviewer can
-run that. The template is the part with no reader, and it belongs in the prompt's PR. That is the
-criterion applied at file granularity rather than at PR granularity, which is what it should be.
+**The corpus half has landed.** [#244](https://github.com/Certora/AutoProver/pull/244) merged on
+2026-09-22 as `7d435150`, and it carried `cvlr_rag_tools.j2` despite the advice to hold the template
+back for the prompt that includes it. That advice is moot now. The template is on master with no
+renderer until this PR. #244 also landed the pieces this section used to list as P6 hunks:
+`CVLR_DEFAULT_CONNECTION`, the `cvlr_rag` schema in `init-db.sql`, `ragbuild`'s `<blockquote>`
+case, the manual half of `populate_cvlr_rag.sh`, and `tests/test_cvlr_rag.py`. #244 also added
+two things the plan had not: `ragbuild --corpus {cvl,extended,cvlr}`, and one search-result
+renderer, `composer/rag/render.py`, shared by every corpus. What remains on the branch in those
+files is C7b's and C7c's.
 
 ### P7 — The backend, the pipeline and the CLI
 
@@ -309,9 +378,13 @@ Still the PR that makes the backend a product, and still last in the wave — bu
 that *composes* seven working things rather than the PR that makes twelve dead ones reachable. Lands
 without the two pinned-run flags; see *Deferred: pinned runs*.
 
+It now also carries three things that were meant to land earlier: the `cvlr-preflight` script (still to
+write) and `entry.py`'s parser, both of which P1 merged without; `make_run_link_fetcher`, which S4 can no longer
+provide; and the reference set's `withholding`, which `--withhold-crate` is the only caller of.
+
 ### Order, and what is forced
 
-**P1 → P2 → P3a → P3b → P4 → K1 → P5 → P6 → P7**
+**~~P1~~ → P2 → P3a → P3b → P4 → K1 → P5 → P6 → P7**
 
 P4 and K1 are the only two with slack: P4 needs `rust_source` (P3a) and nothing after it, and K1
 needs nothing in `composer/spec/cvlr/` at all, so either can move earlier if that helps scheduling.
@@ -435,13 +508,20 @@ the report header, a banner when a run was unconfined, and the `Formalizer.build
 that supplies it. It was written on the reasoning that an unconfined build makes every verdict in
 the document a development result, and that stderr on the machine that ran it is not a record.
 
-**It is not worth a schema field.** Nothing reads it, and no formalizer on this branch overrides the
-hook either — so the field renders absent on every run that exists, here as much as on master. S4
-was opened with it and the field was removed before review.
+**It is not worth a schema field.** Nothing outside this backend reads it. S4 was opened with it,
+and the field was removed before review.
 
-The branch still carries it in `report/schema.py`, `report/render.py`, `autoprove_report.html.j2`,
-`pipeline/core.py` and three render tests; those are what to delete. `docs/cvlr-backend-plan.md`
-mentions it in the record of a run that actually happened and should be left alone.
+An earlier version of this section said no formalizer on the branch overrides the hook. That was
+wrong, and the deletion is larger than it said. `CvlrFormalizer.build_environment` in
+`cvlr/pipeline.py` does override it. `tests/test_cvlr_findings.py` checks that override, and
+`tests/test_cvlr_tape.py` asserts the field is present in a replayed report. So on a CVLR run the
+field is set. The rebase kept it, because deleting a feature is not a rebase's call. What to
+delete, if the drop stands: the field and its two types in `report/schema.py`; the
+`build_environment` parameter in `report/build.py`; `report/render.py` and
+`autoprove_report.html.j2`; the hook in `pipeline/core.py` and its override in `cvlr/pipeline.py`;
+the three render tests; the `test_cvlr_findings.py` case; and the tape assertion.
+`docs/cvlr-backend-plan.md` mentions the field in the record of a run that actually happened, and
+should be left alone.
 
 ---
 
@@ -456,11 +536,12 @@ A tag exists because a *wheel* has one: a Rust descriptor's `rag_db_default` cro
 string, so `rag_env` has to turn a string into a connection and a tool set. In-tree Python never
 holds such a string unless a flag invents one. CVL's composition root builds a
 `PostgreSQLRAGDatabase` from a constant and hands the object to `composer/spec/services.py`, which
-never sees a name; `populate_extended_rag.sh` passes `ragbuild` an `--output` connection. The CVLR
-backend does both of those and needs no registry at either end.
+never sees a name. The populate scripts pass `ragbuild --corpus <name>`. Since #244, that name
+picks one of `db.py`'s connection constants inside `ragbuild` itself. It does not go through a
+registry. The CVLR backend does both of those and needs no registry at either end.
 
 So `db.py` gains one line — `CVLR_DEFAULT_CONNECTION`, beside the three constants that already name
-a corpus's database — and nothing else. Not landing, in **P6** or anywhere: `ragbuild`'s
+a corpus's database — and nothing else. That line landed with #244. Not landing, in **P6** or anywhere: `ragbuild`'s
 `--knowledge-base` flag, `rag_env`'s `_FACTORIES` entry, the `build_rag_tools(model=...)` parameter
 added for a caller this drops, and the four `tests/test_rag_env.py` tests covering a registered
 corpus. `tests/test_cvlr_rag.py` replaces the one of those worth keeping — that the three tools
@@ -570,9 +651,13 @@ user is not a review, so it lands with the code that needs it.
 [#185](https://github.com/Certora/AutoProver/pull/185) and
 [#232](https://github.com/Certora/AutoProver/pull/232) are in the report package itself;
 [#228](https://github.com/Certora/AutoProver/pull/228) is in `pipeline/core.py`, a few lines from
-the give-up boundary S4 retypes. All three are still open. Whichever lands second pays the merge in
-each pair, and S4 now also carries whatever S1 and S3 left in those files. Worth deciding the order
-deliberately rather than discovering it.
+the give-up boundary S4 retypes. All three were open when this was written. Whichever landed second
+would pay the merge in each pair, so the order was worth deciding deliberately rather than
+discovering it.
+
+*What happened:* #228 merged on 2026-09-18 and #232 on 2026-09-20, both ahead of S4. #228's merge
+was mechanical. #232's was not, and it reshapes S4 (wave 1, *What master has left for S4*). Only
+#185 is still open.
 
 **5. Is there an EVM-visible behaviour change anywhere in wave 1?** Two, and both PRs said so in
 their own bodies rather than leaving a reviewer to find it. **S3** was the larger and is now on
@@ -602,6 +687,9 @@ and buys nothing.
 tools and the ingestion are a capability someone can run today; the template is a fragment with no
 renderer. Dropping that one file also removes the old plan's only cross-wave ordering constraint.
 
+*What happened instead:* #244 merged on 2026-09-22 with the template in it. That costs nothing
+except one file on master that nothing renders until P6.
+
 **7. Does P3 land as one PR or two?** One capability, +3,967 code and +2,280 tests, or two of
 roughly half that at the cost of splitting `tests/test_cvlr_tree.py` and
 `tests/test_cvlr_module_redirect.py` along the same line. The split is written into the tables above
@@ -630,16 +718,17 @@ already local to the functions that need them.
 |----|-------|
 | S1 *(merged)* | `composer/layout.py` `composer/spec/gen_types.py` `composer/sandbox/recipes.py` `composer/pipeline/ecosystem.py` `composer/foundry/entry.py` `composer/spec/source/autoprove_common.py` `tests/test_fs_forbidden_read.py` `tests/test_sandbox_config.py` `scripts/docker-compose.sandbox.yml` `composer/pipeline/cli.py` *(hunks)* |
 | S3 *(merged)* | `composer/certora_env.py` `composer/prover/{certoraRunWrapper,core,ptypes,results}.py` `analyzer/analysis.py` `composer/tools/{prover,thinking}.py` `composer/authoring/buffer.py` `composer/core/context.py` `composer/cvl/tools.py` `composer/workflow/executor.py` `composer/spec/source/{autoprove_common,harness}.py` `composer/spec/source/munge/compile_check.py` `tests/conftest.py` `tests/test_prover_app.py` `tests/test_prover_options.py` `tests/test_wrapped_prover_runner.py` `tests/test_solana_cex_trace.py` `tests/data/solana_cex/` `tests/test_tree_parsing.py` `tests/test_cex_analysis_failure_isolation.py` `tests/test_autoprove_report.py` *(hunks)* |
-| S4 | `composer/spec/source/report/{schema,collect,build}.py` `composer/spec/source/report_prover.py` `tests/test_autoprove_report.py` `composer/pipeline/core.py` *(hunks)* |
-| P1 | `composer/cargo/{__init__,metadata,session}.py` `composer/spec/cvlr_reference.py` `composer/spec/cvlr/{__init__,conf,crates,env_paths,forks,scaffold,preflight}.py` `composer/spec/cvlr/tuning.py` *(split: the layer families and `compose_env`)* `composer/spec/cvlr/envs/` `composer/prover/conf.py` `composer/spec/source/{prover,author,artifacts}.py` *(hunks: onto `composer.prover.conf`)* `composer/spec/natspec/task_description.py` *(hunks)* `composer/spec/cvlr/entry.py` *(hunks: the parser, `parse_main_program`, confinement)* `tests/test_cvlr_reference.py` `tests/test_cvlr_env_paths.py` `tests/test_cvlr_forks.py` `tests/test_cvlr_preflight.py` `tests/test_prover_conf.py` `tests/test_rules_striping.py` *(hunks)* `tests/test_stuck_rule_warnings.py` *(hunks)* `tests/test_cvlr_scaffold.py` *(split: everything that does not reach `harness`)* `tests/test_cvlr_plumbing.py` *(split: the `cargo metadata` and conf halves)* — plus the `cvlr-preflight` console script and its `pyproject.toml` entry, new work |
-| P2 | `composer/cargo/sbf.py` `composer/spec/cvlr/{prover,rules}.py` `tests/test_cvlr_end_to_end.py` `tests/test_cvlr_rules.py` `tests/test_cvlr_loop_bound.py` `tests/data/loop_bound_probe.rs` `tests/test_cvlr_plumbing.py` *(split: `sbf_argv`, the build script, `write_submission`)* |
+| S4 | `composer/spec/source/report/{schema,collect,build}.py` `tests/test_autoprove_report.py` `composer/pipeline/core.py` *(hunks)* — `report_prover.py`'s `job_input` now goes to P3b and its fetcher to P7 |
+| P1 *(merged)* | `composer/cargo/{__init__,features,manifest,metadata,session}.py` `composer/spec/cvlr/{__init__,conf,crates,env_paths,forks,preflight,reference,scaffold,tuning}.py` `composer/spec/cvlr/envs/` `composer/spec/cvlr/harness_files/` `composer/prover/conf.py` `composer/spec/source/{prover,author,artifacts}.py` *(hunks)* `composer/spec/natspec/task_description.py` *(hunks)* `tests/test_cvlr_{env_paths,forks,plumbing,preflight,reference,scaffold}.py` `tests/test_prover_conf.py` `tests/test_rules_striping.py` *(hunks)* `tests/test_stuck_rule_warnings.py` *(hunks)* `tests/data/vault_sbf_symbols.txt` `pyproject.toml` `uv.lock` |
+| P1 follow-up, to master now | `composer/spec/cvlr/preflight.py` *(hunk: `check(manifest_dir=…)`)* `composer/spec/cvlr/crates.py` *(hunk: drop `roots()`)* — plus the regression test, still to write |
+| P2 | `composer/cargo/sbf.py` `composer/spec/cvlr/{prover,rules}.py` `composer/spec/cvlr/envs/` *(hunks: the directives added since P1)* `tests/test_cvlr_env_paths.py` *(hunk: the directive counts)* `tests/test_cvlr_end_to_end.py` `tests/test_cvlr_rules.py` `tests/test_cvlr_loop_bound.py` `tests/data/loop_bound_probe.rs` `tests/test_cvlr_plumbing.py` *(split: `sbf_argv`, the build script, `write_submission`)* |
 | P3a | `composer/spec/cvlr/{rust_source,munge,tree}.py` `graphcore` `pyproject.toml` `tests/test_cvlr_munge.py` *(split: the source half, less the three `CvlrFormalizer` cases)* `tests/test_cvlr_module_redirect.py` `tests/test_cvlr_import_swap.py` `tests/test_cvlr_anchor_reach.py` `tests/data/anchor_reach_probe.rs` |
-| P3b | `composer/spec/cvlr/{state,harness,verify}.py` `composer/spec/cvlr/tuning.py` *(split: `SummaryDirective`, `TuningFiles`, appended to what P1 landed)* `composer/cargo/symbols.py` `tests/test_cvlr_symbols.py` `tests/data/vault_sbf_symbols.txt` `tests/test_cvlr_tuning.py` `tests/test_cvlr_tree.py` `tests/test_cvlr_scaffold.py` *(split: the `harness` cases)* `tests/test_cvlr_plumbing.py` *(split: `_CaptureCallbacks`, `_RunAccounting`)* |
+| P3b | `composer/spec/cvlr/{state,harness,verify}.py` `composer/spec/cvlr/tuning.py` *(split: `SummaryDirective`, `TuningFiles`, appended to what P1 landed)* `composer/spec/cvlr/conf.py` *(hunks: `OptimisticLoop`, `CollectUnsatCore`)* `composer/spec/source/report_prover.py` *(hunks: `job_input`, `fetch_unsat_cores`)* `composer/cargo/symbols.py` `tests/test_cvlr_symbols.py` `tests/test_cvlr_tuning.py` `tests/test_cvlr_tree.py` `tests/test_cvlr_plumbing.py` *(split: `_CaptureCallbacks`, `_RunAccounting`)* |
 | P4 | `composer/spec/cvlr/{anchor_surface,example,guidance}.py` `tests/test_cvlr_anchor_surface.py` `tests/test_cvlr_worked_example.py` |
 | K1 | `composer/kb/kb_context.py` `composer/kb/knowledge_base.py` `composer/kb/resources/cvlr_baseline_facts.md` `composer/templates/kb_index.j2` `composer/templates/cvl_kb_index.j2` `tests/test_kb_bundle.py` `tests/test_cvlr_bundle.py` |
 | P5 | `composer/spec/cvlr/editor.py` `composer/cargo/depinfo.py` `composer/templates/cvlr_munge_editor_system.j2` `composer/templates/cvlr_munge_review_system.j2` `tests/test_cvlr_editor.py` `tests/test_cvlr_derive_swap.py` |
-| P6 | `composer/spec/cvlr/{author,crate_mount,source_tools}.py` `composer/templates/cvlr_{feedback_prompt,property_generation_prompt,property_generation_system_prompt,property_judge_system_prompt,source_tools,rag_tools}.j2` `composer/spec/source/source_env.py` `composer/tools/cvlr_rag.py` `composer/rag/db.py` *(hunks: the connection constant)* `composer/scripts/init-db.sql` `composer/scripts/ragbuild.py` *(hunks: the `<blockquote>` case)* `scripts/populate_cvlr_rag.sh` *(hunks: the manual half)* `template_manifest.json` `tests/test_cvlr_rag.py` *(new, not on the branch)* `tests/test_cvlr_judge_input.py` `tests/test_cvlr_knowledge.py` `tests/data/cvlr_judge/` |
-| P7 | `composer/spec/cvlr/pipeline.py` `composer/spec/cvlr/entry.py` *(hunks: `cvlr_executor`, `_entry_point`)* `composer/cli/console_solana.py` `composer/cli/tui_solana.py` `composer/spec/context.py` `composer/spec/services.py` `composer/ui/tool_display.py` `composer/rustapp/toolchain.py` `tests/test_cvlr_entry.py` `tests/test_cvlr_findings.py` `tests/test_cvlr_author.py` `tests/test_cvlr_munge.py` *(split: the three `CvlrFormalizer` cases)* `tests/test_cvlr_judge_round_cost.py` `tests/test_cvlr_plumbing.py` *(the remainder)* `tests/test_autoprove_integration.py` `.github/workflows/integration-tests.yml` |
+| P6 | `composer/spec/cvlr/{author,crate_mount,source_tools}.py` `composer/templates/cvlr_{feedback_prompt,property_generation_prompt,property_generation_system_prompt,property_judge_system_prompt,source_tools}.j2` `composer/spec/source/source_env.py` `template_manifest.json` `tests/test_cvlr_judge_input.py` `tests/test_cvlr_knowledge.py` `tests/data/cvlr_judge/` |
+| P7 | `composer/spec/cvlr/pipeline.py` `composer/spec/cvlr/entry.py` *(the whole file, now including the parser P1 did not take)* the `cvlr-preflight` console script *(new work, still to write)* `composer/spec/cvlr/reference.py` *(hunks: `ProgramModel`, `withholding`)* `tests/test_cvlr_reference.py` *(hunks)* `composer/spec/source/report_prover.py` *(hunk: `make_run_link_fetcher`)* `composer/cli/console_solana.py` `composer/cli/tui_solana.py` `composer/spec/context.py` `composer/spec/services.py` `composer/ui/tool_display.py` `composer/rustapp/toolchain.py` `tests/test_cvlr_entry.py` `tests/test_cvlr_findings.py` `tests/test_cvlr_author.py` `tests/test_cvlr_munge.py` *(split: the three `CvlrFormalizer` cases)* `tests/test_cvlr_judge_round_cost.py` `tests/test_cvlr_plumbing.py` *(the remainder)* `tests/test_autoprove_integration.py` `.github/workflows/integration-tests.yml` |
 | P8 | `tests/test_cvlr_gate.py` `test_scenarios/solana_vault_idl/` `composer/diagnostics/budget.py` |
 | P9 | `composer/testing/` `scripts/record_cvlr_tape.sh` `tests/test_cvlr_tape.py` `tests/test_tape_setup.py` |
 | R3 | `scripts/Dockerfile` `scripts/Dockerfile.solana` `scripts/docker-compose.yml` `scripts/docker-compose.common.yml` `scripts/docker-compose.solana.yml` `scripts/autoprove-entrypoint.sh` `tests/test_cvlr_image.py` |
