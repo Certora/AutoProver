@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""certoraSolanaProver's ``build_script``. Copied beside a command file by
-:func:`composer.cargo.sbf.write_build_script`; do not edit the copy.
+"""certoraSolanaProver's ``build_script``.
 
-The prover runs the copy directly and reads the build manifest from stdout. It
-must run without this package installed, so it imports nothing from it.
+:func:`composer.cargo.sbf.write_build_script` copies this file next to a
+command file. Edit this file, not the copy.
+
+The prover runs the copy directly and reads the build manifest from stdout.
+The copy imports nothing from this package: the package is not installed
+where the prover runs it.
 """
 
 import json
@@ -24,8 +27,8 @@ def main() -> int:
         return 1
     argv = [*command["argv_prefix"], *command["argv"]]
 
-    # Certora passes --json and -l; those flags do nothing here. --cargo_features
-    # is how the prover adds features, and ignoring it would build the wrong crate.
+    # The prover passes --json, -l, and --cargo_features. Only --cargo_features
+    # changes the build. Dropping it builds the wrong crate.
     if "--cargo_features" in sys.argv:
         extra = sys.argv[sys.argv.index("--cargo_features") + 1 :]
         if extra:

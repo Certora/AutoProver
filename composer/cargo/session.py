@@ -153,7 +153,7 @@ class CargoSession:
         self, *, timeout_s: int, extra_ro: tuple[Path, ...] = ()
     ) -> BackendSpec:
         """The confinement :meth:`run_confined` applies, as an argv prefix for a
-        command something else launches later."""
+        command launched later."""
         return await self._sandbox_granting(extra_ro).backend_spec(
             self.workdir, timeout_s=timeout_s
         )

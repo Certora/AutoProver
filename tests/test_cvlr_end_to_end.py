@@ -1,17 +1,16 @@
-"""A hand-written CVLR rule in, verdicts out, with the latency of both compile tiers.
+"""A hand-written CVLR rule in, verdicts out, and the time both compile tiers take.
 
-`Certora/SolanaExamples <https://github.com/Certora/SolanaExamples>`_ ships minimal CVLR projects,
-each with a conf and an **expected-verdict file** its own CI compares against. So the assertion is
-not "the plumbing returned something"; it is "the plumbing returned what the project's authors say
-is correct", including the rule that is meant to fail and the one that is meant to fail *sanity*.
+`Certora/SolanaExamples <https://github.com/Certora/SolanaExamples>`_ ships small
+CVLR projects. Each has a conf and an expected-verdict file that its CI checks.
+This test checks those verdicts, including the rule that should fail and the
+one that should fail its sanity check.
 
-Marked ``expensive``: it submits a real cloud job. It also needs a real Rust + Solana platform
-toolchain, and it skips — naming the missing piece — rather than failing when one is absent, since a
-machine without the toolchain is not a machine with a broken backend.
+Marked ``expensive``. It submits a real cloud job and needs a Rust toolchain
+and Solana platform tools. It skips, and names the missing piece, when either
+is absent.
 
-Confinement is the one thing it does *not* skip over: the build runs under production's sandbox
-(``cvlr_confinement``), because the whole point of this gate is the plumbing, and an unconfined
-build exercises a different one.
+The build runs under the production sandbox (``cvlr_confinement``). An
+unconfined build is a different path, so a missing sandbox skips the test.
 """
 
 import json
@@ -44,8 +43,11 @@ pytestmark = [pytest.mark.expensive, pytest.mark.asyncio]
 
 
 class _NoAnalysis(CexHandler):
-    """Explains nothing. The test reads verdicts, and the examples include a rule meant to fail, so
-    this is reached and must not need an LLM."""
+    """Returns no explanation.
+
+    A rule in the examples is meant to fail, so this handler runs. The test
+    has no LLM.
+    """
 
     async def analyze(
         self,
@@ -56,18 +58,16 @@ class _NoAnalysis(CexHandler):
     ) -> str:
         return ""
 
-#: Where the public examples repo is checked out. An env var rather than a vendored fixture: the
-#: repo is the upstream artifact this test is *about*, and a copy in this tree would silently stop
-#: tracking it.
+#: Checkout of the public examples repo. Not vendored: a copy in this tree
+#: would stop tracking upstream.
 EXAMPLES_ENV = "SOLANA_EXAMPLES_REPO"
 DEFAULT_EXAMPLES = Path("~/src/SolanaExamples").expanduser()
 
-#: The example whose conf ships an expected-verdict file covering all three outcomes that matter.
+#: The example whose expected-verdict file covers success, violation, and a sanity failure.
 EXAMPLE = Path("cvlr_by_example/first_example")
 
-#: ``Reports/output.json``'s vocabulary — what an expected-verdict file is written in — against the
-#: treeView vocabulary the shared result parser produces. Two names for one outcome, and the
-#: translation lives here because the expected file is the *fixture's* format, not the backend's.
+#: Expected-verdict names (``Reports/output.json``) to the treeView names the
+#: result parser returns. The expected file uses the fixture's names.
 EXPECTED_TO_TREEVIEW = {
     "SUCCESS": "VERIFIED",
     "FAIL": "VIOLATED",
@@ -76,15 +76,15 @@ EXPECTED_TO_TREEVIEW = {
 
 
 def _shipped_cli_only() -> None:
-    """Refuse to run against a Certora source checkout.
+    """Skip when ``$CERTORA`` points at a Prover source checkout.
 
-    ``$CERTORA`` makes :func:`composer.certora_env.import_prover_entry` import the CLI from a local
-    Prover build (:mod:`composer.certora_env`'s documented policy), and such a build reports itself
-    as "no package installed" — so the run is rejected before upload unless it also names a
-    ``prover_version``. That is a real developer setting for EVM work and incidental here, but the
-    resulting failure names neither this variable nor the expected-verdict file it would invalidate:
-    a local Prover branch need not agree with the release the fixture's verdicts were recorded
-    against. Skipping names it instead."""
+    ``$CERTORA`` makes :func:`composer.certora_env.import_prover_entry` import
+    the CLI from a local Prover build (:mod:`composer.certora_env`). That build
+    reports itself as "no package installed", so the run is rejected before
+    upload unless it also names a ``prover_version``. A local branch need not
+    match the release the fixture's verdicts were recorded against, and the
+    failure names neither ``$CERTORA`` nor that file.
+    """
     if os.environ.get("CERTORA"):
         pytest.skip(
             "$CERTORA points this run at a Prover source checkout, whose verdicts need not match "
@@ -117,9 +117,8 @@ async def cvlr_confinement() -> SandboxConfig:
 def workdir(tmp_path: Path) -> Path:
     """A throwaway copy of the examples repo.
 
-    A copy rather than the checkout itself because a session's workdir is written to — the private
-    ``CARGO_HOME``, the build script, the conf, ``target/`` — and a test that dirties a developer's
-    working tree is a test they learn to avoid running.
+    The session writes a private ``CARGO_HOME``, the build script, the conf,
+    and ``target/`` into the workdir.
     """
     _shipped_cli_only()
     root = _examples_root()
@@ -151,8 +150,7 @@ async def test_the_examples_project_verifies_exactly_as_its_authors_expect(
     session = CargoSession(workdir=workdir, sandbox=cvlr_confinement)
     assert isinstance(await session.warm(manifest_dirs=(EXAMPLE,)), Warmed)
 
-    # The fast tier, measured against the same crate the slow tier builds — the two numbers side by
-    # side are what open question 1 is decided on, and the ratio is the whole argument for two tiers.
+    # Same crate as the slow build below. Both durations are printed.
     fast = await session.check(package="first_example", features=("certora",))
     assert fast.ok, fast.verdict
 
@@ -166,8 +164,8 @@ async def test_the_examples_project_verifies_exactly_as_its_authors_expect(
     )
     prepared = await prepare_submission(session, submission)
     assert not isinstance(prepared, BuildRejected), prepared
-    # Our build script and message on the authors' settings. `files` names their prebuilt `.so`,
-    # which the prover refuses beside a build script.
+    # Keep the authors' settings. Drop `files`: it names their prebuilt `.so`,
+    # and the prover rejects that next to a build script.
     ours = json.loads(prepared.conf_path.read_text())
     conf = {
         **{k: v for k, v in authors_conf.items() if k != "files"},

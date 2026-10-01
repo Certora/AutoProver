@@ -449,13 +449,9 @@ def test_a_units_summary_file_is_named_when_the_run_passes_one():
 
 
 def test_the_build_warms_with_the_cargo_it_will_actually_run(tmp_path):
-    """A cache is only warm for the cargo that filled it.
+    """Both platform-tools flavours, when the ``cargo`` binary is present.
 
-    Cargo hashes a git source into a directory name and the hash is not stable across versions: the
-    host's cargo 1.89 fetched ``Certora/anchor`` into ``git/db/anchor-8a7e45e4c93a95b5`` while the
-    cargo 1.79 inside platform-tools v1.43 looked for ``git/db/anchor-1f3eb14fb7b4e8f1``, found
-    nothing, and — confined and therefore offline — called it a network failure. Measured, not
-    inferred: both directories exist side by side after fetching with each.
+    The tool picks which one runs.
     """
     for flavour in ("platform-tools-certora", "platform-tools"):
         binary = tmp_path / "v1.43" / flavour / "rust" / "bin" / "cargo"
@@ -466,25 +462,32 @@ def test_the_build_warms_with_the_cargo_it_will_actually_run(tmp_path):
 
     assert [p.parent.parent.parent.name for p in found] == [
         "platform-tools-certora", "platform-tools"
-    ], "both flavours are warmed, since which one the build picks is the tool's business"
+    ], "both flavours, when the cargo binary is present"
 
 
 def test_a_version_with_no_toolchain_yields_nothing_to_warm(tmp_path):
-    """Not an error: an unconfined build is not forced offline and fetches what it lacks, and a
-    confined one already fails at :class:`PlatformToolsMissing` with an operator action named."""
+    """No binaries means nothing to fetch.
+
+    An unconfined build can still fetch. A confined build already fails in
+    :class:`composer.cargo.sbf.PlatformToolsMissing` when the toolchain
+    directory is missing.
+    """
     assert platform_tools_cargos("v1.43", root=tmp_path) == ()
 
 
 def test_a_directory_without_the_binary_is_not_offered(tmp_path):
-    """A half-extracted toolchain directory exists; warming with a path that is not there would
-    fail the fetch and report it as the project's problem."""
+    """A toolchain directory with no ``cargo`` binary is skipped.
+
+    Fetching that path would fail, and the failure would look like a problem
+    in the project.
+    """
     (tmp_path / "v1.43" / "platform-tools" / "rust" / "bin").mkdir(parents=True)
 
     assert platform_tools_cargos("v1.43", root=tmp_path) == ()
 
 
 def test_warming_is_tracked_per_binary_not_per_session(tmp_path):
-    """Two cargos do not share a git cache, so one having warmed says nothing about the other."""
+    """Two cargos do not share a git cache. One of them being warm says nothing about the other."""
     session = CargoSession(workdir=tmp_path, sandbox=SandboxConfig())
 
     assert not session.already_warmed("/tools/v1.43/rust/bin/cargo")
@@ -506,18 +509,19 @@ def _build(**overrides) -> SbfBuild:
 
 
 def test_the_build_never_touches_rustup():
-    """``cargo certora-sbf`` registers a toolchain link around each build, which writes to
-    ``RUSTUP_HOME`` — read-only under confinement. Dropping ``--no-rustup`` fails the build for a
-    reason that names neither rustup nor the sandbox."""
+    """``cargo certora-sbf`` links a rustup toolchain on each build and writes
+    ``RUSTUP_HOME``. That directory is read-only under confinement, and the
+    failure names neither rustup nor the sandbox."""
     assert "--no-rustup" in _build().argv()
 
 
 def test_the_build_is_told_where_the_platform_tools_are():
-    """The tool reads ``$CERTORA_PLATFORM_TOOLS_ROOT`` too, and the confined child never sees it:
-    the launcher scrubs the environment down to a chain-neutral passthrough list that does not carry
-    it. A deployment whose toolchains are not in the tool's default location — the container, whose
-    default location is under a world-writable ``$HOME`` — would otherwise grant one root read-only
-    and build against another."""
+    """The tool also reads ``$CERTORA_PLATFORM_TOOLS_ROOT``, and the confined
+    child does not see it. The launcher passes a fixed environment list that
+    omits it. The tool's own default is under ``$HOME``, which is
+    world-writable in the container, so the argv names the root the read-only
+    grant covers.
+    """
     argv = _build().argv()
     assert argv[argv.index("--platform-tools-root") + 1] == str(PLATFORM_TOOLS_ROOT)
 
@@ -528,8 +532,8 @@ def test_features_reach_the_build_as_one_space_separated_value():
 
 
 def test_a_manifest_missing_what_the_prover_requires_is_rejected_here():
-    """The same key missing at submission time is a ``CertoraUserInputError`` from inside a run that
-    has already started."""
+    """A missing key fails here. At submission time the same gap is a
+    ``CertoraUserInputError`` from a run that has already started."""
     with pytest.raises(MalformedBuildManifest, match="executables"):
         parse_build_manifest(json.dumps({"success": True, "project_directory": "/w", "sources": []}))
 
@@ -586,8 +590,8 @@ def test_the_manifest_keeps_cargos_own_paths():
 
 @pytest.mark.asyncio
 async def test_the_generated_build_script_reruns_the_gates_command(tmp_path):
-    """The prover's build has to be the build that already passed, or the artifact it reports is not
-    the artifact the gate approved."""
+    """The prover reruns this command. It has to be the build the gate already
+    ran, or the reported artifact is not the one the gate approved."""
     session = CargoSession(workdir=tmp_path, sandbox=SandboxConfig(provider="none"))
     build = _build(features=("certora",))
     script = await write_build_script(session, build, name="unit")
@@ -598,7 +602,8 @@ async def test_the_generated_build_script_reruns_the_gates_command(tmp_path):
 
 @pytest.mark.asyncio
 async def test_the_build_script_grants_the_platform_tools_root_its_argv_names(tmp_path, monkeypatch):
-    """A root outside ``rust_build_policy``'s defaults, as ``$CERTORA_PLATFORM_TOOLS_ROOT`` names."""
+    """The platform-tools root is granted read-only, including a root outside
+    ``rust_build_policy``'s defaults."""
     from composer.cargo import sbf
     from composer.sandbox import config as config_mod
     from composer.sandbox.launcher import LauncherProvider
@@ -625,8 +630,7 @@ async def test_the_build_script_grants_the_platform_tools_root_its_argv_names(tm
 
 @pytest.mark.asyncio
 async def test_an_unconfined_session_produces_a_build_script_with_no_wrapper(tmp_path):
-    """The macOS development carve-out: ``provider="none"`` is a passthrough, and the script runs
-    the command directly rather than pretending to confine it."""
+    """``provider="none"`` is a passthrough. The script runs the command with no wrapper."""
     session = CargoSession(workdir=tmp_path, sandbox=SandboxConfig(provider="none"))
     script = await write_build_script(session, _build(), name="unit")
     assert json.loads(build_command_path(script).read_text())["argv_prefix"] == []
@@ -634,22 +638,22 @@ async def test_an_unconfined_session_produces_a_build_script_with_no_wrapper(tmp
 
 @pytest.mark.asyncio
 async def test_the_build_script_is_executable(tmp_path):
-    """``certoraParseBuildScript`` execs it directly rather than through an interpreter, so without
-    the execute bit the shebang means nothing and ``validate_exec_file`` rejects the conf."""
+    """``certoraParseBuildScript`` execs the script. Without the execute bit,
+    ``validate_exec_file`` rejects the conf."""
     session = CargoSession(workdir=tmp_path, sandbox=SandboxConfig(provider="none"))
     script = await write_build_script(session, _build(), name="unit")
     assert script.stat().st_mode & stat.S_IXUSR
 
 
 def _unconfined(tmp_path: Path) -> CargoSession:
-    """No cargo and no network: `provider="none"` makes the build script a passthrough, so the
-    conf-writing half is reachable without a toolchain."""
+    """``provider="none"`` makes the build script a passthrough, so writing
+    the conf needs no toolchain."""
     return CargoSession(workdir=tmp_path, sandbox=SandboxConfig(provider="none"))
 
 
 @pytest.mark.asyncio
 async def test_a_tuned_conf_reaches_the_file_the_prover_is_handed(tmp_path):
-    """The settings an author may change, checked at the far end of the wire."""
+    """Author settings are written into the conf the prover is given."""
     edited = cvlr_conf.TunableConf(loop_iter=4, optimistic_loop=True)
     conf_path = await write_submission(
         _unconfined(tmp_path),
@@ -668,9 +672,10 @@ async def test_a_tuned_conf_reaches_the_file_the_prover_is_handed(tmp_path):
 
 @pytest.mark.asyncio
 async def test_the_written_conf_names_the_build_script_written_beside_it(tmp_path):
-    """`write_submission` writes two files and the conf points at the other one. Nothing else
-    checks that they agree, and a conf naming a script that is not there is rejected inside
-    `certoraRun`'s own validation — after the upload, in its vocabulary rather than ours."""
+    """The conf names the build script written next to it.
+
+    A conf that names a missing script is rejected by ``certoraRun`` after the upload.
+    """
     conf_path = await write_submission(
         _unconfined(tmp_path),
         Submission(manifest_path=tmp_path / "Cargo.toml", target_directory=tmp_path / "target"),
@@ -685,8 +690,11 @@ async def test_the_written_conf_names_the_build_script_written_beside_it(tmp_pat
 
 @pytest.mark.asyncio
 async def test_two_units_sharing_a_tree_write_separate_confs_and_build_scripts(tmp_path):
-    """Units sharing a working tree are submitted concurrently. A file they shared would carry the
-    second unit's loop bound or features into the first unit's job."""
+    """Two submissions in one working tree write separate confs and build scripts.
+
+    They can be in flight together. A shared file would send one submission's
+    loop bound or features with the other's job.
+    """
     session = _unconfined(tmp_path)
     manifest = tmp_path / "Cargo.toml"
     solvency = await write_submission(
@@ -723,8 +731,7 @@ async def test_two_units_sharing_a_tree_write_separate_confs_and_build_scripts(t
     assert features(confs["solvency"]) == "certora solvency"
     assert features(confs["access"]) == "certora access"
 
-    # One crate, two feature sets: in one target directory, each unit's rerun would rebuild the
-    # artifact over the other's, and a prover could upload the `.so` the other unit just built.
+    # Separate target directories. One directory would let each rerun replace the other's `.so`.
     target_dirs = {
         next(a for a in argv(conf) if a.startswith("CARGO_TARGET_DIR=")) for conf in confs.values()
     }
@@ -735,7 +742,7 @@ async def test_two_units_sharing_a_tree_write_separate_confs_and_build_scripts(t
 
 
 def _stub_command(script: Path) -> None:
-    """Replace the build with a stand-in that reports where it ran and what it was given."""
+    """Point the command file at a stand-in that prints its working directory and arguments."""
     command_file = build_command_path(script)
     command = json.loads(command_file.read_text())
     command["argv"] = [
@@ -746,7 +753,7 @@ def _stub_command(script: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_the_build_script_runs_its_command_in_the_workdir_with_the_provers_features(tmp_path):
-    """The script is what the prover execs, so it is run here rather than read."""
+    """Run the script the way the prover does, including ``--cargo_features``."""
     script = await write_build_script(_unconfined(tmp_path), _build(), name="unit")
     _stub_command(script)
 
@@ -762,8 +769,7 @@ async def test_the_build_script_runs_its_command_in_the_workdir_with_the_provers
 
 @pytest.mark.asyncio
 async def test_a_build_script_moved_with_its_tree_refuses_to_build_the_original(tmp_path):
-    """The command names the tree it was written in by absolute path. Run from a copy, it would
-    build the original and hand the prover that tree's artifact."""
+    """The command names its workdir by absolute path. A copied script would build the original tree."""
     original = tmp_path / "original"
     original.mkdir()
     script = await write_build_script(_unconfined(original), _build(), name="unit")
@@ -781,14 +787,13 @@ async def test_a_build_script_moved_with_its_tree_refuses_to_build_the_original(
 
 
 def test_a_relative_target_directory_is_refused():
-    """``cargo certora-sbf`` resolves one against two different directories."""
+    """``cargo certora-sbf`` resolves a relative target directory against the working
+    directory and against the package directory."""
     with pytest.raises(ValueError):
         SbfBuild(manifest_path=Path("/w/Cargo.toml"), target_dir=Path("target"))
 
 
 def test_a_failed_compile_carries_the_compilers_own_words():
-    """The consumer is an authoring agent, and rustc's human-format output — span, note, suggestion
-    — is the most actionable form it can be given."""
     failed = CompileFailed(diagnostics="error[E0599]: no method named `cvlr_assert`", exit_code=101)
     assert not isinstance(failed, Built)
     assert "E0599" in failed.diagnostics

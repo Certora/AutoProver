@@ -1,27 +1,23 @@
 """Solana verification build: ``cargo certora-sbf`` and its JSON output.
 
-The slow compile gate (:mod:`composer.cargo.session` is the fast one), and the
-point where the backend and ``certoraSolanaProver`` agree on what was built.
+The slow compile gate. :mod:`composer.cargo.session` is the fast one.
 
-``cargo certora-sbf --json`` prints a JSON document (stdout; compile log on
-stderr). ``certoraSolanaProver``'s ``build_script`` is defined as "run this and
-read that JSON from stdout" (``CertoraProver/certoraParseBuildScript.py``). The
-backend runs the build, reads the JSON, and gives the prover a
-:func:`build_script` that reruns the same command, confined the same way.
+``cargo certora-sbf --json`` prints the build manifest on stdout and the
+compile log on stderr. ``certoraSolanaProver`` reads that JSON from its build
+script's stdout (``CertoraProver/certoraParseBuildScript.py``). This module
+runs the build and writes a script that reruns the same command, confined the
+same way.
 
-The prover reruns the build instead of replaying a saved manifest. A saved
-manifest goes stale if anything moves, and the prover can then upload the wrong
-sources or a missing artifact. The second run is a warm cargo no-op because
-each :class:`SbfBuild` has a target directory of its own: builds of one crate
-with different features would otherwise rebuild over each other's artifact,
-and the prover could upload a ``.so`` another build had just replaced.
+The prover reruns the build. A saved manifest goes stale when sources move,
+and the prover can then upload the wrong sources or a missing artifact. The
+rerun compiles nothing new when that target directory already holds the
+build. Each :class:`SbfBuild` has its own target directory, so two builds of
+one crate with different features do not replace each other's ``.so``.
 
-The conf uses a build script instead of handing over the finished ``.so`` via
-``files``. ``set_rust_build_directory`` only copies the project's Rust sources
-into ``.certora_sources`` on the build-script path; with ``files`` it copies the
-artifact and nothing else. ``certoraSolanaProver``'s own from-sources path also
-runs ``cargo certora-sbf`` unconfined inside its process, which the sandbox does
-not allow.
+The conf names a build script. On that path, ``set_rust_build_directory``
+copies the Rust sources into ``.certora_sources``. With ``files``, it copies
+the ``.so`` and nothing else. The prover's own from-sources path runs
+``cargo certora-sbf`` unconfined, which the sandbox does not allow.
 """
 
 import asyncio
@@ -84,11 +80,10 @@ class SbfSubcommandMissing(RuntimeError):
 
 
 async def sbf_subcommand_version() -> str:
-    """Output of ``cargo certora-sbf --version``, or raise :class:`SbfSubcommandMissing`.
+    """What ``cargo certora-sbf --version`` prints.
 
-    Runs the subcommand instead of searching ``PATH``. Cargo also looks in
-    ``$CARGO_HOME/bin`` and the active toolchain's libexec, so a failed ``which``
-    would reject working installs.
+    Runs the subcommand. Cargo also finds it under ``$CARGO_HOME/bin`` and the
+    active toolchain's libexec, so a ``PATH`` search rejects working installs.
     """
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -120,9 +115,8 @@ type _SolanaFiles = Annotated[tuple[str, ...], BeforeValidator(_one_or_many)]
 class BuildManifest(BaseModel):
     """Output of ``cargo certora-sbf --json``, checked against what the prover requires.
 
-    Paths are as cargo printed them: ``project_directory`` absolute, everything
-    else relative to it. ``certoraParseBuildScript`` resolves them against
-    ``project_directory``, so rewriting them here would add a second convention.
+    ``project_directory`` is absolute. The other paths are relative to it.
+    ``certoraParseBuildScript`` resolves them against ``project_directory``.
     """
 
     model_config = ConfigDict(frozen=True, extra="ignore", strict=True)
@@ -147,8 +141,8 @@ class MalformedBuildManifest(ValueError):
 def parse_manifest(stdout: str) -> BuildManifest:
     """Parse the build JSON into the shape ``certoraParseBuildScript`` accepts.
 
-    Checked here so a bad manifest is a build-tool error next to the build, not a
-    ``CertoraUserInputError`` inside a prover run that has already started.
+    A bad manifest fails here, before a prover run starts. During submission
+    the same JSON is a ``CertoraUserInputError`` after the upload.
     """
     try:
         return BuildManifest.model_validate_json(stdout)
@@ -177,13 +171,12 @@ class SbfRun:
 
 @dataclass(frozen=True)
 class SbfBuild:
-    """One ``cargo certora-sbf`` build: what the gate runs and the build script reruns.
+    """One ``cargo certora-sbf`` build. The gate runs it, and the build script reruns it.
 
-    ``target_dir`` is absolute and lies under the crate's workspace root. The
-    tool reports the artifact relative to that root. It resolves a relative
-    target directory against the working directory for ``cargo metadata`` but
-    against the package directory for the build, so the artifact it reports
-    would not be the one it built.
+    ``target_dir`` is absolute and under the workspace root. The tool reports
+    the artifact relative to that root. A relative target directory is resolved
+    against the working directory by ``cargo metadata`` and against the package
+    directory by the build, so the reported path is not the file that was built.
     """
 
     manifest_path: Path
@@ -198,20 +191,20 @@ class SbfBuild:
     def argv(self) -> list[str]:
         """The full command line, program included.
 
-        The target directory is set as ``CARGO_TARGET_DIR`` through ``env``
-        because ``cargo certora-sbf`` has no flag for it and reads the artifact
+        The target directory is ``CARGO_TARGET_DIR`` on the argv.
+        ``cargo certora-sbf`` has no flag for it, and it reads the artifact
         path from its own ``cargo metadata`` call, which ``--cargo-args`` does
-        not reach. Setting it in the argv rather than the child's environment
-        gets it past the launcher, which keeps only
-        :data:`~composer.sandbox.recipes.DEFAULT_ENV_PASSTHROUGH`.
+        not reach. The launcher keeps only
+        :data:`~composer.sandbox.recipes.DEFAULT_ENV_PASSTHROUGH`, so the same
+        variable in the child's environment is dropped.
 
-        ``--no-rustup`` is required under confinement. The tool otherwise
-        registers a ``certora-solana`` rustup toolchain and writes to
-        ``RUSTUP_HOME``, which is read-only.
+        ``--no-rustup`` is required. Without it the tool registers a
+        ``certora-solana`` rustup toolchain and writes ``RUSTUP_HOME``, which
+        is read-only under confinement.
 
-        ``--platform-tools-root`` is passed on the argv, not left to
-        ``$CERTORA_PLATFORM_TOOLS_ROOT``, for the same reason as the target
-        directory. The build and the build script grant the same root read-only.
+        ``--platform-tools-root`` is on the argv. The launcher would drop
+        ``$CERTORA_PLATFORM_TOOLS_ROOT``. The build and the build script grant
+        that root read-only.
         """
         args = [
             "env",
@@ -239,16 +232,14 @@ def platform_tools_installed(version: str, *, root: Path = PLATFORM_TOOLS_ROOT) 
 def platform_tools_cargos(version: str, *, root: Path = PLATFORM_TOOLS_ROOT) -> tuple[Path, ...]:
     """``cargo`` binaries shipped with a platform-tools version.
 
-    Not the cargo on ``PATH``. Cargo hashes a git source into a cache directory
-    name, and that hash is not stable across cargo versions. Host cargo 1.89
-    fetches ``Certora/anchor`` into ``git/db/anchor-8a7e45e4c93a95b5``; cargo
-    1.79 in platform-tools v1.43 looks for ``git/db/anchor-1f3eb14fb7b4e8f1``,
-    finds nothing, and offline reports::
+    Not the cargo on ``PATH``. A git source's cache directory name depends on
+    the cargo version, so a fetch with the host cargo misses the cache the
+    platform-tools cargo reads. An offline build then reports ``can't checkout
+    ... you are in the offline mode``.
 
-        can't checkout from '...': you are in the offline mode (--offline)
-
-    A version can ship both ``platform-tools`` and ``platform-tools-certora``.
-    Warming both is cheap (they share the registry cache).
+    One version may contain both ``platform-tools`` and ``platform-tools-certora``.
+    The tool picks which binary runs, so both are returned. They share the
+    registry cache.
     """
     return tuple(
         cargo
@@ -262,8 +253,7 @@ async def _warm_for_the_build_cargo(
 ) -> None:
     """Fetch with the cargos the chain build will run. Confined builds only.
 
-    A failure is logged, not raised — a partial cache still compiles what it
-    has, and the build names the crate it could not find.
+    A fetch failure is logged. The later build names the crate it could not find.
     """
     for cargo in platform_tools_cargos(tools_version):
         if session.already_warmed(cargo):
@@ -279,11 +269,10 @@ async def _warm_for_the_build_cargo(
 async def sbf_build(
     session: CargoSession, build: SbfBuild, *, timeout_s: int = BUILD_TIMEOUT_S
 ) -> SbfRun:
-    """Run the slow tier in ``session``'s workdir, confined.
+    """Run ``cargo certora-sbf`` in ``session``'s workdir, confined.
 
-    Raises :class:`PlatformToolsMissing` instead of returning a failed run when
-    the toolchain is missing: that is an operator problem, not a Rust error an
-    authoring agent can fix.
+    A missing toolchain raises :class:`PlatformToolsMissing`. An operator
+    installs it. A failed compile returns rustc's diagnostics.
     """
     tools_version = build.tools_version
     if tools_version is not None and session.confined:
@@ -305,7 +294,7 @@ async def sbf_build(
     try:
         manifest = parse_manifest(built.stdout)
     except MalformedBuildManifest as exc:
-        # Compiler succeeded; JSON did not. Report the manifest error, not stderr.
+        # The compiler succeeded and the JSON did not. Report the manifest error, not stderr.
         return SbfRun(
             elapsed,
             CompileFailed(diagnostics=str(exc), exit_code=built.exit_code),
@@ -328,15 +317,14 @@ async def write_build_script(
 ) -> Path:
     """Write the ``build_script`` the conf points at, and return its path.
 
-    ``name`` keeps scripts apart when several submissions share one workdir.
-    Confinement is an opaque ``argv_prefix`` from :meth:`CargoSession.backend_spec`
-    (``docs/command-sandbox.md`` §4). If the provider cannot confine, that call
-    raises before anything runs.
+    ``name`` separates scripts when several submissions share one workdir.
+    Confinement is the ``argv_prefix`` from :meth:`CargoSession.backend_spec`
+    (``docs/command-sandbox.md`` §4). If the provider cannot confine, that
+    call raises before anything is written.
 
-    The command file names the workdir, the target directory and the
-    confinement grants by absolute path, so it is valid only where it was
-    written. The script refuses to run from anywhere else rather than build the
-    tree it was written for.
+    The command file names the workdir, the target directory, and the
+    confinement grants by absolute path. The script runs only in the tree it
+    was written for.
     """
     spec = await session.backend_spec(timeout_s=timeout_s, extra_ro=(PLATFORM_TOOLS_ROOT,))
     build_dir = session.workdir / BUILD_DIR
