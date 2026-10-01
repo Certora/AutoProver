@@ -351,6 +351,19 @@ def test_the_judge_is_told_a_rule_without_a_lemma_can_still_be_legitimate() -> N
     assert "not an unsound one" in rendered and "weaker" in rendered
 
 
+def test_the_judge_checks_balance_rules_for_an_effect_preserving_stand_in() -> None:
+    """With the real CPI and no munge, the prover's model moves no tokens, so a no-dilution or
+    no-spend rule verifies having checked nothing. Two did, on the vault benchmark, before their
+    authors added stand-ins; the judge's munge-keyed CPI check never fired, because there was no
+    munge to read."""
+    rendered = env.get_template("cvlr_property_judge_system_prompt.j2").render(
+        cvlr_versions="cvlr 0.6.1"
+    )
+
+    assert "That holds with no munge at all" in rendered
+    assert "cvlr_solana::token::spl_token_transfer" in rendered
+
+
 def test_the_judge_is_told_a_verified_lemma_is_not_an_over_assumption() -> None:
     """`.apply()` ends by assuming its conclusion, which reads like the thing the judge exists to
     reject; unflagged, the mechanism is unusable."""
