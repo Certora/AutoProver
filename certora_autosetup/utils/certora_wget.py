@@ -19,7 +19,7 @@ Security:
   - Uses certora-login's secure credential storage
   - Automatically refreshes tokens on 401/403 errors
 """
-import os, sys, shutil, subprocess, argparse
+import os, re, sys, shutil, subprocess, argparse
 from typing import Optional, Dict
 from urllib.parse import urlparse, urlunparse
 
@@ -270,13 +270,16 @@ def run_wget_or_curl(url: str, cookie_map: Dict[str, str], outpath: str, retry_o
 
 # ---------- Utility Function for Direct Invocation ----------
 
+_OUTPUT_URL_RE = re.compile(r"https://(?:prover|vaas-dev|vaas-stg)\.certora\.com/output/(?:\d+/)?([0-9A-Fa-f]+)/?")
+
+
 def to_outputs_url(url: str) -> str:
     """Map a /output/[USER/]JOB job URL to /v1/domain/jobs/JOB/f/outputs, keeping the query."""
     parsed = urlparse(url)
-    parts = [p for p in parsed.path.split("/") if p]
-    after = parts[parts.index("output") + 1:]
-    job_id = after[1] if len(after) > 1 else after[0]
-    return urlunparse(parsed._replace(path=f"/v1/domain/jobs/{job_id}/f/outputs"))
+    match = _OUTPUT_URL_RE.fullmatch(urlunparse(parsed._replace(query="", fragment="")))
+    if match is None:
+        raise ValueError(f"Not a Certora job URL: {url}")
+    return urlunparse(parsed._replace(path=f"/v1/domain/jobs/{match[1]}/f/outputs"))
 
 
 def download_with_auth(url: str, output_path: str, convert_to_zip_output: bool = False, auth_cookies: Optional[Dict[str, str]] = None) -> int:
