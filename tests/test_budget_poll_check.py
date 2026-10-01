@@ -45,3 +45,23 @@ def test_poll_is_quiet_while_inside_the_budget() -> None:
     install_run_summary(summary)
     with time_budget(7_200):
         asyncio.run(_callbacks(summary).on_cloud_poll("RUNNING", "Cloud job 0059382f: RUNNING"))
+
+
+def test_the_helper_raises_once_the_budget_is_spent() -> None:
+    """The same check, for a caller outside the pipeline that waits on its own
+    external work and cannot go through ``_SpecCallbacks``."""
+    from composer.diagnostics.budget import raise_if_budget_exhausted
+
+    install_run_summary(_summary_started_ago(7_300))
+    with time_budget(7_200), pytest.raises(BudgetExceeded, match="Time budget"):
+        raise_if_budget_exhausted()
+
+
+def test_the_helper_is_quiet_without_a_budget_and_inside_one() -> None:
+    from composer.diagnostics.budget import raise_if_budget_exhausted
+
+    install_run_summary(_summary_started_ago(10_000))
+    raise_if_budget_exhausted()
+    install_run_summary(_summary_started_ago(60))
+    with time_budget(7_200):
+        raise_if_budget_exhausted()

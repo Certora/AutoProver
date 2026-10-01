@@ -10,7 +10,6 @@ Provides get_prover_tool(), whose submit_buffer / collect_results tools:
 
 import asyncio
 import functools
-import json
 import logging
 import os
 import time
@@ -42,6 +41,9 @@ from composer.prover.core import (
     DefaultCexHandler, ProverReport
 )
 from composer.prover.callbacks import ProverEventCallbacks
+from composer.prover.conf import (
+    Conf, ExcludeRules, InheritRules, RuleSelection, SelectRules, dump_conf,
+)
 from composer.prover.ptypes import StatusCodes
 from composer.ui.tool_display import tool_display
 from composer.diagnostics.stream import (
@@ -77,19 +79,45 @@ The author's editable-flag registry (``author.EDITABLE_FLAGS``) must stay disjoi
 from this set, or an "accepted" flag edit would never reach the prover."""
 
 
-def prover_config_overlay(base_config: dict, *, main_contract: str, verify_target: str) -> dict:
+def prover_config_overlay(
+    base_config: Conf,
+    *,
+    main_contract: str,
+    verify_target: str,
+    extra: Conf | None = None,
+    rules: RuleSelection = InheritRules(),
+) -> Conf:
     """The fixed prover settings the source pipeline layers on top of the base config.
 
     Shared by the live prover run and the persisted ``certora/confs`` dump so the
     two can't drift. ``verify_target`` is the ``<contract>:<spec path>`` the run verifies.
     """
-    return {
+    conf = {
         **base_config,
         "verify": verify_target,
         "parametric_contracts": main_contract,
         "optimistic_loop": True,
         "rule_sanity": "basic",
+        **(extra or {}),
     }
+    return rules.apply_to(conf)
+
+
+BOTH_RULE_SCOPES = "Cannot invoke the prover with both `rules` and `exclude_rules` set to non-none"
+
+
+def rule_selection(
+    rules: list[str] | None, exclude_rules: list[str] | None
+) -> RuleSelection | str:
+    """The run's scope from a caller's ``rules``/``exclude_rules`` pair, or why the pair is
+    invalid. Neither leaves the base config's own selection in force."""
+    if rules is not None and exclude_rules is not None:
+        return BOTH_RULE_SCOPES
+    if rules is not None:
+        return SelectRules(tuple(rules))
+    if exclude_rules is not None:
+        return ExcludeRules(tuple(exclude_rules))
+    return InheritRules()
 
 
 
@@ -111,19 +139,19 @@ def _merge_rule_skips(left: dict[str, str], right: dict[str, str]) -> dict[str, 
         to_ret[k] = v
     return to_ret
 
-class RuleSelection(TypedDict):
+class RuleSelectionRecord(TypedDict):
     sort: Literal["exclude", "include"]
     selector: list[str]
 
-def _selection_of(rule: list[str] | None, exclude_rules: list[str] | None) -> RuleSelection | None:
-    """The ``RuleSelection`` a submit_buffer call asks for, or None to run the whole buffer."""
+def _selection_of(rule: list[str] | None, exclude_rules: list[str] | None) -> RuleSelectionRecord | None:
+    """The ``RuleSelectionRecord`` a submit_buffer call asks for, or None to run the whole buffer."""
     if rule is not None:
-        return RuleSelection(sort="include", selector=rule)
+        return RuleSelectionRecord(sort="include", selector=rule)
     if exclude_rules is not None:
-        return RuleSelection(sort="exclude", selector=exclude_rules)
+        return RuleSelectionRecord(sort="exclude", selector=exclude_rules)
     return None
 
-def _selection_key(sel: RuleSelection | None) -> str:
+def _selection_key(sel: RuleSelectionRecord | None) -> str:
     """A stable key distinguishing one buffer's rule selections, so striped runs (different subsets of
     the same buffer at the same content) coexist as separate jobs instead of deduping each other. The
     whole-buffer run keys to the empty string."""
@@ -131,17 +159,18 @@ def _selection_key(sel: RuleSelection | None) -> str:
         return ""
     return f"{sel['sort']}:{','.join(sorted(sel['selector']))}"
 
-def _apply_selection(config: dict, selection: RuleSelection | None) -> None:
-    """Write a rule subset onto a prover conf: ``rule`` for an include selection, ``exclude_rule`` for
-    an exclude one; a None selection leaves the conf running every rule."""
-    if selection is not None:
-        config["rule" if selection["sort"] == "include" else "exclude_rule"] = list(selection["selector"])
+def _scope_of(record: RuleSelectionRecord | None) -> RuleSelection:
+    """The conf scope a recorded selection runs under; None runs every rule."""
+    if record is None:
+        return InheritRules()
+    names = tuple(record["selector"])
+    return SelectRules(names) if record["sort"] == "include" else ExcludeRules(names)
 
 class ProverRunLog(TypedDict):
     tool_call_id: str
     prover_results: list[tuple[RulePath, StatusCodes]]
     spec_digest: str
-    rules: RuleSelection | None
+    rules: RuleSelectionRecord | None
     sort: Literal["run"]
     declared_rules: list[str]
     state_digest: str
@@ -617,8 +646,7 @@ def setup_prover_config_in(
     spec_contents: str,
     spec_stem: str | None = None,
     main_contract: str,
-    rule: list[str] | None,
-    exclude_rule: list[str] | None,
+    rules: RuleSelection,
     conf_dir: Path = CERTORA_DIR,
     **config_extra
 ):
@@ -628,13 +656,15 @@ def setup_prover_config_in(
         name=spec_stem
     ) as generated_path:
         config = prover_config_overlay(
-            config, main_contract=main_contract, verify_target=f"{main_contract}:{generated_path}"
+            config,
+            main_contract=main_contract,
+            verify_target=f"{main_contract}:{generated_path}",
+            extra=config_extra,
+            rules=rules,
         )
-        config.update(config_extra)
-        _apply_selection(config, _selection_of(rule, exclude_rule))
         with temp_certora_file(
             root=working_dir,
-            content=json.dumps(config, indent=2),
+            content=dump_conf(config),
             ext="conf",
             name=spec_stem,
             prefix="verify",
@@ -700,19 +730,21 @@ def buffer_conf(
     buffer_name: str,
     conf_dir: Path,
     msg: str,
-    selection: RuleSelection | None = None,
+    selection: RuleSelectionRecord | None = None,
 ) -> Iterator[tuple[str, dict]]:
     """Build a conf verifying an already-materialized buffer spec at ``spec_path`` (its imports resolve
     to the sibling ``.spec`` files written by :func:`materialize_buffers`). ``selection`` restricts the
     run to a subset of the buffer's rules. Yields (conf_path, config)."""
     cfg = prover_config_overlay(
-        config, main_contract=main_contract, verify_target=f"{main_contract}:{spec_path}"
+        config,
+        main_contract=main_contract,
+        verify_target=f"{main_contract}:{spec_path}",
+        extra={"msg": msg},
+        rules=_scope_of(selection),
     )
-    cfg["msg"] = msg
-    _apply_selection(cfg, selection)
     with temp_certora_file(
         root=working_dir,
-        content=json.dumps(cfg, indent=2),
+        content=dump_conf(cfg),
         ext="conf",
         name=f"verify_{buffer_name}",
         prefix="verify",
@@ -789,7 +821,7 @@ class _BufJob:
     task: asyncio.Task[None]
     #: The rule subset this job runs, or None for the whole buffer. Jobs of one buffer are keyed by
     #: ``(name, _selection_key(selection))``, so striped runs at the same content coexist.
-    selection: RuleSelection | None = None
+    selection: RuleSelectionRecord | None = None
 
 
 @dataclass
@@ -802,7 +834,7 @@ class _BufDone:
     result: ProverReport | str
     all_rules: list[str]
     #: The rule subset this run covered, recorded onto the run's ``ProverRunLog.rules``.
-    selection: RuleSelection | None = None
+    selection: RuleSelectionRecord | None = None
 
 
 def get_prover_tool(
@@ -844,7 +876,7 @@ def get_prover_tool(
             *, name: str, digest: str, label: str, buffers: Mapping[str, NamedBuffer],
             vfs: dict[str, str], conf: dict, cex_state: StateWithSkips, tool_call_id: str,
             writer: Callable[[ProverEvents], None], summary: RunSummary,
-            selection: RuleSelection | None = None,
+            selection: RuleSelectionRecord | None = None,
         ) -> None:
             """Verify one buffer end-to-end against a frozen snapshot (taken at submit time) of the source
             and all buffers, then push the outcome onto the completion queue. The job runs in its own

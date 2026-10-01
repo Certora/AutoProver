@@ -7,6 +7,7 @@ from typing import Any, AsyncContextManager, Awaitable, ContextManager, Iterator
 
 from graphcore.tools.vfs import GlobalExcludeArg
 
+from composer.prover.conf import dump_conf
 from composer.spec.gen_types import ITypedTemplate
 from composer.spec.natspec.models import (
     InterfaceDeclModel,
@@ -152,9 +153,8 @@ class ConfigurationBuilder:
 
     @contextlib.contextmanager
     def _build_to(self, path: pathlib.Path) -> Iterator[pathlib.Path]:
-        import json
         with temp_certora_file(
-            content=json.dumps(self.config, indent=2),
+            content=dump_conf(self.config),
             root=str(path),
             ext="conf",
             prefix="run",

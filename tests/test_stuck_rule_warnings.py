@@ -15,7 +15,7 @@ The loop this covers used to be inline in ``verify_spec`` and carried three defe
 
 from composer.prover.ptypes import RulePath
 from composer.spec.source.prover import (
-    NagMarker, ProverHistoryItem, ProverRunLog, RuleSelection, STUCK_RULE_NAG_THRESHOLD,
+    NagMarker, ProverHistoryItem, ProverRunLog, RuleSelectionRecord, STUCK_RULE_NAG_THRESHOLD,
     stuck_rule_reminder, stuck_rule_warnings,
 )
 
@@ -26,7 +26,7 @@ R2 = RulePath(rule="r2")
 def _run(
     *results: tuple[RulePath, str],
     tc_id: str = "tc",
-    rules: RuleSelection | None = None,
+    rules: RuleSelectionRecord | None = None,
     declared: tuple[str, ...] = ("r1", "r2"),
 ) -> ProverHistoryItem:
     return ProverRunLog(

@@ -28,7 +28,7 @@ from composer.spec.cvl_generation import (
 )
 from composer.prover.core import run_prover, CexHandler, ProverCallbacks, ProverReport
 from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools, WIPE_HISTORY
-from composer.spec.source.prover import setup_prover_config_in
+from composer.spec.source.prover import rule_selection, setup_prover_config_in
 from composer.spec.source.spec_buffers import (
     SpecBuffersExtra, buffer_review_text, buffer_state_digest, check_buffer_completion,
     combined_buffers_view, max_spec_buffers, requireinvariant_citations, run_targets,
@@ -838,6 +838,9 @@ class WrappedProverRunner:
         exclude_rules: list[str] | None = None,
         **config,
     ) -> ProverReport | str:
+        selection = rule_selection(rules, exclude_rules)
+        if isinstance(selection, str):
+            return selection
         # The spec/conf staging only has to outlive the run itself, so one call
         # stages, runs, and cleans up (the CVLAuthorState.prover_runner contract).
         with setup_prover_config_in(
@@ -846,8 +849,7 @@ class WrappedProverRunner:
             main_contract=self.main_contract,
             spec_contents=curr_spec,
             config=self.config,
-            rule=rules,
-            exclude_rule=exclude_rules,
+            rules=selection,
             **config
         ) as (conf_path, _):
             return await run_prover(
