@@ -2042,6 +2042,16 @@ because the core had Solana in it rather than because the chains differ in machi
   run binds no `code_editor` (`CvlrChain.program_editing`). A Soroban charter is the remaining
   §7.9 item, with the `#[contractimpl]` surface reader and worked example.
 
+A later finding worth recording next to the rest: the build targets **`wasm32v1-none`**, not
+`wasm32-unknown-unknown`. CVLR declares `wasm_import_module = "env"` on the `CVT_*` intrinsics under
+`cfg(all(target_family = "wasm", target_os = "none"))`, and only this target satisfies it — built
+both ways on one project, every `CVT_*` resolves on `wasm32v1-none` and none does on the older
+target. It also answers §9's open question about wasm features: the older target emitted eight
+post-MVP features (bulk-memory, multivalue, nontrapping-fptoint, reference-types, …) whose
+acceptance by the prover was unknown, where `wasm32v1-none` emits only `mutable-globals`.
+`--allow-undefined` is still passed, now for exactly one symbol: `cvlr-soroban`'s
+`CERTORA_SOROBAN_is_auth` carries no such attribute on the SDK-22 and SDK-25 branches.
+
 One Soroban fact changed what the prompts teach: Certora's own Soroban specs state rejection
 properties as assume-violation, call, `cvlr_assert!(false)`, in confs *without* `rule_sanity`. This
 backend's conf runs the vacuity check, which reports that shape as vacuous, so the Soroban author is

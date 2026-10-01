@@ -27,14 +27,20 @@ from composer.cargo.sbf import (
 )
 from composer.cargo.session import CargoSession, CompileFailed
 
-#: soroban-sdk 22's target.
-WASM_TARGET = "wasm32-unknown-unknown"
+#: What a Soroban contract is built for. ``wasm32v1-none`` rather than ``wasm32-unknown-unknown``,
+#: and the reason is CVLR's own: it declares ``wasm_import_module = "env"`` on the ``CVT_*``
+#: intrinsics under ``cfg(all(target_family = "wasm", target_os = "none"))``, and only this target
+#: satisfies that — ``wasm32-unknown-unknown``'s ``target_os`` is ``unknown``. Built both ways on one
+#: project: every ``CVT_*`` resolves here and none of them does there. It is also the more
+#: conservative artifact, emitting Wasm 1.0 rather than the post-MVP features a newer rustc enables
+#: for the older target, which is the safer thing to hand an analyzer.
+WASM_TARGET = "wasm32v1-none"
 
-#: The 0.4 CVLR line declares the ``CVT_*`` intrinsics as bare ``extern "C"``, relying on wasm-ld's
-#: ``--allow-undefined`` to turn them into the ``env`` imports the prover reads. Current rustc no
-#: longer passes it for this target (the link fails on ``CVT_satisfy``), so it is passed here. The
-#: cost: a genuinely missing symbol becomes an import the prover rejects, not a link error. Drop
-#: this once the pinned ``cvlr`` declares ``wasm_import_module = "env"`` (unreleased main does).
+#: What the link still needs after the target change, and it is one symbol: ``cvlr-soroban``'s
+#: ``CERTORA_SOROBAN_is_auth`` carries no ``wasm_import_module`` on the SDK-22 and SDK-25 branches
+#: (``main`` declares it unconditionally). Without the flag the link fails on that alone. The cost
+#: is the old one: a genuinely missing symbol becomes an import the prover rejects rather than a
+#: link error — so drop this as soon as those branches carry the attribute.
 LINK_ARGS = ("-C", "link-arg=--allow-undefined")
 
 
@@ -121,6 +127,28 @@ class WasmArtifactMissing(RuntimeError):
         )
 
 
+#: How rustc reports a target whose standard library is not installed. Two spellings, because
+#: cargo's own message and rustc's differ and which one surfaces depends on where the build stops.
+_MISSING_TARGET = ("may not be installed", "can't find crate for `core`")
+
+
+def _with_target_hint(diagnostics: str) -> str:
+    """The compiler's message, plus the one-line fix when the target itself is missing.
+
+    Worth special-casing because of *when* it would otherwise be read: the host ``cargo check`` in
+    preflight passes without the wasm target, so an uninstalled target first appears at a unit's
+    first submission — minutes in, after an agent has authored a harness — as a compile failure the
+    author is told to fix, and it has nothing to do with the harness.
+    """
+    if not any(phrase in diagnostics for phrase in _MISSING_TARGET):
+        return diagnostics
+    return (
+        f"{diagnostics}\n\n"
+        f"note: the {WASM_TARGET} standard library is not installed for this toolchain. This is a "
+        f"host setup problem, not a problem with the harness: run `rustup target add {WASM_TARGET}`."
+    )
+
+
 async def wasm_build(
     session: CargoSession,
     identity: WasmIdentity,
@@ -137,7 +165,10 @@ async def wasm_build(
     if built.exit_code != 0:
         return WasmRun(
             elapsed,
-            CompileFailed(diagnostics=built.stderr.strip(), exit_code=built.exit_code),
+            CompileFailed(
+                diagnostics=_with_target_hint(built.stderr.strip()),
+                exit_code=built.exit_code,
+            ),
             session.confined,
         )
     manifest = wasm_manifest(identity)
