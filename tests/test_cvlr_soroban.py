@@ -47,7 +47,7 @@ from composer.spec.cvlr.scaffold import (
     scaffold_for,
 )
 from composer.spec.cvlr.verify import HarnessTarget, gate_tools
-from composer.spec.cvlr_reference import SOROBAN
+from composer.spec.cvlr_reference import SOROBAN, SOROBAN_LINES, soroban_line_for
 from composer.spec.types import PropertyFormulation
 from composer.templates.loader import load_jinja_template
 
@@ -73,7 +73,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-soroban-sdk = "22.0.7"
+soroban-sdk = "22.0.11"
 """
 
 
@@ -81,7 +81,7 @@ def _project(
     root: Path,
     *,
     manifest: str = MANIFEST,
-    sdk_version: str | None = "22.0.7",
+    sdk_version: str | None = "22.0.11",
 ) -> tuple[Workspace, CratePackage]:
     (root / "src").mkdir(parents=True, exist_ok=True)
     for path, contents in (
@@ -117,6 +117,11 @@ def _project(
         packages=tuple(resolved),
     )
     return workspace, package
+
+
+#: The fixtures below build a project on soroban-sdk 22, and ``cvlr-soroban`` is branched per SDK
+#: generation — so the reference set under test is that generation's, not the newest.
+SOROBAN_22 = SOROBAN_LINES["22"]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -282,7 +287,7 @@ def _appended(plan) -> str:
 
 def test_soroban_scaffold_plans_no_solana_furniture(tmp_path):
     workspace, package = _project(tmp_path)
-    plan = plan_scaffold(workspace, package, SOROBAN, SOROBAN_SCAFFOLD)
+    plan = plan_scaffold(workspace, package, SOROBAN_22, SOROBAN_SCAFFOLD)
     assert not plan.blocked
     files = _planned_files(plan)
     assert not any(ENVS_DIR.as_posix() in f for f in files), "no tuning-file tree on Soroban"
@@ -292,30 +297,39 @@ def test_soroban_scaffold_plans_no_solana_furniture(tmp_path):
     assert "[patch.crates-io" not in appended
 
 
-def test_soroban_scaffold_pins_the_reference_set_from_crates_io(tmp_path):
+def test_soroban_scaffold_pins_the_branch_each_crate_lives_on(tmp_path):
+    """Two repositories, and the chain crate's branch is the project's SDK generation.
+
+    No release pins here, and that is the point: no published ``cvlr`` builds a Soroban contract,
+    and ``cvlr-soroban`` cuts a branch per SDK generation because its helpers return the SDK's own
+    types."""
     workspace, package = _project(tmp_path)
-    plan = plan_scaffold(workspace, package, SOROBAN, SOROBAN_SCAFFOLD)
+    plan = plan_scaffold(workspace, package, SOROBAN_22, SOROBAN_SCAFFOLD)
     appended = _appended(plan)
-    assert f'[dependencies.{SOROBAN.chain.name}]\nversion = "={SOROBAN.chain.version}"' in appended
-    assert "[dependencies.cvlr-soroban-derive]" in appended
-    assert "git =" not in appended
-    assert f'[dependencies.cvlr]\nversion = "={SOROBAN.core.version}"' in appended
-    assert f'certora = ["dep:cvlr", "dep:{SOROBAN.chain.name}"' in appended
+
+    assert f'[dependencies.cvlr]\ngit = "{SOROBAN_22.core.git.repo}"' in appended
+    assert f'branch = "{SOROBAN_22.core.git.branch}"' in appended
+    for crate in (SOROBAN_22.chain, *SOROBAN_22.specializations):
+        assert f'[dependencies.{crate.name}]\ngit = "{crate.git.repo}"' in appended, crate.name
+    # The SDK-22 project gets the 22 branch, not the newest.
+    assert 'branch = "soroban-22.0.8"' in appended
+    assert SOROBAN.chain.git.branch not in appended.replace("main\"", "")
+    assert f'certora = ["dep:cvlr", "dep:{SOROBAN_22.chain.name}"' in appended
 
 
 def test_soroban_scaffold_applies_and_is_idempotent(tmp_path):
     workspace, package = _project(tmp_path)
-    plan = plan_scaffold(workspace, package, SOROBAN, SOROBAN_SCAFFOLD)
+    plan = plan_scaffold(workspace, package, SOROBAN_22, SOROBAN_SCAFFOLD)
     assert apply(plan, workspace.root)
     # The manifest still parses, and now declares the feature and the pinned deps.
     parsed = tomllib.loads((tmp_path / "Cargo.toml").read_text())
     assert "certora" in parsed["features"]
-    assert parsed["dependencies"]["cvlr-soroban"]["version"] == "=0.4.0"
+    assert parsed["dependencies"]["cvlr-soroban"]["branch"] == SOROBAN_22.chain.git.branch
     assert parsed["dependencies"]["cvlr-soroban"]["optional"] is True
     assert "metadata" not in parsed.get("package", {})
     # Second plan: nothing left to change.
     workspace2, package2 = _project(tmp_path)
-    again = plan_scaffold(workspace2, package2, SOROBAN, SOROBAN_SCAFFOLD)
+    again = plan_scaffold(workspace2, package2, SOROBAN_22, SOROBAN_SCAFFOLD)
     assert not [c for c in again.changes if not isinstance(c, NewFile)]
 
 
@@ -323,26 +337,26 @@ def test_soroban_scaffold_turns_off_core_cvlrs_std_default(tmp_path):
     """Core ``cvlr``'s default ``cvlr-nondet/std`` collides with ``soroban-sdk``'s ``panic_impl``
     in the wasm build; a host ``cargo check`` never sees it."""
     workspace, package = _project(tmp_path)
-    assert apply(plan_scaffold(workspace, package, SOROBAN, SOROBAN_SCAFFOLD), workspace.root)
+    assert apply(plan_scaffold(workspace, package, SOROBAN_22, SOROBAN_SCAFFOLD), workspace.root)
     deps = tomllib.loads((tmp_path / "Cargo.toml").read_text())["dependencies"]
-    assert deps[SOROBAN.core.name]["default-features"] is False
+    assert deps[SOROBAN_22.core.name]["default-features"] is False
     # Only the core: cvlr-soroban's defaults are empty, and upstream leaves them on.
-    assert "default-features" not in deps[SOROBAN.chain.name]
+    assert "default-features" not in deps[SOROBAN_22.chain.name]
 
 
 def test_soroban_workspace_pin_also_turns_off_core_cvlrs_std_default(tmp_path):
     """Cargo ignores a member's ``default-features = false`` unless the workspace entry agrees."""
     workspace, package = _project(tmp_path, manifest="[workspace]\n" + MANIFEST)
-    assert apply(plan_scaffold(workspace, package, SOROBAN, SOROBAN_SCAFFOLD), workspace.root)
+    assert apply(plan_scaffold(workspace, package, SOROBAN_22, SOROBAN_SCAFFOLD), workspace.root)
     parsed = tomllib.loads((tmp_path / "Cargo.toml").read_text())
-    assert parsed["workspace"]["dependencies"][SOROBAN.core.name]["default-features"] is False
-    assert "default-features" not in parsed["workspace"]["dependencies"][SOROBAN.chain.name]
-    assert parsed["dependencies"][SOROBAN.core.name]["workspace"] is True
+    assert parsed["workspace"]["dependencies"][SOROBAN_22.core.name]["default-features"] is False
+    assert "default-features" not in parsed["workspace"]["dependencies"][SOROBAN_22.chain.name]
+    assert parsed["dependencies"][SOROBAN_22.core.name]["workspace"] is True
 
 
 def test_soroban_platform_gate_refuses_the_wrong_sdk_generation(tmp_path):
     workspace, package = _project(tmp_path, sdk_version="26.1.0")
-    plan = plan_scaffold(workspace, package, SOROBAN, SOROBAN_SCAFFOLD)
+    plan = plan_scaffold(workspace, package, SOROBAN_22, SOROBAN_SCAFFOLD)
     assert plan.blocked
     assert "soroban-sdk" in plan.blocked[0].problem
 
@@ -517,3 +531,21 @@ def test_a_soroban_build_is_not_granted_platform_tools(monkeypatch):
     monkeypatch.delenv("COMPOSER_SANDBOX_PROVIDER", raising=False)
     assert PLATFORM_TOOLS_ROOT not in entry.build_confinement("soroban").extra_ro
     assert PLATFORM_TOOLS_ROOT in entry.build_confinement("solana").extra_ro
+
+
+def test_a_project_locked_below_the_branchs_sdk_patch_is_refused_with_the_fix(tmp_path):
+    """The generation matches and cargo still cannot resolve: ``cvlr-soroban``'s 22 branch requires
+    ``soroban-sdk ^22.0.8`` and the sunbeam token's lockfile pins 22.0.7. Cargo reports that as a
+    version conflict naming neither the branch nor the lock, so the gate says it plainly — and names
+    the lockfile update that fixes it, since the manifest range already admits the newer patch."""
+    workspace, package = _project(tmp_path, sdk_version="22.0.7")
+    blocked = plan_scaffold(workspace, package, SOROBAN_LINES["22"], SOROBAN_SCAFFOLD).blocked
+    assert len(blocked) == 1
+    assert "locked to soroban-sdk 22.0.7" in blocked[0].problem
+    assert "at least 22.0.8" in blocked[0].problem
+    assert "cargo update -p soroban-sdk" in blocked[0].resolution
+
+
+def test_the_patch_gate_passes_once_the_lockfile_moves(tmp_path):
+    workspace, package = _project(tmp_path, sdk_version="22.0.11")
+    assert not plan_scaffold(workspace, package, SOROBAN_LINES["22"], SOROBAN_SCAFFOLD).blocked

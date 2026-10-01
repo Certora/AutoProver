@@ -559,8 +559,21 @@ def _toml_array(values: list[str]) -> str:
     return json.dumps(values)
 
 
+def _pin_body(crate: CrateRelease, *, default_features: bool) -> str:
+    """How a manifest names one reference-set crate: an exact release, or its branch.
+
+    Shared by the member and workspace-root writers so a git-pinned crate cannot end up pinned one
+    way in one manifest and another way in the other — cargo resolves that to two copies of the
+    crate and a type mismatch across them."""
+    if crate.git is not None:
+        pin = f'git = "{crate.git.repo}"\nbranch = "{crate.git.branch}"\n'
+    else:
+        pin = f'version = "={crate.version}"\n'
+    return pin if default_features else pin + "default-features = false\n"
+
+
 def _dependency_stanza(
-    crate: str, *, inherit: bool, version: str, default_features: bool = True
+    crate: CrateRelease, *, inherit: bool, default_features: bool = True
 ) -> str:
     """A ``[dependencies.<crate>]`` sub-table.
 
@@ -568,9 +581,12 @@ def _dependency_stanza(
     has a ``[dependencies]`` table, where re-opening that table would be a duplicate-table error.
     ``optional`` is what makes ``dep:`` usable in the feature, and what keeps CVLR out of a release
     build entirely."""
-    pin = "workspace = true" if inherit else f'version = "={version}"'
-    features = "" if default_features else "default-features = false\n"
-    return f"[dependencies.{crate}]\n{pin}\n{features}optional = true\n"
+    pin = (
+        "workspace = true\n"
+        if inherit
+        else _pin_body(crate, default_features=default_features)
+    )
+    return f"[dependencies.{crate.name}]\n{pin}optional = true\n"
 
 
 def _default_features(
@@ -586,6 +602,51 @@ def _generation(version: str) -> str:
     Coarse on purpose. ``solana-program`` 2.2 and 2.3 are the same generation and interchangeable;
     1.18 and 2.2 are not, and each generation has its own ``AccountInfo`` type."""
     return version.split(".", maxsplit=1)[0]
+
+
+def _version_tuple(version: str) -> tuple[int, ...]:
+    """A version as integers, for comparison. Non-numeric tails (``-rc1``) stop the parse rather
+    than raising: a prerelease compares as its release, which is the reading that keeps a gate from
+    refusing a project over a suffix."""
+    out: list[int] = []
+    for part in version.split("."):
+        digits = ""
+        for ch in part:
+            if not ch.isdigit():
+                break
+            digits += ch
+        if not digits:
+            break
+        out.append(int(digits))
+    return tuple(out)
+
+
+def _check_patch_level(version: str, witness: str, reference: ChainReference) -> list[Blocked]:
+    """Refuse a project *locked* below the patch the chain crate's own requirement names.
+
+    The generation matches, so this is not a type-compatibility problem — it is cargo being unable
+    to resolve, which it reports as a conflict naming neither the CVLR branch nor the lockfile. The
+    project's manifest range usually already admits the newer patch, so the fix is a lockfile
+    update rather than an edit; saying so is the whole value of checking here.
+    """
+    minimum = reference.platform.minimum
+    if minimum is None or _version_tuple(version) >= _version_tuple(minimum):
+        return []
+    return [
+        Blocked(
+            path=Path("Cargo.toml"),
+            problem=(
+                f"this project is locked to {witness} {version}, but the CVLR chain crate for "
+                f"{reference.platform.label} requires at least {minimum}. The generation is right, "
+                f"so nothing here is incompatible — cargo simply cannot resolve the two, and "
+                f"reports it as a version conflict that names neither"
+            ),
+            resolution=(
+                f"run `cargo update -p {witness}` (the manifest's own range normally already "
+                f"allows {minimum}), or pin {witness} to {minimum} or newer by hand"
+            ),
+        )
+    ]
 
 
 def _check_platform(workspace: Workspace, reference: ChainReference) -> list[Blocked]:
@@ -608,7 +669,7 @@ def _check_platform(workspace: Workspace, reference: ChainReference) -> list[Blo
         if resolved is None:
             continue
         if _generation(resolved.version) == _generation(witness.line):
-            return []
+            return _check_patch_level(resolved.version, witness.name, reference)
         return [
             Blocked(
                 path=Path("Cargo.toml"),
@@ -650,9 +711,7 @@ def _plan_workspace_manifest(
             )
             continue
         # A member's `default-features = false` is ignored unless the workspace entry says it too.
-        pin = f'version = "={crate.version}"\n'
-        if not _default_features(crate, reference, chain):
-            pin += "default-features = false\n"
+        pin = _pin_body(crate, default_features=_default_features(crate, reference, chain))
         stanzas.append(f"[workspace.dependencies.{crate.name}]\n{pin}")
     if not stanzas:
         return [], satisfied
@@ -747,9 +806,8 @@ def _plan_feature_forwarding(
                     contents=_section_banner()
                     + "\n".join(
                         _dependency_stanza(
-                            c.name,
+                            c,
                             inherit=False,
-                            version=c.version,
                             default_features=_default_features(c, reference, chain),
                         )
                         for c in missing
@@ -841,9 +899,8 @@ def _plan_package_manifest(
 
     appended += [
         _dependency_stanza(
-            c.name,
+            c,
             inherit=inherit,
-            version=c.version,
             default_features=_default_features(c, reference, chain),
         )
         for c in missing

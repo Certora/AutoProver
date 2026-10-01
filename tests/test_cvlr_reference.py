@@ -23,13 +23,24 @@ def test_the_chains_are_exactly_the_pipelines_rust_chains():
     assert set(ref.REFERENCE_SET) == set(get_args(ChainTag)) - {"evm"}
 
 
-def test_every_cvlr_crate_is_pinned_to_an_exact_release():
+def test_every_cvlr_crate_is_pinned_exactly_or_to_a_branch_with_a_commit():
     # A range would let a resolver move the corpus's ground truth without an edit here, and the
-    # compile gate would then be testing something nobody chose.
+    # compile gate would then be testing something nobody chose. A branch pin moves too, which is
+    # why it has to record the commit it was verified against.
     for chain, r in ref.REFERENCE_SET.items():
         for crate in r.crates():
-            assert crate.dependency_line().startswith(f'{crate.name} = "='), (chain, crate)
             assert crate.version[0].isdigit(), (chain, crate)
+            if crate.git is None:
+                assert crate.dependency_line().startswith(f'{crate.name} = "='), (chain, crate)
+            else:
+                assert crate.git.branch and len(crate.git.observed) == 40, (chain, crate)
+                assert f'git = "{crate.git.repo}"' in crate.dependency_line(), (chain, crate)
+
+
+def test_only_soroban_needs_a_branch():
+    # Solana's line is released; Soroban's is not, and the day it is, these pins become plain ones.
+    assert all(c.git is None for c in ref.SOLANA.crates())
+    assert all(c.git is not None for c in ref.SOROBAN.crates())
 
 
 def test_the_platform_is_a_line_not_a_release():
@@ -86,9 +97,9 @@ def test_an_unknown_chain_raises_and_names_the_ones_that_exist():
     assert "'solana'" in str(e.value) and "'soroban'" in str(e.value)
 
 
-def test_soroban_pins_the_core_line_its_chain_crate_shipped_with():
-    # Deliberately not Solana's core: no cvlr 0.6.x release builds a Soroban contract (cvlr-spec is
-    # not no_std). The two converge again once a release carries main's fix — and this test is
-    # where that bump gets decided, rather than the chains drifting apart unnoticed.
+def test_both_chains_are_on_one_core_line_again():
+    # They diverged while Soroban was stuck on 0.4: no cvlr 0.6.x *release* builds a Soroban
+    # contract. main fixed it, so Soroban pins main and the lines agree — which is what gives the
+    # Soroban author the same language Solana has (parametric rules, lemmas, the derives).
     assert ref.SOROBAN.core.name == ref.SOLANA.core.name == "cvlr"
-    assert ref.SOROBAN.core.version.split(".")[:2] == ["0", "4"]
+    assert ref.SOROBAN.core.version == ref.SOLANA.core.version

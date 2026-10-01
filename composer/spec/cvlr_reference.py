@@ -35,15 +35,36 @@ import dataclasses
 
 
 @dataclasses.dataclass(frozen=True)
+class GitPin:
+    """A branch of a CVLR repository, for a crate whose releases trail what a chain needs.
+
+    Soroban's whole set is in this state: no published ``cvlr`` builds a Soroban contract, and the
+    fixes live on ``main`` unreleased. A branch moves under us, which is exactly what the reference
+    set exists to prevent — so :attr:`observed` records the commit the set was checked against, and
+    a bump is an edit here rather than a silent resolution change.
+    """
+
+    repo: str
+    branch: str
+    #: The commit ``branch`` pointed at when this entry was last verified.
+    observed: str
+
+
+@dataclasses.dataclass(frozen=True)
 class CrateRelease:
-    """One crate at one exact published version."""
+    """One crate at one exact published version, or on a branch when none carries what is needed."""
 
     name: str
     version: str
+    #: Set when the pin is a branch. The version stays: it is what the branch's manifest says, and
+    #: what a resolved graph will report, so version gaps still read the same.
+    git: GitPin | None = None
 
     def dependency_line(self) -> str:
         """The ``Cargo.toml`` line for this crate — an exact version, not a caret range: the
         reference set is a statement about what was compiled, not a compatibility claim."""
+        if self.git is not None:
+            return f'{self.name} = {{ git = "{self.git.repo}", branch = "{self.git.branch}" }}'
         return f'{self.name} = "={self.version}"'
 
 
@@ -130,6 +151,11 @@ class PlatformGeneration:
     #: actually carries the type, and that survived the split, is what makes the answer legible
     #: across it.
     witnesses: tuple[CrateRequirement, ...]
+    #: The lowest patch release within this generation the CVLR chain crate accepts, when it asks
+    #: for one. ``cvlr-soroban``'s SDK-22 branch requires ``soroban-sdk ^22.0.8``, so a project
+    #: *locked* to 22.0.7 is the same generation and still unresolvable — cargo reports that as a
+    #: version-selection conflict naming neither side's reason, which is worth pre-empting.
+    minimum: str | None = None
     #: How this generation spells the paths the canonical tuning files name, for
     #: :mod:`composer.spec.cvlr.env_paths` to emit. Empty for a generation whose spelling *is* the
     #: canonical one — the files are vendored verbatim from upstream and upstream writes them in the
@@ -274,29 +300,99 @@ SOLANA = ChainReference(
     ),
 )
 
-SOROBAN = ChainReference(
-    # The 0.4 line, not Solana's 0.6.1: no 0.6.x release builds a Soroban contract, because
-    # ``cvlr-spec`` is not ``#![no_std]`` and its ``std`` ``panic_impl`` collides with
-    # ``soroban-sdk``'s in the wasm build (a host ``cargo check`` passes). 0.4.2 is what
-    # stellar-contracts resolves. ``cvlr``'s unreleased main fixes it; the cores converge then.
-    core=CrateRelease("cvlr", "0.4.2"),
-    chain=CrateRelease("cvlr-soroban", "0.4.0"),
-    # The derive crate is a companion rather than a specialization, but it is declared the same
-    # way: a target reaches for it only when it writes the attribute macros.
-    specializations=(CrateRelease("cvlr-soroban-derive", "0.4.0"),),
-    platform=PlatformGeneration(
-        label="soroban-sdk 22.x",
-        crates=(CrateRequirement("soroban-sdk", "22"),),
-        # Soroban ships one SDK crate rather than a family, so declaring it and witnessing it are
-        # the same crate. Spelled out rather than defaulted: they coincide here as a fact about
-        # this platform, not as a rule, and Solana is the proof that the two can diverge.
-        witnesses=(CrateRequirement("soroban-sdk", "22"),),
-    ),
+#: The CVLR core, for Soroban. ``main`` rather than a release because no published ``cvlr`` builds a
+#: Soroban contract — ``cvlr-spec`` is ``#![no_std]`` only on ``main``, and its ``std``
+#: ``panic_impl`` collides with ``soroban-sdk``'s in the wasm build. ``main`` also declares
+#: ``wasm_import_module = "env"`` on the ``CVT_*`` externs, which a release does not. The core is
+#: free of ``soroban-sdk``, so one line serves every SDK generation: what the facade decides is the
+#: *language* the author writes, and that is the same everywhere.
+_CVLR_MAIN = GitPin(
+    repo="https://github.com/Certora/cvlr",
+    branch="main",
+    observed="f1e3e08bf9c5525f5f8096a52ffe0d69bbe510c7",
 )
+
+#: ``cvlr-soroban`` is branched per SDK generation, because its helpers return the SDK's own types
+#: and each generation defines its own. So the chain crate — and only the chain crate — is chosen by
+#: the project's SDK. A generation with no branch is refused rather than paired with a neighbour:
+#: ``Address`` from 23 and ``Address`` from 26 are different types, and mixing them does not warn.
+_SOROBAN_CHAIN_BRANCHES: dict[str, str] = {
+    "22": "soroban-22.0.8",
+    "25": "soroban-25.1.1",
+    "26": "main",
+}
+
+#: What each branch's own ``soroban-sdk`` requirement demands, at the patch level.
+_SOROBAN_MINIMUM: dict[str, str] = {"22": "22.0.8", "25": "25.1.1", "26": "26.1.0"}
+
+_SOROBAN_OBSERVED: dict[str, str] = {
+    "22": "d00c0ab7499407bab4be0993176cbaf96d183461",
+    "25": "faf7fb826f395cc0573a0ce674b7e4099cdf6f57",
+    "26": "70a9ddfcc4fd4ca49ba5c8866a863f0f37b4b61b",
+}
+
+_CVLR_SOROBAN_REPO = "https://github.com/Certora/cvlr-soroban"
+
+
+def _soroban_line(generation: str) -> ChainReference:
+    """The reference set for a Soroban project on one SDK generation."""
+    pin = GitPin(
+        repo=_CVLR_SOROBAN_REPO,
+        branch=_SOROBAN_CHAIN_BRANCHES[generation],
+        observed=_SOROBAN_OBSERVED[generation],
+    )
+    return ChainReference(
+        core=CrateRelease("cvlr", "0.6.1", git=_CVLR_MAIN),
+        chain=CrateRelease("cvlr-soroban", "0.4.0", git=pin),
+        # The derive crate is a companion rather than a specialization, but it is declared the same
+        # way: a target reaches for it only when it writes the attribute macros.
+        specializations=(CrateRelease("cvlr-soroban-derive", "0.4.0", git=pin),),
+        platform=PlatformGeneration(
+            label=f"soroban-sdk {generation}.x",
+            crates=(CrateRequirement("soroban-sdk", generation),),
+            # Soroban ships one SDK crate rather than a family, so declaring it and witnessing it
+            # are the same crate. Spelled out rather than defaulted: they coincide here as a fact
+            # about this platform, not as a rule, and Solana is the proof that the two can diverge.
+            witnesses=(CrateRequirement("soroban-sdk", generation),),
+            minimum=_SOROBAN_MINIMUM[generation],
+        ),
+    )
+
+
+#: One reference set per supported SDK generation, newest last.
+SOROBAN_LINES: dict[str, ChainReference] = {
+    generation: _soroban_line(generation) for generation in sorted(_SOROBAN_CHAIN_BRANCHES)
+}
+
+#: The newest line, for callers with no project in hand — the corpus builders and the crate
+#: reference, which describe "current CVLR" rather than what one target resolves.
+SOROBAN = SOROBAN_LINES[max(SOROBAN_LINES, key=int)]
 
 #: Keyed by the chain vocabulary of ``composer.pipeline.ecosystem.ChainTag``, minus ``evm`` — CVLR
 #: is the Rust-side specification language and has no EVM line.
 REFERENCE_SET: dict[str, ChainReference] = {"solana": SOLANA, "soroban": SOROBAN}
+
+
+def soroban_line_for(sdk_version: str | None) -> ChainReference:
+    """The Soroban reference set for a project resolving ``sdk_version``.
+
+    ``None`` — a project that does not resolve ``soroban-sdk`` at all — gets the newest line, and
+    the scaffold's platform gate has nothing to disagree with. An unsupported generation raises
+    here rather than being paired with a neighbouring branch, because the types differ silently.
+    """
+    if sdk_version is None:
+        return SOROBAN
+    generation = sdk_version.split(".", maxsplit=1)[0]
+    try:
+        return SOROBAN_LINES[generation]
+    except KeyError:
+        raise ValueError(
+            f"no cvlr-soroban branch pairs with soroban-sdk {sdk_version}: the supported "
+            f"generations are {', '.join(sorted(SOROBAN_LINES, key=int))}. The chain crate returns "
+            f"the SDK's own types, so a neighbouring branch would compile against a different "
+            f"`Address` — move the project to a supported generation, or ask for a branch cut "
+            f"against this one."
+        ) from None
 
 
 def reference_for(chain: str) -> ChainReference:

@@ -38,7 +38,7 @@ from composer.spec.cvlr.scaffold import (
     plan_scaffold,
     scaffold_for,
 )
-from composer.spec.cvlr_reference import reference_for
+from composer.spec.cvlr_reference import ChainReference, reference_for, soroban_line_for
 
 _log = logging.getLogger(__name__)
 
@@ -172,6 +172,24 @@ async def _workspace_at(root: Path, *, features: tuple[str, ...] = ()) -> Worksp
     return workspace
 
 
+def _reference_for_project(chain: str, workspace: Workspace) -> ChainReference:
+    """The CVLR reference set this project is pinned to.
+
+    Chain-wide for Solana, and per SDK generation for Soroban: ``cvlr-soroban`` is branched per
+    generation because its helpers return the SDK's own types
+    (:func:`composer.spec.cvlr_reference.soroban_line_for`). Resolved from the graph cargo computed
+    rather than from a manifest string, so a workspace-inherited or transitively-pinned SDK is read
+    the same way the build will see it.
+    """
+    if chain != "soroban":
+        return reference_for(chain)
+    resolved = workspace.resolved("soroban-sdk")
+    try:
+        return soroban_line_for(resolved.version if resolved is not None else None)
+    except ValueError as exc:
+        raise PreflightFailed(str(exc)) from exc
+
+
 async def prepare_workspace(
     project_root: Path, *, package: str | None = None, chain: str = "solana"
 ) -> CvlrPreflight:
@@ -180,9 +198,9 @@ async def prepare_workspace(
     Writes into the project it is given, which for a pipeline run is the copy the run owns. The
     scaffold never overwrites, so pointing this at an already-verified project is a read.
     """
-    reference = reference_for(chain)
     workspace = await _workspace_at(project_root)
     member = _pick_package(workspace, package)
+    reference = _reference_for_project(chain, workspace)
 
     plan = plan_scaffold(workspace, member, reference, scaffold_for(chain))
     _log.info("%s", plan.describe())
