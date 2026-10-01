@@ -753,6 +753,8 @@ async def batch_cvlr_generation(
         )
     )
     graph = builder.compile_async()
+    if verify.analysis is not None:
+        verify.analysis.model.bind(builder.build_async()[1])
 
     # Seeded from the previous run's draft when there is one, the way CVL's author does it
     # (``cvl_generation.run_cvl_generator``). A budget-cut unit otherwise starts from nothing,

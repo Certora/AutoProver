@@ -48,7 +48,7 @@ from composer.prover import conf as prover_conf
 from composer.spec.cvlr import conf as cvlr_conf
 from composer.spec.cvlr.crates import Absent, resolve
 from composer.spec.cvlr.prover import Submission, write_submission
-from composer.spec.cvlr.verify import _CaptureCallbacks, _RunAccounting
+from composer.spec.cvlr.verify import CexAnalysis, _CaptureCallbacks, _RunAccounting
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.cvlr_reference import SOLANA
 from composer.spec.system_model import SolidityIdentifier
@@ -659,3 +659,19 @@ async def test_capturing_evidence_does_not_replace_the_accounting():
 
     assert summary.prover_total_calls == 1
 
+
+
+def test_counterexamples_are_explained_on_the_authors_bound_model():
+    """The analysis forks the author's conversation, and a model without the author's tools makes
+    every fork miss the cache on the whole of it: on the vault benchmark, two thirds of the first
+    44 minutes' spend. So there is no default model to fall back on, only the author's."""
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+    analysis = CexAnalysis(store=CexAnalysisStore(store=InMemoryStore(), namespace=("t",)))
+    state = {"messages": []}
+    with pytest.raises(RuntimeError, match="before the author's graph was built"):
+        analysis.handler(state)  # type: ignore[arg-type]
+
+    bound = FakeListChatModel(responses=["x"])
+    analysis.model.bind(bound)
+    assert analysis.handler(state).llm is bound  # type: ignore[arg-type, attr-defined]
