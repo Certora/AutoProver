@@ -152,7 +152,7 @@ it is not.
 | PR | Code | Tests | What it can do when it lands |
 |----|------|-------|------------------------------|
 | **P1** Resolve the project — [#248](https://github.com/Certora/AutoProver/pull/248), **merged** `2eb4a391` | +3,697 | +2,391 | Point it at a Cargo workspace: it names the package under verification, resolves which `cvlr` / `cvlr-solana` the build gets, writes the prover conf, and scaffolds a CVLR workspace into a project that has none. |
-| **P2** A hand-written rule in, verdicts out | +822 | +900 | Build a CVLR harness for SBF and submit it, and read the verdicts back. The deterministic submission path, end to end, with no agent in it. |
+| **P2** A hand-written rule in, verdicts out — [#258](https://github.com/Certora/AutoProver/pull/258), draft | +822 | +900 | Build a CVLR harness for SBF and submit it, and read the verdicts back. The deterministic submission path, end to end, with no agent in it. |
 | **P3a** The working copy and what may be changed in it | +2,048 | +1,310 | Materialize a per-unit working tree over the project and apply a source modification to it — the nine munge kinds, expressed over the Rust parsing primitives. |
 | **P3b** A generated harness, and what its verdict means | +1,919 | +1,180 | Take a generated harness module through tuning, build and submission, and decide what the run proved — including when a rule passed for a reason that says nothing about the program. |
 | **P4** The Anchor surface and the worked example | +715 | +720 | Read an Anchor program's account and handler surface, and render the worked example an author is shown against that program rather than against a generic one. |
