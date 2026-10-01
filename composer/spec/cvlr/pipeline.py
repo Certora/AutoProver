@@ -218,10 +218,7 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
             ),
             prover_opts=self.deps.prover_opts,
             stamper=prover_stamper(),
-            # The heavy tier: reading a counterexample back to a property is the reasoning this
-            # backend most needs done well, and a bad account of one sends the author to rewrite a
-            # rule that was right.
-            analysis=CexAnalysis(llm=run.env.llm_heavy(), store=self.deps.cex_analysis),
+            analysis=CexAnalysis(store=self.deps.cex_analysis),
         )
         return await batch_cvlr_generation(
             ctx.abstract(CvlrGeneration),
