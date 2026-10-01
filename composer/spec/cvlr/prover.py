@@ -16,7 +16,7 @@ A submission has three steps:
    with the Solana CLI selected.
 """
 
-import dataclasses
+from dataclasses import dataclass, field
 import logging
 from pathlib import Path
 
@@ -53,14 +53,14 @@ _log = logging.getLogger(__name__)
 CONF_DIR = CERTORA_DIR / "confs"
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class BuildRejected:
     """The pre-submission build failed, so nothing was submitted."""
 
     build: SbfRun
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class SubmissionFailed:
     """The build succeeded but the prover run did not produce results.
 
@@ -73,7 +73,7 @@ class SubmissionFailed:
     reason: str
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class Checked:
     """The prover ran and returned per-rule outcomes. Rules inside may still have failed."""
 
@@ -88,7 +88,7 @@ class Checked:
 type CvlrOutcome = BuildRejected | SubmissionFailed | Checked
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class Submission:
     """One submission, apart from the session it runs in.
 
@@ -99,7 +99,7 @@ class Submission:
 
     manifest_path: Path
     settings: TunableConf = TunableConf()
-    rules: RuleSelection = dataclasses.field(default_factory=InheritRules)
+    rules: RuleSelection = field(default_factory=InheritRules)
     msg: str = ""
     #: Names the conf and the build script. Submissions that share a workdir keep
     #: separate files.
@@ -154,7 +154,7 @@ async def write_submission(
     return conf_path
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class Prepared:
     """A built ``.so`` and the conf that will verify it. Nothing has been sent to the cloud."""
 
