@@ -20,6 +20,7 @@ from composer.spec.gen_types import (
     AP_REPORT_DIR, AUTOPROVE_INTERNAL_DIR, CERTORA_DIR, buffer_spec_path, component_specs_dir,
     under_project,
 )
+from composer.prover.conf import dump_conf
 from composer.spec.source.prover import prover_config_overlay
 from composer.spec.util import ensure_dir
 
@@ -106,7 +107,7 @@ class ProverArtifactStore(ArtifactStore[ComponentSpec, GeneratedCVL]):
                     main_contract=self._main_contract,
                     verify_target=f"{self._main_contract}:{i.buffer_spec_rel(name)}",
                 )
-                _write_checked(confs_root / f"verify_{name}.conf", json.dumps(conf, indent=2))
+                _write_checked(confs_root / f"verify_{name}.conf", dump_conf(conf))
         else:
             _log.warning("no base config for %s; skipping conf dump", i.stem)
         self._write_commentary(i.stem, artifact.commentary)
