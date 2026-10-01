@@ -24,7 +24,7 @@ import pytest
 
 from composer.authoring.state import SkippedProperty, make_validation_stamper, spec_digest
 from composer.prover.conf import SelectRules
-from composer.spec.cvlr.conf import OptimisticLoop, ProverSettings, RunOverlay, solana_conf
+from composer.spec.cvlr.conf import OptimisticLoop, TunableConf, RunOverlay, solana_conf
 from composer.spec.cvlr.prover import Submission as CvlrSubmission
 from composer.spec.cvlr.harness import (
     DELIVERABLE_DIR,
@@ -376,7 +376,7 @@ def _verify_state(draft: str) -> dict:
         "rule_subjects": [],
         "summaries": [],
         "munges": [],
-        "prover_settings": ProverSettings(),
+        "prover_settings": TunableConf(),
         "required_validations": [],
         "validations": {},
         "failed": None,
@@ -452,7 +452,7 @@ def test_optimistic_loop_goes_on_and_the_whole_conf_comes_back():
 def test_optimistic_loop_already_on_is_refused():
     from composer.spec.cvlr.verify import SetOptimisticLoop
 
-    state = {**_verify_state(DRAFT), "prover_settings": ProverSettings(optimistic_loop=OptimisticLoop(why="w"))}
+    state = {**_verify_state(DRAFT), "prover_settings": TunableConf(optimistic_loop=OptimisticLoop(why="w"))}
     out = _adjust(state, [SetOptimisticLoop(type="optimistic_loop", enabled=True)])
     assert isinstance(out, str) and "already on" in out
 
@@ -460,10 +460,10 @@ def test_optimistic_loop_already_on_is_refused():
 def test_optimistic_loop_goes_off_and_takes_its_reason_with_it():
     from composer.spec.cvlr.verify import SetOptimisticLoop
 
-    state = {**_verify_state(DRAFT), "prover_settings": ProverSettings(optimistic_loop=OptimisticLoop(why="w"))}
+    state = {**_verify_state(DRAFT), "prover_settings": TunableConf(optimistic_loop=OptimisticLoop(why="w"))}
     out = _adjust(state, [SetOptimisticLoop(type="optimistic_loop", enabled=False)])
     assert not isinstance(out, str), out
-    assert out.update["prover_settings"] == ProverSettings()
+    assert out.update["prover_settings"] == TunableConf()
 
 
 def test_the_edits_apply_together_or_not_at_all():
@@ -477,7 +477,7 @@ def test_the_edits_apply_together_or_not_at_all():
          SetOptimisticLoop(type="optimistic_loop", enabled=True)],
     )
     assert not isinstance(out, str), out
-    assert out.update["prover_settings"] == ProverSettings(
+    assert out.update["prover_settings"] == TunableConf(
         loop_iter=4, optimistic_loop=OptimisticLoop(why="tried bounding the operands first")
     )
 
@@ -501,7 +501,7 @@ def test_edits_apply_together_or_not_at_all():
         SetOptimisticLoop(type="optimistic_loop", enabled=False),
     ])
     assert isinstance(out, str) and "already off" in out
-    assert state["prover_settings"] == ProverSettings()
+    assert state["prover_settings"] == TunableConf()
 
 
 def test_a_config_change_invalidates_the_prover_stamp():
@@ -564,7 +564,7 @@ async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeyp
     )
     token = verify_mod.VerifyRules._dep_ctx.set(deps)
     try:
-        state = {**_verify_state(_DRAFT_TWO_RULES), "prover_settings": ProverSettings(loop_iter=5)}
+        state = {**_verify_state(_DRAFT_TWO_RULES), "prover_settings": TunableConf(loop_iter=5)}
         tool = verify_mod.VerifyRules(state=state, tool_call_id="tc")
         with pytest.raises(_StopProbe):
             await tool.run()
@@ -577,10 +577,10 @@ async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeyp
     # The settings come from state, not from the deps the run was constructed with: they are the
     # author's to change, and a submission built from the starting copy would send the old settings
     # while `version_history` had already recorded the new ones.
-    assert captured["settings"] == ProverSettings(loop_iter=5)
+    assert captured["settings"] == TunableConf(loop_iter=5)
     # And the selection actually reaches the conf as a `rule` entry.
     conf = solana_conf(
-        ProverSettings(), RunOverlay(build_script=Path("/w/b.py"), rules=captured["rules"])
+        TunableConf(), RunOverlay(build_script=Path("/w/b.py"), rules=captured["rules"])
     )
     assert conf["rule"] == ["rule_balance_conserved", "rule_only_authority_withdraws"]
 
@@ -616,7 +616,7 @@ def test_the_default_conf_enables_vacuity_checking():
     not be smoothed away, and the same choice means the gate has no notion of rule *strength*.
     Vacuity checking is what supplies it, both public examples enable it, and this default had not.
     """
-    conf = solana_conf(ProverSettings(), RunOverlay(build_script=Path("/w/b.py")))
+    conf = solana_conf(TunableConf(), RunOverlay(build_script=Path("/w/b.py")))
     assert conf["rule_sanity"] == "basic"
 
 

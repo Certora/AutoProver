@@ -150,7 +150,7 @@ def test_every_entry_offers_a_path_the_scaffold_s_project_can_write(family):
     An entry whose only path names an undeclared crate is worse than one with no path: the caller
     writes it, and the compiler rejects a name the corpus was authoritative about.
     """
-    from composer.spec.cvlr_reference import SOLANA
+    from composer.spec.cvlr.reference import SOLANA
 
     declared = {c.name.replace("-", "_") for c in SOLANA.scaffold_crates()}
     for crate in family:
@@ -399,7 +399,7 @@ def test_a_checkout_enters_as_a_patch_and_not_as_a_dependency(tmp_path):
     release this build does not support is exactly what the pin exists to prevent. As a patch, a
     checkout that has moved off the pin fails at cargo instead.
     """
-    from composer.spec.cvlr_reference import SOLANA
+    from composer.spec.cvlr.reference import SOLANA
 
     _probe_crate(tmp_path, SOLANA, {"cvlr-asserts": _checkout("cvlr-asserts")})
     manifest = (tmp_path / "Cargo.toml").read_text()
@@ -410,7 +410,7 @@ def test_a_checkout_enters_as_a_patch_and_not_as_a_dependency(tmp_path):
 
 
 def test_a_probe_with_no_checkouts_has_no_patch_table(tmp_path):
-    from composer.spec.cvlr_reference import SOLANA
+    from composer.spec.cvlr.reference import SOLANA
 
     _probe_crate(tmp_path, SOLANA, {})
     assert "[patch" not in (tmp_path / "Cargo.toml").read_text()
@@ -464,7 +464,7 @@ def test_the_manifest_source_names_every_checkout_it_read():
     Grouped by checkout rather than listed per crate: fifteen crates from two trees is two facts.
     It is also the only durable trace, since the rows carry none.
     """
-    from composer.spec.cvlr_reference import SOLANA
+    from composer.spec.cvlr.reference import SOLANA
 
     assert "checkout" not in manifest_source(SOLANA, {})
     source = manifest_source(

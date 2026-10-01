@@ -4,7 +4,7 @@
 #   cvlr_kb      the Solana manual (solana.html, from gen_docs.sh). Prose and methodology,
 #                hand-written, allowed to lag the crates.
 #   cvlr_api_kb  the CVLR API, generated here by composer.scripts.cvlr_api_docs from rustdoc over
-#                the releases composer/spec/cvlr_reference.py pins.
+#                the releases composer/spec/cvlr/reference.py pins.
 #
 # Each manifest declares its own knowledge_base, and rag_import routes by that tag, so both land
 # from one call. See docs/cvlr-api-docs-plan.md. Any source can be missing and the others still

@@ -69,7 +69,7 @@ from composer.rag.import_format import (
     RagManifest,
 )
 from composer.spec.cvlr.crates import CVLR_PREFIX
-from composer.spec.cvlr_reference import ChainReference, reference_for
+from composer.spec.cvlr.reference import ChainReference, reference_for
 from composer.tools.cvlr_api_rag import API_ROOT, SURFACE_HEADING
 
 _log = logging.getLogger(__name__)

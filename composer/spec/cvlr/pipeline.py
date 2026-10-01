@@ -73,7 +73,7 @@ from composer.spec.cvlr.verify import (
     VerifyDeps,
     prover_stamper,
 )
-from composer.spec.cvlr_reference import SOLANA, ChainReference
+from composer.spec.cvlr.reference import SOLANA, ChainReference
 from composer.spec.solana.model import (
     SolanaApplication,
     SolanaComponentInstance,
@@ -90,7 +90,7 @@ from composer.spec.source.report.collect import (
 from composer.spec.source.report.schema import (
     AppliedEditRecord, BuildEnvironment, ConfinedBuilds, SourceEditRecord, UnconfinedBuilds,
 )
-from composer.spec.source.report_prover import make_prover_fetcher
+from composer.spec.source.report_prover import make_run_link_fetcher
 from composer.spec.source.report.schema import RuleName
 from composer.spec.types import PropertyFormulation
 
@@ -250,7 +250,7 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
         The shared fetcher reads nothing but ``run_link``, so one instance serves every backend with
         a prover job behind it; this one is built per call because a formalizer is cheap to make and
         holding an API client on it would outlive the run."""
-        return await make_prover_fetcher()(formalized)
+        return await make_run_link_fetcher()(formalized)
 
     @override
     async def source_edits(
@@ -429,8 +429,8 @@ class CvlrBackend:
     package: str | None = None
     #: The CVLR releases this run scaffolds the target with. Beside :attr:`package` because it is
     #: the same kind of decision: what this run is pointed at. Narrowed by
-    #: :meth:`~composer.spec.cvlr_reference.ChainReference.withholding` when the target is itself
-    #: the program one of the :class:`~composer.spec.cvlr_reference.ProgramModel` crates models,
+    #: :meth:`~composer.spec.cvlr.reference.ChainReference.withholding` when the target is itself
+    #: the program one of the :class:`~composer.spec.cvlr.reference.ProgramModel` crates models,
     #: which is the only narrowing there is.
     reference: ChainReference = SOLANA
 

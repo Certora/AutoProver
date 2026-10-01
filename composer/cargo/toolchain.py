@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from composer.cargo.metadata import Workspace, read_workspace
+from composer.cargo.metadata import Workspace
 from composer.cargo.sbf import Built, sbf_build
 from composer.cargo.session import CargoSession, WarmFailed
 from composer.sandbox.config import SandboxConfig
@@ -67,7 +67,7 @@ class SolanaToolchain:
         none of them is improved by an exception.
         """
         root = Path(source.project_root)
-        workspace = await read_workspace(root)
+        workspace = await Workspace.read(root)
         if not isinstance(workspace, Workspace):
             _log.warning(
                 "could not read the Cargo project at %s: %s", root, workspace.describe()
@@ -133,7 +133,7 @@ class SolanaToolchain:
         program = request.get("build_program")
         if not program:
             return {}
-        workspace = await read_workspace(workdir, offline=True)
+        workspace = await Workspace.read(workdir, offline=True)
         if not isinstance(workspace, Workspace):
             raise ToolchainRequestUnsupported(
                 f"the plan asks to build {program!r}, but the Cargo workspace at {workdir} could "

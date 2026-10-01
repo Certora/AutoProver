@@ -9,7 +9,7 @@ component.
 import pytest
 
 from composer.spec.cvlr.anchor_surface import Param, read_surface
-from composer.spec.cvlr.conf import ProverSettings, settings_conf
+from composer.spec.cvlr.conf import TunableConf, tunable_conf
 from composer.spec.cvlr.example import (
     ExampleAccount,
     WorkedExample,
@@ -208,7 +208,7 @@ def _render(example: WorkedExample | None, conf: dict | None = None) -> str:
         module="exchange_rate",
         cvlr_versions="cvlr 0.6.1",
         example=example,
-        conf=settings_conf(ProverSettings()) if conf is None else conf,
+        conf=tunable_conf(TunableConf()) if conf is None else conf,
     )
 
 
