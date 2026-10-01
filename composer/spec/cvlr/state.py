@@ -180,6 +180,24 @@ def _latest_settings(_current: TunableConf, update: TunableConf) -> TunableConf:
     return update
 
 
+class LastVerdicts(BaseModel):
+    """The last prover run that produced verdicts, as the expected-failure markings are judged
+    against it.
+
+    Whether a run stamps the draft depends on the markings, and a marking usually follows the run
+    that showed the violation. So the run's verdicts are kept with the stamp it earns, and a change
+    of marking re-decides the stamp without another run. ``stamp`` is the digest of the draft as it
+    stood at that run, so a draft edited since gets nothing from it.
+    """
+
+    status: dict[str, bool]
+    #: Rules that stopped on an assertion the prover generated; no marking accounts for one.
+    incomplete: list[str]
+    #: Declared rules the report gave no verdict for; while any is missing, nothing stamps.
+    unverdicted: list[str]
+    stamp: dict[str, str]
+
+
 class CvlrGenerationExtra(AuthoringExtra):
     property_rules: list[PropertyRuleMapping]
     #: One entry per declared rule, naming what it drives. See :data:`RuleSubject`.
@@ -202,6 +220,8 @@ class CvlrGenerationExtra(AuthoringExtra):
     #: their writes were dropped. Absent until a run has reported.
     external_functions: NotRequired[tuple[str, ...]]
     expected_failures: Annotated[dict[CheckName, str], merge_expected_failures]
+    #: Absent until a prover run has produced verdicts.
+    last_verdicts: NotRequired[LastVerdicts]
     #: The job link from the most recent prover run that produced results, whether or not it was
     #: all green — a link to a failing run is still the most useful thing a report can offer.
     prover_link: NotRequired[str | None]
