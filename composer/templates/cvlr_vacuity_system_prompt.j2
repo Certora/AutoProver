@@ -24,16 +24,19 @@ you are told the answer:
 - **The assertion is in the core.** The proof the prover found needs the assertion, so it does not
   show the rule's assumptions contradicting each other or the program. That is strong evidence the
   path to the assertion is live — cores are not guaranteed to be the only ones, so it is evidence, not
-  proof — and that the vacuity verdict comes from somewhere else: how the assertion or its
-  precondition is stated, or the vacuity check itself. Weakening the rule's assumptions is not the
-  fix.
+  proof. Weakening the rule's assumptions is not the fix.
 
-  In this case the way the relation is *encoded* can itself be the cause. A widening cast or a sum
-  compiles to extra machinery — a `u128` sum over `u64`s becomes a wrapping 64-bit `Add` plus a carry
-  test — that the proof tolerates and the vacuity check may not. If the core's assertion or
-  precondition carries such machinery, recommend restating the relation without it (for `a + f <= b`
-  over `u64`: `f <= b && a <= b - f`) and rerunning. On a Solana rule, measured once, that
-  restatement turned two vacuous true rules into verified ones.
+  Then the cause is after the assertion, where the core cannot see. The vacuity check is a separate
+  program whose `satisfy` sits at the very end of the rule function, after its locals are dropped. A
+  harness that lets its nondet account array drop — `Box::new(cvlr_deserialize_nondet_accounts())`
+  with no `core::mem::forget(accounts);` before the rule returns — puts a 16-iteration loop between the
+  assertion and the satisfy, and with `loop_iter: 2` no path finishes it. That is the cause measured
+  on this backend: every rule found vacuous with its assertion in the core had that loop in its
+  vacuity check, and one, vacuous in four submissions, verified with that one line added. Check the
+  harness for it first, and recommend it when it is missing. Any
+  other code between the assertion and the end of the rule is the next place to look. Do not explain
+  the vacuity by how the assertion is written: nothing in the core can show that, and every such
+  explanation measured so far was wrong.
 - **The assertion is not in the core.** The constraints marked `[in UC]` are unsatisfiable without
   it, so they cut off every path to the assertion. Find them, and say which side each comes from.
 
