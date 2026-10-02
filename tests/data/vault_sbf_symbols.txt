@@ -1,0 +1,70 @@
+# Demangled symbols from test_scenarios/solana_vault_idl built for SBF with platform-tools
+# v1.43 (anchor-lang 0.31.1, solana-program 2.3.0). Filtered to the platform and Anchor
+# layers, which is what the tuning files address. Regenerate with:
+#   cargo certora-sbf --tools-version v1.43
+#   llvm-nm --defined-only target/sbf-solana-solana/release/vault.so \
+#     | awk '{ $1=""; $2=""; sub(/^[ \t]+/,""); print }' | rustfilt | sort -u
+<anchor_lang::accounts::account::Account<T> as anchor_lang::Accounts<B>>::try_accounts
+anchor_lang::accounts::account::Account<T>::exit_with_expected_owner
+anchor_lang::accounts::account::Account<T>::try_from
+anchor_lang::accounts::account::Account<T>::try_from_unchecked
+<anchor_lang::accounts::program::Program<T> as anchor_lang::Accounts<B>>::try_accounts
+<anchor_lang::accounts::signer::Signer as anchor_lang::Accounts<B>>::try_accounts
+anchor_lang::accounts::signer::Signer::try_from
+<anchor_lang::bpf_writer::BpfWriter<&mut [u8]> as std::io::Write>::write_all
+anchor_lang::common::close
+anchor_lang::common::is_closed
+anchor_lang::error::AnchorError::log
+<anchor_lang::error::Error as core::convert::From<anchor_lang::error::AnchorError>>::from
+<anchor_lang::error::Error as core::convert::From<anchor_lang::error::ErrorCode>>::from
+<anchor_lang::error::Error as core::convert::From<solana_program_error::ProgramError>>::from
+<anchor_lang::error::ErrorCode as core::fmt::Display>::fmt
+anchor_lang::error::ErrorCode::name
+anchor_lang::error::Error::log
+anchor_lang::error::Error::with_account_name
+anchor_lang::error::Error::with_pubkeys
+anchor_lang::error::Error::with_values
+anchor_lang::error::<impl core::convert::From<anchor_lang::error::Error> for solana_program_error::ProgramError>::from
+anchor_lang::error::ProgramErrorWithOrigin::log
+anchor_lang::system_program::allocate
+anchor_lang::system_program::assign
+anchor_lang::system_program::create_account
+anchor_lang::system_program::transfer
+<solana_account_info::AccountInfo as core::clone::Clone>::clone
+solana_account_info::AccountInfo::assign
+solana_account_info::AccountInfo::data_is_empty
+solana_account_info::AccountInfo::data_len
+solana_account_info::AccountInfo::lamports
+solana_account_info::AccountInfo::realloc
+solana_account_info::AccountInfo::try_borrow_data
+solana_account_info::AccountInfo::try_borrow_lamports
+solana_account_info::AccountInfo::try_borrow_mut_data
+solana_account_info::AccountInfo::try_borrow_mut_lamports
+solana_account_info::AccountInfo::try_data_len
+solana_cpi::invoke_signed_unchecked
+solana_instruction::Instruction::new_with_bincode
+solana_program_entrypoint::deserialize
+solana_program_error::<impl core::convert::From<solana_program_error::ProgramError> for u64>::from
+<solana_program_error::ProgramError as core::clone::Clone>::clone
+<solana_program_error::ProgramError as core::convert::From<u64>>::from
+<solana_program_error::ProgramError as core::fmt::Debug>::fmt
+<solana_program_error::ProgramError as core::fmt::Display>::fmt
+solana_program::program::invoke
+solana_program::program::invoke_signed
+solana_pubkey::_::<impl serde_core::ser::Serialize for solana_pubkey::Pubkey>::serialize
+<solana_pubkey::Pubkey as borsh::de::BorshDeserialize>::deserialize_reader
+solana_pubkey::Pubkey::create_program_address
+solana_pubkey::Pubkey::create_with_seed
+<solana_pubkey::PubkeyError as core::fmt::Debug>::fmt
+solana_pubkey::Pubkey::find_program_address
+solana_pubkey::Pubkey::log
+solana_rent::Rent::is_exempt
+solana_rent::Rent::minimum_balance
+solana_sha256_hasher::hashv
+<solana_stable_layout::stable_instruction::StableInstruction as core::convert::From<solana_instruction::Instruction>>::from
+solana_system_interface::instruction::allocate
+solana_system_interface::instruction::assign
+solana_system_interface::instruction::create_account
+solana_system_interface::instruction::create_account_with_seed
+solana_system_interface::instruction::transfer
+solana_sysvar::rent::<impl solana_sysvar::Sysvar for solana_rent::Rent>::get

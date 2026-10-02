@@ -156,6 +156,11 @@ def _read_job_info(scenario_dir: Path) -> dict:
     return json.loads((scenario_dir / "certora" / "ap_report" / "job_info.json").read_text())
 
 
+def _read_report(scenario_dir: Path) -> dict:
+    """The report phase's canonical results artifact (an ``AutoProverReport``)."""
+    return json.loads((scenario_dir / "certora" / "ap_report" / "report.json").read_text())
+
+
 async def test_autoprove_counter_runs_end_to_end(scenario_provider, langgraph_db, monkeypatch):
     scenario_dir = scenario_provider.by_name(_SCENARIO_NAME)
     _install_mocks(monkeypatch, scenario_dir)
@@ -174,6 +179,13 @@ async def test_autoprove_counter_runs_end_to_end(scenario_provider, langgraph_db
     assert job_info["user_id"] == "e2e-user"
     assert job_info["run_id"] == summary.run_id
     assert "token_usage" in job_info and "prover_usage" in job_info
+
+    # The component was delivered (it did not give up) and formalized properties —
+    # this is what keeps the run meaningful rather than vacuous. Read from the
+    # report's own delivered/gave-up accounting, not the filesystem.
+    report = _read_report(scenario_dir)
+    assert report["gave_up_components"] == [], f"component(s) gave up: {report['gave_up_components']}"
+    assert report["properties"], "no properties formalized — nothing was delivered"
 
 
 async def test_autoprove_dumps_job_info_when_pipeline_crashes(scenario_provider, langgraph_db, monkeypatch):

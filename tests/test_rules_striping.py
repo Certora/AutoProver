@@ -28,7 +28,7 @@ from composer.spec.cvl_generation import PropertyRuleMapping, validate_property_
 from composer.spec.source.author import ExpectRuleFailure
 from composer.spec.source.buffer_tools import put_buffer
 from composer.spec.source.prover import (
-    NagMarker, ProverHistoryItem, ProverRunLog, RuleSelection, StateWithSkips,
+    NagMarker, ProverHistoryItem, ProverRunLog, RuleSelectionRecord, StateWithSkips,
     VALIDATION_KEY, _executed_rules, _is_completion_history,
 )
 from composer.spec.source.spec_buffers import NamedBuffer, check_buffer_completion
@@ -47,18 +47,18 @@ RB = RulePath(rule="b")
 # ---------------------------------------------------------------------------
 
 
-def _inc(*rules: str) -> RuleSelection:
+def _inc(*rules: str) -> RuleSelectionRecord:
     return {"sort": "include", "selector": list(rules)}
 
 
-def _exc(*rules: str) -> RuleSelection:
+def _exc(*rules: str) -> RuleSelectionRecord:
     return {"sort": "exclude", "selector": list(rules)}
 
 
 def _log(
     *results: tuple[RulePath, StatusCodes],
     digest: str = "d1",
-    rules: RuleSelection | None = None,
+    rules: RuleSelectionRecord | None = None,
     declared: tuple[str, ...] = ("a", "b"),
 ) -> ProverRunLog:
     return ProverRunLog(
