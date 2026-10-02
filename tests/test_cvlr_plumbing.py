@@ -10,6 +10,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -36,12 +37,14 @@ from composer.spec.cvlr import conf as cvlr_conf
 from composer.spec.cvlr.crates import Absent, CvlrSources
 from composer.spec.cvlr.reference import SOLANA
 from composer.cargo.sbf import (
+    BUILD_TIMEOUT_ENV,
+    DEFAULT_BUILD_TIMEOUT_S,
     MalformedBuildManifest,
     Built,
     build_command_path,
     parse_manifest as parse_build_manifest,
     platform_tools_cargos,
-    PLATFORM_TOOLS_ROOT,
+    resolved_build_timeout_s,
     SbfBuild,
     write_build_script,
 )
@@ -498,7 +501,7 @@ def test_warming_is_tracked_per_binary_not_per_session(tmp_path):
 
 
 def test_the_certora_feature_is_the_default():
-    assert Submission(manifest_path=Path("/w/C.toml")).features == ("certora",)
+    assert Submission(manifest_path=Path("/w/C.toml"), stem="unit", msg="unit").features == ("certora",)
 
 
 def _build(**overrides) -> SbfBuild:
@@ -515,15 +518,18 @@ def test_the_build_never_touches_rustup():
     assert "--no-rustup" in _build().argv()
 
 
-def test_the_build_is_told_where_the_platform_tools_are():
-    """The tool also reads ``$CERTORA_PLATFORM_TOOLS_ROOT``, and the confined
-    child does not see it. The launcher passes a fixed environment list that
-    omits it. The tool's own default is under ``$HOME``, which is
-    world-writable in the container, so the argv names the root the read-only
-    grant covers.
-    """
-    argv = _build().argv()
-    assert argv[argv.index("--platform-tools-root") + 1] == str(PLATFORM_TOOLS_ROOT)
+class TestResolvedBuildTimeout:
+    def test_unset_returns_default(self, monkeypatch):
+        monkeypatch.delenv(BUILD_TIMEOUT_ENV, raising=False)
+        assert resolved_build_timeout_s() == DEFAULT_BUILD_TIMEOUT_S
+
+    def test_integer_env_value_used(self, monkeypatch):
+        monkeypatch.setenv(BUILD_TIMEOUT_ENV, "600")
+        assert resolved_build_timeout_s() == 600
+
+    def test_non_integer_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setenv(BUILD_TIMEOUT_ENV, "not-a-number")
+        assert resolved_build_timeout_s() == DEFAULT_BUILD_TIMEOUT_S
 
 
 def test_features_reach_the_build_as_one_space_separated_value():
@@ -534,22 +540,25 @@ def test_features_reach_the_build_as_one_space_separated_value():
 def test_a_manifest_missing_what_the_prover_requires_is_rejected_here():
     """A missing key fails here. At submission time the same gap is a
     ``CertoraUserInputError`` from a run that has already started."""
-    with pytest.raises(MalformedBuildManifest, match="executables"):
+    with pytest.raises(MalformedBuildManifest) as rejected:
         parse_build_manifest(json.dumps({"success": True, "project_directory": "/w", "sources": []}))
+    assert "executables" in str(rejected.value.__cause__)
 
 
 def test_a_build_that_reports_failure_is_not_read_as_a_manifest():
-    with pytest.raises(MalformedBuildManifest, match="success"):
+    with pytest.raises(MalformedBuildManifest) as rejected:
         parse_build_manifest(
             json.dumps(
                 {"success": False, "project_directory": "/w", "sources": [], "executables": "x.so"}
             )
         )
+    assert "success" in str(rejected.value.__cause__)
 
 
-def test_a_build_that_printed_no_json_says_so():
-    with pytest.raises(MalformedBuildManifest, match="Invalid JSON"):
+def test_a_build_that_printed_no_json_is_rejected():
+    with pytest.raises(MalformedBuildManifest) as rejected:
         parse_build_manifest("error: could not compile `first_example`")
+    assert "Invalid JSON" in str(rejected.value.__cause__)
 
 
 _VALID = {"success": True, "project_directory": "/w", "sources": [], "executables": "x.so"}
@@ -560,8 +569,9 @@ _VALID = {"success": True, "project_directory": "/w", "sources": [], "executable
     [("executables", ["x.so"]), ("sources", "p/src/lib.rs"), ("solana_inlining", 3)],
 )
 def test_a_manifest_field_of_the_wrong_type_is_rejected_here(field, value):
-    with pytest.raises(MalformedBuildManifest, match=field):
+    with pytest.raises(MalformedBuildManifest) as rejected:
         parse_build_manifest(json.dumps({**_VALID, field: value}))
+    assert field in str(rejected.value.__cause__)
 
 
 def test_a_single_env_file_is_read_as_one_path_the_way_the_prover_reads_it():
@@ -601,34 +611,6 @@ async def test_the_generated_build_script_reruns_the_gates_command(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_the_build_script_grants_the_platform_tools_root_its_argv_names(tmp_path, monkeypatch):
-    """The platform-tools root is granted read-only, including a root outside
-    ``rust_build_policy``'s defaults."""
-    from composer.cargo import sbf
-    from composer.sandbox import config as config_mod
-    from composer.sandbox.launcher import LauncherProvider
-
-    async def _available(provider):
-        return None
-
-    root = tmp_path / "tools"
-    root.mkdir()
-    monkeypatch.setattr(sbf, "PLATFORM_TOOLS_ROOT", root)
-    monkeypatch.setattr(SandboxConfig, "resolve_provider", lambda self: LauncherProvider(binary="rc"))
-    monkeypatch.setattr(config_mod, "ensure_available", _available)
-    workdir = tmp_path / "w"
-    workdir.mkdir()
-    session = CargoSession(workdir=workdir, sandbox=SandboxConfig(provider="launcher"))
-
-    script = await write_build_script(session, _build(), name="unit")
-
-    command = json.loads(build_command_path(script).read_text())
-    prefix, argv = command["argv_prefix"], command["argv"]
-    assert argv[argv.index("--platform-tools-root") + 1] == str(root)
-    assert any(a == "--ro" and b == str(root.resolve()) for a, b in zip(prefix, prefix[1:]))
-
-
-@pytest.mark.asyncio
 async def test_an_unconfined_session_produces_a_build_script_with_no_wrapper(tmp_path):
     """``provider="none"`` is a passthrough. The script runs the command with no wrapper."""
     session = CargoSession(workdir=tmp_path, sandbox=SandboxConfig(provider="none"))
@@ -661,6 +643,7 @@ async def test_a_tuned_conf_reaches_the_file_the_prover_is_handed(tmp_path):
             manifest_path=tmp_path / "Cargo.toml",
             settings=edited,
             stem="unit",
+            msg="unit",
         ),
     )
 
@@ -677,7 +660,7 @@ async def test_the_written_conf_names_the_build_script_written_beside_it(tmp_pat
     """
     conf_path = await write_submission(
         _unconfined(tmp_path),
-        Submission(manifest_path=tmp_path / "Cargo.toml"),
+        Submission(manifest_path=tmp_path / "Cargo.toml", stem="unit", msg="unit"),
     )
 
     named = Path(json.loads(conf_path.read_text())["build_script"])
@@ -702,6 +685,7 @@ async def test_two_units_sharing_a_tree_write_separate_confs_and_build_scripts(t
             manifest_path=manifest,
             settings=cvlr_conf.TunableConf(loop_iter=3),
             stem="solvency",
+            msg="solvency",
             features=("certora", "solvency"),
         ),
     )
@@ -711,6 +695,7 @@ async def test_two_units_sharing_a_tree_write_separate_confs_and_build_scripts(t
             manifest_path=manifest,
             settings=cvlr_conf.TunableConf(loop_iter=7),
             stem="access",
+            msg="access",
             features=("certora", "access"),
         ),
     )
@@ -771,7 +756,53 @@ async def test_a_build_script_moved_with_its_tree_refuses_to_build_the_original(
 
     assert ran.returncode != 0
     assert ran.stdout == ""
-    assert "Regenerate it here" in ran.stderr
+    assert "different working tree" in ran.stderr
+
+
+@pytest.mark.asyncio
+async def test_the_build_script_carries_the_build_timeout(tmp_path, monkeypatch):
+    monkeypatch.setenv(BUILD_TIMEOUT_ENV, "600")
+    script = await write_build_script(_unconfined(tmp_path), _build(), name="unit")
+    assert json.loads(build_command_path(script).read_text())["timeout_s"] == 600
+
+
+def _is_gone(pid: int) -> bool:
+    """Exited: no process, or a zombie waiting for its new parent to reap it."""
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except FileNotFoundError:
+        return True
+    return state == "Z"
+
+
+@pytest.mark.asyncio
+async def test_a_build_past_its_timeout_is_stopped_with_everything_it_started(tmp_path):
+    """Cargo runs the compilers as child processes, so stopping cargo alone would leave them running."""
+    script = await write_build_script(_unconfined(tmp_path), _build(), name="unit")
+    pid_file = tmp_path / "child.pid"
+    command_file = build_command_path(script)
+    command = json.loads(command_file.read_text())
+    command["argv"] = [
+        sys.executable, "-c",
+        "import pathlib, subprocess, sys, time; "
+        "child = subprocess.Popen(['sleep', '60']); "
+        "pathlib.Path(sys.argv[1]).write_text(str(child.pid)); "
+        "time.sleep(60)",
+        str(pid_file),
+    ]
+    command["timeout_s"] = 1
+    command_file.write_text(json.dumps(command))
+
+    ran = subprocess.run([str(script), "--json"], capture_output=True, text=True, timeout=30)
+
+    assert ran.returncode == 124
+    assert ran.stdout == ""
+    assert "did not finish within 1s" in ran.stderr
+    child = int(pid_file.read_text())
+    deadline = time.monotonic() + 5
+    while not _is_gone(child) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert _is_gone(child)
 
 
 def test_a_failed_compile_carries_the_compilers_own_words():

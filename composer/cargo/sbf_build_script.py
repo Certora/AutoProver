@@ -10,9 +10,14 @@ where the prover runs it.
 """
 
 import json
+import os
 import pathlib
+import signal
 import subprocess
 import sys
+
+#: What coreutils ``timeout`` exits with when the command timed out.
+EXIT_TIMED_OUT = 124
 
 
 def main() -> int:
@@ -20,10 +25,7 @@ def main() -> int:
     command = json.loads(here.with_suffix(".json").read_text())
     workdir = pathlib.Path(command["cwd"])
     if here.parent.parent != workdir:
-        sys.stderr.write(
-            f"{here} was written for the working tree at {workdir}, and its command builds that "
-            f"tree. Regenerate it here instead of copying it.\n"
-        )
+        sys.stderr.write("This build script was written for a different working tree.\n")
         return 1
     argv = [*command["argv_prefix"], *command["argv"]]
 
@@ -34,10 +36,30 @@ def main() -> int:
         if extra:
             argv += ["--features", " ".join(extra)]
 
-    result = subprocess.run(argv, capture_output=True, text=True, cwd=workdir)
-    sys.stderr.write(result.stderr)
-    sys.stdout.write(result.stdout)
-    return result.returncode
+    timeout_s = command["timeout_s"]
+    # A session of its own, so killing the group also kills the compilers cargo starts.
+    proc = subprocess.Popen(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=workdir,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        _, stderr = proc.communicate()
+        sys.stderr.write(stderr)
+        sys.stderr.write(f"The build did not finish within {timeout_s}s.\n")
+        return EXIT_TIMED_OUT
+    sys.stderr.write(stderr)
+    sys.stdout.write(stdout)
+    return proc.returncode
 
 
 if __name__ == "__main__":

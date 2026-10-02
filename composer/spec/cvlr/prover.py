@@ -21,7 +21,6 @@ import logging
 from pathlib import Path
 
 from composer.cargo.sbf import (
-    BUILD_TIMEOUT_S,
     Built,
     SbfBuild,
     SbfRun,
@@ -98,12 +97,12 @@ class Submission:
     """
 
     manifest_path: Path
-    settings: TunableConf = TunableConf()
-    rules: RuleSelection = field(default_factory=InheritRules)
-    msg: str = ""
     #: Names the conf and the build script. Submissions that share a workdir keep
     #: separate files.
-    stem: str = "cvlr"
+    stem: str
+    msg: str
+    settings: TunableConf = TunableConf()
+    rules: RuleSelection = field(default_factory=InheritRules)
     #: Cargo features for the gate build and the prover's rerun. Submissions that
     #: share a crate select different rules by naming different features.
     features: tuple[str, ...] = (DEFAULT_FEATURE,)
@@ -121,23 +120,19 @@ def _sbf_build(session: CargoSession, submission: Submission) -> SbfBuild:
     )
 
 
-async def build_for_submission(
-    session: CargoSession, submission: Submission, *, timeout_s: int = BUILD_TIMEOUT_S
-) -> SbfRun:
+async def build_for_submission(session: CargoSession, submission: Submission) -> SbfRun:
     """Run this submission's ``cargo certora-sbf`` build."""
-    return await sbf_build(session, _sbf_build(session, submission), timeout_s=timeout_s)
+    return await sbf_build(session, _sbf_build(session, submission))
 
 
-async def write_submission(
-    session: CargoSession, submission: Submission, *, timeout_s: int = BUILD_TIMEOUT_S
-) -> Path:
+async def write_submission(session: CargoSession, submission: Submission) -> Path:
     """Write the build script and the conf, and return the conf's path.
 
     The conf names the script relative to the workdir, the same way a CVL conf
     names its spec. Both files can be rerun by hand from the workdir.
     """
     script = await write_build_script(
-        session, _sbf_build(session, submission), name=submission.stem, timeout_s=timeout_s
+        session, _sbf_build(session, submission), name=submission.stem
     )
     conf = solana_conf(
         submission.settings,
@@ -163,7 +158,7 @@ class Prepared:
 
 
 async def prepare_submission(
-    session: CargoSession, submission: Submission, *, timeout_s: int = BUILD_TIMEOUT_S
+    session: CargoSession, submission: Submission
 ) -> BuildRejected | Prepared:
     """Build the program, harness included, then write the conf that checks it.
 
@@ -178,10 +173,10 @@ async def prepare_submission(
     ``run_submission`` returns first, the CLI failed before uploading, and the
     crate is free again.
     """
-    build = await build_for_submission(session, submission, timeout_s=timeout_s)
+    build = await build_for_submission(session, submission)
     if not isinstance(build.verdict, Built):
         return BuildRejected(build)
-    return Prepared(build, await write_submission(session, submission, timeout_s=timeout_s))
+    return Prepared(build, await write_submission(session, submission))
 
 
 async def run_submission(
@@ -219,13 +214,12 @@ async def submit(
     cex: CexHandler,
     callbacks: ProverCallbacks | None = None,
     tool_call_id: str = "cvlr-submit",
-    build_timeout_s: int = BUILD_TIMEOUT_S,
 ) -> CvlrOutcome:
     """:func:`prepare_submission`, then :func:`run_submission`.
 
     For a caller whose working tree is not shared with another submission.
     """
-    prepared = await prepare_submission(session, submission, timeout_s=build_timeout_s)
+    prepared = await prepare_submission(session, submission)
     if isinstance(prepared, BuildRejected):
         return prepared
     return await run_submission(

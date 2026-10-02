@@ -22,11 +22,12 @@ import json5
 import pytest
 import pytest_asyncio
 
-from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, Built, platform_tools_installed
+from composer.cargo.sbf import Built, platform_tools_installed
 from composer.cargo.session import CargoSession, Warmed
 from composer.prover.core import CexHandler, CexProgressCallbacks, make_prover_options
 from composer.prover.ptypes import RuleResult
 from composer.prover.conf import dump_conf
+from composer.sandbox.recipes import PLATFORM_TOOLS_ROOT
 from composer.sandbox.config import SandboxConfig
 from composer.sandbox.policy import SandboxUnavailable, ensure_available
 from composer.spec.cvlr.conf import PLATFORM_TOOLS_VERSION

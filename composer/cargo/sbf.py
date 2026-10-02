@@ -38,6 +38,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, BeforeValidator, ConfigDict, ValidationError
 
 from composer.cargo.session import CargoSession, CompileFailed, WarmFailed
+from composer.sandbox.recipes import PLATFORM_TOOLS_ROOT
 
 _log = logging.getLogger(__name__)
 
@@ -45,13 +46,25 @@ _log = logging.getLogger(__name__)
 #: and prints the build manifest.
 SBF_SUBCOMMAND = "certora-sbf"
 
-#: Same default and override variable as the tool. Both the build's argv and its
-#: read-only grant are taken from this one value.
-PLATFORM_TOOLS_ROOT = Path(
-    os.environ.get("CERTORA_PLATFORM_TOOLS_ROOT", Path.home() / ".cache" / "solana")
-)
+DEFAULT_BUILD_TIMEOUT_S: int = 1800  # 30 minutes
 
-BUILD_TIMEOUT_S = 1800
+BUILD_TIMEOUT_ENV = "AUTOPROVER_SBF_BUILD_TIMEOUT"
+
+
+def resolved_build_timeout_s() -> int:
+    """Build timeout in seconds: ``DEFAULT_BUILD_TIMEOUT_S``, or the integer value of
+    ``AUTOPROVER_SBF_BUILD_TIMEOUT`` when that env var is set. A non-integer env value is
+    ignored with a warning."""
+    default = DEFAULT_BUILD_TIMEOUT_S
+    raw = os.environ.get(BUILD_TIMEOUT_ENV)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        _log.warning("Ignoring non-integer %s=%r", BUILD_TIMEOUT_ENV, raw)
+        return default
+
 
 #: Under the workdir (the only path the confinement policy grants read-write).
 BUILD_DIR = Path(".certora_build")
@@ -61,26 +74,16 @@ class PlatformToolsMissing(RuntimeError):
     """The requested platform-tools version is not installed, and a confined
     build cannot download it the way ``cargo certora-sbf`` would unconfined."""
 
-    def __init__(self, version: str, root: Path):
+    def __init__(self, version: str):
         self.version = version
-        self.root = root
-        super().__init__(
-            f"Solana platform tools {version} are not installed under {root}. A confined build "
-            f"cannot fetch them (no network, and the cache is read-only). Install them once, "
-            f"unconfined, with `cargo certora-sbf --tools-version {version}` in any Solana crate, "
-            f"or point CERTORA_PLATFORM_TOOLS_ROOT at a root that has them."
-        )
+        super().__init__(f"Solana platform tools {version} are not installed.")
 
 
 class SbfSubcommandMissing(RuntimeError):
     """``cargo certora-sbf`` is not installed."""
 
-    def __init__(self, detail: str):
-        super().__init__(
-            f"`cargo certora-sbf` is not available: {detail}. The pre-submission build and the "
-            f"prover's build script both run it. Install it with `cargo install cargo-certora-sbf` "
-            f"(Rust 1.81 or newer)."
-        )
+    def __init__(self):
+        super().__init__("`cargo certora-sbf` is not installed.")
 
 
 async def sbf_subcommand_version() -> str:
@@ -95,10 +98,11 @@ async def sbf_subcommand_version() -> str:
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
     except OSError as exc:
-        raise SbfSubcommandMissing(f"cargo could not be run ({exc})") from exc
+        raise SbfSubcommandMissing() from exc
     stdout, stderr = await proc.communicate()
     if proc.returncode != 0:
-        raise SbfSubcommandMissing(stderr.decode().strip() or f"exit {proc.returncode}")
+        _log.warning("cargo %s --version failed: %s", SBF_SUBCOMMAND, stderr.decode().strip())
+        raise SbfSubcommandMissing()
     return stdout.decode().strip()
 
 
@@ -151,7 +155,8 @@ def parse_manifest(stdout: str) -> BuildManifest:
     try:
         return BuildManifest.model_validate_json(stdout)
     except ValidationError as exc:
-        raise MalformedBuildManifest(f"unusable build manifest: {exc}") from exc
+        _log.warning("unusable build manifest: %s", exc)
+        raise MalformedBuildManifest("The Solana build's output could not be read.") from exc
 
 
 @dataclass(frozen=True)
@@ -187,19 +192,12 @@ class SbfBuild:
         ``--no-rustup`` is required. Without it the tool registers a
         ``certora-solana`` rustup toolchain and writes ``RUSTUP_HOME``, which
         is read-only under confinement.
-
-        ``--platform-tools-root`` is on the argv. The launcher keeps only
-        :data:`~composer.sandbox.recipes.DEFAULT_ENV_PASSTHROUGH`, so it would drop
-        ``$CERTORA_PLATFORM_TOOLS_ROOT``. The build and the build script grant
-        that root read-only.
         """
         args = [
             "cargo",
             SBF_SUBCOMMAND,
             "--json",
             "--no-rustup",
-            "--platform-tools-root",
-            str(PLATFORM_TOOLS_ROOT),
             "--manifest-path",
             str(self.manifest_path),
         ]
@@ -251,9 +249,7 @@ async def _warm_for_the_build_cargo(
             )
 
 
-async def sbf_build(
-    session: CargoSession, build: SbfBuild, *, timeout_s: int = BUILD_TIMEOUT_S
-) -> SbfRun:
+async def sbf_build(session: CargoSession, build: SbfBuild) -> SbfRun:
     """Run ``cargo certora-sbf`` in ``session``'s workdir, confined.
 
     A missing toolchain raises :class:`PlatformToolsMissing`. An operator
@@ -262,13 +258,11 @@ async def sbf_build(
     tools_version = build.tools_version
     if tools_version is not None and session.confined:
         if not platform_tools_installed(tools_version):
-            raise PlatformToolsMissing(tools_version, PLATFORM_TOOLS_ROOT)
+            raise PlatformToolsMissing(tools_version)
         await _warm_for_the_build_cargo(session, tools_version, build.manifest_path)
     program, *args = build.argv()
     started = time.perf_counter()
-    built = await session.run_confined(
-        program, args, timeout_s=timeout_s, extra_ro=(PLATFORM_TOOLS_ROOT,)
-    )
+    built = await session.run_confined(program, args, timeout_s=resolved_build_timeout_s())
     elapsed = int((time.perf_counter() - started) * 1000)
     if built.exit_code != 0:
         return SbfRun(
@@ -293,13 +287,7 @@ def build_command_path(script: Path) -> Path:
     return script.with_suffix(".json")
 
 
-async def write_build_script(
-    session: CargoSession,
-    build: SbfBuild,
-    *,
-    name: str,
-    timeout_s: int = BUILD_TIMEOUT_S,
-) -> Path:
+async def write_build_script(session: CargoSession, build: SbfBuild, *, name: str) -> Path:
     """Write the ``build_script`` the conf points at, and return its path.
 
     ``name`` separates scripts when several submissions share one workdir.
@@ -311,7 +299,7 @@ async def write_build_script(
     confinement grants by absolute path. The script runs only in the tree it
     was written for.
     """
-    spec = await session.backend_spec(timeout_s=timeout_s, extra_ro=(PLATFORM_TOOLS_ROOT,))
+    spec = await session.backend_spec(timeout_s=resolved_build_timeout_s())
     build_dir = session.workdir / BUILD_DIR
     build_dir.mkdir(parents=True, exist_ok=True)
     script = build_dir / f"{name}.py"
@@ -321,6 +309,7 @@ async def write_build_script(
                 "cwd": str(session.workdir.resolve()),
                 "argv_prefix": spec["argv_prefix"],
                 "argv": build.argv(),
+                "timeout_s": spec["timeout_s"],
             },
             indent=2,
         )
