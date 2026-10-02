@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from enum import Enum
 from typing import TYPE_CHECKING, Protocol, Literal
 
 # Nominal ``str`` subtypes for the distinct identity fields of an analyzed
@@ -87,6 +88,17 @@ type PropertyType = Literal["attack_vector", "safety_property", "invariant"]
 """The kind of a property: an attack vector, a safety property, or a state
 invariant. Shared so every layer (inference, report, grouping) addresses the
 same vocabulary instead of redeclaring the literal."""
+
+
+class DesignDocOrigin(str, Enum):
+    """How a run's design document was chosen. Shared by the workflow's provenance record and
+    the persisted report, whose JSON carries the values below.
+
+      - SUPPLIED   — named when the run was launched
+      - DISCOVERED — found in the project tree by the design-doc finder
+    """
+    SUPPLIED = "supplied"
+    DISCOVERED = "discovered"
 
 class UntitledPropertyFormulation(BaseModel):
     sort: PropertyType = Field(description="The type of property you are describing.")

@@ -32,6 +32,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from pydantic import BaseModel, Field
 
 from composer.input.files import Document
+from composer.llm.structured import DecodesJsonStrings
 from composer.llm.types import CacheLevel
 from composer.spec.types import ComponentName, PropertyFormulation, PropertyKey, PropertyTitle
 from composer.templates.loader import load_jinja_template
@@ -79,7 +80,7 @@ class PropertyGroup(BaseModel):
     )
 
 
-class PropertyRanking(BaseModel):
+class PropertyRanking(DecodesJsonStrings):
     """Every candidate scored, and the claims they group into."""
     ranked: list[RankedProperty] = Field(
         description="Every candidate property, each appearing exactly once."
