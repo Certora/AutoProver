@@ -1,5 +1,6 @@
 """Per-buffer completion tracking: each buffer is judged complete over its own runs and digest."""
 
+from composer.prover.conf import InheritRules
 from composer.prover.ptypes import RulePath
 from composer.spec.source.prover import (
     NagMarker,
@@ -14,7 +15,7 @@ def _run(buffer: str, digest: str, results: list[tuple[str, str]]) -> ProverRunL
     return ProverRunLog(
         tool_call_id="t",
         prover_results=[(RulePath(rule=r), s) for r, s in results],  # type: ignore[misc]
-        rules=None,
+        rules=InheritRules(),
         spec_digest="h",
         sort="run",
         declared_rules=[r for r, _ in results],

@@ -1178,7 +1178,7 @@ _NAG_CVL_TAPE: list[BaseMessage] = [
 
     # NG-verify — re-verify. The skipped rule is excluded from all_verified
     # AND from the stuck-rule tally (no re-nag); the two increment() rules
-    # pass, so rules=None + all_verified stamps validations["prover"] at the
+    # pass, so a whole-buffer run + all_verified stamps validations["prover"] at the
     # digest of the final (attempt-nudged) spec.
     _ai("Re-submitting the buffer with the stuck rule excluded.", _tc("submit_buffer", name="core")),
     _ai("Collecting the results.", _tc("collect_results", wait=True)),

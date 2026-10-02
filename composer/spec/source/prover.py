@@ -139,29 +139,6 @@ def _merge_rule_skips(left: dict[str, str], right: dict[str, str]) -> dict[str, 
         to_ret[k] = v
     return to_ret
 
-def _selection_key(sel: RuleSelection) -> str:
-    """A stable key distinguishing one buffer's rule selections, so striped runs (different subsets of
-    the same buffer at the same content) coexist as separate jobs instead of deduping each other. The
-    whole-buffer run keys to the empty string."""
-    match sel:
-        case InheritRules():
-            return ""
-        case SelectRules(names):
-            return f"include:{','.join(sorted(names))}"
-        case ExcludeRules(names):
-            return f"exclude:{','.join(sorted(names))}"
-
-def _selected_rules(sel: RuleSelection, declared: Iterable[str]) -> list[str]:
-    """The rules of ``declared`` a run under ``sel`` checks. Buffer confs select no rules of their
-    own, so inheriting runs every declared rule."""
-    match sel:
-        case InheritRules():
-            return list(declared)
-        case SelectRules(names):
-            return list(names)
-        case ExcludeRules(names):
-            return [r for r in declared if r not in set(names)]
-
 class ProverRunLog(TypedDict):
     tool_call_id: str
     prover_results: list[tuple[RulePath, StatusCodes]]
@@ -186,7 +163,7 @@ type ProverHistoryItem = Annotated[ProverRunLog | NagMarker, Discriminator("sort
 def _executed_rules(
     r: ProverRunLog
 ) -> list[str]:
-    return _selected_rules(r["rules"], r["declared_rules"])
+    return r["rules"].checked_among(r["declared_rules"])
 
 def declared_rules_at(
     history: Sequence[ProverHistoryItem], state_digest: str
@@ -819,7 +796,7 @@ class _BufJob:
     digest: str
     task: asyncio.Task[None]
     #: The rule subset this job runs. Jobs of one buffer are keyed by
-    #: ``(name, _selection_key(selection))``, so striped runs at the same content coexist.
+    #: ``(name, selection.key())``, so striped runs at the same content coexist.
     selection: RuleSelection = InheritRules()
 
 
@@ -950,14 +927,14 @@ def get_prover_tool(
                 unknown = [r for r in selection.names if r not in owned]
                 if unknown:
                     return f"Buffer {name!r} declares no rule(s) {unknown}; its rules are {sorted(owned)}."
-                if not _selected_rules(selection, owned):
+                if not selection.checked_among(owned):
                     return f"That selection would run no rule of buffer {name!r}; its rules are {sorted(owned)}."
 
             digest = _cur_digest(state, buffers, name)
             if _buffer_complete_at(state, buffers, name, digest):
                 return f"Buffer {name!r} is already verified at its current content; nothing to submit."
 
-            sel_key = _selection_key(selection)
+            sel_key = selection.key()
             existing = buffer_jobs.get((name, sel_key))
             if existing is not None and existing.digest == digest:
                 # This exact subset at this exact content is already in flight, or has just finished with
