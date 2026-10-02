@@ -52,6 +52,12 @@ class SelectRules:
 
     names: tuple[str, ...]
 
+    def __post_init__(self) -> None:
+        # Sorted so that selections naming the same rules compare equal. Coerced to a tuple
+        # because checkpointed graph state records selections, and the checkpoint serializer
+        # restores tuples as lists.
+        object.__setattr__(self, "names", tuple(sorted(self.names)))
+
     def apply_to(self, conf: Conf) -> Conf:
         return {**conf, "rule": list(self.names)}
 
@@ -62,10 +68,14 @@ class ExcludeRules:
 
     names: tuple[str, ...]
 
+    def __post_init__(self) -> None:
+        # See SelectRules.__post_init__.
+        object.__setattr__(self, "names", tuple(sorted(self.names)))
+
     def apply_to(self, conf: Conf) -> Conf:
         return {**conf, "exclude_rule": list(self.names)}
 
 
 #: A run's rule scope. ``apply_to(conf)`` returns ``conf`` scoped to it, writing only the key the
-#: selection names.
+#: selection names. Selections are hashable, and equal whenever they name the same rules.
 type RuleSelection = InheritRules | SelectRules | ExcludeRules

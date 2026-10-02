@@ -4,6 +4,7 @@ Mirrors what `_is_completion_history` accepts: completion may be reached pieceme
 several runs against one authoring state, so the report has to read all of them.
 """
 
+from composer.prover.conf import InheritRules
 from composer.spec.source.prover import ProverHistoryItem, ProverRunLog, NagMarker, covering_run_links
 
 
@@ -16,7 +17,7 @@ def _run(
     run = ProverRunLog(
         tool_call_id="tc",
         prover_results=[],
-        rules=None,
+        rules=InheritRules(),
         spec_digest="d",
         sort="run",
         declared_rules=["r1"],
