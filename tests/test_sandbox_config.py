@@ -13,6 +13,7 @@ import pytest
 from composer.sandbox.config import SandboxConfig
 from composer.sandbox.launcher import LauncherProvider
 from composer.sandbox.policy import NoneProvider
+from composer.sandbox import recipes
 from composer.sandbox.recipes import (
     git_config_ro_paths,
     rust_build_policy,
@@ -166,6 +167,16 @@ def test_rust_build_policy_grants_cargo_bin_not_home_root(tmp_path, monkeypatch)
     pol = rust_build_policy(tmp_path / "work")
     assert (cargo / "bin").resolve() in pol.ro_paths
     assert cargo.resolve() not in pol.ro_paths
+
+
+def test_rust_build_policy_grants_the_platform_tools_root(tmp_path, monkeypatch):
+    """A confined build cannot download platform tools, so it must be able to read the installed ones."""
+    root = tmp_path / "solana"
+    root.mkdir()
+    monkeypatch.setattr(recipes, "PLATFORM_TOOLS_ROOT", root)
+
+    pol = rust_build_policy(tmp_path / "work")
+    assert root.resolve() in pol.ro_paths
 
 
 def test_shared_cargo_ro_paths_excludes_credentials(tmp_path):

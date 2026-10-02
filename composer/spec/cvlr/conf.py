@@ -93,14 +93,14 @@ DEFAULT_FEATURE = CargoFeature("certora")
 class RunOverlay:
     """What one submission adds to the conf its :class:`TunableConf` describes.
 
-    ``build_script`` is a path as the prover reads it: relative to the directory
-    ``certoraSolanaProver`` runs in, which is the session's workdir.
+    ``build_script`` is absolute and outside the session's workdir: the prover
+    runs it unconfined, so no build may be able to rewrite it.
     """
 
     build_script: Path
     rules: RuleSelection = field(default_factory=InheritRules)
     msg: str = ""
-    #: Points-to summary files, in the same relative-to-the-workdir spelling as ``build_script``.
+    #: Points-to summary files, relative to the workdir ``certoraSolanaProver`` runs in.
     #: Empty leaves the key unset, so the package's ``[package.metadata.certora]`` declaration
     #: still applies.
     summaries: tuple[Path, ...] = ()
