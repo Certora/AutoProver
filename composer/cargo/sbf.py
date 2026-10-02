@@ -253,7 +253,9 @@ async def sbf_build(session: CargoSession, build: SbfBuild) -> SbfRun:
     """Run ``cargo certora-sbf`` in ``session``'s workdir, confined.
 
     A missing toolchain raises :class:`PlatformToolsMissing`. An operator
-    installs it. A failed compile returns rustc's diagnostics.
+    installs it. Build JSON the prover would reject raises
+    :class:`MalformedBuildManifest`: the tool is at fault, not the sources. A
+    failed compile returns rustc's diagnostics.
     """
     tools_version = build.tools_version
     if tools_version is not None and session.confined:
@@ -270,16 +272,7 @@ async def sbf_build(session: CargoSession, build: SbfBuild) -> SbfRun:
             CompileFailed(diagnostics=built.stderr.strip(), exit_code=built.exit_code),
             session.confined,
         )
-    try:
-        manifest = parse_manifest(built.stdout)
-    except MalformedBuildManifest as exc:
-        # The compiler succeeded and the JSON did not. Report the manifest error, not stderr.
-        return SbfRun(
-            elapsed,
-            CompileFailed(diagnostics=str(exc), exit_code=built.exit_code),
-            session.confined,
-        )
-    return SbfRun(elapsed, Built(manifest), session.confined)
+    return SbfRun(elapsed, Built(parse_manifest(built.stdout)), session.confined)
 
 
 def build_command_path(script: Path) -> Path:
