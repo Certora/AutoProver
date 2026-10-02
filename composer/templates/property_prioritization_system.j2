@@ -34,7 +34,8 @@ candidate in exactly one group and name what that group, taken together, establi
 one is fine when a property stands alone.
 
 The run pursues the group containing the highest-scoring property, and it pursues all of it, so a
-group must hold everything its claim rests on. A property that has to hold for the claim to mean
+group must hold everything its claim rests on. Your scores alone decide which group that is: the
+claim you would choose to prove must be the one that holds your highest score. A property that has to hold for the claim to mean
 anything belongs in the group even when its own score is low; leaving it out does not make the run
 cheaper, it makes the claim unproven. Equally, a property the claim does not need belongs in its
 own group — padding a group spends the run's budget on properties nobody chose.
@@ -59,8 +60,13 @@ component's copies on their own merits.
     Score 100
       Good example: "Total assets backing the pool are always at least the sum of user claims"
         (violation means the protocol is insolvent and users cannot be made whole)
+      Good example: "No sequence of deposits and withdrawals returns more assets than it put in"
+        (violation lets any user drain the pool through the ordinary entry points)
+
+    Score 85
       Good example: "Only an account holding the admin role can change the fee recipient"
-        (violation hands protocol revenue to an attacker)
+        (violation hands protocol revenue to an attacker, but the property guards one
+        configuration setter behind a standard role check, not the accounting every user relies on)
 
     Score 70
       Good example: "Shares minted on deposit equal assets deposited times the current exchange rate"
@@ -87,12 +93,56 @@ component with the most properties.
   - **Falsifiable against this code.** A property that restates a compiler guarantee, or that no
     implementation of this contract could violate, buys nothing however grand it sounds.
 
+# Which kind of property outranks which
+
+Many candidates can claim a catastrophic worst case. Order them by the value at risk and by who can
+reach the violation:
+
+  1. Properties whose violation lets an unprivileged actor directly take or lock user funds, or
+     break solvency or conservation of value: backing covers claims, no deposit/withdraw sequence
+     is profitable, rounding never favours the caller, share price cannot be moved for free.
+  2. Properties that guard privileged configuration or access-control plumbing: who may upgrade,
+     pause, set fees, set parameters, or grant roles.
+
+A property in the first kind scores above a property in the second kind whenever the two are
+comparable on raw consequence. This matters most when the access check is inherited library code
+behind a standard modifier or role check: that code is shared with many deployed protocols and is
+rarely where a new bug lives, while the protocol's own accounting is specific to it and has no
+second line of defence. An access-control property scores at the top only when the protocol
+implements the check itself in an unusual way, or when an unprivileged path reaches the privileged
+effect without the check.
+
+    Good example: "The pool always holds at least the assets its shares claim" scored 100, and
+      "Only the upgrade role can change the implementation" scored 85, where the upgrade check is a
+      standard library modifier.
+    Bad example: the same two properties with the upgrade property scored higher because "an
+      unauthorized upgrade can steal everything". Both worst cases are total loss; the solvency
+      identity is the one any user can reach and the one written for this protocol.
+
 # The `critical_match` flag
 
-Set it when a property answers a concern raised explicitly in the design document, threat model, or
-supplied notes — something the reader of those documents asked to be checked, rather than something
-inferred unaided. It carries a fixed bonus on top of the score, so mark it honestly: flagging
-everything makes it meaningless.
+Set it only when the design document, threat model, or supplied notes explicitly ask for the
+property to be checked, or explicitly call it critical or most important: a concern, requirement,
+invariant, known risk, or audit focus that the text states as such. Describing a feature, listing
+a component, or naming a mechanism is not a request. When in doubt, leave it false.
+
+    Good example: the design document says "The key invariant is that the sum of all balances never
+      exceeds total reserves". Set it on the property that states that invariant.
+    Good example: the threat model lists "Known risk: a keeper could liquidate a healthy position".
+      Set it on the property that only unhealthy positions can be liquidated.
+    Good example: the notes say "Please focus the review on the reward distribution math". Set it on
+      the properties about how rewards are distributed.
+    Bad example: the design document says "The contract is deployed behind an upgradeable proxy;
+      upgrades are authorized by the admin role". That describes the architecture. It asks for
+      nothing, so do not set it on the upgrade-authorization properties.
+    Bad example: a feature list says "Supports gasless approvals via signed permits". Do not set it
+      on the permit properties: the document names the feature, it does not ask for it to be checked.
+    Bad example: a section explains how the protocol computes its fees. Explaining a mechanism is not
+      the same as asking for it to be checked.
+
+The flag does not add to the score. It only decides between two properties with exactly the same
+score. The run pursues the group holding your highest score, so if the documents explicitly name one
+property as the most important thing to check, give it the score that reflects that.
 
 # Hard constraints — violating these means your output is rejected
 
