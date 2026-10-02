@@ -160,10 +160,24 @@ class NagMarker(TypedDict):
 
 type ProverHistoryItem = Annotated[ProverRunLog | NagMarker, Discriminator("sort")]
 
+def _checked_rules(selection: RuleSelection, declared: Iterable[str]) -> list[str]:
+    """The ``declared`` rules a run under ``selection`` checks. ``InheritRules`` counts as every
+    rule: the source pipeline's base confs select none of their own. Names match exactly, which
+    holds because ``submit_buffer`` admits only names the buffer declares, never patterns."""
+    match selection:
+        case InheritRules():
+            return list(declared)
+        case SelectRules(names):
+            selected = set(names)
+            return [r for r in declared if r in selected]
+        case ExcludeRules(names):
+            excluded = set(names)
+            return [r for r in declared if r not in excluded]
+
 def _executed_rules(
     r: ProverRunLog
 ) -> list[str]:
-    return r["rules"].checked_among(r["declared_rules"])
+    return _checked_rules(r["rules"], r["declared_rules"])
 
 def declared_rules_at(
     history: Sequence[ProverHistoryItem], state_digest: str
@@ -795,8 +809,8 @@ class _BufJob:
     #: so a job whose digest is now stale (its buffer or a shared import changed) can't mark it done.
     digest: str
     task: asyncio.Task[None]
-    #: The rule subset this job runs. Jobs of one buffer are keyed by
-    #: ``(name, selection.key())``, so striped runs at the same content coexist.
+    #: The rule subset this job runs. Jobs of one buffer are keyed by ``(name, selection)``, so
+    #: striped runs at the same content coexist.
     selection: RuleSelection = InheritRules()
 
 
@@ -841,9 +855,9 @@ def get_prover_tool(
         # submit_buffer launches a background task per buffer and returns immediately; collect_results
         # drains finished jobs off the queue. At most one live job per buffer name — a re-submit supersedes
         # a stale predecessor. See submit_buffer / collect_results below.
-        # Keyed by (buffer name, selection key): one buffer can have several concurrent jobs, one per
+        # Keyed by (buffer name, selection): one buffer can have several concurrent jobs, one per
         # rule subset it was striped into. A content edit supersedes every one of them (digest changes).
-        buffer_jobs: dict[tuple[str, str], _BufJob] = {}
+        buffer_jobs: dict[tuple[str, RuleSelection], _BufJob] = {}
         done_queue: asyncio.Queue[_BufDone] = asyncio.Queue()
         submit_counts: dict[str, int] = {}
 
@@ -927,15 +941,14 @@ def get_prover_tool(
                 unknown = [r for r in selection.names if r not in owned]
                 if unknown:
                     return f"Buffer {name!r} declares no rule(s) {unknown}; its rules are {sorted(owned)}."
-                if not selection.checked_among(owned):
+                if not _checked_rules(selection, owned):
                     return f"That selection would run no rule of buffer {name!r}; its rules are {sorted(owned)}."
 
             digest = _cur_digest(state, buffers, name)
             if _buffer_complete_at(state, buffers, name, digest):
                 return f"Buffer {name!r} is already verified at its current content; nothing to submit."
 
-            sel_key = selection.key()
-            existing = buffer_jobs.get((name, sel_key))
+            existing = buffer_jobs.get((name, selection))
             if existing is not None and existing.digest == digest:
                 # This exact subset at this exact content is already in flight, or has just finished with
                 # its result not yet collected. Either way, do not launch a duplicate — the answer is
@@ -948,11 +961,11 @@ def get_prover_tool(
                 )
             # A content edit supersedes every subset job of this buffer (all now at a stale digest); the
             # sibling subsets at the *current* digest are the parallel stripes and stay running.
-            for (nm, sk), j in list(buffer_jobs.items()):
+            for (nm, sel), j in list(buffer_jobs.items()):
                 if nm == name and j.digest != digest and not j.task.done():
                     # TODO: this cancels the local task only; the cloud prover job itself keeps running.
                     j.task.cancel()
-                    buffer_jobs.pop((nm, sk), None)
+                    buffer_jobs.pop((nm, sel), None)
 
             n = submit_counts.get(name, 0) + 1
             submit_counts[name] = n
@@ -967,8 +980,8 @@ def get_prover_tool(
                 # progress can render loosely in the UI (functional results are unaffected).
                 writer=get_stream_writer(), summary=get_run_summary(),
             ))
-            buffer_jobs[(name, sel_key)] = _BufJob(name=name, digest=digest, task=task, selection=selection)
-            running = sorted({nm for (nm, _sk), j in buffer_jobs.items() if not j.task.done()})
+            buffer_jobs[(name, selection)] = _BufJob(name=name, digest=digest, task=task, selection=selection)
+            running = sorted({nm for (nm, _sel), j in buffer_jobs.items() if not j.task.done()})
             match selection:
                 case InheritRules():
                     sel_desc = ""

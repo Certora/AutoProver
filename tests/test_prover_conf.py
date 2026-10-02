@@ -28,6 +28,12 @@ def test_rule_selections_survive_a_checkpoint_round_trip():
         assert hash(restored) == hash(sel)
 
 
+def test_rule_selections_ignore_name_order():
+    assert SelectRules(("b", "a")) == SelectRules(("a", "b"))
+    assert hash(ExcludeRules(("b", "a"))) == hash(ExcludeRules(("a", "b")))
+    assert SelectRules(("a",)) != ExcludeRules(("a",))
+
+
 def test_cvl_overlay_forces_its_settings_over_the_base():
     """CVL overrides the base's own sanity and loop settings, whatever they are."""
     base = {**_BASE, "rule_sanity": "advanced", "optimistic_loop": False}

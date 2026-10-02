@@ -88,6 +88,9 @@ class TestExecutedRules:
     def test_exclude_executes_the_complement(self):
         assert _executed_rules(_log(rules=_exc("b"), declared=("a", "b", "c"))) == ["a", "c"]
 
+    def test_include_executes_only_declared_rules(self):
+        assert _executed_rules(_log(rules=_inc("b", "gone"), declared=("a", "b"))) == ["b"]
+
 
 # =========================================================================
 # _is_completion_history: piecemeal coverage accounting

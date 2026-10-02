@@ -8,7 +8,6 @@ Shared by every ecosystem. What a conf contains is each ecosystem's own policy
 import json
 import re
 import string
-from collections.abc import Iterable
 from dataclasses import dataclass
 
 #: A conf: the top-level JSON object.
@@ -46,13 +45,6 @@ class InheritRules:
     def apply_to(self, conf: Conf) -> Conf:
         return conf
 
-    def key(self) -> str:
-        return ""
-
-    def checked_among(self, declared: Iterable[str]) -> list[str]:
-        """Every declared rule, which holds only for a base conf that selects none of its own."""
-        return list(declared)
-
 
 @dataclass(frozen=True)
 class SelectRules:
@@ -61,18 +53,13 @@ class SelectRules:
     names: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        # Checkpointed graph state records selections, and the checkpoint serializer restores
-        # tuples as lists.
-        object.__setattr__(self, "names", tuple(self.names))
+        # Sorted so that selections naming the same rules compare equal. Coerced to a tuple
+        # because checkpointed graph state records selections, and the checkpoint serializer
+        # restores tuples as lists.
+        object.__setattr__(self, "names", tuple(sorted(self.names)))
 
     def apply_to(self, conf: Conf) -> Conf:
         return {**conf, "rule": list(self.names)}
-
-    def key(self) -> str:
-        return f"include:{','.join(sorted(self.names))}"
-
-    def checked_among(self, declared: Iterable[str]) -> list[str]:
-        return list(self.names)
 
 
 @dataclass(frozen=True)
@@ -83,20 +70,12 @@ class ExcludeRules:
 
     def __post_init__(self) -> None:
         # See SelectRules.__post_init__.
-        object.__setattr__(self, "names", tuple(self.names))
+        object.__setattr__(self, "names", tuple(sorted(self.names)))
 
     def apply_to(self, conf: Conf) -> Conf:
         return {**conf, "exclude_rule": list(self.names)}
 
-    def key(self) -> str:
-        return f"exclude:{','.join(sorted(self.names))}"
-
-    def checked_among(self, declared: Iterable[str]) -> list[str]:
-        excluded = set(self.names)
-        return [r for r in declared if r not in excluded]
-
 
 #: A run's rule scope. ``apply_to(conf)`` returns ``conf`` scoped to it, writing only the key the
-#: selection names. ``key()`` is a stable identity, the same for equal selections whatever their
-#: name order. ``checked_among(declared)`` is the declared rules a run under it checks.
+#: selection names. Selections are hashable, and equal whenever they name the same rules.
 type RuleSelection = InheritRules | SelectRules | ExcludeRules
