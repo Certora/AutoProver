@@ -612,6 +612,21 @@ it was stable and repeatable. The remaining vacuity cluster needs a different ex
 assertion* are the next lead, as is `rule_diag_signer_set_membership` pinning the longest job of both
 runs.
 
+**U24. The Rust build sandboxing scheme has never had a full security audit.**
+Every CVLR build compiles and runs native code that neither we nor the user wrote: the analyzed
+program's `build.rs` and proc-macros, and the LLM's edited source. The only thing between that code
+and AutoProver's secrets, network and filesystem is the Landlock + seccomp confinement
+([command-sandbox.md](./command-sandbox.md), [composer/sandbox/](../composer/sandbox/),
+[rust/run-confined/](../rust/run-confined/)). What checks it today is the escape suite we wrote
+ourselves ([test_sandbox_escape.py](../tests/test_sandbox_escape.py)), and the gaps found so far were
+found by accident: the x32-ABI seccomp bypass, and the shared `CARGO_HOME` that let one run poison
+the next. Wants a dedicated adversarial review of the whole scheme. That covers the threat model in
+§2, the seccomp deny-list (residual risk compared with a default-deny allowlist), Landlock ABI
+fallback on the kernels we deploy to, and same-uid recovery of secrets through `/proc` or `ptrace`.
+It also covers every read-only and writable grant in `rust_build_policy` and the CVLR recipes, the
+unsandboxed warm `cargo fetch`, and the environment allowlist. The open questions in
+command-sandbox.md §11 are where it starts, not its scope.
+
 ---
 
 ## Leads from the certora-cvlr-kb ledger
