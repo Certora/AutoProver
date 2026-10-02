@@ -9,6 +9,7 @@ The copy imports nothing from this package: the package is not installed
 where the prover runs it.
 """
 
+import argparse
 import json
 import os
 import pathlib
@@ -20,7 +21,23 @@ import sys
 EXIT_TIMED_OUT = 124
 
 
+def parse_prover_args() -> argparse.Namespace:
+    """The flags certoraRun passes to a ``build_script``.
+
+    Only ``--cargo_features`` changes the build. Dropping it builds the wrong
+    crate. Any flag not declared here is rejected rather than ignored: a new
+    one may change what the prover expects to get built.
+    """
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("-l", action="store_true")
+    # certoraRun passes the features as one space-separated argument.
+    parser.add_argument("--cargo_features", nargs="*", default=[])
+    return parser.parse_args()
+
+
 def main() -> int:
+    args = parse_prover_args()
     here = pathlib.Path(__file__).resolve()
     command = json.loads(here.with_suffix(".json").read_text())
     workdir = pathlib.Path(command["cwd"])
@@ -28,13 +45,9 @@ def main() -> int:
         sys.stderr.write("This build script was written for a different working tree.\n")
         return 1
     argv = [*command["argv_prefix"], *command["argv"]]
-
-    # The prover passes --json, -l, and --cargo_features. Only --cargo_features
-    # changes the build. Dropping it builds the wrong crate.
-    if "--cargo_features" in sys.argv:
-        extra = sys.argv[sys.argv.index("--cargo_features") + 1 :]
-        if extra:
-            argv += ["--features", " ".join(extra)]
+    features = " ".join(args.cargo_features)
+    if features:
+        argv += ["--features", features]
 
     timeout_s = command["timeout_s"]
     # A session of its own, so killing the group also kills the compilers cargo starts.
