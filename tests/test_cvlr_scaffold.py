@@ -189,6 +189,29 @@ def test_a_fresh_project_gets_the_whole_shape_and_a_second_run_gets_nothing(tmp_
     assert again.satisfied
 
 
+#: ``[package]`` split by another table, as solana-program-stake's program manifest has it. tomlkit
+#: reads such a table back as a proxy over its fragments rather than as a table.
+SPLIT_PACKAGE = STANDALONE + """
+[lints]
+workspace = true
+
+[package.metadata.solana]
+program-id = "Prog111111111111111111111111111111111111111"
+"""
+
+
+def test_a_package_table_split_by_another_table_is_scaffolded_and_idempotent(tmp_path):
+    plan, workspace = _plan(tmp_path, manifest=SPLIT_PACKAGE, workspace_manifest=SPLIT_PACKAGE)
+    assert not plan.blocked
+    apply(plan, workspace.root)
+    parsed = tomllib.loads((tmp_path / "Cargo.toml").read_text())
+    assert "certora" in parsed["package"]["metadata"]
+    assert parsed["package"]["metadata"]["solana"]["program-id"].startswith("Prog")
+
+    again, _ = _plan(tmp_path, manifest=SPLIT_PACKAGE, workspace_manifest=SPLIT_PACKAGE)
+    assert again.changes == ()
+
+
 def test_the_manifest_a_fresh_project_ends_up_with_still_parses(tmp_path):
     plan, workspace = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
     apply(plan, workspace.root)
