@@ -483,7 +483,12 @@ def _externals_note(externals: Sequence[str]) -> str | None:
 
     Not a gate: an external call is how the starting configuration keeps most of a platform's code
     out of the analysis, and nothing in the author's action space inlines one. What the author can
-    do is know where its verdicts stop meaning what they say.
+    do is know where its verdicts stop meaning what they say, and, where the program's own code
+    makes the call, bound the value with a stand-in.
+
+    A bound is often the better remedy even where inlining is possible: platform code such as stake
+    activation loops once per epoch over a sysvar read by syscall, in ``f64``, and analyzed it
+    leaves a rule vacuous on the unwinding assertion.
     """
     if not externals:
         return None
@@ -495,9 +500,15 @@ def _externals_note(externals: Sequence[str]) -> str | None:
         "An external call returns an arbitrary value and writes nothing else, so any state it "
         "would change keeps its old value, and one that returns its result through memory may "
         "never succeed, which leaves the code after it unreachable. None of this shows in a "
-        "verdict. If a rule's property depends on what one of these does, say so in the rule's "
-        "commentary, drive the program's own code below the call, or skip the property. You "
-        "cannot add inlining directives."
+        "verdict. You cannot add inlining directives.\n"
+        "If a rule's property depends on the value one of these computes, and the program's own "
+        "code makes the call, you can bound the value instead of losing it. Ask `code_editor` to "
+        "extract the call into a function of its own (`extract_function`), then to replace that "
+        "function with a stand-in you write (`mock_fn`) that returns `nondet()` values constrained "
+        "by what the real function guarantees, such as a result no larger than its input. Use "
+        "only bounds the real function provably keeps: a tighter one can pass a rule the program "
+        "fails. Name the stand-in in `rule_subjects`. Otherwise say so in the rule's commentary, "
+        "drive the program's own code below the call, or skip the property."
     )
 
 
