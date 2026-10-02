@@ -31,13 +31,20 @@ in-memory overlay, which is both more accurate — one unit's diff stops showing
 lines — and available after the tree has been deleted.
 """
 
+import asyncio
 import dataclasses
 import functools
 import logging
+import os
 from pathlib import PurePath
 from pathlib import Path, PurePosixPath
 
-from graphcore.tools.vfs import DictBackend, DirBackend, PersistentMaterializer
+from graphcore.tools.vfs import (
+    MATERIALIZED_MANIFEST,
+    DictBackend,
+    DirBackend,
+    PersistentMaterializer,
+)
 
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.munge import (
@@ -252,15 +259,54 @@ class SharedTree:
             global_exclude=_NOT_MATERIALIZED,
         )
 
-    async def materialize(self) -> None:
-        """Put the project into the tree, if this is the first time anyone has.
+    async def materialize(self) -> tuple[str, ...]:
+        """Put the project into the tree, and return the project files a reused tree had stale.
 
         Idempotent by way of the materializer's manifest rather than by an existence check: a tree
         that is already there is one the base copy skips, and one that is half-written is one it
         completes.
+
+        A tree a previous run left is brought up to date with the project first, because the base
+        copy never runs again: a source edit, or the scaffold's rewrite of a file it generates,
+        reaches the build only this way. Once per run and content-compared, so an unchanged project
+        rewrites nothing and cargo rebuilds nothing. A file deleted from the project stays in the
+        tree.
         """
         self.root.parent.mkdir(parents=True, exist_ok=True)
+        stale = (
+            await asyncio.to_thread(self._resync_base)
+            if (self.root / MATERIALIZED_MANIFEST).is_file()
+            else ()
+        )
         await self._materializer.dump_to(self.root)
+        return stale
+
+    def _resync_base(self) -> tuple[str, ...]:
+        """Copy over each project file whose bytes differ from the tree's. Returns those paths.
+
+        The overlay's paths are skipped: the dump that follows writes them. A file the previous
+        run munged is not in the overlay yet, so it is reset to the project's copy here and the
+        first reconcile munges it again, which costs that one crate a rebuild on resume.
+        """
+        stale: list[str] = []
+        for directory, subdirs, files in os.walk(self.pristine):
+            here = Path(directory).relative_to(self.pristine)
+            subdirs[:] = [d for d in subdirs if not _NOT_MATERIALIZED(here / d)]
+            for name in files:
+                relative = here / name
+                key = relative.as_posix()
+                if key in self._derived.files:
+                    continue
+                source, dest = self.pristine / relative, self.root / relative
+                if source.is_symlink() or not source.is_file():
+                    continue
+                content = source.read_bytes()
+                if dest.is_file() and dest.read_bytes() == content:
+                    continue
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(content)
+                stale.append(key)
+        return tuple(stale)
 
     def adopt(self, relative: Path | str, *more: Path | str) -> tuple[str, ...]:
         """Re-sync named files from the pristine project into the tree. Returns what changed.

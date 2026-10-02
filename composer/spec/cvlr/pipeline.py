@@ -371,7 +371,13 @@ class CvlrStagedFormalizer(StagedFormalizer[GeneratedHarness, SolanaComponentIns
 
         tree = SharedTree(pristine=project, root=project / WORK_DIR / BUILD_DIR)
         adopted = tree.adopt(manifest, *(p.relative_to(project) for p in declared))
-        await tree.materialize()
+        stale = await tree.materialize()
+        if stale:
+            _log.info(
+                "cvlr: the reused working tree was behind the project in %d file(s): %s",
+                len(stale),
+                ", ".join(stale[:20]) + (" …" if len(stale) > 20 else ""),
+            )
         # A reused tree predates the two declarations above, so a resumed run whose component set
         # changed would build against a manifest missing a unit's feature and a `mod.rs` missing its
         # module. Content-compared, so an unchanged set costs nothing.
