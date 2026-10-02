@@ -809,7 +809,7 @@ def plan_scaffold(
     relative = _project_relative(package.root, workspace.root)
     plan = _PlanBuilder(workspace.root)
     inherit = plan.read(Path("Cargo.toml")).workspace is not None
-    dialect = dialect_for(workspace, reference)
+    dialect = dialect_for(workspace, package, reference)
 
     _plan_workspace_manifest(reference, plan)
     _plan_harness(package, relative, dialect, plan)
