@@ -161,6 +161,24 @@ def test_an_older_cargo_that_reports_only_kind_still_names_the_lib_target():
     assert lend.lib.builds_shared_object
 
 
+def test_the_linked_graph_follows_normal_dependencies_only():
+    """A dev or build dependency is never linked into the library, and neither is what another
+    member depends on."""
+    lend, root, cvlr, log = (p["id"] for p in _METADATA["packages"])
+    payload = json.loads(json.dumps(_METADATA))
+    payload["resolve"] = {
+        "nodes": [
+            {"id": lend, "deps": [{"pkg": cvlr, "dep_kinds": [{"kind": None}]}]},
+            {"id": cvlr, "deps": [{"pkg": log, "dep_kinds": [{"kind": "build"}]}]},
+            {"id": root, "deps": [{"pkg": log, "dep_kinds": [{"kind": None}]}]},
+        ]
+    }
+    workspace = _workspace(payload)
+    lending = workspace.member("example-lending")
+    assert lending is not None
+    assert [p.name for p in workspace.linked_into(lending)] == ["example-lending", "cvlr"]
+
+
 def test_a_git_source_is_split_into_repository_reference_and_commit():
     source = GitSource.parse(
         "git+https://github.com/Certora/anchor.git?branch=certora-v0.31.1#3ebe7595"

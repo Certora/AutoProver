@@ -117,6 +117,7 @@ def _project(
         target_directory=root / "target",
         members=(package,),
         packages=tuple(resolved),
+        links={package: tuple(resolved[1:])},
     )
     return workspace, package
 
@@ -351,9 +352,37 @@ def test_an_older_platform_copy_beside_the_reference_one_is_refused(tmp_path):
     workspace, package = _project(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
     (current,) = workspace.resolved("solana-program")
     older = replace(current, version="1.18.26")
-    workspace = replace(workspace, packages=(*workspace.packages, older))
+    workspace = replace(
+        workspace,
+        packages=(*workspace.packages, older),
+        links={package: (*workspace.links[package], older)},
+    )
     plan = plan_scaffold(workspace, package, SOLANA)
     assert any("1.18.26" in b.problem for b in plan.blocked)
+
+
+def test_a_platform_copy_the_program_does_not_link_is_not_refused(tmp_path):
+    # solana-program-stake: the program is on 2.x, and a sibling `interface` member on 3.x pulls
+    # solana-account-info 3.0.0 into the lockfile through its dev-dependencies. That copy is never
+    # compiled with the harness.
+    workspace, package = _project(
+        tmp_path,
+        manifest=STANDALONE,
+        workspace_manifest=STANDALONE,
+        platform="2.2.1",
+        platform_crate="solana-account-info",
+    )
+    (current,) = workspace.resolved("solana-account-info")
+    sibling = replace(package, name="interface", manifest_path=tmp_path / "interface" / "Cargo.toml")
+    newer = replace(current, version="3.0.0")
+    workspace = replace(
+        workspace,
+        members=(package, sibling),
+        packages=(*workspace.packages, sibling, newer),
+        links={**workspace.links, sibling: (newer,)},
+    )
+    plan = plan_scaffold(workspace, package, SOLANA)
+    assert not plan.blocked
 
 
 ON_AN_OLDER_LINE = STANDALONE.replace(
