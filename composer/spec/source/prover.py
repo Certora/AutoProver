@@ -161,9 +161,15 @@ class NagMarker(TypedDict):
 type ProverHistoryItem = Annotated[ProverRunLog | NagMarker, Discriminator("sort")]
 
 def _checked_rules(selection: RuleSelection, declared: Iterable[str]) -> list[str]:
-    """The ``declared`` rules a run under ``selection`` checks. ``InheritRules`` counts as every
-    rule: the source pipeline's base confs select none of their own. Names match exactly, which
-    holds because ``submit_buffer`` admits only names the buffer declares, never patterns."""
+    """The ``declared`` rules a run recorded by this module under ``selection`` checks.
+
+    Not a general property of a ``RuleSelection``. It holds only for this module's runs, under
+    two assumptions:
+
+    - ``InheritRules`` counts as every rule, because the source pipeline's base confs select
+      none of their own. Elsewhere, an inherited selection is whatever the base conf selects.
+    - Names match exactly, because ``submit_buffer`` admits only names the buffer declares.
+      ``SelectRules`` and ``ExcludeRules`` names are otherwise globs."""
     match selection:
         case InheritRules():
             return list(declared)

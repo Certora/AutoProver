@@ -462,7 +462,7 @@ class TestBufferCoverage:
     async def test_buffer_run_is_logged_in_history(self, certora_prover: ProverMock):
         # A whole-buffer run is logged in prover_history against the buffer's current state, with its
         # declared rules and results — the buffer analogue of the old include/exclude conf-history check
-        # (rules is None because a buffer is verified whole, not rule-scoped).
+        # (rules is InheritRules() because a buffer is verified whole, not rule-scoped).
         history = await _scenario(
             certora_prover, _buffers(b=_buf("b", "a", "b")),
             b=_report(a=True, b=True),
