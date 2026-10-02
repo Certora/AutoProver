@@ -325,6 +325,14 @@ def test_the_author_is_told_which_functions_were_external_and_what_that_means():
     assert "writes nothing else" in note and "cannot add inlining directives" in note
 
 
+def test_the_author_is_shown_how_to_bound_an_external_value_with_munges_it_has():
+    """Without this the note's only remedies were commentary and skips, so a property over the stake
+    program's activation math, which an author can bound with two munges, went unchecked."""
+    note = _externals_note(("solana_stake_interface::state::Delegation::stake_activating_and_deactivating",))
+    assert note is not None
+    assert "`extract_function`" in note and "`mock_fn`" in note and "`rule_subjects`" in note
+
+
 def test_a_rule_marked_expected_to_fail_that_verifies_is_reported():
     # The more interesting direction: either the defect is not there or the rule does not test for
     # it, and both want the author's attention before the run is called finished.
