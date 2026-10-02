@@ -354,7 +354,9 @@ def _generation(version: str) -> str:
     return version.split(".", maxsplit=1)[0]
 
 
-def _check_platform(workspace: Workspace, reference: ChainReference, plan: _PlanBuilder) -> None:
+def _check_platform(
+    workspace: Workspace, package: CratePackage, reference: ChainReference, plan: _PlanBuilder
+) -> None:
     """Refuse to pin a CVLR release the project's platform generation cannot use.
 
     A target on ``solana-program`` 1.18 given ``cvlr-solana`` 0.5.0 does not warn. It fails to
@@ -367,11 +369,13 @@ def _check_platform(workspace: Workspace, reference: ChainReference, plan: _Plan
     The first witness the project resolves decides. Later ones are not consulted. The list is
     most-specific first because a target on a newer generation resolves only the specific crate.
     Falling through to a broader witness after a specific one has answered would undo that order.
-    Every copy of that witness has to be on the generation: one that is not still meets CVLR's
-    types wherever its dependents hand an account to a helper.
+    Every copy of that witness linked into ``package`` has to be on the generation: one that is not
+    still meets CVLR's types wherever its dependents hand an account to a helper. A copy only
+    another member links, or only a dev-dependency pulls in, is never compiled with the harness.
     """
+    linked = workspace.linked_into(package)
     for witness in reference.platform.witnesses:
-        copies = workspace.resolved(witness.name)
+        copies = [c for c in linked if c.name == witness.name]
         if not copies:
             continue
         off = [c.version for c in copies if _generation(c.version) != _generation(witness.line)]
@@ -816,7 +820,7 @@ def plan_scaffold(
     # Unconditional, both of them: the scaffold always writes the reference-set pin now, so the
     # reference set's platform generation always describes what will be built.
     _check_pins(workspace, package, reference, plan)
-    _check_platform(workspace, reference, plan)
+    _check_platform(workspace, package, reference, plan)
     return plan.build(package.name, dialect)
 
 

@@ -17,7 +17,8 @@ dependency graph, which needs a warm cache or the network; see
 import asyncio
 import shutil
 import subprocess
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 
@@ -97,6 +98,26 @@ class CargoPackageJson(_CargoJson):
     source: str | None = None
 
 
+class CargoDepKindJson(_CargoJson):
+    #: ``None`` for a normal dependency; otherwise ``"dev"`` or ``"build"``.
+    kind: str | None = None
+
+
+class CargoNodeDepJson(_CargoJson):
+    pkg: str
+    #: Cargos before 1.41 omit it. Read as normal, so a dependency is never dropped from a graph.
+    dep_kinds: tuple[CargoDepKindJson, ...] = (CargoDepKindJson(),)
+
+
+class CargoNodeJson(_CargoJson):
+    id: str
+    deps: tuple[CargoNodeDepJson, ...] = ()
+
+
+class CargoResolveJson(_CargoJson):
+    nodes: tuple[CargoNodeJson, ...] = ()
+
+
 class CargoMetadataJson(_CargoJson):
     """The parts of ``cargo metadata --format-version 1`` output this module reads."""
 
@@ -104,6 +125,7 @@ class CargoMetadataJson(_CargoJson):
     workspace_root: Path
     workspace_members: tuple[str, ...] = ()
     target_directory: Path | None = None
+    resolve: CargoResolveJson | None = None
 
 
 @dataclass(frozen=True)
@@ -252,6 +274,9 @@ class Workspace:
     members: tuple[CratePackage, ...]
     #: Every package the graph resolves, members included.
     packages: tuple[CratePackage, ...]
+    #: Each package's normal dependencies, as the resolved graph links them. Dev and build
+    #: dependencies are left out: neither is linked into the package's library.
+    links: Mapping[CratePackage, tuple[CratePackage, ...]] = field(default_factory=dict)
 
     @classmethod
     async def read(
@@ -310,6 +335,22 @@ class Workspace:
         """
         return tuple(p for p in self.packages if p.name == name)
 
+    def linked_into(self, package: CratePackage) -> tuple[CratePackage, ...]:
+        """``package`` and every package its library links, transitively.
+
+        Narrower than :attr:`packages`, which also holds what other members and every dev and
+        build dependency resolve: a copy that is only a sibling member's dev-dependency is never
+        compiled into this package, and cannot meet its types.
+        """
+        seen = {package: None}
+        frontier = [package]
+        while frontier:
+            for dep in self.links.get(frontier.pop(), ()):
+                if dep not in seen:
+                    seen[dep] = None
+                    frontier.append(dep)
+        return tuple(seen)
+
     def family(self, prefix: str) -> tuple[CratePackage, ...]:
         """Every resolved package named ``prefix`` or ``prefix-*``.
 
@@ -345,11 +386,22 @@ def parse_metadata(payload: CargoMetadataJson) -> Workspace:
     """Build a :class:`Workspace` from validated ``cargo metadata --format-version 1`` output."""
     by_id = {raw.id: _package(raw) for raw in payload.packages}
     root = payload.workspace_root
+    nodes = payload.resolve.nodes if payload.resolve is not None else ()
+    links = {
+        by_id[node.id]: tuple(
+            by_id[dep.pkg]
+            for dep in node.deps
+            if dep.pkg in by_id and any(k.kind is None for k in dep.dep_kinds)
+        )
+        for node in nodes
+        if node.id in by_id
+    }
     return Workspace(
         root=root,
         target_directory=payload.target_directory or root / "target",
         members=tuple(by_id[i] for i in payload.workspace_members if i in by_id),
         packages=tuple(by_id.values()),
+        links=links,
     )
 
 
