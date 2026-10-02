@@ -701,6 +701,14 @@ def stuck_rule_nag(
     )
 
 
+def component_slug(spec_stem: str | None, main_contract: str) -> str:
+    """The directory a component's buffers are materialized under (``certora/specs/<slug>/``) and the
+    label prefix of its prover runs: the seeded spec stem, or the main contract, with the
+    ``autospec_`` prefix stripped. One definition, so the author's own runs and a plugin's runs on the
+    author's buffers land in the same place and the buffers' relative imports resolve identically."""
+    return (spec_stem or main_contract).removeprefix("autospec_")
+
+
 @contextmanager
 def materialize_buffers(
     working_dir: str, buffers: Mapping[str, NamedBuffer], slug: str
@@ -729,18 +737,22 @@ def buffer_conf(
     spec_path: str,
     buffer_name: str,
     conf_dir: Path,
-    msg: str,
+    msg: str = "",
     selection: RuleSelectionRecord | None = None,
+    rules: RuleSelection | None = None,
+    **config_extra,
 ) -> Iterator[tuple[str, dict]]:
     """Build a conf verifying an already-materialized buffer spec at ``spec_path`` (its imports resolve
-    to the sibling ``.spec`` files written by :func:`materialize_buffers`). ``selection`` restricts the
-    run to a subset of the buffer's rules. Yields (conf_path, config)."""
+    to the sibling ``.spec`` files written by :func:`materialize_buffers`). The run's scope is
+    ``selection`` (a recorded subset of the buffer's rules, as submit_buffer stripes them) or ``rules``
+    (a scope already built by :func:`rule_selection`); ``config_extra`` entries override the conf for
+    this run only, the way :func:`setup_prover_config_in` takes them. Yields (conf_path, config)."""
     cfg = prover_config_overlay(
         config,
         main_contract=main_contract,
         verify_target=f"{main_contract}:{spec_path}",
-        extra={"msg": msg},
-        rules=_scope_of(selection),
+        extra={"msg": msg, **config_extra},
+        rules=rules if rules is not None else _scope_of(selection),
     )
     with temp_certora_file(
         root=working_dir,
@@ -848,9 +860,8 @@ def get_prover_tool(
     stamper = make_validation_stamper(VALIDATION_KEY)
 
     def component_of(state: StateWithSkips) -> str:
-        """The label prefix for this generation's prover runs: its seeded spec stem, or the main
-        contract, with the ``autospec_`` prefix stripped."""
-        return (state.get("spec_stem") or main_contract).removeprefix("autospec_")
+        """The label prefix for this generation's prover runs (:func:`component_slug`)."""
+        return component_slug(state.get("spec_stem"), main_contract)
 
     # ---- Multi-buffer async submit / collect -------------------------------------------------
     # The agent submits each run-target buffer as an independent background job and consumes results
