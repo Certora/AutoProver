@@ -326,6 +326,37 @@ def test_a_manifest_with_no_features_table_gets_one(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_a_reused_tree_picks_up_a_project_file_changed_since_it_was_built(tmp_path: Path):
+    """The base copy runs once, so before this a reused tree kept the previous run's copy of every
+    project file: a mutated program was verified as the original, and on solana-program-stake a
+    regenerated tuning composite never reached the build."""
+    tree = await _tree(tmp_path)
+    envs = tree.pristine / "programs/p/src/certora/envs"
+    envs.mkdir(parents=True)
+    (envs / "cvlr_inlining.txt").write_text("#[inline(never)] ^old$\n")
+    mutated = _SOURCE.replace("Ok(0)", "Ok(1)")
+    (tree.pristine / _RESERVE).write_text(mutated)
+
+    resumed = SharedTree(pristine=tree.pristine, root=tree.root)
+    stale = await resumed.materialize()
+
+    assert set(stale) == {_RESERVE, "programs/p/src/certora/envs/cvlr_inlining.txt"}
+    assert (tree.root / _RESERVE).read_text() == mutated
+    assert (tree.root / "programs/p/src/certora/envs/cvlr_inlining.txt").is_file()
+
+
+@pytest.mark.asyncio
+async def test_an_unchanged_project_rewrites_nothing_in_a_reused_tree(tmp_path: Path):
+    tree = await _tree(tmp_path)
+    before = (tree.root / _RESERVE).stat().st_mtime_ns
+
+    stale = await SharedTree(pristine=tree.pristine, root=tree.root).materialize()
+
+    assert stale == ()
+    assert (tree.root / _RESERVE).stat().st_mtime_ns == before
+
+
+@pytest.mark.asyncio
 async def test_a_reused_tree_picks_up_a_changed_unit_set(tmp_path: Path):
     """`mod.rs` and the manifest are written into the *project* before the tree is copied, because
     they are deliverables and a function of the job list rather than of any unit's state. A resumed
