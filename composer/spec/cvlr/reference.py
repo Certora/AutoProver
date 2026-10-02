@@ -99,14 +99,16 @@ class NamespacePattern:
     rewriting it would name a symbol that does not exist. The literal ``.*`` is what marks a
     blanket.
 
-    It is also unconditional. A :class:`PathAlias` is dropped unless the target resolves the crate
-    it names. This replacement matches crate names, so it covers the canonical spelling and stays
-    correct on a target that predates the split, and it does not go stale when another crate is
-    split out.
+    It is widened to the crates of ``family`` the target links from outside the project, named one
+    by one, not to a pattern over crate names. A project's own crates can be in the family too
+    (``solana-stake-program`` is a ``solana-*`` crate), and a pattern over the family's names would
+    make the program under verification external.
     """
 
     canonical: str
-    actual: str
+    #: The crate-name prefix of the family, as :meth:`~composer.cargo.metadata.Workspace.family`
+    #: takes it.
+    family: str
 
 
 @dataclass(frozen=True)
@@ -330,7 +332,7 @@ SOLANA = ChainReference(
             #
             # The blanket that sets the platform layer's never-inline default. ``solana_program::.*``
             # only matches what stayed in the monolith. The replacement covers the split crates too.
-            NamespacePattern("solana_program::.*", "solana_[a-z0-9_]*::.*"),
+            NamespacePattern("solana_program::.*", family="solana"),
         ),
     ),
 )

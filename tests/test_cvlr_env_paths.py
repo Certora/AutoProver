@@ -11,6 +11,7 @@ alias whose path no longer appears still looks like coverage.
 
 from pathlib import Path
 
+from dataclasses import replace
 import pytest
 
 from composer.cargo.metadata import CratePackage, RegistrySource, Workspace
@@ -37,43 +38,61 @@ SPLIT_CRATES = (
     "solana-sdk-ids",
     "solana-cpi",
     "solana-instruction",
+    # No alias names these. The vault resolves them, and its symbol table below has symbols in
+    # them, which the never-inline blanket has to reach.
+    "solana-program-entrypoint",
+    "solana-sha256-hasher",
+    "solana-system-interface",
 )
 
 
-def _workspace(*resolved: str) -> Workspace:
-    """A ``Workspace`` that resolves exactly ``resolved``, and nothing else.
+#: The target the dialect is built for. It links every crate a test's workspace resolves.
+PROGRAM = CratePackage(
+    name="prog",
+    version="0.1.0",
+    manifest_path=Path("/nonexistent/prog/Cargo.toml"),
+    lib=None,
+    features=(),
+    source=None,
+)
 
-    Only the resolved-package list matters here: the dialect reads which crates exist and nothing
-    about the files on disk."""
-    packages = tuple(
-        CratePackage(
-            name=name,
-            version="2.3.0",
-            manifest_path=Path("/nonexistent") / name / "Cargo.toml",
-            lib=None,
-            features=(),
-            source=RegistrySource("registry+https://github.com/rust-lang/crates.io-index"),
-        )
-        for name in resolved
+
+def _registry(name: str) -> CratePackage:
+    return CratePackage(
+        name=name,
+        version="2.3.0",
+        manifest_path=Path("/nonexistent") / name / "Cargo.toml",
+        lib=None,
+        features=(),
+        source=RegistrySource("registry+https://github.com/rust-lang/crates.io-index"),
     )
+
+
+def _workspace(*resolved: str) -> Workspace:
+    """A ``Workspace`` whose :data:`PROGRAM` links exactly ``resolved``, and nothing else.
+
+    Only the graph matters here: the dialect reads which crates the program links and nothing
+    about the files on disk."""
+    packages = tuple(_registry(name) for name in resolved)
     return Workspace(
         root=Path("/nonexistent"),
         target_directory=Path("/nonexistent/target"),
-        members=(),
-        packages=packages,
+        members=(PROGRAM,),
+        packages=(PROGRAM, *packages),
+        links={PROGRAM: packages},
     )
 
 
 @pytest.fixture
 def split() -> PathDialect:
     """The dialect a post-split target gets."""
-    return dialect_for(_workspace("solana-program", *SPLIT_CRATES), SOLANA)
+    return dialect_for(_workspace("solana-program", *SPLIT_CRATES), PROGRAM, SOLANA)
 
 
 @pytest.fixture
 def monolithic() -> PathDialect:
     """The dialect a 1.18 target gets, where the canonical paths are already the right ones."""
-    return dialect_for(_workspace("solana-program"), SOLANA)
+    return dialect_for(_workspace("solana-program"), PROGRAM, SOLANA)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -177,11 +196,35 @@ def test_the_blanket_is_widened_even_on_a_target_that_predates_the_split(
 ) -> None:
     """Unlike a :class:`PathAlias`, the widened blanket is a superset of what it replaces, so it
     is correct on either generation and needs no version check. It is a pattern over crate
-    names, not a list of crates."""
+    names the crates the target resolves, and a 1.18 target resolves the monolith."""
     import re
 
     (widened,) = monolithic.spellings("^solana_program::.*$")
     assert re.search(widened, "solana_program::program::invoke_signed")
+
+
+def test_the_blanket_does_not_reach_the_projects_own_solana_named_crate() -> None:
+    """solana-program-stake's program crate is ``solana-stake-program``. A blanket over the
+    family's names made every handler external, so the Prover analyzed none of the program.
+
+    Its graph also resolves a registry crate of the same name, Agave's native stake program, which
+    ``solana-program-test`` pulls in as a dev-dependency. That one is in the family and not local,
+    so only what the program links can tell the two apart."""
+    import re
+
+    program = replace(PROGRAM, name="solana-stake-program")
+    platform = tuple(_registry(name) for name in ("solana-program", *SPLIT_CRATES))
+    agave = _registry("solana-stake-program")
+    workspace = Workspace(
+        root=Path("/nonexistent"),
+        target_directory=Path("/nonexistent/target"),
+        members=(program,),
+        packages=(program, *platform, agave),
+        links={program: platform},
+    )
+    (widened,) = dialect_for(workspace, program, SOLANA).spellings("^solana_program::.*$")
+    assert re.search(widened, "solana_account_info::AccountInfo::lamports")
+    assert not re.search(widened, "solana_stake_program::processor::Processor::process")
 
 
 def test_a_path_that_merely_starts_with_the_split_crate_is_not_widened(
@@ -213,7 +256,7 @@ def test_a_target_without_the_split_crates_keeps_the_canonical_spelling(
 
 
 def test_a_chain_with_no_split_gets_a_dialect_that_changes_nothing() -> None:
-    dialect = dialect_for(_workspace("soroban-sdk"), SOROBAN)
+    dialect = dialect_for(_workspace("soroban-sdk"), PROGRAM, SOROBAN)
     assert dialect.aliases == ()
     assert dialect.spellings("^soroban_sdk::Env::storage$") == ("^soroban_sdk::Env::storage$",)
 

@@ -23,7 +23,7 @@ import re
 from dataclasses import dataclass
 from collections.abc import Iterable
 
-from composer.cargo.metadata import Workspace
+from composer.cargo.metadata import CratePackage, Workspace
 from composer.spec.cvlr.reference import ChainReference, NamespacePattern, PathAlias
 
 _log = logging.getLogger(__name__)
@@ -38,6 +38,11 @@ _TYPE_LINE = re.compile(r"^#\[type\(.*\)\]\s*$")
 
 def _crate_of(path: str) -> str:
     return path.split("::", 1)[0].replace("_", "-")
+
+
+def _symbol_prefix(package: CratePackage) -> str:
+    """The first segment of the demangled symbols ``package`` defines."""
+    return package.lib.artifact_stem if package.lib is not None else package.name.replace("-", "_")
 
 
 @dataclass(frozen=True)
@@ -123,12 +128,19 @@ def _unique(patterns: Iterable[str]) -> list[str]:
     return list(dict.fromkeys(patterns))
 
 
-def dialect_for(workspace: Workspace, reference: ChainReference) -> PathDialect:
-    """The spelling ``workspace`` uses for the platform generation ``reference`` names.
+def dialect_for(
+    workspace: Workspace, package: CratePackage, reference: ChainReference
+) -> PathDialect:
+    """The spelling ``package`` uses for the platform generation ``reference`` names.
 
     Aliases whose crate the target does not resolve are dropped. On an older generation this
     returns a dialect that changes nothing.
+
+    A blanket is widened to the crates ``package`` links. The whole graph is too wide: it can hold
+    a registry crate with the same name as the program, such as Agave's native
+    ``solana-stake-program`` beside the BPF one, and the two define symbols with the same prefix.
     """
+    linked = workspace.linked_into(package)
     aliases: list[PathAlias] = []
     for alias in reference.platform.path_aliases:
         match alias:
@@ -136,8 +148,16 @@ def dialect_for(workspace: Workspace, reference: ChainReference) -> PathDialect:
                 usable = tuple(a for a in actual if workspace.resolved(_crate_of(a)))
                 if usable:
                     aliases.append(PathAlias(canonical, usable))
-            case NamespacePattern(canonical=canonical, actual=actual):
-                aliases.append(PathAlias(canonical, (actual,)))
+            case NamespacePattern(canonical=canonical, family=family):
+                crates = sorted(
+                    {
+                        _symbol_prefix(p)
+                        for p in workspace.family(family)
+                        if not p.is_local and p in linked
+                    }
+                )
+                if crates:
+                    aliases.append(PathAlias(canonical, (f"({'|'.join(crates)})::.*",)))
     dialect = PathDialect(tuple(aliases))
     _log.debug(
         "tuning-path dialect for %s: %d of %d aliases usable",
