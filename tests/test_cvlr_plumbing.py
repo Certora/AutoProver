@@ -6,7 +6,10 @@ submission adds.
 """
 
 import json
+import stat
 import subprocess
+import sys
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -32,6 +35,21 @@ from composer.prover import conf as prover_conf
 from composer.spec.cvlr import conf as cvlr_conf
 from composer.spec.cvlr.crates import Absent, CvlrSources
 from composer.spec.cvlr.reference import SOLANA
+from composer.cargo.sbf import (
+    BUILD_TIMEOUT_ENV,
+    DEFAULT_BUILD_TIMEOUT_S,
+    MalformedBuildManifest,
+    Built,
+    build_command_path,
+    parse_manifest as parse_build_manifest,
+    platform_tools_cargos,
+    resolved_build_timeout_s,
+    SbfBuild,
+    write_build_script,
+)
+from composer.cargo.session import CargoSession, CompileFailed
+from composer.sandbox.config import SandboxConfig
+from composer.spec.cvlr.prover import Submission, write_submission
 
 
 # --------------------------------------------------------------------------------------------
@@ -400,12 +418,12 @@ def test_a_conf_change_invalidates_a_stamp_earned_before_it():
 def _submission(**kwargs) -> dict:
     return cvlr_conf.solana_conf(
         cvlr_conf.TunableConf(),
-        cvlr_conf.RunOverlay(build_script=Path("/w/.certora_build/confined_build.py"), **kwargs),
+        cvlr_conf.RunOverlay(build_script=Path("/submission/confined_build.py"), **kwargs),
     )
 
 
 def test_the_run_names_the_build_script():
-    assert _submission()["build_script"] == "/w/.certora_build/confined_build.py"
+    assert _submission()["build_script"] == "/submission/confined_build.py"
 
 
 def test_the_message_is_reduced_to_what_the_prover_accepts():
@@ -430,3 +448,403 @@ def test_the_env_files_are_left_for_the_build_manifest_to_supply():
 def test_a_units_summary_file_is_named_when_the_run_passes_one():
     conf = _submission(summaries=(Path("envs/cvlr_summaries_vault.txt"),))
     assert conf["solana_summaries"] == ["envs/cvlr_summaries_vault.txt"]
+
+
+def test_the_build_warms_with_the_cargo_it_will_actually_run(tmp_path):
+    """Both platform-tools flavours, when the ``cargo`` binary is present.
+
+    The tool picks which one runs.
+    """
+    for flavour in ("platform-tools-certora", "platform-tools"):
+        binary = tmp_path / "v1.43" / flavour / "rust" / "bin" / "cargo"
+        binary.parent.mkdir(parents=True)
+        binary.write_text("#!/bin/sh\n")
+
+    found = platform_tools_cargos("v1.43", root=tmp_path)
+
+    assert [p.parent.parent.parent.name for p in found] == [
+        "platform-tools-certora", "platform-tools"
+    ], "both flavours, when the cargo binary is present"
+
+
+def test_a_version_with_no_toolchain_yields_nothing_to_warm(tmp_path):
+    """No binaries means nothing to fetch.
+
+    An unconfined build can still fetch. A confined build already fails in
+    :class:`composer.cargo.sbf.PlatformToolsMissing` when the toolchain
+    directory is missing.
+    """
+    assert platform_tools_cargos("v1.43", root=tmp_path) == ()
+
+
+def test_a_directory_without_the_binary_is_not_offered(tmp_path):
+    """A toolchain directory with no ``cargo`` binary is skipped.
+
+    Fetching that path would fail, and the failure would look like a problem
+    in the project.
+    """
+    (tmp_path / "v1.43" / "platform-tools" / "rust" / "bin").mkdir(parents=True)
+
+    assert platform_tools_cargos("v1.43", root=tmp_path) == ()
+
+
+def test_warming_is_tracked_per_binary_not_per_session(tmp_path):
+    """Two cargos do not share a git cache. One of them being warm says nothing about the other."""
+    session = CargoSession(workdir=tmp_path, sandbox=SandboxConfig())
+
+    assert not session.already_warmed("/tools/v1.43/rust/bin/cargo")
+    session._warmed.add("/tools/v1.43/rust/bin/cargo")
+
+    assert session.already_warmed("/tools/v1.43/rust/bin/cargo")
+    assert not session.already_warmed("cargo"), "the host cargo is a separate cache"
+
+
+def test_the_certora_feature_is_the_default():
+    assert Submission(manifest_path=Path("/w/C.toml"), stem="unit", msg="unit").features == ("certora",)
+
+
+def _build(**overrides) -> SbfBuild:
+    return replace(
+        SbfBuild(manifest_path=Path("/w/Cargo.toml")),
+        **overrides,
+    )
+
+
+def test_the_build_never_touches_rustup():
+    """``cargo certora-sbf`` links a rustup toolchain on each build and writes
+    ``RUSTUP_HOME``. That directory is read-only under confinement, and the
+    failure names neither rustup nor the sandbox."""
+    assert "--no-rustup" in _build().argv()
+
+
+class TestResolvedBuildTimeout:
+    def test_unset_returns_default(self, monkeypatch):
+        monkeypatch.delenv(BUILD_TIMEOUT_ENV, raising=False)
+        assert resolved_build_timeout_s() == DEFAULT_BUILD_TIMEOUT_S
+
+    def test_integer_env_value_used(self, monkeypatch):
+        monkeypatch.setenv(BUILD_TIMEOUT_ENV, "600")
+        assert resolved_build_timeout_s() == 600
+
+    def test_non_integer_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setenv(BUILD_TIMEOUT_ENV, "not-a-number")
+        assert resolved_build_timeout_s() == DEFAULT_BUILD_TIMEOUT_S
+
+
+def test_features_reach_the_build_as_one_space_separated_value():
+    argv = _build(features=("certora", "mocks")).argv()
+    assert argv[argv.index("--features") + 1] == "certora mocks"
+
+
+def test_a_manifest_missing_what_the_prover_requires_is_rejected_here():
+    """A missing key fails here. At submission time the same gap is a
+    ``CertoraUserInputError`` from a run that has already started."""
+    with pytest.raises(MalformedBuildManifest) as rejected:
+        parse_build_manifest(json.dumps({"success": True, "project_directory": "/w", "sources": []}))
+    assert "executables" in str(rejected.value.__cause__)
+
+
+def test_a_build_that_reports_failure_is_not_read_as_a_manifest():
+    with pytest.raises(MalformedBuildManifest) as rejected:
+        parse_build_manifest(
+            json.dumps(
+                {"success": False, "project_directory": "/w", "sources": [], "executables": "x.so"}
+            )
+        )
+    assert "success" in str(rejected.value.__cause__)
+
+
+def test_a_build_that_printed_no_json_is_rejected():
+    with pytest.raises(MalformedBuildManifest) as rejected:
+        parse_build_manifest("error: could not compile `first_example`")
+    assert "Invalid JSON" in str(rejected.value.__cause__)
+
+
+_VALID = {"success": True, "project_directory": "/w", "sources": [], "executables": "x.so"}
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [("executables", ["x.so"]), ("sources", "p/src/lib.rs"), ("solana_inlining", 3)],
+)
+def test_a_manifest_field_of_the_wrong_type_is_rejected_here(field, value):
+    with pytest.raises(MalformedBuildManifest) as rejected:
+        parse_build_manifest(json.dumps({**_VALID, field: value}))
+    assert field in str(rejected.value.__cause__)
+
+
+def test_a_single_env_file_is_read_as_one_path_the_way_the_prover_reads_it():
+    manifest = parse_build_manifest(
+        json.dumps({**_VALID, "solana_inlining": "envs/inlining.txt", "solana_summaries": ""})
+    )
+    assert manifest.solana_inlining == ("envs/inlining.txt",)
+    assert manifest.solana_summaries == ()
+
+
+def test_the_manifest_keeps_cargos_own_paths():
+    manifest = parse_build_manifest(
+        json.dumps(
+            {
+                "success": True,
+                "project_directory": "/w",
+                "sources": ["p/Cargo.toml", "p/src/**/*.rs"],
+                "executables": "target/sbf-solana-solana/release/p.so",
+                "solana_inlining": ["p/../envs/cvlr_inlining_core.txt"],
+            }
+        )
+    )
+    assert manifest.artifact == Path("/w/target/sbf-solana-solana/release/p.so")
+    assert manifest.solana_inlining == ("p/../envs/cvlr_inlining_core.txt",)
+
+
+def _unconfined(tmp_path: Path) -> CargoSession:
+    """A session in ``tmp_path/work``. ``provider="none"`` makes the build
+    script a passthrough, so writing the conf needs no toolchain."""
+    workdir = tmp_path / "work"
+    workdir.mkdir(exist_ok=True)
+    return CargoSession(workdir=workdir, sandbox=SandboxConfig(provider="none"))
+
+
+def _outside(tmp_path: Path) -> Path:
+    """Where a submission's build script and conf go: beside the workdir, not in it."""
+    into = tmp_path / "submission"
+    into.mkdir(exist_ok=True)
+    return into
+
+
+@pytest.mark.asyncio
+async def test_the_generated_build_script_reruns_the_gates_command(tmp_path):
+    """The prover reruns this command. It has to be the build the gate already
+    ran, or the reported artifact is not the one the gate approved."""
+    session = _unconfined(tmp_path)
+    build = _build(features=("certora",))
+    script = await write_build_script(session, build, into=_outside(tmp_path), name="unit")
+    command = json.loads(build_command_path(script).read_text())
+    assert command["argv"] == build.argv()
+    assert command["cwd"] == str(session.workdir.resolve())
+
+
+@pytest.mark.asyncio
+async def test_an_unconfined_session_produces_a_build_script_with_no_wrapper(tmp_path):
+    """``provider="none"`` is a passthrough. The script runs the command with no wrapper."""
+    script = await write_build_script(
+        _unconfined(tmp_path), _build(), into=_outside(tmp_path), name="unit"
+    )
+    assert json.loads(build_command_path(script).read_text())["argv_prefix"] == []
+
+
+@pytest.mark.asyncio
+async def test_the_build_script_is_executable(tmp_path):
+    """``certoraParseBuildScript`` execs the script. Without the execute bit,
+    ``validate_exec_file`` rejects the conf."""
+    script = await write_build_script(
+        _unconfined(tmp_path), _build(), into=_outside(tmp_path), name="unit"
+    )
+    assert script.stat().st_mode & stat.S_IXUSR
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("inside", [".", ".certora_build", ".sandbox_tmp"])
+async def test_a_confined_session_refuses_to_write_the_build_script_where_its_build_can(
+    tmp_path, inside
+):
+    """The prover runs the script unconfined, and the script takes its
+    confinement from the command file beside it. A build that could rewrite
+    either one could run the prover's rerun unconfined."""
+    session = CargoSession(workdir=tmp_path, sandbox=SandboxConfig(provider="launcher"))
+    into = tmp_path / inside
+    into.mkdir(exist_ok=True)
+
+    with pytest.raises(ValueError, match="writable by the confined build"):
+        await write_build_script(session, _build(), into=into, name="unit")
+
+    assert list(into.glob("unit.*")) == []
+
+
+@pytest.mark.asyncio
+async def test_a_symlink_into_the_workdir_does_not_pass_for_outside_it(tmp_path):
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    (tmp_path / "link").symlink_to(workdir)
+    session = CargoSession(workdir=workdir, sandbox=SandboxConfig(provider="launcher"))
+
+    with pytest.raises(ValueError, match="writable by the confined build"):
+        await write_build_script(session, _build(), into=tmp_path / "link", name="unit")
+
+
+def test_a_directory_beside_the_workdir_is_out_of_the_confined_builds_reach(tmp_path):
+    session = CargoSession(workdir=tmp_path / "work", sandbox=SandboxConfig(provider="launcher"))
+
+    assert not session.build_can_write(tmp_path / "submission")
+    assert session.build_can_write(tmp_path / "work" / "src")
+
+
+@pytest.mark.asyncio
+async def test_a_tuned_conf_reaches_the_file_the_prover_is_handed(tmp_path):
+    """Author settings are written into the conf the prover is given."""
+    edited = cvlr_conf.TunableConf(loop_iter=4, optimistic_loop=True)
+    conf_path = await write_submission(
+        _unconfined(tmp_path),
+        Submission(
+            manifest_path=tmp_path / "work" / "Cargo.toml",
+            settings=edited,
+            stem="unit",
+            msg="unit",
+        ),
+        into=_outside(tmp_path),
+    )
+
+    written = json.loads(conf_path.read_text())
+    assert written["loop_iter"] == "4"
+    assert written["optimistic_loop"] is True
+
+
+@pytest.mark.asyncio
+async def test_the_written_conf_names_the_build_script_written_beside_it(tmp_path):
+    """The conf names the build script written next to it.
+
+    A conf that names a missing script is rejected by ``certoraRun`` after the upload.
+    """
+    into = _outside(tmp_path)
+    conf_path = await write_submission(
+        _unconfined(tmp_path),
+        Submission(manifest_path=tmp_path / "work" / "Cargo.toml", stem="unit", msg="unit"),
+        into=into,
+    )
+
+    assert conf_path.parent == into.resolve()
+    script = Path(json.loads(conf_path.read_text())["build_script"])
+    assert script.is_absolute(), "the prover runs in the workdir, which does not contain it"
+    assert script.parent == into.resolve()
+    assert script.is_file()
+    assert script.stat().st_mode & stat.S_IXUSR, "certoraRun execs it directly"
+
+
+@pytest.mark.asyncio
+async def test_two_units_sharing_a_tree_write_separate_confs_and_build_scripts(tmp_path):
+    """Two submissions in one working tree write separate confs and build scripts.
+
+    They can be in flight together. A shared file would send one submission's
+    loop bound or features with the other's job.
+    """
+    session = _unconfined(tmp_path)
+    into = _outside(tmp_path)
+    manifest = session.workdir / "Cargo.toml"
+    solvency = await write_submission(
+        session,
+        Submission(
+            manifest_path=manifest,
+            settings=cvlr_conf.TunableConf(loop_iter=3),
+            stem="solvency",
+            msg="solvency",
+            features=("certora", "solvency"),
+        ),
+        into=into,
+    )
+    access = await write_submission(
+        session,
+        Submission(
+            manifest_path=manifest,
+            settings=cvlr_conf.TunableConf(loop_iter=7),
+            stem="access",
+            msg="access",
+            features=("certora", "access"),
+        ),
+        into=into,
+    )
+
+    confs = {unit: json.loads(path.read_text()) for unit, path in (("solvency", solvency), ("access", access))}
+    assert confs["solvency"]["loop_iter"] == "3"
+    assert confs["access"]["loop_iter"] == "7"
+
+    def argv(conf: dict) -> list[str]:
+        return json.loads(build_command_path(Path(conf["build_script"])).read_text())["argv"]
+
+    def features(conf: dict) -> str:
+        return argv(conf)[argv(conf).index("--features") + 1]
+
+    assert features(confs["solvency"]) == "certora solvency"
+    assert features(confs["access"]) == "certora access"
+
+
+def _stub_command(script: Path) -> None:
+    """Point the command file at a stand-in that prints its working directory and arguments."""
+    command_file = build_command_path(script)
+    command = json.loads(command_file.read_text())
+    command["argv"] = [
+        sys.executable, "-c", "import json, os, sys; print(json.dumps([os.getcwd(), sys.argv[1:]]))",
+    ]
+    command_file.write_text(json.dumps(command))
+
+
+@pytest.mark.asyncio
+async def test_the_build_script_runs_its_command_in_the_workdir_with_the_provers_features(tmp_path):
+    """Run the script the way the prover does, including ``--cargo_features``."""
+    session = _unconfined(tmp_path)
+    script = await write_build_script(session, _build(), into=_outside(tmp_path), name="unit")
+    _stub_command(script)
+
+    ran = subprocess.run(
+        [str(script), "--json", "--cargo_features", "a", "b"],
+        capture_output=True, text=True, check=True,
+    )
+
+    cwd, args = json.loads(ran.stdout)
+    assert Path(cwd) == session.workdir.resolve()
+    assert args == ["--features", "a b"]
+
+
+@pytest.mark.asyncio
+async def test_the_build_script_carries_the_build_timeout(tmp_path, monkeypatch):
+    monkeypatch.setenv(BUILD_TIMEOUT_ENV, "600")
+    script = await write_build_script(
+        _unconfined(tmp_path), _build(), into=_outside(tmp_path), name="unit"
+    )
+    assert json.loads(build_command_path(script).read_text())["timeout_s"] == 600
+
+
+def _is_gone(pid: int) -> bool:
+    """Exited: no process, or a zombie waiting for its new parent to reap it."""
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except FileNotFoundError:
+        return True
+    return state == "Z"
+
+
+@pytest.mark.asyncio
+async def test_a_build_past_its_timeout_is_stopped_with_everything_it_started(tmp_path):
+    """Cargo runs the compilers as child processes, so stopping cargo alone would leave them running."""
+    script = await write_build_script(
+        _unconfined(tmp_path), _build(), into=_outside(tmp_path), name="unit"
+    )
+    pid_file = tmp_path / "child.pid"
+    command_file = build_command_path(script)
+    command = json.loads(command_file.read_text())
+    command["argv"] = [
+        sys.executable, "-c",
+        "import pathlib, subprocess, sys, time; "
+        "child = subprocess.Popen(['sleep', '60']); "
+        "pathlib.Path(sys.argv[1]).write_text(str(child.pid)); "
+        "time.sleep(60)",
+        str(pid_file),
+    ]
+    command["timeout_s"] = 1
+    command_file.write_text(json.dumps(command))
+
+    ran = subprocess.run([str(script), "--json"], capture_output=True, text=True, timeout=30)
+
+    assert ran.returncode == 124
+    assert ran.stdout == ""
+    assert "did not finish within 1s" in ran.stderr
+    child = int(pid_file.read_text())
+    deadline = time.monotonic() + 5
+    while not _is_gone(child) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert _is_gone(child)
+
+
+def test_a_failed_compile_carries_the_compilers_own_words():
+    failed = CompileFailed(diagnostics="error[E0599]: no method named `cvlr_assert`", exit_code=101)
+    assert not isinstance(failed, Built)
+    assert "E0599" in failed.diagnostics

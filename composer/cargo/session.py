@@ -22,7 +22,7 @@ from typing import Literal
 
 from composer.cargo.features import CargoFeature
 from composer.sandbox.command import CommandResult, run_local_command
-from composer.sandbox.config import SandboxConfig
+from composer.sandbox.config import BackendSpec, SandboxConfig
 from composer.sandbox.recipes import sandbox_cargo_home
 
 _log = logging.getLogger(__name__)
@@ -138,6 +138,19 @@ class CargoSession:
             provider=self.sandbox.resolve_provider() if self.sandbox.enabled else None,
             policy=self.sandbox.build_policy(self.workdir),
         )
+
+    def build_can_write(self, path: Path) -> bool:
+        """Whether a build in this session can write ``path``. Unconfined, it can write anything."""
+        policy = self.sandbox.build_policy(self.workdir)
+        if policy is None:
+            return True
+        resolved = path.resolve()
+        return any(resolved.is_relative_to(granted.resolve()) for granted in policy.rw_paths)
+
+    async def backend_spec(self, *, timeout_s: int) -> BackendSpec:
+        """The confinement :meth:`run_confined` applies, as an argv prefix for a
+        command launched later."""
+        return await self.sandbox.backend_spec(self.workdir, timeout_s=timeout_s)
 
     async def run_unconfined(
         self, program: str, args: list[str], *, timeout_s: int

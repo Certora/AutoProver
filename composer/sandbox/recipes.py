@@ -45,6 +45,9 @@ SANDBOX_INTERNAL_DIR = INTERNAL_DIR / "sandbox"
 SANDBOX_CARGO_DIR = SANDBOX_INTERNAL_DIR / "cargo"
 SANDBOX_TMP_DIR = SANDBOX_INTERNAL_DIR / "tmp"
 
+#: Where ``cargo certora-sbf`` installs the Solana platform tools by default.
+PLATFORM_TOOLS_ROOT = Path.home() / ".cache" / "solana"
+
 # Read-only system directories the toolchain + its dynamic linker need. ``/etc`` is
 # included because glibc NSS (``getpwuid`` via ``getuser``, CA-cert lookup) reads
 # ``/etc/passwd`` / ``/etc/nsswitch.conf``; it holds no AutoProver secret (those are
@@ -178,8 +181,9 @@ def rust_build_policy(
         *shared_cargo_ro_paths(cargo),
         # The global git config, without which a git dependency cannot be opened at all.
         *git_config_ro_paths(home),
-        # cargo-build-sbf's downloaded sBPF platform-tools (layout varies by version).
-        home / ".cache" / "solana",
+        # The platform tools cargo-build-sbf and cargo certora-sbf download.
+        PLATFORM_TOOLS_ROOT,
+        # The Solana CLI install: upstream cargo-build-sbf and its SBF SDK.
         home / ".local" / "share" / "solana",
     ]
     ro_candidates.extend(extra_ro)
