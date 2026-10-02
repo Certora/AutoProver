@@ -38,12 +38,8 @@ def parse_prover_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_prover_args()
-    here = pathlib.Path(__file__).resolve()
-    command = json.loads(here.with_suffix(".json").read_text())
+    command = json.loads(pathlib.Path(__file__).resolve().with_suffix(".json").read_text())
     workdir = pathlib.Path(command["cwd"])
-    if here.parent.parent != workdir:
-        sys.stderr.write("This build script was written for a different working tree.\n")
-        return 1
     argv = [*command["argv_prefix"], *command["argv"]]
     features = " ".join(args.cargo_features)
     if features:

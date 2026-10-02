@@ -139,6 +139,14 @@ class CargoSession:
             policy=self.sandbox.build_policy(self.workdir),
         )
 
+    def build_can_write(self, path: Path) -> bool:
+        """Whether a build in this session can write ``path``. Unconfined, it can write anything."""
+        policy = self.sandbox.build_policy(self.workdir)
+        if policy is None:
+            return True
+        resolved = path.resolve()
+        return any(resolved.is_relative_to(granted.resolve()) for granted in policy.rw_paths)
+
     async def backend_spec(self, *, timeout_s: int) -> BackendSpec:
         """The confinement :meth:`run_confined` applies, as an argv prefix for a
         command launched later."""

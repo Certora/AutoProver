@@ -11,7 +11,8 @@ A submission has three steps:
 1. Build, confined (:mod:`composer.cargo.sbf`). A failure here is a compiler
    error. The same failure during submission is a ``CertoraUserInputError``
    after the upload.
-2. Write the build script and the conf. The prover reruns that build.
+2. Write the build script and the conf, outside the tree the build can write.
+   The prover reruns that build.
 3. Submit. The caller passes :class:`~composer.prover.core.ProverOptions`
    with the Solana CLI selected.
 """
@@ -28,7 +29,6 @@ from composer.cargo.sbf import (
     write_build_script,
 )
 from composer.cargo.session import CargoSession
-from composer.layout import CERTORA_DIR
 from composer.prover.core import (
     CexHandler,
     ProverCallbacks,
@@ -46,11 +46,6 @@ from composer.spec.cvlr.conf import (
 )
 
 _log = logging.getLogger(__name__)
-
-#: Where a run's conf lands inside the workdir: ``certora/confs/<stem>.conf``, the same
-#: place as the CVL backend (``docs/formalization-abstraction.md`` §6).
-CONF_DIR = CERTORA_DIR / "confs"
-
 
 @dataclass(frozen=True)
 class BuildRejected:
@@ -97,8 +92,8 @@ class Submission:
     """
 
     manifest_path: Path
-    #: Names the conf and the build script. Submissions that share a workdir keep
-    #: separate files.
+    #: Names the conf and the build script. Submissions that share a directory for
+    #: them keep separate files.
     stem: str
     msg: str
     settings: TunableConf = TunableConf()
@@ -125,26 +120,27 @@ async def build_for_submission(session: CargoSession, submission: Submission) ->
     return await sbf_build(session, _sbf_build(session, submission))
 
 
-async def write_submission(session: CargoSession, submission: Submission) -> Path:
-    """Write the build script and the conf, and return the conf's path.
+async def write_submission(session: CargoSession, submission: Submission, *, into: Path) -> Path:
+    """Write the build script and the conf into ``into``, and return the conf's path.
 
-    The conf names the script relative to the workdir, the same way a CVL conf
-    names its spec. Both files can be rerun by hand from the workdir.
+    The prover reads the conf and runs the script unconfined, so ``into`` must be
+    a directory no build in ``session`` can write
+    (:func:`~composer.cargo.sbf.write_build_script`). The caller creates and
+    removes it.
     """
     script = await write_build_script(
-        session, _sbf_build(session, submission), name=submission.stem
+        session, _sbf_build(session, submission), into=into, name=submission.stem
     )
     conf = solana_conf(
         submission.settings,
         RunOverlay(
-            build_script=script.relative_to(session.workdir),
+            build_script=script,
             rules=submission.rules,
             msg=submission.msg,
             summaries=submission.summaries,
         ),
     )
-    conf_path = session.workdir / CONF_DIR / f"{submission.stem}.conf"
-    conf_path.parent.mkdir(parents=True, exist_ok=True)
+    conf_path = script.with_suffix(".conf")
     conf_path.write_text(dump_conf(conf))
     return conf_path
 
@@ -158,9 +154,9 @@ class Prepared:
 
 
 async def prepare_submission(
-    session: CargoSession, submission: Submission
+    session: CargoSession, submission: Submission, *, into: Path
 ) -> BuildRejected | Prepared:
-    """Build the program, harness included, then write the conf that checks it.
+    """Build the program, harness included, then write the conf that checks it into ``into``.
 
     Split from :func:`run_submission` so a caller that shares one tree can wait
     on several submissions' cloud jobs at once. The two halves are not
@@ -176,7 +172,7 @@ async def prepare_submission(
     build = await build_for_submission(session, submission)
     if not isinstance(build.verdict, Built):
         return BuildRejected(build)
-    return Prepared(build, await write_submission(session, submission))
+    return Prepared(build, await write_submission(session, submission, into=into))
 
 
 async def run_submission(
@@ -210,6 +206,7 @@ async def submit(
     session: CargoSession,
     submission: Submission,
     *,
+    into: Path,
     prover_opts: ProverOptions,
     cex: CexHandler,
     callbacks: ProverCallbacks | None = None,
@@ -219,7 +216,7 @@ async def submit(
 
     For a caller whose working tree is not shared with another submission.
     """
-    prepared = await prepare_submission(session, submission)
+    prepared = await prepare_submission(session, submission, into=into)
     if isinstance(prepared, BuildRejected):
         return prepared
     return await run_submission(

@@ -117,8 +117,7 @@ async def cvlr_confinement() -> SandboxConfig:
 def workdir(tmp_path: Path) -> Path:
     """A throwaway copy of the examples repo.
 
-    The session writes a private ``CARGO_HOME``, the build script, the conf,
-    and ``target/`` into the workdir.
+    The session writes a private ``CARGO_HOME`` and ``target/`` into the workdir.
     """
     _shipped_cli_only()
     root = _examples_root()
@@ -159,7 +158,9 @@ async def test_the_examples_project_verifies_exactly_as_its_authors_expect(
         stem="first_example",
         msg="AutoProver CVLR plumbing gate",
     )
-    prepared = await prepare_submission(session, submission)
+    into = workdir.parent / "submission"
+    into.mkdir()
+    prepared = await prepare_submission(session, submission, into=into)
     assert not isinstance(prepared, BuildRejected), prepared
     # Keep the authors' settings. Drop `files`: it names their prebuilt `.so`,
     # and the prover rejects that next to a build script.

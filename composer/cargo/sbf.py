@@ -66,10 +66,6 @@ def resolved_build_timeout_s() -> int:
         return default
 
 
-#: Under the workdir (the only path the confinement policy grants read-write).
-BUILD_DIR = Path(".certora_build")
-
-
 class PlatformToolsMissing(RuntimeError):
     """The requested platform-tools version is not installed, and a confined
     build cannot download it the way ``cargo certora-sbf`` would unconfined."""
@@ -280,22 +276,25 @@ def build_command_path(script: Path) -> Path:
     return script.with_suffix(".json")
 
 
-async def write_build_script(session: CargoSession, build: SbfBuild, *, name: str) -> Path:
-    """Write the ``build_script`` the conf points at, and return its path.
+async def write_build_script(
+    session: CargoSession, build: SbfBuild, *, into: Path, name: str
+) -> Path:
+    """Write the ``build_script`` the conf points at into ``into``, and return its path.
 
-    ``name`` separates scripts when several submissions share one workdir.
-    Confinement is the ``argv_prefix`` from :meth:`CargoSession.backend_spec`
-    (``docs/command-sandbox.md`` §4). If the provider cannot confine, that
-    call raises before anything is written.
+    The prover runs the script unconfined, and the script reads its
+    confinement, the ``argv_prefix`` from :meth:`CargoSession.backend_spec`
+    (``docs/command-sandbox.md`` §4), from the command file beside it. A build
+    that could rewrite either file could run the next build unconfined, so
+    ``into`` must be a directory no build in ``session`` can write. The caller
+    creates and removes it. If the provider cannot confine, this raises before
+    anything is written.
 
-    The command file names the workdir, the manifest, and the
-    confinement grants by absolute path. The script runs only in the tree it
-    was written for.
+    ``name`` separates scripts when several submissions share ``into``.
     """
+    if session.confined and session.build_can_write(into):
+        raise ValueError(f"{into} is writable by the confined build, so it cannot hold the build script")
     spec = await session.backend_spec(timeout_s=resolved_build_timeout_s())
-    build_dir = session.workdir / BUILD_DIR
-    build_dir.mkdir(parents=True, exist_ok=True)
-    script = build_dir / f"{name}.py"
+    script = into.resolve() / f"{name}.py"
     build_command_path(script).write_text(
         json.dumps(
             {

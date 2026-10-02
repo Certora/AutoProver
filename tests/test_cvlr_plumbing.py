@@ -6,7 +6,6 @@ submission adds.
 """
 
 import json
-import shutil
 import stat
 import subprocess
 import sys
@@ -419,12 +418,12 @@ def test_a_conf_change_invalidates_a_stamp_earned_before_it():
 def _submission(**kwargs) -> dict:
     return cvlr_conf.solana_conf(
         cvlr_conf.TunableConf(),
-        cvlr_conf.RunOverlay(build_script=Path("/w/.certora_build/confined_build.py"), **kwargs),
+        cvlr_conf.RunOverlay(build_script=Path("/submission/confined_build.py"), **kwargs),
     )
 
 
 def test_the_run_names_the_build_script():
-    assert _submission()["build_script"] == "/w/.certora_build/confined_build.py"
+    assert _submission()["build_script"] == "/submission/confined_build.py"
 
 
 def test_the_message_is_reduced_to_what_the_prover_accepts():
@@ -598,23 +597,39 @@ def test_the_manifest_keeps_cargos_own_paths():
     assert manifest.solana_inlining == ("p/../envs/cvlr_inlining_core.txt",)
 
 
+def _unconfined(tmp_path: Path) -> CargoSession:
+    """A session in ``tmp_path/work``. ``provider="none"`` makes the build
+    script a passthrough, so writing the conf needs no toolchain."""
+    workdir = tmp_path / "work"
+    workdir.mkdir(exist_ok=True)
+    return CargoSession(workdir=workdir, sandbox=SandboxConfig(provider="none"))
+
+
+def _outside(tmp_path: Path) -> Path:
+    """Where a submission's build script and conf go: beside the workdir, not in it."""
+    into = tmp_path / "submission"
+    into.mkdir(exist_ok=True)
+    return into
+
+
 @pytest.mark.asyncio
 async def test_the_generated_build_script_reruns_the_gates_command(tmp_path):
     """The prover reruns this command. It has to be the build the gate already
     ran, or the reported artifact is not the one the gate approved."""
-    session = CargoSession(workdir=tmp_path, sandbox=SandboxConfig(provider="none"))
+    session = _unconfined(tmp_path)
     build = _build(features=("certora",))
-    script = await write_build_script(session, build, name="unit")
+    script = await write_build_script(session, build, into=_outside(tmp_path), name="unit")
     command = json.loads(build_command_path(script).read_text())
     assert command["argv"] == build.argv()
-    assert command["cwd"] == str(tmp_path.resolve())
+    assert command["cwd"] == str(session.workdir.resolve())
 
 
 @pytest.mark.asyncio
 async def test_an_unconfined_session_produces_a_build_script_with_no_wrapper(tmp_path):
     """``provider="none"`` is a passthrough. The script runs the command with no wrapper."""
-    session = CargoSession(workdir=tmp_path, sandbox=SandboxConfig(provider="none"))
-    script = await write_build_script(session, _build(), name="unit")
+    script = await write_build_script(
+        _unconfined(tmp_path), _build(), into=_outside(tmp_path), name="unit"
+    )
     assert json.loads(build_command_path(script).read_text())["argv_prefix"] == []
 
 
@@ -622,15 +637,46 @@ async def test_an_unconfined_session_produces_a_build_script_with_no_wrapper(tmp
 async def test_the_build_script_is_executable(tmp_path):
     """``certoraParseBuildScript`` execs the script. Without the execute bit,
     ``validate_exec_file`` rejects the conf."""
-    session = CargoSession(workdir=tmp_path, sandbox=SandboxConfig(provider="none"))
-    script = await write_build_script(session, _build(), name="unit")
+    script = await write_build_script(
+        _unconfined(tmp_path), _build(), into=_outside(tmp_path), name="unit"
+    )
     assert script.stat().st_mode & stat.S_IXUSR
 
 
-def _unconfined(tmp_path: Path) -> CargoSession:
-    """``provider="none"`` makes the build script a passthrough, so writing
-    the conf needs no toolchain."""
-    return CargoSession(workdir=tmp_path, sandbox=SandboxConfig(provider="none"))
+@pytest.mark.asyncio
+@pytest.mark.parametrize("inside", [".", ".certora_build", ".sandbox_tmp"])
+async def test_a_confined_session_refuses_to_write_the_build_script_where_its_build_can(
+    tmp_path, inside
+):
+    """The prover runs the script unconfined, and the script takes its
+    confinement from the command file beside it. A build that could rewrite
+    either one could run the prover's rerun unconfined."""
+    session = CargoSession(workdir=tmp_path, sandbox=SandboxConfig(provider="launcher"))
+    into = tmp_path / inside
+    into.mkdir(exist_ok=True)
+
+    with pytest.raises(ValueError, match="writable by the confined build"):
+        await write_build_script(session, _build(), into=into, name="unit")
+
+    assert list(into.glob("unit.*")) == []
+
+
+@pytest.mark.asyncio
+async def test_a_symlink_into_the_workdir_does_not_pass_for_outside_it(tmp_path):
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    (tmp_path / "link").symlink_to(workdir)
+    session = CargoSession(workdir=workdir, sandbox=SandboxConfig(provider="launcher"))
+
+    with pytest.raises(ValueError, match="writable by the confined build"):
+        await write_build_script(session, _build(), into=tmp_path / "link", name="unit")
+
+
+def test_a_directory_beside_the_workdir_is_out_of_the_confined_builds_reach(tmp_path):
+    session = CargoSession(workdir=tmp_path / "work", sandbox=SandboxConfig(provider="launcher"))
+
+    assert not session.build_can_write(tmp_path / "submission")
+    assert session.build_can_write(tmp_path / "work" / "src")
 
 
 @pytest.mark.asyncio
@@ -640,11 +686,12 @@ async def test_a_tuned_conf_reaches_the_file_the_prover_is_handed(tmp_path):
     conf_path = await write_submission(
         _unconfined(tmp_path),
         Submission(
-            manifest_path=tmp_path / "Cargo.toml",
+            manifest_path=tmp_path / "work" / "Cargo.toml",
             settings=edited,
             stem="unit",
             msg="unit",
         ),
+        into=_outside(tmp_path),
     )
 
     written = json.loads(conf_path.read_text())
@@ -658,14 +705,17 @@ async def test_the_written_conf_names_the_build_script_written_beside_it(tmp_pat
 
     A conf that names a missing script is rejected by ``certoraRun`` after the upload.
     """
+    into = _outside(tmp_path)
     conf_path = await write_submission(
         _unconfined(tmp_path),
-        Submission(manifest_path=tmp_path / "Cargo.toml", stem="unit", msg="unit"),
+        Submission(manifest_path=tmp_path / "work" / "Cargo.toml", stem="unit", msg="unit"),
+        into=into,
     )
 
-    named = Path(json.loads(conf_path.read_text())["build_script"])
-    assert not named.is_absolute(), "the prover resolves it against the workdir it runs in"
-    script = tmp_path / named
+    assert conf_path.parent == into.resolve()
+    script = Path(json.loads(conf_path.read_text())["build_script"])
+    assert script.is_absolute(), "the prover runs in the workdir, which does not contain it"
+    assert script.parent == into.resolve()
     assert script.is_file()
     assert script.stat().st_mode & stat.S_IXUSR, "certoraRun execs it directly"
 
@@ -678,7 +728,8 @@ async def test_two_units_sharing_a_tree_write_separate_confs_and_build_scripts(t
     loop bound or features with the other's job.
     """
     session = _unconfined(tmp_path)
-    manifest = tmp_path / "Cargo.toml"
+    into = _outside(tmp_path)
+    manifest = session.workdir / "Cargo.toml"
     solvency = await write_submission(
         session,
         Submission(
@@ -688,6 +739,7 @@ async def test_two_units_sharing_a_tree_write_separate_confs_and_build_scripts(t
             msg="solvency",
             features=("certora", "solvency"),
         ),
+        into=into,
     )
     access = await write_submission(
         session,
@@ -698,6 +750,7 @@ async def test_two_units_sharing_a_tree_write_separate_confs_and_build_scripts(t
             msg="access",
             features=("certora", "access"),
         ),
+        into=into,
     )
 
     confs = {unit: json.loads(path.read_text()) for unit, path in (("solvency", solvency), ("access", access))}
@@ -705,7 +758,7 @@ async def test_two_units_sharing_a_tree_write_separate_confs_and_build_scripts(t
     assert confs["access"]["loop_iter"] == "7"
 
     def argv(conf: dict) -> list[str]:
-        return json.loads(build_command_path(tmp_path / conf["build_script"]).read_text())["argv"]
+        return json.loads(build_command_path(Path(conf["build_script"])).read_text())["argv"]
 
     def features(conf: dict) -> str:
         return argv(conf)[argv(conf).index("--features") + 1]
@@ -727,7 +780,8 @@ def _stub_command(script: Path) -> None:
 @pytest.mark.asyncio
 async def test_the_build_script_runs_its_command_in_the_workdir_with_the_provers_features(tmp_path):
     """Run the script the way the prover does, including ``--cargo_features``."""
-    script = await write_build_script(_unconfined(tmp_path), _build(), name="unit")
+    session = _unconfined(tmp_path)
+    script = await write_build_script(session, _build(), into=_outside(tmp_path), name="unit")
     _stub_command(script)
 
     ran = subprocess.run(
@@ -736,33 +790,16 @@ async def test_the_build_script_runs_its_command_in_the_workdir_with_the_provers
     )
 
     cwd, args = json.loads(ran.stdout)
-    assert Path(cwd) == tmp_path.resolve()
+    assert Path(cwd) == session.workdir.resolve()
     assert args == ["--features", "a b"]
-
-
-@pytest.mark.asyncio
-async def test_a_build_script_moved_with_its_tree_refuses_to_build_the_original(tmp_path):
-    """The command names its workdir by absolute path. A copied script would build the original tree."""
-    original = tmp_path / "original"
-    original.mkdir()
-    script = await write_build_script(_unconfined(original), _build(), name="unit")
-    _stub_command(script)
-    moved = tmp_path / "moved"
-    shutil.copytree(original, moved)
-
-    ran = subprocess.run(
-        [str(moved / script.relative_to(original)), "--json"], capture_output=True, text=True
-    )
-
-    assert ran.returncode != 0
-    assert ran.stdout == ""
-    assert "different working tree" in ran.stderr
 
 
 @pytest.mark.asyncio
 async def test_the_build_script_carries_the_build_timeout(tmp_path, monkeypatch):
     monkeypatch.setenv(BUILD_TIMEOUT_ENV, "600")
-    script = await write_build_script(_unconfined(tmp_path), _build(), name="unit")
+    script = await write_build_script(
+        _unconfined(tmp_path), _build(), into=_outside(tmp_path), name="unit"
+    )
     assert json.loads(build_command_path(script).read_text())["timeout_s"] == 600
 
 
@@ -778,7 +815,9 @@ def _is_gone(pid: int) -> bool:
 @pytest.mark.asyncio
 async def test_a_build_past_its_timeout_is_stopped_with_everything_it_started(tmp_path):
     """Cargo runs the compilers as child processes, so stopping cargo alone would leave them running."""
-    script = await write_build_script(_unconfined(tmp_path), _build(), name="unit")
+    script = await write_build_script(
+        _unconfined(tmp_path), _build(), into=_outside(tmp_path), name="unit"
+    )
     pid_file = tmp_path / "child.pid"
     command_file = build_command_path(script)
     command = json.loads(command_file.read_text())
