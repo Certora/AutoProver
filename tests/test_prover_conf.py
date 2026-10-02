@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
 from composer.prover.conf import ExcludeRules, InheritRules, SelectRules, dump_conf
 from composer.spec.source.prover import (
     BOTH_RULE_SCOPES, prover_config_overlay, rule_selection, setup_prover_config_in,
@@ -16,6 +18,14 @@ def test_each_rule_selection_writes_only_its_key():
     assert InheritRules().apply_to(_BASE) == _BASE
     assert SelectRules(("r",)).apply_to(_BASE) == {**_BASE, "rule": ["r"]}
     assert ExcludeRules(("r",)).apply_to(_BASE) == {**_BASE, "exclude_rule": ["r"]}
+
+
+def test_rule_selections_survive_a_checkpoint_round_trip():
+    serde = JsonPlusSerializer()
+    for sel in (InheritRules(), SelectRules(("a", "b")), ExcludeRules(("c",))):
+        restored = serde.loads_typed(serde.dumps_typed(sel))
+        assert restored == sel
+        assert hash(restored) == hash(sel)
 
 
 def test_cvl_overlay_forces_its_settings_over_the_base():

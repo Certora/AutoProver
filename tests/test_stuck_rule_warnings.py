@@ -13,9 +13,10 @@ The loop this covers used to be inline in ``verify_spec`` and carried three defe
    a rule that was nagged before isn't stuck now.
 """
 
+from composer.prover.conf import ExcludeRules, InheritRules, RuleSelection, SelectRules
 from composer.prover.ptypes import RulePath
 from composer.spec.source.prover import (
-    NagMarker, ProverHistoryItem, ProverRunLog, RuleSelectionRecord, STUCK_RULE_NAG_THRESHOLD,
+    NagMarker, ProverHistoryItem, ProverRunLog, STUCK_RULE_NAG_THRESHOLD,
     stuck_rule_reminder, stuck_rule_warnings,
 )
 
@@ -26,7 +27,7 @@ R2 = RulePath(rule="r2")
 def _run(
     *results: tuple[RulePath, str],
     tc_id: str = "tc",
-    rules: RuleSelectionRecord | None = None,
+    rules: RuleSelection = InheritRules(),
     declared: tuple[str, ...] = ("r1", "r2"),
 ) -> ProverHistoryItem:
     return ProverRunLog(
@@ -90,7 +91,7 @@ def test_targeted_runs_are_transparent_to_untouched_rules() -> None:
     stuck = {R1: "TIMEOUT"}
     history = [
         _run((R1, "TIMEOUT")),
-        _run((R2, "ERROR"), rules={"sort": "include", "selector": ["r2"]}),
+        _run((R2, "ERROR"), rules=SelectRules(("r2",))),
         _run((R1, "TIMEOUT")),
     ]
     assert _warn(stuck, history)[0] == {R1}
@@ -102,7 +103,7 @@ def test_exclude_scoped_runs_are_transparent_to_excluded_rules() -> None:
     stuck = {R1: "TIMEOUT"}
     history = [
         _run((R1, "TIMEOUT")),
-        _run((R2, "ERROR"), rules={"sort": "exclude", "selector": ["r1"]}),
+        _run((R2, "ERROR"), rules=ExcludeRules(("r1",))),
         _run((R1, "TIMEOUT")),
     ]
     assert _warn(stuck, history)[0] == {R1}
@@ -114,7 +115,7 @@ def test_exclude_scoped_run_that_covers_the_rule_breaks_its_streak() -> None:
     stuck = {R1: "TIMEOUT"}
     history = [
         _run((R1, "TIMEOUT")),
-        _run((R1, "VERIFIED"), rules={"sort": "exclude", "selector": ["r2"]}),
+        _run((R1, "VERIFIED"), rules=ExcludeRules(("r2",))),
         _run((R1, "TIMEOUT")),
     ]
     assert _warn(stuck, history)[0] == set()

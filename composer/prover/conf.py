@@ -37,6 +37,12 @@ def safe_msg(msg: str) -> str:
     return re.sub(r"\s+", " ", "".join(c if c in _MSG_SAFE else " " for c in msg)).strip()
 
 
+def _freeze_names(selection: "SelectRules | ExcludeRules") -> None:
+    """Coerce ``names`` to a tuple. A selection is recorded in checkpointed graph state, and the
+    checkpoint serializer restores tuples as lists."""
+    object.__setattr__(selection, "names", tuple(selection.names))
+
+
 @dataclass(frozen=True)
 class InheritRules:
     """Check whatever the base conf selects: its ``rule`` and ``exclude_rule`` entries, or every
@@ -52,6 +58,9 @@ class SelectRules:
 
     names: tuple[str, ...]
 
+    def __post_init__(self) -> None:
+        _freeze_names(self)
+
     def apply_to(self, conf: Conf) -> Conf:
         return {**conf, "rule": list(self.names)}
 
@@ -61,6 +70,9 @@ class ExcludeRules:
     """Check every rule the base conf selects except these."""
 
     names: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        _freeze_names(self)
 
     def apply_to(self, conf: Conf) -> Conf:
         return {**conf, "exclude_rule": list(self.names)}

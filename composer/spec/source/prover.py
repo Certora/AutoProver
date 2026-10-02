@@ -139,38 +139,34 @@ def _merge_rule_skips(left: dict[str, str], right: dict[str, str]) -> dict[str, 
         to_ret[k] = v
     return to_ret
 
-class RuleSelectionRecord(TypedDict):
-    sort: Literal["exclude", "include"]
-    selector: list[str]
-
-def _selection_of(rule: list[str] | None, exclude_rules: list[str] | None) -> RuleSelectionRecord | None:
-    """The ``RuleSelectionRecord`` a submit_buffer call asks for, or None to run the whole buffer."""
-    if rule is not None:
-        return RuleSelectionRecord(sort="include", selector=rule)
-    if exclude_rules is not None:
-        return RuleSelectionRecord(sort="exclude", selector=exclude_rules)
-    return None
-
-def _selection_key(sel: RuleSelectionRecord | None) -> str:
+def _selection_key(sel: RuleSelection) -> str:
     """A stable key distinguishing one buffer's rule selections, so striped runs (different subsets of
     the same buffer at the same content) coexist as separate jobs instead of deduping each other. The
     whole-buffer run keys to the empty string."""
-    if sel is None:
-        return ""
-    return f"{sel['sort']}:{','.join(sorted(sel['selector']))}"
+    match sel:
+        case InheritRules():
+            return ""
+        case SelectRules(names):
+            return f"include:{','.join(sorted(names))}"
+        case ExcludeRules(names):
+            return f"exclude:{','.join(sorted(names))}"
 
-def _scope_of(record: RuleSelectionRecord | None) -> RuleSelection:
-    """The conf scope a recorded selection runs under; None runs every rule."""
-    if record is None:
-        return InheritRules()
-    names = tuple(record["selector"])
-    return SelectRules(names) if record["sort"] == "include" else ExcludeRules(names)
+def _selected_rules(sel: RuleSelection, declared: Iterable[str]) -> list[str]:
+    """The rules of ``declared`` a run under ``sel`` checks. Buffer confs select no rules of their
+    own, so inheriting runs every declared rule."""
+    match sel:
+        case InheritRules():
+            return list(declared)
+        case SelectRules(names):
+            return list(names)
+        case ExcludeRules(names):
+            return [r for r in declared if r not in set(names)]
 
 class ProverRunLog(TypedDict):
     tool_call_id: str
     prover_results: list[tuple[RulePath, StatusCodes]]
     spec_digest: str
-    rules: RuleSelectionRecord | None
+    rules: RuleSelection
     sort: Literal["run"]
     declared_rules: list[str]
     state_digest: str
@@ -190,13 +186,7 @@ type ProverHistoryItem = Annotated[ProverRunLog | NagMarker, Discriminator("sort
 def _executed_rules(
     r: ProverRunLog
 ) -> list[str]:
-    if r["rules"] is None:
-        return r["declared_rules"]
-    elif r["rules"]["sort"] == "include":
-        return r["rules"]["selector"]
-    else:
-        to_filt = set(r["rules"]["selector"])
-        return [ r_id for r_id in r["declared_rules"] if r_id not in to_filt ]
+    return _selected_rules(r["rules"], r["declared_rules"])
 
 def declared_rules_at(
     history: Sequence[ProverHistoryItem], state_digest: str
@@ -738,21 +728,18 @@ def buffer_conf(
     buffer_name: str,
     conf_dir: Path,
     msg: str = "",
-    selection: RuleSelectionRecord | None = None,
-    rules: RuleSelection | None = None,
+    rules: RuleSelection = InheritRules(),
     **config_extra,
 ) -> Iterator[tuple[str, dict]]:
     """Build a conf verifying an already-materialized buffer spec at ``spec_path`` (its imports resolve
     to the sibling ``.spec`` files written by :func:`materialize_buffers`). The run's scope is
-    ``selection`` (a recorded subset of the buffer's rules, as submit_buffer stripes them) or ``rules``
-    (a scope already built by :func:`rule_selection`); ``config_extra`` entries override the conf for
-    this run only, the way :func:`setup_prover_config_in` takes them. Yields (conf_path, config)."""
+    ``rules``; ``config_extra`` entries override the conf for this run only, the way :func:`setup_prover_config_in` takes them. Yields (conf_path, config)."""
     cfg = prover_config_overlay(
         config,
         main_contract=main_contract,
         verify_target=f"{main_contract}:{spec_path}",
         extra={"msg": msg, **config_extra},
-        rules=rules if rules is not None else _scope_of(selection),
+        rules=rules,
     )
     with temp_certora_file(
         root=working_dir,
@@ -831,9 +818,9 @@ class _BufJob:
     #: so a job whose digest is now stale (its buffer or a shared import changed) can't mark it done.
     digest: str
     task: asyncio.Task[None]
-    #: The rule subset this job runs, or None for the whole buffer. Jobs of one buffer are keyed by
+    #: The rule subset this job runs. Jobs of one buffer are keyed by
     #: ``(name, _selection_key(selection))``, so striped runs at the same content coexist.
-    selection: RuleSelectionRecord | None = None
+    selection: RuleSelection = InheritRules()
 
 
 @dataclass
@@ -846,7 +833,7 @@ class _BufDone:
     result: ProverReport | str
     all_rules: list[str]
     #: The rule subset this run covered, recorded onto the run's ``ProverRunLog.rules``.
-    selection: RuleSelectionRecord | None = None
+    selection: RuleSelection = InheritRules()
 
 
 def get_prover_tool(
@@ -887,7 +874,7 @@ def get_prover_tool(
             *, name: str, digest: str, label: str, buffers: Mapping[str, NamedBuffer],
             vfs: dict[str, str], conf: dict, cex_state: StateWithSkips, tool_call_id: str,
             writer: Callable[[ProverEvents], None], summary: RunSummary,
-            selection: RuleSelectionRecord | None = None,
+            selection: RuleSelection = InheritRules(),
         ) -> None:
             """Verify one buffer end-to-end against a frozen snapshot (taken at submit time) of the source
             and all buffers, then push the outcome onto the completion queue. The job runs in its own
@@ -913,7 +900,7 @@ def get_prover_tool(
                         with buffer_conf(
                             working_dir=run_root, config=conf, main_contract=main_contract,
                             spec_path=spec_path, buffer_name=name, conf_dir=conf_dir, msg=label,
-                            selection=selection,
+                            rules=selection,
                         ) as (cpath, cfg):
                             res = await run_prover(
                                 Path(run_root), [cpath], tool_call_id, prover_opts,
@@ -955,19 +942,15 @@ def get_prover_tool(
             if not b.is_run_target:
                 return f"Buffer {name!r} is a shared (imports-only) buffer; it runs no rules of its own."
 
-            rule: list[str] | None = args.get("rule")
-            exclude_rules: list[str] | None = args.get("exclude_rules")
-            if rule is not None and exclude_rules is not None:
+            selection = rule_selection(args.get("rule"), args.get("exclude_rules"))
+            if isinstance(selection, str):
                 return "Pass at most one of `rule` / `exclude_rules`; omit both to run the whole buffer."
-            selection = _selection_of(rule, exclude_rules)
-            if selection is not None:
+            if not isinstance(selection, InheritRules):
                 owned = b.owned_rules
-                unknown = [r for r in selection["selector"] if r not in owned]
+                unknown = [r for r in selection.names if r not in owned]
                 if unknown:
                     return f"Buffer {name!r} declares no rule(s) {unknown}; its rules are {sorted(owned)}."
-                would_run = selection["selector"] if selection["sort"] == "include" \
-                    else [r for r in owned if r not in set(selection["selector"])]
-                if not would_run:
+                if not _selected_rules(selection, owned):
                     return f"That selection would run no rule of buffer {name!r}; its rules are {sorted(owned)}."
 
             digest = _cur_digest(state, buffers, name)
@@ -1009,9 +992,13 @@ def get_prover_tool(
             ))
             buffer_jobs[(name, sel_key)] = _BufJob(name=name, digest=digest, task=task, selection=selection)
             running = sorted({nm for (nm, _sk), j in buffer_jobs.items() if not j.task.done()})
-            sel_desc = "" if selection is None else (
-                f" (rules {selection['selector']})" if selection["sort"] == "include"
-                else f" (excluding {selection['selector']})")
+            match selection:
+                case InheritRules():
+                    sel_desc = ""
+                case SelectRules(names):
+                    sel_desc = f" (rules {list(names)})"
+                case ExcludeRules(names):
+                    sel_desc = f" (excluding {list(names)})"
             return (
                 f"Submitted buffer {name!r}{sel_desc} (submission {n}); it is now proving in the "
                 f"background. Running: {running}. Call collect_results to retrieve results as jobs finish."
