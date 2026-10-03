@@ -17,13 +17,14 @@ PRs unreachable until the last. Wave 2 is re-cut below so that each feature arri
 that uses it. Rule 5 states the criterion; the [old-name map](#appendix-the-old-partition-and-where-it-went)
 is the last appendix. The rules, the deferrals and the drops are otherwise unchanged.
 
-**Where it stands, 2026-10-01.** Wave 1 is finished: S4 was closed and folded into P7. Of wave 2, **P1 has merged**
-([#248](https://github.com/Certora/AutoProver/pull/248), `2eb4a391`), and the corpus half of P6
-merged ahead of it as [#244](https://github.com/Certora/AutoProver/pull/244). The branch has been
-rebased onto that master: 271 commits, 189 files, about 100,000 inserted lines. P1 changed a lot in
-review, and the branch carries 727 lines of later work on files P1 now owns. The
+**Where it stands, 2026-10-02.** Wave 1 is finished: S4 was closed and folded into P7. Of wave 2,
+**P1 and P2 have merged**: P1 as [#248](https://github.com/Certora/AutoProver/pull/248) (`2eb4a391`)
+and P2 as [#258](https://github.com/Certora/AutoProver/pull/258) (`b999c306`). The corpus half of P6
+merged ahead of both as [#244](https://github.com/Certora/AutoProver/pull/244). The branch has been
+rebased onto master after #258 (`709293a9`): 291 commits, 195 files, about 100,000 inserted lines.
+P1 changed a lot in review, and the branch carries 727 lines of later work on files P1 now owns. The
 [list below](#what-the-branch-carries-on-top-of-p1s-files) assigns each of those to the PR it rides.
-The next PR is **P2**.
+The next PR is **P3a**.
 
 ---
 
@@ -152,7 +153,7 @@ it is not.
 | PR | Code | Tests | What it can do when it lands |
 |----|------|-------|------------------------------|
 | **P1** Resolve the project — [#248](https://github.com/Certora/AutoProver/pull/248), **merged** `2eb4a391` | +3,697 | +2,391 | Point it at a Cargo workspace: it names the package under verification, resolves which `cvlr` / `cvlr-solana` the build gets, writes the prover conf, and scaffolds a CVLR workspace into a project that has none. |
-| **P2** A hand-written rule in, verdicts out — [#258](https://github.com/Certora/AutoProver/pull/258), draft | +822 | +900 | Build a CVLR harness for SBF and submit it, and read the verdicts back. The deterministic submission path, end to end, with no agent in it. |
+| **P2** A hand-written rule in, verdicts out — [#258](https://github.com/Certora/AutoProver/pull/258), **merged** `b999c306` | +639 | +624 | Build a CVLR harness for SBF and submit it, and read the verdicts back. The deterministic submission path, end to end, with no agent in it. |
 | **P3a** The working copy and what may be changed in it | +2,048 | +1,310 | Materialize a per-unit working tree over the project and apply a source modification to it — the nine munge kinds, expressed over the Rust parsing primitives. |
 | **P3b** A generated harness, and what its verdict means | +1,919 | +1,180 | Take a generated harness module through tuning, build and submission, and decide what the run proved — including when a rule passed for a reason that says nothing about the program. |
 | **P4** The Anchor surface and the worked example | +715 | +720 | Read an Anchor program's account and handler surface, and render the worked example an author is shown against that program rather than against a generic one. |
@@ -243,6 +244,16 @@ stake program (`docs/stake-benchmark.md`). A regression test needs a fixture who
 collides with its own graph, and that test is still to write.
 
 ### P2 — A hand-written rule in, verdicts out
+
+**Merged 2026-10-02 as [#258](https://github.com/Certora/AutoProver/pull/258), `b999c306`:** 10
+files, +1,269 −8. What review changed is below. The last change came after the branch had stacked on
+#258. The build script, its command file and the conf moved out of the working tree, into an `into`
+directory the caller supplies (`write_build_script` refuses one the confined build can write). The
+Prover runs that script unconfined, and the script reads its confinement from the command file, so a
+`build.rs` that could rewrite either one could make the Prover's rebuild run unconfined. The
+branch's reconcile (`fc61b4b6`) supplies `.cvlr_work/submissions`, a sibling of the shared tree. It
+rides **P3b** (`VerifyDeps.submissions`) and **P7** (`SUBMISSIONS_DIR`, created in
+`CvlrStagedFormalizer.begin`). `tests/test_cvlr_end_to_end.py` passed on the rebased branch.
 
 `composer/cargo/sbf.py`, `composer/spec/cvlr/{prover,rules}.py`, and
 `tests/test_cvlr_end_to_end.py`.
@@ -415,7 +426,7 @@ description has to say so rather than leave a reviewer to find it.
 
 ### Order, and what is forced
 
-**~~P1~~ → P2 → P3a → P3b → P4 → K1 → P5 → P6 → P7**
+**~~P1~~ → ~~P2~~ → P3a → P3b → P4 → K1 → P5 → P6 → P7**
 
 P4 and K1 are the only two with slack: P4 needs `rust_source` (P3a) and nothing after it, and K1
 needs nothing in `composer/spec/cvlr/` at all, so either can move earlier if that helps scheduling.
@@ -810,7 +821,7 @@ already local to the functions that need them.
 | S4 *(closed)* | nothing: the give-up reason goes to P7, `job_input` to P3b, the fetcher to P7 |
 | P1 *(merged)* | `composer/cargo/{__init__,features,manifest,metadata,session}.py` `composer/spec/cvlr/{__init__,conf,crates,env_paths,forks,preflight,reference,scaffold,tuning}.py` `composer/spec/cvlr/envs/` `composer/spec/cvlr/harness_files/` `composer/prover/conf.py` `composer/spec/source/{prover,author,artifacts}.py` *(hunks)* `composer/spec/natspec/task_description.py` *(hunks)* `tests/test_cvlr_{env_paths,forks,plumbing,preflight,reference,scaffold}.py` `tests/test_prover_conf.py` `tests/test_rules_striping.py` *(hunks)* `tests/test_stuck_rule_warnings.py` *(hunks)* `tests/data/vault_sbf_symbols.txt` `pyproject.toml` `uv.lock` |
 | P1 follow-up, to master now | `composer/spec/cvlr/preflight.py` *(hunk: `check(manifest_dir=…)`)* `composer/spec/cvlr/crates.py` *(hunk: drop `roots()`)* — plus the regression test, still to write |
-| P2 | `composer/cargo/sbf.py` `composer/spec/cvlr/prover.py` `tests/test_cvlr_end_to_end.py` `tests/test_cvlr_plumbing.py` *(split: `sbf_argv`, the build script, `write_submission`)* |
+| P2 *(merged)* | `composer/cargo/sbf.py` `composer/spec/cvlr/prover.py` `tests/test_cvlr_end_to_end.py` `tests/test_cvlr_plumbing.py` *(split: `sbf_argv`, the build script, `write_submission`)* |
 | Tuning directives *(held)* | `composer/spec/cvlr/envs/` *(hunks)* `tests/test_cvlr_env_paths.py` *(hunk: the directive counts)* `tests/test_cvlr_dropped_writes.py` `tests/data/dropped_writes_probe.rs` |
 | P3a | `composer/spec/cvlr/{rust_source,munge,tree}.py` `graphcore` `pyproject.toml` `tests/test_cvlr_munge.py` *(split: the source half, less the three `CvlrFormalizer` cases)* `tests/test_cvlr_module_redirect.py` `tests/test_cvlr_import_swap.py` `tests/test_cvlr_anchor_reach.py` `tests/data/anchor_reach_probe.rs` |
 | P3b | `composer/spec/cvlr/{state,harness,verify,rules}.py` `tests/test_cvlr_rules.py` `tests/test_cvlr_build_permit.py` `composer/prover/core.py` *(hunk: `UnanalyzedCexHandler`)* `composer/spec/cvlr/tuning.py` *(split: `SummaryDirective`, `TuningFiles`, appended to what P1 landed)* `composer/spec/cvlr/conf.py` *(hunks: `OptimisticLoop`, `CollectUnsatCore`)* `composer/spec/source/report_prover.py` *(hunks: `job_input`, `fetch_unsat_cores`)* `composer/cargo/symbols.py` `tests/test_cvlr_symbols.py` `tests/test_cvlr_tuning.py` `tests/test_cvlr_tree.py` `tests/test_cvlr_plumbing.py` *(split: `_CaptureCallbacks`, `_RunAccounting`)* |
