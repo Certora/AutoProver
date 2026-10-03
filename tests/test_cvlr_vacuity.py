@@ -188,7 +188,8 @@ def _deps(analyzer: _FakeAnalyzer, results: _FakeResults) -> verify_mod.VacuityD
     verify = SimpleNamespace(
         lock=asyncio.Lock(),
         target=SimpleNamespace(session=None, stage=_stubbed_stage, build_slot=contextlib.nullcontext),
-        submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit_x"),
+        submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit_x", msg="m"),
+        submissions=Path("/w/submissions"),
         prover_opts=None,
     )
     return verify_mod.VacuityDeps(verify, analyzer, lambda: results)  # type: ignore[arg-type]

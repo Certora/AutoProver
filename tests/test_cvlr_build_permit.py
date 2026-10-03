@@ -45,6 +45,7 @@ def _deps(tmp_path: Path, sem: asyncio.Semaphore) -> SimpleNamespace:
         target=SimpleNamespace(
             session=target.session, stage=stage, build_slot=target.build_slot
         ),
+        submissions=tmp_path / "submissions",
         prover_opts=None,
     )
 
@@ -54,7 +55,7 @@ def _submit(deps: SimpleNamespace):
         deps,  # type: ignore[arg-type]
         {"summaries": [], "munges": []},  # type: ignore[arg-type]
         "draft",
-        Submission(manifest_path=Path("/w/Cargo.toml")),
+        Submission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
         callbacks=_RunAccounting(),
         cex=None,  # type: ignore[arg-type]
         tool_call_id="tc",

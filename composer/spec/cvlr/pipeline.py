@@ -112,6 +112,11 @@ WORK_DIR = Path(".cvlr_work")
 #: are visibly separate things in one place.
 BUILD_DIR = "build"
 
+#: Each submission's build script, its command file and its conf, beside :data:`BUILD_DIR` rather
+#: than in it: the Prover runs the script unconfined, so nothing the confined build can write may
+#: hold it (:func:`composer.cargo.sbf.write_build_script`).
+SUBMISSIONS_DIR = "submissions"
+
 
 class CvlrPhase(enum.Enum):
     DISCOVER_DESIGN_DOC = "discover_design_doc"
@@ -158,6 +163,8 @@ class SharedBuild:
     #: Prover's rebuild and upload, and not across the cloud job — see
     #: :meth:`composer.spec.cvlr.verify.HarnessTarget.build_slot`.
     build_sem: asyncio.Semaphore
+    #: Where submissions are written; see :data:`SUBMISSIONS_DIR`.
+    submissions: Path
     warm_failure: str | None = None
 
 
@@ -217,6 +224,7 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
                     self.deps.package_dir / ENVS_DIR / SUMMARIES.unit_composite(identity.module),
                 ),
             ),
+            submissions=self.build.submissions,
             prover_opts=self.deps.prover_opts,
             stamper=prover_stamper(),
             analysis=CexAnalysis(store=self.deps.cex_analysis),
@@ -384,6 +392,8 @@ class CvlrStagedFormalizer(StagedFormalizer[GeneratedHarness, SolanaComponentIns
         if adopted:
             _log.info("cvlr: re-synced %s into the working tree", ", ".join(adopted))
         session = CargoSession(workdir=tree.root, sandbox=self.deps.sandbox)
+        submissions = project / WORK_DIR / SUBMISSIONS_DIR
+        submissions.mkdir(parents=True, exist_ok=True)
         warmed = await session.warm()
         failure = (
             f"could not fetch the dependency graph for {tree.root} "
@@ -397,6 +407,7 @@ class CvlrStagedFormalizer(StagedFormalizer[GeneratedHarness, SolanaComponentIns
             # One permit for the run. Cargo would serialize concurrent builds against this
             # `target/` on its own lock anyway; the permit is the queue the host can see.
             build_sem=asyncio.Semaphore(1),
+            submissions=submissions,
             warm_failure=failure,
         )
         return CvlrFormalizer(GeneratedHarness, "prover", self.deps, build)

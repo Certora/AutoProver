@@ -438,6 +438,9 @@ class VerifyDeps:
 
     target: HarnessTarget
     submission: Submission
+    #: The directory :func:`composer.spec.cvlr.prover.prepare_submission` writes into. Outside the
+    #: tree, which the confined build can write.
+    submissions: Path
     prover_opts: ProverOptions
     stamper: ValidationStamper
     #: ``None`` runs the prover with no analysis at all — the plumbing tests and any caller with no
@@ -629,7 +632,9 @@ async def _stage_and_submit(
     """
     async with deps.target.build_slot() as permit:
         reconciled = await deps.target.stage(draft, state["summaries"], state["munges"])
-        prepared = await prepare_submission(deps.target.session, submission)
+        prepared = await prepare_submission(
+            deps.target.session, submission, into=deps.submissions
+        )
         if isinstance(prepared, BuildRejected):
             return reconciled, prepared
         callbacks.release_on_upload(permit)

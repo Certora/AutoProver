@@ -28,11 +28,12 @@ from pathlib import Path
 import pytest
 
 from composer.cargo.metadata import Workspace
-from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, Built, platform_tools_installed
+from composer.cargo.sbf import Built, platform_tools_installed
 from composer.cargo.session import CargoSession, Warmed
 from composer.prover.conf import SelectRules, dump_conf
 from composer.prover.core import UnanalyzedCexHandler, make_prover_options
 from composer.sandbox.config import SandboxConfig
+from composer.sandbox.recipes import PLATFORM_TOOLS_ROOT
 from composer.spec.cvlr.conf import PLATFORM_TOOLS_VERSION
 from composer.spec.cvlr.prover import (
     BuildRejected,
@@ -109,6 +110,8 @@ async def test_which_writes_the_model_drops(project, capsys):
     fast = await session.check(package=PACKAGE, features=("certora",))
     assert fast.ok, fast.verdict
 
+    into = project.parent / "submission"
+    into.mkdir()
     prepared = await prepare_submission(
         session,
         Submission(
@@ -117,6 +120,7 @@ async def test_which_writes_the_model_drops(project, capsys):
             stem=STEM,
             msg="AutoProver dropped-writes probe",
         ),
+        into=into,
     )
     if isinstance(prepared, BuildRejected):
         outcome = prepared

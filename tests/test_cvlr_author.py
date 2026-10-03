@@ -565,7 +565,8 @@ async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeyp
         ),
         # What the run started from. The state below carries different settings, which is what a
         # settings edit would have produced and what the submission must actually use.
-        submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml")),
+        submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
+        submissions=Path("/w/submissions"),
         prover_opts=None,
         analysis=None,
         stamper=None,

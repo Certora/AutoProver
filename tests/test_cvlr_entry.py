@@ -188,7 +188,7 @@ async def test_the_build_subcommand_is_probed_before_anything_is_staged(
     behaves normally through preflight, analysis, extraction and a full authoring iteration before
     failing at the phase that already cost the money."""
     async def refuse() -> str:
-        raise entry_sbf.SbfSubcommandMissing("no such subcommand")
+        raise entry_sbf.SbfSubcommandMissing()
 
     monkeypatch.setattr(entry, "sbf_subcommand_version", refuse)
 

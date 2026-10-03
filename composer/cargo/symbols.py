@@ -16,7 +16,8 @@ import re
 import subprocess
 from pathlib import Path
 
-from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, PlatformToolsMissing
+from composer.cargo.sbf import PlatformToolsMissing
+from composer.sandbox.recipes import PLATFORM_TOOLS_ROOT
 
 #: ``llvm-nm`` is not in platform-tools, and the system one mis-reads SBF names
 #: (every symbol comes back empty). ``llvm-readelf`` is shipped and works.
@@ -90,7 +91,7 @@ def defined_functions(shared_object: Path, *, tools_version: str) -> tuple[str, 
     """
     reader = PLATFORM_TOOLS_ROOT / tools_version / _READELF
     if not reader.is_file():
-        raise PlatformToolsMissing(tools_version, PLATFORM_TOOLS_ROOT)
+        raise PlatformToolsMissing(tools_version)
     run = subprocess.run(
         [str(reader), "--syms", str(shared_object)],
         capture_output=True,

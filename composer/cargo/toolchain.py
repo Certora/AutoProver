@@ -145,9 +145,7 @@ class SolanaToolchain:
                 f"the plan asks to build {program!r}, which is not a member of the Cargo workspace "
                 f"at {workdir}"
             )
-        built = await sbf_build(
-            session, SbfBuild(manifest_path=package.manifest_path), timeout_s=timeout_s
-        )
+        built = await sbf_build(session, SbfBuild(manifest_path=package.manifest_path))
         if not isinstance(built.verdict, Built):
             raise ToolchainRequestUnsupported(
                 f"building {program} failed:\n{built.verdict.diagnostics}"
