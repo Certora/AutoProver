@@ -75,12 +75,13 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.messages.tool import ToolCall
 
 
-def _tc(name: str, **args: Any) -> ToolCall:
+def _tc(tool: str, **args: Any) -> ToolCall:
     """Tool-call dict with a unique ``id`` (LangGraph binds tool responses back
-    to calls by id, so every entry needs its own)."""
+    to calls by id, so every entry needs its own). ``tool`` is the tool name;
+    ``**args`` are the call arguments (so a tool with a ``name`` argument works)."""
     return {
         "id": f"toolu_{uuid.uuid4().hex[:20]}",
-        "name": name,
+        "name": tool,
         "args": args,
         "type": "tool_call",
     }
@@ -106,16 +107,17 @@ def _ai(text: str = "", *tool_calls: ToolCall) -> AIMessage:
 #
 # The Solidity source is staged on disk in
 # ``composer/testing/scenarios/autoprove_counter/src/Counter.sol``. These CVL
-# strings are emitted as ``put_cvl_raw`` arguments during the component-CVL
+# strings are emitted as ``put_buffer`` arguments during the component-CVL
 # phase. Real tools validate them:
 #
-#   - Typechecker.jar  — gatekeeps ``put_cvl_raw`` (rejects parse errors).
-#   - Certora prover   — gatekeeps ``verify_spec`` (proves or CEXes).
+#   - Typechecker.jar  — gatekeeps ``put_buffer`` (rejects parse errors).
+#   - Certora prover   — gatekeeps ``submit_buffer`` / ``collect_results``
+#                        (proves or CEXes the buffer).
 
 
 # Intentionally malformed surface-syntax CVL. Triggers the Typechecker.jar
-# rejection path on the first ``put_cvl_raw`` of the component-CVL phase;
-# the tape's next turn resubmits valid CVL.
+# rejection path on Q5's malformed ``put_buffer`` (a tool-coverage turn); the
+# put is rejected and creates no buffer.
 BROKEN_PARSE_CVL = """\
 invariant not_valid_cvl()
     this is definitely not valid CVL syntax;
@@ -157,7 +159,8 @@ rule increment_increases_sender_tally {
 # ``Counter.incrementOther`` (which has a real off-target bug: it credits
 # ``msg.sender`` instead of ``other``). The tape responds to that CEX by
 # calling ``expect_rule_failure`` to mark the rule as surfacing a real
-# implementation bug, then re-runs ``verify_spec`` with the rule excluded.
+# implementation bug, then re-collects to refresh the buffer's completion
+# stamp — the failure is forgiven as expected-to-fail, not excluded from the run.
 COMPONENT_CVL = """\
 methods {
     function count() external returns (uint256) envfree;
@@ -698,12 +701,11 @@ _CVL_TAPE: list[BaseMessage] = [
         ),
     ),
 
-    # Q5 — intentionally malformed CVL on the first put_cvl_raw.
-    # Typechecker.jar rejects the parse and the tool returns the error text
-    # without mutating curr_spec.
+    # Q5 — intentionally malformed CVL via put_buffer. Typechecker.jar rejects
+    # the parse, so the tool returns the error text and creates no buffer.
     _ai(
-        "Drafting the component spec.",
-        _tc("put_cvl_raw", cvl_file=BROKEN_PARSE_CVL),
+        "Drafting a scratch buffer.",
+        _tc("put_buffer", name="scratch", cvl=BROKEN_PARSE_CVL),
     ),
 
     # Q6 — exercise get_cvl + record_skip against a real batch title.
@@ -750,14 +752,23 @@ _CVL_TAPE: list[BaseMessage] = [
 
     # ── The component spec proper ──────────────────────────────────────
 
-    # R1 — put the incomplete first draft. Typechecks, so it reaches the judge.
+    # R1 — put the incomplete first draft as a run-target buffer covering only the two
+    # increment() properties. Typechecks, so it reaches the judge (which rejects on coverage).
     _ai(
-        "Writing a first pass at the component spec.",
-        _tc("put_cvl_raw", cvl_file=PARTIAL_COMPONENT_CVL),
+        "Writing a first pass as a run-target buffer.",
+        _tc(
+            "put_buffer",
+            name="core",
+            cvl=PARTIAL_COMPONENT_CVL,
+            property_rules={
+                "count_increments_by_one": ["increment_increases_count"],
+                "sender_increments_by_one": ["increment_increases_sender_tally"],
+            },
+        ),
     ),
 
     # R2 — request feedback. Spawns J1.{1-3}. The judge returns good=False, so
-    # validations["feedback"] is NOT stamped and the author must revise.
+    # the buffer's feedback validation is NOT stamped and the author must revise.
     _ai(
         "Requesting judge feedback on the first draft.",
         _tc("feedback_tool"),
@@ -794,11 +805,21 @@ _CVL_TAPE: list[BaseMessage] = [
         ),
     ),
 
-    # R3 — author addresses the feedback with the full three-rule spec.
-    # Mutates curr_spec, so any prior stamp would be stale regardless.
+    # R3 — author addresses the feedback by re-putting the buffer with the full
+    # three-rule spec and assigning all three properties. Changing the buffer
+    # content invalidates any prior stamp regardless.
     _ai(
-        "Adding the missing incrementOther rule.",
-        _tc("put_cvl_raw", cvl_file=COMPONENT_CVL),
+        "Adding the missing incrementOther rule and assigning all three properties.",
+        _tc(
+            "put_buffer",
+            name="core",
+            cvl=COMPONENT_CVL,
+            property_rules={
+                "count_increments_by_one": ["increment_increases_count"],
+                "sender_increments_by_one": ["increment_increases_sender_tally"],
+                "other_increments_by_one": ["incrementOther_credits_target_when_distinct"],
+            },
+        ),
     ),
 
     # R4 — second feedback round. Spawns J2.{1-3}, which approves.
@@ -825,28 +846,26 @@ _CVL_TAPE: list[BaseMessage] = [
         "Judge: reading the draft.",
         _tc("read_rough_draft"),
     ),
-    # J2.3 — good=True verdict. Stamps validations["feedback"] with
-    # digest(COMPONENT_CVL, skipped=[]). rule_skips is NOT part of the
-    # digest, so the later expect_rule_failure won't invalidate this
+    # J2.3 — good=True verdict. Stamps the buffer's feedback validation at its
+    # current digest (which includes its claimed properties). rule_skips is NOT
+    # part of the digest, so the later expect_rule_failure won't invalidate this
     # stamp.
     _ai(
         "Judge: approving the component spec.",
         _tc("result", good=True, feedback=""),
     ),
 
-    # R5 — first prover run. The two increment() rules verify; the
-    # incrementOther rule CEXes (msg.sender credited instead of other).
-    # all_verified=False → validations[prover] NOT stamped, tool returns
-    # raw report string. Exactly ONE failing rule → exactly ONE
-    # ``analyze_cex_raw`` LLM call fires inline (CEX.2 below).
-    _ai(
-        "Running the prover on the component spec.",
-        _tc("verify_spec", rules=None),
-    ),
+    # R5 — first prover run: submit the buffer, then collect its result. The two
+    # increment() rules verify; the incrementOther rule CEXes (msg.sender credited
+    # instead of other). The buffer is not complete, so the completion gate stays
+    # closed. Exactly ONE violated rule → exactly ONE ``analyze_cex_raw`` LLM call
+    # fires inside the background job during ``collect_results`` (CEX.2 below).
+    _ai("Submitting the buffer for verification.", _tc("submit_buffer", name="core")),
+    _ai("Collecting the results.", _tc("collect_results", wait=True)),
 
     # CEX.2 — inline analysis of the incrementOther CEX. Plain AIMessage,
     # no tool_calls, mirrors the CEX.1 entry in the invariant-CVL phase.
-    # Critical placement: between R5 and R6 in the global tape cursor.
+    # Critical placement: after R5's collect_results and before R6 in the lane.
     _ai(
         "Counter-example analysis for rule "
         "``incrementOther_credits_target_when_distinct``:\n\n"
@@ -886,35 +905,22 @@ _CVL_TAPE: list[BaseMessage] = [
         ),
     ),
 
-    # R7 — re-run prover. With the buggy rule in rule_skips, the
-    # all_verified loop in verify_spec ignores it; the two increment()
-    # rules pass, so all_verified=True and rules=None → stamps
-    # validations[prover] at digest(COMPONENT_CVL, skipped=[]), which
-    # matches the feedback stamp from J2.3.
+    # R7 — re-collect (no re-run). R5's run already stands at the current digest;
+    # now that the incrementOther rule is expected-to-fail, collect_results
+    # re-evaluates completion over that run — the two increment() rules VERIFIED and
+    # the incrementOther failure forgiven — and stamps the buffer's ``prover``
+    # validation, which the publish gate (check_buffer_completion) requires. No new
+    # submit: the content is unchanged since R3, so re-running only reproduces R5.
     _ai(
-        "Re-running the prover with the buggy rule excluded.",
-        _tc("verify_spec", rules=None),
-    ),
-    _ai(
-        "Counter-example analysis for rule "
-        "``incrementOther_credits_target_when_distinct``:\n\n"
-        "The prover constructed a state where ``msg.sender`` and "
-        "``other`` are distinct nonzero addresses and ``increments[other]"
-        "`` starts at 0. After the call, ``increments[other]`` is still "
-        "0 — the implementation incremented ``increments[msg.sender]`` "
-        "instead. This is a real bug in ``Counter.incrementOther``: it "
-        "credits the caller rather than the target address. The CVL "
-        "rule is correctly written; the implementation is wrong.\n\n"
-        "Suggested action: leave the rule in place as a regression "
-        "witness, mark it expected-to-fail with a citation back to the "
-        "implementation bug, and surface this in the final commentary "
-        "so a human can fix the Solidity."
+        "Re-collecting to refresh the completion stamp now that the buggy rule is expected-to-fail.",
+        _tc("collect_results", wait=True),
     ),
 
-    # R8 — final result. Both stamps current, curr_spec unchanged since
-    # R3. Commentary documents the surfaced bug so the downstream
-    # ``natspec_report`` / file-on-disk autospec output flags it for the
-    # human reviewer.
+    # R8 — final result. The buffer is complete (two increment() rules verified,
+    # incrementOther expected-to-fail) and reviewed, so the completion gate opens.
+    # Commentary documents the surfaced bug so the downstream ``natspec_report`` /
+    # file-on-disk autospec output flags it for the human reviewer. The
+    # property→rule mapping already lives on the buffer (from R3's put_buffer).
     _ai(
         "Finalizing the component CVL.",
         _tc(
@@ -928,11 +934,6 @@ _CVL_TAPE: list[BaseMessage] = [
                 "sender] instead of increments[other]. The spec is "
                 "correct; the implementation needs to be fixed."
             ),
-            property_rules=[
-                {"property_title": "count_increments_by_one", "rules": ["increment_increases_count"]},
-                {"property_title": "sender_increments_by_one", "rules": ["increment_increases_sender_tally"]},
-                {"property_title": "other_increments_by_one", "rules": ["incrementOther_credits_target_when_distinct"]},
-            ],
         ),
     ),
 ]
@@ -1117,23 +1118,35 @@ def _nag_streak_turns() -> list[BaseMessage]:
     author monitor injects the <system-reminder> before the next turn."""
     turns: list[BaseMessage] = [
         _ai(
-            "Writing the component spec covering all three properties.",
-            _tc("put_cvl_raw", cvl_file=_nag_attempt_spec(0)),
+            "Writing the component as a single run-target buffer covering all three properties.",
+            _tc(
+                "put_buffer",
+                name="core",
+                cvl=_nag_attempt_spec(0),
+                property_rules={
+                    "count_increments_by_one": ["increment_increases_count"],
+                    "sender_increments_by_one": ["increment_increases_sender_tally"],
+                    "other_increments_by_one": [NAG_STUCK_RULE],
+                },
+            ),
         ),
-        _ai(
-            "Running the prover on the component spec.",
-            _tc("verify_spec", rules=None),
-        ),
+        _ai("Submitting the buffer for verification.", _tc("submit_buffer", name="core")),
+        _ai("Collecting the results.", _tc("collect_results", wait=True)),
     ]
     for i in range(1, STUCK_RULE_NAG_THRESHOLD):
         turns.append(_ai(
-            f"The sanity failure could be transient — nudging the spec and "
-            f"trying again (attempt {i + 1}).",
-            _tc("put_cvl_raw", cvl_file=_nag_attempt_spec(i)),
+            f"The sanity failure could be transient — nudging the buffer and "
+            f"re-submitting (attempt {i + 1}). The nudge changes the content, so the "
+            f"buffer re-launches.",
+            _tc("put_buffer", name="core", cvl=_nag_attempt_spec(i)),
         ))
         turns.append(_ai(
-            f"Re-running the prover (attempt {i + 1}).",
-            _tc("verify_spec", rules=None),
+            f"Re-submitting the buffer (attempt {i + 1}).",
+            _tc("submit_buffer", name="core"),
+        ))
+        turns.append(_ai(
+            f"Collecting the results (attempt {i + 1}).",
+            _tc("collect_results", wait=True),
         ))
     return turns
 
@@ -1165,12 +1178,10 @@ _NAG_CVL_TAPE: list[BaseMessage] = [
 
     # NG-verify — re-verify. The skipped rule is excluded from all_verified
     # AND from the stuck-rule tally (no re-nag); the two increment() rules
-    # pass, so rules=None + all_verified stamps validations["prover"] at the
+    # pass, so a whole-buffer run + all_verified stamps validations["prover"] at the
     # digest of the final (attempt-nudged) spec.
-    _ai(
-        "Re-running the prover with the stuck rule excluded.",
-        _tc("verify_spec", rules=None),
-    ),
+    _ai("Re-submitting the buffer with the stuck rule excluded.", _tc("submit_buffer", name="core")),
+    _ai("Collecting the results.", _tc("collect_results", wait=True)),
 
     # NG-judge — the feedback round runs AFTER the streak: every nudge put
     # invalidated any earlier feedback stamp, so it is earned once here, on
@@ -1216,11 +1227,6 @@ _NAG_CVL_TAPE: list[BaseMessage] = [
                 "expected-to-fail after the stuck-rule reminder fired; it "
                 "needs a human rewrite."
             ),
-            property_rules=[
-                {"property_title": "count_increments_by_one", "rules": ["increment_increases_count"]},
-                {"property_title": "sender_increments_by_one", "rules": ["increment_increases_sender_tally"]},
-                {"property_title": "other_increments_by_one", "rules": [NAG_STUCK_RULE]},
-            ],
         ),
     ),
 ]

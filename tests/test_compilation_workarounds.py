@@ -1030,6 +1030,50 @@ def test_project_default_is_preferred_over_whatever_solc_is_on_path(
     assert compilation_config["solc"] == "solc8.34"
 
 
+def test_a_conf_pinned_only_by_the_seeded_default_still_gets_the_fallback(
+    manager, monkeypatch, tmp_path
+) -> None:
+    # A conf that arrives with neither a scalar solc nor a compiler_map is still
+    # pinned in fact: _seed_compile_maps writes solc_default_version into the map
+    # for every contract. The gate has to read that effective default, or the one
+    # workaround that could substitute an installed compiler stays switched off and
+    # the run dies in compilation with nothing explaining why.
+    monkeypatch.setattr(
+        manager, "_solc_fallback_candidates", lambda: [("solc8.21", "0.8.21")]
+    )
+    monkeypatch.setattr(manager, "solc_default_version", "solc8.34")
+    contracts = [_write_pragma(tmp_path, "Vault", "^0.8.0")]
+    # The failure has to name the compiler seeding pinned, which is the default.
+    not_found_default = (
+        "attribute/flag 'compiler_map': Solidity executable solc8.34 not found in path\n"
+    )
+    success, _, compilation_config, _ = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [not_found_default],
+        contracts,
+    )
+    assert success is True
+    assert compilation_config["solc"] == "solc8.21"
+
+
+def test_the_bare_solc_default_is_not_a_pin(manager, monkeypatch, tmp_path) -> None:
+    # The other side of the same gate: --solc-default solc means "whatever the
+    # environment resolves", which is the case the fallback exists to stay out of.
+    monkeypatch.setattr(manager, "solc_default_version", "solc")
+    contracts = [_write_pragma(tmp_path, "Vault", "^0.8.0")]
+    success, _, compilation_config, _ = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [SOLC_NOT_FOUND_OUTPUT] * 10,
+        contracts,
+    )
+    assert success is False
+    assert compilation_config.get("solc", "solc") == "solc"
+
+
 def test_candidates_fall_through_to_the_next_when_the_pragma_rejects_the_first(
     manager, monkeypatch, tmp_path
 ) -> None:

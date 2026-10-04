@@ -247,16 +247,14 @@ class AnthropicService(ProviderServiceBase):
         """Mirrors the SDK's own ``_should_retry`` status roster (408/409/429
         and every 5xx, which covers 529 overloaded) plus connection-level
         failures (``APITimeoutError`` subclasses ``APIConnectionError``), a
-        connection dropped mid-stream, and an error the server reports inside a
+        transport failure mid-stream, and an error the server reports inside a
         stream. 400-class request errors are deterministic — an over-long prompt
         fails identically on every attempt — and are deliberately excluded."""
         if isinstance(exc, anthropic.APIConnectionError):
             return True
-        # A connection that drops mid-stream surfaces as a raw httpx.RemoteProtocolError
-        # ("peer closed connection without sending complete message body") — the SDK does not
-        # wrap streamed-body failures as APIConnectionError, so match it directly. It is a
-        # transient transport failure, retryable like any connection-level error.
-        if isinstance(exc, httpx.RemoteProtocolError):
+        # The SDK does not wrap streamed-body failures as APIConnectionError: a dropped stream
+        # raises httpx.RemoteProtocolError, a stalled one httpx.ReadTimeout. Both are transient.
+        if isinstance(exc, httpx.TransportError):
             return True
         if isinstance(exc, anthropic.APIStatusError):
             if exc.status_code in (408, 409, 429) or exc.status_code >= 500:

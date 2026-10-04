@@ -10,7 +10,6 @@ Provides get_prover_tool(), whose submit_buffer / collect_results tools:
 
 import asyncio
 import functools
-import json
 import logging
 import os
 import time
@@ -42,6 +41,9 @@ from composer.prover.core import (
     DefaultCexHandler, ProverReport
 )
 from composer.prover.callbacks import ProverEventCallbacks
+from composer.prover.conf import (
+    Conf, ExcludeRules, InheritRules, RuleSelection, SelectRules, dump_conf,
+)
 from composer.prover.ptypes import StatusCodes
 from composer.ui.tool_display import tool_display
 from composer.diagnostics.stream import (
@@ -77,19 +79,45 @@ The author's editable-flag registry (``author.EDITABLE_FLAGS``) must stay disjoi
 from this set, or an "accepted" flag edit would never reach the prover."""
 
 
-def prover_config_overlay(base_config: dict, *, main_contract: str, verify_target: str) -> dict:
+def prover_config_overlay(
+    base_config: Conf,
+    *,
+    main_contract: str,
+    verify_target: str,
+    extra: Conf | None = None,
+    rules: RuleSelection = InheritRules(),
+) -> Conf:
     """The fixed prover settings the source pipeline layers on top of the base config.
 
     Shared by the live prover run and the persisted ``certora/confs`` dump so the
     two can't drift. ``verify_target`` is the ``<contract>:<spec path>`` the run verifies.
     """
-    return {
+    conf = {
         **base_config,
         "verify": verify_target,
         "parametric_contracts": main_contract,
         "optimistic_loop": True,
         "rule_sanity": "basic",
+        **(extra or {}),
     }
+    return rules.apply_to(conf)
+
+
+BOTH_RULE_SCOPES = "Cannot invoke the prover with both `rules` and `exclude_rules` set to non-none"
+
+
+def rule_selection(
+    rules: list[str] | None, exclude_rules: list[str] | None
+) -> RuleSelection | str:
+    """The run's scope from a caller's ``rules``/``exclude_rules`` pair, or why the pair is
+    invalid. Neither leaves the base config's own selection in force."""
+    if rules is not None and exclude_rules is not None:
+        return BOTH_RULE_SCOPES
+    if rules is not None:
+        return SelectRules(tuple(rules))
+    if exclude_rules is not None:
+        return ExcludeRules(tuple(exclude_rules))
+    return InheritRules()
 
 
 
@@ -111,37 +139,11 @@ def _merge_rule_skips(left: dict[str, str], right: dict[str, str]) -> dict[str, 
         to_ret[k] = v
     return to_ret
 
-class RuleSelection(TypedDict):
-    sort: Literal["exclude", "include"]
-    selector: list[str]
-
-def _selection_of(rule: list[str] | None, exclude_rules: list[str] | None) -> RuleSelection | None:
-    """The ``RuleSelection`` a submit_buffer call asks for, or None to run the whole buffer."""
-    if rule is not None:
-        return RuleSelection(sort="include", selector=rule)
-    if exclude_rules is not None:
-        return RuleSelection(sort="exclude", selector=exclude_rules)
-    return None
-
-def _selection_key(sel: RuleSelection | None) -> str:
-    """A stable key distinguishing one buffer's rule selections, so striped runs (different subsets of
-    the same buffer at the same content) coexist as separate jobs instead of deduping each other. The
-    whole-buffer run keys to the empty string."""
-    if sel is None:
-        return ""
-    return f"{sel['sort']}:{','.join(sorted(sel['selector']))}"
-
-def _apply_selection(config: dict, selection: RuleSelection | None) -> None:
-    """Write a rule subset onto a prover conf: ``rule`` for an include selection, ``exclude_rule`` for
-    an exclude one; a None selection leaves the conf running every rule."""
-    if selection is not None:
-        config["rule" if selection["sort"] == "include" else "exclude_rule"] = list(selection["selector"])
-
 class ProverRunLog(TypedDict):
     tool_call_id: str
     prover_results: list[tuple[RulePath, StatusCodes]]
     spec_digest: str
-    rules: RuleSelection | None
+    rules: RuleSelection
     sort: Literal["run"]
     declared_rules: list[str]
     state_digest: str
@@ -158,16 +160,30 @@ class NagMarker(TypedDict):
 
 type ProverHistoryItem = Annotated[ProverRunLog | NagMarker, Discriminator("sort")]
 
+def _checked_rules(selection: RuleSelection, declared: Iterable[str]) -> list[str]:
+    """The ``declared`` rules a run recorded by this module under ``selection`` checks.
+
+    Not a general property of a ``RuleSelection``. It holds only for this module's runs, under
+    two assumptions:
+
+    - ``InheritRules`` counts as every rule, because the source pipeline's base confs select
+      none of their own. Elsewhere, an inherited selection is whatever the base conf selects.
+    - Names match exactly, because ``submit_buffer`` admits only names the buffer declares.
+      ``SelectRules`` and ``ExcludeRules`` names are otherwise globs."""
+    match selection:
+        case InheritRules():
+            return list(declared)
+        case SelectRules(names):
+            selected = set(names)
+            return [r for r in declared if r in selected]
+        case ExcludeRules(names):
+            excluded = set(names)
+            return [r for r in declared if r not in excluded]
+
 def _executed_rules(
     r: ProverRunLog
 ) -> list[str]:
-    if r["rules"] is None:
-        return r["declared_rules"]
-    elif r["rules"]["sort"] == "include":
-        return r["rules"]["selector"]
-    else:
-        to_filt = set(r["rules"]["selector"])
-        return [ r_id for r_id in r["declared_rules"] if r_id not in to_filt ]
+    return _checked_rules(r["rules"], r["declared_rules"])
 
 def declared_rules_at(
     history: Sequence[ProverHistoryItem], state_digest: str
@@ -617,8 +633,7 @@ def setup_prover_config_in(
     spec_contents: str,
     spec_stem: str | None = None,
     main_contract: str,
-    rule: list[str] | None,
-    exclude_rule: list[str] | None,
+    rules: RuleSelection,
     conf_dir: Path = CERTORA_DIR,
     **config_extra
 ):
@@ -628,13 +643,15 @@ def setup_prover_config_in(
         name=spec_stem
     ) as generated_path:
         config = prover_config_overlay(
-            config, main_contract=main_contract, verify_target=f"{main_contract}:{generated_path}"
+            config,
+            main_contract=main_contract,
+            verify_target=f"{main_contract}:{generated_path}",
+            extra=config_extra,
+            rules=rules,
         )
-        config.update(config_extra)
-        _apply_selection(config, _selection_of(rule, exclude_rule))
         with temp_certora_file(
             root=working_dir,
-            content=json.dumps(config, indent=2),
+            content=dump_conf(config),
             ext="conf",
             name=spec_stem,
             prefix="verify",
@@ -671,6 +688,14 @@ def stuck_rule_nag(
     )
 
 
+def component_slug(spec_stem: str | None, main_contract: str) -> str:
+    """The directory a component's buffers are materialized under (``certora/specs/<slug>/``) and the
+    label prefix of its prover runs: the seeded spec stem, or the main contract, with the
+    ``autospec_`` prefix stripped. One definition, so the author's own runs and a plugin's runs on the
+    author's buffers land in the same place and the buffers' relative imports resolve identically."""
+    return (spec_stem or main_contract).removeprefix("autospec_")
+
+
 @contextmanager
 def materialize_buffers(
     working_dir: str, buffers: Mapping[str, NamedBuffer], slug: str
@@ -699,20 +724,23 @@ def buffer_conf(
     spec_path: str,
     buffer_name: str,
     conf_dir: Path,
-    msg: str,
-    selection: RuleSelection | None = None,
+    msg: str = "",
+    rules: RuleSelection = InheritRules(),
+    **config_extra,
 ) -> Iterator[tuple[str, dict]]:
     """Build a conf verifying an already-materialized buffer spec at ``spec_path`` (its imports resolve
-    to the sibling ``.spec`` files written by :func:`materialize_buffers`). ``selection`` restricts the
-    run to a subset of the buffer's rules. Yields (conf_path, config)."""
+    to the sibling ``.spec`` files written by :func:`materialize_buffers`). The run's scope is
+    ``rules``; ``config_extra`` entries override the conf for this run only, the way :func:`setup_prover_config_in` takes them. Yields (conf_path, config)."""
     cfg = prover_config_overlay(
-        config, main_contract=main_contract, verify_target=f"{main_contract}:{spec_path}"
+        config,
+        main_contract=main_contract,
+        verify_target=f"{main_contract}:{spec_path}",
+        extra={"msg": msg, **config_extra},
+        rules=rules,
     )
-    cfg["msg"] = msg
-    _apply_selection(cfg, selection)
     with temp_certora_file(
         root=working_dir,
-        content=json.dumps(cfg, indent=2),
+        content=dump_conf(cfg),
         ext="conf",
         name=f"verify_{buffer_name}",
         prefix="verify",
@@ -787,9 +815,9 @@ class _BufJob:
     #: so a job whose digest is now stale (its buffer or a shared import changed) can't mark it done.
     digest: str
     task: asyncio.Task[None]
-    #: The rule subset this job runs, or None for the whole buffer. Jobs of one buffer are keyed by
-    #: ``(name, _selection_key(selection))``, so striped runs at the same content coexist.
-    selection: RuleSelection | None = None
+    #: The rule subset this job runs. Jobs of one buffer are keyed by ``(name, selection)``, so
+    #: striped runs at the same content coexist.
+    selection: RuleSelection = InheritRules()
 
 
 @dataclass
@@ -802,7 +830,7 @@ class _BufDone:
     result: ProverReport | str
     all_rules: list[str]
     #: The rule subset this run covered, recorded onto the run's ``ProverRunLog.rules``.
-    selection: RuleSelection | None = None
+    selection: RuleSelection = InheritRules()
 
 
 def get_prover_tool(
@@ -816,9 +844,8 @@ def get_prover_tool(
     stamper = make_validation_stamper(VALIDATION_KEY)
 
     def component_of(state: StateWithSkips) -> str:
-        """The label prefix for this generation's prover runs: its seeded spec stem, or the main
-        contract, with the ``autospec_`` prefix stripped."""
-        return (state.get("spec_stem") or main_contract).removeprefix("autospec_")
+        """The label prefix for this generation's prover runs (:func:`component_slug`)."""
+        return component_slug(state.get("spec_stem"), main_contract)
 
     # ---- Multi-buffer async submit / collect -------------------------------------------------
     # The agent submits each run-target buffer as an independent background job and consumes results
@@ -834,9 +861,9 @@ def get_prover_tool(
         # submit_buffer launches a background task per buffer and returns immediately; collect_results
         # drains finished jobs off the queue. At most one live job per buffer name — a re-submit supersedes
         # a stale predecessor. See submit_buffer / collect_results below.
-        # Keyed by (buffer name, selection key): one buffer can have several concurrent jobs, one per
+        # Keyed by (buffer name, selection): one buffer can have several concurrent jobs, one per
         # rule subset it was striped into. A content edit supersedes every one of them (digest changes).
-        buffer_jobs: dict[tuple[str, str], _BufJob] = {}
+        buffer_jobs: dict[tuple[str, RuleSelection], _BufJob] = {}
         done_queue: asyncio.Queue[_BufDone] = asyncio.Queue()
         submit_counts: dict[str, int] = {}
 
@@ -844,7 +871,7 @@ def get_prover_tool(
             *, name: str, digest: str, label: str, buffers: Mapping[str, NamedBuffer],
             vfs: dict[str, str], conf: dict, cex_state: StateWithSkips, tool_call_id: str,
             writer: Callable[[ProverEvents], None], summary: RunSummary,
-            selection: RuleSelection | None = None,
+            selection: RuleSelection = InheritRules(),
         ) -> None:
             """Verify one buffer end-to-end against a frozen snapshot (taken at submit time) of the source
             and all buffers, then push the outcome onto the completion queue. The job runs in its own
@@ -870,7 +897,7 @@ def get_prover_tool(
                         with buffer_conf(
                             working_dir=run_root, config=conf, main_contract=main_contract,
                             spec_path=spec_path, buffer_name=name, conf_dir=conf_dir, msg=label,
-                            selection=selection,
+                            rules=selection,
                         ) as (cpath, cfg):
                             res = await run_prover(
                                 Path(run_root), [cpath], tool_call_id, prover_opts,
@@ -912,27 +939,22 @@ def get_prover_tool(
             if not b.is_run_target:
                 return f"Buffer {name!r} is a shared (imports-only) buffer; it runs no rules of its own."
 
-            rule: list[str] | None = args.get("rule")
-            exclude_rules: list[str] | None = args.get("exclude_rules")
-            if rule is not None and exclude_rules is not None:
+            selection = rule_selection(args.get("rule"), args.get("exclude_rules"))
+            if isinstance(selection, str):
                 return "Pass at most one of `rule` / `exclude_rules`; omit both to run the whole buffer."
-            selection = _selection_of(rule, exclude_rules)
-            if selection is not None:
+            if not isinstance(selection, InheritRules):
                 owned = b.owned_rules
-                unknown = [r for r in selection["selector"] if r not in owned]
+                unknown = [r for r in selection.names if r not in owned]
                 if unknown:
                     return f"Buffer {name!r} declares no rule(s) {unknown}; its rules are {sorted(owned)}."
-                would_run = selection["selector"] if selection["sort"] == "include" \
-                    else [r for r in owned if r not in set(selection["selector"])]
-                if not would_run:
+                if not _checked_rules(selection, owned):
                     return f"That selection would run no rule of buffer {name!r}; its rules are {sorted(owned)}."
 
             digest = _cur_digest(state, buffers, name)
             if _buffer_complete_at(state, buffers, name, digest):
                 return f"Buffer {name!r} is already verified at its current content; nothing to submit."
 
-            sel_key = _selection_key(selection)
-            existing = buffer_jobs.get((name, sel_key))
+            existing = buffer_jobs.get((name, selection))
             if existing is not None and existing.digest == digest:
                 # This exact subset at this exact content is already in flight, or has just finished with
                 # its result not yet collected. Either way, do not launch a duplicate — the answer is
@@ -945,11 +967,11 @@ def get_prover_tool(
                 )
             # A content edit supersedes every subset job of this buffer (all now at a stale digest); the
             # sibling subsets at the *current* digest are the parallel stripes and stay running.
-            for (nm, sk), j in list(buffer_jobs.items()):
+            for (nm, sel), j in list(buffer_jobs.items()):
                 if nm == name and j.digest != digest and not j.task.done():
                     # TODO: this cancels the local task only; the cloud prover job itself keeps running.
                     j.task.cancel()
-                    buffer_jobs.pop((nm, sk), None)
+                    buffer_jobs.pop((nm, sel), None)
 
             n = submit_counts.get(name, 0) + 1
             submit_counts[name] = n
@@ -964,11 +986,15 @@ def get_prover_tool(
                 # progress can render loosely in the UI (functional results are unaffected).
                 writer=get_stream_writer(), summary=get_run_summary(),
             ))
-            buffer_jobs[(name, sel_key)] = _BufJob(name=name, digest=digest, task=task, selection=selection)
-            running = sorted({nm for (nm, _sk), j in buffer_jobs.items() if not j.task.done()})
-            sel_desc = "" if selection is None else (
-                f" (rules {selection['selector']})" if selection["sort"] == "include"
-                else f" (excluding {selection['selector']})")
+            buffer_jobs[(name, selection)] = _BufJob(name=name, digest=digest, task=task, selection=selection)
+            running = sorted({nm for (nm, _sel), j in buffer_jobs.items() if not j.task.done()})
+            match selection:
+                case InheritRules():
+                    sel_desc = ""
+                case SelectRules(names):
+                    sel_desc = f" (rules {list(names)})"
+                case ExcludeRules(names):
+                    sel_desc = f" (excluding {list(names)})"
             return (
                 f"Submitted buffer {name!r}{sel_desc} (submission {n}); it is now proving in the "
                 f"background. Running: {running}. Call collect_results to retrieve results as jobs finish."
