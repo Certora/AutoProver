@@ -27,7 +27,13 @@ class ProverRunner(Protocol):
     duration of the call and forwards to ``run_prover``. ``rules`` and
     ``exclude_rules`` scope the run the way ``verify_spec`` scopes its own runs
     (at most one of them); ``config`` entries override the author's current
-    prover config for this run only."""
+    prover config for this run only.
+
+    ``buffer`` names the author's buffer that ``curr_spec`` is the (edited) text
+    of. The runner then stages it in that buffer's place, beside the author's
+    other buffers, so the ``import`` statements of the staged text resolve the
+    way they do in the author's own runs. ``None`` stages ``curr_spec`` on its
+    own, as a free-standing spec."""
     async def __call__(
         self,
         *,
@@ -38,6 +44,7 @@ class ProverRunner(Protocol):
         tool_call_id: str,
         rules: list[str] | None = None,
         exclude_rules: list[str] | None = None,
+        buffer: str | None = None,
         **config,
     ) -> ProverReport | str:
         ...
@@ -69,7 +76,7 @@ class CVLAuthorState:
     working_dir: pathlib.Path
     # The spec under authoring, as its named buffers — each a self-contained CVL unit (its own rules,
     # methods{}, and imports). Every rule lives in exactly one buffer; ``spec_for_rule`` returns the CVL
-    # for a given rule.
+    # for a given rule, and ``prover_runner`` stages the whole set when asked to verify one buffer.
     buffers: Mapping[str, NamedBuffer]
     prover_runner: ProverRunner
     host: TaskHost

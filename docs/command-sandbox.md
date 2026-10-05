@@ -161,6 +161,12 @@ chosen by [`SandboxConfig`](../composer/sandbox/config.py) (`$COMPOSER_SANDBOX_P
 provider is a passthrough (`argv == [program, *args]`, and an **empty** `argv_prefix`) — byte-for-byte
 the unconfined behavior, for the EVM/Foundry paths and explicit trusted-input dev runs.
 
+An `argv_prefix` stored in a file for a later launch is only as trusted as the file. The CVLR
+submission writes one into the build script's command file, which `certoraSolanaProver` runs
+unconfined, so that file, the script, and the conf naming it live outside every `rw` grant
+([`write_build_script`](../composer/cargo/sbf.py) refuses a directory the build can write). In
+the workdir, a confined build could drop the prefix and make the prover's rerun unconfined.
+
 Nothing in the backend ABI, the driver, or the artifact store changes — which is why confinement
 could be added last, and why a wheel names no sandbox mechanism anywhere.
 

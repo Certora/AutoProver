@@ -8,6 +8,7 @@ import pytest
 
 from graphcore.testing import Scenario, tool_call_raw
 
+from composer.prover.conf import SelectRules
 from composer.prover.core import ProverReport
 from composer.prover.ptypes import RulePath
 from composer.spec.source.buffer_tools import put_buffer
@@ -46,7 +47,7 @@ def test_materialize_buffers_writes_under_the_component_slug_dir(tmp_path):
 def _runlog(tc, digest, link, rule, selector):
     return ProverRunLog(
         tool_call_id=tc, prover_results=[(RulePath(rule=rule), "VERIFIED")],
-        rules={"sort": "include", "selector": selector}, spec_digest="", sort="run",
+        rules=SelectRules(tuple(selector)), spec_digest="", sort="run",
         declared_rules=["r_a", "r_b"], state_digest=digest, buffer="both", link=link,
     )
 
@@ -223,7 +224,7 @@ class TestBufferSubmitCollect:
         assert _prover_complete(st) is None
         runs = [it for it in st["prover_history"] if it["sort"] == "run" and it.get("buffer") == "both"]
         assert len(runs) == 2
-        assert {tuple(r["rules"]["selector"]) for r in runs} == {("r_a",), ("r_b",)}
+        assert {r["rules"] for r in runs} == {SelectRules(("r_a",)), SelectRules(("r_b",))}
         assert all(len(r["prover_results"]) == 1 for r in runs)  # each run reported only its own rule
 
     async def test_striped_subsets_launch_as_separate_jobs(self, certora_prover: ProverMock):
@@ -436,7 +437,7 @@ class TestBufferSubmitCollect:
 
         def _run(buf: str, declared: list[str]) -> ProverRunLog:
             return ProverRunLog(
-                tool_call_id="t", prover_results=[], rules={"sort": "include", "selector": declared},
+                tool_call_id="t", prover_results=[], rules=SelectRules(tuple(declared)),
                 spec_digest="", sort="run", declared_rules=declared, state_digest=pdig(buf),
                 buffer=buf, link="l",
             )
@@ -493,7 +494,7 @@ class TestBufferSubmitCollect:
 
         def _run(buf: str, declared: list[str]) -> ProverRunLog:
             return ProverRunLog(
-                tool_call_id="t", prover_results=[], rules={"sort": "include", "selector": declared},
+                tool_call_id="t", prover_results=[], rules=SelectRules(tuple(declared)),
                 spec_digest="", sort="run", declared_rules=declared, state_digest=pdig(buf),
                 buffer=buf, link="l",
             )

@@ -1,4 +1,4 @@
-from typing import AsyncIterator, NotRequired, override, Literal, Annotated, Sequence, Protocol, Callable
+from typing import AsyncIterator, Mapping, NotRequired, override, Literal, Annotated, Sequence, Protocol, Callable
 
 from typing_extensions import TypedDict
 from contextlib import asynccontextmanager
@@ -28,9 +28,11 @@ from composer.spec.cvl_generation import (
 )
 from composer.prover.core import run_prover, CexHandler, ProverCallbacks, ProverReport
 from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools, WIPE_HISTORY
-from composer.spec.source.prover import setup_prover_config_in
+from composer.spec.source.prover import (
+    buffer_conf, component_slug, materialize_buffers, rule_selection, setup_prover_config_in,
+)
 from composer.spec.source.spec_buffers import (
-    SpecBuffersExtra, buffer_review_text, buffer_state_digest, check_buffer_completion,
+    NamedBuffer, SpecBuffersExtra, buffer_review_text, buffer_state_digest, check_buffer_completion,
     combined_buffers_view, max_spec_buffers, requireinvariant_citations, run_targets,
     skips_review_digest, SKIPS_VALIDATION_KEY, validate_coverage, validate_declared_rules_mapped,
     validate_disjoint_rules, validate_requireinvariant_proved,
@@ -51,6 +53,7 @@ from composer.spec.source.prover import (
 from langgraph.graph import MessagesState
 from pathlib import Path
 from composer.spec.gen_types import (
+    CERTORA_DIR,
     CVLResource, SPECS_DIR, TypedTemplate, buffer_spec_path, import_statement_for,
 )
 from composer.spec.service_host import ServiceHost, Sort
@@ -825,6 +828,12 @@ class WrappedProverRunner:
     config: dict
     prover_options: ProverOptions
     main_contract: str
+    #: The author's buffers as they stood when the plugin read its state, and the
+    #: component directory they are materialized under. A run on a named buffer
+    #: stages all of them, with that buffer replaced by the text under test, so
+    #: the text's imports resolve to the same files the author's own runs see.
+    buffers: Mapping[str, NamedBuffer] = field(default_factory=dict)
+    slug: str = ""
 
     async def run(
         self,
@@ -836,20 +845,49 @@ class WrappedProverRunner:
         tool_call_id: str,
         rules: list[str] | None = None,
         exclude_rules: list[str] | None = None,
+        buffer: str | None = None,
         **config,
     ) -> ProverReport | str:
+        selection = rule_selection(rules, exclude_rules)
+        if isinstance(selection, str):
+            return selection
         # The spec/conf staging only has to outlive the run itself, so one call
         # stages, runs, and cleans up (the CVLAuthorState.prover_runner contract).
-        with setup_prover_config_in(
-            working_dir=working_dir,
-            spec_stem="adhoc_run",
-            main_contract=self.main_contract,
-            spec_contents=curr_spec,
-            config=self.config,
-            rule=rules,
-            exclude_rule=exclude_rules,
-            **config
-        ) as (conf_path, _):
+        if buffer is None:
+            with setup_prover_config_in(
+                working_dir=working_dir,
+                spec_stem="adhoc_run",
+                main_contract=self.main_contract,
+                spec_contents=curr_spec,
+                config=self.config,
+                rules=selection,
+                **config
+            ) as (conf_path, _):
+                return await run_prover(
+                    pathlib.Path(working_dir),
+                    [conf_path],
+                    tool_call_id,
+                    self.prover_options,
+                    callbacks, cex_handler
+                )
+        if buffer not in self.buffers:
+            raise ValueError(f"no buffer named {buffer!r}; the author has {sorted(self.buffers)}")
+        if not self.slug:
+            raise ValueError("a buffer run needs the component slug its buffers are materialized under")
+        staged = {**self.buffers, buffer: self.buffers[buffer].model_copy(update={"cvl": curr_spec})}
+        with (
+            materialize_buffers(working_dir, staged, self.slug) as paths,
+            buffer_conf(
+                working_dir=working_dir,
+                config=self.config,
+                main_contract=self.main_contract,
+                spec_path=paths[buffer],
+                buffer_name=buffer,
+                conf_dir=CERTORA_DIR / "confs",
+                rules=selection,
+                **config,
+            ) as (conf_path, _),
+        ):
             return await run_prover(
                 pathlib.Path(working_dir),
                 [conf_path],
@@ -976,7 +1014,9 @@ async def batch_cvl_generation(
                 prover_runner=WrappedProverRunner(
                     st["config"],
                     prover_tool.options,
-                    source.contract_name
+                    source.contract_name,
+                    buffers=st.get("buffers") or {},
+                    slug=component_slug(spec_stem, source.contract_name),
                 ).run,
                 host=task_host,
                 edit_store=_PluginStore()

@@ -195,6 +195,9 @@ class SanityResult(Enum):
 SANITY_TIMEOUT_ENV = "AUTOPROVER_SANITY_TIMEOUT"
 DEFAULT_SANITY_TIMEOUT = 1200
 
+# loop_iter written to the config when Stage 1 finds none, so it never falls back to the prover default.
+DEFAULT_LOOP_ITER = 3
+
 
 def sanity_global_timeout() -> int:
     """The per-job prover timeout (seconds) for the exploratory sanity runs: ``DEFAULT_SANITY_TIMEOUT``,
@@ -404,7 +407,12 @@ class SanityPhase:
 
         if optimal_loop_iter is None:
             duration = time.time() - start_time
-            self.log("error", f"Stage 1 failed - no sufficient loop_iter found. Duration: {duration}")
+            self.log(
+                "error",
+                f"Stage 1 failed - no sufficient loop_iter found, using default loop_iter={DEFAULT_LOOP_ITER}. "
+                f"Duration: {duration}",
+            )
+            self._apply_loop_iter_and_flags_to_main_config(DEFAULT_LOOP_ITER)
             return {}
 
         self.log("info", f"Stage 1 completed: optimal loop_iter = {optimal_loop_iter}")

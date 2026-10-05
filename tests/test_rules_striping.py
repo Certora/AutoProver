@@ -23,12 +23,13 @@ import pytest
 from composer.prover.core import (
     ProverReport, SpecCompilationError, declared_rules_list
 )
+from composer.prover.conf import ExcludeRules, InheritRules, RuleSelection, SelectRules
 from composer.prover.ptypes import RulePath, StatusCodes
 from composer.spec.cvl_generation import PropertyRuleMapping, validate_property_rules
 from composer.spec.source.author import ExpectRuleFailure
 from composer.spec.source.buffer_tools import put_buffer
 from composer.spec.source.prover import (
-    NagMarker, ProverHistoryItem, ProverRunLog, RuleSelection, StateWithSkips,
+    NagMarker, ProverHistoryItem, ProverRunLog, StateWithSkips,
     VALIDATION_KEY, _executed_rules, _is_completion_history,
 )
 from composer.spec.source.spec_buffers import NamedBuffer, check_buffer_completion
@@ -48,17 +49,17 @@ RB = RulePath(rule="b")
 
 
 def _inc(*rules: str) -> RuleSelection:
-    return {"sort": "include", "selector": list(rules)}
+    return SelectRules(rules)
 
 
 def _exc(*rules: str) -> RuleSelection:
-    return {"sort": "exclude", "selector": list(rules)}
+    return ExcludeRules(rules)
 
 
 def _log(
     *results: tuple[RulePath, StatusCodes],
     digest: str = "d1",
-    rules: RuleSelection | None = None,
+    rules: RuleSelection = InheritRules(),
     declared: tuple[str, ...] = ("a", "b"),
 ) -> ProverRunLog:
     return ProverRunLog(
@@ -86,6 +87,9 @@ class TestExecutedRules:
 
     def test_exclude_executes_the_complement(self):
         assert _executed_rules(_log(rules=_exc("b"), declared=("a", "b", "c"))) == ["a", "c"]
+
+    def test_include_executes_only_declared_rules(self):
+        assert _executed_rules(_log(rules=_inc("b", "gone"), declared=("a", "b"))) == ["b"]
 
 
 # =========================================================================
@@ -458,7 +462,7 @@ class TestBufferCoverage:
     async def test_buffer_run_is_logged_in_history(self, certora_prover: ProverMock):
         # A whole-buffer run is logged in prover_history against the buffer's current state, with its
         # declared rules and results — the buffer analogue of the old include/exclude conf-history check
-        # (rules is None because a buffer is verified whole, not rule-scoped).
+        # (rules is InheritRules() because a buffer is verified whole, not rule-scoped).
         history = await _scenario(
             certora_prover, _buffers(b=_buf("b", "a", "b")),
             b=_report(a=True, b=True),
@@ -467,7 +471,7 @@ class TestBufferCoverage:
         ).map_run(lambda st: st["prover_history"])
         [entry] = [h for h in history if h["sort"] == "run"]
         assert entry["buffer"] == "b"
-        assert entry["rules"] is None
+        assert entry["rules"] == InheritRules()
         assert sorted(entry["declared_rules"]) == ["a", "b"]
         assert (RulePath(rule="a"), "VERIFIED") in entry["prover_results"]
 
