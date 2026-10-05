@@ -60,7 +60,7 @@ from composer.spec.prop_inference import (
 )
 from composer.llm.types import CacheLevel
 from composer.input.files import Document
-from composer.spec.source.report.build import build_report
+from composer.spec.source.report.build import build_report, design_doc_record
 from composer.spec.source.report.collect import ReportComponentInput, Verdict, EvidenceFetcher, Formalized
 from composer.spec.source.report.schema import (
     AutoProverReport, DeprioritizedProperty, RuleName, ReportBackend, SourceEditRecord,
@@ -770,6 +770,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
             return await build_report(
                 contract_name=source.contract_name, backend=formalizer.backend_tag,
                 components=inputs, llm=run.env.llm_lite(), fetch_verdicts=formalizer.fetch_verdicts,
+                grouping_retry_llm=run.env.llm_heavy(),
                 source_edits=await formalizer.source_edits(outcomes, run),
                 verification_artifacts=artifact_records,
                 # Findings only when the backend supplies evidence — skip the heavy model otherwise.
@@ -778,6 +779,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 run_mode=run.run_mode.value,
                 deprioritized=deprioritized,
                 active_plugins=plugin_manager.plugin_manifest,
+                design_doc=design_doc_record(source),
             )
         report = await run.runner(
             job=_report,
