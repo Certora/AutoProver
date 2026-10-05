@@ -8,7 +8,7 @@ structured-output response and a run that proves the wrong thing (or nothing).
 import pytest
 
 from composer.spec.prioritize import (
-    CRITICAL_MATCH_BONUS, Candidate, PropertyGroup, PropertyRanking,
+    Candidate, PropertyGroup, PropertyRanking,
     RankedProperty, build_candidates, priority, select, validate_ranking,
 )
 from composer.spec.types import ComponentName, PropertyFormulation, PropertyTitle
@@ -98,11 +98,11 @@ def test_a_lower_scoring_property_rides_along_in_the_winning_group():
     assert select(cands, r).titles == ["solvency", "shares_sane"]
 
 
-def test_a_flagged_concern_wins_at_a_comparable_score():
+def test_a_flagged_concern_wins_a_tie():
     cands = _cands()
     r = _default(solvency=40)
-    r.ranked[1] = _e(VAULT, "no_free_mint", 30, critical=True)
-    # 30 + 15 beats 40.
+    r.ranked[1] = _e(VAULT, "no_free_mint", 40, critical=True)
+    # Equal scores; without the flag the first-listed property would win.
     assert select(cands, r).titles == ["no_free_mint"]
 
 
@@ -111,7 +111,38 @@ def test_a_flagged_concern_does_not_drag_a_trivial_property_past_a_critical_one(
     r = _default(solvency=90)
     r.ranked[1] = _e(VAULT, "no_free_mint", 30, critical=True)
     assert select(cands, r).titles == ["solvency"]
-    assert priority(_e(VAULT, "x", 30, critical=True)) == 30 + CRITICAL_MATCH_BONUS
+
+
+def test_a_flag_never_lifts_a_property_over_a_higher_score():
+    # The model's scores are its whole judgement, and its justification is written from them. A
+    # flag on a property scored a few points lower must not hand it the run.
+    cands = build_candidates([
+        (0, ComponentName("Vault"), [_prop("claims_covered_by_assets")]),
+        (1, ComponentName("Admin"), [_prop("upgrade_requires_role")]),
+    ])
+    r = _ranking(
+        [_e("0: Vault", "claims_covered_by_assets", 100),
+         _e("1: Admin", "upgrade_requires_role", 97, critical=True)],
+        [_g("the vault is solvent", ("0: Vault", "claims_covered_by_assets")),
+         _g("only the role holder upgrades", ("1: Admin", "upgrade_requires_role"))],
+    )
+    assert validate_ranking(cands, r) is None
+
+    sel = select(cands, r)
+    assert (sel.unit_index, sel.claim) == (0, "the vault is solvent")
+    assert priority(_e(VAULT, "x", 97, critical=True)) < priority(_e(VAULT, "y", 98))
+
+
+def test_members_are_ordered_by_score_with_the_flag_breaking_ties():
+    props = [_prop("a"), _prop("b"), _prop("c")]
+    cands = build_candidates([(0, ComponentName("Vault"), props)])
+    label = "0: Vault"
+    r = _ranking(
+        [_e(label, "a", 80), _e(label, "b", 90, critical=True), _e(label, "c", 90)],
+        [_g("one claim", (label, "a"), (label, "c"), (label, "b"))],
+    )
+    assert validate_ranking(cands, r) is None
+    assert select(cands, r).titles == ["b", "c", "a"]
 
 
 def test_a_large_group_is_pursued_whole():
