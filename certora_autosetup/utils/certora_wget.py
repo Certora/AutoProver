@@ -19,8 +19,9 @@ Security:
   - Uses certora-login's secure credential storage
   - Automatically refreshes tokens on 401/403 errors
 """
-import os, sys, shutil, subprocess, argparse
+import os, re, sys, shutil, subprocess, argparse
 from typing import Optional, Dict
+from urllib.parse import urlparse, urlunparse
 
 # Suppress keyring warnings before importing certora_login
 try:
@@ -269,6 +270,18 @@ def run_wget_or_curl(url: str, cookie_map: Dict[str, str], outpath: str, retry_o
 
 # ---------- Utility Function for Direct Invocation ----------
 
+_OUTPUT_URL_RE = re.compile(r"https://(?:prover|vaas-dev|vaas-stg)\.certora\.com/output/(?:\d+/)?([0-9A-Fa-f]+)/?")
+
+
+def to_outputs_url(url: str) -> str:
+    """Map a /output/[USER/]JOB job URL to /v1/domain/jobs/JOB/f/outputs, keeping the query."""
+    parsed = urlparse(url)
+    match = _OUTPUT_URL_RE.fullmatch(urlunparse(parsed._replace(query="", fragment="")))
+    if match is None:
+        raise ValueError(f"Not a Certora job URL: {url}")
+    return urlunparse(parsed._replace(path=f"/v1/domain/jobs/{match[1]}/f/outputs"))
+
+
 def download_with_auth(url: str, output_path: str, convert_to_zip_output: bool = False, auth_cookies: Optional[Dict[str, str]] = None) -> int:
     """
     Download a file from Certora with authentication (utility function for programmatic use).
@@ -279,7 +292,7 @@ def download_with_auth(url: str, output_path: str, convert_to_zip_output: bool =
     Args:
         url: URL to download (should be on https://prover.certora.com/...)
         output_path: Output file path (str or Path)
-        convert_to_zip_output: If True, convert /output to /zipOutput in URL
+        convert_to_zip_output: If True, convert the /output job URL to its /f/outputs archive URL
         auth_cookies: Optional pre-fetched auth cookies to reuse (avoids concurrent auth calls)
 
     Returns:
@@ -301,10 +314,10 @@ def download_with_auth(url: str, output_path: str, convert_to_zip_output: bool =
         else:
             cookie_map = auth_cookies
 
-        # Optionally convert /output to /zipOutput
+        # Optionally convert the job URL to its outputs archive URL
         actual_url = url
         if convert_to_zip_output:
-            actual_url = url.replace("/output", "/zipOutput")
+            actual_url = to_outputs_url(url)
 
         # Run downloader
         return run_wget_or_curl(actual_url, cookie_map, str(output_path))
@@ -323,18 +336,18 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Fetch authenticated Certora content using certora-login.")
     ap.add_argument("url", help="URL to fetch (should be on https://prover.certora.com/...)")
     ap.add_argument("output", nargs="?", default="output.html", help="Output file (default output.html)")
-    ap.add_argument("--zip-output", action="store_true", help="Convert /output to /zipOutput in URL")
+    ap.add_argument("--zip-output", action="store_true", help="Convert the /output job URL to its /f/outputs archive URL")
     args = ap.parse_args()
 
     try:
         # Get authentication cookies
         cookie_map = get_auth_cookies()
 
-        # optionally convert /output to /zipOutput
+        # optionally convert the job URL to its outputs archive URL
         url = args.url
         if args.zip_output:
-            url = url.replace("/output", "/zipOutput")
-            _logger.log(f"Converted URL to use /zipOutput: {url}", "INFO")
+            url = to_outputs_url(url)
+            _logger.log(f"Converted URL to the outputs archive: {url}", "INFO")
 
         # run downloader
         out = args.output

@@ -65,7 +65,7 @@ class CloudJob:
 
     @property
     def job_data_url(self) -> str:
-        return f"{self.base_url}/jobData/{self.user_id}/{self.job_id}?anonymousKey={self.anonymous_key}"
+        return f"{self.base_url}/v1/domain/jobs/{self.job_id}?anonymousKey={self.anonymous_key}"
 
 
 def parse_cloud_link(link: str) -> CloudJob:
@@ -111,7 +111,7 @@ async def _poll_job_inner(
                 resp.raise_for_status()
                 data = await resp.json()
 
-            status = data.get("jobStatus", "UNKNOWN")
+            status = data.get("job_status", "UNKNOWN")
 
             if on_status is not None:
                 await on_status(status)
@@ -128,9 +128,9 @@ async def poll_job(
     interval: float = 10.0,
     on_status: Callable[[str], Awaitable[None]] | None = None,
 ) -> dict:
-    """Poll /jobData until the job reaches a terminal status.
+    """Poll /v1/domain/jobs/{id} until the job reaches a terminal status.
 
-    Returns the full jobData JSON dict.
+    Returns the full job JSON dict.
     Raises TimeoutError if the job doesn't finish within `timeout` seconds.
     """
     return await asyncio.wait_for(_poll_job_inner(job, interval=interval, on_status=on_status), timeout=timeout)
@@ -143,7 +143,7 @@ def _job_runtime_ms(job_data: dict) -> int | None:
     ``startTime`` marks when the prover actually began executing. Returns ``None``
     if either timestamp is absent or unparseable, so usage capture never breaks a run.
     """
-    start, finish = job_data.get("startTime"), job_data.get("finishTime")
+    start, finish = job_data.get("start_time"), job_data.get("finish_time")
     if not start or not finish:
         return None
     try:
@@ -235,7 +235,7 @@ async def cloud_results(
     except TimeoutError as exc:
         raise CloudJobError(JobStatus.UNKNOWN, run_result_link) from exc
 
-    status = convert_job_status(job_data.get("jobStatus", "UNKNOWN"))
+    status = convert_job_status(job_data.get("job_status", "UNKNOWN"))
     if status is not JobStatus.SUCCEEDED:
         raise CloudJobError(status, run_result_link)
 
