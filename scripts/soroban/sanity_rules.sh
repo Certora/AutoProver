@@ -9,6 +9,8 @@ TYPES_JSON=/tmp/types.json
 NONDET_JSON=/tmp/nondet_types.json
 USES_TXT=/tmp/uses.rs
 
+BYTESN_HEADER=$2
+
 cd $1
 
 for sf in $(jq -r '(.["contracts"] + .["traits"])[]["sanity_file"]' ./sanity_summary.json | sort | uniq); do
@@ -22,7 +24,7 @@ for sf in $(jq -r '(.["contracts"] + .["traits"])[]["sanity_file"]' ./sanity_sum
 
     jinja2 $MY_DIR/sanity_rules.j2 $TESTS_JSON > $TESTS_RS
 
-    cat $sf $TESTS_RS > $SANITY_TMP    
+    cat $sf $BYTESN_HEADER $TESTS_RS > $SANITY_TMP    
     mv $SANITY_TMP $sf
     
 done

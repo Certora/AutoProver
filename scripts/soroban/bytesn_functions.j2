@@ -1,0 +1,10 @@
+{% for size in sizes %}
+pub fn nondet_bytesn_{{ size }}() -> soroban_sdk::BytesN<{{ size }}> {
+  #[link(wasm_import_module = "env")]
+  #[allow(improper_ctypes)]
+  extern "C" {
+    fn CVT_nondet_bytes_n_{{ size }}() -> soroban_sdk::BytesN<{{ size }}>;
+  }
+  unsafe { CVT_nondet_bytes_n_{{ size }}() }
+}
+{% endfor %}

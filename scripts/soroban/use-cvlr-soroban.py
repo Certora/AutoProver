@@ -77,13 +77,27 @@ def inherit_cvlr_stuff(t):
   t["dependencies"]["cvlr-soroban"] = put_stuff({ "workspace": True, "default-features": False })
   t["dependencies"]["cvlr-soroban-derive"] = put_stuff({ "workspace": True, "default-features": False })
 
+
+def check_muxed_address():
+  vs = sdk_version
+  if vs is not None:
+    if vs[0] >= 23:
+      print(vs.__str__() + " has MuxedAddress")
+      return True
   
+  print(vs.__str__() + " doesn't have MuxedAddress")
+  return False
+
+
 def put_dependencies(t):
   t["dependencies"]["cvlr"] = put_stuff({"git": "https://github.com/Certora/cvlr", "branch": "0.6.1-soroban-changes", "default-features": False})
-  t["dependencies"]["cvlr-soroban"] = put_stuff({ "path": str(root / "cvlr-soroban/cvlr-soroban"), "default-features": False })
+  o = { "path": str(root / "cvlr-soroban/cvlr-soroban"), "default-features": False }
+  if check_muxed_address():
+    o["features"] = [ "muxedaddress" ]
+  t["dependencies"]["cvlr-soroban"] = put_stuff(o)
   t["dependencies"]["cvlr-soroban-derive"] = put_stuff({ "path": str(root / "cvlr-soroban/cvlr-soroban-derive"), "default-features": False })
 
-
+  
 def ensure_cvlr_soroban(obj, from_path, to_path):
   to_path = Path(to_path).parent / "cvlr-soroban"
   if not to_path.exists():

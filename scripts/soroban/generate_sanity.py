@@ -12,6 +12,9 @@ Usage:
 Options:
     --dry-run   Print generated content without writing any files
     --force     Overwrite existing sanity files
+
+Rust sources are parsed with tree-sitter-rust (see rust_ast.py):
+    pip install tree-sitter tree-sitter-rust
 """
 
 import sys, os, re, argparse, json
@@ -19,6 +22,7 @@ from pathlib import Path
 from typing import Optional
 from collections import defaultdict
 from util import *
+import rust_ast as ra
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -47,95 +51,21 @@ def to_snake(name: str) -> str:
     """Convert CamelCase to snake_case."""
     return to_kebab(name).replace('-', '_')
 
-def extract_block(text: str, start: int) -> tuple[str, int]:
-    """Extract balanced {…} starting at index `start` (must be '{')."""
-    if start >= len(text) or text[start] != '{':
-        return '', start
-    depth, i = 0, start
-    while i < len(text):
-        ch = text[i]
-        if ch == '{':
-            depth += 1
-        elif ch == '}':
-            depth -= 1
-            if depth == 0:
-                return text[start:i + 1], i + 1
-        i += 1
-    return text[start:], len(text)
-
-def strip_comments(text: str) -> str:
-    """Strip // line comments and /* */ block comments (naively)."""
-    # Block comments
-    text = re.sub(r'/\*.*?\*/', ' ', text, flags=re.DOTALL)
-    # Line comments
-    text = re.sub(r'//[^\n]*', '', text)
-    return text
+# ─── Rust parsing (tree-sitter) ─────────────────────────────────────────────
+#
+# All Rust source analysis goes through tree-sitter-rust (see rust_ast.py), so
+# comments, string literals, nested generics and multi-line signatures need no
+# special handling.  Two kinds of code are deliberately ignored, as before:
+#   * inline modules gated on a test attribute (`#[cfg(test)] mod tests { … }`)
+#   * macro bodies such as `cfg_if::cfg_if! { … }` — tree-sitter keeps these as
+#     opaque token trees, so items inside them are never seen.
 
 
-# Matches attributes containing the word 'test' (e.g. #[cfg(test)],
-# #[cfg(any(test, feature="testutils"))]) followed by a mod block.
-_TEST_ATTR_MOD_PAT = re.compile(
-    r'#\[[^\]]*\btest\b[^\]]*\]\s*(?:pub\s+)?mod\s+\w+\s*\{'
-)
+def _read_tree(filepath: Path):
+    """Parse *filepath*; returns (root_node, source_bytes)."""
+    tree = ra.parse_file(filepath)
+    return tree.root_node, tree.root_node.text
 
-# Matches cfg_if::cfg_if! { ... } and cfg_if! { ... }
-_CFG_IF_PAT = re.compile(
-    r'\bcfg_if\s*(?:::\s*cfg_if\s*)?\s*!\s*\{'
-)
-
-
-def _strip_brace_blocks(cleaned: str, pattern: re.Pattern) -> str:
-    """Remove all blocks matched by *pattern* (which must end just before the
-    opening '{') from an already-comment-stripped source string."""
-    pos = 0
-    parts: list[str] = []
-    while pos < len(cleaned):
-        m = pattern.search(cleaned, pos)
-        if not m:
-            parts.append(cleaned[pos:])
-            break
-        parts.append(cleaned[pos:m.start()])
-        brace_pos = m.end() - 1   # the opening '{'
-        _, end_pos = extract_block(cleaned, brace_pos)
-        pos = end_pos
-    return ''.join(parts)
-
-
-def strip_test_blocks(cleaned: str) -> str:
-    """Remove test-attributed mod blocks (e.g. #[cfg(test)] mod tests { … })
-    from an already-comment-stripped source string so that test-only
-    #[contract] structs are not mistaken for real contracts."""
-    return _strip_brace_blocks(cleaned, _TEST_ATTR_MOD_PAT)
-
-
-def strip_cfg_if_blocks(cleaned: str) -> str:
-    """Remove cfg_if::cfg_if! { … } macro invocations from an
-    already-comment-stripped source string.  Conditional compilation blocks
-    often contain alternate module declarations or type definitions that do
-    not match the current build target and would confuse the analysis."""
-    return _strip_brace_blocks(cleaned, _CFG_IF_PAT)
-
-
-def strip_non_contract_blocks(content: str) -> str:
-    """Full cleaning pipeline: strip comments, test mod blocks, and cfg_if blocks."""
-    cleaned = strip_comments(content)
-    cleaned = strip_test_blocks(cleaned)
-    cleaned = strip_cfg_if_blocks(cleaned)
-    return cleaned
-
-def parse_param(s: str) -> Optional[tuple[str, str]]:
-    """Parse 'name: Type' → (name, type). Returns None for self variants."""
-    s = s.strip()
-    if re.match(r'^&?mut?\s*self$', s):
-        return None
-    idx = s.find(':')
-    if idx < 0:
-        return None
-    name = s[:idx].strip()
-    ty = s[idx + 1:].strip()
-    # Remove mut from name (e.g. `mut foo: Bar`)
-    name = re.sub(r'^mut\s+', '', name)
-    return (name, ty)
 
 def collect_soroban_types(params: list[tuple[str, str]], ret: Optional[str]) -> set[str]:
     """Gather soroban_sdk type names from a function signature."""
@@ -149,106 +79,63 @@ def collect_soroban_types(params: list[tuple[str, str]], ret: Optional[str]) -> 
 
 # ─── Use-statement analysis ──────────────────────────────────────────────────
 
-def expand_use_tree(tree: str, prefix: str = '') -> list[tuple[str, str, bool]]:
+def use_triples(decl: ra.UseDecl) -> list[tuple[str, str, bool]]:
     """
-    Recursively expand a use tree into (local_name, full_path, is_self) triples.
+    Expand a parsed `use` declaration into (local_name, full_path, is_self)
+    triples, one per imported name (glob imports are returned by use_globs).
 
     - is_self=True  means the name was introduced via `{self}` — i.e. the
       module itself was imported, so the name is the last path segment and
       sub-items should be grouped with it under `use full_path::{self, ...}`.
     - is_self=False means a regular name or alias import.
     """
-    tree = tree.strip()
-    if not tree:
-        return []
-
-    # `... as Alias` at this level (no braces before `as`)
-    as_m = re.match(r'^([^{]+?)\s+as\s+(\w+)$', tree)
-    if as_m:
-        path_part = as_m.group(1).strip()
-        alias = as_m.group(2)
-        full = f'{prefix}::{path_part}'.lstrip(':') if prefix else path_part
-        return [(alias, full, False)]
-
-    # Find first top-level `{`
-    brace_idx = tree.find('{')
-
-    if brace_idx == -1:
-        # Simple path: `foo::bar::Name` or `self` or `*`
-        if tree == 'self':
-            local_name = prefix.split('::')[-1] if prefix else 'self'
-            return [(local_name, prefix, True)]
-        if tree == '*':
-            return []
-        full = f'{prefix}::{tree}'.lstrip(':') if prefix else tree
-        last = tree.split('::')[-1]
-        return [(last, full, False)]
-
-    # Contains braces: `prefix_part::{...}`
-    prefix_part = tree[:brace_idx].rstrip(':').strip()
-    if prefix and prefix_part:
-        new_prefix = f'{prefix}::{prefix_part}'
-    elif prefix_part:
-        new_prefix = prefix_part
-    else:
-        new_prefix = prefix
-
-    # Find matching `}`
-    depth = 0
-    end_idx = len(tree) - 1
-    for i in range(brace_idx, len(tree)):
-        if tree[i] == '{':
-            depth += 1
-        elif tree[i] == '}':
-            depth -= 1
-            if depth == 0:
-                end_idx = i
-                break
-
-    inner = tree[brace_idx + 1:end_idx]
-    items = split_by_comma(inner)
-
-    result = []
-    for item in items:
-        item = item.strip()
-        if item:
-            result.extend(expand_use_tree(item, new_prefix))
-    return result
+    triples: list[tuple[str, str, bool]] = []
+    for leaf in decl.leaves:
+        if leaf.kind == 'glob':
+            continue
+        if leaf.kind == 'self':
+            local = leaf.alias or (leaf.path.split('::')[-1] if leaf.path else 'self')
+            triples.append((local, leaf.path, True))
+        else:
+            triples.append((leaf.local_name, leaf.path, False))
+    return triples
 
 
-def parse_use_stmts_from_source(source_text: str) -> list[str]:
+def use_globs(decl: ra.UseDecl) -> list[str]:
+    """Module paths imported with `*` in *decl* (e.g. ['crate::types'])."""
+    return [leaf.path for leaf in decl.leaves if leaf.kind == 'glob']
+
+
+def parse_use_decls(filepath: Path) -> list[ra.UseDecl]:
+    """All `use` declarations in a Rust file, in source order."""
+    root, _ = _read_tree(filepath)
+    return ra.use_decls(root)
+
+
+def _is_soroban_sdk_path(path: str) -> bool:
+    return path == 'soroban_sdk' or path.startswith('soroban_sdk::')
+
+
+def triples_and_globs(decls: list[ra.UseDecl]) -> tuple[list[tuple[str, str, bool]], list[str]]:
+    """Split use declarations into name triples and glob prefixes.
+
+    Top-level soroban types (soroban_sdk::Address etc.) are handled by
+    collect_soroban_types().  Sub-module paths (soroban_sdk::auth::Context)
+    are NOT in SOROBAN_SDK_TYPES and need a full `use` statement, so only
+    those soroban_sdk imports are kept here.
     """
-    Extract all `use ...;` statements from Rust source text.
-    Handles multi-line use statements by tracking brace depth.
-    """
-    cleaned = strip_comments(source_text)
-    stmts = []
-    i = 0
-    while i < len(cleaned):
-        m = re.search(r'(?<![a-zA-Z_0-9])(?:pub\s+)?use\s+', cleaned[i:])
-        if not m:
-            break
-        use_start = i + m.start()
-        j = i + m.end()
-        depth = 0
-        found = False
-        while j < len(cleaned):
-            ch = cleaned[j]
-            if ch == '{':
-                depth += 1
-            elif ch == '}':
-                if depth == 0:
-                    break   # hit outer block boundary — not a use stmt
-                depth -= 1
-            elif ch == ';' and depth == 0:
-                stmts.append(cleaned[use_start:j + 1].strip())
-                found = True
-                i = j + 1
-                break
-            j += 1
-        if not found:
-            i = j + 1
-    return stmts
+    triples: list[tuple[str, str, bool]] = []
+    globs: list[str] = []
+    for decl in decls:
+        for triple in use_triples(decl):
+            _n, p, _s = triple
+            if _is_soroban_sdk_path(p):
+                if p.count('::') >= 2:
+                    triples.append(triple)
+                continue
+            triples.append(triple)
+        globs.extend(g for g in use_globs(decl) if not _is_soroban_sdk_path(g))
+    return triples, globs
 
 
 def extract_local_type_names(all_fns: list[dict],
@@ -354,16 +241,17 @@ def _fn_uses_unresolvable(fn: dict, unresolvable: set[str]) -> bool:
 def find_locally_defined_names(filepath: Path) -> set[str]:
     """
     Return the set of type/trait names *defined* in this file (not imported).
-    Scans for `pub trait`, `pub struct`, `pub enum`, `pub type` declarations.
+    Collects `pub trait`, `pub struct`, `pub enum` and `pub type` items
+    (outside test modules and macro bodies).
     """
     try:
-        content = filepath.read_text(encoding='utf-8')
-        cleaned = strip_non_contract_blocks(content)
+        root, _ = _read_tree(filepath)
     except Exception:
         return set()
     names: set[str] = set()
-    for m in re.finditer(r'\bpub\s+(?:trait|struct|enum|type)\s+(\w+)', cleaned):
-        names.add(m.group(1))
+    for node in ra.items_of_type(root, 'trait_item', 'struct_item', 'enum_item', 'type_item'):
+        if ra.is_pub(node):
+            names.add(ra.name_of(node))
     return names
 
 
@@ -432,23 +320,37 @@ _KNOWN_EXTERNAL_PREFIXES = frozenset({
 })
 
 
-def find_declared_modules(source_text: str) -> set[str]:
-    """Return the set of submodule names declared in source_text, either as
+def find_declared_modules(root) -> set[str]:
+    """Return the set of submodule names declared in a parsed file, either as
     file modules (`mod name;`) or as top-level inline modules
     (`mod name { ... }`, e.g. a `pub mod client { contractimport!(...) }`
     wrapper).  Test-only inline modules (`#[cfg(test)] mod tests { ... }`)
     are ignored."""
-    cleaned = strip_comments(source_text)
-    mods = set(re.findall(r'\bmod\s+(\w+)\s*;', cleaned))
-
-    # Inline modules: only those at brace depth 0 are direct children of
-    # this file's module (a `mod b {}` nested in `mod a {}` is `a::b`).
-    no_tests = strip_test_blocks(cleaned)
-    for m in re.finditer(r'\bmod\s+(\w+)\s*\{', no_tests):
-        prefix = no_tests[:m.start()]
-        if prefix.count('{') == prefix.count('}'):
-            mods.add(m.group(1))
+    mods = {ra.name_of(n) for n in ra.items_of_type(root, 'mod_item', skip_test_mods=False)
+            if n.child_by_field_name('body') is None}
+    # Inline modules: only direct children of the file are submodules of this
+    # file's module (a `mod b {}` nested in `mod a {}` is `a::b`).
+    for n in root.named_children:
+        if n.type == 'mod_item' and n.child_by_field_name('body') is not None \
+                and not ra.is_test_mod(n):
+            mods.add(ra.name_of(n))
     return mods
+
+
+def _module_file(src_dir: Path, mod_path: str) -> Optional[Path]:
+    """src/a/b.rs or src/a/b/mod.rs for a crate-relative module path 'a::b'
+    (a leading `crate::` / `self::` is ignored)."""
+    for lead in ('crate::', 'self::'):
+        if mod_path.startswith(lead):
+            mod_path = mod_path[len(lead):]
+    parts = [p for p in mod_path.split('::') if p]
+    if not parts:
+        return None
+    for cand in (src_dir.joinpath(*parts).with_suffix('.rs'),
+                 src_dir.joinpath(*parts, 'mod.rs')):
+        if cand.exists():
+            return cand
+    return None
 
 
 def normalize_triples_bare_mods(triples: list[tuple[str, str, bool]],
@@ -544,47 +446,36 @@ def find_publicly_exported_names(lib_rs: Path) -> set[str]:
     - `pub use module::*;`             — glob re-export (scans the module file)
     """
     try:
-        text = lib_rs.read_text(encoding='utf-8')
+        decls = parse_use_decls(lib_rs)
     except Exception:
         return set()
 
     src_dir = lib_rs.parent
     result: set[str] = find_locally_defined_names(lib_rs)
 
-    for stmt in parse_use_stmts_from_source(text):
-        if not re.match(r'\s*pub\s+use\b', stmt):
+    for decl in decls:
+        if not decl.is_pub:
             continue  # only pub use
-
-        body = re.sub(r'^\s*pub\s+use\s+', '', stmt).rstrip(';').strip()
-
-        # Glob re-export: pub use some::module::*
-        if body.rstrip().endswith('*'):
-            gm = re.match(r'(.*?)::\s*\*$', body.strip())
-            if gm:
-                mod_path = gm.group(1).strip()
-                mod_parts_list = mod_path.replace('::', '/').split('/')
-                cand_rs  = src_dir.joinpath(*mod_parts_list).with_suffix('.rs')
-                cand_mod = src_dir.joinpath(*mod_parts_list, 'mod.rs')
-                for cand in (cand_rs, cand_mod):
-                    if cand.exists():
-                        result |= find_locally_defined_names(cand)
-                        break
-        else:
-            # Named re-exports — collect the local names
-            for name, _path, is_self in expand_use_tree(body):
-                if not is_self and re.match(r'[A-Z]', name):
-                    result.add(name)
+        for mod_path in use_globs(decl):
+            cand = _module_file(src_dir, mod_path)
+            if cand is not None:
+                result |= find_locally_defined_names(cand)
+        # Named re-exports — collect the local names
+        for name, _path, is_self in use_triples(decl):
+            if not is_self and re.match(r'[A-Z]', name):
+                result.add(name)
 
     return result
 
 
-def collect_glob_triples(raw_stmts: list[str],
+def collect_glob_triples(glob_prefixes: list[str],
                           source_file: Path) -> list[tuple[str, str, bool]]:
     """
-    For each 'use X::*;' import in raw_stmts, scan the target module file and
-    return (name, full_path, False) triples for every publicly defined name.
-    This handles the common pattern of 'use crate::types::*;' where individual
-    type names are otherwise invisible to the triple lookup.
+    For each 'use X::*;' import (given as its prefix 'X'), scan the target
+    module file and return (name, full_path, False) triples for every
+    publicly defined name.  This handles the common pattern of
+    'use crate::types::*;' where individual type names are otherwise
+    invisible to the triple lookup.
     """
     src_module = source_module_parts(source_file)
     # Find the 'src/' directory nearest to source_file
@@ -597,11 +488,7 @@ def collect_glob_triples(raw_stmts: list[str],
         return []
 
     result: list[tuple[str, str, bool]] = []
-    for stmt in raw_stmts:
-        m = re.match(r'(?:pub\s+)?use\s+(.*?)\s*::\s*\*\s*;', stmt.strip())
-        if not m:
-            continue
-        prefix = m.group(1).strip()
+    for prefix in glob_prefixes:
         # Resolve super:: relative to this source file
         if prefix == 'super' or prefix.startswith('super::'):
             prefix = resolve_super_path(prefix, src_module)
@@ -617,30 +504,26 @@ def collect_glob_triples(raw_stmts: list[str],
                         for name in find_publicly_exported_names(crate_root_ext):
                             result.append((name, f'{prefix}::{name}', False))
             continue  # skip if external and not found locally
-        mod_path = prefix[len('crate::'):]
-        mod_parts_list = mod_path.replace('::', '/').split('/')
 
         # Candidates: src/a/b.rs or src/a/b/mod.rs
-        candidate_rs  = src_dir.joinpath(*mod_parts_list).with_suffix('.rs')
-        candidate_mod = src_dir.joinpath(*mod_parts_list, 'mod.rs')
-        for candidate in (candidate_rs, candidate_mod):
-            if candidate.exists():
-                for name in find_locally_defined_names(candidate):
-                    result.append((name, f'{prefix}::{name}', False))
-                break
+        candidate = _module_file(src_dir, prefix)
+        if candidate is not None:
+            for name in find_locally_defined_names(candidate):
+                result.append((name, f'{prefix}::{name}', False))
     return result
 
 
 def collect_project_use_stmts(all_fns: list[dict],
                                source_file: Path,
                                extra_names: Optional[set[str]] = None
-                               ) -> tuple[list[str], set[str]]:
+                               ) -> tuple[list[str], set[str], set[str]]:
     """
-    Return ``(use_stmts, sdk_shadowed)`` where:
+    Return ``(use_stmts, sdk_shadowed, unresolved_needed)`` where:
     - ``use_stmts``    — `use` statements for project-local types/traits needed by all_fns.
     - ``sdk_shadowed`` — names that appear in SOROBAN_SDK_TYPES but are *also*
                          locally imported (e.g. ``crate::types::Error``); callers
                          should subtract these from the soroban_sdk import line.
+    - ``unresolved_needed`` — needed names with no matching import.
 
     Parses `source_file`'s own use statements, expands them to individual
     (name, path, is_self) triples, then reconstructs minimal use statements
@@ -649,34 +532,14 @@ def collect_project_use_stmts(all_fns: list[dict],
     `extra_names` adds additional local names to look up (e.g. impl trait names).
     """
     try:
-        source_text = source_file.read_text(encoding='utf-8')
+        source_root, _ = _read_tree(source_file)
     except Exception:
-        return [], set()
-
-    raw_stmts = parse_use_stmts_from_source(source_text)
+        return [], set(), set()
 
     # Module path of the source file (for resolving super:: references)
     mod_parts = source_module_parts(source_file)
 
-    all_triples: list[tuple[str, str, bool]] = []
-    glob_stmts: list[str] = []
-    for stmt in raw_stmts:
-        body = re.sub(r'^\s*(?:pub\s+)?use\s+', '', stmt).rstrip(';').strip()
-        if 'soroban_sdk' in stmt:
-            # Top-level soroban types (soroban_sdk::Address etc.) are handled by
-            # collect_soroban_types().  Sub-module paths (soroban_sdk::auth::Context)
-            # are NOT in SOROBAN_SDK_TYPES and need a full `use` statement, so we
-            # collect them here.
-            for triple in expand_use_tree(body):
-                n, p, s = triple
-                if p.startswith('soroban_sdk::') and p.count('::') >= 2:
-                    all_triples.append(triple)
-            continue
-        if body.rstrip().endswith('*'):
-            # Glob import — expand later against the target module file
-            glob_stmts.append(stmt)
-            continue
-        all_triples.extend(expand_use_tree(body))
+    all_triples, glob_prefixes = triples_and_globs(ra.use_decls(source_root))
 
     # Bug fix 1a: convert super:: paths to crate:: using the source file's module
     # position.  A use statement like `use super::types::Foo;` in src/foo/bar.rs
@@ -688,14 +551,14 @@ def collect_project_use_stmts(all_fns: list[dict],
     # Bug fix 1b: convert bare paths like `use error::Error;` that start with a
     # locally-declared submodule (mod error;) to crate:: paths.  Such paths work
     # in lib.rs as relative references but not from src/sanity.rs.
-    declared_mods = find_declared_modules(source_text)
+    declared_mods = find_declared_modules(source_root)
     all_triples = normalize_triples_bare_mods(all_triples, declared_mods, mod_parts)
 
     # Bug fix 2: expand glob imports (use X::*;) so that types only visible via
     # a glob in the source file (e.g. MyType in `Vec<MyType>` when the source has
     # `use crate::types::*;`) are still resolvable.
-    if glob_stmts:
-        all_triples.extend(collect_glob_triples(glob_stmts, source_file))
+    if glob_prefixes:
+        all_triples.extend(collect_glob_triples(glob_prefixes, source_file))
 
     # Bug fix 3: when source_file is not lib.rs, also scan lib.rs for pub use
     # re-exports.  Contracts often rely on types made visible via `pub use` in
@@ -715,28 +578,14 @@ def collect_project_use_stmts(all_fns: list[dict],
         lib_rs = _lib_rs_candidate if _lib_rs_candidate.exists() else _mod_rs_candidate
         if lib_rs.exists() and lib_rs.resolve() != source_file.resolve():
             try:
-                lib_text = lib_rs.read_text(encoding='utf-8')
-                lib_raw_stmts = parse_use_stmts_from_source(lib_text)
-                lib_triples: list[tuple[str, str, bool]] = []
-                lib_glob_stmts: list[str] = []
-                for stmt in lib_raw_stmts:
-                    body2 = re.sub(r'^\s*(?:pub\s+)?use\s+', '', stmt).rstrip(';').strip()
-                    if 'soroban_sdk' in stmt:
-                        for triple in expand_use_tree(body2):
-                            n2, p2, s2 = triple
-                            if p2.startswith('soroban_sdk::') and p2.count('::') >= 2:
-                                lib_triples.append(triple)
-                        continue
-                    if body2.rstrip().endswith('*'):
-                        lib_glob_stmts.append(stmt)
-                        continue
-                    lib_triples.extend(expand_use_tree(body2))
+                lib_root, _ = _read_tree(lib_rs)
+                lib_triples, lib_globs = triples_and_globs(ra.use_decls(lib_root))
                 # lib.rs is always at the crate root (mod_parts = [])
                 lib_triples = normalize_triples_super(lib_triples, [])
-                lib_declared_mods = find_declared_modules(lib_text)
+                lib_declared_mods = find_declared_modules(lib_root)
                 lib_triples = normalize_triples_bare_mods(lib_triples, lib_declared_mods, [])
-                if lib_glob_stmts:
-                    lib_triples.extend(collect_glob_triples(lib_glob_stmts, lib_rs))
+                if lib_globs:
+                    lib_triples.extend(collect_glob_triples(lib_globs, lib_rs))
                 all_triples.extend(lib_triples)
             except Exception:
                 pass
@@ -780,76 +629,32 @@ def _subst_self_assoc(ty: str, assoc_types: dict) -> str:
     return re.sub(r'\bSelf::(\w+)', replace, ty)
 
 
-def extract_fn_signatures(block_body: str,
+def extract_fn_signatures(body,
                           require_pub: bool = False) -> list[dict]:
     """
-    Pull all fn signatures from the *interior* of an impl or trait block.
-    Returns list of dicts: {name, params: [(name, ty)], ret: str|None}
+    Pull all fn signatures from an impl or trait body (a tree-sitter
+    `declaration_list` node).
+    Returns list of dicts: {name, params: [(name, ty)], ret: str|None, has_default}
 
     require_pub — when True only `pub fn` signatures are returned (used for
     direct impl blocks where private helpers must be excluded from the sanity
     wrapper).
     """
     fns = []
-    text = strip_comments(block_body)
-    i = 0
-
-    # Pattern selects either any `fn` or only `pub fn` depending on require_pub
-    fn_pat = (r'\bpub\s+fn\s+(\w+)\s*(?:<[^>]*>)?\s*\('
-              if require_pub
-              else r'\bfn\s+(\w+)\s*(?:<[^>]*>)?\s*\(')
-
-    while i < len(text):
-        # Find next qualifying `fn` keyword
-        m = re.search(fn_pat, text[i:])
-        if not m:
-            break
-
-        fn_name = m.group(1)
-        # Position of the opening '(' for params
-        paren_open = i + m.end() - 1  # points to '('
-
-        # Walk to find matching ')'
-        depth, j = 0, paren_open
-        while j < len(text):
-            if text[j] == '(':
-                depth += 1
-            elif text[j] == ')':
-                depth -= 1
-                if depth == 0:
-                    break
-            j += 1
-
-        params_str = text[paren_open + 1:j]
-        raw_params = split_by_comma(params_str)
-        params = [parse_param(p) for p in raw_params]
-        params = [p for p in params if p is not None]
-
-        # Everything after ')' up to the body opening '{'
-        after_paren = text[j + 1:]
-        ret_match = re.match(
-            r'\s*->\s*([\w\s<>:,&\'()\[\]!?*+]+?)(?=\s*(?:where\b|\{|;))',
-            after_paren
-        )
-        ret_type = ret_match.group(1).strip() if ret_match else None
-
-        # Skip past the body (or semicolon for trait method stubs)
-        search_from = j + 1
-        brace_pos = text.find('{', search_from)
-        semi_pos = text.find(';', search_from)
-
-        if brace_pos != -1 and (semi_pos == -1 or brace_pos < semi_pos):
-            has_default = True
-            _, i = extract_block(text, brace_pos)
-        elif semi_pos != -1:
-            has_default = False
-            i = semi_pos + 1
-        else:
-            has_default = False
-            break
-
-        fns.append({'name': fn_name, 'params': params, 'ret': ret_type, 'has_default': has_default})
-
+    if body is None:
+        return fns
+    for node in body.named_children:
+        if node.type not in ('function_item', 'function_signature_item'):
+            continue
+        if require_pub and not ra.is_pub(node):
+            continue
+        fns.append({
+            'name': ra.name_of(node),
+            'params': ra.fn_params(node),
+            'ret': ra.fn_return(node),
+            # trait methods with a body have a default implementation
+            'has_default': node.type == 'function_item',
+        })
     return fns
 
 
@@ -857,72 +662,54 @@ def scan_file(filepath: Path) -> tuple[list[dict], list[dict]]:
     """
     Scan one .rs file.
     Returns (contracts, traits) where each is a list of dicts.
+
+    Test-only inline modules and macro bodies (e.g. cfg_if! blocks) are not
+    looked at, so conditionally-compiled or test-only #[contract] structs are
+    not picked up.
     """
-    content = filepath.read_text(encoding='utf-8')
-    # Remove comments, test-only mod blocks, and cfg_if blocks so that
-    # conditionally-compiled or test-only #[contract] structs are not picked up.
-    cleaned = strip_non_contract_blocks(content)
+    root, _ = _read_tree(filepath)
 
     contracts = []
     traits = []
 
+    impl_nodes = [n for n in ra.items_of_type(root, 'impl_item')
+                  if ra.has_attr(n, 'contractimpl')]
+
     # ── #[contract] structs ─────────────────────────────────────────────────
-    for m in re.finditer(r'#\[contract\]\s*(?:pub\s+)?struct\s+(\w+)', cleaned):
-        struct_name = m.group(1)
+    for snode in ra.items_of_type(root, 'struct_item'):
+        if not ra.has_attr(snode, 'contract'):
+            continue
+        struct_name = ra.name_of(snode)
         direct_fns = []
         trait_fns = []
         impl_traits: set[str] = set()
 
         # Walk every #[contractimpl…] block
-        for attr_m in re.finditer(r'#\[contractimpl(?:\([^)]*\))?\]', cleaned):
-            attr_text = attr_m.group(0)
-            is_contracttrait = 'contracttrait' in attr_text
-
-            # Find the `impl` keyword after the attribute
-            after_attr = cleaned[attr_m.end():]
-            impl_m = re.search(r'\bimpl\b', after_attr)
-            if not impl_m:
-                continue
-
-            # Slice from `impl` to find the opening `{`
-            impl_start = attr_m.end() + impl_m.end()
-            brace_pos = cleaned.find('{', impl_start)
-            if brace_pos == -1:
-                continue
-
-            impl_header = cleaned[impl_start:brace_pos]
-
-            # Determine which type this impl is on
-            for_m = re.search(r'\bfor\s+(\w+)', impl_header)
-            if for_m:
-                impl_type = for_m.group(1)
-                is_trait_impl = True
-            else:
-                direct_m = re.match(r'\s*(\w+)', impl_header)
-                impl_type = direct_m.group(1) if direct_m else None
-                is_trait_impl = False
-
+        for impl in impl_nodes:
+            trait_node = impl.child_by_field_name('trait')
+            is_trait_impl = trait_node is not None
+            impl_type = ra.base_type_name(impl.child_by_field_name('type'))
             if impl_type != struct_name:
                 continue
 
-            block, _ = extract_block(cleaned, brace_pos)
+            body = impl.child_by_field_name('body')
             # For direct (non-trait) impl blocks, skip private helper fns.
             # Trait impl blocks don't use `pub` on their methods, so we keep all.
-            fns = extract_fn_signatures(block[1:-1], require_pub=not is_trait_impl)
+            fns = extract_fn_signatures(body, require_pub=not is_trait_impl)
 
             if is_trait_impl:
                 # Capture the full trait path (e.g. 'token::Interface') and its
                 # short last-segment name for use statements.
-                trait_m = re.match(r'\s*([\w:]+)', impl_header)
-                full_trait_name = trait_m.group(1) if trait_m else None
+                full_trait_name = ra.path_without_generics(trait_node)
                 if full_trait_name:
                     impl_traits.add(full_trait_name.split('::')[-1])
 
                 # Collect `type AssocName = ConcreteType;` definitions so we can
                 # substitute Self::AssocName → ConcreteType in method signatures
                 assoc_types: dict[str, str] = {}
-                for at_m in re.finditer(r'\btype\s+(\w+)\s*=\s*([^;]+);', block[1:-1]):
-                    assoc_types[at_m.group(1)] = at_m.group(2).strip()
+                for item in (body.named_children if body is not None else []):
+                    if item.type == 'type_item':
+                        assoc_types[ra.name_of(item)] = ra.text(item.child_by_field_name('type')).strip()
 
                 for fn in fns:
                     fn['is_trait'] = True
@@ -950,21 +737,27 @@ def scan_file(filepath: Path) -> tuple[list[dict], list[dict]]:
             })
 
     # ── #[contracttrait] traits ─────────────────────────────────────────────
-    for m in re.finditer(r'#\[contracttrait\]\s*pub\s+trait\s+(\w+)\s*(?:<[^>]*>)?\s*\{', cleaned):
-        trait_name = m.group(1)
-        brace_pos = cleaned.find('{', m.start())
-        block, _ = extract_block(cleaned, brace_pos)
-        block_body = block[1:-1]
-        fns = extract_fn_signatures(block_body)
-        # Required associated types: `type Foo;` or `type Foo: Bound;` with no `= ...`
-        # Strip defaulted types first, then find remaining type declarations.
-        stripped = re.sub(r'\btype\s+\w+(?:[^=;]*?)=[^;]+;', '', block_body)
-        required_types = re.findall(r'\btype\s+(\w+)\s*(?::[^;{=]*)?\s*;', stripped)
+    for tnode in ra.items_of_type(root, 'trait_item'):
+        if not ra.has_attr(tnode, 'contracttrait') or not ra.is_pub(tnode):
+            continue
+        body = tnode.child_by_field_name('body')
+        fns = extract_fn_signatures(body)
+        # Required associated types: `type Foo;` or `type Foo: Bound;` with no
+        # default (`type Foo = Bar;` is parsed as a type_item, not associated_type).
+        required_types = [ra.name_of(n) for n in (body.named_children if body is not None else [])
+                          if n.type == 'associated_type'
+                          and n.child_by_field_name('default_type') is None]
+        # Supertraits (`pub trait FungibleBurnable: FungibleToken<…>`) must be
+        # implemented by the sanity contract too, which a stub crate cannot do.
+        bounds = tnode.child_by_field_name('bounds')
+        supertraits = [ra.text(b).strip() for b in (ra.named_children(bounds) if bounds is not None else [])
+                       if b.type != 'lifetime']
         traits.append({
-            'name': trait_name,
+            'name': ra.name_of(tnode),
             'file': filepath,
             'fns': fns,
             'required_types': required_types,
+            'supertraits': supertraits,
         })
 
     return contracts, traits
@@ -1093,14 +886,12 @@ def resolve_qualified_trait_path(trait_name: str, source_file: Path) -> str:
         return trait_name
     first_seg, rest = trait_name.split('::', 1)
     try:
-        source_text = source_file.read_text(encoding='utf-8')
+        decls = parse_use_decls(source_file)
     except Exception:
         return trait_name
-    raw_stmts = parse_use_stmts_from_source(source_text)
     mod_parts = source_module_parts(source_file)
-    for stmt in raw_stmts:
-        body = re.sub(r'^\s*(?:pub\s+)?use\s+', '', stmt).rstrip(';').strip()
-        for name, path, is_self in expand_use_tree(body):
+    for decl in decls:
+        for name, path, is_self in use_triples(decl):
             if name == first_seg and is_self:
                 # e.g. name='token', path='soroban_sdk::token', is_self=True
                 # → 'token::Interface' becomes 'soroban_sdk::token::Interface'
@@ -1264,12 +1055,13 @@ def generate_contract_sanity(contract: dict) -> tuple[str, list[dict]] | None:
             if not parent_file.exists():
                 parent_file = src_dir / 'mod.rs'
             def _declared_mods_strict(path: Path) -> set[str]:
-                """Like find_declared_modules but also strips cfg_if blocks so
-                that `mod foo;` inside cfg_if! { ... } is not counted as a real
-                unconditional declaration."""
-                text = path.read_text(encoding='utf-8')
-                cleaned = strip_cfg_if_blocks(strip_comments(text))
-                return set(re.findall(r'\bmod\s+(\w+)\s*;', cleaned))
+                """`mod foo;` declarations in *path*.  A `mod foo;` inside a
+                macro such as cfg_if! { ... } is not a real unconditional
+                declaration and is not counted (tree-sitter does not parse
+                macro bodies as items)."""
+                root, _ = _read_tree(path)
+                return {ra.name_of(n) for n in ra.items_of_type(root, 'mod_item', skip_test_mods=False)
+                        if n.child_by_field_name('body') is None}
 
             for i, seg in enumerate(mod_parts_for_import[:-1] if source_file.stem != 'mod' else mod_parts_for_import):
                 if not parent_file.exists():
@@ -1774,20 +1566,24 @@ def main():
         print()
 
     # ── Handle traits ─────────────────────────────────────────────────────────
-    # Skip traits that have any required methods (no default body) — those are
-    # abstract and cannot be implemented safely without knowing the concrete
-    # semantics.  Traits where every method has a default body are concrete and
-    # get a sanity crate with an empty impl (no stubs needed).
+    # Skip traits that have any required methods (no default body), required
+    # associated types or supertraits — those are abstract and cannot be
+    # implemented safely without knowing the concrete semantics.  Traits where
+    # every method has a default body are concrete and get a sanity crate with
+    # an empty impl (no stubs needed).
     for trait in traits:
         required_methods = [fn['name'] for fn in trait['fns'] if not fn.get('has_default', False)]
         required_types = trait.get('required_types', [])
-        is_abstract = bool(required_methods or required_types)
+        supertraits = trait.get('supertraits', [])
+        is_abstract = bool(required_methods or required_types or supertraits)
         if is_abstract:
             parts = []
             if required_methods:
                 parts.append(f'methods: {", ".join(required_methods)}')
             if required_types:
                 parts.append(f'types: {", ".join(required_types)}')
+            if supertraits:
+                parts.append(f'supertraits: {", ".join(supertraits)}')
             reason = f'required {"; ".join(parts)}'
             print(f'Skipped trait {trait["name"]} (abstract — {reason})')
             summary['skipped_traits'].append({

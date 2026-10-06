@@ -1,364 +1,132 @@
-
 #!/usr/bin/env python3
 """
 Parse all Rust source files under a Soroban contract repo and extract
 every type annotated with #[contracttype], producing a JSON description
 of each type's kind (struct / enum / tuple-struct) and its fields or variants.
- 
+
 Each field carries a "recursive" flag that is True when the field's type,
 or the type of any transitive child field, is the same type that contains
 the field (i.e. the type is directly or indirectly self-referential through
 that field).
+
+Rust sources are parsed with tree-sitter-rust (see rust_ast.py):
+    pip install tree-sitter tree-sitter-rust
 """
- 
+
 import json
 import re
 import sys
 from pathlib import Path
 from util import *
- 
-# ---------------------------------------------------------------------------
-# Tokeniser helpers
-# ---------------------------------------------------------------------------
- 
-def strip_comments(src: str) -> str:
-    """Remove // line comments and /* … */ block comments."""
-    # block comments (non-greedy)
-    src = re.sub(r'/\*.*?\*/', '', src, flags=re.DOTALL)
-    # line comments
-    src = re.sub(r'//[^\n]*', '', src)
-    return src
+import rust_ast as ra
 
+# Attributes that mark a Soroban contract type.
+CONTRACT_TYPE_ATTRS = ('contracttype', 'contracterror', 'contractclient')
 
-_TEST_ATTR_MOD_PAT = re.compile(
-    r'#\[[^\]]*\btest\b[^\]]*\]\s*(?:pub\s+)?mod\s+\w+\s*\{'
-)
-
-
-_CFG_IF_PAT = re.compile(
-    r'\bcfg_if\s*(?:::\s*cfg_if\s*)?\s*!\s*\{'
-)
-
-
-def _strip_brace_blocks(cleaned: str, pattern: re.Pattern) -> str:
-    """Remove all macro/mod blocks matched by *pattern* (which must end just
-    before the opening '{') from an already-comment-stripped source string."""
-    pos = 0
-    parts: list[str] = []
-    while pos < len(cleaned):
-        m = pattern.search(cleaned, pos)
-        if not m:
-            parts.append(cleaned[pos:])
-            break
-        parts.append(cleaned[pos:m.start()])
-        brace_pos = m.end() - 1   # points to the opening '{'
-        close = find_matching_brace(cleaned, brace_pos)
-        if close == -1:
-            parts.append(cleaned[m.start():])
-            break
-        pos = close + 1           # skip past the closing '}'
-    return ''.join(parts)
-
-
-def strip_test_blocks(cleaned: str) -> str:
-    """Remove test-attributed mod blocks (e.g. #[cfg(test)] mod tests { … })
-    from an already-comment-stripped source string so that test-only
-    #[contracttype] definitions are not mistaken for real types."""
-    return _strip_brace_blocks(cleaned, _TEST_ATTR_MOD_PAT)
-
-
-def strip_cfg_if_blocks(cleaned: str) -> str:
-    """Remove cfg_if::cfg_if! { … } blocks from an already-comment-stripped
-    source string so that conditionally-compiled definitions are not picked up."""
-    return _strip_brace_blocks(cleaned, _CFG_IF_PAT)
-
-
-def strip_non_contract_blocks(content: str) -> str:
-    """Full cleaning pipeline: strip comments, test mod blocks, and cfg_if blocks."""
-    cleaned = strip_comments(content)
-    cleaned = strip_test_blocks(cleaned)
-    cleaned = strip_cfg_if_blocks(cleaned)
-    return cleaned
- 
- 
-def find_matching_brace(s: str, start: int) -> int:
-    """Return the index of the closing '}' that matches the '{' at *start*."""
-    depth = 0
-    i = start
-    while i < len(s):
-        if s[i] == '{':
-            depth += 1
-        elif s[i] == '}':
-            depth -= 1
-            if depth == 0:
-                return i
-        i += 1
-    return -1
- 
- 
-def find_matching_paren(s: str, start: int) -> int:
-    """Return the index of the closing ')' that matches the '(' at *start*."""
-    depth = 0
-    i = start
-    while i < len(s):
-        if s[i] == '(':
-            depth += 1
-        elif s[i] == ')':
-            depth -= 1
-            if depth == 0:
-                return i
-        i += 1
-    return -1
- 
- 
 # ---------------------------------------------------------------------------
 # Type-string cleanup
 # ---------------------------------------------------------------------------
- 
+
 def clean_type(raw: str) -> str:
     raw = raw.strip().rstrip(',').strip()
     # collapse internal whitespace
     raw = re.sub(r'\s+', ' ', raw)
     return raw
- 
- 
+
+
 # ---------------------------------------------------------------------------
 # Type-alias collection
 # ---------------------------------------------------------------------------
 
-def parse_type_aliases(src: str) -> dict[str, str]:
-    """Scan *src* for non-parametric `type Alias = RhsType;` declarations and
-    return a mapping {alias_name: rhs_type_string}.  Parametric aliases such
-    as `type Foo<T> = Bar<T>` are skipped because their RHS depends on the
-    type parameter and cannot be substituted without specialisation."""
-    src_s = strip_non_contract_blocks(src)
+def parse_type_aliases_tree(root) -> dict[str, str]:
+    """Collect non-parametric `type Alias = RhsType;` items (outside test
+    modules and macro bodies) as {alias_name: rhs_type_string}.  Parametric
+    aliases such as `type Foo<T> = Bar<T>` are skipped because their RHS
+    depends on the type parameter and cannot be substituted without
+    specialisation."""
     aliases: dict[str, str] = {}
-    for m in re.finditer(r'\btype\s+([A-Za-z_][A-Za-z0-9_]*)\s*', src_s):
-        name = m.group(1)
-        rest = src_s[m.end():]
-        if rest.startswith('<'):
+    for node in ra.items_of_type(root, 'type_item'):
+        if node.child_by_field_name('type_parameters') is not None:
             continue  # parametric alias – skip
-        if not rest.startswith('='):
-            continue
-        # Collect everything up to the terminating ';' at depth 0
-        start = m.end() + 1  # character after '='
-        depth_a = depth_p = depth_b = 0
-        chars: list[str] = []
-        i = start
-        while i < len(src_s):
-            c = src_s[i]
-            if c == '<':
-                depth_a += 1
-            elif c == '>':
-                depth_a -= 1
-            elif c == '(':
-                depth_p += 1
-            elif c == ')':
-                depth_p -= 1
-            elif c == '{':
-                depth_b += 1
-            elif c == '}':
-                depth_b -= 1
-            elif c == ';' and depth_a == 0 and depth_p == 0 and depth_b == 0:
-                break
-            chars.append(c)
-            i += 1
-        rhs = clean_type(''.join(chars))
+        rhs = clean_type(ra.text(node.child_by_field_name('type')))
         if rhs:
-            aliases[name] = rhs
+            aliases[ra.name_of(node)] = rhs
     return aliases
 
+
+def parse_type_aliases(src: str) -> dict[str, str]:
+    """Scan *src* for non-parametric `type Alias = RhsType;` declarations."""
+    return parse_type_aliases_tree(ra.parse(src).root_node)
+
 # ---------------------------------------------------------------------------
-# Struct / enum body parsers
+# Struct / enum body parsers (tree-sitter nodes)
 # ---------------------------------------------------------------------------
- 
-def parse_struct_fields(body: str) -> list[dict]:
-    """Parse named fields of a struct body (inside { … })."""
+
+def parse_struct_fields(body) -> list[dict]:
+    """Named fields of a `field_declaration_list` node ({ … })."""
     fields = []
-    # Each field optionally has attributes and pub keyword.
-    # Pattern: optional pub/pub(…) then  name: Type,
-    # We iterate line-by-line; a type may span multiple lines for generics.
-    body = strip_comments(body)
- 
-    # Strip outer braces if present
-    body = body.strip()
-    if body.startswith('{'):
-        body = body[1:]
-    if body.endswith('}'):
-        body = body[:-1]
- 
-    # Remove attribute lines (#[...])
-    body = re.sub(r'#\s*\[.*?\]', '', body, flags=re.DOTALL)
- 
-    # Split on field separators: "name: Type," – we need to handle nested generics
-    # Strategy: find "identifier: " pattern, then grab until next "identifier: " or end
-    # We'll scan token by token tracking depth
-    tokens = []
-    i = 0
-    body = body.strip()
-    while i < len(body):
-        # skip whitespace
-        if body[i].isspace():
-            i += 1
+    if body is None:
+        return fields
+    for fd in ra.named_children(body):
+        if fd.type != 'field_declaration':
             continue
-        # skip pub visibility
-        if body[i:].startswith('pub') and (len(body) <= i+3 or not (body[i+3].isalnum() or body[i+3] == '_')):
-            rest = body[i+3:]
-            if rest and rest[0] == '(':
-                # pub(crate) etc.
-                close = body.index(')', i+3)
-                i = close + 1
-            else:
-                i += 3
-            continue
-        # match  field_name  :
-        m = re.match(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*:', body[i:])
-        if m:
-            name = m.group(1)
-            i += m.end()
-            # now collect the type until the next top-level comma or end
-            type_chars = []
-            depth_angle = 0
-            depth_paren = 0
-            depth_brace = 0
-            while i < len(body):
-                c = body[i]
-                if c == '<':
-                    depth_angle += 1
-                elif c == '>':
-                    depth_angle -= 1
-                elif c == '(':
-                    depth_paren += 1
-                elif c == ')':
-                    depth_paren -= 1
-                elif c == '{':
-                    depth_brace += 1
-                elif c == '}':
-                    depth_brace -= 1
-                elif c == ',' and depth_angle == 0 and depth_paren == 0 and depth_brace == 0:
-                    i += 1
-                    break
-                type_chars.append(c)
-                i += 1
-            field_type = clean_type(''.join(type_chars))
-            if name and field_type:
-                fields.append({"name": name, "type": parse_type_str(field_type)})
-        else:
-            i += 1
- 
+        name = ra.text(fd.child_by_field_name('name'))
+        field_type = clean_type(ra.text(fd.child_by_field_name('type')))
+        if name and field_type:
+            fields.append({"name": name, "type": parse_type_str(field_type)})
     return fields
- 
- 
-def parse_tuple_struct_fields(inner: str) -> list[dict]:
-    """Parse positional fields of a tuple struct body (inside ( … ))."""
-    inner = strip_comments(inner).strip()
-    if inner.startswith('('):
-        inner = inner[1:]
-    if inner.endswith(')'):
-        inner = inner[:-1]
-    # Remove attribute annotations
-    inner = re.sub(r'#\s*\[.*?\]', '', inner, flags=re.DOTALL)
-    # Remove pub
-    parts = []
-    # split by top-level commas
-    depth = 0
-    current = []
-    for c in inner:
-        if c in '<(':
-            depth += 1
-        elif c in '>)':
-            depth -= 1
-        elif c == ',' and depth == 0:
-            parts.append(''.join(current).strip())
-            current = []
-            continue
-        current.append(c)
-    if current:
-        parts.append(''.join(current).strip())
- 
+
+
+def parse_tuple_struct_fields(body) -> list[dict]:
+    """Positional fields of an `ordered_field_declaration_list` node (( … ))."""
     fields = []
-    for idx, part in enumerate(parts):
-        part = re.sub(r'\bpub\b(\s*\([^)]*\))?', '', part).strip()
+    if body is None:
+        return fields
+    for idx, ty in enumerate(body.children_by_field_name('type')):
+        part = clean_type(ra.text(ty))
         if part:
-            fields.append({"index": idx, "type": parse_type_str(clean_type(part))})
+            fields.append({"index": idx, "type": parse_type_str(part)})
     return fields
- 
- 
-def parse_enum_variants(body: str) -> list[dict]:
-    """Parse variants of an enum body (inside { … })."""
-    body = strip_comments(body).strip()
-    if body.startswith('{'):
-        body = body[1:]
-    if body.endswith('}'):
-        body = body[:-1]
- 
+
+
+def parse_enum_variants(body) -> list[dict]:
+    """Variants of an `enum_variant_list` node ({ … })."""
     variants = []
-    i = 0
-    body = body.strip()
-    while i < len(body):
-        # skip whitespace
-        if body[i].isspace():
-            i += 1
+    if body is None:
+        return variants
+    for v in ra.named_children(body):
+        if v.type != 'enum_variant':
             continue
-        # skip attribute lines
-        if body[i] == '#':
-            depth = 0
-            while i < len(body):
-                if body[i] == '[':
-                    depth += 1
-                elif body[i] == ']':
-                    depth -= 1
-                    if depth == 0:
-                        i += 1
-                        break
-                i += 1
-            continue
-        # match variant name
-        m = re.match(r'([A-Za-z_][A-Za-z0-9_]*)', body[i:])
-        if not m:
-            i += 1
-            continue
-        vname = m.group(1)
-        i += m.end()
-        # skip whitespace
-        while i < len(body) and body[i].isspace():
-            i += 1
- 
-        if i >= len(body):
-            variants.append({"variant": vname, "kind": "unit"})
-            break
- 
-        if body[i] == '{':
-            # struct variant
-            close = find_matching_brace(body, i)
-            inner = body[i:close+1]
-            fields = parse_struct_fields(inner)
-            variants.append({"variant": vname, "kind": "struct", "fields": fields})
-            i = close + 1
-        elif body[i] == '(':
-            # tuple variant
-            close = find_matching_paren(body, i)
-            inner = body[i:close+1]
-            fields = parse_tuple_struct_fields(inner)
-            variants.append({"variant": vname, "kind": "tuple", "fields": fields})
-            i = close + 1
-        elif body[i] == ',':
-            variants.append({"variant": vname, "kind": "unit"})
-            i += 1
-        elif body[i] == '=':
-            # discriminant: Unit = N,
-            j = i + 1
-            while j < len(body) and body[j] != ',':
-                j += 1
-            disc = body[i+1:j].strip()
-            variants.append({"variant": vname, "kind": "unit", "discriminant": disc})
-            i = j + 1
+        vname = ra.name_of(v)
+        vbody = v.child_by_field_name('body')
+        value = v.child_by_field_name('value')
+        if vbody is None:
+            entry = {"variant": vname, "kind": "unit"}
+            if value is not None:
+                entry["discriminant"] = ra.text(value).strip()
+            variants.append(entry)
+        elif vbody.type == 'field_declaration_list':
+            variants.append({"variant": vname, "kind": "struct",
+                             "fields": parse_struct_fields(vbody)})
         else:
-            variants.append({"variant": vname, "kind": "unit"})
- 
+            variants.append({"variant": vname, "kind": "tuple",
+                             "fields": parse_tuple_struct_fields(vbody)})
     return variants
- 
- 
+
+
+def _reparse_body(kind: str, body_text: str):
+    """Parse the text of a struct/enum body that came out of a macro token
+    tree, returning the tree-sitter body node (or None)."""
+    code = f'{kind} __Macro {body_text}'
+    if kind == 'struct' and body_text.lstrip().startswith('('):
+        code += ';'
+    root = ra.parse(code).root_node
+    for item in root.named_children:
+        if item.type in ('struct_item', 'enum_item'):
+            return item.child_by_field_name('body')
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Recursive-field analysis
 # ---------------------------------------------------------------------------
@@ -456,8 +224,9 @@ def annotate_recursive(all_types: list[dict]) -> None:
 #
 # Some #[contracttype] definitions live inside a macro_rules! body and use
 # metavariable repetition syntax (e.g. `$(pub $ttl_field: u64),*`) instead of
-# literal field names.  The helpers below detect this case, find the enclosing
-# macro definition and its call-site invocation in the same source file, and
+# literal field names.  tree-sitter keeps macro bodies as token trees, so the
+# helpers below walk those token trees to find such definitions, locate the
+# enclosing macro's call-site invocation in the same source file, and
 # materialise the concrete fields / variants from the invocation arguments.
 # ---------------------------------------------------------------------------
 
@@ -466,137 +235,118 @@ def has_macro_metavars(text: str) -> bool:
     return '$' in text
 
 
-def find_containing_macro_rules(src: str, pos: int):
+def _macro_name(invocation) -> str:
+    return ra.squash(ra.text(invocation.child_by_field_name('macro'))).split('::')[-1]
+
+
+def find_macro_invocation_tt(root, macro_name: str):
     """
-    If *pos* falls inside a ``macro_rules! name { ... }`` body, return
-    ``(macro_name, body_start, body_end)``; otherwise return ``None``.
+    Return the token tree of the first call-site ``macro_name! { ... }`` (or
+    ``macro_name! ( ... )``) outside any ``macro_rules!`` body and test
+    module; otherwise return ``None``.
     """
-    for m in re.finditer(r'\bmacro_rules!\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{', src):
-        macro_name = m.group(1)
-        body_open = m.end() - 1
-        body_close = find_matching_brace(src, body_open)
-        if body_close == -1:
+    for inv in ra.items_of_type(root, 'macro_invocation'):
+        if _macro_name(inv) != macro_name:
             continue
-        if body_open < pos < body_close:
-            return macro_name, body_open, body_close
+        tt = next((c for c in inv.named_children if c.type == 'token_tree'), None)
+        if tt is not None and ra.tt_delim(tt) in ('{', '('):
+            return tt
     return None
 
 
-def find_macro_invocation_body(src: str, macro_name: str):
-    """
-    Return the inner text of the first actual call-site
-    ``macro_name! { ... }`` (or ``macro_name! ( ... )``) that occurs *outside*
-    any ``macro_rules!`` body; otherwise return ``None``.
-    """
-    macro_bodies: list[tuple[int, int]] = []
-    for m in re.finditer(r'\bmacro_rules!\s+[A-Za-z_][A-Za-z0-9_]*\s*\{', src):
-        bo = m.end() - 1
-        bc = find_matching_brace(src, bo)
-        if bc != -1:
-            macro_bodies.append((bo, bc))
+def _invocation_entries(tt) -> list[list]:
+    """Split an invocation token tree into its top-level comma-separated
+    entries (lists of tokens).  Bracketed groups are single token-tree nodes,
+    so only `<`/`>` are not tracked — matching how the entries are written
+    (`Variant(A, B) => field`)."""
+    return ra.split_tokens(ra.tt_inner(tt), ',')
 
-    def in_macro_body(p: int) -> bool:
-        return any(lo < p < hi for lo, hi in macro_bodies)
 
-    pattern = re.compile(r'\b' + re.escape(macro_name) + r'!\s*([{(])')
-    for m in pattern.finditer(src):
-        if in_macro_body(m.start()):
-            continue
-        opener = m.group(1)
-        start = m.end() - 1
-        end = (find_matching_brace(src, start) if opener == '{'
-               else find_matching_paren(src, start))
-        if end == -1:
-            continue
-        return src[start + 1 : end]
+def _arrow_target(entry: list):
+    """For `… => ident`, return (index_of_arrow, ident) or (None, None)."""
+    for i, tok in enumerate(entry):
+        if tok.type == '=>' and i + 1 < len(entry) and entry[i + 1].type == 'identifier':
+            return i, ra.text(entry[i + 1])
+    return None, None
+
+
+def _repetition_parts(src: bytes, rep):
+    """Decompose a `$( … ) sep op` token_repetition into
+    (inner_tokens, separator_text, operator)."""
+    kids = [c for c in rep.children if not ra.is_comment(c)]
+    if len(kids) < 4 or kids[0].type != '$' or kids[1].type != '(':
+        return None
+    op = kids[-1]
+    close = kids[-2]
+    if op.type not in ('*', '+', '?') or close.type != ')':
+        return None
+    sep = src[close.end_byte:op.start_byte].decode('utf-8', errors='replace').strip()
+    return kids[2:-2], sep, op.type
+
+
+def _metavar_fragment(macro_def, metavar: str):
+    """Fragment specifier (`ident`, `tt`, …) of *metavar* in the macro's matchers."""
+    stack = [macro_def]
+    while stack:
+        n = stack.pop()
+        if n.type == 'token_binding_pattern' and ra.text(n.child_by_field_name('name')) == metavar:
+            return ra.text(n.child_by_field_name('type'))
+        stack.extend(reversed(n.named_children))
     return None
 
 
-def _split_invocation_entries(inv_body: str) -> list[str]:
-    """Split a macro invocation body into top-level comma-separated entries.
-
-    Only ``()`` and ``{}`` brackets are tracked for depth because ``<`` and
-    ``>`` also appear as comparison / arrow operators (e.g. ``=>``) and would
-    corrupt a depth counter.  Generic-type commas (e.g. ``Vec<A, B>``) are
-    always inside a ``()`` field list, so they are handled correctly by the
-    paren depth alone.
+def expand_macro_struct_fields(body_tt, macro_def, root, src: bytes):
     """
-    entries: list[str] = []
-    depth_p = depth_b = 0
-    cur: list[str] = []
-    for c in inv_body:
-        if c == '(':   depth_p += 1
-        elif c == ')': depth_p -= 1
-        elif c == '{': depth_b += 1
-        elif c == '}': depth_b -= 1
-        elif c == ',' and depth_p == 0 and depth_b == 0:
-            entry = ''.join(cur).strip()
-            if entry:
-                entries.append(entry)
-            cur = []
-            continue
-        cur.append(c)
-    last = ''.join(cur).strip()
-    if last:
-        entries.append(last)
-    return entries
-
-
-def expand_macro_struct_fields(inner: str, struct_pos: int, src: str):
-    """
-    When *inner* (the raw struct body including outer braces) contains macro
-    metavariable repetition like ``$(pub $ttl_field: u64),*``, resolve the
-    concrete fields from the enclosing macro's call-site invocation.
+    When a struct body inside a macro_rules! transcriber is a metavariable
+    repetition like ``$(pub $ttl_field: u64),*``, resolve the concrete fields
+    from the enclosing macro's call-site invocation.
 
     Handles the pattern ``$(pub? $FIELD_VAR: FieldType),*`` where $FIELD_VAR
     is bound to the identifier after ``=>`` in each invocation entry.
 
     Returns a list of field dicts on success, or ``None``.
     """
-    body = inner.strip().lstrip('{').rstrip('}').strip()
-
-    m = re.match(
-        r'\$\(\s*(?:pub\s+)?\$([A-Za-z_][A-Za-z0-9_]*)\s*:\s*'
-        r'([A-Za-z_][A-Za-z0-9_<>,:&\[\] ]*?)\s*\)\s*,\s*\*',
-        body
-    )
-    if not m:
+    if macro_def is None:
         return None
-    field_type_str = m.group(2).strip()
-
-    ctx = find_containing_macro_rules(src, struct_pos)
-    if ctx is None:
+    inner = ra.tt_inner(body_tt)
+    if not inner or inner[0].type != 'token_repetition':
         return None
-    macro_name = ctx[0]
+    parts = _repetition_parts(src, inner[0])
+    if parts is None:
+        return None
+    toks, sep, op = parts
+    if sep != ',' or op != '*':
+        return None
+    i = 0
+    if i < len(toks) and toks[i].type == 'pub':
+        i += 1
+    if not (i + 1 < len(toks) and toks[i].type == 'metavariable' and toks[i + 1].type == ':'):
+        return None
+    type_toks = toks[i + 2:]
+    if not type_toks:
+        return None
+    field_type_str = ra.span_text(src, type_toks).strip()
 
-    inv_body = find_macro_invocation_body(src, macro_name)
-    if inv_body is None:
+    inv = find_macro_invocation_tt(root, ra.name_of(macro_def))
+    if inv is None:
         return None
 
-    entries = _split_invocation_entries(inv_body)
-    field_names: list[str] = []
-    for entry in entries:
-        arrow_m = re.search(r'=>\s*([A-Za-z_][A-Za-z0-9_]*)', entry)
-        if arrow_m:
-            field_names.append(arrow_m.group(1))
-
-    seen: set[str] = set()
     unique: list[str] = []
-    for n in field_names:
-        if n not in seen:
-            seen.add(n)
-            unique.append(n)
+    for entry in _invocation_entries(inv):
+        _, name = _arrow_target(entry)
+        if name and name not in unique:
+            unique.append(name)
     if not unique:
         return None
 
     return [{"name": name, "type": parse_type_str(field_type_str)} for name in unique]
 
 
-def expand_macro_enum_variants(inner: str, enum_pos: int, src: str):
+def expand_macro_enum_variants(body_tt, macro_def, root, src: bytes):
     """
-    When *inner* (the raw enum body including outer braces) contains macro
-    metavariable repetition (e.g. ``$($variant),*`` or ``$($ev)*``), resolve
-    the concrete variants from the enclosing macro's call-site invocation.
+    When an enum body inside a macro_rules! transcriber contains metavariable
+    repetition (e.g. ``$($variant),*`` or ``$($ev)*``), resolve the concrete
+    variants from the enclosing macro's call-site invocation.
 
     Each invocation entry must be either:
       ``Variant(F1, F2, ...) => ttl_field``  (tuple variant)
@@ -606,17 +356,14 @@ def expand_macro_enum_variants(inner: str, enum_pos: int, src: str):
 
     Returns a list of variant dicts on success, or ``None``.
     """
-    body = inner.strip().lstrip('{').rstrip('}').strip()
-    if not re.match(r'\$\(', body):
+    if macro_def is None:
+        return None
+    inner = ra.tt_inner(body_tt)
+    if not inner or inner[0].type != 'token_repetition':
         return None
 
-    ctx = find_containing_macro_rules(src, enum_pos)
-    if ctx is None:
-        return None
-    macro_name = ctx[0]
-
-    inv_body = find_macro_invocation_body(src, macro_name)
-    if inv_body is None:
+    inv = find_macro_invocation_tt(root, ra.name_of(macro_def))
+    if inv is None:
         return None
 
     # A repetition over a single bare metavariable, e.g. `$($variant),*`,
@@ -626,144 +373,200 @@ def expand_macro_enum_variants(inner: str, enum_pos: int, src: str):
     # Only when that metavariable is declared `:ident` in the macro's matchers;
     # a `:tt` bundle such as `$($ev)*` carries whole variants (with fields).
     names_only = False
-    rep_m = re.fullmatch(
-        r'\$\(\s*\$([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*,?\s*[*+]\s*,?', body)
-    if rep_m:
-        macro_src = src[ctx[1]:ctx[2] + 1]
-        frag = re.search(r'\$' + re.escape(rep_m.group(1)) + r'\s*:\s*([a-z_]+)', macro_src)
-        names_only = bool(frag and frag.group(1) == 'ident')
+    if len(inner) == 1:
+        parts = _repetition_parts(src, inner[0])
+        if parts is not None:
+            toks, sep, _op = parts
+            if len(toks) == 1 and toks[0].type == 'metavariable' and sep in ('', ','):
+                names_only = _metavar_fragment(macro_def, ra.text(toks[0])) == 'ident'
 
-    entries = _split_invocation_entries(inv_body)
     variants: list[dict] = []
-    for entry in entries:
-        entry = entry.strip()
-        entry = re.sub(r'\s*=>\s*[A-Za-z_][A-Za-z0-9_]*\s*$', '', entry).strip()
+    for entry in _invocation_entries(inv):
+        arrow, _ = _arrow_target(entry)
+        if arrow is not None and arrow + 2 == len(entry):
+            entry = entry[:arrow]
+        if not entry or entry[0].type in ('$', 'metavariable', 'token_repetition'):
+            continue
+        if entry[0].type != 'identifier':
+            continue
+        vname = ra.text(entry[0])
         if names_only:
-            vname_m = re.match(r'([A-Za-z_][A-Za-z0-9_]*)', entry)
-            if vname_m and not entry.startswith('$'):
-                variants.append({"variant": vname_m.group(1), "kind": "unit"})
+            variants.append({"variant": vname, "kind": "unit"})
             continue
-        if not entry or entry.startswith('$'):
-            continue
-        vname_m = re.match(r'([A-Za-z_][A-Za-z0-9_]*)', entry)
-        if not vname_m:
-            continue
-        vname = vname_m.group(1)
-        rest = entry[vname_m.end():].strip()
-        if rest.startswith('('):
-            close = find_matching_paren(rest, 0)
-            fields_str = rest[1 : close] if close != -1 else rest[1:]
-            fields = parse_tuple_struct_fields('(' + fields_str + ')')
-            variants.append({"variant": vname, "kind": "tuple", "fields": fields})
-        elif rest.startswith('{'):
-            close = find_matching_brace(rest, 0)
-            inner_v = rest[: close + 1] if close != -1 else rest
-            fields = parse_struct_fields(inner_v)
-            variants.append({"variant": vname, "kind": "struct", "fields": fields})
+        body = _reparse_body('enum', '{ ' + ra.span_text(src, entry) + ' }')
+        parsed = parse_enum_variants(body)
+        if parsed and parsed[0]["variant"] == vname:
+            variants.append(parsed[0])
         else:
             variants.append({"variant": vname, "kind": "unit"})
 
     return variants if variants else None
 
 
+def _is_attr_tokens(toks: list, i: int) -> bool:
+    return (i + 1 < len(toks) and toks[i].type == '#'
+            and toks[i + 1].type == 'token_tree' and ra.tt_delim(toks[i + 1]) == '[')
+
+
+def _find_macro_contracttypes(toks: list, macro_def, out: list) -> None:
+    """Find `#[contracttype] (pub)? struct|enum Name …` sequences in a macro
+    token list (recursively), appending
+    (start_byte, kind, name, body_token_tree_or_None, macro_def)."""
+    i = 0
+    while i < len(toks):
+        tok = toks[i]
+        if _is_attr_tokens(toks, i):
+            attr_inner = ra.tt_inner(toks[i + 1])
+            is_contract_attr = (
+                attr_inner and attr_inner[0].type == 'identifier'
+                and ra.text(attr_inner[0]) in CONTRACT_TYPE_ATTRS
+                and (len(attr_inner) == 1 or (len(attr_inner) == 2
+                                              and attr_inner[1].type == 'token_tree'
+                                              and ra.tt_delim(attr_inner[1]) == '(')))
+            if is_contract_attr:
+                j = i + 2
+                while _is_attr_tokens(toks, j):          # further attributes
+                    j += 2
+                if j < len(toks) and toks[j].type == 'pub':
+                    j += 1
+                    if j < len(toks) and toks[j].type == 'token_tree' and ra.tt_delim(toks[j]) == '(':
+                        j += 1
+                if j + 1 < len(toks) and toks[j].type in ('struct', 'enum') \
+                        and toks[j + 1].type == 'identifier':
+                    kind, name = toks[j].type, ra.text(toks[j + 1])
+                    j += 2
+                    if j < len(toks) and toks[j].type == '<':  # generics
+                        depth = 0
+                        while j < len(toks):
+                            if toks[j].type == '<':
+                                depth += 1
+                            elif toks[j].type == '>':
+                                depth -= 1
+                                if depth == 0:
+                                    j += 1
+                                    break
+                            j += 1
+                    body = None
+                    if j < len(toks) and toks[j].type == 'token_tree' and ra.tt_delim(toks[j]) in ('{', '('):
+                        body = toks[j]
+                    out.append((toks[i].start_byte, kind, name, body, macro_def))
+                    i = j + 1
+                    continue
+        if tok.type in ('token_tree', 'token_repetition'):
+            _find_macro_contracttypes(ra.tt_inner(tok) if tok.type == 'token_tree'
+                                      else list(tok.children), macro_def, out)
+        i += 1
+
+
 # ---------------------------------------------------------------------------
 # Main extractor
 # ---------------------------------------------------------------------------
- 
-CONTRACTTYPE_RE = re.compile(
-    r'#\s*\[\s*contract(type|error|client)\s*(?:\([^)]*\))?\s*\]'
-)
- 
- 
-def extract_from_source(src: str, filepath: str) -> list[dict]:
-    """Return all contracttype definitions found in *src*."""
-    src_stripped = strip_non_contract_blocks(src)
+
+def _struct_entry_fields(entry: dict, body) -> None:
+    """Fill struct_kind / fields / macro_expanded (in the original key order)."""
+    if body is not None and body.type == 'ordered_field_declaration_list':
+        entry["struct_kind"] = "tuple"
+        entry["fields"] = parse_tuple_struct_fields(body)
+        entry["macro_expanded"] = False
+    elif body is not None and body.type == 'field_declaration_list':
+        entry["macro_expanded"] = False
+        entry["struct_kind"] = "named"
+        entry["fields"] = parse_struct_fields(body)
+    else:
+        entry["struct_kind"] = "unit"
+        entry["fields"] = []
+        entry["macro_expanded"] = False
+
+
+def _macro_entry_body(entry: dict, kind: str, body_tt, macro_def, root, src: bytes) -> None:
+    """Fill an entry for a contract type found inside a macro token tree."""
+    if kind == "struct":
+        if body_tt is None:
+            _struct_entry_fields(entry, None)
+            return
+        body_text = ra.text(body_tt)
+        if ra.tt_delim(body_tt) == '(':
+            _struct_entry_fields(entry, _reparse_body('struct', body_text))
+            return
+        if has_macro_metavars(body_text):
+            expanded = expand_macro_struct_fields(body_tt, macro_def, root, src)
+            fields = expanded if expanded is not None else parse_struct_fields(_reparse_body('struct', body_text))
+            entry["macro_expanded"] = expanded is not None
+        else:
+            fields = parse_struct_fields(_reparse_body('struct', body_text))
+            entry["macro_expanded"] = False
+        entry["struct_kind"] = "named"
+        entry["fields"] = fields
+    else:
+        body_text = ra.text(body_tt) if body_tt is not None else '{}'
+        if body_tt is not None and has_macro_metavars(body_text):
+            expanded = expand_macro_enum_variants(body_tt, macro_def, root, src)
+            variants = expanded if expanded is not None else parse_enum_variants(_reparse_body('enum', body_text))
+            entry["macro_expanded"] = expanded is not None
+        else:
+            variants = parse_enum_variants(_reparse_body('enum', body_text))
+            entry["macro_expanded"] = False
+        entry["variants"] = variants
+
+
+def extract_from_source(src: str, filepath: str, root=None) -> list[dict]:
+    """Return all contracttype definitions found in *src* (or in the already
+    parsed tree *root* of it).
+
+    Items inside test-gated inline modules are ignored, as are the bodies of
+    `cfg_if!` invocations.  Definitions inside other macro bodies (notably
+    `macro_rules!` transcribers) are found by scanning their token trees.
+    """
+    if root is None:
+        root = ra.parse(src).root_node
+    src_b = root.text
     # Build a map of explicitly-imported names for this file so cross-crate
     # types referenced in fields can be annotated with their use path even
     # when those types aren't themselves contracttypes in the scanned set.
-    file_uses = parse_file_uses(src)
+    file_uses = parse_file_uses_tree(root)
+
+    found: list[tuple] = []   # (start_byte, kind, name, body, macro_def_or_None, from_macro)
+    for node in ra.walk(root):
+        if node.type in ('struct_item', 'enum_item') and ra.has_attr(node, *CONTRACT_TYPE_ATTRS):
+            kind = 'struct' if node.type == 'struct_item' else 'enum'
+            found.append((node.start_byte, kind, ra.name_of(node),
+                          node.child_by_field_name('body'), None, False))
+        elif node.type == 'macro_definition':
+            hits: list = []
+            for rule in node.named_children:
+                if rule.type == 'macro_rule':
+                    right = rule.child_by_field_name('right')
+                    if right is not None:
+                        _find_macro_contracttypes(ra.tt_inner(right), node, hits)
+            found.extend(h + (True,) for h in hits)
+        elif node.type == 'macro_invocation' and _macro_name(node) != 'cfg_if':
+            hits = []
+            for tt in node.named_children:
+                if tt.type == 'token_tree':
+                    _find_macro_contracttypes(ra.tt_inner(tt), None, hits)
+            found.extend(h + (True,) for h in hits)
+    found.sort(key=lambda f: f[0])
+
     results = []
- 
-    for m in CONTRACTTYPE_RE.finditer(src_stripped):
-        attr_end = m.end()
-        # skip whitespace after the attribute
-        rest = src_stripped[attr_end:]
-        rest_stripped = rest.lstrip()
-        lead_ws = len(rest) - len(rest_stripped)
-        pos = attr_end + lead_ws
- 
-        # remove any intermediate derives/other attributes between contracttype and the type def
-        while pos < len(src_stripped) and src_stripped[pos] == '#':
-            bracket_open = src_stripped.index('[', pos)
-            bracket_close = src_stripped.index(']', bracket_open)
-            pos = bracket_close + 1
-            pos += len(src_stripped[pos:]) - len(src_stripped[pos:].lstrip())
- 
-        # expect: (pub)? struct|enum  Name
-        head_match = re.match(
-            r'(?:pub\s*(?:\([^)]*\)\s*)?)?'   # optional visibility
-            r'(struct|enum)\s+'               # kind
-            r'([A-Za-z_][A-Za-z0-9_]*)'       # name
-            r'(?:\s*<[^{(;]*>)?'              # optional generics
-            r'\s*',
-            src_stripped[pos:]
-        )
-        if not head_match:
-            continue
- 
-        kind = head_match.group(1)
-        name = head_match.group(2)
-        body_start = pos + head_match.end()
- 
+    for _start, kind, name, body, macro_def, from_macro in found:
         entry: dict = {"name": name,
                        "kind": kind,
                        "file": filepath,
                        "use": src_path_to_module(filepath) + "::" + name,
                        "_file_uses": file_uses,
                     }
- 
-        if kind == "struct":
-            if body_start < len(src_stripped) and src_stripped[body_start] == '(':
-                # tuple struct
-                close = find_matching_paren(src_stripped, body_start)
-                inner = src_stripped[body_start:close+1]
-                fields = parse_tuple_struct_fields(inner)
-                entry["struct_kind"] = "tuple"
-                entry["fields"] = fields
-                entry["macro_expanded"] = False
-            elif body_start < len(src_stripped) and src_stripped[body_start] == '{':
-                close = find_matching_brace(src_stripped, body_start)
-                inner = src_stripped[body_start:close+1]
-                if has_macro_metavars(inner):
-                    expanded = expand_macro_struct_fields(inner, body_start, src_stripped)
-                    fields = expanded if expanded is not None else parse_struct_fields(inner)
-                    entry["macro_expanded"] = expanded is not None
-                else:
-                    fields = parse_struct_fields(inner)
-                    entry["macro_expanded"] = False
-                entry["struct_kind"] = "named"
-                entry["fields"] = fields
-            else:
-                entry["struct_kind"] = "unit"
-                entry["fields"] = []
-                entry["macro_expanded"] = False
-        elif kind == "enum":
-            close = find_matching_brace(src_stripped, body_start)
-            inner = src_stripped[body_start:close+1]
-            if has_macro_metavars(inner):
-                expanded = expand_macro_enum_variants(inner, body_start, src_stripped)
-                variants = expanded if expanded is not None else parse_enum_variants(inner)
-                entry["macro_expanded"] = expanded is not None
-            else:
-                variants = parse_enum_variants(inner)
-                entry["macro_expanded"] = False
-            entry["variants"] = variants
- 
+        if from_macro:
+            _macro_entry_body(entry, kind, body, macro_def, root, src_b)
+        elif kind == "struct":
+            _struct_entry_fields(entry, body)
+        else:
+            entry["macro_expanded"] = False
+            entry["variants"] = parse_enum_variants(body)
         results.append(entry)
- 
+
     return results
- 
- 
+
+
 # ---------------------------------------------------------------------------
 # Crate discovery & privacy-aware "use" resolution
 #
@@ -907,214 +710,102 @@ def resolve_module_file(parent_file: Path, mod_name: str) -> Path | None:
     return None
  
  
-def extract_use_items(group_inner: str) -> list:
-    """Split a `pub use` brace-group's inner text by top-level commas,
-    handling 'as' aliases and nested sub-groups."""
-    parts: list[str] = []
-    depth = 0
-    cur: list[str] = []
-    for ch in group_inner:
-        if ch == '{':
-            depth += 1
-        elif ch == '}':
-            depth -= 1
-        elif ch == ',' and depth == 0:
-            p = ''.join(cur).strip()
-            if p:
-                parts.append(p)
-            cur = []
-            continue
-        cur.append(ch)
-    p = ''.join(cur).strip()
-    if p:
-        parts.append(p)
- 
-    items = []
-    for part in parts:
-        part = part.strip()
-        if not part:
-            continue
-        if '{' in part:
-            prefix, _, inner = part.partition('{')
-            prefix = prefix.rstrip(': \t')
-            inner = inner.rstrip('}').strip()
-            for sub in extract_use_items(inner):
-                name = f"{prefix}::{sub['name']}" if prefix else sub['name']
-                items.append({"name": name, "alias": sub["alias"]})
-            continue
-        m = re.match(r'^(.*?)\s+as\s+([A-Za-z_][A-Za-z0-9_]*)$', part)
-        if m:
-            items.append({"name": m.group(1).strip(), "alias": m.group(2)})
-        else:
-            items.append({"name": part, "alias": None})
-    return items
- 
- 
-def find_pub_use_statements_in_source(src: str) -> list:
-    """Unrestricted `pub use ...;` statements (excludes `pub(crate) use` /
-    `pub(super) use` / `pub(in ...) use`), multi-line/alias/glob aware.
-    Returns [{"path_prefix": str|None, "items": [{"name","alias"}]}]."""
+def find_pub_use_statements(container) -> list:
+    """Unrestricted `pub use ...;` statements that are direct children of
+    *container* (a source_file or an inline module's declaration_list).
+    `pub(crate) use` / `pub(super) use` / `pub(in ...) use` are excluded.
+    Returns [{"path_prefix": str|None, "items": [{"name","alias"}]}], where an
+    item "name" is relative to "path_prefix" and "*" marks a glob."""
     results = []
-    for m in re.finditer(r'\bpub[ \t]+use[ \t]+', src):
-        start = m.end()
-        depth = 0
-        end = None
-        for i in range(start, len(src)):
-            c = src[i]
-            if c == '{':
-                depth += 1
-            elif c == '}':
-                depth -= 1
-            elif c == ';' and depth == 0:
-                end = i
-                break
-        if end is None:
+    for node in ra.named_children(container):
+        if node.type != 'use_declaration':
             continue
-        body = src[start:end].strip()
- 
-        if '{' in body:
-            prefix, _, rest = body.partition('{')
-            prefix = prefix.rstrip(': \t')
-            inner = rest.rstrip()
-            if inner.endswith('}'):
-                inner = inner[:-1]
-            items = extract_use_items(inner)
-            path_prefix = prefix or None
-        elif body.endswith('*'):
-            path_prefix = body[:-1].rstrip(': \t') or None
-            items = [{"name": "*", "alias": None}]
-        else:
-            alias = None
-            path = body
-            alias_m = re.match(r'^(.*?)\s+as\s+([A-Za-z_][A-Za-z0-9_]*)$', body)
-            if alias_m:
-                path, alias = alias_m.group(1).strip(), alias_m.group(2)
-            segments = path.split('::')
-            last = segments[-1].strip()
-            path_prefix = '::'.join(segments[:-1]).strip() or None
-            items = [{"name": last, "alias": alias}]
- 
-        results.append({"path_prefix": path_prefix, "items": items})
+        decl = ra.use_decl_of(node)
+        if not decl.is_pub:
+            continue
+        prefix = decl.root_path
+        items = []
+        nested_globs = []
+        for leaf in decl.leaves:
+            if leaf.kind == 'glob':
+                if leaf.path == prefix:
+                    items.append({"name": "*", "alias": None})
+                else:
+                    nested_globs.append(leaf.path)
+                continue
+            path = leaf.path if leaf.kind == 'name' else _join_path(leaf.path, 'self')
+            if prefix and path.startswith(prefix + '::'):
+                rel = path[len(prefix) + 2:]
+            else:
+                rel = path
+            items.append({"name": rel, "alias": leaf.alias})
+        if items:
+            results.append({"path_prefix": prefix or None, "items": items})
+        for g in nested_globs:
+            results.append({"path_prefix": g or None, "items": [{"name": "*", "alias": None}]})
     return results
- 
- 
-def _expand_use_into(body: str, prefix: str, out: dict) -> None:
-    """Recursively expand a `use` tree segment into *out* ({local_name: full_path}).
-
-    *body* is everything after the leading path prefix (which is in *prefix*).
-    Examples (prefix="k2_shared"):
-      "Asset"                 → out["Asset"] = "k2_shared::Asset"
-      "{Asset, AssetConfig}"  → two entries
-      "types::{Foo, Bar}"     → out["Foo"] = "k2_shared::types::Foo" etc.
-      "Foo as F"              → out["F"] = "k2_shared::Foo"
-      "self"                  → out[last_seg_of_prefix] = prefix
-    """
-    body = body.strip()
-    if not body:
-        return
-
-    # Find the first brace group (ignoring angle brackets)
-    brace_pos = -1
-    angle_depth = 0
-    for i, c in enumerate(body):
-        if c == '<':
-            angle_depth += 1
-        elif c == '>':
-            angle_depth -= 1
-        elif c == '{' and angle_depth == 0:
-            brace_pos = i
-            break
-
-    if brace_pos == -1:
-        # No brace: simple leaf or "a::b::C" path
-        # Handle `as` alias
-        as_m = re.match(r'^(.*?)\s+as\s+([A-Za-z_][A-Za-z0-9_]*)$', body)
-        if as_m:
-            path_part, alias = as_m.group(1).strip(), as_m.group(2)
-            full = f"{prefix}::{path_part}" if prefix else path_part
-            out[alias] = full
-        elif body == 'self':
-            if prefix:
-                out[prefix.split('::')[-1]] = prefix
-        elif body != '*':  # ignore globs
-            full = f"{prefix}::{body}" if prefix else body
-            out[body.split('::')[-1]] = full
-        return
-
-    # "path_prefix::{...}" — recurse into each comma-separated item
-    path_part = body[:brace_pos].rstrip(': \t')
-    new_prefix = f"{prefix}::{path_part}" if path_part and prefix else (path_part or prefix)
-
-    # Find matching close brace
-    close = -1
-    depth = 0
-    for i in range(brace_pos, len(body)):
-        if body[i] == '{':
-            depth += 1
-        elif body[i] == '}':
-            depth -= 1
-            if depth == 0:
-                close = i
-                break
-    inner = body[brace_pos + 1: close] if close >= 0 else body[brace_pos + 1:]
-
-    # Split inner by top-level commas
-    parts: list[str] = []
-    d = 0
-    cur: list[str] = []
-    for c in inner:
-        if c == '{':
-            d += 1
-        elif c == '}':
-            d -= 1
-        elif c == ',' and d == 0:
-            parts.append(''.join(cur).strip())
-            cur = []
-            continue
-        cur.append(c)
-    if cur:
-        parts.append(''.join(cur).strip())
-
-    for part in parts:
-        part = part.strip()
-        if part:
-            _expand_use_into(part, new_prefix, out)
 
 
-def parse_file_uses(src: str) -> dict[str, str]:
-    """Parse all `use` statements from *src* (comments already stripped or not),
-    returning {local_name: full_qualified_path}.
+def _join_path(prefix: str, rest: str) -> str:
+    return f"{prefix}::{rest}" if prefix else rest
+
+
+def parse_file_uses_tree(root) -> dict[str, str]:
+    """All `use` declarations under *root* as {local_name: full_qualified_path}.
 
     Example: `use k2_shared::{Asset, AssetConfig};`
       → {"Asset": "k2_shared::Asset", "AssetConfig": "k2_shared::AssetConfig"}
 
-    Only non-restricted `use` is captured (i.e. NOT `pub(crate) use` / `use(self)` etc.
-    but plain `use` and `pub use` both count for our annotation purposes).
+    Both plain `use` and `pub use` count for our annotation purposes; glob
+    imports are ignored.
     """
     result: dict[str, str] = {}
-    src_s = strip_comments(src)
-    for m in re.finditer(r'\buse\s+', src_s):
-        start = m.end()
-        depth = 0
-        end = None
-        for i in range(start, len(src_s)):
-            c = src_s[i]
-            if c == '{':
-                depth += 1
-            elif c == '}':
-                depth -= 1
-            elif c == ';' and depth == 0:
-                end = i
-                break
-        if end is None:
-            continue
-        body = src_s[start:end].strip()
-        # Split off any leading "pub" that got pulled in (e.g. if `pub use`)
-        # — the regex anchor on \buse\s+ already positions us at the path start,
-        # but `re.finditer` on `\buse\s+` may fire on the `use` inside `pub use`
-        # so the body starts directly with the path.
-        _expand_use_into(body, "", result)
+    for decl in ra.use_decls(root):
+        for leaf in decl.leaves:
+            if leaf.kind == 'glob':
+                continue
+            if leaf.kind == 'self':
+                if leaf.path:
+                    result[leaf.alias or leaf.path.split('::')[-1]] = leaf.path
+                continue
+            result[leaf.local_name] = leaf.path
     return result
+
+
+def parse_file_uses(src: str) -> dict[str, str]:
+    """Parse all `use` statements from *src* → {local_name: full_qualified_path}."""
+    return parse_file_uses_tree(ra.parse(src).root_node)
+
+
+_ITEM_KEYWORDS = ('struct', 'enum', 'union', 'trait', 'type', 'fn', 'const', 'static')
+
+
+def _macro_token_trees(node) -> list:
+    """Token trees of a macro definition's transcribers or an invocation's arguments."""
+    if node.type == 'macro_definition':
+        return [r.child_by_field_name('right') for r in node.named_children
+                if r.type == 'macro_rule' and r.child_by_field_name('right') is not None]
+    return [c for c in node.named_children if c.type == 'token_tree']
+
+
+def _pub_item_names_in_tokens(toks: list) -> list[str]:
+    """Names in `pub struct|enum|trait|type|fn|const|static Name` token
+    sequences of a macro body (recursively)."""
+    names = []
+    for i, tok in enumerate(toks):
+        if tok.type == 'pub' and i + 2 < len(toks) and toks[i + 1].type in _ITEM_KEYWORDS \
+                and toks[i + 2].type == 'identifier':
+            names.append(ra.text(toks[i + 2]))
+        elif tok.type == 'token_tree':
+            names.extend(_pub_item_names_in_tokens(ra.tt_inner(tok)))
+        elif tok.type == 'token_repetition':
+            names.extend(_pub_item_names_in_tokens(list(tok.children)))
+    return names
+
+
+# Item kinds recorded as publicly reachable names of a module.
+_PUBLIC_ITEM_TYPES = ('struct_item', 'enum_item', 'union_item', 'trait_item', 'type_item',
+                      'function_item', 'const_item', 'static_item')
 
 
 def scan_crate_public_items(crate_root: Path, dependency_aliases: dict) -> tuple:
@@ -1128,27 +819,27 @@ def scan_crate_public_items(crate_root: Path, dependency_aliases: dict) -> tuple
     foreign_reexports/foreign_globs record `pub use` statements that
     re-export something from ANOTHER workspace crate (resolved via
     *dependency_aliases*), for cross-crate public-reexport detection.
-    (Trimmed from the equivalent scanner in soroban_use_decls.py -- this
-    version only needs plain item declarations, not Soroban contract
-    attributes.)
+    Only plain `pub` items count (not `pub(crate)` etc.), items are attributed
+    to the module that actually contains them (inline `pub mod x { … }`
+    blocks included), and test-gated modules are skipped.
     """
     entry = crate_root / "src" / "lib.rs"
     if not entry.exists():
         entry = crate_root / "src" / "main.rs"
     if not entry.exists():
         return {}, [], []
- 
+
     pub_items: dict[str, str] = {}
     foreign_reexports: list = []
     foreign_globs: list = []
     visited: set = set()
- 
+
     def record(name: str, module_path: list) -> None:
         qpath = "::".join(module_path)
         existing = pub_items.get(name)
         if existing is None or len(qpath) < len(existing):
             pub_items[name] = qpath
- 
+
     def resolve_glob_target(rs_file: Path, module_path: list, prefix: str):
         parts = [p for p in prefix.split('::') if p]
         if not parts:
@@ -1165,96 +856,99 @@ def scan_crate_public_items(crate_root: Path, dependency_aliases: dict) -> tuple
                 return None, None
             cur_file = resolved
         return cur_file, module_path
- 
+
+    def scan_pub_uses(container, rs_file: Path, module_path: list) -> None:
+        for stmt in find_pub_use_statements(container):
+            prefix = stmt["path_prefix"]
+            for it in stmt["items"]:
+                if it["name"] == "*":
+                    if not prefix:
+                        continue
+                    target_file, target_path = resolve_glob_target(rs_file, module_path, prefix)
+                    if target_file:
+                        scan_file(target_file, target_path, is_public_context=True)
+                        continue
+                    parts = [p for p in prefix.split('::') if p]
+                    if parts and parts[0] not in ('crate', 'self', 'super'):
+                        src_crate = dependency_aliases.get(parts[0])
+                        if src_crate:
+                            foreign_globs.append({
+                                "source_crate": src_crate,
+                                "source_qpath_prefix": "::".join(parts[1:]),
+                                "dest_qpath": "::".join(module_path),
+                            })
+                    continue
+
+                full_parts = [p for p in (
+                    (prefix.split('::') if prefix else []) + it["name"].split('::')
+                ) if p]
+                if not full_parts:
+                    continue
+                first_seg = full_parts[0]
+                final_name = it["alias"] if it["alias"] else full_parts[-1]
+                if final_name in ("self", "crate", "super"):
+                    continue
+                record(final_name, module_path)
+
+                if first_seg not in ("crate", "self", "super") and not resolve_module_file(rs_file, first_seg):
+                    src_crate = dependency_aliases.get(first_seg)
+                    if src_crate:
+                        foreign_reexports.append({
+                            "source_crate": src_crate,
+                            "source_qpath": "::".join(full_parts[1:-1]),
+                            "source_name": full_parts[-1],
+                            "dest_qpath": "::".join(module_path),
+                            "dest_name": final_name,
+                        })
+
+    def scan_items(container, rs_file: Path, module_path: list, is_public_context: bool) -> None:
+        for node in ra.named_children(container):
+            if node.type == 'mod_item':
+                if not ra.is_pub(node) or ra.is_test_item(node):
+                    continue
+                mod_name = ra.name_of(node)
+                if is_public_context:
+                    record(mod_name, module_path)
+                body = node.child_by_field_name('body')
+                if body is None:
+                    mod_file = resolve_module_file(rs_file, mod_name)
+                    if mod_file:
+                        scan_file(mod_file, module_path + [mod_name], is_public_context=is_public_context)
+                else:
+                    scan_items(body, rs_file, module_path + [mod_name], is_public_context)
+            elif node.type in _PUBLIC_ITEM_TYPES:
+                if is_public_context and ra.is_pub(node):
+                    record(ra.name_of(node), module_path)
+            elif node.type in ('macro_definition', 'macro_invocation') and is_public_context:
+                # Items generated by a macro in this module (e.g. a
+                # `macro_rules!` that emits `pub struct TtlConfig { … }`):
+                # macros cannot be expanded here, so record `pub <item> Name`
+                # token sequences found in their bodies.
+                if node.type == 'macro_invocation' and _macro_name(node) == 'cfg_if':
+                    continue
+                for tt in _macro_token_trees(node):
+                    for name in _pub_item_names_in_tokens(ra.tt_inner(tt)):
+                        record(name, module_path)
+        if is_public_context:
+            scan_pub_uses(container, rs_file, module_path)
+
     def scan_file(rs_file: Path, module_path: list, is_public_context: bool) -> None:
         rs_file = rs_file.resolve()
         key = (rs_file, tuple(module_path))
         if key in visited:
             return
         visited.add(key)
- 
+
         try:
-            src = strip_comments(rs_file.read_text(encoding="utf-8", errors="replace"))
+            root = ra.parse_file(rs_file).root_node
         except OSError:
             return
- 
-        lines = src.splitlines()
-        i = 0
-        while i < len(lines):
-            line = lines[i].strip()
-            i += 1
- 
-            m = re.match(r'pub\s+mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;', line)
-            if m:
-                mod_name = m.group(1)
-                if is_public_context:
-                    record(mod_name, module_path)
-                mod_file = resolve_module_file(rs_file, mod_name)
-                if mod_file:
-                    scan_file(mod_file, module_path + [mod_name], is_public_context=is_public_context)
- 
-            m = re.match(r'pub\s+mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{', line)
-            if m and is_public_context:
-                record(m.group(1), module_path)
- 
-            if is_public_context:
-                m = re.match(
-                    r'pub\s*(?:\([^)]*\)\s*)?'
-                    r'(struct|enum|trait|type|fn|const|static)\s+'
-                    r'([A-Za-z_][A-Za-z0-9_]*)',
-                    line
-                )
-                if m:
-                    record(m.group(2), module_path)
- 
-        if is_public_context:
-            for stmt in find_pub_use_statements_in_source(src):
-                prefix = stmt["path_prefix"]
-                for it in stmt["items"]:
-                    if it["name"] == "*":
-                        if not prefix:
-                            continue
-                        target_file, target_path = resolve_glob_target(rs_file, module_path, prefix)
-                        if target_file:
-                            scan_file(target_file, target_path, is_public_context=True)
-                            continue
-                        parts = [p for p in prefix.split('::') if p]
-                        if parts and parts[0] not in ('crate', 'self', 'super'):
-                            src_crate = dependency_aliases.get(parts[0])
-                            if src_crate:
-                                foreign_globs.append({
-                                    "source_crate": src_crate,
-                                    "source_qpath_prefix": "::".join(parts[1:]),
-                                    "dest_qpath": "::".join(module_path),
-                                })
-                        continue
- 
-                    full_parts = [p for p in (
-                        (prefix.split('::') if prefix else []) + it["name"].split('::')
-                    ) if p]
-                    if not full_parts:
-                        continue
-                    first_seg = full_parts[0]
-                    final_name = it["alias"] if it["alias"] else full_parts[-1]
-                    if final_name in ("self", "crate", "super"):
-                        continue
-                    record(final_name, module_path)
- 
-                    if first_seg not in ("crate", "self", "super") and not resolve_module_file(rs_file, first_seg):
-                        src_crate = dependency_aliases.get(first_seg)
-                        if src_crate:
-                            foreign_reexports.append({
-                                "source_crate": src_crate,
-                                "source_qpath": "::".join(full_parts[1:-1]),
-                                "source_name": full_parts[-1],
-                                "dest_qpath": "::".join(module_path),
-                                "dest_name": final_name,
-                            })
- 
+        scan_items(root, rs_file, module_path, is_public_context)
+
     scan_file(entry, [], is_public_context=True)
     return pub_items, foreign_reexports, foreign_globs
- 
- 
+
+
 def qualified_path(crate_name: str, qpath: str, name: str) -> str:
     """
     A bare, dot/colon-qualified path to *name* -- matching this script's
@@ -1647,10 +1341,11 @@ def main():
             continue
         src = rs_file.read_text(encoding="utf-8", errors="replace")
         rel = str(rs_file.relative_to(root))
-        found = extract_from_source(src, rel)
+        tree_root = ra.parse(src).root_node
+        found = extract_from_source(src, rel, root=tree_root)
         all_types.extend(found)
         # Collect type aliases from every file for later resolution
-        workspace_type_aliases.update(parse_type_aliases(src))
+        workspace_type_aliases.update(parse_type_aliases_tree(tree_root))
 
     annotate_resolved_aliases(all_types, workspace_type_aliases)
     annotate_recursive(all_types)

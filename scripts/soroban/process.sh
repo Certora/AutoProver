@@ -29,6 +29,7 @@ shift $((OPTIND -1))
 MY_DIR=$(realpath $(dirname $0))
 
 SDK_USAGE_JSON=/tmp/sdk_versions.json
+BYTESN_HEADER=/tmp/bytesn_header.rs
 
 if [[ -e $1/Cargo.lock ]]; then
     DIR=$(realpath $1)
@@ -61,9 +62,11 @@ python $MY_DIR/generate_sanity.py $DIR
 
 python $MY_DIR/use-cvlr-soroban.py $DIR $CVLR_DIR $SDK_VERSION
 
-bash $MY_DIR/generate_nondet_2.sh $DIR
+jq -f $MY_DIR/bytesn_functions.jq ./sanity_summary.json | jinja2 $MY_DIR/bytesn_functions.j2 > $BYTESN_HEADER
 
-bash $MY_DIR/sanity_rules.sh $DIR
+bash -v $MY_DIR/generate_nondet_2.sh $DIR
+
+bash $MY_DIR/sanity_rules.sh $DIR $BYTESN_HEADER
 
 mkdir conf
 python $MY_DIR/sanity_conf.py ./sanity_summary.json $MY_DIR/sanity_conf.j2

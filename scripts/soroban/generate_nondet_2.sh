@@ -20,6 +20,8 @@ use cvlr_soroban_derive::rule;
 use cvlr_soroban::*;
 EOF
 
+    jq -f $MY_DIR/bytesn_functions.jq $TYPES_FOR_FILE | jinja2 $MY_DIR/bytesn_functions.j2 >> $f
+    
     (jq -f $MY_DIR/nonrec.jq < $TYPES_FOR_FILE |  jq '{ "types": [ .[] | select(has("fields") and (.["fields"][0] | has("name")))]}' | jinja2 $MY_DIR/struct_nondet.j2) >> $f
 	
     (jq -f $MY_DIR/nonrec.jq < $TYPES_FOR_FILE |  jq '{ "types": [ .[] | select(has("fields") and (.["fields"][0] | has("name") | not))]}' | jinja2 $MY_DIR/struct_unnamed_nondet.j2) >> $f
