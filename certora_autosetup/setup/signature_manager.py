@@ -38,15 +38,21 @@ class SignatureManager:
     database management functionality.
     """
 
-    def __init__(self, project_root: Path):
+    def __init__(self, project_root: Path, database: Optional[SignatureDatabase] = None):
         """
         Initialize the signature manager.
 
         Args:
             project_root: Root directory of the project
+            database: An existing database to populate. Omit for a fresh one. Passing one
+                makes ``populate_signature_database`` extend an index built by an earlier
+                compilation instead of starting over, which is what lets a caller index a
+                single added contract without recompiling the rest.
         """
         self.project_root = project_root
-        self.signature_database = SignatureDatabase(project_root=project_root)
+        self.signature_database = (
+            database if database is not None else SignatureDatabase(project_root=project_root)
+        )
         self.build_json_path: Optional[Path] = None
     def extract_signatures_from_build(
         self, build_json_path: Path

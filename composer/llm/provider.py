@@ -9,7 +9,7 @@ registry, or ``composer.input.files`` — so both ``composer.input.files`` and
 the per-provider modules can import it without an import cycle.
 """
 
-from typing import Protocol, TYPE_CHECKING, Callable, Literal
+from typing import Awaitable, Protocol, TYPE_CHECKING, Callable, Literal
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import cached_property
@@ -23,14 +23,21 @@ from abc import ABC, abstractmethod
 if TYPE_CHECKING:
     from langchain_core.callbacks import BaseCallbackHandler
     from langchain_core.language_models.chat_models import BaseChatModel
-    from graphcore.tools.memory import AsyncPostgresBackend
+    from graphcore.tools.memory import MemoryToolImpl
     from graphcore.graph import RawMessageType
     from langchain_core.tools import BaseTool
 
 class ProviderService(Protocol):
     def select_memory_tool(
-        self, backend: "AsyncPostgresBackend"
+        self, backend: "MemoryToolImpl[Awaitable[str]]"
     ) -> "BaseTool":
+        """Wrap a memory backend in the tool shape this provider expects.
+
+        The parameter is the *interface* the tool builders take, not one backend that
+        implements it: ``graphcore``'s async memory tools accept any ``MemoryToolImpl``, and
+        naming a concrete postgres backend here shut out the sqlite and filesystem ones for
+        no reason. A caller without a database can now supply its own.
+        """
         ...
 
     def uploader(self) -> FileUploader:
@@ -69,7 +76,7 @@ def payload_error_type(body: object) -> str | None:
 
 class ProviderServiceBase(ABC):
     def __init__(self,
-        mem_fact: Callable[["AsyncPostgresBackend"], "BaseTool"],
+        mem_fact: Callable[["MemoryToolImpl[Awaitable[str]]"], "BaseTool"],
         uploader_fact: Callable[[], FileUploader]
     ):
         self.mem_fact = mem_fact
@@ -83,7 +90,7 @@ class ProviderServiceBase(ABC):
         return self._uploader_prop
     
     def select_memory_tool(
-        self, backend: "AsyncPostgresBackend"
+        self, backend: "MemoryToolImpl[Awaitable[str]]"
     ) -> "BaseTool":
         return self.mem_fact(backend)
 

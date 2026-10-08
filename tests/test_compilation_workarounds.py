@@ -398,6 +398,18 @@ BULK_VIA_IR_LEGACY_COPY = (
     "   --> contracts/Vault.sol:120:9:\n"
 )
 
+# The same condition as above, as solc 0.8.25 reports it: no "(only supported by the IR
+# pipeline)" clause and no `--via-ir` hint, just "not yet supported". With only the hint to
+# key on, the whole workaround table found nothing and the run ended "Compilation failed
+# with no applicable workaround".
+HINTLESS_VIA_IR_STORAGE_COPY = (
+    "Compiling contracts/0.8.25/Oracle.sol...\n"
+    "solc8.25 had an error:\n"
+    "UnimplementedFeatureError: Copying of type struct \n"
+    "SlotCache.ValueWithCache memory[2] memory to storage not yet \n"
+    "supported.\n"
+)
+
 # The error calling for the OPPOSITE fix (turn via-ir OFF for an old compiler). It
 # names the conf key solc_via_ir, which must stay outside the via-ir-required family.
 UNSUPPORTED_SOLC_VIA_IR_OUTPUT = (
@@ -469,6 +481,15 @@ def test_detects_bulk_via_ir_required_via_source_location(manager) -> None:
     # wrapped `--via-\nir` hint must still be recognized.
     contracts = [ContractHandle(contract_name="Vault", source_file="contracts/Vault.sol")]
     assert manager._detect_via_ir_required(BULK_VIA_IR_LEGACY_COPY, contracts) == "Vault"
+
+
+def test_detects_via_ir_required_without_a_remediation_hint(manager) -> None:
+    # Decided on the diagnostic alone: the only way to compile this is via-ir, so unlike
+    # stack-too-deep there is no other remedy the detector would be preempting.
+    contracts = [ContractHandle(
+        contract_name="Oracle", source_file="contracts/0.8.25/Oracle.sol"
+    )]
+    assert manager._detect_via_ir_required(HINTLESS_VIA_IR_STORAGE_COPY, contracts) == "Oracle"
 
 
 def test_unsupported_solc_via_ir_is_not_via_ir_required(manager) -> None:

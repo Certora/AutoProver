@@ -39,6 +39,29 @@ except ImportError:
     # Fallback to regular json if json5 is not available
     import json as json5  # type: ignore[no-redef]
 
+#: The per-contract compiler maps, keyed by contract name. certoraRun treats each as
+#: all-or-nothing: once a conf carries one, every entry in ``files`` must be matched by it.
+#: ``solc_map`` and ``compiler_map`` are two spellings of the same map; both are accepted on
+#: input, so both are handled when entries are removed.
+COMPILER_MAP_KEYS = (
+    "solc_map", "compiler_map", "solc_optimize_map", "solc_via_ir_map",
+    "solc_evm_version_map",
+)
+
+
+def contract_names_in(conf_object: Dict[str, Any]) -> List[str]:
+    """The contract names a conf's ``files`` contributes, in order.
+
+    A ``files`` entry names its contract explicitly as ``path.sol:Contract``, and otherwise
+    by its file stem. These are the keys every per-contract map has to cover, and reading them
+    off the conf rather than off disk means a map edit does not need the sources present.
+    """
+    names = []
+    for entry in conf_object.get("files", []):
+        path, _, explicit = str(entry).partition(":")
+        names.append(explicit or Path(path).stem)
+    return names
+
 
 @dataclass
 class FileContent:
@@ -438,6 +461,135 @@ class ConfigManager:
                 json.dump(conf_object, f, indent=4, sort_keys=True)
 
         return FileContent.from_file(config_file)
+
+    def remove_files_from_config(
+        self,
+        config_file: Path,
+        contract_names: List[str],
+    ) -> List[str]:
+        """
+        Remove contracts from a configuration's ``files`` and from every per-contract map.
+
+        The inverse of :meth:`add_files_to_config`, and it has to touch the same four maps.
+        An entry naming a contract no longer in ``files`` does not break the build, but it
+        makes a later re-add inherit settings nobody chose for it.
+
+        Args:
+            config_file: Path to configuration file to update
+            contract_names: Contract names to remove, as they appear in ``files``
+                (the ``:Contract`` suffix, or the file stem when there is none)
+
+        Returns:
+            The contract names actually removed
+        """
+        with config_file.open("r") as f:
+            conf_object = json5.load(f)
+
+        wanted = set(contract_names)
+        kept: List[str] = []
+        removed: List[str] = []
+        for entry, name in zip(conf_object.get("files", []), contract_names_in(conf_object)):
+            if name in wanted:
+                removed.append(name)
+                self.log(f"Removed contract file from {config_file.name}: {entry}")
+            else:
+                kept.append(entry)
+
+        if not removed:
+            return []
+
+        conf_object["files"] = kept
+        for map_key in COMPILER_MAP_KEYS:
+            entries = conf_object.get(map_key)
+            if isinstance(entries, dict):
+                conf_object[map_key] = {
+                    k: v for k, v in entries.items() if k not in wanted
+                }
+
+        with config_file.open("w") as f:
+            json.dump(conf_object, f, indent=4, sort_keys=True)
+        return removed
+
+    def set_compiler_setting(
+        self,
+        config_file: Path,
+        contract_name: str,
+        setting: str,
+        value: Any,
+        scene_default: Any = None,
+    ) -> str | None:
+        """
+        Set one per-contract compiler setting, keeping the map total.
+
+        certoraRun treats a per-contract map as all-or-nothing: once present, every entry in
+        ``files`` must be matched by it. So setting a value for one contract may mean creating
+        the map, which means supplying a value for every other contract too.
+
+        Where the setting has a scene-wide scalar (``solc``, ``solc_via_ir``,
+        ``solc_evm_version``) that scalar is the value for everyone else, and is then dropped
+        — a conf carrying both a map and its scalar is rejected. Where there is none,
+        ``scene_default`` supplies it. ``solc_evm_version`` and ``solc_optimize`` have no value
+        meaning "whatever each compiler does by default", so creating either map without a
+        scalar or a ``scene_default`` would have to invent one, and is refused instead.
+
+        Args:
+            config_file: Path to configuration file to update
+            contract_name: The contract to set the value for
+            setting: One of ``solc``, ``via_ir``, ``optimize``, ``evm_version``
+            value: The value for ``contract_name``
+            scene_default: The value for every other contract, when the map has to be created
+                and no scene-wide scalar supplies one
+
+        Returns:
+            None on success, or a message explaining why the edit was refused
+        """
+        # Keyed on the scalar's own name, so the roster stays the one certoraRun enforces.
+        by_setting = {
+            scalar.removeprefix("solc_") if scalar != "solc" else "solc": (map_key, scalar)
+            for scalar, map_key in self.SCALAR_TO_MAP_KEYS
+        }
+        if setting not in by_setting:
+            return (
+                f"Unknown compiler setting {setting!r}; expected one of "
+                f"{', '.join(sorted(by_setting))}"
+            )
+        map_key, scalar_key = by_setting[setting]
+
+        with config_file.open("r") as f:
+            conf_object = json5.load(f)
+
+        names = contract_names_in(conf_object)
+        if contract_name not in names:
+            return (
+                f"{contract_name} is not in the configuration's files, so it cannot carry a "
+                f"{setting} setting"
+            )
+
+        if map_key not in conf_object:
+            # Creating the map means answering for every contract, not just this one.
+            fallback = conf_object.pop(scalar_key, None)
+            if fallback is None:
+                fallback = scene_default
+            if fallback is None and setting == "via_ir":
+                fallback = False
+            if fallback is None and setting == "solc":
+                fallback = DEFAULT_SOLC_VERSION
+            if fallback is None:
+                return (
+                    f"The configuration has no {map_key} and no {scalar_key}, so setting "
+                    f"{setting} for {contract_name} alone would leave every other contract "
+                    f"unmatched. Supply a scene_default to use for the rest."
+                )
+            conf_object[map_key] = {name: fallback for name in names}
+            self.log(f"Created {map_key} with {len(conf_object[map_key])} entries")
+
+        conf_object[map_key][contract_name] = value
+        self.drop_scalars_superseded_by_maps(conf_object)
+        self.log(f"Set {map_key}[{contract_name}] = {value}")
+
+        with config_file.open("w") as f:
+            json.dump(conf_object, f, indent=4, sort_keys=True)
+        return None
 
     def _update_compiler_maps_for_new_contracts(
         self,
@@ -939,10 +1091,44 @@ class ConfigManager:
         files: List[str],
         default_version: str,
         additional_entries: Dict[str, str],
+        conf_object: Optional[Dict[str, Any]] = None,
+        convention: Optional[SolcConvention] = None,
     ) -> Dict[str, str]:
-        """Create compiler_map from files list with default version, plus additional entries."""
+        """Create compiler_map from files list, resolving each file's own version.
+
+        Every file gets an entry, because a file in ``files`` with no entry in a present map
+        is rejected outright. Each entry comes from that file's own ``pragma solidity`` via
+        :meth:`_resolve_solc_for_handle`, falling back to ``default_version`` where no pragma
+        resolves.
+
+        **Resolving rather than stamping the default matters because this map is created
+        once.** The caller reaches here on the *first* contract whose version diverges from
+        the global, and from then on ``compiler_map`` exists, so
+        :meth:`update_compiler_map_for_contract` takes its other branch — guarded by
+        ``contract_name not in compiler_map``, which is never true for a name this seeding
+        already wrote. Stamping the default therefore froze every *other* contract at the
+        global version permanently, however far its own pragma diverged.
+
+        It needs two distinct divergent versions to show, so a project with one odd contract
+        never revealed it. On a five-version tree (0.4.24 / 0.6.11 / 0.6.12 / 0.8.9 /
+        0.8.25) 54 of 55 entries came out wrong, and the scene failed to compile with
+        ``solc4.24`` parsing a 0.6.12 ``receive()``.
+
+        ``conf_object`` is optional only for backwards compatibility with callers that have
+        no conf to bias against; without it the per-file resolution still runs, just without
+        the lowest-satisfying-in-conf preference.
+        """
         contracts = parse_contract_files(files, project_root=self.project_root, strict=False)
-        compiler_map = {c.contract_name: default_version for c in contracts}
+        compiler_map: Dict[str, str] = {}
+        for c in contracts:
+            try:
+                compiler_map[c.contract_name] = self._resolve_solc_for_handle(
+                    c, conf_object if conf_object is not None else {}, convention=convention,
+                )
+            except Exception:
+                # A file whose pragma cannot be read still needs an entry, or the conf is
+                # rejected for a missing map key rather than for the unreadable file.
+                compiler_map[c.contract_name] = default_version
         compiler_map.update(additional_entries)
         return compiler_map
 
@@ -1003,7 +1189,9 @@ class ConfigManager:
             global_solc = conf_object.get("solc", "solc")
             if version_for_contract != global_solc:
                 conf_object["compiler_map"] = self._create_compiler_map_from_files(
-                    conf_object.get("files", []), global_solc, {contract_name: version_for_contract}
+                    conf_object.get("files", []), global_solc,
+                    {contract_name: version_for_contract},
+                    conf_object=conf_object, convention=convention,
                 )
                 conf_object.pop("solc", None)  # mutually exclusive with compiler_map
                 self.log(

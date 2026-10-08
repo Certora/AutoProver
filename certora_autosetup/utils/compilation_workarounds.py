@@ -164,6 +164,22 @@ _VIA_IR_HINT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Diagnostics that are via-ir-only by their own wording, with no remediation hint to key on.
+# solc has phrased this one condition both ways: releases that append "(only supported by the
+# IR pipeline)" are caught by ``_VIA_IR_HINT_RE``, but 0.8.25 reports only
+# "UnimplementedFeatureError: Copying of type <T> memory[N] memory to storage not yet
+# supported." — same cause, same single remedy, no hint. Without this the whole workaround
+# table finds nothing and the run ends "Compilation failed with no applicable workaround",
+# which is what a 0.8.25 contract copying a memory array into storage does on plain settings.
+#
+# Safe to treat as decisive because the diagnostic offers no alternative: unlike stack-too-deep
+# there is no optimizer or Yul rung to climb first, so it never competes with the ladder that
+# ``_MULTI_REMEDY_DIAGNOSTIC_RE`` guards.
+_VIA_IR_ONLY_DIAGNOSTIC_RE = re.compile(
+    r"UnimplementedFeatureError:\s*Copying of type .*? to storage not yet supported",
+    re.IGNORECASE,
+)
+
 # Diagnostics that carry the same hint while via-ir is only ONE of the remedies solc
 # offers ("... while enabling the optimizer. Otherwise, try removing local variables"),
 # so the hint does not mean via-ir is required. Their escalation ladder — optimizer,
@@ -1150,6 +1166,8 @@ class CompilationWorkaroundManager:
 
         def requires_via_ir(block: List[str]) -> bool:
             normalized = _normalize_ws("\n".join(block))
+            if _VIA_IR_ONLY_DIAGNOSTIC_RE.search(normalized):
+                return True
             return bool(_VIA_IR_HINT_RE.search(normalized)) and not _MULTI_REMEDY_DIAGNOSTIC_RE.search(normalized)
 
         current_path: Optional[str] = None

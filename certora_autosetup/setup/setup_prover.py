@@ -38,6 +38,7 @@ from certora_autosetup.setup.import_case_fix import (
     plan_import_case_fixes,
     revert_import_case_fixes,
 )
+from certora_autosetup.setup.build_index import index_build
 from certora_autosetup.setup.signature_manager import SignatureManager
 from certora_autosetup.setup.signature_types import ContractInfo
 from certora_autosetup.setup.solidity_utils import extract_definitions_from_solidity
@@ -1187,32 +1188,17 @@ class SetupProver:
         self.log("Extracting function signatures and creating signature database...")
 
         try:
-            # Initialize signature manager
             project_root = Path.cwd()
-            signature_manager = SignatureManager(project_root)
-
-            # Extract signatures from build JSON
-            signatures = signature_manager.extract_signatures_from_build(
-                build_json_path
+            self.log("🔄 Populating signature database with contract_infos and signatures...")
+            database = index_build(
+                build_json_path,
+                self.getASTPath(),
+                project_root=project_root,
+                log=self.log,
             )
 
-            # Create contract info objects from build data
-            contract_infos = self._extract_contract_infos_from_build(build_json_path)
-
-            # Find the latest AST file
-            ast_file_path = self.getASTPath()
-
-            # Extract inheritance info and abstract contracts from AST if available
-            inheritance_info, abstract_contracts = self._extract_inheritance_and_abstract_from_ast(ast_file_path)
-            if inheritance_info:
-                self._merge_inheritance_info(contract_infos, inheritance_info)
-
-            self.log(f"Detected abstract contracts: {abstract_contracts}")
-            # Populate signature database
-            self.log("🔄 Populating signature database with contract_infos and signatures...")
-            signature_manager.populate_signature_database(contract_infos, signatures, abstract_contracts)
-
             # Dump signature database to JSON (same as autosetup)
+            signature_manager = SignatureManager(project_root, database=database)
             dump_path = signature_manager.dump_signature_database()
             self.log(f"✓ Generated signature database: {dump_path}")
 
@@ -1220,156 +1206,6 @@ class SetupProver:
             self.log(f"Failed to generate signature database: {e}", "ERROR")
             self.log(f"Traceback: {traceback.format_exc()}", "ERROR")
             raise
-
-    def _extract_inheritance_and_abstract_from_ast(self, ast_file_path: Optional[Path]) -> tuple[Dict[str, List[str]], set]:
-        """Extract inheritance information and abstract contracts from AST dumps.
-
-        Args:
-            ast_file_path: Path to the .asts.json file, or None if not available
-
-        Returns:
-            Tuple of (inheritance_info, abstract_contracts) where:
-            - inheritance_info: Dict mapping contract_name -> list of parent contracts
-            - abstract_contracts: Set of contract names that are abstract or interfaces
-        """
-        inheritance_info = {}
-        abstract_contracts = set()
-
-        if not ast_file_path:
-            self.log("No AST file provided - inheritance info will be missing", "WARNING")
-            return inheritance_info, abstract_contracts
-
-        try:
-            self.log(f"Extracting inheritance info from {ast_file_path}")
-
-            # Stream the (multi-GB) .asts.json once, keeping only the slim per-contract
-            # views needed below so the dump is never fully materialized.
-            declarations = list(iter_contract_declarations(AstDump.stream_units(ast_file_path)))
-
-            # Build ID to contract name mapping once
-            id_to_name = {
-                decl.node_id: decl.name for decl in declarations if decl.node_id and decl.name
-            }
-
-            # Now process contracts and resolve inheritance using the pre-built mapping
-            for decl in declarations:
-                if not decl.name:
-                    continue
-                # Check if abstract or interface
-                if decl.abstract or decl.contract_kind is ContractKind.INTERFACE:
-                    abstract_contracts.add(decl.name)
-                    self.log(f"Identified {'abstract' if decl.abstract else 'interface'}: {decl.name}", "DEBUG")
-
-                # Get linearized base contracts (includes self + all inherited contracts)
-                linearized = decl.linearized_base_ids
-                if len(linearized) > 1:  # More than just self
-                    # Convert IDs to contract names using pre-built mapping
-                    base_contracts = [id_to_name[contract_id] for contract_id in linearized[1:] if contract_id in id_to_name]
-                    if base_contracts:
-                        inheritance_info[decl.name] = base_contracts
-
-            self.log(f"Extracted inheritance for {len(inheritance_info)} contracts", "DEBUG")
-            self.log(f"Found {len(abstract_contracts)} abstract/interface contracts to skip", "INFO")
-            return inheritance_info, abstract_contracts
-
-        except Exception as e:
-            self.log(f"Failed to extract inheritance from AST: {e}", "WARNING")
-            return inheritance_info, abstract_contracts
-
-    def _merge_inheritance_info(self, contract_infos: List[ContractInfo], inheritance_info: Dict[str, List[str]]) -> None:
-        """Merge inheritance information into ContractInfo objects in place."""
-        for contract_info in contract_infos:
-            if contract_info.name in inheritance_info:
-                contract_info.inherits_from = (contract_info.inherits_from or []) + inheritance_info[contract_info.name]
-
-    def _extract_contract_infos_from_build(
-        self, build_json_path: Path
-    ) -> List[ContractInfo]:
-        """Extract contract information from build JSON to create ContractInfo objects."""
-        contract_infos = []
-
-        try:
-            with open(build_json_path, "r") as f:
-                build_data = json.load(f)
-
-            seen_contracts = set()
-
-            # Discover contracts and create ContractInfo objects
-            for contract in iter_contracts(build_data):
-                methods = contract.get("methods", [])
-                if not methods:
-                    continue
-
-                contract_name = contract.get("name", "Unknown")
-
-                # Skip if already processed
-                if contract_name in seen_contracts:
-                    continue
-                seen_contracts.add(contract_name)
-
-                # Get source file directly from contract object (canonical source)
-                source_file_str = contract_source_file(contract)
-
-                # Fall back to method inspection only if contract-level fields are missing
-                if not source_file_str:
-                    fallback_source = None
-                    for method in methods:
-                        original_file = method.get("originalFile")
-                        if original_file:
-                            fallback_source = original_file
-
-                        # Prefer file that matches contract name (where contract is actually defined)
-                        if original_file.endswith(f"/{contract_name}.sol") or original_file.endswith(f"\\{contract_name}.sol"):
-                            source_file_str = original_file
-                            break
-                    if not source_file_str and fallback_source:
-                        source_file_str = fallback_source
-
-                # Final fallback
-                if not source_file_str:
-                    source_file_str = "unknown.sol"
-
-                # Determine contract kind (basic heuristic)
-                is_library = any(
-                    method.get("isLibrary", False) for method in methods
-                )
-                kind = ContractKind.LIBRARY if is_library else ContractKind.CONTRACT
-
-                # Extract constructor params
-                ctor_params = None
-                for method in methods:
-                    if method.get("name", "") == "constructor":
-                        params = []
-                        for arg, param_name in zip(
-                            method.get("fullArgs", []), method.get("paramNames", [])
-                        ):
-                            type_desc = arg.get("typeDesc", {})
-                            sol_type = parse_type_descriptor(type_desc, TypeParseMode.SOLIDITY)
-                            location = arg.get("location", "")
-                            if location in ("memory", "calldata", "storage"):
-                                sol_type = f"{sol_type} {location}"
-                            params.append((sol_type, param_name))
-                        if params:
-                            ctor_params = params
-                        break
-
-                # Create contract info with inheritance
-                contract_info = ContractInfo(
-                    name=contract_name,
-                    kind=kind,
-                    source_file=Path(source_file_str),
-                    inherits_from=[],  # added later via _extract_inheritance_from_ast()
-                    artifact_path=build_json_path,
-                    constructor_params=ctor_params,
-                )
-
-                contract_infos.append(contract_info)
-
-            return contract_infos
-
-        except Exception as e:
-            self.log(f"Error extracting contract infos: {e}", "ERROR")
-            return []
 
     def generate_ast_graph(self, ast_path: Path) -> None:
         """

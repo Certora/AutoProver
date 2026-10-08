@@ -81,6 +81,24 @@ class SignatureDatabase:
         # Clear inheritance cache when contracts are updated
         self._inheritance_cache.clear()
 
+    def remove_contract(self, contract_name: str) -> None:
+        """Forget a contract: its record, and every implementation edge naming it.
+
+        The counterpart to :meth:`add_contract` for a re-index. ``add_contract`` replaces a
+        record of the same name, but ``add_signature`` only ever *adds* to a selector's
+        implementor set — so re-indexing a contract that has since dropped a function would
+        otherwise leave it listed as implementing one it no longer has, and a link or
+        dispatcher chosen on that evidence resolves to code that is not there.
+
+        A selector left with no implementors keeps its signature entry: the signature is
+        still how that selector is named, which is worth knowing even where nothing in the
+        scene implements it.
+        """
+        self._contracts.pop(contract_name, None)
+        for implementors in self._implementations.values():
+            implementors.discard(contract_name)
+        self._inheritance_cache.clear()
+
     def get_signature(self, selector: str) -> Optional[FunctionSignature]:
         """Get the function signature for a selector."""
         return self._signatures.get(selector)

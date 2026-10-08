@@ -4,6 +4,25 @@ from typing import cast
 from langgraph.store.base import BaseStore
 
 
+def vfs_digest(vfs: dict[str, str]) -> str:
+    """A content hash of a VFS overlay, stable across runs and orderings.
+
+    Two uses, and they want the same thing: addressing a stored edit by its content, and
+    stamping an approval so a later change to any file voids it.
+
+    Paths are hashed alongside contents. Hashing values alone makes two overlays with the
+    same file bodies under different names collide, so moving content between paths — a
+    rename, a file split — would leave a stamp looking valid over a tree that had changed.
+    """
+    hasher = hashlib.sha256()
+    for name in sorted(vfs):
+        hasher.update(name.encode("utf-8"))
+        hasher.update(b"\0")
+        hasher.update(vfs[name].encode("utf-8"))
+        hasher.update(b"\0")
+    return hasher.hexdigest()
+
+
 @dataclass(frozen=True)
 class MungeEditor:
     """The munge editor sub-agent, commissioned through the author's
@@ -72,12 +91,7 @@ class EditStore:
 
     @classmethod
     def _deterministic_hash(cls, vfs: dict[str, str]) -> str:
-        sorted_keys = sorted(vfs.keys())
-        hasher = hashlib.sha256()
-        for nm in sorted_keys:
-            hasher.update(vfs[nm].encode("utf-8"))
-            hasher.update(b'\0')
-        return hasher.hexdigest()
+        return vfs_digest(vfs)
 
     async def commit(
         self, vfs: dict[str, str], *, executive_summary: str, why_sound: str,
