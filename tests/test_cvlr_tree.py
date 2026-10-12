@@ -325,9 +325,9 @@ def test_a_manifest_with_no_features_table_gets_one(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_a_reused_tree_picks_up_a_project_file_changed_since_it_was_built(tmp_path: Path):
-    """The base copy runs once, so before this a reused tree kept the previous run's copy of every
-    project file: a mutated program was verified as the original, and on solana-program-stake a
-    regenerated tuning composite never reached the build."""
+    """Without bringing a reused tree up to date, it would keep the previous run's copy of every
+    project file: an edited program would be verified as the original, and a regenerated tuning file
+    would never reach the build."""
     tree = await _tree(tmp_path)
     envs = tree.pristine / "programs/p/src/certora/envs"
     envs.mkdir(parents=True)

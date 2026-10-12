@@ -154,7 +154,7 @@ it is not.
 |----|------|-------|------------------------------|
 | **P1** Resolve the project — [#248](https://github.com/Certora/AutoProver/pull/248), **merged** `2eb4a391` | +3,697 | +2,391 | Point it at a Cargo workspace: it names the package under verification, resolves which `cvlr` / `cvlr-solana` the build gets, writes the prover conf, and scaffolds a CVLR workspace into a project that has none. |
 | **P2** A hand-written rule in, verdicts out — [#258](https://github.com/Certora/AutoProver/pull/258), **merged** `b999c306` | +639 | +624 | Build a CVLR harness for SBF and submit it, and read the verdicts back. The deterministic submission path, end to end, with no agent in it. |
-| **P3a1** The working copy, and edits to the program's functions | +1,260 | +740 | Materialize one working tree over the project and reuse it in the next run without a cold rebuild; record an edit to a function in the program (the five attribute kinds and extraction), replay it onto the tree, and diff it for the report. |
+| **P3a1** The working copy, and edits to the program's functions | +1,204 | +889 | Materialize one working tree over the project and reuse it in the next run without a cold rebuild; record an edit to a function in the program (the five attribute kinds and extraction), replay it onto the tree, and diff it for the report. |
 | **P3a2** Structural swaps | +710 | +900 | Swap a derive, redirect a module to a substitute, and swap an import, gated on a unit's feature or, for a dependency's module, on the shared one. |
 | **P3b** A generated harness, and what its verdict means | +1,919 | +1,180 | Take a generated harness module through tuning, build and submission, and decide what the run proved — including when a rule passed for a reason that says nothing about the program. |
 | **P4** The Anchor surface and the worked example | +715 | +720 | Read an Anchor program's account and handler surface, and render the worked example an author is shown against that program rather than against a generic one. |
@@ -307,7 +307,7 @@ tests divide the same way: `tests/test_cvlr_forks.py` with P1, `tests/test_cvlr_
 
 Three commits a reviewer can read in order:
 
-1. `composer/spec/cvlr/rust_source.py`, the parsing primitive.
+1. `composer/spec/cvlr/rust_source.py`, the parsing primitive, less `DERIVE_LIST`.
 2. `munge.py` without the three structural swaps: the five attribute kinds (`EarlyPanic`, `MockFn`,
    `InlineNever`, `HookOnEntry`, `HookOnExit`), `FunctionExtraction`, their refusals,
    `apply_attribute`, `apply_extraction`, and the state helpers (`munge_history`, `amended`,
@@ -318,7 +318,9 @@ Three commits a reviewer can read in order:
 3. `composer/spec/cvlr/tree.py`, less the swaps' ranks in `replay` and `run_global_munges`, with the
    graphcore pin bump `85be3db` → `9f4e9fc` (graphcore #39), whose `PersistentMaterializer` writes the
    munged files and restores them once no unit's state munges them. With the cases from
-   `tests/test_cvlr_tree.py` that need no harness.
+   `tests/test_cvlr_tree.py` that need no harness, and the three project-source boundary cases
+   from `tests/test_cvlr_munge.py`, rewritten against `SharedTree.pristine_of` because on the
+   branch they go through `verify.HarnessTarget`.
 
 **The project-source boundary lives in `tree.py`** (`NOT_PROJECT_SOURCE`, `is_project_source`,
 `NotProjectSource`), moved there from `munge.py`, which never used it. It states which files the tree
@@ -342,9 +344,10 @@ Nothing in production calls the tree until P3b.
 Named **P3a3** in the three-way split. `DeriveSwap`, `ModuleRedirect` and `ImportSwap`,
 with their refusals and appliers (`apply_derive_swap`, `apply_module_redirect`,
 `apply_import_swap`), `mirror_path` and `forwards_feature`. In `tree.py`, their ranks in `replay` and
-`run_global_munges`. A module redirect of a local dependency is the only munge gated on the shared
-`certora` feature, so it is the only reason that method exists. `DERIVE_LIST` in `rust_source.py` is
-the derive swap's, but it is three lines and rides P3a1.
+`run_global_munges`, and the `created` and `subject` properties every munge kind carries on the
+branch. A module redirect of a local dependency is the only munge gated on the shared `certora`
+feature, so it is the only reason that method exists. `DERIVE_LIST` in `rust_source.py` comes here
+too, since the derive swap is its only user before P4.
 
 Tests: `tests/test_cvlr_module_redirect.py`, `tests/test_cvlr_import_swap.py` and
 `tests/test_cvlr_derive_swap.py`, which import only `munge` and `tree` at module scope. One function
