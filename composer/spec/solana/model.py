@@ -118,6 +118,32 @@ class AuthorityInteraction(BaseModel):
 type ComponentInteraction = InterComponentInteraction | AuthorityInteraction
 
 
+class Computation(BaseModel):
+    """A function where the protocol's arithmetic happens, named so the property extractor can ask
+    what its result must respect. It may live in the program or in a dependency the program relies
+    on: the stake program's activation schedule is `solana_stake_interface`'s, and a stake account's
+    withdrawable balance depends on it.
+
+    ``computes`` says what, never how. The extractor states properties from it, and a formula here
+    becomes a property that restates the formula, which holds for this implementation only."""
+
+    function: str = Field(
+        description="The function's Rust path as the program calls it, e.g. "
+        "`solana_stake_interface::state::Delegation::stake` or `crate::helpers::calculate_split`."
+    )
+    crate: str = Field(
+        description="The crate that defines the function: the program's own, or a dependency's."
+    )
+    computes: str = Field(
+        description="What the result is, in the protocol's terms: 'the part of a delegation that "
+        "is effective at an epoch'. No formula and no constants: say what it computes, not how."
+    )
+    used_by: list[str] = Field(
+        description="The instructions whose behavior depends on the result. Each must match the "
+        "`name` of an instruction declared on the program."
+    )
+
+
 class ProgramComponent(BaseModel):
     """A single major "component" of a program — a named *capability*: a semantic cluster of the
     program's instructions together with the account state they maintain.
@@ -148,6 +174,11 @@ class ProgramComponent(BaseModel):
     )
     requirements: list[str] = Field(
         description="Natural-language requirements for this component — its behavioral specification."
+    )
+    computations: list[Computation] = Field(
+        default_factory=list,
+        description="The functions where this component's arithmetic happens, including functions "
+        "in dependencies whose results the program relies on. Empty if the component does none.",
     )
 
 
@@ -314,3 +345,4 @@ class SolanaComponentInstance:
             "slug": self.slug,
             "instructions": [i.model_dump(mode="json") for i in self.instructions],
         }
+

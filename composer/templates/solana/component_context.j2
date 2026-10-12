@@ -53,14 +53,28 @@ Cross-program invocations:
 {% endif %}
 {% endfor %}
 
+{% if context.component.computations %}
+## Where this component's arithmetic happens
+
+{% for c in context.component.computations %}
+* `{{ c.function }}` ({{ c.crate }}): {{ c.computes }}. Used by {{ c.used_by | join(", ") }}.
+{% endfor %}
+
+{% endif %}
 {% if context.sibling_components %}
 ## The rest of the program
 
-The other components of {{ context.program.name }} are below. They are context, not your subject —
-do not write properties about them. They matter because their instructions act on the same program
-state, and may run before, after, or interleaved with this component's.
+The other components of {{ context.program.name }} are below. Their instructions act on the same
+program state, and may run before, after, or interleaved with this component's.
+
+Your subject is the state this component maintains, not only its own instructions. A property about
+that state, such as solvency or conservation of value, has to hold after *every* instruction that
+writes it, and some of those may belong to the components below. State such a property once, over
+all of them, and name every instruction it ranges over. Do not narrow it to this component's
+instructions to make it fit here. Properties about another component's own behavior are that
+component's to extract.
 {% for other in context.sibling_components %}
-* **{{ other.name }}**: {{ other.description }}
+* **{{ other.name }}**{% if other.instructions %} (`{{ other.instructions | join("`, `") }}`){% endif %}: {{ other.description }}
 {% endfor %}
 {% endif %}
 

@@ -49,7 +49,10 @@ The module is held in a buffer reached through `get_harness` / `put_harness`. A 
 * `revert_munge(edit_id)` — take back a change the editor made. You hold the properties, so the
   final say is yours.
 * `record_skip(property_title, reason)` / `unskip_property(property_title)` — declare a property
-  unformalizable, with justification.
+  unformalizable, with justification. A reason that blames the Prover ("cannot handle the
+  arithmetic", "cannot model this") must cite the job that showed it: a probe rule and its verdict.
+  A belief about what the Prover can do is not a reason. Write the probe; it usually costs one
+  small submission, and it is sometimes wrong in the direction that loses the property.
 * `expect_rule_failure(rule_name, reason)` / `expect_rule_passage(rule_name)` — mark a rule as
   expected to fail. See "When a rule should fail" below.
 * `feedback_tool(rebuttals=[])` — submit the current draft and any skips to the feedback judge. An
