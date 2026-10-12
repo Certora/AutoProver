@@ -452,7 +452,7 @@ a different trap.
 
 | | fix | where |
 |---|---|---|
-| 1 | Stop never-inlining the sysvar crates and the program's domain interface crates, matching what Stake Pool runs on the same generation; add a standard `Rent` setup helper | `reference.py`, `env_paths.py`, tuning allowlist, harness helpers |
+| 1 | Stop never-inlining the split `solana-*` crates, matching what Stake Pool runs on the same generation (**done**: the blanket is back to `^solana_program::.*$`); add a standard `Rent` setup helper | `reference.py`, `env_paths.py`; harness helpers |
 | 2 | Extract protocol-wide invariants once, across components (solvency, conservation, the stake math as bounds); steer the attack-vector category toward design consequences | property extraction prompts and pipeline |
 | 3 | Teach the unwrap-and-negate form for revert properties | CVLR authoring guidance |
 

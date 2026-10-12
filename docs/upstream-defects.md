@@ -933,6 +933,17 @@ symbol loses coverage.**
 
 Note this is a defect in the *files*, not in the prover: they were correct when written.
 
+**Correction, 2026-10-12: the blanket is no longer widened.** Widening it was wrong. Inlining
+less library code is not a safe direction, because a function that is not inlined is external: it
+returns an arbitrary value and writes nothing. On solana-program-stake the widened blanket made
+`Sysvar::from_account_info` never return `Ok`, and made `solana_stake_interface`'s authorization
+and stake math into oracles. 29 of the 50 skipped properties trace to it, and so do the munges
+that route every `Clock` and `Rent` read around a handler (`docs/stake-benchmark.md`, "Expert
+review"). Projects verified on this generation, such as Stake Pool on `solana-program` 2.2.1, run
+the unwidened blanket and analyze the split crates. The renames above stand. Against the fixture,
+core inlining now reaches 6→19 symbols rather than 35: the sixteen the widening added were
+split-crate symbols it made external.
+
 ---
 
 ## T2

@@ -11,7 +11,6 @@ alias whose path no longer appears still looks like coverage.
 
 from pathlib import Path
 
-from dataclasses import replace
 import pytest
 
 from composer.cargo.metadata import CratePackage, RegistrySource, Workspace
@@ -23,7 +22,7 @@ from composer.spec.cvlr.tuning import (
     compose_env,
     starting_env,
 )
-from composer.spec.cvlr.reference import SOLANA, SOROBAN, NamespacePattern, PathAlias
+from composer.spec.cvlr.reference import SOLANA, SOROBAN, PathAlias
 
 #: Every crate the post-split Solana platform layer is spread across, as a target resolves them.
 SPLIT_CRATES = (
@@ -39,7 +38,7 @@ SPLIT_CRATES = (
     "solana-cpi",
     "solana-instruction",
     # No alias names these. The vault resolves them, and its symbol table below has symbols in
-    # them, which the never-inline blanket has to reach.
+    # them.
     "solana-program-entrypoint",
     "solana-sha256-hasher",
     "solana-system-interface",
@@ -86,13 +85,13 @@ def _workspace(*resolved: str) -> Workspace:
 @pytest.fixture
 def split() -> PathDialect:
     """The dialect a post-split target gets."""
-    return dialect_for(_workspace("solana-program", *SPLIT_CRATES), PROGRAM, SOLANA)
+    return dialect_for(_workspace("solana-program", *SPLIT_CRATES), SOLANA)
 
 
 @pytest.fixture
 def monolithic() -> PathDialect:
     """The dialect a 1.18 target gets, where the canonical paths are already the right ones."""
-    return dialect_for(_workspace("solana-program"), PROGRAM, SOLANA)
+    return dialect_for(_workspace("solana-program"), SOLANA)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -175,56 +174,25 @@ def test_a_symbol_level_alias_beats_the_module_it_sits_inside() -> None:
 # the blanket
 
 
-def test_the_namespace_blanket_widens_to_the_whole_family(split: PathDialect) -> None:
-    """``^solana_program::.*$`` sets the never-inline default for the platform layer. On a
-    post-split target it matches almost nothing that moved out. The widened form has to cover
-    the split crates and the monolith that remains."""
+def test_the_blanket_stays_on_the_monolith(split: PathDialect) -> None:
+    """``^solana_program::.*$`` is not respelled for the split crates, so they are analyzed.
+
+    A non-inlined function is external: it returns an arbitrary value and writes nothing. Widened,
+    the blanket made ``Sysvar::from_account_info`` return through memory and never succeed, and made
+    ``solana_stake_interface``'s authorization and stake math oracles. On solana-program-stake that
+    cost 29 of 50 skipped properties and a munge in six of seven components for every ``Clock`` or
+    ``Rent`` read. Projects verified on this generation run the blanket unwidened.
+    """
     import re
 
-    (widened,) = split.spellings("^solana_program::.*$")
+    blanket = "^solana_program::.*$"
+    assert split.spellings(blanket) == (blanket,)
     for symbol in (
-        "solana_account_info::AccountInfo::lamports",
-        "solana_pubkey::Pubkey::find_program_address",
-        "solana_cpi::invoke_signed_unchecked",
-        "solana_program::program::invoke_signed",
+        "solana_sysvar::Sysvar::from_account_info",
+        "solana_stake_interface::state::Authorized::check",
+        "solana_stake_program::processor::Processor::process",
     ):
-        assert re.search(widened, symbol), f"{widened} does not cover {symbol}"
-
-
-def test_the_blanket_is_widened_even_on_a_target_that_predates_the_split(
-    monolithic: PathDialect,
-) -> None:
-    """Unlike a :class:`PathAlias`, the widened blanket is a superset of what it replaces, so it
-    is correct on either generation and needs no version check. It is a pattern over crate
-    names the crates the target resolves, and a 1.18 target resolves the monolith."""
-    import re
-
-    (widened,) = monolithic.spellings("^solana_program::.*$")
-    assert re.search(widened, "solana_program::program::invoke_signed")
-
-
-def test_the_blanket_does_not_reach_the_projects_own_solana_named_crate() -> None:
-    """solana-program-stake's program crate is ``solana-stake-program``. A blanket over the
-    family's names made every handler external, so the Prover analyzed none of the program.
-
-    Its graph also resolves a registry crate of the same name, Agave's native stake program, which
-    ``solana-program-test`` pulls in as a dev-dependency. That one is in the family and not local,
-    so only what the program links can tell the two apart."""
-    import re
-
-    program = replace(PROGRAM, name="solana-stake-program")
-    platform = tuple(_registry(name) for name in ("solana-program", *SPLIT_CRATES))
-    agave = _registry("solana-stake-program")
-    workspace = Workspace(
-        root=Path("/nonexistent"),
-        target_directory=Path("/nonexistent/target"),
-        members=(program,),
-        packages=(program, *platform, agave),
-        links={program: platform},
-    )
-    (widened,) = dialect_for(workspace, program, SOLANA).spellings("^solana_program::.*$")
-    assert re.search(widened, "solana_account_info::AccountInfo::lamports")
-    assert not re.search(widened, "solana_stake_program::processor::Processor::process")
+        assert not re.search(blanket, symbol), f"{symbol} would be external"
 
 
 def test_a_path_that_merely_starts_with_the_split_crate_is_not_widened(
@@ -256,7 +224,7 @@ def test_a_target_without_the_split_crates_keeps_the_canonical_spelling(
 
 
 def test_a_chain_with_no_split_gets_a_dialect_that_changes_nothing() -> None:
-    dialect = dialect_for(_workspace("soroban-sdk"), PROGRAM, SOROBAN)
+    dialect = dialect_for(_workspace("soroban-sdk"), SOROBAN)
     assert dialect.aliases == ()
     assert dialect.spellings("^soroban_sdk::Env::storage$") == ("^soroban_sdk::Env::storage$",)
 
@@ -348,19 +316,6 @@ def test_every_declared_alias_still_names_something_in_the_starting_files() -> N
         )
 
 
-def test_the_namespace_blanket_is_declared_for_a_directive_that_exists() -> None:
-    """Specifically the blanket, because it is the one whose canonical spelling contains a regex
-    fragment: rewording ``^solana_program::.*$`` to anything else leaves it matching
-    nothing, and the platform layer loses its default with no other symptom."""
-    blankets = [
-        a for a in SOLANA.platform.path_aliases if isinstance(a, NamespacePattern)
-    ]
-    assert blankets, "the platform layer's never-inline default is no longer widened"
-    core = (ENV_DIR / "cvlr_inlining_core.txt").read_text()
-    for blanket in blankets:
-        assert f"#[inline(never)] ^{blanket.canonical}$" in core
-
-
 # ---------------------------------------------------------------------------------------------
 # pinned against a real binary
 
@@ -389,8 +344,6 @@ def test_every_alias_rewrites_to_a_path_the_binary_actually_defines(split: PathD
     symbols = _measured_symbols()
     unexercised: list[str] = []
     for alias in SOLANA.platform.path_aliases:
-        if isinstance(alias, NamespacePattern):
-            continue
         spellings = (alias.canonical, *alias.actual)
         if not any(sp in s for s in symbols for sp in spellings):
             unexercised.append(alias.canonical)
@@ -437,7 +390,7 @@ def test_the_dialect_measurably_restores_coverage_and_costs_none(split: PathDial
         return live, reached
 
     for name, directives, coverage in (
-        ("cvlr_inlining_core.txt", (4, 17), (6, 35)),
+        ("cvlr_inlining_core.txt", (4, 17), (6, 19)),
         ("cvlr_inlining_anchor.txt", (11, 12), (26, 26)),
         ("cvlr_summaries_core.txt", (2, 5), (2, 3)),
     ):

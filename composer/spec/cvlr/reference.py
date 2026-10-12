@@ -84,34 +84,6 @@ class PathAlias:
 
 
 @dataclass(frozen=True)
-class NamespacePattern:
-    """A blanket over one crate's whole namespace, widened to the family that replaced that crate.
-
-    The canonical spelling is ``<crate>::.*``, the pattern the starting layers use for a whole
-    layer, as in ``#[inline(never)] ^solana_program::.*$``. After the monolith split, that layer
-    lives in ``solana_account_info``, ``solana_pubkey``, ``solana_cpi``, and others, so the blanket
-    matches almost nothing and the default stops applying.
-
-    This is not a :class:`PathAlias`, for two reasons.
-
-    It must not rewrite a path that merely starts with the crate.
-    ``solana_program::instruction::get_stack_height`` is still a function in the monolith, and
-    rewriting it would name a symbol that does not exist. The literal ``.*`` is what marks a
-    blanket.
-
-    It is widened to the crates of ``family`` the target links from outside the project, named one
-    by one, not to a pattern over crate names. A project's own crates can be in the family too
-    (``solana-stake-program`` is a ``solana-*`` crate), and a pattern over the family's names would
-    make the program under verification external.
-    """
-
-    canonical: str
-    #: The crate-name prefix of the family, as :meth:`~composer.cargo.metadata.Workspace.family`
-    #: takes it.
-    family: str
-
-
-@dataclass(frozen=True)
 class PlatformGeneration:
     """The chain-platform release line a CVLR chain crate is bound to.
 
@@ -135,7 +107,7 @@ class PlatformGeneration:
     #: How this generation spells the paths in the starting tuning files.
     #: :mod:`composer.spec.cvlr.env_paths` applies these. Empty when this generation's spelling
     #: is already the one the starting layers use, which is the monolith's.
-    path_aliases: tuple[PathAlias | NamespacePattern, ...] = ()
+    path_aliases: tuple[PathAlias, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -330,9 +302,12 @@ SOLANA = ChainReference(
             # the monolith on this generation, and `solana_program::poseidon` does not exist here
             # under any spelling. Rewriting either would hide a directive that does not apply.
             #
-            # The blanket that sets the platform layer's never-inline default. ``solana_program::.*``
-            # only matches what stayed in the monolith. The replacement covers the split crates too.
-            NamespacePattern("solana_program::.*", family="solana"),
+            # Nor is the never-inline blanket `solana_program::.*`. It matches only what stayed in
+            # the monolith, so the split crates are analyzed. That is what projects verified on
+            # this generation run, and what their specs depend on: a non-inlined function is
+            # external, returning an arbitrary value and writing nothing, so
+            # `Sysvar::from_account_info` never returns `Ok` and the program's domain interface
+            # crates (`solana_stake_interface`) become oracles.
         ),
     ),
 )
