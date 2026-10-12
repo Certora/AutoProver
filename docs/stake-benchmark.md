@@ -469,9 +469,26 @@ scaffolded with the corrected tuning files
 | `Delegation::stake` never exceeds the delegated amount | SANITY_FAILED |
 
 The first four were out of reach in the third run: the read never succeeded, and the address check
-and the lockup decision were oracles. The fifth is the stake math, and it came back vacuous rather
-than violated. That is not yet evidence either way about the arithmetic. The probe bounded the
-epoch loop by assumption, and the setup is the first suspect.
+and the lockup decision were oracles.
+
+**The stake math is checkable.** The fifth rule was vacuous because of its own setup, not the
+arithmetic. It assumed `deactivation_epoch == u64::MAX`, and under the default conf a `u64` cannot
+equal any constant at or above `2^63` (upstream-defects P11). Restated without that assumption, the
+property verifies with its sanity check passing, in three forms: a stake that never deactivates, one
+that deactivates after the target epoch, and an unconstrained activation and deactivation schedule
+within the loop bound
+([job](https://prover.certora.com/jobStatus/37632/5fe23edd4ee04ddcb45482ac5e8abc50?anonymousKey=d27dc644070d97886e2a8a22dd216cf70add168a)).
+They verify under `-solanaTACSoundSignedMath` too
+([job](https://prover.certora.com/jobStatus/37632/5a3d3e4b3dbf4db1a687b9d4b9f74b7e?anonymousKey=f9e0a89e6523c9e357bf9cf6445d7d611078d2ea)).
+The warmup rate's `f64` multiply is summarized as unconstrained, and the bound holds anyway because
+the code clamps around it. The reviewers were right to doubt the run's claim that the Prover cannot
+handle this.
+
+**P11 matters to this program beyond that one rule.** `u64::MAX` is the stake program's sentinel
+for "not deactivating" and "bootstrap". The third run's Deactivation unit measured the harness side
+of it and assigned the sentinel instead of assuming it (`deactivation.rs:73`). The program side
+cannot be routed around: `is_bootstrap()` and `merge.rs:96` compare account-derived epochs against
+`u64::MAX`, and under the default conf those branches are never taken.
 
 None of this touches the third run's main finding: `process_withdraw` with the source equal to
 the destination truncates the account through `realloc(0)`.

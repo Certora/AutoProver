@@ -49,9 +49,10 @@ the write-up gives the line number rather than the name.
 | [P5](#p5) | A [3308] in the generated vacuity check is reported as a clean `VERIFIED` when `rule_sanity` is off | **critical** |
 | [P6](#p6) | A summarized CPI havocs the caller's *deserialized* `Account<T>`, not just the account buffer | **not reproduced** by a direct probe; the handler form is unmeasured |
 | [P7](#p7) | A checked `i128` multiply is rejected outright — `__muloti4` is not modelled | **major** — fix in flight (CERT-10103) |
-| [P8](#p8) | `-solanaTACSoundSignedMath` disables most of `-solanaTACMathInt`; together they turn a 7-minute green run into a 2-hour timeout | **major** — blocks adopting the flag (CERT-10061) |
+| [P8](#p8) | `-solanaTACSoundSignedMath` disables most of `-solanaTACMathInt`; together they turn a 7-minute green run into a 2-hour timeout | **major** — fixed on the Prover's master branch, not yet all released (CERT-10061) |
 | [P9](#p9) | Binding a handler's `Result` makes the rule vacuous, so an *acceptance* property is unstatable | **major** |
 | [P10](#p10) | The vacuity check's `satisfy` sits after the rule's drop glue, so a loop there makes a verified rule `SANITY_FAILED` | **major**, worked around |
+| [P11](#p11) | Without `-solanaTACSoundSignedMath`, a `u64` compared against a constant with the top bit set (`u64::MAX`, `1 << 63`) is modelled as comparing against a negative number | **critical** — unsound by default; `-solanaTACSoundSignedMath` fixes it, and AutoProver runs it on Prover master during development |
 | [U1](#u1) | `extract_job_id_from_url` cannot parse a Solana Prover job link | **major**, worked around |
 | [T1](#t1) | Tuning files are spelled for pre-2.2 `solana-program` paths | major |
 | [T2](#t2) | A canonical tuning file names one specific on-chain program | hygiene |
@@ -576,6 +577,11 @@ as a bitvector multiply with an overflow branch. The gap is specific to the sign
 
 ### `-solanaTACSoundSignedMath` and `-solanaTACMathInt` defeat each other, and the prover says so in a TODO
 
+**Status, 2026-10-12: fixed on the Prover's master branch, not yet all released.** AutoProver's
+Solana conf now sets the flag and pins `prover_version: master` for development (P11,
+[cvlr-todo.md](./cvlr-todo.md) U25). The measurement below is against release 8.19.x and has not
+been retaken on master.
+
 Two shipped flags whose combination is un-reconciled upstream. Turning the first on silently disables
 most of what the second does, and on a real harness that converts a seven-minute green run into a
 two-hour run in which most rules return no verdict at all.
@@ -822,6 +828,55 @@ five-minute diagnosis.
 **This may be [P9](#p9).** P9's control group differs in binding the handler's `Result` rather than
 `.unwrap()`ing it, which changes the rule function's codegen; its `forget` experiment forgot the
 `Result`, not the account array. Its jobs' vacuity programs would show an unwinding assert if so.
+
+---
+
+## P11
+
+### A `u64` compared against a constant with the top bit set is modelled as a negative comparison
+
+**Effect: any comparison between a nondeterministic `u64` and a constant at or above `2^63` is
+decided wrongly, in the harness and in the program alike.** An assumption that a value equals
+`u64::MAX` makes a rule vacuous. A branch in the program on `x == u64::MAX` is never taken for a
+value that came from an account. Nothing reports either.
+
+**The measurement.** One probe of seven rules, each a `cvlr_satisfy!` over a fresh `nondet::<u64>()`,
+submitted three ways against the same build:
+
+| constraint on `x` | default conf | without `-solanaTACMathInt` | with `-solanaTACSoundSignedMath true` |
+|---|---|---|---|
+| `x < 10` | satisfiable | satisfiable | satisfiable |
+| `x == 1 << 62` | satisfiable | satisfiable | satisfiable |
+| `x == (1 << 63) - 1` | satisfiable | satisfiable | satisfiable |
+| `x >= 1 << 63` | satisfiable | satisfiable | satisfiable |
+| `x == 1 << 63` | **unsatisfiable** | **unsatisfiable** | satisfiable |
+| `x == u64::MAX` | **unsatisfiable** | **unsatisfiable** | satisfiable |
+| `x > u64::MAX - 2` | **unsatisfiable** | **unsatisfiable** | satisfiable |
+
+A value at or above `2^63` exists (`x >= 1 << 63`, which compiles to a sign test), but no value
+equals any particular such constant. The SBF immediate for `u64::MAX` is `-1`, and the TAC carries
+it as `assume(r1 == -1)`. `-solanaTACMathInt` is not the cause: removing it changes nothing.
+`-solanaTACSoundSignedMath` is the fix.
+
+**Why it is critical rather than a trap.** The harness half can be avoided by assigning a sentinel
+rather than assuming it, and the AutoProver author on the stake program found exactly that by
+itself, after two vacuous runs. It also measured the converse: under `cvlr_assume!(x != u64::MAX)` a
+witness had `x == 2^64 - 1`. The program half cannot be avoided. The stake program's `is_bootstrap`
+(`activation_epoch == u64::MAX`), and `merge.rs`'s `deactivation_epoch == Epoch::MAX` over an epoch
+read from account data, are branches the prover never takes, so any rule through them verifies a
+program with those branches deleted. A `u64::MAX` sentinel is a common Solana idiom.
+
+**Why the fix is not simply to turn the flag on.** P8: on a `u128`-heavy harness the sound flag
+turned a 6.7-minute green run into a two-hour timeout. On the stake probe, with no `u128` work, it
+cost nothing measurable, and the stake-math rules verified under both settings.
+
+**What AutoProver does about it.** The Solana conf sets `-solanaTACSoundSignedMath true` and pins
+`prover_version: master`, where P8's fixes are. On master the seven-rule probe above is satisfiable
+throughout. The pin is a ship blocker ([cvlr-todo.md](./cvlr-todo.md) U25).
+
+**What would resolve it**: sign-correct handling of 64-bit immediates without the cost of the
+full sound-signed-math mode, or CERT-10061, which would make the sound mode affordable. Failing
+either, a warning when a comparison against a top-bit constant is encoded under the unsound mode.
 
 ---
 

@@ -627,6 +627,16 @@ It also covers every read-only and writable grant in `rust_build_policy` and the
 unsandboxed warm `cargo fetch`, and the environment allowlist. The open questions in
 command-sandbox.md §11 are where it starts, not its scope.
 
+
+**U25. Ship blocker: the Solana conf pins `prover_version: master`.**
+`BASE_CONF` ([conf.py](../composer/spec/cvlr/conf.py)) turns on `-solanaTACSoundSignedMath`. Without
+it, a `u64` compared against a constant at or above `2^63` is modelled as a negative comparison, so
+a program's `== u64::MAX` branches are never taken ([upstream-defects.md](./upstream-defects.md)
+P11). The fixes that let the flag coexist with `-solanaTACMathInt` (P8) are on the Prover's master
+branch but not all released, so the conf also names `prover_version: master`. That is right for
+development and wrong for a shipped product. Remove `prover_version` once those fixes are in a
+release, and rerun the CVLR gate against the released Prover first, since P8's two-hour timeouts are
+what the release has to have fixed.
 ---
 
 ## Leads from the certora-cvlr-kb ledger

@@ -29,15 +29,25 @@ from composer.spec.util import string_hash
 #:
 #: ``prover_args`` has none of the ``-solanaOptimistic*`` flags: they are unsound, and they do not
 #: fix the [3308] they were meant to.
+#:
+#: ``-solanaTACSoundSignedMath`` is on because without it a ``u64`` compared against a constant at
+#: or above ``2^63`` (``u64::MAX``) is modelled as a comparison against a negative number
+#: (``docs/upstream-defects.md`` P11). The fixes that make it affordable alongside
+#: ``-solanaTACMathInt`` (P8) are on the Prover's master branch and not yet released, hence
+#: ``prover_version``.
+#:
+#: TODO(cvlr-todo U25): remove ``prover_version`` before the Solana AutoProver ships.
 BASE_CONF: Conf = {
     "smt_timeout": "6000",
     "rule_sanity": "basic",
+    "prover_version": "master",
     "prover_args": [
         "-unsatCoresForAllAsserts true",
         "-solanaSkipCallRegInst true",
         "-solanaTACOptimize 2",
         "-solanaStackSize 8192",
         "-solanaTACMathInt true",
+        "-solanaTACSoundSignedMath true",
     ],
 }
 
