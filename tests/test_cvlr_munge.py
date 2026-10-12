@@ -34,11 +34,10 @@ from composer.spec.cvlr.munge import (
 # ---------------------------------------------------------------------------------------------
 # the source half
 #
-# The charter (plan §7.6.3) is six kinds read off the one real source munge in the corpus, and two of
-# them are CVLR attributes an author can apply mechanically. What makes that safe rather than an
-# agent editing a program is that the vocabulary is closed, the insert is one line, and a compile
-# gate sits behind it. What a compile gate cannot catch is naming the wrong function, which is what
-# these refusals are for.
+# The attribute kinds are CVLR attributes an author can apply mechanically. What makes that safe
+# rather than an agent editing a program is that the vocabulary is closed, the insert is one line,
+# and a compile gate sits behind it. What a compile gate cannot catch is naming the wrong function,
+# which is what these refusals are for.
 
 SOURCE = """\
 use anchor_lang::prelude::*;
@@ -183,8 +182,8 @@ def test_the_same_munge_recorded_twice_lands_once():
 
 
 def test_a_re_record_of_a_held_munge_is_a_correction_of_its_prose():
-    """The ids match, so the two differ only in `why` — and the later one is the amendment. Dropping
-    it, which is what the reducer used to do, is why a landed justification could not be fixed."""
+    """The ids match, so the two differ only in `why` — and the later one is the amendment. Keeping
+    the first instead would leave a landed justification uncorrectable."""
     one = _munge("redeem_fees")
     corrected = amended(one, "superseded by the harness as it now stands")
 
@@ -360,7 +359,7 @@ async def test_a_unit_that_munged_nothing_contributes_no_record(tmp_path):
 # ---------------------------------------------------------------------------------------------
 # extraction — the one kind that is not an attribute
 #
-# ``docs/who-edits-the-program.md`` §8.4. Everything above inserts a line above a signature, which
+# Everything above inserts a line above a signature, which
 # needs only the signature to still be there. This replaces a region, so it needs two things the
 # attribute kinds get for free and neither is optional: the region has to be *the same region* it
 # was recorded against, and the deployed build has to be untouched by construction rather than by

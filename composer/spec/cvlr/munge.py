@@ -28,19 +28,18 @@ from composer.spec.cvlr.rust_source import DERIVE_LIST, body_span
 # ---------------------------------------------------------------------------------------------
 # attributes on the program's own functions
 #
-# ``docs/cvlr-backend-plan.md`` §7.6.3 has the charter these two kinds were read off, and §7.6.4 the
-# boundary. Both are CVLR attributes rather than rewrites, which is what makes applying one a
-# mechanical edit with a compile gate behind it instead of an agent editing a program.
+# Each kind is a CVLR attribute rather than a rewrite, which is what makes applying one a mechanical
+# edit with a compile gate behind it instead of an agent editing a program.
 
 
 @dataclass(frozen=True)
 class EarlyPanic:
     """Every ``?`` in the function becomes ``.unwrap()``.
 
-    Literally that — ``cvlr_early_panic`` walks the body and rewrites ``Expr::Try``. So it is the
-    ``.unwrap()``-versus-``.is_ok()`` choice the author prompt teaches, reached one level down: a
-    ``?`` inside the program, below the handler a rule calls, whose error construction the pointer
-    analysis then refuses ([3308]). The most common munge in the corpus by a wide margin.
+    Literally that — ``cvlr_early_panic`` walks the body and rewrites ``Expr::Try``. It is for a
+    ``?`` inside the program, below the handler a rule calls, whose error construction the prover's
+    pointer analysis refuses ([3308]). The most common munge in hand-written CVLR projects by a wide
+    margin.
 
     What it cannot do is make an *acceptance* property statable. It removes the failure path rather
     than exposing one, so "this handler accepts a zero amount" is no more provable after it.
@@ -82,8 +81,8 @@ class InlineNever:
     Behaviour-preserving outright — ``inline`` is a hint about codegen and nothing else — which makes
     it the cheapest thing in the vocabulary to justify. It earns its place because a summary, an
     inlining directive and a counterexample's call stack all address a function *by symbol*, and a
-    function the optimizer folded away has no symbol to address. The corpus uses it exactly that way,
-    three of five times paired with ``early_panic``.
+    function the optimizer folded away has no symbol to address. Hand-written projects use it that
+    way, often paired with ``early_panic``.
     """
 
     def attribute(self) -> str:
@@ -99,12 +98,11 @@ class HookOnEntry:
 
     ``cvlr::hook_on_entry`` (``cvlr-hook``, in the pinned reference set) rewrites the body to run
     ``call`` before anything else. Sound when the call only *observes* — records a flag, checks an
-    invariant, logs — which is every use in the corpus; a call that mutates the program's state is a
-    rewrite wearing an attribute and is outside the charter.
+    invariant, logs; a call that mutates the program's state is a rewrite wearing an attribute and
+    is outside the vocabulary.
 
-    It is the vocabulary's only instrument for reaching a point *inside* an execution. Everything
-    else states a property at a function boundary, so a property about a state transition buried in a
-    handler has, until now, had nowhere to attach.
+    It is the vocabulary's only instrument for *observing* a point inside an execution. Everything
+    else states a property at a function boundary.
     """
 
     call: str
@@ -129,18 +127,15 @@ class HookOnExit:
         return f"calls {self.call} on exit"
 
 
-#: The declared munge kinds — the charter, as types. A change that would need a *new* one is the
-#: give-up boundary (§7.6.4): not an edit budget, because the one real source munge in the corpus is
-#: 1097 routine lines and one hand-unrolled loop, and only the loop needed a person.
+#: The attribute kinds, as types. A change that would need a kind outside the vocabulary is the
+#: give-up boundary rather than an edit budget.
 #:
-#: Five, not the two this backend shipped first. The three added here are the rest of what a corpus
-#: survey found projects actually writing, minus one that cannot be had: ``certora_make_pub`` is a
-#: *project-local* proc macro in the one project that uses it and has no counterpart in ``cvlr``,
-#: and Rust cannot make visibility conditional on a feature without duplicating the item.
+#: These are the attributes hand-written CVLR projects put on their programs' functions, less one
+#: that cannot be had: making an item ``pub`` for verification has no counterpart in ``cvlr``, and
+#: Rust cannot make visibility conditional on a feature without duplicating the item.
 #:
-#: The sixth kind a corpus survey found is **not** an attribute and so is not in this union at all —
-#: see :class:`FunctionExtraction`, which is a sibling of :class:`FunctionMunge` rather than one
-#: more entry here.
+#: Splitting a function is **not** an attribute and so is not in this union — see
+#: :class:`FunctionExtraction`, a sibling of :class:`FunctionMunge` rather than one more entry here.
 type MungeKind = EarlyPanic | MockFn | InlineNever | HookOnEntry | HookOnExit
 
 
@@ -149,7 +144,7 @@ class FunctionMunge:
     """One verification-only attribute on one of the program's functions, and what turns it on.
 
     ``feature`` is the cargo feature the attribute is gated on, and it is what makes a shared
-    working tree possible (``docs/single-working-tree.md`` §2.3). A munge recorded by one unit is a
+    working tree possible. A munge recorded by one unit is a
     **dormant** line for every other: with the feature off, ``cfg_attr`` contributes no attribute and
     the compiled function is the one the project shipped. So two units' munges of the same function
     coexist as two lines, and the union of every unit's munges is the single well-defined content of
@@ -169,9 +164,8 @@ class FunctionMunge:
     #: Why the prover could not analyze the function as written, and why this attribute is sound for
     #: the properties in this batch. The only account anybody gets, exactly as with a summary.
     why: str
-    #: The cargo feature that activates it. Defaulted to the whole-harness feature so a record
-    #: written without one still means what it used to; every munge this backend records names the
-    #: recording unit's own feature.
+    #: The cargo feature that activates it. Every munge this backend records names the recording
+    #: unit's own feature; the default, the whole-harness feature, is for a record that names none.
     feature: str = DEFAULT_FEATURE
 
     @property
@@ -207,7 +201,7 @@ class FunctionMunge:
 
 @dataclass(frozen=True)
 class Munged:
-    """The attribute was inserted.
+    """The edit was applied.
 
     ``line`` is where the function's signature sits **in the returned source**, 1-indexed — so it
     is what a message about the munge should quote, and the attribute is the line above it.
@@ -253,7 +247,7 @@ class SourceDrifted:
     not an attribute. An attribute is *inserted* above a signature, so replaying it needs only the
     signature to still be there; a rewrite replaces a region and has to know the region is
     unchanged. Content addressing is what makes a moved region loud rather than a rewrite applied to
-    code nobody read (``docs/who-edits-the-program.md`` §8.4).
+    code nobody read.
     """
 
     function: str
@@ -416,8 +410,7 @@ def function_names(source: str) -> tuple[str, ...]:
 # ---------------------------------------------------------------------------------------------
 # extraction: the one kind that is not an attribute
 #
-# ``docs/who-edits-the-program.md`` §8.4. Everything above attaches a line to a function that already
-# exists, which is why applying one is a mechanical insert. Extraction *splits* a function so a rule
+# Everything above attaches a line to a function that already exists, which is why applying one is a mechanical insert. Extraction *splits* a function so a rule
 # can drive a piece of it directly, and there is no attribute for that — so it is a rewrite, and a
 # rewrite needs two things the attribute kinds get for free: it has to be content-addressed, so a
 # replay onto source that has moved fails loudly instead of quietly rewriting the wrong region; and
@@ -487,10 +480,9 @@ def _reindent(text: str, indent: str) -> str:
 class FunctionExtraction:
     """A function split into a feature-gated pair so a rule can drive a piece of it.
 
-    The kind two of the last gate run's eight skips wanted and the vocabulary could not express: a
-    property about a state transition buried inside a handler has no function boundary to attach to,
-    and no attribute creates one. :class:`HookOnEntry` reaches such a point to *observe* it; this is
-    for the case where the rule has to **call** it.
+    For a property about a state transition buried inside a handler, which has no function boundary
+    to attach to; no attribute creates one. :class:`HookOnEntry` reaches such a point to *observe*
+    it; this is for the case where the rule has to **call** it.
 
     What replaces the original function is three items rather than one::
 
@@ -926,11 +918,10 @@ type Munge = FunctionMunge | FunctionExtraction | DeriveSwap | ModuleRedirect | 
 def apply_munge(source: str, munge: Munge) -> MungeAttempt:
     """Apply one recorded edit to ``source``, or say why it did not take.
 
-    The refusals are the drift detector for a resumed or replayed run
-    (``docs/single-working-tree.md`` §4.3). Replay happens against the *pristine* project, which can
-    have moved since the edit was recorded; a function that is gone, has acquired a same-named
-    sibling, or whose body no longer reads as it did is reported here rather than silently
-    mis-applied, which is what a text overlay of the old file would have done.
+    The refusals are the drift detector for a resumed or replayed run. Replay happens against the
+    *pristine* project, which can have moved since the edit was recorded; a function that is gone,
+    has acquired a same-named sibling, or whose body no longer reads as it did is reported here
+    rather than silently mis-applied.
     """
     match munge:
         case FunctionMunge():
@@ -1286,7 +1277,7 @@ class DropMunges:
     payloads and a list that sometimes meant "remove these" would be indistinguishable from one that
     meant "add these". It is what makes a munge undoable: the working tree is rebuilt from the
     pristine copy and replayed from this list on every build, so an ``edit_id`` that leaves the list
-    leaves the file (``docs/single-working-tree.md`` §4).
+    leaves the file.
     """
 
     edit_ids: frozenset[str]
@@ -1301,8 +1292,7 @@ def amended(munge: Munge, why: str) -> Munge:
     :attr:`edit_id` deliberately excludes ``why`` — it keys on what the compiler and the prover see —
     so the result is the *same* munge by every identity this module defines. That is what makes a
     correction free: no file changes, :func:`munge_history` yields the same token, and no submission
-    is invalidated. It is also what made the correction impossible before this existed, since
-    re-recording the munge with better prose was indistinguishable from re-recording it unchanged.
+    is invalidated.
     """
     return replace(munge, why=why)
 
@@ -1329,9 +1319,8 @@ def merge_munges(left: list[Munge], right: MungeWrite) -> list[Munge]:
 
     A record whose id is already held **replaces** it rather than being dropped. Since the id covers
     everything the build sees, the two can differ only in ``why``, and the later prose is a
-    correction of the earlier — see :func:`amended`. Dropping it, which is what this did before, was
-    the reason a landed munge's justification could not be fixed: the editor could re-record it, the
-    reducer would discard the record, and the stale sentence would go on to the report.
+    correction of the earlier — see :func:`amended`. Keeping the first would leave a landed munge's
+    justification uncorrectable, and the stale sentence would go on to the report.
     """
     if isinstance(right, DropMunges):
         return [m for m in left if m.edit_id not in right.edit_ids]
