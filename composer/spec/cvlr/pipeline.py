@@ -380,7 +380,6 @@ class CvlrStagedFormalizer(StagedFormalizer[GeneratedHarness, SolanaComponentIns
         )
 
         tree = SharedTree(pristine=project, root=project / WORK_DIR / BUILD_DIR)
-        adopted = tree.adopt(manifest, *(p.relative_to(project) for p in declared))
         stale = await tree.materialize()
         if stale:
             _log.info(
@@ -388,11 +387,6 @@ class CvlrStagedFormalizer(StagedFormalizer[GeneratedHarness, SolanaComponentIns
                 len(stale),
                 ", ".join(stale[:20]) + (" …" if len(stale) > 20 else ""),
             )
-        # A reused tree predates the two declarations above, so a resumed run whose component set
-        # changed would build against a manifest missing a unit's feature and a `mod.rs` missing its
-        # module. Content-compared, so an unchanged set costs nothing.
-        if adopted:
-            _log.info("cvlr: re-synced %s into the working tree", ", ".join(adopted))
         session = CargoSession(
             workdir=tree.root, sandbox=self.deps.sandbox, toolchain=HOST_RUST_TOOLCHAIN
         )

@@ -165,7 +165,7 @@ def _state(draft: str = _DRAFT) -> dict:
 
 
 async def _stubbed_stage(draft, summaries=(), munges=()) -> Reconciled:
-    return Reconciled(written=(), drifted=())
+    return Reconciled(drifted=())
 
 
 class _FakeAnalyzer:

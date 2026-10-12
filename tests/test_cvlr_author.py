@@ -545,7 +545,7 @@ async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeyp
     from composer.spec.cvlr.tree import Reconciled
 
     async def _stubbed_stage(draft, summaries=(), munges=()) -> Reconciled:
-        return Reconciled(written=(), drifted=())
+        return Reconciled(drifted=())
 
     captured: dict = {}
 
