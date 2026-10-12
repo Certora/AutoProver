@@ -452,9 +452,26 @@ a different trap.
 
 | | fix | where |
 |---|---|---|
-| 1 | Stop never-inlining the split `solana-*` crates, matching what Stake Pool runs on the same generation (**done**: the blanket is back to `^solana_program::.*$`); add a standard `Rent` setup helper | `reference.py`, `env_paths.py`; harness helpers |
+| 1 | Stop never-inlining the split `solana-*` crates, matching what Stake Pool runs on the same generation; teach the sysvar idiom | **done**: the blanket is back to `^solana_program::.*$`; recipe K3 |
 | 2 | Extract protocol-wide invariants once, across components (solvency, conservation, the stake math as bounds); steer the attack-vector category toward design consequences | property extraction prompts and pipeline |
 | 3 | Teach the unwrap-and-negate form for revert properties | CVLR authoring guidance |
+
+**The point 1 fix, checked on the Prover.** A hand-written probe against the pristine snapshot,
+scaffolded with the corrected tuning files
+([job](https://prover.certora.com/jobStatus/37632/ad46e66071c64143995d0ab7e6ef69de?anonymousKey=b839038d820c244c1782e546e039d03f551daa59)):
+
+| rule | verdict |
+|---|---|
+| `Clock::from_account_info` can return `Ok` on the sysvar's account | VERIFIED |
+| `Rent::from_account_info` can return `Ok` on the sysvar's account | VERIFIED |
+| a successful `Clock::from_account_info` implies the canonical key | VERIFIED |
+| `Lockup::is_in_force` is in force before the lockup epoch | VERIFIED |
+| `Delegation::stake` never exceeds the delegated amount | SANITY_FAILED |
+
+The first four were out of reach in the third run: the read never succeeded, and the address check
+and the lockup decision were oracles. The fifth is the stake math, and it came back vacuous rather
+than violated. That is not yet evidence either way about the arithmetic. The probe bounded the
+epoch loop by assumption, and the setup is the first suspect.
 
 None of this touches the third run's main finding: `process_withdraw` with the source equal to
 the destination truncates the account through `realloc(0)`.

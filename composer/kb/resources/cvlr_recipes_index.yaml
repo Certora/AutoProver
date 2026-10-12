@@ -37,3 +37,17 @@ recipes:
   search_terms:
   - clog
   - cvlr_assert
+- id: K3
+  name: Sysvars, read directly and tied to the syscall
+  triggers:
+  - A handler reads `Clock` or `Rent`, by syscall or from a sysvar account
+  - You are about to split a handler, mock a read, or skip a property because a sysvar read is
+    external
+  - A property about the rent-exempt reserve or `minimum_balance`
+  channel: RULE
+  file: recipes/cvlr-k3-sysvars-read-directly.md
+  search_terms:
+  - from_account_info
+  - Clock::get
+  - Rent::get
+  - minimum_balance

@@ -438,6 +438,18 @@ def test_the_judge_is_told_a_missing_clog_can_make_a_counterexample_wrong():
     assert "K2" in {r.id for r in _kb_model(CVLR_RECIPES).recipes}
 
 
+def test_the_author_is_told_sysvars_are_read_directly():
+    """The stake run split handlers in six of seven components to pass `Clock` and `Rent` in as
+    parameters, because the tuning files made `Sysvar::from_account_info` external. With that fixed,
+    the recipe is what keeps an author from reaching for the workaround out of habit."""
+    from composer.kb.kb_context import CVLR_RECIPES, _kb_model, kb_loader
+
+    (k3,) = [r for r in _kb_model(CVLR_RECIPES).recipes if r.id == "K3"]
+    assert "from_account_info" in k3.search_terms
+    text = kb_loader(CVLR_RECIPES)("K3")
+    assert text is not None and "cvlr_assume!(*clock_info.key == sysvar::clock::id());" in text
+
+
 def test_the_judge_is_told_where_optimistic_loop_is_and_what_justifies_it():
     """The setting is in the conf, which the judge never reads. What justifies it is one
     observation — the reported iteration rising with the bound — and anything short of that leaves
