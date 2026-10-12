@@ -352,3 +352,109 @@ named the experiment: add `clog!`s to the owner comparison so the counterexample
 pin the owner to a concrete distinct key rather than assuming a disequality over an opaque 32-byte
 value. Do that before authoring anything new — a second batch of rules built on the same
 `assume_stake_shape` would inherit the same weakness.
+
+## Expert review of the third run, 2026-10-12
+
+The third run (2026-10-01/02, written up in the stake repo as
+`docs/autoprover-benchmark-2026-10-02.md`) published 7 of 8 components: 111 rules, 69 of 119
+properties covered, 50 skipped. Certora's Solana specialists reviewed the generated spec. They
+raised three points, and each one holds up against the run's own record.
+
+### 1. Rent and Clock are standard, and the spec rewrote the program to avoid them
+
+> AP says it doesn't know how to handle Rent and Clock syscalls, and because of this, it does
+> heavy rewriting of the client. To the point where lots of rules are mainly about the rewritten
+> code itself and not the client code. … One can look at related SF projects (P-Token, Stake
+> Pool) to see how we handle both.
+
+**The cause is our tuning file, not the Prover.** The generated `cvlr_inlining.txt` never-inlines
+every `solana-*` crate the program links: `solana_sysvar`, `solana_rent`, `solana_clock` and
+`solana_stake_interface` among them. That blanket is AutoProver's. `644bf82f` widened the upstream
+`^solana_program::.*$` to cover the crates the monolith split into, and `a18a7637` narrowed it to
+the linked crates. The allowlist exempts `Clock::get`, `Rent::get` and `Rent::minimum_balance`,
+but nothing exempts `solana_sysvar::Sysvar::from_account_info`. That default trait method is how
+the handlers read both sysvars (`Clock::from_account_info(clock_info)?`), so the Prover treats it
+as external. It returns an unconstrained `Result` and writes nothing, so a rule that reaches it
+measured as never returning `Ok`.
+
+The units then did what they had to. They split the handlers with `extract_function` so the
+sysvar arrived as a parameter, and the rules entered below the handlers. That is the rewriting the
+reviewers saw: 15 of the delivered munges, across six of the seven components, exist to move a
+`Clock` or `Rent` read out of the way. Thirteen skips, also across six components, cite
+`Sysvar::from_account_info` by name.
+
+**What practitioners run.** Stake Pool is on the same platform generation (`solana-program`
+2.2.1), and its `cvlr_inlining_core.txt` still carries only the upstream blanket. That blanket
+matches almost nothing after the split, so `solana_sysvar` and `solana_rent` are analyzed. Its
+specs call `Clock::get()`, `Rent::get()` and `Clock::from_account_info` directly and tie the
+account to the syscall with one assume (`cvlr_initialize_rent_account`). P-Token does the same
+with Pinocchio's `Rent`, and pins the parameters to mainnet defaults
+(`cvlr_assume_rent_defaults`).
+
+**One real limit remains.** `solana_rent::Rent::minimum_balance` computes in `f64`, and the
+float builtins are summarized as `r0:num`, so two calls with the same length can disagree. The
+practitioners' answer is to read `meta.rent_exempt_reserve` from state rather than recompute it.
+The split unit's integer stand-in for `Rent` was a reasonable answer to a real problem; the
+`from_account_info` workaround was not needed.
+
+**The same blanket explains most of the other skips.** `Authorized::check`,
+`Authorized::authorize`, `Meta::set_lockup`, `Lockup::is_in_force` and
+`Delegation::stake_activating_and_deactivating` are all in `solana_stake_interface`, which the
+blanket also made external. 29 of the 50 skips cite that crate, including 14 of Authorization &
+Lockup's 15, and the skipped staking math (point 2).
+
+### 2. The specs describe the code, not the design
+
+> A good spec is one that holds for an entire class of implementations. … Solvency is a good spec
+> because all protocols must remain solvent. But rules that check so and so fields are set
+> correctly, or the program reverts under some condition are not very interesting. … Solvency is
+> attempted, but only partially. Properties about math of staking and de-staking was skipped,
+> because AP said it believed the certora prover cannot handle that (I am not so sure).
+
+Three causes, in order of weight.
+
+- **Extraction is per component.** Properties are extracted per component, and the components are
+  instruction groups. A protocol-wide invariant has no single component to belong to. Solvency is
+  one: every stake account keeps `lamports >= rent_exempt_reserve + delegation.stake` after every
+  instruction. Lamport conservation across all eighteen instructions is another. Each component
+  sees a slice of it, which is the "partially" the reviewers noticed.
+- **The extraction prompt invites implementation checks.** `solana/property_prompt.j2` says to
+  derive properties "from first principles", but its third category, attack vectors, is
+  illustrated with "if the `authority` account is not constrained to sign…". Most of the 111 rules
+  are that category: a field set, a check present, an error returned.
+- **The backend guidance ranks implementation checks first.** `SOLANA_CVLR_GUIDANCE`
+  (`composer/spec/cvlr/guidance.py`), which goes verbatim into the extractor's system prompt, calls
+  account validation "the highest-value properties on this chain". It also excludes "rent
+  economics", which keeps the rent-exempt reserve, half of the stake program's solvency condition,
+  off the list.
+- **The staking math was skipped for the blanket, not the arithmetic.** The skips name
+  `stake_activating_and_deactivating` as external, which is point 1. The arithmetic does use
+  `f64` (the warmup/cooldown rate, `state.rs:739-830`), but the properties worth stating don't
+  need exact values. Effective stake never exceeds the delegation. Deactivation is monotone across
+  epochs. Activating plus effective equals the delegated amount. Each holds whatever the float
+  multiply returns, because the code clamps and saturates around it.
+
+### 3. Revert rules should unwrap and assert the negation
+
+> I see lots of rules with the following structure: … `assume(some_cond_on_pre_state); let res =
+> process_fn(accounts, ...); cvlr_assert!(res.is_err());` In my experience, it is much better to
+> unwrap() the call and assert the negation without assuming. This works better because the
+> prover cuts out error paths resulting in smaller formulas eventually.
+
+The delivered spec has 26 `cvlr_assert!(….is_err())` rules, 14 of them in Split & Merge. The
+preferred form is the contrapositive: `process_fn(…).unwrap(); cvlr_assert!(!some_cond)`. A panic
+in `unwrap` is assumed away, so every error path is dropped from the formula, and the rule states
+the same thing: success implies the condition did not hold. Nothing in the CVLR authoring guidance
+recommends either form. The one `is_err` example in `cvlr_baseline_facts.md` is there to illustrate
+a different trap.
+
+### What follows from this
+
+| | fix | where |
+|---|---|---|
+| 1 | Stop never-inlining the sysvar crates and the program's domain interface crates, matching what Stake Pool runs on the same generation; add a standard `Rent` setup helper | `reference.py`, `env_paths.py`, tuning allowlist, harness helpers |
+| 2 | Extract protocol-wide invariants once, across components (solvency, conservation, the stake math as bounds); steer the attack-vector category toward design consequences | property extraction prompts and pipeline |
+| 3 | Teach the unwrap-and-negate form for revert properties | CVLR authoring guidance |
+
+None of this touches the third run's main finding: `process_withdraw` with the source equal to
+the destination truncates the account through `realloc(0)`.

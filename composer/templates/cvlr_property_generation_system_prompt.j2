@@ -308,6 +308,21 @@ an Anchor program that means the `#[error_code]` enum's generated `Display`, whi
 Measured directly: two rules in one job, same program, same property, differing only in this — the
 `.unwrap()` rule verified and its vacuity check passed, the `.is_ok()` rule errored with [3308].
 
+**A rejection property takes the same shape, by its contrapositive.** "The handler refuses X" says
+the same thing as "if the handler succeeds, X did not hold". So write
+
+```rust
+handler(ctx, ..).unwrap();
+cvlr_assert!(!x);
+```
+
+and not `cvlr_assume!(x); cvlr_assert!(handler(ctx, ..).is_err());`. Leave the input unconstrained
+by X: the rule ranges over every input, and a success where X held is the counterexample. Capture
+whatever X reads from pre-state into locals before the call. The `is_err()` form keeps every error
+path in the formula, so the query is larger and slower, and on an Anchor program it is the [3308]
+above. The contrapositive prunes them all, and it stays sound where the program's own `?` has been
+turned into a panic, because a panic is not a success either.
+
 **What `.unwrap()` cannot do, and this is the important half.** It *assumes* the call succeeded. So it
 is right for a property of the form "**if** the handler succeeds, the state moved like this" — which
 is most integrity properties, and what the example above is. It cannot demonstrate that the handler

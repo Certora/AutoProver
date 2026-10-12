@@ -178,6 +178,16 @@ def test_the_worked_example_unwraps_the_handler_rather_than_branching_on_it():
     )
 
 
+def test_a_rejection_property_is_written_as_its_contrapositive():
+    """Reviewers of the stake run found 26 rules of the form ``assume(x); assert(handler(..).is_err())``.
+    ``handler(..).unwrap(); assert(!x)`` states the same property and lets the prover prune every
+    error path, which is a smaller formula, and on Anchor the difference between [3308] and a verdict.
+    """
+    prompt = _flat(_author_system_prompt())
+    assert _flat("A rejection property takes the same shape, by its contrapositive") in prompt
+    assert "cvlr_assert!(!x);" in prompt
+
+
 def test_the_author_is_warned_that_re_reading_an_account_yields_pre_state():
     """The idiom that silently produces a *wrong answer* rather than an error, so it is the one worth
     guarding. An Anchor ``Account<T>`` is a deserialized copy written back only in ``exit``, which
@@ -470,10 +480,12 @@ def test_the_judge_is_told_the_instruments_are_in_its_input_and_nowhere_else():
 def test_the_judge_is_told_early_panic_makes_a_rejection_property_vacuous():
     """The unsoundness specific to this munge, and one the verdict cannot show: `early_panic`
     deletes the error path, so a rule asserting that bad input is refused goes green over a program
-    that no longer has a way to refuse it."""
+    that no longer has a way to refuse it. Only the ``is_err()`` form: the contrapositive the author
+    is taught counts a panic as a non-success, so the judge must not reject that one."""
     item_one = _flat(_judge_system_prompt()).split("2. **Vacuity")[0]
-    assert "fatal to any property about rejection" in item_one
+    assert "fatal to a rejection rule written as" in item_one
     assert "is vacuous" in item_one
+    assert "The contrapositive form is unaffected" in item_one
 
 
 def test_the_judge_is_told_a_mock_is_the_mirror_problem_one_level_down():
