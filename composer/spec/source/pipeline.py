@@ -227,6 +227,7 @@ class ProverBackend:
     """``PipelineBackend[AutoProvePhase, GeneratedCVL, None, SpecIdentity, ContractComponentInstance,
     ContractInstance, SourceApplication, None]`` (P, FormT, H, A, Unit, Main, App, Pre) — structural."""
     backend_guidance = CERTORA_BACKEND_GUIDANCE
+    shared_unit = None
     core_phases = CorePhases({
         "analysis": AutoProvePhase.COMPONENT_ANALYSIS,
         "extraction": AutoProvePhase.BUG_ANALYSIS,

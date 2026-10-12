@@ -49,6 +49,7 @@ from composer.pipeline.core import (
     Formalizer,
     PipelineRun,
     PreparedSystem,
+    SharedUnit,
     StagedFormalizer,
     SystemAnalysisSpec,
     ToolBinder,
@@ -78,6 +79,7 @@ from composer.spec.solana.model import (
     SolanaApplication,
     SolanaComponentInstance,
     SolanaProgramInstance,
+    protocol_unit,
 )
 from composer.io.multi_job import TaskInfo
 from composer.spec.source.cex_capture import CexAnalysisStore
@@ -450,6 +452,12 @@ class CvlrBackend:
     reference: ChainReference = SOLANA
 
     backend_guidance = SOLANA_CVLR_GUIDANCE
+    #: A CVLR rule drives the handlers it names; nothing checks a property against every handler
+    #: by itself, as a CVL invariant is. Properties several components state go to one unit.
+    shared_unit = SharedUnit(
+        make=protocol_unit,
+        entry_points=lambda unit: [i.name for i in unit.instructions],
+    )
     analysis_spec = SystemAnalysisSpec("solana-analysis", "solana-properties")
     core_phases = CorePhases(
         {

@@ -346,3 +346,49 @@ class SolanaComponentInstance:
             "instructions": [i.model_dump(mode="json") for i in self.instructions],
         }
 
+
+#: The shared unit's name, and the base of its slug.
+PROTOCOL_UNIT_NAME = ComponentName("Protocol invariants")
+
+
+def protocol_unit(main: SolanaProgramInstance) -> SolanaComponentInstance:
+    """A unit spanning every instruction of ``main``, for properties hoisted out of the components.
+
+    It is a component like the others, appended to a copy of the analyzed model, so every consumer
+    of a :class:`SolanaComponentInstance` (prompts, the worked example, artifact names) handles it
+    unchanged. The copy is this unit's alone: the extracted units keep the model they were
+    extracted under, whose cache keys depend on it.
+    """
+    program = main.program
+    taken = {slugify_filename(c.name) for c in program.components}
+    name = PROTOCOL_UNIT_NAME
+    while slugify_filename(name) in taken:
+        name = ComponentName(f"{name} (shared)")
+    component = ProgramComponent(
+        name=name,
+        description=(
+            "Properties that hold across the whole program, not within one component: each was "
+            "extracted by one or more components and ranges over instructions of several. A "
+            "property here is checked against every instruction it names, as one specification "
+            "applied to each handler."
+        ),
+        instructions=[i.name for i in program.instructions],
+        account_types=list(program.account_types),
+        interactions=[],
+        requirements=[],
+        computations=list(
+            {c.function: c for comp in program.components for c in comp.computations}.values()
+        ),
+    )
+    extended = program.model_copy(update={"components": [*program.components, component]})
+    # Validated rather than ``model_copy``-ed: a copy carries the instance's ``cached_property``
+    # values with it, and ``programs`` would still name the program without this component.
+    app = SolanaApplication.model_validate(
+        {
+            **dict(main.app),
+            "components": [extended if c is program else c for c in main.app.components],
+        }
+    )
+    return SolanaComponentInstance(
+        ind=len(program.components), _program=SolanaProgramInstance(main.ind, app)
+    )

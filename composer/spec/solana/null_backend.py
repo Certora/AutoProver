@@ -155,6 +155,7 @@ class NullSolanaBackend:
 
     artifact_store: NullSolanaArtifactStore
     backend_guidance = SOLANA_NULL_GUIDANCE
+    shared_unit = None
     analysis_spec = SystemAnalysisSpec("solana-analysis", "solana-properties")
     core_phases = CorePhases(
         {

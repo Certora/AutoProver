@@ -56,6 +56,7 @@ from composer.spec.system_analysis import run_component_analysis
 from composer.spec.prioritize import (
     Candidate, PropertyRanking, Selection, build_candidates, rank_properties, select,
 )
+from composer.spec import hoist
 from composer.spec.prop_inference import (
     run_property_inference, AnyPropertyGenerationInput, CacheablePropertyGenerationInput,
 )
@@ -74,7 +75,7 @@ from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_I
 from composer.pipeline.ecosystem import Ecosystem
 from .keys import (
     COMPONENT_KEY, FINAL_PROPERTIES_KEY, FORMALIZATION_KEY, PLUGIN_ARTIFACTS_KEY,
-    POST_PROPERTY_KEY, PRE_PROPERTY_KEY, PRIORITIZATION_KEY, PROPERTIES_KEY,
+    HOIST_KEY, POST_PROPERTY_KEY, PRE_PROPERTY_KEY, PRIORITIZATION_KEY, PROPERTIES_KEY,
     SYSTEM_ANALYSIS_KEY, PLUGIN_FORMALIZATION_KEY, candidates_digest
 )
 from composer.diagnostics.budget import (
@@ -277,9 +278,29 @@ class PreparedSystem[FormT: BackendResult, U: FeatureUnit, Main](ABC):
         ...
 
 
+@dataclass(frozen=True)
+class SharedUnit[U: FeatureUnit, Main]:
+    """How a backend builds the unit that protocol-wide properties are hoisted into.
+
+    A backend whose rules each drive the entry points they name needs this: a property stated over
+    every entry point would otherwise be formalized once per unit that extracted it. A backend
+    whose checker ranges over every entry point by itself (CVL invariants) does not."""
+
+    #: The unit, built from the located main. Its ``unit_index`` must differ from every extracted
+    #: unit's.
+    make: Callable[[Main], U]
+    #: The entry point names a unit's properties may range over, for the hoisting prompt.
+    entry_points: Callable[[U], list[str]]
+
+
 class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](Protocol):
     @property
     def backend_guidance(self) -> str: ...
+
+    @property
+    def shared_unit(self) -> SharedUnit[U, Main] | None:
+        """``None`` unless this backend formalizes hoisted properties in a shared unit."""
+        ...
 
     @property
     def analysis_spec(self) -> SystemAnalysisSpec: ...
@@ -657,6 +678,19 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
             pathlib.Path(run.source.project_root),
         )
 
+    # 3c. Protocol-wide properties stated by several units move into one shared unit, formalized
+    #     first. After the pin is written, so a pinned replay hoists from the same raw extraction.
+    if (
+        (shared := backend.shared_unit) is not None
+        and run.run_mode is RunMode.COMPREHENSIVE
+        and len(batches) > 1
+    ):
+        with named_budget_or_nop("property_extraction"):
+            batches = await _hoist(
+                backend.analysis_spec.properties_key, shared, prepared.main, batches, run,
+                phases["extraction"], extraction_plugins,
+            )
+
     # 4. A backend whose units share an artifact handed back a ``StagedFormalizer`` instead of a
     #    formalizer: the artifact is authored HERE — once, from every unit's properties — and the
     #    formalizer it yields is the only one that exists (see :class:`StagedFormalizer`).
@@ -954,6 +988,70 @@ async def _prioritize[P: enum.Enum, H, U: FeatureUnit](
         len(deprioritized), len(batches) - 1,
     )
     return [_Batch(chosen.feat, props, chosen.feat_ctx)], deprioritized
+
+
+HOIST_TASK_ID = "hoist"
+
+
+async def _hoist[P: enum.Enum, H, Main, U: FeatureUnit](
+    prop_key: str,
+    shared: SharedUnit[U, Main],
+    main: Main,
+    batches: list[_Batch[U]],
+    run: PipelineRun[P, H],
+    phase: P,
+    plugins: PluginPhaseManager[P, U],
+) -> list[_Batch[U]]:
+    """Move protocol-wide properties into ``shared``'s unit; the shared batch comes first.
+
+    Units keep their own ``feat`` and ``feat_ctx``, so only ``FORMALIZATION_KEY`` forks for a unit
+    that lost properties. A unit left with none is not formalized. A plan that will not validate
+    leaves ``batches`` as they are: the run pays for duplicates rather than failing.
+    """
+    candidates = hoist.build_candidates(
+        [(b.feat.unit_index, b.feat.display_name, shared.entry_points(b.feat), b.props)
+         for b in batches]
+    )
+    prop_ctx = run.ctx.child(PROPERTIES_KEY(prop_key))
+    ctx = prop_ctx.child(HOIST_KEY(candidates_digest([(b.feat, b.props) for b in batches])))
+
+    plan = await ctx.cache_get(hoist.HoistPlan)
+    if plan is None:
+        try:
+            plan = await run.runner(
+                TaskInfo(HOIST_TASK_ID, "Property Hoisting", phase),
+                lambda: hoist.plan_hoist(
+                    llm=run.env.llm_heavy(),
+                    contract_name=run.source.contract_name,
+                    candidates=candidates,
+                ),
+            )
+        except ValueError as e:
+            _log.warning("hoisting skipped; every unit keeps its properties: %s", e)
+            return batches
+        await ctx.cache_put(plan)
+
+    hoisted = hoist.apply_plan(candidates, plan)
+    if not hoisted.shared:
+        return batches
+    unit = shared.make(main)
+    unit_ctx = await prop_ctx.child(
+        COMPONENT_KEY(unit, plugins.plugin_digest),
+        {**unit.context_tag(), "plugins": plugins.plugin_manifest},
+    )
+    for member, representative in hoisted.absorbed:
+        if member != representative:
+            _log.info("hoisted: %s stands for %s", representative, member)
+    _log.info(
+        "hoisted %d protocol-wide propert(ies) into %s, absorbing %d",
+        len(hoisted.shared), unit.display_name, len(hoisted.absorbed),
+    )
+    kept = [
+        _Batch(b.feat, props, b.feat_ctx)
+        for b in batches
+        if (props := hoisted.kept[b.feat.unit_index])
+    ]
+    return [_Batch(unit, hoisted.shared, unit_ctx), *kept]
 
 
 async def _pinned_batches[P: enum.Enum, H, Main, U: FeatureUnit](
