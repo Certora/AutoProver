@@ -46,6 +46,7 @@ from graphcore.tools.vfs import (
     PersistentMaterializer,
 )
 
+from composer.layout import INTERNAL_DIR
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.munge import (
     DeriveSwap,
@@ -56,27 +57,71 @@ from composer.spec.cvlr.munge import (
     Munge,
     Munged,
     MungeAttempt,
-    NOT_PROJECT_SOURCE,
-    NotProjectSource,
     apply_munge,
-    is_project_source,
 )
 from composer.spec.source.munge.vfs_diff import compute_diff, fs_resolver
 
 _log = logging.getLogger(__name__)
 
-#: Never copied into the working tree. ``target`` is regenerable and enormous; ``.git`` is neither
-#: needed nor ours to duplicate; the work directory is where the copy itself goes, so copying it
-#: would nest the tree inside itself.
+#: Top-level directories of the project that are **not** its source.
 #:
-#: The list is :data:`~composer.spec.cvlr.munge.NOT_PROJECT_SOURCE`, because it is the same fact read
-#: twice: what a copy of the project leaves out is what a munge of the project may not touch.
-#: Sharing it also keeps the two from drifting, which matters in one direction — a directory added
-#: here and not there would become munge-able.
+#: Two uses, and they are the same fact: these are what the working tree is never filled from
+#: (:func:`_NOT_MATERIALIZED`) and what a munge may not touch. ``target`` is regenerable and
+#: enormous; ``.git`` is neither needed nor ours to duplicate; the work directory is where the copy
+#: itself goes, so copying it would nest the tree inside itself. Sharing one list keeps the two from
+#: drifting, which matters in one direction — a directory left out of the copy and not listed here
+#: would become munge-able.
+#:
+#: A munge is a modification of *the program under verification*, and containment in the workdir
+#: does not establish that — confinement puts the run's private ``CARGO_HOME`` under
+#: :data:`~composer.sandbox.recipes.SANDBOX_CARGO_DIR`, so every dependency's unpacked source is
+#: inside the workdir too. Without this, ``munge_function`` would happily rewrite Anchor.
+#:
+#: That is the same failure ``validate_rule_subjects`` exists to prevent one axis over: a rule that
+#: drives a dependency proves a property of the dependency, and a munge of one modifies a
+#: dependency's behaviour for every crate that uses it, including the ones the property is about.
+#:
+#: The cargo home needs no entry of its own: it lives under :data:`INTERNAL_DIR`, and the match is
+#: on the first path component.
+NOT_PROJECT_SOURCE = (
+    "target",
+    ".git",
+    INTERNAL_DIR.name,
+    "certora_out",
+    ".cvlr_work",
+)
+
+
+def is_project_source(relative: PurePosixPath | str) -> bool:
+    """Whether a workdir-relative path names a file the project shipped rather than one a build made.
+
+    Judged on the first path component, which is where every entry in :data:`NOT_PROJECT_SOURCE`
+    sits — a nested ``target/`` belonging to a vendored crate is already excluded by its parent.
+    """
+    parts = PurePosixPath(relative).parts
+    return bool(parts) and parts[0] not in NOT_PROJECT_SOURCE
+
+
+@dataclasses.dataclass(frozen=True)
+class NotProjectSource:
+    """The path is inside the working tree but is not the project's source.
+
+    Almost always a dependency: confinement puts the run's ``CARGO_HOME`` under
+    ``.certora_internal/sandbox/cargo``, so every crate the build resolves has its unpacked source
+    in the tree, a few directories away from the program.
+    """
+
+    path: str
+    directory: str
+
+    def describe(self) -> str:
+        return f"{self.path} is under {self.directory}, which is not the project's source"
+
+
 def _NOT_MATERIALIZED(path: PurePath) -> bool:
     """Directories the tree is never filled from, by first path component.
 
-    The same list the munge boundary uses (:data:`NOT_PROJECT_SOURCE`) and for the same reason: a
+    The same list the munge boundary uses (:data:`NOT_PROJECT_SOURCE`), and for the same reason: a
     build directory, a VCS directory and a previous run's tree are not the project. Copying one into
     the tree would at best waste the space and at worst nest a working copy inside a working copy.
     """

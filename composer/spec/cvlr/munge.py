@@ -21,7 +21,6 @@ from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import PurePosixPath
 
-from composer.layout import INTERNAL_DIR
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.rust_source import DERIVE_LIST, body_span
 
@@ -204,56 +203,6 @@ class FunctionMunge:
 
     def attribute_line(self, indent: str) -> str:
         return f'{indent}#[cfg_attr(feature = "{self.feature}", {self.kind.attribute()})]'
-
-
-#: Top-level directories inside a unit's workdir that are **not** the project's source.
-#:
-#: Two uses, and they are the same fact: these are what a workspace copy leaves behind
-#: (:data:`composer.spec.cvlr.pipeline._NOT_COPIED`) and what a munge may not touch. A munge is a
-#: modification of *the program under verification*, and containment in the workdir does not
-#: establish that — confinement puts the run's private ``CARGO_HOME`` under
-#: :data:`~composer.sandbox.recipes.SANDBOX_CARGO_DIR`, so every dependency's unpacked source is
-#: inside the workdir too. Without this, ``munge_function`` would happily rewrite Anchor.
-#:
-#: That is the same failure ``validate_rule_subjects`` exists to prevent one axis over: a rule that
-#: drives a dependency proves a property of the dependency, and a munge of one modifies a
-#: dependency's behaviour for every crate that uses it, including the ones the property is about.
-#:
-#: The cargo home needs no entry of its own: it lives under :data:`INTERNAL_DIR`, and the match is
-#: on the first path component.
-NOT_PROJECT_SOURCE = (
-    "target",
-    ".git",
-    INTERNAL_DIR.name,
-    "certora_out",
-    ".cvlr_work",
-)
-
-
-def is_project_source(relative: PurePosixPath | str) -> bool:
-    """Whether a workdir-relative path names a file the project shipped rather than one a build made.
-
-    Judged on the first path component, which is where every entry in :data:`NOT_PROJECT_SOURCE`
-    sits — a nested ``target/`` belonging to a vendored crate is already excluded by its parent.
-    """
-    parts = PurePosixPath(relative).parts
-    return bool(parts) and parts[0] not in NOT_PROJECT_SOURCE
-
-
-@dataclass(frozen=True)
-class NotProjectSource:
-    """The path is inside the working tree but is not the project's source.
-
-    Almost always a dependency: confinement puts the run's ``CARGO_HOME`` under
-    ``.certora_internal/sandbox/cargo``, so every crate the build resolves has its unpacked source
-    in the tree, a few directories away from the program.
-    """
-
-    path: str
-    directory: str
-
-    def describe(self) -> str:
-        return f"{self.path} is under {self.directory}, which is not the project's source"
 
 
 @dataclass(frozen=True)

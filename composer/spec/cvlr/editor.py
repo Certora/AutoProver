@@ -95,7 +95,6 @@ from composer.spec.cvlr.munge import (
     MungeKind,
     Munged,
     NoFunctionBody,
-    NotProjectSource,
     SwappedDerive,
     amended,
     apply_attribute,
@@ -110,7 +109,7 @@ from composer.spec.cvlr.munge import (
     merge_munges,
 )
 
-from composer.spec.cvlr.tree import NotInWorkdir, munge_diff
+from composer.spec.cvlr.tree import NotInWorkdir, NotProjectSource, munge_diff
 from composer.spec.cvlr.tuning import SummaryDirective
 from composer.spec.cvlr.state import CvlrGenerationState
 from composer.spec.cvlr.verify import HarnessTarget

@@ -259,7 +259,7 @@ def test_a_dependency_inside_the_workdir_is_refused_too(tmp_path):
     in the graph, including the ones the property is about. Same failure
     ``validate_rule_subjects`` prevents one axis over.
     """
-    from composer.spec.cvlr.munge import NotProjectSource
+    from composer.spec.cvlr.tree import NotProjectSource
 
     workdir = tmp_path / "work"
     (workdir / "src").mkdir(parents=True)
@@ -282,7 +282,7 @@ def test_the_copy_and_the_munge_rule_are_one_list():
     """What a copy of the project leaves out is what a munge of the project may not touch. Drift in
     one direction is the dangerous one: a directory added to the copy's ignore list and not to this
     one would become munge-able."""
-    from composer.spec.cvlr.munge import NOT_PROJECT_SOURCE, is_project_source
+    from composer.spec.cvlr.tree import NOT_PROJECT_SOURCE, is_project_source
     from composer.spec.cvlr.pipeline import WORK_DIR
 
     assert WORK_DIR.name in NOT_PROJECT_SOURCE

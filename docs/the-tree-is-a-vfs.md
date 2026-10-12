@@ -193,7 +193,7 @@ Ordered so that each step is independently revertible and none is a flag day.
    nothing about the build changes.
 3. **Retire `SharedTree`'s own materialization** in favour of the stack's, keeping `resolve()`'s
    typed refusals as the munge-boundary check they also serve
-   ([munge.py](../composer/spec/cvlr/munge.py)'s `NOT_PROJECT_SOURCE`).
+   ([tree.py](../composer/spec/cvlr/tree.py)'s `NOT_PROJECT_SOURCE`).
 4. ~~**Rewrite diagnostics paths** back to project-relative before they reach the author.~~
    **Not needed — step 2 subsumed it.** cargo emits diagnostic paths relative to its workdir, and
    its workdir is the tree; the author's read stack is now rooted at the same place, so the path

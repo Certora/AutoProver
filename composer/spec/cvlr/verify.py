@@ -86,7 +86,6 @@ from composer.spec.cvlr.munge import (
     MockFn,
     MungeKind,
     Munged,
-    NotProjectSource,
     apply_munge,
 )
 from composer.spec.cvlr.prover import (
@@ -108,7 +107,13 @@ from composer.spec.cvlr.state import (
     LastVerdicts,
     tuning_history,
 )
-from composer.spec.cvlr.tree import NotInWorkdir, Reconciled, SharedTree, UnitEdits
+from composer.spec.cvlr.tree import (
+    NotInWorkdir,
+    NotProjectSource,
+    Reconciled,
+    SharedTree,
+    UnitEdits,
+)
 from composer.spec.cvlr.tuning import SummaryDirective, TuningFiles
 from composer.spec.cvlr.vacuity import VacuityAnalyzer, core_finding
 from composer.spec.source.cex_capture import CexAnalysisStore
