@@ -208,9 +208,7 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
     def declare_modules(self, modules: list[HarnessModule]) -> tuple[Path, ...]:
         """Write ``specs/mod.rs`` declaring every unit's module behind its own cargo feature.
 
-        Returns every path it is responsible for, ``mod.rs`` first, so a caller sharing one working
-        tree across units can re-sync exactly these
-        (:meth:`composer.spec.cvlr.tree.SharedTree.adopt`).
+        Returns every path it is responsible for, ``mod.rs`` first.
 
         Called once, before any unit authors, because the file has to name every unit and no single
         unit knows them all. Each declaration is gated on :attr:`HarnessModule.feature`, which is
