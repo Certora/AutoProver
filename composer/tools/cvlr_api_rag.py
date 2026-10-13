@@ -42,7 +42,9 @@ API_ROOT = "CVLR API"
 _AUTHORITY = (
     "This corpus is generated from the CVLR crates at the releases this build pins, so it is "
     "authoritative on what exists and what its signature is. Where it disagrees with the CVLR "
-    "manual, with a past project, or with recall, it is right and they are stale."
+    "manual, with a past project, or with recall, it is right and they are stale. Its code "
+    "examples are labelled: one 'compiled against the pinned crates' was type-checked against "
+    "those releases; one 'not compiled' is a sketch."
 )
 
 

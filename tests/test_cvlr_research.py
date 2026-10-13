@@ -22,7 +22,8 @@ import pytest
 
 from composer.rag.db import CVLR_API_DEFAULT_CONNECTION, CVLR_DEFAULT_CONNECTION, KNOWLEDGE_BASES
 from composer.rag.types import ManualRef, ManualSectionHit
-from composer.scripts.cvlr_api_docs import CrateDocs, build_manifest
+from composer.cargo.doctest import Passed
+from composer.scripts.cvlr_api_docs import CrateDocs, ExampleGate, build_manifest, gated_sources
 from composer.tools import rag_env
 from composer.tools.cvlr_api_rag import API_ROOT, SURFACE_HEADING, get_tools
 from composer.ui.tool_display import CommonTools
@@ -90,13 +91,17 @@ class _FakeDB:
         ]
 
 
+def _passing(crates: list[CrateDocs]) -> ExampleGate:
+    return ExampleGate(verdicts={source: Passed() for source in gated_sources(crates)})
+
+
 @pytest.fixture
 def corpus():
     crates = [
         CrateDocs("cvlr-asserts", "0.6.1", json.loads((_DATA / "cvlr_asserts.json").read_text())),
         CrateDocs("cvlr-mathint", "0.6.1", json.loads((_DATA / "cvlr_mathint.json").read_text())),
     ]
-    return _FakeDB(build_manifest(crates, source="test").manual_sections)
+    return _FakeDB(build_manifest(crates, "test", _passing(crates)).manual_sections)
 
 
 @pytest.fixture
@@ -165,7 +170,7 @@ def test_the_surface_heading_is_shared_by_the_producer_and_the_tool():
     # The producer writes this heading and `cvlr_api_surface` fetches by it. Two spellings would
     # make the closed listing unreachable, and nothing else would fail.
     crates = [CrateDocs("cvlr-asserts", "0.6.1", json.loads((_DATA / "cvlr_asserts.json").read_text()))]
-    headers = [list(s.headers) for s in build_manifest(crates, "t").manual_sections]
+    headers = [list(s.headers) for s in build_manifest(crates, "t", _passing(crates)).manual_sections]
     assert [API_ROOT, "cvlr-asserts", "0.6.1", SURFACE_HEADING] in headers
 
 
@@ -281,7 +286,7 @@ def two_generations():
         CrateDocs("cvlr-solana", "0.6.0", payload),
         CrateDocs("cvlr-asserts", "0.6.1", json.loads((_DATA / "cvlr_asserts.json").read_text())),
     ]
-    return _FakeDB(build_manifest(crates, source="test").manual_sections)
+    return _FakeDB(build_manifest(crates, "test", _passing(crates)).manual_sections)
 
 
 def _scoped(db, pinned):

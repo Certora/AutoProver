@@ -8,7 +8,7 @@ with a counterexample whose value looks arbitrary rather than wrong.
 
 **Formula:** `clog!` the exact expression the assertion reads, immediately before the assertion.
 
-```rust
+```rust,ignore
 crate::pool_program::close_if_stale(ctx, stale).unwrap();
 
 // Without this, the comparison chain can be folded into a bitmask test, and the
