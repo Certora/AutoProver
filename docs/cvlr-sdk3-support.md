@@ -360,6 +360,30 @@ The image drift test keeps the constant equal to the Dockerfile's `RUST_VERSION`
 
 ### A4. Excluding the entrypoint when there is no `no-entrypoint`
 
+**Done.** The `certora` feature turns on the entrypoint switch:
+
+- `no-entrypoint`, when the package declares it;
+- otherwise `custom-heap`, when the package's sources invoke `entrypoint!` or
+  `entrypoint_no_alloc!`. The scaffold declares `custom-heap = []` if the package does not.
+
+Both macros install the allocator through `custom_heap_default!`, in `solana-program` 2.x and
+`solana-program-entrypoint` 3.x alike.
+
+The SDK 3 stake probe passes with nothing set by hand
+([job](https://prover.certora.com/jobStatus/37632/7864326f83ea451badcdd40895e2f87d?anonymousKey=469262b3bd888f4e1df8fd3f3487aba74c8614d9)):
+
+- a fresh worktree of `main`;
+- the scaffold adding `custom-heap` itself;
+- `cvlr-solana` 0.6.0 read from `f054348` (A5);
+- a confined v1.53 build with the host toolchain (A3, A3b).
+
+All ten rules verify.
+
+A project that already has a `certora` feature is left as it is. The scaffold does not extend an
+existing feature list.
+
+What follows is the original analysis.
+
 The scaffold writes `certora = ["no-entrypoint", …]` when the package declares `no-entrypoint`,
 which is how the program's own entrypoint and global allocator are kept out of the verification
 build. Stake `main` declares no features at all, and calls `entrypoint!` unconditionally. (At

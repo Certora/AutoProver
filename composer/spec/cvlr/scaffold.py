@@ -91,6 +91,19 @@ SHARED_OBJECT_TYPE = "cdylib"
 #: ``first_example`` has ``certora = []``.
 NO_ENTRYPOINT_FEATURE = CargoFeature("no-entrypoint")
 
+#: What keeps the SDK's ``entrypoint!`` from installing its global allocator. The macro's
+#: ``custom_heap_default!`` checks the *calling* crate's ``custom-heap`` feature, in ``solana-program``
+#: 2.x and ``solana-program-entrypoint`` 3.x alike. Enabled by ``certora`` for a package that calls
+#: the macro and has no ``no-entrypoint`` to turn off: stake's program calls ``entrypoint!``
+#: unconditionally. The program's bump allocator writes the heap at a fixed address, and a rule that
+#: also allocates through ``__rust_alloc`` fails with Prover error 3309, "Conflicting allocation/usage
+#: of heap memory".
+CUSTOM_HEAP_FEATURE = CargoFeature("custom-heap")
+
+#: An invocation of the SDK's ``entrypoint!`` or ``entrypoint_no_alloc!``, which both install the
+#: allocator.
+_ENTRYPOINT_MACRO = re.compile(r"\bentrypoint(?:_no_alloc)?![ \t]*[(\[{]")
+
 
 # ---------------------------------------------------------------------------------------------
 # what a scaffolding run would change
@@ -543,12 +556,33 @@ def local_dependencies(workspace: Workspace, package: CratePackage) -> tuple[Cra
     )
 
 
+def _calls_entrypoint(package: CratePackage) -> bool:
+    """Whether ``package``'s own sources invoke the SDK's entrypoint macro."""
+    source = package.root / "src"
+    return any(
+        _ENTRYPOINT_MACRO.search(path.read_text(errors="replace"))
+        for path in source.rglob("*.rs")
+        if not path.is_relative_to(source / "certora")
+    )
+
+
+def _entrypoint_switch(package: CratePackage) -> CargoFeature | None:
+    """The feature that keeps ``package``'s entrypoint, and the allocator it installs, out of a
+    verification build: ``no-entrypoint`` when the package declares it, else ``custom-heap`` when it
+    calls ``entrypoint!``, else nothing."""
+    if NO_ENTRYPOINT_FEATURE in package.features:
+        return NO_ENTRYPOINT_FEATURE
+    if _calls_entrypoint(package):
+        return CUSTOM_HEAP_FEATURE
+    return None
+
+
 def _certora_feature(package: CratePackage, reference: ChainReference) -> list[str]:
     """What ``package``'s ``certora`` feature turns on within ``package`` itself: the CVLR
-    crates, and ``no-entrypoint`` when the package declares it."""
+    crates, and the entrypoint switch (:func:`_entrypoint_switch`)."""
     enables = [f"dep:{c.name}" for c in reference.scaffold_crates()]
-    if NO_ENTRYPOINT_FEATURE in package.features:
-        enables.insert(0, NO_ENTRYPOINT_FEATURE)
+    if (switch := _entrypoint_switch(package)) is not None:
+        enables.insert(0, switch)
     return enables
 
 
@@ -616,8 +650,8 @@ def _plan_package_manifest(
     Three things go there, each skipped when the manifest already has it:
 
     - the CVLR crates, as optional dependencies, so a release build does not compile them;
-    - the ``certora`` feature, which turns those dependencies on, along with ``no-entrypoint``
-      when the package declares it and every local dependency's own ``certora`` feature
+    - the ``certora`` feature, which turns those dependencies on, along with the entrypoint switch
+      (:func:`_entrypoint_switch`) and every local dependency's own ``certora`` feature
       (:func:`_plan_feature_forwarding`);
     - ``[package.metadata.certora]``, which tells the prover where the sources and tuning files
       are.
@@ -677,9 +711,16 @@ def _plan_package_manifest(
         enables = _certora_feature(package, reference) + [
             f"{dep.name}/{DEFAULT_FEATURE}" for dep in local_dependencies(workspace, package)
         ]
+        # A feature cargo does not know cannot be enabled, so `custom-heap` is declared when the
+        # package has not declared it.
+        declared: tuple[tuple[str, TomlValue], ...] = (
+            ((CUSTOM_HEAP_FEATURE, []),)
+            if CUSTOM_HEAP_FEATURE in enables and CUSTOM_HEAP_FEATURE not in features
+            else ()
+        )
         plan.add_manifest_edit(
             manifest_rel,
-            AddEntries(("features",), ((DEFAULT_FEATURE, enables),)),
+            AddEntries(("features",), (*declared, (DEFAULT_FEATURE, enables))),
             f"the feature that compiles the harness in ({', '.join(enables)})",
         )
 

@@ -270,6 +270,60 @@ def test_a_package_with_no_entrypoint_feature_does_not_get_one_invented(tmp_path
     (features,) = [a for a in _additions(plan) if a.table == ("features",)]
     assert isinstance(features, AddEntries)
     assert "no-entrypoint" not in dict(features.entries)["certora"]
+    # Nor a heap switch: this crate has no entrypoint whose allocator would need one.
+    assert "custom-heap" not in dict(features.entries)
+
+
+ENTRYPOINT = """\
+use solana_program_entrypoint::{entrypoint, ProgramResult};
+
+entrypoint!(process_instruction);
+"""
+
+
+def _features(plan) -> dict:
+    (features,) = [a for a in _additions(plan) if a.table == ("features",)]
+    assert isinstance(features, AddEntries)
+    return dict(features.entries)
+
+
+def test_a_program_that_cannot_turn_its_entrypoint_off_turns_its_allocator_off(tmp_path):
+    """Stake's program calls `entrypoint!` unconditionally and declares no features. Its bump
+    allocator then shares the heap with the harness's `Box`, and every rule that allocates fails
+    with Prover error 3309."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "entrypoint.rs").write_text(ENTRYPOINT)
+    plan, workspace = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
+    features = _features(plan)
+    assert features["custom-heap"] == []
+    assert features["certora"][0] == "custom-heap"
+
+    apply(plan, workspace.root)
+    manifest = tomllib.loads((tmp_path / "Cargo.toml").read_text())
+    assert "custom-heap" in manifest["features"]["certora"]
+    again, _ = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
+    assert again.changes == ()
+
+
+def test_a_heap_switch_the_package_already_declares_is_enabled_not_redeclared(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "entrypoint.rs").write_text(ENTRYPOINT)
+    manifest = STANDALONE + "\n[features]\ncustom-heap = []\n"
+    plan, _ = _plan(tmp_path, manifest=manifest, workspace_manifest=manifest)
+    features = _features(plan)
+    assert "custom-heap" not in features
+    assert features["certora"][0] == "custom-heap"
+
+
+def test_no_entrypoint_is_the_switch_when_the_package_has_it(tmp_path):
+    """It removes the entrypoint and its allocator both, and it is the convention the program's
+    authors chose."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "entrypoint.rs").write_text(ENTRYPOINT)
+    plan, _ = _plan(tmp_path, manifest=WITH_FEATURES, workspace_manifest=WITH_FEATURES)
+    features = _features(plan)
+    assert features["certora"][0] == "no-entrypoint"
+    assert "custom-heap" not in features["certora"]
 
 
 def test_a_workspace_gets_the_pins_and_its_member_inherits_them(tmp_path):
