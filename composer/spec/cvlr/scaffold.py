@@ -67,7 +67,7 @@ from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.env_paths import PathDialect, dialect_for
 from composer.spec.cvlr import forks
 from composer.spec.cvlr.tuning import ENV_FAMILIES, INLINING, SUMMARIES, compose_env
-from composer.spec.cvlr.reference import ChainReference
+from composer.spec.cvlr.reference import ChainReference, CrateRequirement
 
 #: Where the harness module goes in the target package.
 HARNESS_DIR = Path("src") / "certora"
@@ -367,17 +367,24 @@ def _generation(version: str) -> str:
     return version.split(".", maxsplit=1)[0]
 
 
-def _check_platform(
-    workspace: Workspace, package: CratePackage, reference: ChainReference, plan: _PlanBuilder
-) -> None:
-    """Refuse to pin a CVLR release the project's platform generation cannot use.
+@dataclass(frozen=True)
+class _OnGeneration:
+    """The package links the reference's generation of its platform crates."""
 
-    A target on ``solana-program`` 1.18 given ``cvlr-solana`` 0.5.0 does not warn. It fails to
-    compile, because the two generations have different ``AccountInfo`` types and the chain
-    crate's helpers return the other one. The reference set already records which generation a
-    chain crate requires (:class:`~composer.spec.cvlr.reference.PlatformGeneration`). This is
-    where a project that is on a different one is caught, and it has to be caught before the pin
-    is written.
+
+@dataclass(frozen=True)
+class _OffGeneration:
+    """The package links a copy of ``witness`` from another generation."""
+
+    witness: CrateRequirement
+    builds: tuple[str, ...]
+
+
+def _read_platform(
+    workspace: Workspace, package: CratePackage, reference: ChainReference
+) -> _OnGeneration | _OffGeneration | None:
+    """Which generation ``package`` is on, as far as ``reference`` can tell; ``None`` when it links
+    none of the reference's witnesses.
 
     The first witness the project resolves decides. Later ones are not consulted. The list is
     most-specific first because a target on a newer generation resolves only the specific crate.
@@ -391,21 +398,58 @@ def _check_platform(
         copies = [c for c in linked if c.name == witness.name]
         if not copies:
             continue
-        off = [c.version for c in copies if _generation(c.version) != _generation(witness.line)]
-        if off:
-            builds = ", ".join(off)
+        off = tuple(c.version for c in copies if _generation(c.version) != _generation(witness.line))
+        return _OffGeneration(witness, off) if off else _OnGeneration()
+    return None
+
+
+def select_generation(
+    workspace: Workspace, package: CratePackage, candidates: Sequence[ChainReference]
+) -> ChainReference | None:
+    """The reference set in ``candidates`` for the platform generation ``package`` is on, or
+    ``None`` when it is on none of them.
+
+    Evidence is required: a package that links none of a reference's witnesses is not on that
+    generation. ``candidates`` come newest first (:data:`~composer.spec.cvlr.reference.REFERENCE_SET`),
+    and the first match wins.
+    """
+    return next(
+        (
+            reference
+            for reference in candidates
+            if isinstance(_read_platform(workspace, package, reference), _OnGeneration)
+        ),
+        None,
+    )
+
+
+def _check_platform(
+    workspace: Workspace, package: CratePackage, reference: ChainReference, plan: _PlanBuilder
+) -> None:
+    """Refuse to pin a CVLR release the project's platform generation cannot use.
+
+    A target on ``solana-program`` 1.18 given ``cvlr-solana`` 0.5.x does not warn. It fails to
+    compile, because the two generations have different ``AccountInfo`` types and the chain
+    crate's helpers return the other one. The reference set already records which generation a
+    chain crate requires (:class:`~composer.spec.cvlr.reference.PlatformGeneration`). This is
+    where a project that is on a different one is caught, and it has to be caught before the pin
+    is written. :func:`_read_platform` is how the generation is read.
+    """
+    match _read_platform(workspace, package, reference):
+        case _OffGeneration(witness=witness, builds=builds):
             plan.add_blocked(
                 Blocked(
                     path=Path("Cargo.toml"),
                     problem=(
-                        f"this project builds {witness.name} {builds}, and the CVLR line this "
-                        f"build supports ({reference.line()}) requires "
+                        f"this project builds {witness.name} {', '.join(builds)}, and the CVLR "
+                        f"line this build supports ({reference.line()}) requires "
                         f"{reference.platform.label}"
                     ),
                     resolution=f"move the project to {witness.name} {witness.line}",
                 )
             )
-        return
+        case _OnGeneration() | None:
+            pass
 
 
 @dataclass(frozen=True)
@@ -458,8 +502,8 @@ def _check_pins(
 ) -> None:
     """Refuse a project that is on a CVLR release other than the one this build is pinned to.
 
-    One line is supported at a time — the one :mod:`composer.spec.cvlr.reference` names — and
-    everything this scaffold writes belongs to it: the pins, the specializations added beside
+    One line is supported per platform generation, and ``reference`` is the one for this project's
+    (:func:`select_generation`). Everything this scaffold writes belongs to it: the pins, the specializations added beside
     them, and the env files :mod:`composer.spec.cvlr.tuning` composes. A project already on
     another line cannot be given those without putting two CVLR generations in one graph, which
     does not compile. This scaffold used to resolve that by deferring to the project's pin and

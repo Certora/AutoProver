@@ -22,7 +22,7 @@ from composer.spec.cvlr.tuning import (
     compose_env,
     starting_env,
 )
-from composer.spec.cvlr.reference import SOLANA, SOROBAN, PathAlias
+from composer.spec.cvlr.reference import SOLANA_V2, SOLANA_V3, SOROBAN, PathAlias
 
 #: Every crate the post-split Solana platform layer is spread across, as a target resolves them.
 SPLIT_CRATES = (
@@ -85,13 +85,13 @@ def _workspace(*resolved: str) -> Workspace:
 @pytest.fixture
 def split() -> PathDialect:
     """The dialect a post-split target gets."""
-    return dialect_for(_workspace("solana-program", *SPLIT_CRATES), SOLANA)
+    return dialect_for(_workspace("solana-program", *SPLIT_CRATES), SOLANA_V2)
 
 
 @pytest.fixture
 def monolithic() -> PathDialect:
     """The dialect a 1.18 target gets, where the canonical paths are already the right ones."""
-    return dialect_for(_workspace("solana-program"), SOLANA)
+    return dialect_for(_workspace("solana-program"), SOLANA_V2)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -308,7 +308,7 @@ def test_every_declared_alias_still_names_something_in_the_starting_files() -> N
     path no longer appears anywhere is dead weight that reads like coverage — and the failure mode it is
     supposed to prevent is itself silent, so nothing else would notice."""
     starting = "\n".join((ENV_DIR / name).read_text() for name in STARTING_ENVS)
-    for alias in SOLANA.platform.path_aliases:
+    for alias in SOLANA_V2.platform.path_aliases:
         canonical = alias.canonical
         assert canonical in starting, (
             f"{canonical} is aliased but appears in none of the starting tuning files; either "
@@ -343,7 +343,7 @@ def test_every_alias_rewrites_to_a_path_the_binary_actually_defines(split: PathD
     """
     symbols = _measured_symbols()
     unexercised: list[str] = []
-    for alias in SOLANA.platform.path_aliases:
+    for alias in SOLANA_V2.platform.path_aliases:
         spellings = (alias.canonical, *alias.actual)
         if not any(sp in s for s in symbols for sp in spellings):
             unexercised.append(alias.canonical)
@@ -433,3 +433,64 @@ def test_program_error_from_is_inlined_under_the_dialect(split: PathDialect) -> 
         in composite
     )
     assert "#[inline(never)] ^<solana_program_error::ProgramError" not in composite
+
+
+#: The SDK 3 counterpart of :data:`SYMBOLS_FIXTURE`: stake `main`, which has no `solana-program` at
+#: all. The SDK 3 alias table was read off it.
+SDK3_SYMBOLS_FIXTURE = Path(__file__).parent / "data" / "stake_sdk3_sbf_symbols.txt"
+
+
+def _sdk3_symbols() -> tuple[str, ...]:
+    return tuple(
+        line.strip()
+        for line in SDK3_SYMBOLS_FIXTURE.read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    )
+
+
+def test_every_sdk3_alias_the_binary_exercises_names_a_path_it_defines() -> None:
+    """On SDK 3 the canonical spelling never appears, so an alias is exercised exactly when its
+    target does. The unexercised ones are stated: the list changing says something about the
+    fixture, or about an alias that has started to name nothing."""
+    symbols = _sdk3_symbols()
+    unexercised = [
+        alias.canonical
+        for alias in SOLANA_V3.platform.path_aliases
+        if not any(a in s for s in symbols for a in alias.actual)
+    ]
+    assert unexercised == [
+        "solana_program::program_pack",
+        "solana_program::hash",
+        "solana_program::system_program",
+        "solana_program::incinerator",
+        "solana_program::program::invoke_signed_unchecked",
+        "solana_program::instruction::get_stack_height",
+        "solana_program::poseidon",
+    ]
+
+
+def test_the_sdk3_dialect_reaches_the_sysvar_reads_and_cpi_the_program_calls() -> None:
+    """Without the dialect, no platform directive reaches them: each is spelled `solana_program::`,
+    and the program has no such crate."""
+    import re
+
+    symbols = _sdk3_symbols()
+
+    def reached(text: str) -> set[str]:
+        hits: set[str] = set()
+        for line in text.splitlines():
+            s = line.strip()
+            if not s or s.startswith(";") or s.startswith("#[type("):
+                continue
+            pattern = re.sub(r"^#\[inline(?:\(never\))?\]\s*", "", s).strip()
+            hits |= {x for x in symbols if re.search(pattern, x)}
+        return hits
+
+    calls = {
+        "solana_sysvar::clock::<impl solana_sysvar::Sysvar for solana_clock::Clock>::get",
+        "solana_sysvar::rent::<impl solana_sysvar::Sysvar for solana_rent::Rent>::get",
+        "solana_cpi::set_return_data",
+    }
+    v3 = PathDialect(SOLANA_V3.platform.path_aliases)
+    assert not calls & reached(starting_env("cvlr_inlining_core.txt"))
+    assert calls <= reached(starting_env("cvlr_inlining_core.txt", v3))

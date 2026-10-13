@@ -74,7 +74,7 @@ from composer.spec.cvlr.verify import (
     VerifyDeps,
     prover_stamper,
 )
-from composer.spec.cvlr.reference import SOLANA, ChainReference
+from composer.spec.cvlr.reference import ChainReference
 from composer.spec.solana.model import (
     SolanaApplication,
     SolanaComponentInstance,
@@ -443,15 +443,17 @@ class CvlrBackend:
     #: counterexamples be read as another's. Required rather than defaulted to ``None``: a run that
     #: produces no findings should be somebody's decision, not a forgotten argument.
     cex_analysis: CexAnalysisStore
-    #: The package to verify. ``None`` lets preflight pick it when there is only one candidate; a
-    #: workspace with several is refused rather than guessed at.
-    package: str | None = None
     #: The CVLR releases this run scaffolds the target with. Beside :attr:`package` because it is
     #: the same kind of decision: what this run is pointed at. Narrowed by
     #: :meth:`~composer.spec.cvlr.reference.ChainReference.withholding` when the target is itself
     #: the program one of the :class:`~composer.spec.cvlr.reference.ProgramModel` crates models,
-    #: which is the only narrowing there is.
-    reference: ChainReference = SOLANA
+    #: which is the only narrowing there is. One per platform generation; there is no default,
+    #: because the right one depends on the target
+    #: (:func:`~composer.spec.cvlr.scaffold.select_generation`).
+    reference: ChainReference
+    #: The package to verify. ``None`` lets preflight pick it when there is only one candidate; a
+    #: workspace with several is refused rather than guessed at.
+    package: str | None = None
 
     backend_guidance = SOLANA_CVLR_GUIDANCE
     #: A CVLR rule drives the handlers it names; nothing checks a property against every handler

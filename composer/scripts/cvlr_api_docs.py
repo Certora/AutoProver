@@ -69,7 +69,7 @@ from composer.rag.import_format import (
     RagManifest,
 )
 from composer.spec.cvlr.crates import CVLR_PREFIX
-from composer.spec.cvlr.reference import ChainReference, GitCommit, reference_for
+from composer.spec.cvlr.reference import ChainReference, GitCommit, generations
 from composer.tools.cvlr_api_rag import API_ROOT, SURFACE_HEADING
 
 _log = logging.getLogger(__name__)
@@ -130,6 +130,9 @@ class LocalCheckout:
 
     root: pathlib.Path
     crate_dir: pathlib.Path
+    #: The crate's version in the checkout, as cargo reports it. A generation that pins the crate
+    #: at another version does not take this checkout (:func:`sources_for`).
+    version: str
     #: ``git describe`` of :attr:`root`, ``-dirty`` included. The only thing that distinguishes
     #: one build of a checkout from another, and uncommitted edits are the case that matters.
     revision: str
@@ -961,14 +964,36 @@ def crate_sources(roots: Sequence[pathlib.Path]) -> dict[str, LocalCheckout]:
                 f"cargo metadata failed in {resolved}:\n{result.stderr.strip()}"
             )
         revision = _revision(resolved)
-        for name, crate_dir in cvlr_packages(json.loads(result.stdout), resolved).items():
+        metadata = json.loads(result.stdout)
+        versions = {p["name"]: p["version"] for p in metadata.get("packages", [])}
+        for name, crate_dir in cvlr_packages(metadata, resolved).items():
             if (prior := sources.get(name)) is not None:
                 raise RustdocUnavailable(
                     f"both {prior.root} and {resolved} define {name}. Pass one of them: which "
                     f"copy the corpus would describe is not something this can choose for you."
                 )
-            sources[name] = LocalCheckout(root=resolved, crate_dir=crate_dir, revision=revision)
+            sources[name] = LocalCheckout(
+                root=resolved, crate_dir=crate_dir, version=versions[name], revision=revision
+            )
     return sources
+
+
+def sources_for(
+    reference: ChainReference, sources: Mapping[str, LocalCheckout]
+) -> dict[str, LocalCheckout]:
+    """The checkouts one generation can take: all but those of a crate it pins at another version.
+
+    A ``cvlr-solana`` checkout is one release line, and the generations pin different ones.
+    Patched into the other generation's probe it would fail there at cargo, so it is left to the
+    generation it belongs to. A crate the reference set does not pin, such as ``cvlr-asserts``
+    under the core, is taken by every generation.
+    """
+    pinned = {c.name: c.version for c in reference.crates()}
+    return {
+        name: source
+        for name, source in sources.items()
+        if pinned.get(name, source.version) == source.version
+    }
 
 
 def _probe_crate(
@@ -1098,6 +1123,26 @@ def _commits(
     }
 
 
+def document_generations(
+    references: Sequence[ChainReference],
+    workdir: pathlib.Path,
+    sources: Mapping[str, LocalCheckout],
+) -> list[CrateDocs]:
+    """Every generation's crates, each documented in a probe of its own, a crate the generations
+    share (the core) once.
+
+    One probe per generation, because the generations cannot share one: their chain crates are
+    bound to different platform crates, which is the reason there are two.
+    """
+    crates: dict[tuple[str, str], CrateDocs] = {}
+    for n, reference in enumerate(references):
+        probe = workdir / f"generation-{n}"
+        probe.mkdir(parents=True, exist_ok=True)
+        for docs in document_family(reference, probe, sources=sources_for(reference, sources)):
+            crates.setdefault((docs.name, docs.version), docs)
+    return list(crates.values())
+
+
 def manifest_source(reference: ChainReference, sources: Mapping[str, LocalCheckout]) -> str:
     """What the manifest records about where it came from.
 
@@ -1176,7 +1221,7 @@ def main() -> None:
         help="Where to write the manifest. Feed it to composer.scripts.rag_import.",
     )
     parser.add_argument(
-        "--chain", default="solana", help="Which reference set to document (solana, soroban)."
+        "--chain", default="solana", help="Which chain to document (solana, soroban): every platform generation it supports."
     )
     parser.add_argument(
         "--keep", type=pathlib.Path, default=None,
@@ -1199,15 +1244,15 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
-    reference = reference_for(args.chain)
+    references = generations(args.chain)
     try:
         sources = crate_sources(args.crate_source)
         if args.keep is not None:
             args.keep.mkdir(parents=True, exist_ok=True)
-            crates = document_family(reference, args.keep, sources=sources)
+            crates = document_generations(references, args.keep, sources)
         else:
             with tempfile.TemporaryDirectory(prefix="cvlr-api-docs-") as tmp:
-                crates = document_family(reference, pathlib.Path(tmp), sources=sources)
+                crates = document_generations(references, pathlib.Path(tmp), sources)
     except RustdocUnavailable as exc:
         raise SystemExit(f"cvlr_api_docs: {exc}") from exc
 
@@ -1215,7 +1260,10 @@ def main() -> None:
         args.output.write_text(undocumented_report(crates))
         _log.info("wrote %s", args.output)
         return
-    manifest = build_manifest(crates, source=manifest_source(reference, sources))
+    source = " | ".join(
+        f"{r.platform.label}: {manifest_source(r, sources_for(r, sources))}" for r in references
+    )
+    manifest = build_manifest(crates, source=source)
     args.output.write_text(manifest.model_dump_json(indent=1))
     _log.info(
         "wrote %s: %d sections, %d embedded groups",

@@ -37,7 +37,7 @@ from composer.cargo.metadata import (
 from composer.prover import conf as prover_conf
 from composer.spec.cvlr import conf as cvlr_conf
 from composer.spec.cvlr.crates import Absent, CvlrSources
-from composer.spec.cvlr.reference import SOLANA
+from composer.spec.cvlr.reference import SOLANA_V2
 from composer.cargo.sbf import (
     BUILD_TIMEOUT_ENV,
     DEFAULT_BUILD_TIMEOUT_S,
@@ -370,18 +370,18 @@ def test_a_project_on_the_reference_core_but_without_the_chain_crate_reports_tha
     """Two different statements, and only one of them stops a run: an old ``cvlr-solana`` and no
     ``cvlr-solana`` at all. They are separate types so a caller cannot conflate them."""
     sources = CvlrSources.of(_workspace(_METADATA))
-    gaps = {g.crate: g for g in sources.gaps(SOLANA)}
+    gaps = {g.crate: g for g in sources.gaps(SOLANA_V2)}
     assert "cvlr" not in gaps, "the fixture pins the reference core, so it is not a gap"
     assert isinstance(gaps["cvlr-solana"], Absent)
     assert "is not a dependency of this project" in gaps["cvlr-solana"].describe()
-    assert sources.mismatched(SOLANA) == (), "absence is not something to refuse over"
+    assert sources.mismatched(SOLANA_V2) == (), "absence is not something to refuse over"
 
 
 def test_an_older_cvlr_than_the_pin_is_a_mismatch_that_stops_the_run():
     payload = json.loads(json.dumps(_METADATA))
     payload["packages"][2]["version"] = "0.4.1"
     sources = CvlrSources.of(_workspace(payload))
-    mismatched = {g.crate: g for g in sources.mismatched(SOLANA)}
+    mismatched = {g.crate: g for g in sources.mismatched(SOLANA_V2)}
     assert mismatched["cvlr"].resolved == "0.4.1"
     assert mismatched["cvlr"].reference == "0.6.1"
 
@@ -391,7 +391,7 @@ def test_an_older_cvlr_beside_the_pinned_one_is_still_a_mismatch():
     older = json.loads(json.dumps(payload["packages"][2]))
     older.update(id=f"{older['source']}#cvlr@0.4.1", version="0.4.1")
     payload["packages"].append(older)
-    (mismatch,) = CvlrSources.of(_workspace(payload)).mismatched(SOLANA)
+    (mismatch,) = CvlrSources.of(_workspace(payload)).mismatched(SOLANA_V2)
     assert (mismatch.crate, mismatch.resolved) == ("cvlr", "0.4.1")
 
 

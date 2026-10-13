@@ -24,7 +24,7 @@ import pytest
 
 from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.preflight import gate_workspace, prepare_workspace, select_package
-from composer.spec.cvlr.reference import SOLANA
+from composer.spec.cvlr.reference import SOLANA_V2
 
 pytestmark = [pytest.mark.expensive, pytest.mark.asyncio]
 
@@ -78,7 +78,7 @@ async def test_a_bare_cargo_workspace_becomes_one_that_compiles_with_a_harness_i
     assert selected.name == "vault"
     assert selected.package_dir == Path("programs/vault")
 
-    pre = await prepare_workspace(selected.workspace_root, reference=SOLANA, package=selected.name)
+    pre = await prepare_workspace(selected.workspace_root, reference=SOLANA_V2, package=selected.name)
     assert pre.scaffold.blocked == (), pre.scaffold.blocked
     assert pre.artifact_stem == "vault"
     # Resolved from the scaffolded graph: before it, this project had no CVLR dependency at all.
@@ -97,7 +97,7 @@ async def test_pointing_it_at_a_project_it_already_scaffolded_replaces_only_the_
     selected = await select_package(project, None, main_source=main_source)
 
     first = await prepare_workspace(
-        selected.workspace_root, reference=SOLANA, package=selected.name
+        selected.workspace_root, reference=SOLANA_V2, package=selected.name
     )
     assert first.applied != ()
     specs = main_source.parent / "certora" / "specs" / "mod.rs"
@@ -105,7 +105,7 @@ async def test_pointing_it_at_a_project_it_already_scaffolded_replaces_only_the_
     specs.write_text(f"{scaffolded}\n// an author's work\n")
 
     again = await prepare_workspace(
-        selected.workspace_root, reference=SOLANA, package=selected.name
+        selected.workspace_root, reference=SOLANA_V2, package=selected.name
     )
 
     assert again.applied == (specs.relative_to(selected.workspace_root),)

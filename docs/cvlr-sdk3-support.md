@@ -245,6 +245,28 @@ change.
 
 ### A1. Two Solana platform generations
 
+**Done.** `REFERENCE_SET["solana"]` is `(SOLANA_V3, SOLANA_V2)`, newest first:
+
+- `SOLANA_V3` is `cvlr-solana`, `cvlr-solana-stake` and `cvlr-spl-token` 0.6.0, read from
+  `f054348` (A5), on the same `cvlr` 0.6.1 core as `SOLANA_V2`.
+- `scaffold.select_generation` picks the set whose platform witness the package links. It reads
+  the witnesses the same way `_check_platform` does, and it requires a witness to be linked.
+- `preflight.select_package` calls it at the point the run first reads the workspace, before any
+  service starts. A package on neither generation is refused there, with what it builds and both
+  supported generations in the message.
+- `entry.py` gives the backend `selected.reference`, and `CvlrBackend.reference` has no default.
+- The API-docs producer documents every generation, each in its own probe crate, and merges by
+  crate name and version. A `--crate-source` checkout reaches only a generation that pins its
+  version.
+
+Checked on real projects:
+
+- Selection picks SDK 3 for stake `main`, and SDK 2 for the stake snapshot and the vault.
+- The real `prepare_workspace` and the confined compile gate pass on a fresh stake `main`
+  worktree, with `cvlr-spl-token` 0.6.0 in the graph.
+
+What follows is the original plan.
+
 `reference.py` names one `ChainReference` per chain. That was the design ("one CVLR line
 supported at a time"), and it has to give way here. The vault tutorial, the corpus programs and
 anything older stay on 2.x, while every current program is on SDK 3. Moving the single line to
@@ -273,6 +295,13 @@ follow package selection, which is the first point where the resolved graph is k
 section removes.
 
 ### A2. SDK 3 tuning-path aliases
+
+**Done**, in `SOLANA_V3.platform.path_aliases`. `tests/data/stake_sdk3_sbf_symbols.txt` holds stake
+`main`'s demangled platform symbols, built with v1.53. The tests check the aliases against that
+fixture, as they check the 2.x aliases against the vault's. Eight aliases are exercised there. The
+seven stake does not exercise are listed in the test. The starting inlining file reaches
+`Clock::get`, `Rent::get` and `set_return_data` only through the SDK 3 spellings.
+
 
 Each alias below was checked against the probe binary's demangled symbols. Most are the 2.2 set.
 These differ:

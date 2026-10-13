@@ -14,15 +14,15 @@ the chain's own SDK that a chain crate is built against, such as ``solana-progra
 
 Exact versions, not ranges. The core and the chain crates are versioned separately, so "latest"
 can pair a new core with an old chain crate. A bump is an edit here, and it moves every project
-this build sets up: what is named here is the one CVLR line supported at a time, the way a Prover
-release ships one CVL. That is why :mod:`composer.spec.cvlr.scaffold` refuses a project already on
-a different line rather than deferring to it.
+this build sets up: what is named here is the one CVLR line supported per platform generation, the
+way a Prover release ships one CVL. That is why :mod:`composer.spec.cvlr.scaffold` refuses a project
+already on a different line rather than deferring to it.
 
 A chain crate is bound to one platform generation, and each generation has its own ``AccountInfo``.
-``cvlr-solana`` 0.4.x goes with ``solana-program`` 1.18, 0.5.x with 2.2, and the unreleased 0.6
-line with the ``solana-*`` v3 crates. A helper from one generation cannot be passed an account
-from another, so :attr:`ChainReference.platform` is part of the reference, not a detail of one
-target.
+``cvlr-solana`` 0.4.x goes with ``solana-program`` 1.18, 0.5.x with 2.2, and 0.6.x with the
+``solana-*`` v3 crates. A helper from one generation cannot be passed an account from another, so
+:attr:`ChainReference.platform` is part of the reference, not a detail of one target, and a chain
+has one reference set per generation it supports (:data:`REFERENCE_SET`).
 
 ``solana-program`` stopped defining the platform types at 2.2, not at 3.0. 1.17 and 1.18 have a
 real ``account_info`` module. 2.2.1, 2.3.0, and 3.0.0 re-export ``solana-account-info``. A path
@@ -291,7 +291,7 @@ _CVLR_SOLANA_0_5_1 = GitCommit(
     rev="2e53877a4d9ffb10aff5dc21829fd073f00333a6",
 )
 
-SOLANA = ChainReference(
+SOLANA_V2 = ChainReference(
     core=_CORE,
     chain_crate=CrateRelease("cvlr-solana", "0.5.1", _CVLR_SOLANA_0_5_1),
     models=(
@@ -357,6 +357,70 @@ SOLANA = ChainReference(
     ),
 )
 
+#: ``cvlr-solana`` 0.6.0, the SDK 3 line: 0.5.1 ported to the split ``solana-*`` 3.x crates, with
+#: both program models. Released from one commit, like 0.5.1.
+#:
+#: TODO(cvlr-todo U26): pin the crates.io release once it is published, and drop the commit.
+_CVLR_SOLANA_0_6_0 = GitCommit(
+    repo="https://github.com/Certora/cvlr-solana.git",
+    rev="f054348cc47fa63060190e243f15b02c20f6b610",
+)
+
+SOLANA_V3 = replace(
+    SOLANA_V2,
+    chain_crate=CrateRelease("cvlr-solana", "0.6.0", _CVLR_SOLANA_0_6_0),
+    models=(
+        ProgramModel(
+            CrateRelease("cvlr-solana-stake", "0.6.0", _CVLR_SOLANA_0_6_0), "the stake program"
+        ),
+        ProgramModel(
+            CrateRelease("cvlr-spl-token", "0.6.0", _CVLR_SOLANA_0_6_0), "the SPL token program"
+        ),
+    ),
+    platform=PlatformGeneration(
+        # No `solana-program` at all: every platform type is in its own crate.
+        label="solana-* 3.x",
+        sdk_crates=(CrateRequirement("solana-account-info", "3"),),
+        witnesses=(CrateRequirement("solana-account-info", "3.0"),),
+        # Read off a stake `main` build's demangled symbols (`docs/cvlr-sdk3-support.md`, A2).
+        # Most are the 2.x spellings. Three are not:
+        path_aliases=(
+            PathAlias("solana_program::account_info", ("solana_account_info",)),
+            # `Pubkey` is `solana-address`'s `Address`, which `solana-pubkey` re-exports. The
+            # symbol alias first: the module alias it sits inside would otherwise rewrite it to a
+            # type that does not exist.
+            PathAlias("solana_program::pubkey::Pubkey", ("solana_address::Address",)),
+            PathAlias("solana_program::pubkey", ("solana_address",)),
+            PathAlias("solana_program::program_error", ("solana_program_error",)),
+            PathAlias("solana_program::program_pack", ("solana_program_pack",)),
+            PathAlias("solana_program::rent", ("solana_rent",)),
+            PathAlias("solana_program::clock", ("solana_clock",)),
+            PathAlias("solana_program::sysvar", ("solana_sysvar",)),
+            PathAlias("solana_program::hash", ("solana_hash",)),
+            PathAlias("solana_program::system_program", ("solana_sdk_ids::system_program",)),
+            PathAlias("solana_program::incinerator", ("solana_sdk_ids::incinerator",)),
+            # No monolith, so no second spelling: the facade's own `invoke_signed_unchecked`
+            # is gone with it.
+            PathAlias(
+                "solana_program::program::invoke_signed_unchecked",
+                ("solana_cpi::invoke_signed_unchecked",),
+            ),
+            # `invoke`, `invoke_signed` and `set_return_data` were real functions in the 2.x
+            # monolith. They are `solana-cpi`'s now.
+            PathAlias("solana_program::program", ("solana_cpi",)),
+            PathAlias(
+                "solana_program::instruction::get_stack_height",
+                ("solana_instruction::syscalls::get_stack_height",),
+            ),
+            PathAlias("solana_program::poseidon", ("solana_poseidon",)),
+            # The never-inline blanket `solana_program::.*` is not aliased, as on 2.x. Here it
+            # matches nothing, so the whole SDK is analyzed. `solana_get_sysvar::get_sysvar`, the
+            # generic sysvar read `StakeHistorySysvar` goes through, needs no tuning: the syscall
+            # under it is modelled.
+        ),
+    ),
+)
+
 SOROBAN = ChainReference(
     core=_CORE,
     chain_crate=CrateRelease("cvlr-soroban", "0.4.0"),
@@ -377,11 +441,18 @@ SOROBAN = ChainReference(
 
 #: Keyed by ``composer.pipeline.ecosystem.ChainTag``, minus ``evm``. CVLR is the Rust-side
 #: specification language and has no EVM line.
-REFERENCE_SET: dict[str, ChainReference] = {"solana": SOLANA, "soroban": SOROBAN}
+#:
+#: One reference set per platform generation, newest first. A chain crate works only with its own
+#: generation's ``AccountInfo``, so a target is set up with the generation it is on
+#: (:func:`composer.spec.cvlr.scaffold.select_generation`).
+REFERENCE_SET: dict[str, tuple[ChainReference, ...]] = {
+    "solana": (SOLANA_V3, SOLANA_V2),
+    "soroban": (SOROBAN,),
+}
 
 
-def reference_for(chain: str) -> ChainReference:
-    """The reference set for ``chain``.
+def generations(chain: str) -> tuple[ChainReference, ...]:
+    """The reference sets for ``chain``, one per supported platform generation, newest first.
 
     Raises when ``chain`` has none. Callers need an answer to proceed, and a missing chain is a
     registration bug. The error names the chains that have a set. CVLR has no EVM line."""

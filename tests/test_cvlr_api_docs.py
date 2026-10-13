@@ -150,9 +150,9 @@ def test_every_entry_offers_a_path_the_scaffold_s_project_can_write(family):
     An entry whose only path names an undeclared crate is worse than one with no path: the caller
     writes it, and the compiler rejects a name the corpus was authoritative about.
     """
-    from composer.spec.cvlr.reference import SOLANA
+    from composer.spec.cvlr.reference import SOLANA_V2
 
-    declared = {c.name.replace("-", "_") for c in SOLANA.scaffold_crates()}
+    declared = {c.name.replace("-", "_") for c in SOLANA_V2.scaffold_crates()}
     for crate in family:
         for item in items_of(crate):
             if not item.path:
@@ -389,7 +389,9 @@ def test_indistinguishable_items_are_refused_rather_than_dropped():
 
 def _checkout(name: str) -> LocalCheckout:
     root = Path("/home/eric/src/cvlr")
-    return LocalCheckout(root=root, crate_dir=root / name, revision="cvlr-v0.6.1-3-g8d9d463-dirty")
+    return LocalCheckout(
+        root=root, crate_dir=root / name, version="0.6.1", revision="cvlr-v0.6.1-3-g8d9d463-dirty"
+    )
 
 
 def test_a_checkout_enters_as_a_patch_and_not_as_a_dependency(tmp_path):
@@ -399,9 +401,9 @@ def test_a_checkout_enters_as_a_patch_and_not_as_a_dependency(tmp_path):
     release this build does not support is exactly what the pin exists to prevent. As a patch, a
     checkout that has moved off the pin fails at cargo instead.
     """
-    from composer.spec.cvlr.reference import SOLANA
+    from composer.spec.cvlr.reference import SOLANA_V2
 
-    _probe_crate(tmp_path, SOLANA, {"cvlr-asserts": _checkout("cvlr-asserts")})
+    _probe_crate(tmp_path, SOLANA_V2, {"cvlr-asserts": _checkout("cvlr-asserts")})
     manifest = (tmp_path / "Cargo.toml").read_text()
     deps, patch = manifest.split("[patch.crates-io]")
     assert 'cvlr = "=0.6.1"' in deps
@@ -412,23 +414,25 @@ def test_a_checkout_enters_as_a_patch_and_not_as_a_dependency(tmp_path):
 def test_a_probe_with_no_checkouts_patches_only_the_unpublished_releases(tmp_path):
     """The corpus documents the release a run builds, and for an unpublished one that is its
     commit, not whatever crates.io has under an older version."""
-    from composer.spec.cvlr.reference import SOLANA
+    from composer.spec.cvlr.reference import SOLANA_V2
 
-    _probe_crate(tmp_path, SOLANA, {})
+    _probe_crate(tmp_path, SOLANA_V2, {})
     _, patch = (tmp_path / "Cargo.toml").read_text().split("[patch.crates-io]")
     assert {line.split(" = ")[0] for line in patch.strip().splitlines()} == {
-        crate.name for crate, _ in SOLANA.from_commits()
+        crate.name for crate, _ in SOLANA_V2.from_commits()
     }
-    for crate, commit in SOLANA.from_commits():
+    for crate, commit in SOLANA_V2.from_commits():
         assert commit.patch_line(crate.name) in patch
 
 
 def test_a_checkout_replaces_the_commit_for_the_crates_it_defines(tmp_path):
-    from composer.spec.cvlr.reference import SOLANA
+    from composer.spec.cvlr.reference import SOLANA_V2
 
     root = Path("/home/eric/src/cvlr-solana")
-    checkout = LocalCheckout(root=root, crate_dir=root / "cvlr-solana", revision="v0.5.1")
-    _probe_crate(tmp_path, SOLANA, {"cvlr-solana": checkout})
+    checkout = LocalCheckout(
+        root=root, crate_dir=root / "cvlr-solana", version="0.5.1", revision="v0.5.1"
+    )
+    _probe_crate(tmp_path, SOLANA_V2, {"cvlr-solana": checkout})
     _, patch = (tmp_path / "Cargo.toml").read_text().split("[patch.crates-io]")
     assert 'cvlr-solana = { path = "/home/eric/src/cvlr-solana/cvlr-solana" }' in patch
     assert "cvlr-spl-token = { git" in patch
@@ -483,13 +487,13 @@ def test_the_manifest_source_names_every_checkout_it_read():
     Grouped by checkout rather than listed per crate: fifteen crates from two trees is two facts.
     It is also the only durable trace, since the rows carry none.
     """
-    from composer.spec.cvlr.reference import SOLANA
+    from composer.spec.cvlr.reference import SOLANA_V2
 
-    assert "checkout" not in manifest_source(SOLANA, {})
-    (_, commit), *_ = SOLANA.from_commits()
-    assert f"{commit.repo} @ {commit.rev[:12]}" in manifest_source(SOLANA, {})
+    assert "checkout" not in manifest_source(SOLANA_V2, {})
+    (_, commit), *_ = SOLANA_V2.from_commits()
+    assert f"{commit.repo} @ {commit.rev[:12]}" in manifest_source(SOLANA_V2, {})
     source = manifest_source(
-        SOLANA, {"cvlr-asserts": _checkout("cvlr-asserts"), "cvlr-log": _checkout("cvlr-log")}
+        SOLANA_V2, {"cvlr-asserts": _checkout("cvlr-asserts"), "cvlr-log": _checkout("cvlr-log")}
     )
     assert "cvlr 0.6.1" in source
     assert source.count("/home/eric/src/cvlr @ cvlr-v0.6.1-3-g8d9d463-dirty") == 1
@@ -609,3 +613,16 @@ def test_a_public_module_keeps_its_own_path():
     # not resolve. The rule is reachability, not "shallowest always".
     paths = {i.name: i.path for i in items_of(_docs("cvlr-solana"))}
     assert any(p.startswith("cvlr_solana::pubkey::") for p in paths.values()), paths
+
+
+def test_a_checkout_of_one_release_line_reaches_only_its_generation():
+    """Patched into the other generation's probe, a cvlr-solana 0.6.0 checkout fails at cargo."""
+    from composer.scripts.cvlr_api_docs import sources_for
+    from composer.spec.cvlr.reference import SOLANA_V2, SOLANA_V3
+
+    root = Path("/home/eric/src/cvlr-solana")
+    sdk3 = LocalCheckout(root=root, crate_dir=root / "cvlr-solana", version="0.6.0", revision="x")
+    core = _checkout("cvlr-asserts")
+    sources = {"cvlr-solana": sdk3, "cvlr-asserts": core}
+    assert sources_for(SOLANA_V3, sources) == sources
+    assert sources_for(SOLANA_V2, sources) == {"cvlr-asserts": core}

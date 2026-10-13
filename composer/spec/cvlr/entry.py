@@ -54,7 +54,7 @@ from composer.spec.context import SourceFields
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness
 from composer.spec.cvlr.pipeline import BUILD_DIR, WORK_DIR, CvlrBackend, CvlrPhase
 from composer.spec.cvlr.preflight import SelectedPackage, select_package
-from composer.spec.cvlr.reference import reference_for
+from composer.spec.cvlr.reference import generations
 from composer.spec.service_host import PureServiceHost
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.source_env import build_layered_source_tools, build_source_tools
@@ -356,8 +356,13 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
     # Before any service starts: a workspace cargo cannot read, a package that is not a member, and
     # a multi-program workspace with nothing naming the one to verify are all usage errors, and
     # each of them is cheaper here by one analysis agent than inside preflight.
+    # The ecosystem's name is the chain key, so the reference sets are looked up rather than
+    # imported: this module's ``SOLANA`` is the ecosystem, not a reference set.
     selected = await select_package(
-        project_root, args.package, main_source=(project_root / main_source).resolve()
+        project_root,
+        args.package,
+        candidates=generations(SOLANA.name),
+        main_source=(project_root / main_source).resolve(),
     )
     if identifier != (crate := selected.name.replace("-", "_")):
         # Legal, so not a refusal — the identifier only has to be a name the analysis can carry and
@@ -466,9 +471,7 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
                     store=staged.conns.store, namespace=("cvlr_cex", thread_id)
                 ),
                 package=selected.name,
-                # The ecosystem's name is the chain key, so the reference set is looked up rather
-                # than imported: this module's ``SOLANA`` is the ecosystem, not the reference.
-                reference=reference_for(SOLANA.name).withholding(*args.withhold_crate),
+                reference=selected.reference.withholding(*args.withhold_crate),
             )
             return await cont(env, backend)
 

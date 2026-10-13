@@ -45,7 +45,7 @@ from composer.spec.cvlr.prover import (
 )
 from composer.spec.cvlr.rules import rule_names
 from composer.spec.cvlr.scaffold import SPECS_DIR, apply, plan_scaffold
-from composer.spec.cvlr.reference import SOLANA
+from composer.spec.cvlr.reference import SOLANA_V2
 
 pytestmark = [pytest.mark.expensive, pytest.mark.asyncio]
 
@@ -95,7 +95,7 @@ async def test_which_writes_the_model_drops(project, capsys):
     package = workspace.member(PACKAGE)
     assert package is not None, f"no {PACKAGE} member in {project}"
 
-    plan = plan_scaffold(workspace, package, SOLANA)
+    plan = plan_scaffold(workspace, package, SOLANA_V2)
     assert plan.blocked == (), plan.blocked
     apply(plan, project)
     (package.root / SPECS_DIR / "mod.rs").write_text(PROBE.read_text())
