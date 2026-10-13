@@ -13,9 +13,11 @@ on. So the prompt assertions below are load-bearing rather than cosmetic, in the
 
 No toolchain, no network, no LLM.
 """
+from typing import get_args
+
 from composer.pipeline.ecosystem import SOLANA, SOLANA_PROPERTY_SYSTEM_TEMPLATE
 from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE
-from composer.spec.cvlr.author import CvlrVersionParams
+from composer.spec.cvlr.author import CvlrVersionParams, Rebuttal
 from composer.spec.prop_inference import PropertySystemPromptParams
 from composer.spec.types import PropertyFormulation
 from composer.templates.loader import load_jinja_template
@@ -699,6 +701,16 @@ def test_neither_prompt_still_offers_a_source_mount():
     for prompt in (_author_system_prompt(), _judge_system_prompt(), _author_task_prompt()):
         assert "cvlr_source_" not in prompt
         assert "mounted" not in prompt
+        assert "crate source" not in prompt
+        assert "crate_source" not in prompt
+
+
+def test_the_judge_prompt_names_every_empirical_evidence_kind_a_rebuttal_can_carry():
+    kinds = get_args(Rebuttal.model_fields["evidence_type"].annotation)
+    prompt = _judge_system_prompt()
+    for kind in kinds:
+        if kind != "reasoned":
+            assert f"`{kind}`" in prompt
 
 
 def test_both_prompts_name_the_release_the_answers_are_about():
