@@ -19,9 +19,11 @@ the live run's tool census recorded 50 crate-source calls in a single run, and e
 becomes a sub-agent invocation unless it is answered from the index.
 """
 
-from typing import Any, NotRequired, TypedDict, override
+from collections.abc import Callable, Iterable
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, override
 
 from dataclasses import dataclass
+import logging
 
 from langchain_core.tools import BaseTool
 from langgraph.graph import MessagesState
@@ -33,6 +35,12 @@ from graphcore.graph import Builder, FlowInput
 from graphcore.tools.schemas import WithInjectedId
 
 from composer.kb.kb_context import with_cvlr_facts
+from composer.rag.db import (
+    CVLR_API_DEFAULT_CONNECTION,
+    CVLR_DEFAULT_CONNECTION,
+    ComposerRAGDB,
+    PostgreSQLRAGDatabase,
+)
 from composer.spec.agent_index import (
     AgentIndex,
     AgentIndexConfig,
@@ -43,8 +51,47 @@ from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.service_host import ModelProvider
 from composer.spec.util import uniq_thread_id
+from composer.tools import cvlr_api_rag, cvlr_rag
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 from composer.ui.tool_display import CommonTools, tool_display_of
+
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
+
+_log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class CvlrCorpus:
+    """One of the two corpora the researcher searches: where it lives and the tools over it."""
+
+    name: str
+    connection: str
+    tools: Callable[[ComposerRAGDB], Iterable[BaseTool]]
+
+
+#: Both corpora, opened by their connections rather than resolved by a registered name. The
+#: researcher needs both or neither, so nothing ever chooses one, and no wheel declares either.
+CVLR_CORPORA: tuple[CvlrCorpus, ...] = (
+    CvlrCorpus("cvlr_kb", CVLR_DEFAULT_CONNECTION, cvlr_rag.get_tools),
+    CvlrCorpus("cvlr_api_kb", CVLR_API_DEFAULT_CONNECTION, cvlr_api_rag.get_tools),
+)
+
+
+def corpus_tools(model: "SentenceTransformer") -> tuple[BaseTool, ...]:
+    """The search tools over both CVLR corpora, querying with ``model``.
+
+    A corpus that cannot be opened contributes no tools rather than failing the run: search is an
+    aid, and what is load-bearing is in the bundle. The pools open lazily, so an absent database
+    usually surfaces at the first search rather than here.
+    """
+    tools: list[BaseTool] = []
+    for corpus in CVLR_CORPORA:
+        try:
+            tools.extend(corpus.tools(PostgreSQLRAGDatabase(corpus.connection, model)))
+        except Exception as e:  # noqa: BLE001 — a search aid must never fail a run
+            _log.warning("CVLR corpus %s unavailable (%s); searching without it", corpus.name, e)
+    return tuple(tools)
 
 #: Where cached answers live. Shared across runs on purpose: the pin and §2.3 together mean an
 #: answer about CVLR is a fact about the pinned release, not about the run that asked.

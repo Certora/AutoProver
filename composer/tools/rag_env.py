@@ -9,14 +9,12 @@ application fork (the tool classes live in ``composer/tools/<corpus>_rag.py``, s
 ``composer.rag.db.KNOWLEDGE_BASES``, the same map the corpus importer
 (:mod:`composer.scripts.rag_import`) targets, so a corpus is imported and searched under one name.
 
-Two corpora are registered, and they are separate on purpose (``docs/cvlr-api-docs-plan.md``
-§4.1): ``cvlr_kb`` (:mod:`composer.tools.cvlr_rag`), the Solana Prover manual, and
-``cvlr_api_kb`` (:mod:`composer.tools.cvlr_api_rag`), the API generated from the crates. A
-retrieval hit carries no provenance, so which tool set answered is how an agent knows which of the
-two it is holding. Both halves of a corpus — a ``composer/tools/<corpus>_rag.py`` and
-its ``KNOWLEDGE_BASES`` connection — must land together: a half-registration (a tag whose tools
-module doesn't exist) would pass :func:`validate_rag_db` and then be swallowed by the degrade path
-below, which is exactly the confusion the two failure modes are separated to avoid.
+**No corpus is registered yet.** Both halves of the first one — a ``composer/tools/<corpus>_rag.py``
+and its ``KNOWLEDGE_BASES`` connection — land with the application that declares it, so until then
+every tag is unregistered and any wheel naming one fails at descriptor load. That is the intended
+resting state, not a gap: a half-registration (a tag whose tools module doesn't exist) would pass
+:func:`validate_rag_db` and then be swallowed by the degrade path below, which is exactly the
+confusion the two failure modes are separated to avoid.
 
 Two failure modes, deliberately opposite:
 
@@ -35,7 +33,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
-    from sentence_transformers import SentenceTransformer
 
     from composer.rag.db import ComposerRAGDB
 
@@ -46,27 +43,10 @@ _log = logging.getLogger(__name__)
 type _ToolsFactory = Callable[["ComposerRAGDB"], "Iterable[BaseTool]"]
 
 
-def _cvlr_tools(db: "ComposerRAGDB") -> "Iterable[BaseTool]":
-    """Deferred import: a corpus module is pulled in only when a descriptor selects that corpus,
-    so registering a tag costs nothing at import time."""
-    from composer.tools.cvlr_rag import get_tools
-
-    return get_tools(db)
-
-
-def _cvlr_api_tools(db: "ComposerRAGDB") -> "Iterable[BaseTool]":
-    from composer.tools.cvlr_api_rag import get_tools
-
-    return get_tools(db)
-
-
 #: Registered corpora, by tag. An entry is added together with the ``composer/tools/<corpus>_rag.py``
 #: it imports and the ``KNOWLEDGE_BASES`` connection it needs — all three at once, or the tag
 #: validates and then silently produces no tools.
-_FACTORIES: dict[str, _ToolsFactory] = {
-    "cvlr_kb": _cvlr_tools,
-    "cvlr_api_kb": _cvlr_api_tools,
-}
+_FACTORIES: dict[str, _ToolsFactory] = {}
 
 
 def validate_rag_db(rag_db: str | None) -> None:
@@ -88,26 +68,17 @@ def validate_rag_db(rag_db: str | None) -> None:
         )
 
 
-def build_rag_tools(
-    rag_db: str, model: "SentenceTransformer | None" = None
-) -> "tuple[BaseTool, ...]":
+def build_rag_tools(rag_db: str) -> "tuple[BaseTool, ...]":
     """Search tools for the declared corpus, or ``()`` if it can't be opened (best-effort — the
     author still has the static cheat-sheet). An unregistered tag raises; see the module docstring
-    for why the two are treated differently.
-
-    ``model`` is the embedding model to query with. It is worth passing whenever the caller already
-    has one: :func:`composer.rag.models.get_model` is not memoized, so omitting it loads a second
-    copy of a multi-hundred-megabyte transformer that does the same job as the one the run staged.
-    """
+    for why the two are treated differently."""
     validate_rag_db(rag_db)
     try:
         from composer.rag.db import KNOWLEDGE_BASES, PostgreSQLRAGDatabase
         from composer.rag.models import get_model
 
         # Lazy pool — opens on first search; the DB must already be populated.
-        db = PostgreSQLRAGDatabase(
-            KNOWLEDGE_BASES[rag_db], model if model is not None else get_model()
-        )
+        db = PostgreSQLRAGDatabase(KNOWLEDGE_BASES[rag_db], get_model())
         return tuple(_FACTORIES[rag_db](db))
     except Exception as e:  # noqa: BLE001 — RAG is optional; the cheat-sheet suffices
         _log.warning("RAG %r unavailable (%s); using the static cheat-sheet only", rag_db, e)

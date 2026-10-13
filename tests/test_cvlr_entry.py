@@ -222,10 +222,10 @@ def test_the_parser_takes_a_program_the_way_the_pipeline_splits_it():
     assert args.package is None
 
 
-def test_the_corpus_defaults_to_the_cvlr_knowledge_base():
+def test_the_corpora_are_on_by_default():
     """The expensive gate ran with no corpus on purpose — measuring the floor. A CLI run is not the
     floor, and an absent database degrades to no search tools rather than failing."""
-    assert entry.build_parser().parse_args(["/proj", "src/lib.rs:p"]).rag_corpus == "cvlr_kb"
+    assert entry.build_parser().parse_args(["/proj", "src/lib.rs:p"]).corpus is True
 
 
 def test_the_design_doc_is_optional():
@@ -285,7 +285,7 @@ def wiring(monkeypatch, tmp_path):
             bind_source_tools=lambda tools: {**kw, "source_tools": tools}
         ),
     )
-    monkeypatch.setattr(entry, "build_rag_tools", lambda tag, model: (f"tools:{tag}:{model}",))
+    monkeypatch.setattr(entry, "corpus_tools", lambda model: (f"search:{model}",))
     # The researcher is a compiled sub-agent graph over a real model provider; these tests are
     # about which tools reach which agent, so it records its inputs and stands in for itself.
     monkeypatch.setattr(
@@ -419,7 +419,7 @@ async def test_the_prover_is_cloud_only(project, monkeypatch, wiring):
 @pytest.mark.asyncio
 async def test_the_corpus_can_be_turned_off(project, monkeypatch, wiring):
     await _run(
-        [str(project), "programs/vault/src/lib.rs:vault", "--rag-corpus", "none"],
+        [str(project), "programs/vault/src/lib.rs:vault", "--no-corpus"],
         monkeypatch, wiring,
     )
 
@@ -440,8 +440,8 @@ async def test_both_corpora_reach_the_researcher_and_neither_reaches_the_author(
     rag_tools = wiring.env["rag_tools"]  # type: ignore[index]
     researcher = next(t for t in rag_tools if isinstance(t, tuple) and t[0] == "researcher")
     # The embedder the run already staged, not a second load of the same transformer.
-    assert researcher[1] == ("tools:cvlr_kb:staged-embedder", "tools:cvlr_api_kb:staged-embedder")
-    assert not any(isinstance(t, str) and t.startswith("tools:") for t in rag_tools), (
+    assert researcher[1] == ("search:staged-embedder",)
+    assert not any(isinstance(t, str) and t.startswith("search:") for t in rag_tools), (
         "the corpus search tools belong to the researcher, not to the author"
     )
 
@@ -451,7 +451,7 @@ async def test_turning_the_corpus_off_takes_the_researcher_with_it(project, monk
     # A researcher with no corpus can only answer from recall, which is the failure the corpus
     # exists to prevent — so `none` means no search rather than an unsourced sub-agent.
     await _run(
-        [str(project), "programs/vault/src/lib.rs:vault", "--rag-corpus", "none"],
+        [str(project), "programs/vault/src/lib.rs:vault", "--no-corpus"],
         monkeypatch, wiring,
     )
     rag_tools = wiring.env["rag_tools"]  # type: ignore[index]

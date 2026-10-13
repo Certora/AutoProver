@@ -18,8 +18,8 @@ factory — and differs from it in the four places a Rust/Solana run differs fro
   production one.
 * **The prover is cloud-only** (§3 item 1), so there is no ``--local`` to offer.
 
-The corpus is wired here and was not in the expensive gate: ``build_rag_tools`` degrades to no RAG
-when the database is not up, which is the documented behaviour for a search aid — so naming it
+The corpora are wired here and were not in the expensive gate: ``corpus_tools`` degrades to no
+search when a database is not up, which is the documented behaviour for a search aid — so naming it
 costs a developer without one nothing, and a developer with one gets §9's other defense against
 inventing CVLR helpers.
 """
@@ -48,7 +48,6 @@ from composer.pipeline.ecosystem import SOLANA
 from composer.pipeline.ptypes import DEFAULT_MAX_CPU_TASKS, CorePipelineResult
 from composer.pipeline.run_mode import RunMode
 from composer.prover.core import make_prover_options
-from composer.rag.db import KNOWLEDGE_BASES
 from composer.sandbox.config import SandboxConfig
 from composer.spec.context import SourceFields
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness
@@ -61,19 +60,13 @@ from composer.spec.source.source_env import build_layered_source_tools, build_so
 from composer.kb.kb_context import CVLR_BUNDLE
 from composer.kb.knowledge_base import kb_tools
 from composer.spec.agent_index import agent_index_config_from_env
-from composer.spec.cvlr_research import DEFAULT_CVLR_AGENT_INDEX_NS, cvlr_research_tools
-from composer.tools.rag_env import build_rag_tools
+from composer.spec.cvlr_research import (
+    DEFAULT_CVLR_AGENT_INDEX_NS,
+    corpus_tools,
+    cvlr_research_tools,
+)
 
 _log = logging.getLogger(__name__)
-
-#: The corpus this backend searches — the tag, not a connection string, since
-#: ``composer.rag.db.KNOWLEDGE_BASES`` is where a tag's connection lives and the importer targets
-#: the same name. ``none`` disables the search tools.
-DEFAULT_CORPUS = "cvlr_kb"
-
-#: The generated API corpus. Not a CLI choice and not a default among alternatives: it describes
-#: the CVLR releases ``composer.spec.cvlr.reference`` pins, so a run either has it or does not.
-CVLR_API_CORPUS = "cvlr_api_kb"
 
 #: The result a frontend renders.
 type CvlrPipelineResult = CorePipelineResult[GeneratedHarness]
@@ -94,7 +87,7 @@ class CvlrArgs(ExtendedModelOptions, Protocol):
     system_doc: str | None
     package: str | None
     withhold_crate: list[str]
-    rag_corpus: str
+    corpus: bool
     max_concurrent: int
     max_cpu_tasks: int
     cache_ns: str | None
@@ -148,13 +141,10 @@ def build_parser() -> argparse.ArgumentParser:
              "way to run without part of CVLR.",
     )
     parser.add_argument(
-        "--rag-corpus", default=DEFAULT_CORPUS,
-        choices=(*sorted(set(KNOWLEDGE_BASES) - {CVLR_API_CORPUS}), "none"),
-        help=f"CVLR *manual* corpus to search, or none to search nothing (default: "
-             f"{DEFAULT_CORPUS}). The generated API corpus ({CVLR_API_CORPUS}) is not a choice: "
-             f"it describes the CVLR releases this build pins, so there is only ever one of it. "
-             f"A corpus that is not installed degrades to no search tools rather than failing "
-             f"the run, and `none` also turns off the research sub-agent that reads them.",
+        "--no-corpus", dest="corpus", action="store_false",
+        help="Run without the CVLR corpora — the manual and the generated API reference — and "
+             "without the research sub-agent that reads them. A corpus that is not installed "
+             "already degrades to no search rather than failing the run.",
     )
     parser.add_argument("--max-concurrent", type=int, default=4, help="Max concurrent agents (default: 4)")
     parser.add_argument(
@@ -425,31 +415,22 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
             )
             # The staged embedding model, not a fresh one: ``get_model`` is not memoized, and a
             # second load is a second multi-hundred-megabyte transformer doing the same job.
-            # The recipes ride with the corpus tools rather than with the bundle's documents: the
-            # documents are a cached prefix every CVLR agent gets, and a tool is something an agent
-            # is given. Every agent that searches the corpus can also retrieve a recipe.
             # Two corpora, one agent. The search tools go to the researcher and not to the
             # author: an ordering between a generated reference and a hand-written manual is a
             # judgement, and making it once inside a sub-agent is cheaper and more consistent
             # than restating it in every prompt that could search (docs/cvlr-api-docs-plan.md §5).
             # The recipes are not corpus search and stay with the author, which is what the tool
             # list in its prompt describes.
-            corpus_tools = (
-                (
-                    build_rag_tools(args.rag_corpus, staged.embed_model)
-                    + build_rag_tools(CVLR_API_CORPUS, staged.embed_model)
-                )
-                if args.rag_corpus != "none" else ()
-            )
+            searches = corpus_tools(staged.embed_model) if args.corpus else ()
             researcher = cvlr_research_tools(
                 staged.llm_models,
-                corpus_tools,
+                searches,
                 staged.conns.indexed_store,
                 recursion_limit=args.recursion_limit,
                 index_config=agent_index_config_from_env(
                     user_ns(*DEFAULT_CVLR_AGENT_INDEX_NS, staged.root_key)
                 ),
-            ) if corpus_tools else ()
+            ) if searches else ()
             rag_tools = tuple(kb_tools(CVLR_BUNDLE)) + researcher
             env = PureServiceHost(
                 models=staged.llm_models, rag_tools=rag_tools, sort="existing"
