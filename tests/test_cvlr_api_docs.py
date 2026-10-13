@@ -409,11 +409,30 @@ def test_a_checkout_enters_as_a_patch_and_not_as_a_dependency(tmp_path):
     assert 'cvlr-asserts = { path = "/home/eric/src/cvlr/cvlr-asserts" }' in patch
 
 
-def test_a_probe_with_no_checkouts_has_no_patch_table(tmp_path):
+def test_a_probe_with_no_checkouts_patches_only_the_unpublished_releases(tmp_path):
+    """The corpus documents the release a run builds, and for an unpublished one that is its
+    commit, not whatever crates.io has under an older version."""
     from composer.spec.cvlr.reference import SOLANA
 
     _probe_crate(tmp_path, SOLANA, {})
-    assert "[patch" not in (tmp_path / "Cargo.toml").read_text()
+    _, patch = (tmp_path / "Cargo.toml").read_text().split("[patch.crates-io]")
+    assert {line.split(" = ")[0] for line in patch.strip().splitlines()} == {
+        crate.name for crate, _ in SOLANA.from_commits()
+    }
+    for crate, commit in SOLANA.from_commits():
+        assert commit.patch_line(crate.name) in patch
+
+
+def test_a_checkout_replaces_the_commit_for_the_crates_it_defines(tmp_path):
+    from composer.spec.cvlr.reference import SOLANA
+
+    root = Path("/home/eric/src/cvlr-solana")
+    checkout = LocalCheckout(root=root, crate_dir=root / "cvlr-solana", revision="v0.5.1")
+    _probe_crate(tmp_path, SOLANA, {"cvlr-solana": checkout})
+    _, patch = (tmp_path / "Cargo.toml").read_text().split("[patch.crates-io]")
+    assert 'cvlr-solana = { path = "/home/eric/src/cvlr-solana/cvlr-solana" }' in patch
+    assert "cvlr-spl-token = { git" in patch
+    assert patch.count("cvlr-solana = ") == 1
 
 
 def test_a_checkout_that_defines_no_cvlr_crate_is_refused(tmp_path):
@@ -467,6 +486,8 @@ def test_the_manifest_source_names_every_checkout_it_read():
     from composer.spec.cvlr.reference import SOLANA
 
     assert "checkout" not in manifest_source(SOLANA, {})
+    (_, commit), *_ = SOLANA.from_commits()
+    assert f"{commit.repo} @ {commit.rev[:12]}" in manifest_source(SOLANA, {})
     source = manifest_source(
         SOLANA, {"cvlr-asserts": _checkout("cvlr-asserts"), "cvlr-log": _checkout("cvlr-log")}
     )

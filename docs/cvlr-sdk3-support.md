@@ -36,8 +36,9 @@ All ten rules verified, with vacuity checked
 | `rule_effective_stake_never_exceeds_delegation` | The integer stake math (`Delegation::stake_v2`) verifies |
 | `rule_control` | Baseline |
 
-The Prover needs no change for SDK 3. The run used the current conf: Prover `master` and
-`-solanaTACSoundSignedMath` (U25, P11).
+Nothing the probe exercised needs a Prover change. The run used the current conf: Prover
+`master` and `-solanaTACSoundSignedMath` (U25, P11). One Prover change is needed outside what the
+probe covers: SPL Token CPI substitution does not recognize SDK 3's `invoke` (P1, below).
 
 Two things about stake `main` itself bear on the benchmark:
 
@@ -75,6 +76,21 @@ Released from the branch as it stands, SDK 3 would lose the docs the SDK 2.2 lin
 
 What AutoProver needs is a crates.io release, say `cvlr-solana` 0.6.0, built on SDK 3. Until then
 A5 is the stopgap.
+
+**Status: ported, unreleased.** Branch `eric/sdk3` of `Certora/cvlr-solana`, local only, has the
+port cherry-picked onto `main` (`30a8dbd`), with these resolutions:
+
+- `main`'s documentation is kept.
+- `fun_acc_infos_with_mem_layout` is dropped, as the port did. The `acc_infos_with_mem_layout!`
+  alias stays: it only calls `cvlr_deserialize_nondet_accounts()`, and existing specs use it.
+- The `rt` feature uses `solana-account` 3 instead of `solana-sdk`.
+- `invoke!` and `invoke_signed!` now expand to `solana_cpi::invoke_signed_unchecked`, through a
+  hidden re-export. The port had left them naming `solana_program`, which no SDK 3 program has.
+
+CI's checks pass on the branch: `fmt`, `clippy -D warnings`, `doc -D missing_docs`, and the tests.
+The stake probe verifies all ten rules against it
+([job](https://prover.certora.com/jobStatus/37632/357dc4fa69324cb6be0509048e0c7b9d?anonymousKey=f559cc790f6f81ec87f20767473839f283569fcc)).
+What remains is review, merge and release.
 
 ### Release lines
 
@@ -128,9 +144,50 @@ The port comments `cvlr-solana-stake` and `cvlr-spl-token` out of the workspace.
 - **`cvlr-solana-stake`** does not block the stake benchmark, which withholds it from that target
   anyway. It is still needed for any other program that calls into stake.
 
-Until C2 lands, an SDK 3 run has no program models. A4's reference set says so: its `models` is
-empty, and a token program on SDK 3 is refused as missing the token model, rather than given the
-SDK 2.2 one.
+Until C2 is released, an SDK 3 run has no program models. A1's reference set says so: its
+`models` is empty, and a token program on SDK 3 is refused as missing the token model, rather than
+given the SDK 2.2 one.
+
+**Status: ported on `eric/sdk3` (`9d6a9e3`), compiled but not yet verified against a program.**
+
+- `cvlr-spl-token` builds on `spl-token` 9. Its re-export of `spl_token::instruction`, which
+  `spl-token` 9 deprecates, is kept because the crate stands in for `spl_token`.
+- `cvlr-solana-stake` takes its types from `solana-stake-interface` 5, the line stake `main` uses.
+  It reads the clock account through `SysvarSerialize`, so its behaviour is unchanged.
+  - It still applies the program's former rent rule, `Meta::rent_exempt_reserve`. The current
+    program reads `Rent` instead. The crate docs list this as a known divergence.
+  - Interface 5 is a choice: `solana-stake-interface` had four majors on SDK 3 in 2026, and a
+    program on another major has different `StakeStateV2` types from the model's.
+
+The token model also depends on P1: until the Prover recognizes SDK 3's `invoke`, the mocks are
+never substituted.
+
+## Prover change
+
+### P1. CPI substitution matches only the monolith's `invoke`
+
+The Prover's CPI analysis, which replaces SPL Token CPIs with `cvlr-spl-token`'s mocks, finds
+calls by exact demangled name: `solana_program::program::invoke` and
+`solana_program::program::invoke_signed` (EVMVerifier `src/main/kotlin/sbf/analysis/cpis/CpisAnalysis.kt`,
+`INVOKE_FUNCTION_NAME` and `INVOKE_SIGNED_FUNCTION_NAME`, compared with `==`).
+
+On SDK 3 there is no `solana_program`, and a program calls `solana_cpi::invoke` and
+`solana_cpi::invoke_signed`. The analysis finds no invokes, so no CPI is substituted. Nothing
+reports this. With `-solanaCpiAnalysis` on, a rule crossing a token CPI would neither use the mock
+nor hit the analysis's "Unresolved CPI call" assertion. Such a rule could pass while checking
+nothing about the transfer.
+
+The fix is to recognize both spellings:
+
+- the names `CpisAnalysis.kt` compares calls against;
+- the `mockFor` names `CpisSubstitutionMap.kt` passes to `getCallInstructionToThis`.
+
+The stake probe does not cover this: stake makes no token CPIs, and the probe never turns CPI
+analysis on. A test needs an SDK 3 program that transfers tokens by CPI.
+
+The mangled names the substitution map carries for the `cvlr_spl_token` mocks are only metadata.
+Calls are made by demangled name, so a new `cvlr-spl-token` release does not need a Prover
+change.
 
 ## AutoProver changes
 
@@ -235,22 +292,33 @@ The scaffold rule:
 
 This is generation-independent. A 2.x program without `no-entrypoint` has the same problem.
 
-### A5. A development pin for the unreleased `cvlr-solana`, until C1
+### A5. Reading an unpublished release from its commit
 
-`_check_pins` refuses a CVLR crate declared as a git or path dependency, because its release
-cannot be read. Until C1 is on crates.io, the SDK 3 reference set needs a way to name the branch.
-Follow the `prover_version: master` precedent (U25):
+**Done, for the 2.x line.** Only the crates' owner can publish to crates.io, so a release can be
+cut and tagged well before it is published. Until it is, the reference set names the commit the
+release was cut from:
 
-- A `CrateRelease` variant for a git revision, pinned to a commit hash rather than a branch.
-- The scaffold writes it as a `[patch.crates-io]` entry. The project still declares
-  `cvlr-solana = "=0.6.0-dev"`, so `_check_pins`'s version reading holds.
-- A `TODO(cvlr-todo U26)`, recorded as a ship blocker in `cvlr-todo.md`: replace the git pin with
-  the C1 release before the Solana AutoProver ships.
+- **The reference set.** `CrateRelease.unpublished` is a `GitCommit`: a repository and a commit
+  hash, never a tag or a branch, since either can move.
+- **The project's dependency.** The project still declares the crates.io spelling (`=0.5.1`), so
+  `_check_pins` reads the version as it always has.
+- **The patch.** The scaffold adds one `[patch.crates-io.<crate>]` table per pinned crate the
+  project is given. Cargo applies a patch only when the commit's version meets the requirement,
+  so a wrong commit fails the build instead of standing in for the release.
+- **A project that already patches the crate** is checked against the resolved graph. The pinned
+  commit is satisfied; anything else is refused.
+- **The API-docs producer** patches its probe crate the same way. A `--crate-source` checkout
+  replaces the commit for the crates it defines. The manifest's source line records the commit.
+- **The ship blocker.** U26 in `cvlr-todo.md` is the exit: once the release is published, drop the
+  `GitCommit`s and nothing else changes.
 
-The patch target has to be readable inside the build sandbox. The probe vendored the checkout
-under the project and added `exclude = ["vendor-cvlr"]` to the workspace, so that the nested
-CVLR workspace did not become a member. A git source fetched by cargo's own warm step avoids both
-problems, which is why the pin is a git revision and not a vendored copy.
+`cvlr-solana` 0.5.1 is pinned this way (`2e53877`). A sandboxed scaffold, warm and SBF build of the
+SDK 2.2 stake snapshot, with the pin pointed at a local `file://` clone, resolved `cvlr-solana`
+0.5.1 from that commit. A second run of the scaffold changed nothing. The SDK 3 reference set
+(A1) pins the 0.6.0 release commit (`f054348`) the same way.
+
+**For a real run, the commits have to be on GitHub.** Today they are on local branches of
+`cvlr-solana`, with local tags.
 
 ### A6. Scope the API corpus to the run's generation
 
@@ -304,8 +372,8 @@ Little of it depends on the generation.
 
 ## Order
 
-1. **C1 request** to the CVLR owners: rebase the port onto `main`, then release it. Ask for the
-   C2 ports at the same time.
+1. **C1 + C2:** review and release `eric/sdk3`, which has both ports. **P1** goes to the Prover
+   team in parallel; nothing on the AutoProver side waits for it, but token programs on SDK 3 do.
 2. **A3**, with the vault check. It is independent of everything else, and unblocks the build.
 3. **A4.** Also independent, and testable on the probe worktree.
 4. **A1 + A2 + A5** together. A1 is the reference-set change, A2 the SDK 3 aliases it carries,

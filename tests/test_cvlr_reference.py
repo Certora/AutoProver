@@ -45,23 +45,22 @@ def test_the_dependency_block_carries_the_platform_too():
     # gate for a missing import rather than for anything about CVLR.
     block = ref.SOLANA.cargo_dependencies()
     assert 'cvlr = "=0.6.1"' in block
-    assert 'cvlr-solana = "=0.5.0"' in block
+    assert 'cvlr-solana = "=0.5.1"' in block
     assert 'solana-program = "2.2"' in block
 
 
 def test_the_solana_choice_records_the_platform_it_implies():
-    # cvlr-solana 0.5.0 requires solana-program 2.2, and each Solana generation has its own
+    # cvlr-solana 0.5.x requires solana-program 2.2, and each Solana generation has its own
     # AccountInfo. Changing the chain crate without changing this label pairs the wrong types.
-    assert ref.SOLANA.chain_crate == ref.CrateRelease("cvlr-solana", "0.5.0")
+    assert (ref.SOLANA.chain_crate.name, ref.SOLANA.chain_crate.version) == ("cvlr-solana", "0.5.1")
     assert "2.x" in ref.SOLANA.platform.label
 
 
 def test_the_spl_token_model_is_part_of_the_reference_set():
-    # On crates.io at 0.5.0, the same version as the chain crate it was split from. Leaving it
-    # off the reference set would keep the scaffold from pinning it.
-    assert ref.ProgramModel(
-        ref.CrateRelease("cvlr-spl-token", "0.5.0"), "the SPL token program"
-    ) in ref.SOLANA.models
+    # Released with the chain crate it was split from, at its version. Leaving it off the
+    # reference set would keep the scaffold from pinning it.
+    (token,) = [m for m in ref.SOLANA.models if m.program == "the SPL token program"]
+    assert (token.release.name, token.release.version) == ("cvlr-spl-token", "0.5.1")
     assert ref.SOLANA.unpublished == ()
 
 
@@ -130,3 +129,28 @@ def test_both_chains_share_one_core_release():
     # The core line is chain-independent; two chains drifting apart on it would mean one of them
     # is being compiled against a cvlr nobody chose.
     assert ref.SOLANA.core == ref.SOROBAN.core
+
+
+def test_the_crates_of_one_repository_are_read_from_one_commit():
+    """``cvlr-solana`` releases its three crates together. Patching them from two commits would
+    build a chain crate and a model that were never released together."""
+    commits = {commit for _, commit in ref.SOLANA.from_commits()}
+    assert {c.name for c, _ in ref.SOLANA.from_commits()} == {
+        "cvlr-solana", "cvlr-solana-stake", "cvlr-spl-token"
+    }
+    assert len(commits) == 1
+
+
+def test_a_commit_is_pinned_by_hash_and_never_by_a_name_that_can_move():
+    for _, commit in ref.SOLANA.from_commits():
+        assert len(commit.rev) == 40 and all(ch in "0123456789abcdef" for ch in commit.rev)
+
+
+def test_reading_a_release_from_its_commit_is_still_tracked_as_a_ship_blocker():
+    """This fails once nothing is read from a commit, so whoever publishes the release and drops
+    the commits also closes cvlr-todo U26."""
+    from pathlib import Path
+
+    todo = (Path(__file__).parent.parent / "docs" / "cvlr-todo.md").read_text()
+    assert ref.SOLANA.from_commits()
+    assert "**U26. Ship blocker: the Solana reference set reads `cvlr-solana` from a git commit.**" in todo

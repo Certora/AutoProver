@@ -69,7 +69,7 @@ from composer.rag.import_format import (
     RagManifest,
 )
 from composer.spec.cvlr.crates import CVLR_PREFIX
-from composer.spec.cvlr.reference import ChainReference, reference_for
+from composer.spec.cvlr.reference import ChainReference, GitCommit, reference_for
 from composer.tools.cvlr_api_rag import API_ROOT, SURFACE_HEADING
 
 _log = logging.getLogger(__name__)
@@ -138,10 +138,22 @@ class LocalCheckout:
         return f"{self.root} @ {self.revision}"
 
 
-#: Where one crate's documentation came from. A corpus mixes the two: a caller who points at the
-#: ``cvlr`` checkout still gets ``cvlr-solana`` from crates.io. It reaches the manifest's source
-#: line, the undocumented report and the log, and deliberately not the rows.
-type Origin = Published | LocalCheckout
+@dataclass(frozen=True)
+class ReleaseCommit:
+    """A release the reference set reads from the commit it was cut from, because crates.io does
+    not have it yet (:class:`~composer.spec.cvlr.reference.GitCommit`)."""
+
+    commit: GitCommit
+
+    def describe(self) -> str:
+        return f"{self.commit.repo} @ {self.commit.rev[:12]}"
+
+
+#: Where one crate's documentation came from. A corpus mixes them: a caller who points at the
+#: ``cvlr`` checkout still gets ``cvlr-solana`` from wherever the reference set reads it. It
+#: reaches the manifest's source line, the undocumented report and the log, and deliberately not
+#: the rows.
+type Origin = Published | LocalCheckout | ReleaseCommit
 
 
 @dataclass(frozen=True)
@@ -972,13 +984,16 @@ def _probe_crate(
     those two questions apart: the pin still says which crates resolve and at what version, and
     the patch only redirects where their source is read from. A checkout whose version has moved
     off the pin therefore fails here, at cargo, rather than producing a corpus quietly describing
-    a release this build does not support.
+    a release this build does not support. An unpublished release enters the same way, from its
+    commit, unless a checkout replaces it.
     """
     (root / "src").mkdir(parents=True, exist_ok=True)
     (root / "src" / "lib.rs").write_text("")
-    patches = "".join(
-        f'{name} = {{ path = "{source.crate_dir}" }}\n' for name, source in sorted(sources.items())
-    )
+    entries = {
+        crate.name: commit.patch_line(crate.name) for crate, commit in reference.from_commits()
+    }
+    entries |= {name: f'{name} = {{ path = "{source.crate_dir}" }}' for name, source in sources.items()}
+    patches = "".join(f"{entries[name]}\n" for name in sorted(entries))
     (root / "Cargo.toml").write_text(
         "[package]\n"
         f'name = "{PROBE_PACKAGE}"\n'
@@ -1050,8 +1065,11 @@ def document_family(
     if shutil.which("cargo") is None:
         raise RustdocUnavailable("cargo is not on PATH, so there is nothing to document.")
     _probe_crate(workdir, reference, sources)
+    commits = _commits(reference, sources)
+    # A commit cargo has not fetched is not in the registry cache, so resolving one needs the
+    # network. Everything after this reads what resolution fetched.
     subprocess.run(
-        ["cargo", "generate-lockfile", "-q", "--offline"],
+        ["cargo", "generate-lockfile", "-q", *(() if commits else ("--offline",))],
         cwd=workdir, capture_output=True, text=True, check=False,
     )
     packages = _family_packages(workdir)
@@ -1062,11 +1080,22 @@ def document_family(
         )
     crates: list[CrateDocs] = []
     for name, version in packages:
-        origin = sources.get(name, Published())
+        origin: Origin = sources.get(name) or commits.get(name) or Published()
         _log.info("rustdoc: %s %s from %s", name, version, origin.describe())
         crates.append(load(_rustdoc(workdir, name), name, version, origin))
     resolve_aliases(crates)
     return crates
+
+
+def _commits(
+    reference: ChainReference, sources: Mapping[str, LocalCheckout]
+) -> dict[str, ReleaseCommit]:
+    """The unpublished releases the probe reads from their commits: those no checkout replaces."""
+    return {
+        crate.name: ReleaseCommit(commit)
+        for crate, commit in reference.from_commits()
+        if crate.name not in sources
+    }
 
 
 def manifest_source(reference: ChainReference, sources: Mapping[str, LocalCheckout]) -> str:
@@ -1078,6 +1107,12 @@ def manifest_source(reference: ChainReference, sources: Mapping[str, LocalChecko
     """
     pinned = ", ".join(f"{c.name} {c.version}" for c in reference.crates())
     base = f"rustdoc over the CVLR family pinned at {pinned}"
+    if commits := _commits(reference, sources):
+        by_commit: dict[str, list[str]] = {}
+        for name, commit in sorted(commits.items()):
+            by_commit.setdefault(commit.describe(), []).append(name)
+        read = "; ".join(f"{where}: {', '.join(names)}" for where, names in by_commit.items())
+        base += f", reading these unpublished releases from their release commits — {read}"
     if not sources:
         return base
     by_checkout: dict[str, list[str]] = {}

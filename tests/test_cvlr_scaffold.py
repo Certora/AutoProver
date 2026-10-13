@@ -20,7 +20,9 @@ from composer.cargo.metadata import (
     CargoFailed,
     CargoMetadataJson,
     CratePackage,
+    GitSource,
     LibTarget,
+    PackageSource,
     MetadataFailure,
     RegistrySource,
     Workspace,
@@ -55,11 +57,14 @@ def _project(
     platform: str | None = "2.2.1",
     platform_crate: str = "solana-program",
     cvlr_resolved: dict[str, str] | None = None,
+    sources: dict[str, PackageSource | None] | None = None,
 ) -> tuple[Workspace, CratePackage]:
     """A project on disk plus the ``Workspace`` cargo would report for it.
 
     ``platform`` and ``cvlr_resolved`` stand in for the resolved graph, which is what the platform
     gate and the version-gap report read; the manifests on disk are what the planner parses.
+    ``sources`` gives a crate in ``cvlr_resolved`` a source other than crates.io; ``None`` is a
+    path in the workspace, as cargo reports one.
 
     ``platform_crate`` is a parameter because which crate carries ``AccountInfo`` is itself a fact
     about the generation: Solana's v3 split moved it out of ``solana-program`` and stopped
@@ -109,7 +114,9 @@ def _project(
                 manifest_path=root / "vendor" / name / "Cargo.toml",
                 lib=None,
                 features=(),
-                source=RegistrySource("registry+https://github.com/rust-lang/crates.io-index"),
+                source=(sources or {})[name]
+                if name in (sources or {})
+                else RegistrySource("registry+https://github.com/rust-lang/crates.io-index"),
             )
         )
     workspace = Workspace(
@@ -533,13 +540,13 @@ def test_a_reference_set_crate_the_project_does_not_name_is_not_a_refusal(tmp_pa
     # up, starting with the fresh one.
     manifest = STANDALONE.replace(
         "[dependencies]\nsolana-program",
-        '[dependencies]\ncvlr = "=0.6.1"\ncvlr-solana = "=0.5.0"\nsolana-program',
+        '[dependencies]\ncvlr = "=0.6.1"\ncvlr-solana = "=0.5.1"\nsolana-program',
     )
     plan, _ = _plan(
         tmp_path,
         manifest=manifest,
         workspace_manifest=manifest,
-        cvlr_resolved={"cvlr": "0.6.1", "cvlr-solana": "0.5.0"},
+        cvlr_resolved={"cvlr": "0.6.1", "cvlr-solana": "0.5.1"},
     )
     assert not plan.blocked
     (dependencies,) = [a for a in _additions(plan) if a.table == ("dependencies",)]
@@ -878,12 +885,13 @@ def test_an_anchor_version_the_fork_does_not_cover_blocks_the_whole_plan(tmp_pat
     assert not (tmp_path / "src" / "certora").exists()
 
 
-def test_a_non_anchor_target_gets_no_patch_section(tmp_path):
+def test_a_non_anchor_target_gets_no_fork_patch(tmp_path):
     workspace, package = _project(
         tmp_path, manifest=STANDALONE, workspace_manifest='[workspace]\nmembers = ["."]\n'
     )
     plan = plan_scaffold(workspace, package, SOLANA)
-    assert not [a for a in _additions(plan) if a.table[0] == "patch"]
+    patched = {a.table[-1] for a in _additions(plan) if a.table[0] == "patch"}
+    assert not patched & {"anchor-lang", "anchor-spl"}
     assert any("anchor-lang is not a dependency" in note for note in plan.satisfied)
 
 
@@ -902,3 +910,74 @@ def test_the_forks_planned_are_the_reference_chains_own(tmp_path):
     assert not [a for a in _additions(plan) if a.table[0] == "patch"]
     assert not [b for b in plan.blocked if "anchor-lang" in b.problem], plan.blocked
     assert not [note for note in plan.satisfied if "anchor" in note]
+
+
+# ---------------------------------------------------------------------------------------------
+# unpublished CVLR releases
+
+
+def _commit_patches(plan) -> dict[str, AddTable]:
+    return {
+        a.table[-1]: a
+        for a in _additions(plan)
+        if isinstance(a, AddTable) and a.table[:2] == ("patch", "crates-io")
+        and a.table[-1].startswith("cvlr")
+    }
+
+
+def test_an_unpublished_release_is_read_from_its_commit(tmp_path):
+    """The project declares the crates.io spelling, so the pin gate reads it like any release, and
+    the patch is what sends cargo to the commit."""
+    plan, _ = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
+    assert not plan.blocked
+    patches = _commit_patches(plan)
+    assert set(patches) == {c.name for c, _ in SOLANA.from_commits()}
+    for crate, commit in SOLANA.from_commits():
+        body = patches[crate.name].body
+        assert ("git", commit.repo) in body and ("rev", commit.rev) in body
+    tomllib.loads(apply_and_read(plan, tmp_path))
+
+
+def apply_and_read(plan, root: Path) -> str:
+    apply(plan, root)
+    return (root / "Cargo.toml").read_text()
+
+
+def test_a_withheld_model_gets_no_patch(tmp_path):
+    """Cargo warns, on every build, about a patch for a crate nothing depends on."""
+    workspace, package = _project(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
+    plan = plan_scaffold(workspace, package, SOLANA.withholding("cvlr-solana-stake"))
+    assert "cvlr-solana-stake" not in _commit_patches(plan)
+    assert "cvlr-solana" in _commit_patches(plan)
+
+
+def test_a_project_already_reading_the_commit_is_left_as_it_is(tmp_path):
+    kwargs = dict(manifest=STANDALONE, workspace_manifest=STANDALONE)
+    workspace, package = _project(tmp_path, **kwargs)
+    apply(plan_scaffold(workspace, package, SOLANA), tmp_path)
+
+    (crate, commit), *_ = SOLANA.from_commits()
+    at_commit = GitSource.parse(f"git+{commit.repo}?rev={commit.rev}#{commit.rev}")
+    workspace, package = _project(
+        tmp_path, **kwargs,
+        cvlr_resolved={crate.name: crate.version}, sources={crate.name: at_commit},
+    )
+    again = plan_scaffold(workspace, package, SOLANA)
+    assert not again.blocked
+    assert not _commit_patches(again)
+    assert any(f"already read from {commit.repo}" in note for note in again.satisfied)
+    assert (tmp_path / "Cargo.toml").read_text().count(f"[patch.crates-io.{crate.name}]") == 1
+
+
+def test_a_project_reading_the_crate_from_elsewhere_is_refused(tmp_path):
+    """Its entry is somebody's decision, and building on it verifies against a release this build
+    does not pin."""
+    (crate, commit), *_ = SOLANA.from_commits()
+    manifest = STANDALONE + f'\n[patch.crates-io]\n{crate.name} = {{ path = "../cvlr-solana" }}\n'
+    workspace, package = _project(
+        tmp_path, manifest=manifest, workspace_manifest=manifest,
+        cvlr_resolved={crate.name: crate.version}, sources={crate.name: None},
+    )
+    plan = plan_scaffold(workspace, package, SOLANA)
+    (blocked,) = [b for b in plan.blocked if crate.name in b.problem]
+    assert "a path in this workspace" in blocked.problem and commit.rev in blocked.problem

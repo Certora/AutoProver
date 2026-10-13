@@ -62,7 +62,7 @@ from composer.cargo.manifest import (
     TomlValue,
     read_manifest,
 )
-from composer.cargo.metadata import CratePackage, Workspace
+from composer.cargo.metadata import CratePackage, GitSource, Workspace
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.env_paths import PathDialect, dialect_for
 from composer.spec.cvlr import forks
@@ -780,6 +780,68 @@ def _plan_forks(workspace: Workspace, reference: ChainReference, plan: _PlanBuil
                 plan.add_satisfied(note)
 
 
+def _plan_unpublished(workspace: Workspace, reference: ChainReference, plan: _PlanBuilder) -> None:
+    """Add ``[patch.crates-io]`` entries reading the reference set's unpublished releases from the
+    commits they were cut from (:class:`~composer.spec.cvlr.reference.GitCommit`).
+
+    Only for the crates the project is given. A patch for a crate nothing depends on is one cargo
+    warns about on every build.
+
+    A crate the project's patch table already names is checked against the resolved graph rather
+    than redirected again: a second entry for one crate is a manifest cargo refuses. The pinned
+    commit is satisfied. So is a crate the graph does not resolve yet, because the graph can
+    predate the table. Any other source blocks, since replacing the project's entry would replace
+    somebody's decision, and building on it would verify against a release this build does not pin.
+    """
+    path = Path("Cargo.toml")
+    patched = forks.already_patched(plan.read(path))
+    preamble: tuple[TableItem, ...] = (
+        Comment("Unreleased CVLR crates, read from the commit each release was cut from until"),
+        Comment("crates.io has it."),
+    )
+    for crate in reference.scaffold_crates():
+        commit = crate.unpublished
+        if commit is None:
+            continue
+        if crate.name not in patched:
+            plan.add_manifest_edit(
+                path,
+                AddTable(("patch", "crates-io", crate.name), (*preamble, *commit.patch_body())),
+                f"read {crate.name} {crate.version} from {commit.repo} at {commit.rev[:12]} "
+                f"until it is on crates.io",
+            )
+            preamble = ()
+            continue
+        sources = [c.source for c in workspace.resolved(crate.name)]
+        if not sources:
+            plan.add_satisfied(
+                f"{crate.name} is already redirected in this workspace's [patch.crates-io] table"
+            )
+        elif all(
+            isinstance(s, GitSource) and s.is_from(commit.repo) and s.commit == commit.rev
+            for s in sources
+        ):
+            plan.add_satisfied(
+                f"{crate.name} {crate.version} is already read from {commit.repo} at "
+                f"{commit.rev[:12]}"
+            )
+        else:
+            elsewhere = ", ".join(
+                s.spelling if s is not None else "a path in this workspace" for s in sources
+            )
+            plan.add_blocked(
+                Blocked(
+                    path=path,
+                    problem=(
+                        f"this project's [patch.crates-io] table reads {crate.name} from "
+                        f"{elsewhere}, and this build pins {crate.name} {crate.version} at "
+                        f"{commit.repo} {commit.rev}"
+                    ),
+                    resolution=f"remove the [patch.crates-io] entry for {crate.name}",
+                )
+            )
+
+
 def _plan_gitignore(workspace: Workspace, plan: _PlanBuilder) -> None:
     path = workspace.root / ".gitignore"
     existing = path.read_text() if path.is_file() else None
@@ -816,6 +878,7 @@ def plan_scaffold(
     _plan_gitignore(workspace, plan)
     _plan_feature_forwarding(workspace, package, reference, plan)
     _plan_forks(workspace, reference, plan)
+    _plan_unpublished(workspace, reference, plan)
     _plan_package_manifest(workspace, package, relative, reference, plan, inherit=inherit)
     # Unconditional, both of them: the scaffold always writes the reference-set pin now, so the
     # reference set's platform generation always describes what will be built.

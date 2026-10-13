@@ -637,6 +637,16 @@ branch but not all released, so the conf also names `prover_version: master`. Th
 development and wrong for a shipped product. Remove `prover_version` once those fixes are in a
 release, and rerun the CVLR gate against the released Prover first, since P8's two-hour timeouts are
 what the release has to have fixed.
+
+**U26. Ship blocker: the Solana reference set reads `cvlr-solana` from a git commit.**
+`cvlr-solana` 0.5.1 (the documented API and the `rt` fix) is cut and tagged, but only the crates'
+owner can publish to crates.io, and it is not published yet. The reference set
+([reference.py](../composer/spec/cvlr/reference.py)) pins its three crates at that version and
+names the release commit (`GitCommit`), and the scaffold writes a `[patch.crates-io]` entry per
+crate so cargo reads them from the commit. A shipped product should not send every target to a git
+repository. Once the release is on crates.io, drop the `GitCommit`s; the pins and everything else
+stay. The SDK 3 line (`docs/cvlr-sdk3-support.md`, C1 and A5) uses the same mechanism and
+the same exit.
 ---
 
 ## Leads from the certora-cvlr-kb ledger

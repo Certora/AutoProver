@@ -19,7 +19,7 @@ release ships one CVL. That is why :mod:`composer.spec.cvlr.scaffold` refuses a 
 a different line rather than deferring to it.
 
 A chain crate is bound to one platform generation, and each generation has its own ``AccountInfo``.
-``cvlr-solana`` 0.4.x goes with ``solana-program`` 1.18, 0.5.0 with 2.2, and the unreleased 0.6
+``cvlr-solana`` 0.4.x goes with ``solana-program`` 1.18, 0.5.x with 2.2, and the unreleased 0.6
 line with the ``solana-*`` v3 crates. A helper from one generation cannot be passed an account
 from another, so :attr:`ChainReference.platform` is part of the reference, not a detail of one
 target.
@@ -37,11 +37,39 @@ from composer.spec.cvlr.forks import ANCHOR_FORK, FIXED_FORK, ForkOverride
 
 
 @dataclass(frozen=True)
+class GitCommit:
+    """The commit a release was cut from, read in place of crates.io until the release is published.
+
+    The project still declares the crates.io spelling (``=version``), so the pin gate reads it as
+    it reads any release. A ``[patch.crates-io]`` entry redirects where cargo fetches it. Cargo
+    applies a patch only when the patched crate's version meets the requirement, so a commit at
+    any other version fails the build instead of standing in for the release.
+
+    A commit, not a tag or a branch: either can be moved, and the reference set names what was
+    compiled.
+    """
+
+    repo: str
+    rev: str
+
+    def patch_body(self) -> tuple[tuple[str, str], ...]:
+        """The body of the crate's ``[patch.crates-io.<crate>]`` table."""
+        return (("git", self.repo), ("rev", self.rev))
+
+    def patch_line(self, crate: str) -> str:
+        """The crate's entry in a ``[patch.crates-io]`` table, as one line."""
+        return f'{crate} = {{ git = "{self.repo}", rev = "{self.rev}" }}'
+
+
+@dataclass(frozen=True)
 class CrateRelease:
-    """One crate at one published version."""
+    """One crate at one released version."""
 
     name: str
     version: str
+    #: Where cargo reads the release from while crates.io does not have it. ``None`` for a
+    #: release on crates.io.
+    unpublished: GitCommit | None = None
 
     def dependency_line(self) -> str:
         """A ``Cargo.toml`` dependency line. Exact (``=version``), not a caret range.
@@ -244,20 +272,37 @@ class ChainReference:
         lines += [c.dependency_line() for c in self.platform.sdk_crates]
         return "\n".join(lines)
 
+    def from_commits(self) -> tuple[tuple[CrateRelease, GitCommit], ...]:
+        """The crates in :meth:`crates` that cargo reads from a commit rather than crates.io."""
+        return tuple((c, c.unpublished) for c in self.crates() if c.unpublished is not None)
+
 
 #: The core line, shared by every chain. ``cvlr-spec`` (``cvlr_spec!``, ``cvlr_rules!``,
 #: ``cvlr_lemma!``) is a dependency of ``cvlr``, so a target names one crate and gets the
 #: parametric-rule layer with it.
 _CORE = CrateRelease("cvlr", "0.6.1")
 
+#: ``cvlr-solana`` 0.5.1: 0.5.0 with the public API documented and the ``rt`` feature fixed. The
+#: three crates of that repository are released together, at one version and from one commit.
+#:
+#: TODO(cvlr-todo U26): pin the crates.io release once it is published, and drop the commit.
+_CVLR_SOLANA_0_5_1 = GitCommit(
+    repo="https://github.com/Certora/cvlr-solana.git",
+    rev="2e53877a4d9ffb10aff5dc21829fd073f00333a6",
+)
+
 SOLANA = ChainReference(
     core=_CORE,
-    chain_crate=CrateRelease("cvlr-solana", "0.5.0"),
+    chain_crate=CrateRelease("cvlr-solana", "0.5.1", _CVLR_SOLANA_0_5_1),
     models=(
-        ProgramModel(CrateRelease("cvlr-solana-stake", "0.5.0"), "the stake program"),
+        ProgramModel(
+            CrateRelease("cvlr-solana-stake", "0.5.1", _CVLR_SOLANA_0_5_1), "the stake program"
+        ),
         # The SPL token account model: nondet token accounts and mints, and the token instruction
-        # summaries. On crates.io at 0.5.0, the same version as the chain crate it was split from.
-        ProgramModel(CrateRelease("cvlr-spl-token", "0.5.0"), "the SPL token program"),
+        # summaries. Split out of the chain crate, and released with it.
+        ProgramModel(
+            CrateRelease("cvlr-spl-token", "0.5.1", _CVLR_SOLANA_0_5_1), "the SPL token program"
+        ),
     ),
     forks=(ANCHOR_FORK, FIXED_FORK),
     platform=PlatformGeneration(
