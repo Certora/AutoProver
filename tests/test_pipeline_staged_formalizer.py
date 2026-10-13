@@ -74,6 +74,8 @@ class _Formalizer:
     def findings_evidence(self): return None
     async def fetch_verdicts(self, _inp): return {}
     async def finalize(self, _outcomes, _run): return None
+    async def source_edits(self, _outcomes, _run): return []
+    def build_environment(self): return None
 
 
 class _Staged(core.StagedFormalizer):
@@ -159,9 +161,10 @@ class _Source:
 
 
 class _Env:
-    """Only the model accessor the ranker's call site reaches for."""
+    """Only the model accessors the ranker's and the report's call sites reach for."""
 
     def llm_heavy(self): return None
+    def llm_lite(self): return None
 
 
 class _Run:
@@ -183,7 +186,9 @@ async def _drive[F: (_Staged, _Formalizer)](
     run_mode: RunMode = RunMode.COMPREHENSIVE,
     ranking=None,
     shared_unit=None,
+    reported: dict | None = None,
 ) -> F:
+    reported = {} if reported is None else reported
     async def fake_analysis(*_a, **_kw): return "analyzed"
 
     async def fake_extract_all(*_a, **_kw):
@@ -195,7 +200,9 @@ async def _drive[F: (_Staged, _Formalizer)](
             [],  # nothing failed extraction
         )
 
-    async def fake_report(*_a, **_kw): return object()
+    async def fake_report(*_a, **kw):
+        reported.update(kw)
+        return object()
 
     monkeypatch.setattr(core, "run_component_analysis", fake_analysis)
     monkeypatch.setattr(core, "_extract_all", fake_extract_all)
@@ -462,3 +469,22 @@ async def test_a_prioritized_run_does_not_hoist(monkeypatch):
         ranking=_ranking(("1: admin", "b"), [], order), shared_unit=_SHARED,
     )
     assert [c[0] for c in s.calls] == ["begin", "formalize:admin"]
+
+
+async def test_the_report_is_told_what_each_shared_property_stands_for_by_component_name(monkeypatch):
+    """The plan names units by their prompt label ("1: admin"); the report names components."""
+    async def fake_plan(**_kw):
+        return _plan((("1: admin", "solvent"), [("0: deposits", "solvent-slice"), ("1: admin", "solvent")]))
+
+    monkeypatch.setattr(core.hoist, "plan_hoist", fake_plan)
+    reported: dict = {}
+    await _drive(
+        monkeypatch, {"deposits": ["solvent-slice", "a"], "admin": ["solvent", "b"]}, _Staged(),
+        shared_unit=_SHARED, reported=reported,
+    )
+    (claim,) = reported["hoisted"]
+    assert claim.shared.key == ("protocol", "solvent")
+    assert claim.origin.kind == "chosen" and claim.origin.source == ("admin", "solvent")
+    assert [(a.component, a.title) for a in claim.absorbed] == [
+        ("deposits", "solvent-slice"), ("admin", "solvent")
+    ]

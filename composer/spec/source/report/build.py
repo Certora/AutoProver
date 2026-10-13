@@ -22,7 +22,8 @@ from composer.spec.source.report.grouping import (
     build_fallback_grouping, build_groups, call_grouping_llm, PropertyGroup
 )
 from composer.spec.source.report.schema import (
-    AutoProverReport, BuildEnvironment, DeprioritizedProperty, Finding, Outcome, PropertyKey,
+    AutoProverReport, BuildEnvironment, DeprioritizedProperty, Finding, HoistedClaim, Outcome,
+    PropertyKey,
     ReportBackend, RuleRef, SourceEditRecord,
     VerificationArtifactRecord,
 )
@@ -52,6 +53,7 @@ async def build_report[R: ReportableResult](
     fetch_evidence: EvidenceFetcher | None = None,
     run_mode: str | None = None,
     deprioritized: list[DeprioritizedProperty] | None = None,
+    hoisted: list[HoistedClaim] | None = None,
     active_plugins: list[str] | None = None,
     build_environment: BuildEnvironment | None = None,
 ) -> AutoProverReport:
@@ -139,6 +141,7 @@ async def build_report[R: ReportableResult](
         backend=backend,
         run_mode=run_mode,
         deprioritized=deprioritized or [],
+        hoisted=hoisted or [],
         active_plugins=active_plugins or [],
         contract_name=contract_name,
         run_timestamp_utc=datetime.now(timezone.utc).isoformat(),

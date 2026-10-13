@@ -353,9 +353,43 @@ class DeprioritizedProperty(PropertyFormulation):
     rationale: str
 
 
+class ComponentProperty(PropertyFormulation):
+    """A property, with the component that holds it."""
+    component: ComponentName
+
+    @property
+    def key(self) -> PropertyKey:
+        return (self.component, self.title)
+
+
+class ChosenShared(BaseModel):
+    """The shared property is one of the absorbed properties, exactly as its component extracted
+    it."""
+    kind: Literal["chosen"] = "chosen"
+    source: PropertyKey
+
+
+class SynthesizedShared(BaseModel):
+    """The shared property was written when the run hoisted it, as the conjunction of the absorbed
+    properties, because none of them stated the claim whole. No extractor proposed its wording."""
+    kind: Literal["synthesized"] = "synthesized"
+
+
+class HoistedClaim(BaseModel):
+    """A protocol-wide claim that several components stated, formalized once in the shared unit.
+
+    Without this a reader sees the shared property and nothing of where it came from: a
+    component's own property that was folded into it simply disappears from that component."""
+    #: The property formalized for the claim, in the shared unit, worded as it was formalized.
+    shared: ComponentProperty
+    origin: ChosenShared | SynthesizedShared = Field(discriminator="kind")
+    #: The components' properties it stands for, none of which was formalized separately.
+    absorbed: list[ComponentProperty]
+
+
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
-    schema_version: Literal["3.0", "3.1", "3.2", "3.3"] = "3.3"
+    schema_version: Literal["3.0", "3.1", "3.2", "3.3", "3.4"] = "3.4"
     backend: ReportBackend = "prover"
     #: How much of the inferred property set the run pursued ("comprehensive" or
     #: "prioritized"). Absent on reports written before the mode existed, which are all
@@ -363,6 +397,9 @@ class AutoProverReport(BaseModel):
     run_mode: str | None = None
     #: What a prioritized run set aside. Empty for a comprehensive run.
     deprioritized: list[DeprioritizedProperty] = Field(default_factory=list)
+    #: Protocol-wide claims moved into a shared unit, with what each stands for. Empty for a
+    #: backend without a shared unit, and on reports written before schema 3.4.
+    hoisted: list[HoistedClaim] = Field(default_factory=list)
     #: Plugins active for the run, as the manifest that feeds every per-component cache key.
     #: Without it a finished run leaves no record of which plugins participated, and whether an
     #: installed plugin was even loaded can only be inferred from the container image. Empty for

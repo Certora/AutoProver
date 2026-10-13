@@ -31,8 +31,8 @@ from composer.templates.loader import load_jinja_template
 from composer.spec.source.report.schema import (
     AutoProverReport, BuildEnvironment, ComponentName, CoverageReport, CurtailedComponent,
     Finding,
-    FormalizedProperty, GaveUpComponent, GroupStatus, Outcome, PropertyGroup, PropertyKey,
-    ReportBackend, RuleRef, RuleVerdict, SkippedClaim, SourceEditRecord,
+    FormalizedProperty, GaveUpComponent, GroupStatus, HoistedClaim, Outcome, PropertyGroup,
+    PropertyKey, ReportBackend, RuleRef, RuleVerdict, SkippedClaim, SourceEditRecord,
 )
 
 
@@ -219,6 +219,7 @@ class ReportTemplateParams(TypedDict):
     group_counts: list[ChipView]
     findings: list[FindingView]
     groups: list[GroupView]
+    hoisted: list[HoistedClaim]
     skipped: list[SkippedClaim]
     gave_up: list[GaveUpComponent]
     curtailed: list[CurtailedView]
@@ -430,6 +431,7 @@ def _build_context(report: AutoProverReport) -> ReportTemplateParams:
             _group_view(g, props_by_key, rules_by_ref, unit_labels, group_labels, edited_components)
             for g in report.groups
         ],
+        "hoisted": report.hoisted,
         "skipped": report.skipped,
         "gave_up": report.gave_up_components,
         "curtailed": [_curtailed_view(c) for c in report.curtailed_components],

@@ -239,9 +239,8 @@ stands for 8 properties and conservation's for 7.
 
 Open:
 
-- **The report does not yet say what was absorbed.** The pairs are logged and the plan is cached,
-  but `report.json` shows only the representative. A reader cannot see that Withdrawal's solvency
-  property was folded into the shared unit. This needs a report schema addition.
+- **The report does not yet say what was absorbed.** Resolved by schema 3.4; see the follow-up
+  below.
 - **The shared unit is large.** Fifteen properties over eighteen handlers. Step 5 measures whether
   it fits a unit's budget.
 
@@ -331,8 +330,12 @@ Rerun on the fixtures alone (one model call each, a dollar or two):
   72, every one a member chosen verbatim. An earlier run of the same call failed three times on one
   group, which is what `salvage` is for.
 
-The report still does not mark synthesized properties or say what was absorbed. That is now the
-main open item before a full run.
+**The report now says what was hoisted (schema 3.4).** `AutoProverReport.hoisted` lists one
+`HoistedClaim` per shared property: the property as formalized, its origin (`chosen`, naming the
+component property it came from, or `synthesized`), and every component property it stands for,
+under the component names the rest of the report uses. The HTML renders them in a
+"Protocol-wide properties" section, with each synthesized property marked "written when hoisted"
+above the properties it was written from, so a reviewer can check one against the other.
 
 ### 5. Formalize the shared unit, and measure
 

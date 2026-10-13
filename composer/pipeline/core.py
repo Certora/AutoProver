@@ -51,7 +51,7 @@ from composer.spec.system_model import (
     BaseApplication, FeatureUnit
 )
 from composer.spec.util import combine_digests
-from composer.spec.types import PropertyFormulation, ArtifactIdentifier, VerificationArtifact
+from composer.spec.types import ComponentName, PropertyFormulation, ArtifactIdentifier, VerificationArtifact
 from composer.spec.system_analysis import run_component_analysis
 from composer.spec.prioritize import (
     Candidate, PropertyRanking, Selection, build_candidates, rank_properties, select,
@@ -65,8 +65,8 @@ from composer.input.files import Document
 from composer.spec.source.report.build import build_report
 from composer.spec.source.report.collect import Abandoned, ReportComponentInput, Verdict, EvidenceFetcher, Formalized
 from composer.spec.source.report.schema import (
-    AutoProverReport, BuildEnvironment, DeprioritizedProperty, RuleName, ReportBackend,
-    SourceEditRecord,
+    AutoProverReport, BuildEnvironment, ChosenShared, ComponentProperty, DeprioritizedProperty,
+    HoistedClaim, RuleName, ReportBackend, SourceEditRecord, SynthesizedShared,
     VerificationArtifactRecord,
 )
 from composer.spec.source.report import build as report_build
@@ -680,13 +680,14 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
 
     # 3c. Protocol-wide properties stated by several units move into one shared unit, formalized
     #     first. After the pin is written, so a pinned replay hoists from the same raw extraction.
+    hoisted: list[HoistedClaim] = []
     if (
         (shared := backend.shared_unit) is not None
         and run.run_mode is RunMode.COMPREHENSIVE
         and len(batches) > 1
     ):
         with named_budget_or_nop("property_extraction"):
-            batches = await _hoist(
+            batches, hoisted = await _hoist(
                 backend.analysis_spec.properties_key, shared, prepared.main, batches, run,
                 phases["extraction"], extraction_plugins,
             )
@@ -877,6 +878,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 fetch_evidence=findings_evidence,
                 run_mode=run.run_mode.value,
                 deprioritized=deprioritized,
+                hoisted=hoisted,
                 active_plugins=plugin_manager.plugin_manifest,
                 build_environment=formalizer.build_environment(),
             )
@@ -1001,8 +1003,9 @@ async def _hoist[P: enum.Enum, H, Main, U: FeatureUnit](
     run: PipelineRun[P, H],
     phase: P,
     plugins: PluginPhaseManager[P, U],
-) -> list[_Batch[U]]:
-    """Move protocol-wide properties into ``shared``'s unit; the shared batch comes first.
+) -> tuple[list[_Batch[U]], list[HoistedClaim]]:
+    """Move protocol-wide properties into ``shared``'s unit; the shared batch comes first. Also
+    returns, for the report, what each shared property stands for.
 
     Units keep their own ``feat`` and ``feat_ctx``, so only ``FORMALIZATION_KEY`` forks for a unit
     that lost properties. A unit left with none is not formalized. A plan that will not validate
@@ -1028,12 +1031,12 @@ async def _hoist[P: enum.Enum, H, Main, U: FeatureUnit](
             )
         except ValueError as e:
             _log.warning("hoisting skipped; every unit keeps its properties: %s", e)
-            return batches
+            return batches, []
         await ctx.cache_put(plan)
 
     hoisted = hoist.apply_plan(candidates, plan)
     if not hoisted.shared:
-        return batches
+        return batches, []
     unit = shared.make(main)
     unit_ctx = await prop_ctx.child(
         COMPONENT_KEY(unit, plugins.plugin_digest),
@@ -1051,7 +1054,38 @@ async def _hoist[P: enum.Enum, H, Main, U: FeatureUnit](
         for b in batches
         if (props := hoisted.kept[b.feat.unit_index])
     ]
-    return [_Batch(unit, hoisted.shared, unit_ctx), *kept]
+    names = {c.label: b.feat.display_name for c, b in zip(candidates, batches)}
+    return [_Batch(unit, hoisted.shared, unit_ctx), *kept], _hoisted_claims(
+        candidates, plan, names, unit.display_name
+    )
+
+
+def _hoisted_claims(
+    candidates: Sequence[hoist.HoistCandidate],
+    plan: hoist.HoistPlan,
+    names: dict[ComponentName, ComponentName],
+    shared_unit: ComponentName,
+) -> list[HoistedClaim]:
+    """The report's account of ``plan``, with each unit's prompt label (``"3: Withdrawal"``)
+    replaced by the component name the rest of the report uses."""
+    by_key = {(c.label, p.title): p for c in candidates for p in c.props}
+    claims: list[HoistedClaim] = []
+    for g in plan.groups:
+        origin: ChosenShared | SynthesizedShared
+        match g.shared:
+            case hoist.Chosen(key=(label, title)):
+                origin, shared = ChosenShared(source=(names[label], title)), by_key[(label, title)]
+            case hoist.Synthesized(property=prop):
+                origin, shared = SynthesizedShared(), prop
+        claims.append(HoistedClaim(
+            shared=ComponentProperty(component=shared_unit, **shared.model_dump()),
+            origin=origin,
+            absorbed=[
+                ComponentProperty(component=names[label], **by_key[(label, title)].model_dump())
+                for label, title in g.members
+            ],
+        ))
+    return claims
 
 
 async def _pinned_batches[P: enum.Enum, H, Main, U: FeatureUnit](
