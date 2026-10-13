@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from composer.spec.cvlr.conf import PLATFORM_TOOLS_VERSION
+from composer.spec.cvlr.conf import HOST_RUST_TOOLCHAIN, PLATFORM_TOOLS_VERSION
 
 _SCRIPTS = Path(__file__).parent.parent / "scripts"
 _BASE_DOCKERFILE = _SCRIPTS / "Dockerfile"
@@ -39,6 +39,12 @@ def test_the_image_bakes_the_tools_version_every_build_uses():
     read-only — so the version the image holds is the version a run can use. A version the image
     does not hold fails every run."""
     assert _arg("SOLANA_TOOLS_VERSION") == PLATFORM_TOOLS_VERSION
+
+
+def test_the_image_bakes_the_host_toolchain_every_cargo_command_uses():
+    """The runtime user cannot write the image's rustup home, so a toolchain the image lacks cannot
+    be installed when a run asks for it, and cargo does not start."""
+    assert _arg("RUST_VERSION") == HOST_RUST_TOOLCHAIN
 
 
 def test_the_base_image_carries_no_rust_toolchain():

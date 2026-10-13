@@ -107,6 +107,15 @@ def conf_history(tunable: TunableConf) -> tuple[str, ...]:
 #: crates' lockfiles are full of them. The SDK 2.2 vault builds under v1.53 too.
 PLATFORM_TOOLS_VERSION = "v1.53"
 
+#: The host Rust toolchain every cargo command of a CVLR run uses, whatever the target's
+#: ``rust-toolchain.toml`` pins. The pin is for the project's own builds: host checks and Anza's SBF
+#: toolchain. The program this backend verifies is compiled by the platform tools' rustc whatever the
+#: pin says, so the host toolchain only runs ``cargo metadata``, ``cargo check`` and build scripts.
+#: Following the pin instead fails in the Solana image: the runtime user cannot write the image's
+#: rustup home, so a toolchain the image lacks cannot be installed, and cargo does not start.
+#: ``scripts/Dockerfile.solana`` installs this one.
+HOST_RUST_TOOLCHAIN = "1.90.0"
+
 
 #: The cargo feature that compiles the verification module into the program. The scaffold writes
 #: this name (``certora = ["no-entrypoint", "dep:cvlr", …]``), and preflight passes it to

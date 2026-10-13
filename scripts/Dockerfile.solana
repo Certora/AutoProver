@@ -15,6 +15,9 @@
 ARG BASE_IMAGE=autoprover-local:latest
 FROM --platform=linux/amd64 ${BASE_IMAGE} AS solana
 
+# Must agree with HOST_RUST_TOOLCHAIN in composer/spec/cvlr/conf.py, which every cargo command a CVLR
+# run makes uses in place of the target's own rust-toolchain.toml. The runtime user cannot install
+# another toolchain into this image. tests/test_cvlr_image.py fails the routine gate if they drift.
 ARG RUST_VERSION=1.90.0
 ARG CARGO_CERTORA_SBF_VERSION=0.3.5
 # Must agree with PLATFORM_TOOLS_VERSION in composer/spec/cvlr/conf.py, which is the version every

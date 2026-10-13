@@ -44,7 +44,7 @@ def _workspace(root: Path, *members: CratePackage) -> Workspace:
 def fake_cargo(monkeypatch):
     """``Workspace.read`` replaced by a canned answer, as in ``test_cvlr_scaffold``."""
     def install(workspace: Workspace):
-        async def fake(root, *, offline=False, features=(), timeout_s=0):
+        async def fake(root, *, offline=False, features=(), toolchain=None, timeout_s=0):
             return workspace
         monkeypatch.setattr(Workspace, "read", fake)
     return install

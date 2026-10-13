@@ -329,6 +329,35 @@ changed:
 - **Failing under v1.43 as well, so not caused by the bump:** `test_cvlr_dropped_writes`. Its
   Prover job ends `FAILED` with no results under both releases.
 
+### A3b. One host Rust toolchain, whatever the target pins
+
+**Done.** Every target we run pins its own Rust in `rust-toolchain.toml`:
+
+| Target | Pins |
+|---|---|
+| the vault | 1.89.0 |
+| stake, `sdk-2.2` snapshot | 1.86.0 |
+| stake `main` | 1.93.0 |
+| SolanaExamples | 1.79 |
+| klend | 1.74.1 |
+
+**None of them would run in the Solana image.** The image installs 1.90.0, its rustup home is
+root-owned, and the container runs as the host's UID. A pin the image lacks cannot be installed,
+so cargo does not start (`Permission denied` under `/opt/autoprove/rustup/tmp`). It never showed up
+on a development machine, where rustup installs whatever a project pins.
+
+**CVLR now runs every cargo command with `HOST_RUST_TOOLCHAIN` (1.90.0)**, through
+`RUSTUP_TOOLCHAIN`, which rustup reads ahead of the pin. That covers the workspace read, the warm
+step, the confined checks and builds (through the sandbox policy's environment), and the build
+script the Prover CLI reruns (through its command file).
+
+The pin configures the project's own builds. The verified program is compiled by the platform
+tools' rustc whatever the pin says. So the host toolchain only runs `cargo metadata`, `cargo check`
+and build scripts.
+
+The image drift test keeps the constant equal to the Dockerfile's `RUST_VERSION`. Other users of
+`CargoSession`, such as Crucible's Solana toolchain, still follow the project's pin.
+
 ### A4. Excluding the entrypoint when there is no `no-entrypoint`
 
 The scaffold writes `certora = ["no-entrypoint", …]` when the package declares `no-entrypoint`,

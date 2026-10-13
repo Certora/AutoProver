@@ -22,7 +22,7 @@ from composer.cargo.features import CargoFeature
 from composer.cargo.metadata import CargoUnavailable, CratePackage, Workspace
 from composer.cargo.session import CargoSession, CompileFailed, Compiled, WarmFailed
 from composer.sandbox.config import SandboxConfig
-from composer.spec.cvlr.conf import DEFAULT_FEATURE
+from composer.spec.cvlr.conf import DEFAULT_FEATURE, HOST_RUST_TOOLCHAIN
 from composer.spec.cvlr.crates import CvlrSources, Divergence
 from composer.spec.cvlr.scaffold import (
     ScaffoldBlocked,
@@ -143,7 +143,9 @@ async def select_package(
 
 async def _workspace_at(root: Path, *, features: tuple[CargoFeature, ...] = ()) -> Workspace:
     try:
-        workspace = await Workspace.read(root, features=features)
+        workspace = await Workspace.read(
+            root, features=features, toolchain=HOST_RUST_TOOLCHAIN
+        )
     except CargoUnavailable as exc:
         raise PreflightFailed(str(exc)) from exc
     if not isinstance(workspace, Workspace):
@@ -224,7 +226,9 @@ async def gate_workspace(
     The SBF build is a later gate, and running it here would cost more than the failure it would
     be catching.
     """
-    session = CargoSession(workdir=pre.workspace_root, sandbox=sandbox)
+    session = CargoSession(
+        workdir=pre.workspace_root, sandbox=sandbox, toolchain=HOST_RUST_TOOLCHAIN
+    )
     warmed = await session.warm()
     if isinstance(warmed, WarmFailed):
         raise PreflightFailed(

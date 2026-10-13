@@ -731,9 +731,11 @@ class _FakeCargo:
     def __init__(self, workspace: Workspace | MetadataFailure) -> None:
         self.workspace = workspace
         self.calls: list[tuple[Path, tuple[str, ...]]] = []
+        self.toolchains: list[str | None] = []
 
-    async def __call__(self, root, *, offline=False, features=(), timeout_s=0):
+    async def __call__(self, root, *, offline=False, features=(), toolchain=None, timeout_s=0):
         self.calls.append((Path(root), tuple(features)))
+        self.toolchains.append(toolchain)
         return self.workspace
 
 
@@ -764,6 +766,22 @@ async def test_preflight_resolves_the_verification_graph_from_the_packages_own_d
     assert fake.calls[0] == (tmp_path, ())
     assert fake.calls[-1] == (package.root, ("certora",))
     assert result.artifact_stem == "prog"
+
+
+@pytest.mark.asyncio
+async def test_preflight_reads_the_project_with_the_host_toolchain_not_its_pin(
+    tmp_path, fake_cargo
+):
+    """A project's rust-toolchain.toml names a toolchain the Solana image may not have, and its
+    runtime user cannot install one, so cargo would not start."""
+    from composer.spec.cvlr.conf import HOST_RUST_TOOLCHAIN
+
+    workspace, _ = _project(
+        tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE, package_dir="programs/prog"
+    )
+    fake = fake_cargo(workspace)
+    await preflight.prepare_workspace(tmp_path, reference=SOLANA, package="prog")
+    assert fake.toolchains and set(fake.toolchains) == {HOST_RUST_TOOLCHAIN}
 
 
 @pytest.mark.asyncio

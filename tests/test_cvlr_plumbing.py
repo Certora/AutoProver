@@ -1001,3 +1001,60 @@ def test_counterexamples_are_explained_on_the_authors_bound_model():
     bound = FakeListChatModel(responses=["x"])
     analysis.model.bind(bound)
     assert analysis.handler(state).llm is bound  # type: ignore[arg-type, attr-defined]
+
+
+# --------------------------------------------------------------------------------------------
+# the host toolchain
+
+
+_PRINT_TOOLCHAIN = ["-c", "import os; print(os.environ.get('RUSTUP_TOOLCHAIN', '-'))"]
+
+
+@pytest.mark.asyncio
+async def test_a_session_runs_every_command_with_its_toolchain(tmp_path):
+    """Whatever the project's rust-toolchain.toml pins: the Solana image cannot install it."""
+    session = replace(_unconfined(tmp_path), toolchain="1.90.0")
+    for run in (session.run_unconfined, session.run_confined):
+        result = await run(sys.executable, _PRINT_TOOLCHAIN, timeout_s=30)
+        assert result.stdout.strip() == "1.90.0"
+
+
+@pytest.mark.asyncio
+async def test_a_session_with_no_toolchain_follows_the_project(tmp_path, monkeypatch):
+    monkeypatch.delenv("RUSTUP_TOOLCHAIN", raising=False)
+    result = await _unconfined(tmp_path).run_unconfined(sys.executable, _PRINT_TOOLCHAIN, timeout_s=30)
+    assert result.stdout.strip() == "-"
+
+
+@pytest.mark.asyncio
+async def test_the_build_script_runs_its_command_with_the_sessions_toolchain(tmp_path, monkeypatch):
+    """certoraRun runs the script with its own environment, not the session's."""
+    monkeypatch.delenv("RUSTUP_TOOLCHAIN", raising=False)
+    session = replace(_unconfined(tmp_path), toolchain="1.90.0")
+    script = await write_build_script(session, _build(), into=_outside(tmp_path), name="unit")
+    command_file = build_command_path(script)
+    command = json.loads(command_file.read_text())
+    assert command["env"] == {"RUSTUP_TOOLCHAIN": "1.90.0"}
+    command["argv"] = [sys.executable, *_PRINT_TOOLCHAIN]
+    command_file.write_text(json.dumps(command))
+    ran = subprocess.run([str(script), "--json"], capture_output=True, text=True, check=True)
+    assert ran.stdout.strip() == "1.90.0"
+
+
+def test_reading_a_workspace_runs_cargo_with_the_toolchain_asked_for(tmp_path, monkeypatch):
+    seen: list[dict[str, str] | None] = []
+
+    def fake_run(args, **kwargs):
+        seen.append(kwargs.get("env"))
+        return subprocess.CompletedProcess(args, 1, "", "no manifest")
+
+    monkeypatch.setattr(metadata.shutil, "which", lambda _: "/usr/bin/cargo")
+    monkeypatch.setattr(metadata.subprocess, "run", fake_run)
+    for toolchain in ("1.90.0", None):
+        metadata._cargo_metadata(
+            tmp_path, offline=True, features=(), toolchain=toolchain, timeout_s=5
+        )
+    with_toolchain, without = seen
+    assert with_toolchain is not None and with_toolchain["RUSTUP_TOOLCHAIN"] == "1.90.0"
+    assert without is None
+

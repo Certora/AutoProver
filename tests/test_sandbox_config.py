@@ -126,6 +126,23 @@ def test_rust_build_policy_shape(tmp_path, monkeypatch):
     assert pol.cpu_seconds == 900
 
 
+def test_rust_build_policy_sets_fixed_variables_but_not_over_the_ones_it_owns(tmp_path):
+    """A caller can choose the toolchain. It cannot point the build at the shared cargo home or
+    the shared temp dir, which is what the private ones exist to prevent."""
+    policy = rust_build_policy(
+        tmp_path, env={"RUSTUP_TOOLCHAIN": "1.90.0", "CARGO_HOME": "/shared", "TMPDIR": "/tmp"}
+    )
+    assert policy.env_allowlist["RUSTUP_TOOLCHAIN"] == "1.90.0"
+    assert policy.env_allowlist["CARGO_HOME"] != "/shared"
+    assert policy.env_allowlist["TMPDIR"] != "/tmp"
+
+
+def test_a_configs_fixed_variables_reach_its_policy(tmp_path):
+    config = SandboxConfig(provider="launcher", env={"RUSTUP_TOOLCHAIN": "1.90.0"})
+    policy = config.build_policy(tmp_path)
+    assert policy is not None and policy.env_allowlist["RUSTUP_TOOLCHAIN"] == "1.90.0"
+
+
 def test_rust_build_policy_offline_sets_cargo_net_offline(tmp_path):
     """Default (offline) forces every cargo — incl. a nested one a checker spawns — offline via
     CARGO_NET_OFFLINE; opting out drops it.
