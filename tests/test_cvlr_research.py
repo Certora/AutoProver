@@ -21,10 +21,10 @@ from pathlib import Path
 import pytest
 
 from composer.rag.db import CVLR_API_DEFAULT_CONNECTION, CVLR_DEFAULT_CONNECTION, KNOWLEDGE_BASES
+from composer.spec import cvlr_research
 from composer.rag.types import ManualRef, ManualSectionHit
 from composer.cargo.doctest import Passed
 from composer.scripts.cvlr_api_docs import CrateDocs, ExampleGate, build_manifest, gated_sources
-from composer.tools import rag_env
 from composer.tools.cvlr_api_rag import API_ROOT, SURFACE_HEADING, get_tools
 from composer.ui.tool_display import CommonTools
 
@@ -32,26 +32,42 @@ _DATA = Path(__file__).parent / "data" / "cvlr_rustdoc"
 
 
 # ---------------------------------------------------------------------------------------------
-# registration
+# the corpora
 
 
 def test_the_two_corpora_do_not_share_a_connection():
     # A copy-pasted constant would silently merge them again, and the merge is invisible: both
     # tool sets would work, and answers would just quietly cross over.
     assert CVLR_DEFAULT_CONNECTION != CVLR_API_DEFAULT_CONNECTION
-    assert KNOWLEDGE_BASES["cvlr_kb"] != KNOWLEDGE_BASES["cvlr_api_kb"]
+    assert len({c.connection for c in cvlr_research.CVLR_CORPORA}) == len(cvlr_research.CVLR_CORPORA)
 
 
-def test_the_api_corpus_is_registered_in_both_halves():
-    """A tag needs a connection *and* a tools module.
+def test_the_api_manifest_tag_resolves_for_the_importer():
+    """``cvlr_api_docs`` emits a manifest tagged ``cvlr_api_kb``, and ``rag_import`` has no other way
+    to find the database it names. It must be the database the researcher searches."""
+    assert KNOWLEDGE_BASES["cvlr_api_kb"] == CVLR_API_DEFAULT_CONNECTION
 
-    ``rag_env``'s docstring is explicit about why: a half-registration passes ``validate_rag_db``
-    and is then swallowed by the degrade path, which produces a run with no search tools and no
-    error — exactly the confusion the two failure modes are separated to avoid.
-    """
-    rag_env.validate_rag_db("cvlr_api_kb")
-    assert "cvlr_api_kb" in KNOWLEDGE_BASES
-    assert "cvlr_api_kb" in rag_env._FACTORIES
+
+def test_both_corpora_bind_their_tools():
+    """The pools open lazily, so binding needs no database: this checks the wiring alone."""
+    names = {t.name for t in cvlr_research.corpus_tools(object(), pinned={})}  # type: ignore[arg-type]
+    assert names == {
+        "cvlr_manual_search", "cvlr_keyword_search", "cvlr_get_section",
+        "cvlr_api_search", "cvlr_api_lookup", "cvlr_api_surface",
+    }
+
+
+def test_a_corpus_that_cannot_be_opened_leaves_the_other(monkeypatch: pytest.MonkeyPatch):
+    real = cvlr_research.PostgreSQLRAGDatabase
+
+    def opener(connection: str, model: object):
+        if connection == CVLR_DEFAULT_CONNECTION:
+            raise RuntimeError("connection refused")
+        return real(connection, model)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(cvlr_research, "PostgreSQLRAGDatabase", opener)
+    names = {t.name for t in cvlr_research.corpus_tools(object(), pinned={})}  # type: ignore[arg-type]
+    assert names == {"cvlr_api_search", "cvlr_api_lookup", "cvlr_api_surface"}
 
 
 # ---------------------------------------------------------------------------------------------

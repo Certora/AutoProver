@@ -476,8 +476,9 @@ GitHub with an empty cargo home.
   `selected.reference.crates()`. A row for a crate the run pins at another version is dropped,
   and the search and lookup ask the database for extra rows to make up for it. A crate the run
   does not pin, such as the core's sub-crates, is shown at any version: the generations share it.
-- **The scope reaches the tools.** `build_rag_tools` takes the pins (`pinned=`) and hands them to
-  the corpus factory. `entry.py` passes the selected generation's. The manual corpus ignores them.
+- **The scope reaches the tools.** `cvlr_research.corpus_tools` takes the pins (`pinned=`) and
+  hands them to each corpus's factory. `entry.py` passes the selected generation's. The manual
+  corpus ignores them.
 - **The producer documents both generations** (A1). When a probe crate needs the network to
   resolve a pinned commit, it now fetches the whole graph before running rustdoc offline.
 - **Generated for real:** 362 sections. There is one surface per crate and version: the core once

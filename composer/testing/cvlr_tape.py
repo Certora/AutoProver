@@ -30,7 +30,7 @@ divergence rather than merely a symptom:
   What those calls do is keep the agent's own scratchpad; nothing downstream reads them and no
   assertion in the gate depends on them. So retaining them buys coverage of a tool this gate is not
   for, in exchange for carrying the one divergence that is documented to exhaust a lane.
-* **The corpus is the shipping one.** ``--rag-corpus`` is left at its default, so the author gets
+* **The corpus is the shipping one.** ``--no-corpus`` is not passed, so the author gets
   the research sub-agent over ``cvlr_kb`` and ``cvlr_api_kb``, the only CVLR reference it has
   (``docs/cvlr-api-docs-plan.md`` §8 step 7). A tape recorded under ``none`` smoke-tests an author
   holding nothing but the baseline facts and the recipes, which is not a configuration anybody runs.
@@ -61,12 +61,12 @@ from psycopg.errors import Error as PsycopgError
 from composer.diagnostics.timing import RunSummary
 from composer.io.multi_job import HandlerFactory
 from composer.layout import INTERNAL_DIR
-from composer.rag.db import KNOWLEDGE_BASES
 from composer.spec.cvlr.entry import (
-    CVLR_API_CORPUS, CvlrArgs, CvlrPipelineResult, build_parser, cvlr_executor,
+    CvlrArgs, CvlrPipelineResult, build_parser, cvlr_executor,
 )
 from composer.spec.cvlr.pipeline import WORK_DIR, CvlrPhase
 from composer.spec.cvlr.scaffold import HARNESS_DIR
+from composer.spec.cvlr_research import CVLR_CORPORA
 
 #: The tape's name: ``COMPOSER_RECORD_TAPE`` / ``COMPOSER_TEST_TAPE``, and the
 #: ``composer/testing/ui_harness_<name>.py`` it is written to and replayed from.
@@ -188,18 +188,18 @@ def missing_corpora(args: CvlrArgs) -> list[str]:
     but nothing was ingested into answers every search with nothing, which the author reads as the
     reference having no entry rather than as the corpus being absent.
     """
-    if args.rag_corpus == "none":
+    if not args.corpus:
         return []
     missing = []
-    for corpus in (args.rag_corpus, CVLR_API_CORPUS):
+    for corpus in CVLR_CORPORA:
         try:
-            with psycopg.connect(KNOWLEDGE_BASES[corpus]) as conn:
+            with psycopg.connect(corpus.connection) as conn:
                 row = conn.execute("SELECT count(*) FROM manual_sections").fetchone()
         except PsycopgError:
-            missing.append(corpus)
+            missing.append(corpus.name)
             continue
         if row is None or row[0] == 0:
-            missing.append(corpus)
+            missing.append(corpus.name)
     return missing
 
 async def run_scenario(

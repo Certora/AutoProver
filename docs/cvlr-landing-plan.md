@@ -467,7 +467,7 @@ been deleted, and the producer is now in this repo and in the test suite.
 **What justifies it is the same thing that justified #244.** The producer, the ingest and the tools
 together are a capability someone can run today: `populate_cvlr_rag.sh` builds the corpus, and the
 tools answer from it. `test_cvlr_api_docs.py` drives the producer over trimmed payloads from a real
-rustdoc run. The corpus half of `test_cvlr_research.py` drives the tools against a corpus the
+rustdoc run. The tool half of `test_cvlr_research.py` drives the tools against a corpus the
 producer built. The agent that holds those tools arrives in P6, so this PR has to land before P6.
 Nothing else orders it: its only imports from `composer/spec/cvlr/` are `crates.CVLR_PREFIX` and
 `reference.reference_for`, and both are on master already. Like K1, it can move anywhere ahead of P6.
@@ -478,11 +478,8 @@ would encode the author's belief about rustdoc's schema, and that belief is the 
 be wrong. A reviewer should read the test, not the fixtures. Decision 2 asks the same question about
 P9's tape, at a smaller scale.
 
-**Before it is cut**, the tag registration [decision 8](#decisions-to-make-before-starting) keeps
-out has to come out of the branch:
-the `cvlr_kb` and `cvlr_api_kb` `_FACTORIES` entries, `build_rag_tools(model=…)` and the
-`test_rag_env.py` changes. The `cvlr_kb` `KNOWLEDGE_BASES` entry goes with them, since nothing
-imports `cvlr_kb` through `rag_import` any more.
+Its one `KNOWLEDGE_BASES` entry is `cvlr_api_kb`, for `rag_import`; nothing registers a search
+factory for it ([decision 8](#decisions-to-make-before-starting)).
 
 The `PROVENANCE` stamp now has a reader, so it rides here. `populate_cvlr_rag.sh` prints it, which
 is what the deferral in *Dropped: naming the CVLR corpus by tag* was waiting for.
@@ -549,13 +546,9 @@ And it carries S4's give-up reason (`Abandoned`, `GaveUpComponent.reason`, `sche
 That one is not CVLR-specific: it changes every backend's report, EVM included, and P7's
 description has to say so rather than leave a reviewer to find it.
 
-`entry.py` is also where the two corpora are opened for the researcher. On the branch that is done
-by tag, through `build_rag_tools`, with a `--rag-corpus` flag whose only real choices are `cvlr_kb`
-and `none`. Under [decision 8](#decisions-to-make-before-starting) it becomes two
-`PostgreSQLRAGDatabase`s opened from `db.py`'s constants, and a boolean flag in place of
-`--rag-corpus`. That is a rewrite of about 30 lines, and it has to be made on the branch before P7
-is cut. The same goes for `cvlr_tape.missing_corpora` (P9), which looks the connections up through
-`KNOWLEDGE_BASES`.
+`entry.py` is also where the two corpora are opened for the researcher, through P6's
+`cvlr_research.corpus_tools`, and where `--no-corpus` turns them off
+([decision 8](#decisions-to-make-before-starting)).
 
 ### Order, and what is forced
 
@@ -784,14 +777,14 @@ by `ragbuild --corpus cvlr`, which names its connection constant directly, and n
 imported into it any more.
 
 **The second corpus does not change the argument.** The branch went the other way after this
-section was written. The API-docs work (2026-09-24 onwards) registered both corpora in both maps,
+section was written, and was reworked back on 2026-10-13. The API-docs work (2026-09-24 onwards) registered both corpora in both maps,
 gave `build_rag_tools` a `model` parameter so that two calls share one embedder, and made
 `--rag-corpus` choose among `KNOWLEDGE_BASES` minus the API corpus. In practice that is
 `{cvlr_kb, none}`, a boolean spelled as a tag. Two corpora make the in-tree case for a registry
 weaker, not stronger. The researcher needs both corpora or neither, so nothing ever picks one
 by name. A wheel's descriptor still could not declare two corpora, since `rag_db_default` is a
 single string, so registering both does not serve that case either. The branch code is therefore
-reworked, not landed: see C7b and P7, and [decision 8](#decisions-to-make-before-starting).
+reworked rather than landed: see [decision 8](#decisions-to-make-before-starting).
 
 `gen_docs.sh`'s `PROVENANCE` stamp was deferred to **C7b** until something read it. Its argument is
 the one [cvlr-todo.md](./cvlr-todo.md) U6 gives: three manifests built in three places can be three
@@ -802,9 +795,9 @@ wanted for CVL too, rule 4 sends it to master on its own. **R3**'s Dockerfile wr
 its docs stage and does not call `gen_docs.sh`, so it is unaffected either way, at the cost of the
 same `printf` living in two places.
 
-**P7** carries the consequence: no `--rag-corpus`, `cvlr_rag.get_tools()` and
-`cvlr_api_rag.get_tools()` on databases it opens itself, and its own handling for a corpus that will
-not open, since `build_rag_tools`'s degrade-to-no-RAG path is what it stops using.
+The consequence lands in **P6** and **P7**: `cvlr_research.corpus_tools` opens both databases from
+`db.py`'s constants and carries its own degrade-to-no-search for a corpus that will not open, and
+`entry.py` has `--no-corpus` rather than `--rag-corpus`.
 
 ---
 
@@ -965,23 +958,15 @@ as P3a/P3b because it is the better default, but it is the one place in the wave
 is a judgement rather than a consequence of the DAG, and a reviewer who would rather read 6,000
 lines of one story than two halves of it should say so before the split work is done.
 
-**8. Does the "no tag registry" drop survive a second corpus? Recommended: yes.** The branch
-assumed it did not. It registers `cvlr_kb` and `cvlr_api_kb` in both `KNOWLEDGE_BASES` and
-`rag_env._FACTORIES`, opens both through `build_rag_tools`, and keeps `--rag-corpus`. The case for
-keeping the drop is in
-[Dropped: naming the CVLR corpus by tag](#dropped-naming-the-cvlr-corpus-by-tag). In short, the
-only real choice the flag offers is on or off, and a wheel still could not declare two corpora.
-Keeping it costs a rework on the branch before C7b and P7 are cut:
-
-* `entry.py` opens two databases from constants.
-* `cvlr_tape.missing_corpora` does the same.
-* The `_FACTORIES` entries, `build_rag_tools(model=…)` and the `test_rag_env.py` changes are dropped.
-* `test_cvlr_research.py`'s registration test becomes a test that the API manifest's tag resolves
-  for `rag_import`.
-
-The alternative is to land the registry as the branch has it. That reverses a drop made on
-2026-09-18, and C7b's description would have to argue that case to the same reviewers. Either way,
-the decision has to be made before C7b is cut, because C7b is the first PR it shows up in.
+**8. ~~Does the "no tag registry" drop survive a second corpus?~~ Settled 2026-10-13: yes, and the
+branch is reworked to match.** The API-docs work had registered `cvlr_kb` and `cvlr_api_kb` in both
+`KNOWLEDGE_BASES` and `rag_env._FACTORIES`, opened both through `build_rag_tools`, and kept
+`--rag-corpus`. The case for the drop is in
+[Dropped: naming the CVLR corpus by tag](#dropped-naming-the-cvlr-corpus-by-tag): the flag's only
+real choice was on or off, and a wheel could not declare two corpora anyway. Now
+`cvlr_research.corpus_tools` opens both corpora by connection, `--no-corpus` replaces
+`--rag-corpus`, `cvlr_tape.missing_corpora` reads the same list, `rag_env.py` and its tests are
+master's, and `KNOWLEDGE_BASES` holds only `cvlr_api_kb`, for `rag_import`.
 
 ---
 
@@ -1013,10 +998,10 @@ already local to the functions that need them.
 | P3a2 | `composer/spec/cvlr/munge.py` *(hunks: the three swaps)* `composer/spec/cvlr/tree.py` *(hunks: swap ranks, `run_global_munges`)* `tests/test_cvlr_module_redirect.py` `tests/test_cvlr_import_swap.py` `tests/test_cvlr_derive_swap.py` *(split: less the `editor` case)* |
 | P3b | `composer/spec/cvlr/{state,harness,verify,rules}.py` `tests/test_cvlr_rules.py` `tests/test_cvlr_build_permit.py` `composer/prover/core.py` *(hunk: `UnanalyzedCexHandler`)* `composer/spec/cvlr/tuning.py` *(split: `SummaryDirective`, `TuningFiles`, appended to what P1 landed)* `composer/spec/cvlr/conf.py` *(hunks: `OptimisticLoop`, `CollectUnsatCore`)* `composer/spec/source/report_prover.py` *(hunks: `job_input`, `fetch_unsat_cores`)* `composer/cargo/symbols.py` `tests/test_cvlr_symbols.py` `tests/test_cvlr_tuning.py` `tests/test_cvlr_tree.py` *(split: the harness cases)* `tests/test_cvlr_plumbing.py` *(split: `_CaptureCallbacks`, `_RunAccounting`)* `tests/test_cvlr_anchor_reach.py` `tests/data/anchor_reach_probe.rs` |
 | P4 | `composer/spec/cvlr/{anchor_surface,example,guidance}.py` `tests/test_cvlr_anchor_surface.py` `tests/test_cvlr_worked_example.py` |
-| C7b | `composer/scripts/cvlr_api_docs.py` `composer/cargo/doctest.py` `composer/tools/cvlr_api_rag.py` `composer/tools/cvlr_rag.py` *(hunks: the docstrings)* `composer/scripts/init-db.sql` *(hunks: `cvlr_api_rag`)* `composer/rag/db.py` *(hunks: `CVLR_API_DEFAULT_CONNECTION`, the `cvlr_api_kb` entry and its comment — not `cvlr_kb`'s; decision 8)* `scripts/populate_cvlr_rag.sh` `scripts/gen_docs.sh` `.gitignore` `docs/rag-import-format.md` *(hunks, after the fix above)* `tests/test_cvlr_api_docs.py` `tests/data/cvlr_rustdoc/` `tests/test_cvlr_research.py` *(split: the corpus and tool cases, through `test_the_surface_heading_is_shared_by_the_producer_and_the_tool`)* `tests/test_cargo_doctest.py` `tests/test_cvlr_recipe_examples.py` |
+| C7b | `composer/scripts/cvlr_api_docs.py` `composer/cargo/doctest.py` `composer/tools/cvlr_api_rag.py` `composer/tools/cvlr_rag.py` *(hunks: the docstrings)* `composer/scripts/init-db.sql` *(hunks: `cvlr_api_rag`)* `composer/rag/db.py` *(hunks: `CVLR_API_DEFAULT_CONNECTION`, the `cvlr_api_kb` entry and its comment — not `cvlr_kb`'s; decision 8)* `scripts/populate_cvlr_rag.sh` `scripts/gen_docs.sh` `.gitignore` `docs/rag-import-format.md` *(hunks, after the fix above)* `tests/test_cvlr_api_docs.py` `tests/data/cvlr_rustdoc/` `tests/test_cvlr_research.py` *(split: the tool cases, through `test_the_surface_heading_is_shared_by_the_producer_and_the_tool`)* `tests/test_cargo_doctest.py` `tests/test_cvlr_recipe_examples.py` |
 | K1 | `composer/kb/kb_context.py` `composer/kb/knowledge_base.py` `composer/kb/resources/cvlr_baseline_facts.md` `composer/templates/kb_index.j2` `composer/templates/cvl_kb_index.j2` `tests/test_kb_bundle.py` `tests/test_cvlr_bundle.py` `composer/kb/resources/cvlr_recipes_index.yaml` `composer/kb/resources/recipes/cvlr-*.md` |
 | P5 | `composer/spec/cvlr/editor.py` `composer/cargo/depinfo.py` `composer/templates/cvlr_munge_editor_system.j2` `composer/templates/cvlr_munge_review_system.j2` `tests/test_cvlr_editor.py` `tests/test_cvlr_derive_swap.py` *(split: the `editor` case)* |
-| P6 | `composer/spec/cvlr/author.py` `composer/spec/cvlr_research.py` `composer/templates/cvlr_{feedback_prompt,property_generation_prompt,property_generation_system_prompt,property_judge_system_prompt,research,research_system_prompt}.j2` `composer/templates/cvlr_rag_tools.j2` *(new work: delete)* `composer/ui/tool_display.py` *(hunks: `cvlr_research` and the `cvlr_api_*` / manual entries)* `composer/spec/source/source_env.py` `template_manifest.json` `tests/test_cvlr_judge_input.py` `tests/test_cvlr_knowledge.py` `tests/test_cvlr_research.py` *(split: the researcher and prompt cases)* `tests/test_cvlr_rag.py` *(new work: drop the template case)* `tests/data/cvlr_judge/` |
+| P6 | `composer/spec/cvlr/author.py` `composer/spec/cvlr_research.py` `composer/templates/cvlr_{feedback_prompt,property_generation_prompt,property_generation_system_prompt,property_judge_system_prompt,research,research_system_prompt}.j2` `composer/templates/cvlr_rag_tools.j2` *(new work: delete)* `composer/ui/tool_display.py` *(hunks: `cvlr_research` and the `cvlr_api_*` / manual entries)* `composer/spec/source/source_env.py` `template_manifest.json` `tests/test_cvlr_judge_input.py` `tests/test_cvlr_knowledge.py` `tests/test_cvlr_research.py` *(split: the corpora, researcher and prompt cases)* `tests/test_cvlr_rag.py` *(new work: drop the template case)* `tests/data/cvlr_judge/` |
 | P7 | `composer/spec/source/report/{schema,collect,build}.py` *(hunks: `Abandoned`, `reason`, 3.2)* `composer/pipeline/core.py` *(hunks: `_abandonment`)* `tests/test_autoprove_report.py` *(hunks: the give-up cases)* `composer/spec/cvlr/pipeline.py` `composer/spec/cvlr/entry.py` *(the whole file, now including the parser P1 did not take)* the `cvlr-preflight` console script *(new work, still to write)* `composer/spec/cvlr/reference.py` *(hunks: `ProgramModel`, `withholding`)* `tests/test_cvlr_reference.py` *(hunks)* `composer/spec/source/report_prover.py` *(hunk: `make_run_link_fetcher`)* `composer/cli/console_solana.py` `composer/cli/tui_solana.py` `composer/spec/context.py` `composer/spec/services.py` `composer/ui/tool_display.py` *(the remainder)* `composer/rustapp/toolchain.py` `tests/test_cvlr_entry.py` `tests/test_cvlr_findings.py` `tests/test_cvlr_author.py` `tests/test_cvlr_munge.py` *(split: the three `CvlrFormalizer` cases)* `tests/test_cvlr_judge_round_cost.py` `tests/test_cvlr_plumbing.py` *(the remainder)* `tests/test_autoprove_integration.py` `.github/workflows/integration-tests.yml` |
 | P8 | `tests/test_cvlr_gate.py` `test_scenarios/solana_vault_idl/` `composer/diagnostics/budget.py` |
 | P9 | `composer/testing/` `scripts/record_cvlr_tape.sh` `tests/test_cvlr_tape.py` `tests/test_tape_setup.py` |

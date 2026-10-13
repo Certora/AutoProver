@@ -1835,9 +1835,10 @@ expensive gate still runs unconfined**, which item 3 also forbids; that is a sep
 the first confined run is where the offline registry and the private `CARGO_HOME` get tested for
 real.
 
-One thing wired here that the gate deliberately left out: the `cvlr_kb` corpus. `build_rag_tools`
-degrades to no RAG when the database is absent, which is the documented behaviour for a search aid,
-so `--rag-corpus` defaults to the corpus and costs a developer without one nothing.
+One thing wired here that the gate deliberately left out: the two CVLR corpora, behind the research
+sub-agent. `cvlr_research.corpus_tools` opens both by connection and degrades to no search when a
+database is absent, which is the documented behaviour for a search aid, so the corpora are on by
+default (`--no-corpus` turns them off) and cost a developer without them nothing.
 
 #### 7.8.2 What comparing it against the autoprove entry point found
 
@@ -1862,10 +1863,10 @@ construct a bare `ProverCallbacks()` now constructs that.
 manifest with `prover_usage`; `CvlrArtifactStore` did not, and the exit logger logged only
 `token_usage`. Both now match the autoprove side — which is only worth anything given the fix above.
 
-**The corpus was loading a second embedding model.** `build_rag_tools` called `get_model()`, which
-is not memoized, while `cli_pipeline` had already staged one — two copies of the same
-multi-hundred-megabyte transformer per run. It now takes the model as an optional argument, and the
-entry passes the staged one. (The Rust wheel path, `rustapp.build_default_env`, has the same shape
+**The corpus was loading a second embedding model.** It was opened through `build_rag_tools`, which
+calls `get_model()`, which is not memoized, while `cli_pipeline` had already staged one — two copies
+of the same multi-hundred-megabyte transformer per run. The CVLR entry now opens its corpora itself
+and passes the staged model. (The Rust wheel path, `rustapp.build_default_env`, has the same shape
 and was left alone.)
 
 **Two smaller alignments.** `autoprove_executor` is split from its parser so a caller holding an
