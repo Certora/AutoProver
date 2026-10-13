@@ -177,9 +177,9 @@ it is not.
 | **P3a1** The working copy, and edits to the program's functions | +1,204 | +889 | Materialize one working tree over the project and reuse it in the next run without a cold rebuild; record an edit to a function in the program (the five attribute kinds and extraction), replay it onto the tree, and diff it for the report. |
 | **P3a2** Structural swaps | +710 | +900 | Swap a derive, redirect a module to a substitute, and swap an import, gated on a unit's feature or, for a dependency's module, on the shared one. |
 | **P3b** A generated harness, and what its verdict means | +1,919 | +1,180 | Take a generated harness module through tuning, build and submission, and decide what the run proved — including when a rule passed for a reason that says nothing about the program. |
+| **K1** A knowledge bundle, its second instance, and the CVLR recipes | +1,220 | +170 | Hold two corpora behind one context mechanism instead of a fork of it, carry the run-invariant CVLR fact the author's prompt would otherwise restate, and index the recipes an author retrieves when stuck. |
 | **P4** The Anchor surface and the worked example | +715 | +720 | Read an Anchor program's account and handler surface, and render the worked example an author is shown against that program rather than against a generic one. |
 | **C7b** The CVLR API corpus | +1,580 | +700, and 19,751 of fixtures | Generate the CVLR API reference from the pinned crates' rustdoc, ingest it as `cvlr_api_kb`, and search it with three tools that say they outrank the manual. |
-| **K1** A knowledge bundle, and the second instance that justifies it | +1,100 | +170 | Hold two corpora behind one context mechanism instead of a fork of it, and carry the run-invariant CVLR fact the author's prompt would otherwise restate. |
 | **P5** The munge editor | +2,030 | +920 | Ask an agent to make a source modification, and have a second one accept or reject it. |
 | **P6** The authoring loop | ≈ +2,150 | ≈ +2,250 | Give the author a program and get CVLR rules, judged, with a research sub-agent over both CVLR corpora behind the author and the judge. |
 | **P7** The backend, the pipeline and the CLI | +1,300 | +1,600 | `console-solana` / `tui-solana` on a real target. |
@@ -407,6 +407,34 @@ CLI fails before uploading. `prepare_submission`'s docstring states this contrac
 each submission's local phase, a warm program-crate rebuild plus the upload, but not the cloud
 wait. The unsat-core diagnostic run takes the same permit.
 
+### K1 — A knowledge bundle, its second instance, and the CVLR recipes
+
+The old **S6**, **K1** and **K2** as one PR: `KnowledgeBundle`, a `KBRecipe` generic over its
+channel vocabulary, `@cache`s keyed by bundle, `kb_tools(bundle)`, a `kb_index.j2` that does not
+name CVL in prose a second corpus would inherit — *and* `CVLR_BUNDLE`, `CVLR_FACTS_BUNDLE`,
+`with_cvlr_context`, `with_cvlr_facts`, `composer/kb/resources/cvlr_baseline_facts.md` (the ~400
+lines of run-invariant CVLR and prover fact factored out of the author's system prompt), and the
+CVLR recipes: `cvlr_recipes_index.yaml` and its two bodies, K1 and K2.
+
+**The recipes are here because the bundle cannot be built without them.** `CVLR_BUNDLE` loads
+`cvlr_recipes_index.yaml`, and `test_cvlr_bundle.py` checks that every recipe it indexes exists.
+K2 was planned as content to land last, once the capture triage had settled what survived. The
+triage is done: two of 27 candidate entries survived, and those are the two bodies. What is left
+to add is whatever a run shows the author is missing, which needs no slice of its own.
+
+**This is the one PR that lands ahead of its reader on purpose, and the reason is the criterion
+itself.** S6 alone is a refactor with one instance, which is the shape the feedback is about: a
+reviewer is asked to judge a generalization against a future second user. S6 *with* `CVLR_BUNDLE` is
+the generalization and its second instance in the same diff — `test_kb_bundle.py` renders a bundle
+that is not CVL's, using the API the way production will. Its first reader in production code is
+P5's munge reviewer, through `with_cvlr_facts`; its first test reader is P4's worked-example test,
+which renders the bundle beside the example. That test is why K1 now lands ahead of P4.
+
+Splitting it the other way — bundle to master, CVLR content later — is rule 4's instinct and it is
+wrong here: it produces exactly the caller-less abstraction this re-partition exists to stop.
+Keeping them together also keeps the two review audiences in one diff, where the CVL owners can see
+what their eight agents' context mechanism is being generalized *for*.
+
 ### P4 — The Anchor surface and the worked example
 
 `composer/spec/cvlr/{anchor_surface,example,guidance}.py`.
@@ -419,9 +447,11 @@ usage is in the PR even though the agent that will be *shown* it is P6.
 
 ### C7b — The CVLR API corpus
 
-`composer/scripts/cvlr_api_docs.py` and `composer/tools/cvlr_api_rag.py`. The first is the producer:
+`composer/scripts/cvlr_api_docs.py`, `composer/cargo/doctest.py` and `composer/tools/cvlr_api_rag.py`.
+The first is the producer:
 it runs `cargo rustdoc --output-format json` over the releases `reference.py` pins and writes a
-manifest that `rag_import` ingests as `cvlr_api_kb`. The second holds the three tools over that
+manifest that `rag_import` ingests as `cvlr_api_kb`, with every compilable example in the crates'
+doc comments compiled against the pin by the second. The third holds the three tools over that
 corpus: `cvlr_api_search`, `cvlr_api_lookup` and `cvlr_api_surface`. The corpus registration comes
 with them: a role and schema in `init-db.sql`, `CVLR_API_DEFAULT_CONNECTION`, and a
 `KNOWLEDGE_BASES` entry. That entry is the one `rag_import` resolves a manifest's
@@ -448,38 +478,14 @@ would encode the author's belief about rustdoc's schema, and that belief is the 
 be wrong. A reviewer should read the test, not the fixtures. Decision 2 asks the same question about
 P9's tape, at a smaller scale.
 
-**Before it is cut**, three things on the branch need fixing:
-
-* `gen_docs.sh`'s `PROVENANCE` comment says the CVLR docs producer lives in `certora-cvlr-kb`.
-* `rag-import-format.md` §7's fourth item makes the same claim.
-* The tag registration [decision 8](#decisions-to-make-before-starting) keeps out has to come out:
-  the `cvlr_kb` and `cvlr_api_kb` `_FACTORIES` entries, `build_rag_tools(model=…)` and the
-  `test_rag_env.py` changes. The `cvlr_kb` `KNOWLEDGE_BASES` entry goes with them, since nothing
-  imports `cvlr_kb` through `rag_import` any more.
+**Before it is cut**, the tag registration [decision 8](#decisions-to-make-before-starting) keeps
+out has to come out of the branch:
+the `cvlr_kb` and `cvlr_api_kb` `_FACTORIES` entries, `build_rag_tools(model=…)` and the
+`test_rag_env.py` changes. The `cvlr_kb` `KNOWLEDGE_BASES` entry goes with them, since nothing
+imports `cvlr_kb` through `rag_import` any more.
 
 The `PROVENANCE` stamp now has a reader, so it rides here. `populate_cvlr_rag.sh` prints it, which
 is what the deferral in *Dropped: naming the CVLR corpus by tag* was waiting for.
-
-### K1 — A knowledge bundle, and the second instance that justifies it
-
-The old **S6** and **K1** as one PR: `KnowledgeBundle`, a `KBRecipe` generic over its channel
-vocabulary, `@cache`s keyed by bundle, `kb_tools(bundle)`, a `kb_index.j2` that does not name CVL in
-prose a second corpus would inherit — *and* `CVLR_BUNDLE`, `with_cvlr_context`, `cvlr_kb_tools()`
-and `composer/kb/resources/cvlr_baseline_facts.md`, the ~400 lines of run-invariant CVLR and prover
-fact factored out of the author's system prompt.
-
-**This is the one PR that lands ahead of its reader on purpose, and the reason is the criterion
-itself.** S6 alone is a refactor with one instance, which is the shape the feedback is about: a
-reviewer is asked to judge a generalization against a future second user. S6 *with* `CVLR_BUNDLE` is
-the generalization and its second instance in the same diff — `test_kb_bundle.py` renders a bundle
-that is not CVL's, using the API the way production will. What it lacks is an agent calling
-`with_cvlr_context`, and that is P5, immediately after.
-
-Splitting it the other way — bundle to master, CVLR content later — is rule 4's instinct and it is
-wrong here: it produces exactly the caller-less abstraction this re-partition exists to stop.
-Keeping them together also keeps the two review audiences in one diff, where the CVL owners can see
-what their eight agents' context mechanism is being generalized *for*. See
-[cvlr-knowledge-bundle-plan.md](./cvlr-knowledge-bundle-plan.md) §2.
 
 ### P5 — The munge editor
 
@@ -490,7 +496,8 @@ caller anywhere, and it is the editor: an edit to a file the `certora` feature g
 reach the build, and the editor is what needs to know. In the old plan `depinfo` was in **R1** and
 the editor was in **C3b**, wave 2 and wave 3.
 
-First reader of `with_cvlr_context` (K1), at both of its prompts.
+First production reader of K1's bundle: the reviewer gets `with_cvlr_facts`, the bundle without
+the recipe index, since it holds no tool to retrieve a recipe. The editor gets no bundle.
 
 ### P6 — The authoring loop
 
@@ -552,11 +559,11 @@ is cut. The same goes for `cvlr_tape.missing_corpora` (P9), which looks the conn
 
 ### Order, and what is forced
 
-**~~P1~~ → ~~P2~~ → P3a1 → P3a2 → P3b → P4 → C7b → K1 → P5 → P6 → P7**
+**~~P1~~ → ~~P2~~ → P3a1 → P3a2 → P3b → K1 → P4 → C7b → P5 → P6 → P7**
 
-P4, C7b and K1 are the three with slack. P4 needs `rust_source` (P3a1) and nothing after it. C7b
-needs only what P1 merged, and K1 needs nothing in `composer/spec/cvlr/` at all. Any of them can move
-earlier if that helps scheduling, as long as C7b and K1 stay ahead of P6. C7b could go first today.
+K1, P4 and C7b are the three with slack. K1 needs nothing in `composer/spec/cvlr/` at all, and C7b
+needs only what P1 merged, so either could go first today. P4 needs `rust_source` (P3a1) and K1,
+whose bundle its worked-example test renders. C7b has to be ahead of P6, which reads it.
 Everything else is the DAG.
 
 Checked rather than assumed: the only modules outside `composer/spec/cvlr/` that import from it are
@@ -580,15 +587,14 @@ four times over.
 
 ---
 
-## Wave 3 — gates, the container, recipes, documentation
+## Wave 3 — gates, the container, documentation
 
 | PR | Files | Size | What it is |
 |----|-------|------|------------|
 | **P8** The end-to-end gate and its scenario | 10 | +2,950 | `test_cvlr_gate.py` and the `solana_vault_idl` Anchor program it runs against. Real models, real cargo, real cloud jobs. Carries the change that makes `token_cost_budget` yield its counter instead of `None`: the gate is its only reader, and it reads it to report what the run cost rather than only to trip on the ceiling. **Still owes the corpus flip.** The gate passes `rag_tools=()`, and its comment calls a corpus-backed run "the comparison, not the baseline". With the mount gone, that floor is an author with no CVLR reference at all, which nobody ships ([cvlr-api-docs-plan.md](./cvlr-api-docs-plan.md) §8 step 7). |
-| **P9** The replay tape | 7 | +52,251 | The recorded run that lets the gate's shape be re-checked for the price of the builds and prover jobs alone. 51,000 of those lines are one generated file. It was re-recorded with the shipping corpus (`e8f807e0`), so recording and replay both need `cvlr_kb` and `cvlr_api_kb` populated. That needs C7b's producer, which is already on master by the time P9 is cut. |
-| **R3** A Solana container | 8 | +400 −60 | `scripts/Dockerfile.solana` and `scripts/docker-compose.solana.yml`: a second AutoProver container, `autoprove-solana`, carrying the Rust toolchain and the platform-tools release, layered on the base image — which stays lean and loses nothing but its docs stage, where the one-element `for name in cvl` loop becomes `cvl solana` so the shared postgres gets the manual the backend is for. The shared service body moves to `scripts/docker-compose.common.yml`, which the EVM and Solana services both extend. |
-| **K2** CVLR recipes | ~10 | +121 | `cvlr_recipes_index.yaml` and the recipe bodies, with channels taken from the author's tool list (`RULE` / `MOCK` / `EDIT` / `CONF` / `SKIP`) rather than from the capture taxonomy — a recipe naming an action the agent cannot take cannot be followed. Content for a mechanism K1 shipped and P6 reads, which is why it can land last: its content is whatever survives triage against K1's document, and that triage is work in `certora-cvlr-kb`. |
-| **D** Documentation | ~7 | ≈ +4,950 | What is left after each slice carries its own section: the capture plan, the upstream-defect record, the API-documentation plan, this document, and the to-do index. The API-documentation plan is mostly a record of the migration and its two runs. The design it argues for, two corpora and an ordering between them, is already stated in the docstrings of `db.py`, `cvlr_rag.py` and `cvlr_research.py`. |
+| **P9** The replay tape | 7 | +52,251 | The recorded run that lets the gate's shape be re-checked for the price of the builds and prover jobs alone. 51,000 of those lines are one generated file. **Not yet replayable as cut.** The tape was recorded under `--rag-corpus none`, and `e8f807e0` switched the replay to the shipping corpus without re-recording. Its seven `cvlr_research` calls now reach a researcher whose model turns would draw on the caller's lane ([cvlr-todo.md](./cvlr-todo.md) U27). It needs the researcher given a lane of its own, then a re-recording with both corpora populated, which needs C7b's producer. |
+| **R3** A Solana container | 8 | +400 −60 | `scripts/Dockerfile.solana` and `scripts/docker-compose.solana.yml`: a second AutoProver container, `autoprove-solana`, carrying the Rust toolchain and the platform-tools release, layered on the base image — which stays lean and loses nothing but its docs stage, where the one-element `for name in cvl` loop becomes `cvl solana` so the shared postgres gets the manual the backend is for. The shared service body moves to `scripts/docker-compose.common.yml`, which the EVM and Solana services both extend. The Solana image also generates the `cvlr_api_kb` manifest at build time, where it has a toolchain and the network, and `setup-db` ingests it beside the manual. The certora-cvlr-kb manifest discovery `setup-db` used to do is gone. |
+| **D** Documentation | ~6 | ≈ +3,600 | What is left after each slice carries its own section: the upstream-defect record, the knowledge plan, the API-documentation design note, this document, and the to-do index. The capture plan and the knowledge-bundle plan are not in it: both described the retired certora-cvlr-kb pipeline or a slicing this plan replaced, and were deleted from the branch on 2026-10-13. |
 
 **R3 still goes after P7.** `tests/test_cvlr_image.py` imports `composer.spec.cvlr.conf` to check that
 the image bakes `PLATFORM_TOOLS_VERSION`, which makes P1 the hard floor.
@@ -806,7 +812,7 @@ not open, since `build_rag_tools`'s degrade-to-no-RAG path is what it stops usin
 
 Wave 1's S2, now reverted on the branch. A `field_validator` on `GroupingResult.groups` accepted a
 string that parses as JSON and is either the group list or the whole `GroupingResult` wrapping it,
-returning anything else untouched for pydantic to reject. One Fluid run produced the second shape,
+returning anything else untouched for pydantic to reject. One run on the reference project produced the second shape,
 and the report fell back to a single `general` bucket.
 
 **Its one observation predates the more general fix.** `ae5cc069` was authored 2026-09-08;
@@ -858,7 +864,7 @@ both include.
 and the four `test_cvlr_knowledge.py` tests that covered the rendering. The condition is a caller
 that actually wants the explorer to read the library, which means resolving the crates before the
 source tools are built. Weigh it against giving the explorer `cvlr_research` instead. That is the
-direction [cvlr-api-docs-plan.md](./cvlr-api-docs-plan.md) §1.1 points, and it needs no mount.
+direction [cvlr-api-docs-plan.md](./cvlr-api-docs-plan.md) §1 points, and it needs no mount.
 
 ---
 
@@ -1007,15 +1013,14 @@ already local to the functions that need them.
 | P3a2 | `composer/spec/cvlr/munge.py` *(hunks: the three swaps)* `composer/spec/cvlr/tree.py` *(hunks: swap ranks, `run_global_munges`)* `tests/test_cvlr_module_redirect.py` `tests/test_cvlr_import_swap.py` `tests/test_cvlr_derive_swap.py` *(split: less the `editor` case)* |
 | P3b | `composer/spec/cvlr/{state,harness,verify,rules}.py` `tests/test_cvlr_rules.py` `tests/test_cvlr_build_permit.py` `composer/prover/core.py` *(hunk: `UnanalyzedCexHandler`)* `composer/spec/cvlr/tuning.py` *(split: `SummaryDirective`, `TuningFiles`, appended to what P1 landed)* `composer/spec/cvlr/conf.py` *(hunks: `OptimisticLoop`, `CollectUnsatCore`)* `composer/spec/source/report_prover.py` *(hunks: `job_input`, `fetch_unsat_cores`)* `composer/cargo/symbols.py` `tests/test_cvlr_symbols.py` `tests/test_cvlr_tuning.py` `tests/test_cvlr_tree.py` *(split: the harness cases)* `tests/test_cvlr_plumbing.py` *(split: `_CaptureCallbacks`, `_RunAccounting`)* `tests/test_cvlr_anchor_reach.py` `tests/data/anchor_reach_probe.rs` |
 | P4 | `composer/spec/cvlr/{anchor_surface,example,guidance}.py` `tests/test_cvlr_anchor_surface.py` `tests/test_cvlr_worked_example.py` |
-| C7b | `composer/scripts/cvlr_api_docs.py` `composer/tools/cvlr_api_rag.py` `composer/tools/cvlr_rag.py` *(hunks: the docstrings)* `composer/scripts/init-db.sql` *(hunks: `cvlr_api_rag`)* `composer/rag/db.py` *(hunks: `CVLR_API_DEFAULT_CONNECTION`, the `cvlr_api_kb` entry and its comment — not `cvlr_kb`'s; decision 8)* `scripts/populate_cvlr_rag.sh` `scripts/gen_docs.sh` `.gitignore` `docs/rag-import-format.md` *(hunks, after the fix above)* `tests/test_cvlr_api_docs.py` `tests/data/cvlr_rustdoc/` `tests/test_cvlr_research.py` *(split: the corpus and tool cases, through `test_the_surface_heading_is_shared_by_the_producer_and_the_tool`)* |
-| K1 | `composer/kb/kb_context.py` `composer/kb/knowledge_base.py` `composer/kb/resources/cvlr_baseline_facts.md` `composer/templates/kb_index.j2` `composer/templates/cvl_kb_index.j2` `tests/test_kb_bundle.py` `tests/test_cvlr_bundle.py` |
+| C7b | `composer/scripts/cvlr_api_docs.py` `composer/cargo/doctest.py` `composer/tools/cvlr_api_rag.py` `composer/tools/cvlr_rag.py` *(hunks: the docstrings)* `composer/scripts/init-db.sql` *(hunks: `cvlr_api_rag`)* `composer/rag/db.py` *(hunks: `CVLR_API_DEFAULT_CONNECTION`, the `cvlr_api_kb` entry and its comment — not `cvlr_kb`'s; decision 8)* `scripts/populate_cvlr_rag.sh` `scripts/gen_docs.sh` `.gitignore` `docs/rag-import-format.md` *(hunks, after the fix above)* `tests/test_cvlr_api_docs.py` `tests/data/cvlr_rustdoc/` `tests/test_cvlr_research.py` *(split: the corpus and tool cases, through `test_the_surface_heading_is_shared_by_the_producer_and_the_tool`)* `tests/test_cargo_doctest.py` `tests/test_cvlr_recipe_examples.py` |
+| K1 | `composer/kb/kb_context.py` `composer/kb/knowledge_base.py` `composer/kb/resources/cvlr_baseline_facts.md` `composer/templates/kb_index.j2` `composer/templates/cvl_kb_index.j2` `tests/test_kb_bundle.py` `tests/test_cvlr_bundle.py` `composer/kb/resources/cvlr_recipes_index.yaml` `composer/kb/resources/recipes/cvlr-*.md` |
 | P5 | `composer/spec/cvlr/editor.py` `composer/cargo/depinfo.py` `composer/templates/cvlr_munge_editor_system.j2` `composer/templates/cvlr_munge_review_system.j2` `tests/test_cvlr_editor.py` `tests/test_cvlr_derive_swap.py` *(split: the `editor` case)* |
 | P6 | `composer/spec/cvlr/author.py` `composer/spec/cvlr_research.py` `composer/templates/cvlr_{feedback_prompt,property_generation_prompt,property_generation_system_prompt,property_judge_system_prompt,research,research_system_prompt}.j2` `composer/templates/cvlr_rag_tools.j2` *(new work: delete)* `composer/ui/tool_display.py` *(hunks: `cvlr_research` and the `cvlr_api_*` / manual entries)* `composer/spec/source/source_env.py` `template_manifest.json` `tests/test_cvlr_judge_input.py` `tests/test_cvlr_knowledge.py` `tests/test_cvlr_research.py` *(split: the researcher and prompt cases)* `tests/test_cvlr_rag.py` *(new work: drop the template case)* `tests/data/cvlr_judge/` |
 | P7 | `composer/spec/source/report/{schema,collect,build}.py` *(hunks: `Abandoned`, `reason`, 3.2)* `composer/pipeline/core.py` *(hunks: `_abandonment`)* `tests/test_autoprove_report.py` *(hunks: the give-up cases)* `composer/spec/cvlr/pipeline.py` `composer/spec/cvlr/entry.py` *(the whole file, now including the parser P1 did not take)* the `cvlr-preflight` console script *(new work, still to write)* `composer/spec/cvlr/reference.py` *(hunks: `ProgramModel`, `withholding`)* `tests/test_cvlr_reference.py` *(hunks)* `composer/spec/source/report_prover.py` *(hunk: `make_run_link_fetcher`)* `composer/cli/console_solana.py` `composer/cli/tui_solana.py` `composer/spec/context.py` `composer/spec/services.py` `composer/ui/tool_display.py` *(the remainder)* `composer/rustapp/toolchain.py` `tests/test_cvlr_entry.py` `tests/test_cvlr_findings.py` `tests/test_cvlr_author.py` `tests/test_cvlr_munge.py` *(split: the three `CvlrFormalizer` cases)* `tests/test_cvlr_judge_round_cost.py` `tests/test_cvlr_plumbing.py` *(the remainder)* `tests/test_autoprove_integration.py` `.github/workflows/integration-tests.yml` |
 | P8 | `tests/test_cvlr_gate.py` `test_scenarios/solana_vault_idl/` `composer/diagnostics/budget.py` |
 | P9 | `composer/testing/` `scripts/record_cvlr_tape.sh` `tests/test_cvlr_tape.py` `tests/test_tape_setup.py` |
 | R3 | `scripts/Dockerfile` `scripts/Dockerfile.solana` `scripts/docker-compose.yml` `scripts/docker-compose.common.yml` `scripts/docker-compose.solana.yml` `scripts/autoprove-entrypoint.sh` `tests/test_cvlr_image.py` |
-| K2 | `composer/kb/resources/cvlr_recipes_index.yaml` `composer/kb/resources/recipes/cvlr-*.md` |
 | D | `docs/` *(less the sections that ride their slice, and less `rag-import-format.md`, which goes with C7b)* |
 
 ---
@@ -1045,5 +1050,5 @@ The first draft's names appear in commit messages, in two open PR bodies and in
 | **C7c** | dropped | `cvlr_kb` is now the manual alone; see *Dropped: the practice manifest*. |
 | **C8a**, **C8b** | P8, P9 | Renamed only. |
 | **R3** | unchanged | Still after the CLI exists. |
-| **K2** | unchanged | Content for a mechanism K1 ships and P6 reads. |
+| **K2** | K1 | The bundle loads the recipe index, so the index and its two bodies cannot land after it. |
 | **D** | distributed, then D | A document describing code is the clearest case rule 5 has. |

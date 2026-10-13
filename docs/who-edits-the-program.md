@@ -119,7 +119,7 @@ choose needs to be an agent.
 An editor conversation plus a judge pass per one-line attribute insert, inside a loop whose latency
 is [cvlr-backend-plan.md](cvlr-backend-plan.md) §9's top risk. Batching helps: one request carrying
 several munges, one cumulative diff, one review. Nobody has measured how many munges a unit actually
-needs — the corpus counts (klend-audit 43, kamino 13) are finished projects, not per unit per run.
+needs — the corpus counts (Project A 43, a vault project 13) are finished projects, not per unit per run.
 **That number decides §2.3 and §2.4 together, and it is cheap to collect from the runs we already
 make.**
 
@@ -654,7 +654,7 @@ Three places carry that, because no single one of them can:
 ### 11.3 Cross-crate, and the trade it cost
 
 A redirect inside a **local dependency** is allowed, and it is where the kind earns its keep — the
-five math modules fluid swaps live in `crates/library`, not in the program. It cannot be gated on
+five math modules the reference project swaps live in `crates/library`, not in the program. It cannot be gated on
 the recording unit's feature, because that feature is declared on the program's manifest and means
 nothing in another crate, so it is gated on the shared `certora` and the program forwards it:
 
@@ -868,8 +868,8 @@ separation is the author's to make:
   merely unproven, which is worse, and is a skip.
 
 Nothing about this is novel to us. Every CPI mock in the corpus drops the callee's effect —
-`stake-pool`'s `create_stake_account` assumes the account's shape and returns `Ok(())`, and Fluid's
-liquidity-layer stand-in reimplements the accounting it wants and nothing else. The corpus settled
+`stake-pool`'s `create_stake_account` assumes the account's shape and returns `Ok(())`, and the reference
+project's liquidity-layer stand-in reimplements the accounting it wants and nothing else. The corpus settled
 the question of whether a CPI stand-in is publishable before we asked it. What the backend adds is
 that the trade is written down in `why` and carried to the judge, which a hand-written harness has
 nowhere to put.

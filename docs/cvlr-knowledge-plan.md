@@ -2,307 +2,208 @@
 
 > Two pieces of work, one document, because the second only makes sense once the first is settled.
 >
-> **Part I** (work in **AutoProver**) re-homes the knowledge that
-> [certora-cvlr-kb](https://github.com/Certora/certora-cvlr-kb) produces. Its 83 abstracted entries
-> were routed to the `cvlr_kb` RAG corpus; that destination is wrong. The right one — a CVLR
-> knowledge bundle — did not exist when this was written, and has since landed (§13).
+> **Part I** (AutoProver, **done**) records where CVLR *practice* knowledge lives — a knowledge
+> bundle and a recipe set, written by hand — and the rules for drawing on verification engagements
+> when writing it. It replaces the capture pipeline that was going to generate that knowledge into
+> the `cvlr_kb` corpus, and the private repository that pipeline ran in, `certora-cvlr-kb`, which is
+> being retired.
 >
-> **Part II** (work in **certorag**) extends the property corpus — "what did we prove about a
+> **Part II** (**certorag**, not started) extends the property corpus — "what did we prove about a
 > component like this one" — from CVL/Solidity to CVLR/Solana. This is the one knowledge asset on
 > the CVL side with no CVLR counterpart at all.
 >
-> Prior art, all in this directory: [ecosystem-abstraction.md](./ecosystem-abstraction.md) (the
-> seam Part II rides on), [cvlr-capture-plan.md](./cvlr-capture-plan.md) (the procedure
-> certora-cvlr-kb implements — Part I revises its §7), [cvlr-backend-plan.md](./cvlr-backend-plan.md)
-> (the consumer), [cvlr-todo.md](./cvlr-todo.md) U6 (the repo-boundary question). How Part I
-> landed is planned in [cvlr-knowledge-bundle-plan.md](./cvlr-knowledge-bundle-plan.md). Paths below
-> are relative to the repository root unless marked `certorag:` or `certora-cvlr-kb:`.
+> Related: [cvlr-api-docs-plan.md](./cvlr-api-docs-plan.md) (the two CVLR corpora, which hold
+> reference material rather than practice), [ecosystem-abstraction.md](./ecosystem-abstraction.md)
+> (the seam Part II rides on), [cvlr-backend-plan.md](./cvlr-backend-plan.md) (the consumer),
+> [cvlr-todo.md](./cvlr-todo.md) (the leads the capture survey left, and U6). Paths below are
+> relative to the repository root unless marked `certorag:` or `certora-cvlr-kb:`.
 
 ---
 
 ## 0. The one-paragraph version
 
 On the CVL/Solidity side, exactly two knowledge assets are machine-derived: the CVL manual (sphinx →
-`ragbuild`) and certorag's property corpus. **Every piece of CVL *practice* knowledge — roughly
-1,500 lines of it — is hand-authored**, and it is delivered as an always-in-context bundle plus a
-trigger-indexed recipe set, not as retrievable corpus prose. The CVLR side already had the
-hand-authored equivalent, and more of it: a 754-line authoring system prompt, a written
-`backend_guidance`, starting env files, and a dedicated munge-editor prompt. So certora-cvlr-kb's
-entries are not missing a home — they are competing with an occupied one, and competing in the one
-delivery channel (`cvlr_kb` search) that is explicitly allowed to be absent at run time. What CVLR
-genuinely lacked was (a) a *reusable* knowledge bundle — its knowledge was trapped inside one
-agent's system prompt, unreachable by the other CVLR agents — and (b) any property corpus
-whatsoever.
-
-**Status (2026-09-29).** (a) has landed on `eric/solanaProver`: the bundle exists, the author's
-prompt was factored into it, each CVLR agent that can use it reads it, the judge cites it instead
-of restating it, and the first two recipes are in. What is left of Part I is more recipes (with
-their compile gate) and P1-5 in certora-cvlr-kb (§13). (b) is Part II and has not started.
+`ragbuild`) and certorag's property corpus. **Every piece of CVL *practice* knowledge is
+hand-authored**, and it is delivered as an always-in-context bundle plus a trigger-indexed recipe
+set, not as retrievable corpus prose. CVLR now has the same shape: `cvlr_baseline_facts.md` in a
+CVLR bundle, read by every CVLR agent that can act on it, and two recipes. Corpus search holds only
+reference material — the manual and the generated API — because a corpus is allowed to be absent
+at run time, and anything load-bearing must be in the prompt or the bundle. What CVLR still lacks
+is a property corpus, which is Part II.
 
 ---
 
-# PART I — Where CVLR practice knowledge belongs
+# PART I — Where CVLR practice knowledge belongs (done)
 
-## 1. The CVL knowledge stack, in full
+## 1. The CVL knowledge stack
 
-`composer/kb/kb_context.py` assembles four context
-documents and injects them into an agent's *initial prompt* via `with_cvl_context`, behind a
-`CacheMarker`:
+`composer/kb/kb_context.py` assembles the CVL context documents and injects them into an agent's
+*initial prompt* via `with_cvl_context`, behind a `CacheMarker`:
 
-| Layer | Artifact | Lines | Delivery |
-|---|---|---|---|
-| Baseline facts | `composer/kb/resources/cvl_baseline_facts.md` | 77 | always in context |
-| Topic KB — summarization | `composer/kb/resources/cvl_summarization_rag_draft.md` | 939 | always in context |
-| Topic KB — invariants | `composer/kb/resources/cvl_invariants_quantifiers.md` | 284 | always in context |
-| Situation recipes | `composer/kb/resources/cvl_recipes_index.yaml` + 22 files under `recipes/` | 194 index, ~600 bodies | **index** always in context; body on demand via `get_cvl_recipe` |
-| Backend guidance | `CERTORA_BACKEND_GUIDANCE` in `composer/spec/prop_inference.py` | inline | cached system prefix of property inference |
-| Reference manual | sphinx → `composer/scripts/ragbuild.py` → RAG db | — | searched (`cvl_manual_search`, `cvl_get_section`) |
-| Property corpus | `certorag` | — | analogy probe at property inference |
-
-Two facts about this stack drive everything in Part I.
-
-**Fact 1 — the practice layers are hand-authored, and nothing generates them.** `grep` for
-`cvl_baseline_facts` / `cvl_recipes_index` / `kb/resources` across the tree hits exactly two files:
-`kb_context.py` and `docs/cvlr-capture-plan.md`. `git log --follow` puts all of it in a single
-commit (`b6320237`, "Extended RAG, CVL context"). There is no extraction pipeline, no ranking, no
-ledger, no compile gate. An expert wrote it.
-
-**Fact 2 — the bundle is shared across the whole CVL agent family.** `with_cvl_context` has seven
-call sites: `spec/cvl_research.py`, `spec/feedback.py`, `spec/cex_remediation.py` (twice),
-`spec/natspec/author.py`, `spec/source/author.py`, `spec/source/summarizer.py` — plus an eighth in
-`certorag:certorag/corpus/spec_pipeline.py`. One authoring investment, eight consumers. The
-knowledge is a *bundle*, deliberately separable from any one agent's prompt.
-
-## 2. What the CVLR side already has
-
-All on `eric/solanaProver`. This is the set this plan started from, before W1–W3. Where a row has
-changed since, the change is noted in it.
-
-| Artifact | Size | What it covers |
+| Layer | Artifact | Delivery |
 |---|---|---|
-| `composer/templates/cvlr_property_generation_system_prompt.j2` | **754 lines** | Output shape; what a rule is; `clog!` legibility; assumptions and vacuity; nondeterminism as the quantifier; the prover configuration; loop bounds and the `optimistic_loop` ladder; asking the code editor; Anchor entry points and generated names; arithmetic and why panic-freedom is off the menu; the nonlinear-arithmetic ladder; when a rule should fail. *Now 423 lines: W2 moved 388 of them into the bundle (§4.2).* |
-| `composer/spec/cvlr/guidance.py` — `SOLANA_CVLR_GUIDANCE` | ~80 lines | `backend_guidance` for property inference |
-| `composer/spec/cvlr/envs/` | 154 + 108 lines | `cvlr_inlining_core.txt`, `cvlr_summaries_core.txt` + anchor variants: the **starting layers** of the two tuning files. Vendored from upstream when this plan was written; maintained in AutoProver since `67038c6d`, which deleted the refresh script and the `PROVENANCE` stamp. |
-| `composer/spec/cvlr/tuning.py` | — | How each tuning file is layered: the starting layers, a per-unit layer, and generated composites that are never hand-edited. `summarize_for_prover` writes the author's points-to summaries into the unit layer. |
-| `composer/spec/cvlr/env_paths.py` | — | Rewrites the starting layers into the target's platform-generation path spelling when a composite is built |
-| `composer/templates/cvlr_munge_editor_system.j2` / `_review_system.j2` | 208 / 103 | The munge editor's charter and its reviewer |
-| `composer/templates/cvlr_property_judge_system_prompt.j2` | — | The feedback judge |
-| `composer/tools/cvlr_rag.py` + `KNOWLEDGE_BASES["cvlr_kb"]` | — | Search over `cvlr_kb`, which since `f1da5e4f` is the Solana manual and nothing else |
-| `composer/tools/cvlr_api_rag.py` + `KNOWLEDGE_BASES["cvlr_api_kb"]` | — | *Added since:* the CVLR API, generated from the crates' rustdoc (`docs/cvlr-api-docs-plan.md`) |
-| `composer/spec/cvlr_research.py` | — | *Added since:* a research sub-agent that holds the search tools for both corpora and is told which one wins. The author and the judge get `cvlr_research`, not the search tools. |
+| Baseline facts | `composer/kb/resources/cvl_baseline_facts.md` | always in context |
+| Topic KBs | `cvl_summarization_rag_draft.md`, `cvl_invariants_quantifiers.md` | always in context |
+| Situation recipes | `cvl_recipes_index.yaml` + bodies under `recipes/` | **index** always in context; body on demand via `get_cvl_recipe` |
+| Backend guidance | `CERTORA_BACKEND_GUIDANCE` in `composer/spec/prop_inference.py` | cached system prefix of property inference |
+| Reference manual | sphinx → `composer/scripts/ragbuild.py` → RAG db | searched |
+| Property corpus | `certorag` | analogy probe at property inference |
 
-Three properties of this set matter.
+Two facts about it decided Part I. The practice layers were written by an expert in one commit
+(`b6320237`); there is no extraction pipeline behind them, no ranking and no ledger. And the
+bundle is shared: `with_cvl_context` has seven call sites in this repo and an eighth in certorag.
+The knowledge is a *bundle*, deliberately separable from any one agent's prompt.
 
-**The guidance is written from the manual, not from the engagements.** `guidance.py`'s own docstring:
-*"Everything asserted here is traceable: the Methodology chapter of the published Solana manual… Where
-the manual and the surveyed projects disagree, the manual wins — see `docs/cvlr-capture-plan.md` §4.5
-for why recurrence alone is the wrong axis."* The backend has already decided that recurrence across
-engagements does not outrank the manual.
+## 2. The CVLR side, as built
 
-**The starting env files are data, not advice.** The interesting problem there is not *which*
-symbols to inline — that list was upstream's, and is now maintained in place under
-`composer/spec/cvlr/envs/` — it is that a directive written in the monolith's spelling
-(`solana_program::account_info::AccountInfo`) silently matches nothing on `solana-program` 2.2+,
-which is what `env_paths.py` exists to fix. The author's only write into the tuning files is a
-points-to summary in its own unit layer (`summarize_for_prover`). It cannot add inlining directives,
-and it never edits the starting layers.
+| Artifact | What it covers |
+|---|---|
+| `composer/kb/resources/cvlr_baseline_facts.md` (396 lines) | What a rule is; assumptions and vacuity; nondeterminism as the quantifier; loop bounds and the `optimistic_loop` ladder; arithmetic and why panic-freedom is off the menu; the nonlinear ladder; `clog!` legibility; when the Prover cannot follow the program's own data. Factored out of the author's system prompt (§4.2). |
+| `composer/kb/resources/cvlr_recipes_index.yaml` + `recipes/cvlr-k*.md` | Two recipes, K1 and K2 (§4.3) |
+| `composer/templates/cvlr_property_generation_system_prompt.j2` (479 lines) | The author's own contract: output shape, its tools, the publish stamps, the workflow, Anchor entry points and the worked example |
+| `composer/spec/cvlr/guidance.py` — `SOLANA_CVLR_GUIDANCE` | `backend_guidance` for property inference, written from the manual (§4.4) |
+| `composer/spec/cvlr/envs/` | The starting layers of the two tuning files, maintained in AutoProver since `596ec0de` |
+| `composer/templates/cvlr_munge_editor_system.j2` / `_review_system.j2` | The munge editor's charter and its reviewer |
+| `composer/tools/cvlr_rag.py`, `composer/tools/cvlr_api_rag.py`, `composer/spec/cvlr_research.py` | Reference, not practice: the manual (`cvlr_kb`), the API generated from the crates (`cvlr_api_kb`), and the research sub-agent the author and the judge reach both through ([cvlr-api-docs-plan.md](./cvlr-api-docs-plan.md)) |
 
-**The `cvlr_kb` corpus is explicitly degradable.** `composer/tools/rag_env.py`:
-*"A search aid must never fail a run over that, so `build_rag_tools` degrades to **no RAG** (the
-static cheat-sheet in the prompt suffices)."* Knowledge that lives only in `cvlr_kb` is knowledge
-that may simply not be present for a run. Anything load-bearing must be in the prompt or the bundle.
+## 3. Why the capture pipeline's entries did not become corpus content
 
-## 3. The consequence for the 83 entries
+The capture survey of the Solana engagements produced 83 abstracted entries: 27 `rule_shape`, 18
+`prover_flag`, 17 `conf_key`, 11 `env_inlining`, 6 `munge_form`, 3 `env_summaries`. They were
+headed for `cvlr_kb`. Against the CVLR side as it already stood:
 
-`certora-cvlr-kb:entries/` holds 27 `rule_shape`, 18 `prover_flag`, 17 `conf_key`, 11 `env_inlining`,
-6 `munge_form`, 3 `env_summaries`. Against §2:
+- **`prover_flag`, `conf_key` (35)** — outside the author's action space. `adjust_prover_config`
+  moves the loop bound and `optimistic_loop`, nothing else, and the run's actual conf is injected
+  into the prompt verbatim.
+- **`env_inlining`, `env_summaries` (14)** — restating the starting layers. The real problem there is
+  path spelling across platform generations, which `env_paths.py` owns. One exception became lead L1
+  in `cvlr-todo.md`.
+- **`munge_form` (6)** — owned by the munge editor's charter.
+- **`rule_shape` (27)** — the only candidates, triaged into recipes (§4.3).
 
-| Kind | n | Status |
-|---|---|---|
-| `prover_flag` | 18 | **Outside the action space.** `adjust_prover_config` moves exactly two settings: the loop bound and `optimistic_loop`. (The nonlinear solver portfolio was the second setting when this plan was written. `ec01e2f9` removed it, and `3f3c84c1` added `optimistic_loop`, with the prompt warning that it changes what a verdict means.) The prompt says the rest are "not yours" and to `record_skip` with something actionable instead. And the run's actual conf is injected verbatim — `{{ conf \| tojson(indent=2) }}` — so "read it rather than assuming a default" is already the instruction. |
-| `conf_key` | 17 | Same, plus: several are `status: quarantined` on a ledger question the prompt has already answered. `conf-key-setting-optimistic-loop-explicitly-in-every-conf` is quarantined "because the pass reports that this changes what the program means" — which is precisely the prompt's position, stated as policy. |
-| `env_inlining` | 11 | **Mostly restating the starting layers.** The real problem is the path spelling, which `env_paths.py` owns and no entry addresses. Inlining directives are not in the authoring agent's action space. One exception, noticed late: "force-inline `AccountInfo::realloc`" is **not** in `cvlr_inlining_core.txt`, as this row used to say. `cvlr_summaries_core.txt` summarizes it as an opaque call instead. That is a question about our starting layer, not an entry to retire, and it is lead L1 in `cvlr-todo.md`. |
-| `env_summaries` | 3 | **Restating the starting layers**, like `env_inlining`. Summaries are in the author's action space (`summarize_for_prover` writes them into the unit's own layer, §2), so these were triaged rather than retired unread. All three are already lines in `cvlr_summaries_core.txt`: `^memhavoc_c$`, the soft-float intrinsics (`^__muldf3$` and its siblings), and `std::io::error::Error::new`. No author will need to write them. |
-| `munge_form` | 6 | A dedicated munge editor agent with a 208-line charter already owns this. |
-| `rule_shape` | 27 | **The survivors** — and even these overlap "What a rule is", "Assumptions are the sharpest tool", "Nondeterminism is the quantifier". |
-
-This is not a failure of the capture pipeline. It is what happens when a machine pass and an expert
-work the same seam in parallel and the expert finishes first. The pipeline's *evidence* is still
-good; its *entries* are the wrong output shape.
+It is what happens when a machine pass and an expert work the same seam in parallel and the expert
+finishes first. The evidence was good; the entries were the wrong output shape.
 
 ## 4. Decision
 
-**The deliverable of certora-cvlr-kb is the ledger and the evidence behind it, not the entries.** The
-CVL precedent is unambiguous: a human writes the practice knowledge. certora-cvlr-kb's value is
-telling that human what to write about and what the field actually does, with recurrence counts and
-divergences attached. Entries become evidence hung off questions rather than rows in a corpus.
+**CVLR practice knowledge is written by hand and delivered through the bundle and the recipes, not
+through corpus search.** Corpus search holds reference material only: `cvlr_kb` is the Solana
+manual and nothing else (`26f7b9c9`), and `cvlr_api_kb` is the API generated from the crates. The
+capture pipeline's lasting output is evidence for whoever writes the knowledge, and what survives of
+it is the list of leads in `cvlr-todo.md`.
 
-Four work items follow, three in AutoProver and one in certora-cvlr-kb.
+### 4.1 The bundle (`with_cvlr_context`)
 
-### 4.1 W1 — Factor a CVLR knowledge bundle (`with_cvlr_context`)
+`kb_context.py` was generalized into a `KnowledgeBundle[C]` record (`2ffc1243`): a label, its
+`ContextSpec`s, and an optional `RecipeSet[C]` (tool name, index resource, parser, index template).
+The channel vocabulary is a type parameter, so a CVLR recipe cannot name a CVL channel. Both
+families share one index template, `kb_index.j2`, and `kb_tools(bundle)` builds either family's
+recipe tool. The one change CVL agents see is that the channel legend now renders with the index.
 
-**This is the gap, and it exists independently of anything certora-cvlr-kb produces.** CVL's
-knowledge is a bundle with eight consumers; CVLR's is trapped inside
-`cvlr_property_generation_system_prompt.j2`. The munge editor, the property judge, the feedback
-loop, the cex analyzer and (Part II) certorag's Solana extractor cannot reach a word of it. Each
-either restates it or goes without.
+Each CVLR reader gets what it can act on, which is why there are two bundles:
 
-Generalize `composer/kb/kb_context.py`. Everything in
-it is chain-neutral except four things: the `RecipeChannel` literal, `KB_TOOL_NAME`, the `_INDEX`
-list of `ContextSpec`s, and the two resource filenames. Introduce a `KnowledgeBundle` record
-carrying exactly those, with two instances — `CVL_BUNDLE` and `CVLR_BUNDLE`. **Two instances of one
-record, not a flag or an optional-field struct**: each bundle carries its own channel vocabulary and
-its own resource set, and nothing is meaningful-only-when.
+- **`with_cvlr_context`** (`CVLR_BUNDLE`, the facts plus the recipe index) — the author and the
+  judge, the two agents holding `get_cvlr_recipe`. The recipe tool is added in
+  `composer/spec/cvlr/entry.py`.
+- **`with_cvlr_facts`** (`CVLR_FACTS_BUNDLE`, the facts alone) — the munge reviewer and
+  `cvlr_research`, which cannot retrieve a recipe.
+- **Nothing** — the munge editor. Its charter forbids reasoning about the Prover's internals, which
+  are the bundle's subject.
 
-New files:
+The counterexample analysis needs no wiring of its own: it runs over the author's message list, and
+the bundle is at its head. The bundle is a cached prefix, so the per-run material — the injected
+conf, the worked example and the Anchor section it runs through — stays in the author's prompt.
 
-```
-composer/kb/resources/cvlr_baseline_facts.md      # W2 fills this
-composer/kb/resources/cvlr_recipes_index.yaml     # W3 fills this
-composer/kb/resources/recipes/cvlr-*.md
-composer/templates/cvlr_kb_index.j2               # or parameterize cvl_kb_index.j2
-```
+### 4.2 Populating it: the author's prompt, factored
 
-New API: `with_cvlr_context(prompt)` and `cvlr_kb_tools()` (tool name `get_cvlr_recipe`). Wire into
-the CVLR author, the munge editor, the property judge and the feedback graph. Note that
-`composer/spec/services.py::build_basic_rag_tools` bundles `kb_tools()` with the *CVL* manual tools;
-the CVLR side goes through `composer/tools/rag_env.py` instead, so the recipe tool must be added
-there rather than inherited.
+The bundle was not written from scratch or from the entries. The author's 754-line system prompt was
+split along one line (`f4c953fd`): this agent's contract stays in the prompt, and CVLR and Prover
+facts true for any CVLR agent move to the bundle. 388 lines moved. The judge now cites the bundle's
+sections instead of restating them, and a test checks each cited heading against the bundle
+(`tests/test_cvlr_knowledge.py`, `tests/test_cvlr_bundle.py`).
 
-**As built** (`560e2327`, `0ad9d826`, `0cd4c530`). The design above held, with four differences:
+### 4.3 Recipes, with the channels taken from the action space
 
-- The recipe half is its own record. `KnowledgeBundle[C]` carries a label, its `ContextSpec`s, and
-  an optional `RecipeSet[C]` (tool name, index resource, parser, index template). A bundle without
-  recipes has none; there is no empty index.
-- The channel vocabulary is a type parameter. `KBRecipe[C]` / `IndexModel[C]` validate each index
-  against its own family's `Literal` (`CVL / CONF / EDIT` for CVL), so a CVLR recipe cannot name a
-  CVL channel. The CVL index always had a legend explaining its channels, but it was never
-  rendered, so an agent saw a channel name with nothing saying what it meant. Both indexes'
-  legends now render with the index. For CVL that is the one deliberate change to the rendered
-  prompt; everything else in P1-1 was a no-op.
-- Both families share one index template, `kb_index.j2`, parameterized by label and tool name.
-  There is no `cvlr_kb_index.j2`.
-- `kb_tools(bundle)` replaces a separate `cvlr_kb_tools()`. The CVLR recipe tool is added in
-  `composer/spec/cvlr/entry.py`, next to the `cvlr_research` sub-agent, not in `rag_env.py`.
-  `rag_env.py` only builds corpus search tools, and those now go to the researcher rather than to
-  the author.
-
-Consumers, as P1-3 left them. Each reader gets what it can act on, which is why there are two
-bundles. `with_cvlr_context` (`CVLR_BUNDLE`, facts plus the recipe index) is the initial prompt of
-the author and the judge in `cvlr/author.py`, the two agents holding `get_cvlr_recipe`.
-`with_cvlr_facts` (`CVLR_FACTS_BUNDLE`, the facts alone) is for the munge reviewer and
-`cvlr_research`, which have no recipe tool. The index tells its reader to retrieve a file, and its
-channels name the author's tools. The munge editor gets no bundle at all: its charter forbids
-reasoning about the Prover's internals, which are the bundle's subject, and the legend's `EDIT`
-channel told it to hand the problem to `code_editor`, which is itself. The counterexample analysis
-needs no wiring of its own. `TrivialFanoutCexHandler` analyzes a
-counterexample over the author's live message list, and the bundle is already at the head of that
-list.
-
-### 4.2 W2 — Populate the bundle by factoring the 754-line prompt
-
-Do not write `cvlr_baseline_facts.md` from scratch and do not write it from the entries. Split
-`cvlr_property_generation_system_prompt.j2` along one line:
-
-- **Stays in the prompt** — this agent's contract: output shape, the `put_harness` / `verify_rules` /
-  `record_skip` / `result` tool list, the two publish stamps, the workflow.
-- **Moves to the bundle** — CVLR and prover facts true for any CVLR agent: what a rule is, assumptions
-  and vacuity, nondeterminism as the quantifier, loop bounds and the `optimistic_loop` ladder,
-  arithmetic and panic-freedom, the nonlinear ladder, Anchor entry points and generated names,
-  `clog!` legibility.
-
-The test that the split is right: the munge editor and the judge stop restating what the author
-knows. Moving text costs nothing in tokens while one agent reads it; the point is that five others
-then can.
-
-**As built** (`0ad9d826`). 388 lines moved into `cvlr_baseline_facts.md`, and the prompt went from
-754 lines to 423. The line moved in two places:
-
-- **Anchor entry points and generated names stayed in the prompt.** The worked example runs through
-  that section, and the worked example is per-run material. The bundle is a cached prefix and cannot
-  carry anything that varies by run. The same reasoning keeps the injected conf and the worked
-  example in the prompt.
-- **The pointer-analysis material moved**, although the list above did not name it: the section
-  "When the Prover cannot follow the program's own data" and its four symptoms. That material is
-  true for any CVLR agent, which is the rule that decides what moves.
-
-The knowledge tests (`tests/test_cvlr_knowledge.py`, `tests/test_cvlr_bundle.py`) read the bundle
-and the prompt together. What they assert is what the author knows, not which file says it.
-
-P1-3 met the test in the first paragraph above in its intended sense: the munge editor no longer
-reads the bundle, and the judge cites the bundle instead of restating it. It did not always make
-the prompts shorter (§13).
-
-**certora-cvlr-kb's role here is review input, not source text.** Run the entry set against the
-factored document and ask, per entry, one of: *the document already says this* (drop), *the document
-is silent and N projects agree* (a ledger question, addressed to the document's author), *the
-document takes a position the field contradicts* (the highest-value output the capture pipeline can
-produce — surface it, do not silently overrule the manual, per `guidance.py`'s rule).
-
-### 4.3 W3 — CVLR recipes, with the channel vocabulary taken from the action space
-
-Recipes are the right shape for the surviving `rule_shape` material: a cvlr-kb entry already carries
-`id / title / trigger / pattern / example`, which is near field-for-field `KBRecipe` plus a markdown
-body.
-
-Two corrections to `cvlr-capture-plan.md` §7.2 before writing any:
-
-**The trigger vocabulary is wider than the plan allows.** §7.2 requires a trigger be "an observable
-symptom" and says a trigger "phrasable only as a situation belongs in an entry". The CVL recipes it
-cites as the format to follow exactly do not obey that: R1's trigger is *"Struct annotated
-`@custom:storage-location erc7201:...` plus an assembly slot getter"* (a code situation) and R18's is
-*"reentrancy safety to verify"* (a verification goal). Adopt the CVL-actual vocabulary — symptom,
-code situation, or verification goal. Keep §7.2.1's separate rejection of *reference prose*
-(the docs run offering "Overview" and "Advanced Topics" as recipes); that filter was right and is
-about something else.
-
-**Derive the channels from the tool list, not from the capture data.** §7.2 proposed
-`RULE / MOCK / GATE / ENVFILE / CONF / SCAFFOLD` from the artifact taxonomy. A channel's job is to
-tell a stuck agent whether the fix is in its action space — and that action space is now literally
-enumerable from the author's tool list:
+A channel tells a stuck agent whether the fix is in its action space, so the channels are the
+author's tools (`e04f2dea`), as `CvlrChannel` in `kb_context.py`:
 
 | Channel | Tool | Note |
 |---|---|---|
 | `RULE` | `put_harness` | the default |
 | `MOCK` | `summarize_for_prover` | unsound by construction; invalidates the prover stamp |
 | `EDIT` | `code_editor` | the agent describes the problem, not the edit |
-| `CONF` | `adjust_prover_config` | **only** the loop bound and `optimistic_loop` (which changes what a verdict means); anything else is a `record_skip` |
-| `SKIP` | `record_skip` | the honest terminal channel — no CVL peer, and worth having |
+| `CONF` | `adjust_prover_config` | **only** the loop bound and `optimistic_loop`; anything else is a `record_skip` |
+| `SKIP` | `record_skip` | the honest terminal channel, with no CVL peer |
 
-`ENVFILE` and `SCAFFOLD` are **not channels**. The starting env files are maintained in AutoProver
-and rendered by `env_paths.py`, and the composites are generated. The one tuning-file write the
-author has, a summary in its unit layer, is `MOCK`. Scaffolding happens in a separate phase. A
-recipe whose action is "add an inlining line to `cvlr_inlining.txt`" points at something this agent
-cannot do. Keep the §7.2 naming lesson (`ENV` lost to the word it looks like) — it applies to any
-short channel name.
+There is no channel for env files or scaffolding: the starting env files are maintained here and the
+composites are generated, so a recipe whose action is "add an inlining line" names something the
+author cannot do. A trigger may be a symptom, a code situation or a verification goal, as the CVL
+recipes' are.
 
-**As built** (`0cd4c530`). The five channels are exactly the ones in the table, as `CvlrChannel` in
-`kb_context.py`. Each channel's meaning is in `cvlr_recipes_index.yaml` and is rendered with the
-index. The 27 `rule_shape` entries were triaged against the W2 document, and two recipes survived:
+The 27 `rule_shape` entries were triaged against the factored bundle, and two survived:
 
 - **K1** — satisfy rules for reachability and witnesses, and the acceptance property they must not
-  stand in for. The prompt and the judge mention `cvlr_satisfy!` only as a thing not to do. Its
-  legitimate uses are attested in 4 projects and were written down nowhere.
-- **K2** — `clog!` before an assertion over an enum or a bitfield. The corpus records this as a
-  solver workaround, not a legibility habit: logging gives the value a use site, which stops the
-  comparison chain being folded into a bitmask. The bundle's `clog!` section says nothing about it.
+  stand in for. The prompt and the judge mentioned `cvlr_satisfy!` only as a thing not to do.
+- **K2** — `clog!` before an assertion over an enum or a bitfield. Logging gives the value a use
+  site, which stops the comparison chain being folded into a bitmask: a solver workaround, not a
+  legibility habit.
 
-Most of the other entries are the nondet / assume / act / assert skeleton the bundle now states
-outright, and were dropped. One was dropped for a reason worth keeping: "end every rule with a
-vacuity check" is attested but does not transfer. `cvlr_vacuity_check!` is gated on a cargo feature
-AutoProver never enables. The 3 `env_summaries` entries were triaged too, and none survived (§3).
+The rest restated the bundle. One was dropped for a reason worth keeping: "end every rule with a
+vacuity check" is attested but does not transfer, because `cvlr_vacuity_check!` is gated on a cargo
+feature AutoProver never enables. More recipes come from what runs show the author missing; there
+is no pipeline behind them.
 
-### 4.4 W4 — In certora-cvlr-kb: retire, re-aim, keep
+### 4.4 Rules for drawing on engagements
 
-| Asset | Disposition |
-|---|---|
-| `entries/` `prover_flag`, `conf_key`, `env_inlining`, `env_summaries`, `munge_form` (55) | **Retire as corpus content.** Keep the extracted rows and recurrence counts as ledger evidence against the W2 document. |
-| `entries/` `rule_shape` (27) | Triage against the factored document (W2); what survives becomes a W3 recipe. Done: two survived, as K1 and K2 (§4.3). |
-| `ledger/` + `gen_ledger.py` | **Promote to the primary deliverable.** Re-aim the questions at the W2 document rather than at entry status. |
-| `cvlr-crates.rag.json` + `crate_reference.py` + `crate_inventory.py` | **Retire as corpus content** (revised 2026-09-29; this row previously read "unaffected and keep"). Superseded by AutoProver's `cvlr_api_kb`, generated from rustdoc rather than from a regex scan plus a model — see [cvlr-api-docs-plan.md](./cvlr-api-docs-plan.md) §4.2. The reasoning here was sound and is simply out of date: reference *does* belong in a corpus, but there is now a better-produced one, and it is a **separate** corpus, so keeping this would put two crate references in front of one agent with no way to tell which is current. `cvlr_kb` is the manual and nothing else as of that plan's step 6. **`certora-cvlr-kb:tools/publish.py` still hard-codes `KNOWLEDGE_BASE = "cvlr_kb"`**, so this is the remaining path by which retired content can reach the corpus — AutoProver stopped *discovering* these manifests, it cannot stop them being pushed. |
-| `projects/inventory.yaml`, `locate.py`, `extract.py`'s parsers, `sanitize-denylist.txt` | **Unaffected, and Part II consumes them** (§10). |
-| `compile_gate.py`, `publish_gate.py`, `validate_manifest.py`, `publish.py` | Follow whatever survives. The compile gate still earns its keep for W3 recipe examples, which carry code. |
-| `rank.py`, `template.py`, tiers, currency gaps | Keep for the ledger's prioritization; they were always about *which question to ask first*, which is the deliverable now. |
+Whoever writes the next fact or recipe will be reading verification engagements for evidence. The
+capture survey paid for these rules, and they outlive it.
+
+- **The manual is the reference; the projects are the evidence.** Where the published manual and a
+  project instance disagree on *form*, the manual wins: it is maintained, version-scoped and public,
+  and a project instance is one team's choice frozen at one date. Projects remain the only source
+  for what actually goes wrong — which SDK boundary needed mocking, which property was false, what a
+  timeout hunt ended in — and no manual reports that. `guidance.py` is written to this rule.
+- **"Quotable" means quotable after it compiles.** The manual's own examples carried two defects that
+  fail against every release (recorded in [upstream-defects.md](./upstream-defects.md)), so an
+  example taken from it goes through the same compile check as any other.
+- **Never quote engagement code.** Paraphrase or generalize it, whether or not the repository is
+  public. The reason is overfitting, not confidentiality: a quoted block teaches one project's
+  house layout, helper names and era. A synthetic minimal example retrieves and generalizes better
+  than an excerpt from someone's protocol. Tutorials may be quoted if they are current.
+- **Rank on two axes, because frequency alone points the wrong way.** Older projects outnumber
+  current ones, so a raw count promotes a superseded idiom precisely *because* it is old.
+  *Recurrence* — in how many projects does the underlying problem appear — decides whether a
+  problem is worth knowledge. *Currency* — does a current-practice instance of the solution exist —
+  decides whether there is a solution to state. A recurring problem with only legacy solutions is a
+  gap to record, not advice to ship.
+- **Count clients, not repositories.** Two repositories from one client share tooling, layout and
+  house style, so a team's convention can appear twice and read as an industry idiom. Two repos from
+  one client are one vote.
+- **Judge currency per chain.** The Soroban projects run cvlr 0.3–0.4 while the Solana ones run
+  0.4–0.6, so a 0.4 crate is current on one chain and a generation behind on the other. And
+  vintage belongs to an instance rather than a project: a recent project can carry copied legacy
+  patterns.
+- **An unreviewed how-to and an unreviewed soundness claim fail differently.** A wrong how-to wastes
+  an iteration, and the compiler catches it. A wrong soundness claim produces a proof of something
+  false, and nothing downstream catches it. The second kind never enters the bundle unreviewed.
+- **Gate the shape of generated content, not only its properties.** A capture manifest once passed
+  schema validation, sanitization and the compile gate while 97% of its blocks were single
+  characters: an array field arrived as a string and the renderer iterated it. Every gate asked "is
+  this well-formed?" and none asked "is this anything at all?". `cvlr_api_docs.py` is the producer
+  this now applies to.
+
+Three facts about project files the survey found the hard way, because they silently destroyed
+data before they were known:
+
+- **Certora confs are JSON5-shaped**: `//` comments and trailing commas. A strict parser rejected
+  152 of 486 surveyed confs.
+- **Env files comment with `;` only.** `#` opens a directive (`#[inline(never)] ^core::.*$`), so
+  treating it as a comment marker discards every entry while leaving the file count healthy.
+- **Read versions from `Cargo.lock`, per crate, as (name, version, source).** The CVLR family does
+  not version in lockstep, one lockfile can resolve two versions of one crate, manifest dependency
+  names need not match resolved package names, and a stray `Cargo.lock.backup` will match a careless
+  glob. A chain crate also implies a platform generation (`cvlr-solana` 0.5 is `solana-program` 2.2),
+  which no CVLR version string shows.
 
 ---
 
@@ -310,24 +211,25 @@ AutoProver never enables. The 3 `env_summaries` entries were triaged too, and no
 
 > The engagements Part II draws on are client work, and most are confidential, so they are named
 > here by role — *the reference project*, *Project A/B/C* — rather than by client or repository.
-> The labels are this document's own. certora-cvlr-kb's `projects/inventory.yaml` lists the projects.
+> The labels are this document's own. The capture survey's project inventory lists the projects
+> (§9.1, and §11 on where it has to go).
 
 ## 5. Why this is a different thing, and is not affected by Part I
 
-| | certorag | certora-cvlr-kb |
+| | certorag | CVLR practice knowledge (Part I) |
 |---|---|---|
 | Captures | **what was proven** | **how it is expressed and operated** |
 | Unit | a natural-language property attributed to a component of an application | an idiom / a recipe / a baseline fact |
 | Retrieved by | analogy — "this component resembles that one" | keyword, or a trigger match |
 | Injected at | **property inference**, per component, via `property_inference_input_hook` | authoring, via the bundle and the recipe index |
-| Ages? | no — a solvency property is a solvency property | yes — which is why W2's document needs an author and a ledger |
+| Ages? | no — a solvency property is a solvency property | yes — which is why the bundle needs an author |
 | Contains code? | never; prose only | yes, synthetic and compiled |
 
 certorag's spec-analysis prompt spends four paragraphs forbidding the agent from describing *how* a
 property was expressed. That forbidden residue is Part I's whole subject. The two are orthogonal.
 
 A CVLR run today gets no corpus analogies at all, while an EVM run gets them from an org's worth of
-Solidity engagements. Nothing in AutoProver or certora-cvlr-kb closes that.
+Solidity engagements. Nothing in AutoProver closes that.
 
 ## 6. Preconditions
 
@@ -339,9 +241,8 @@ Solidity engagements. Nothing in AutoProver or certora-cvlr-kb closes that.
    `9e64e2e0` — confirm it is an ancestor of a master carrying `SOLANA`, and move it if not.
 2. **No composer change is required by Part II.** `ForEcosystem[U]` carries the unit type as a value
    precisely so a plugin can scope itself to one ecosystem.
-3. Part I's W1 is a **soft** prerequisite for §9.4: certorag's Solana extractor wants CVLR reading
-   knowledge the way its CVL extractor gets `with_cvl_context`. Without the bundle it works, with a
-   weaker prompt.
+3. Part I's bundle is a **soft** prerequisite for §9.4: certorag's Solana extractor wants CVLR
+   reading knowledge the way its CVL extractor gets `with_cvl_context`. It has landed (§4.1).
 
 ## 7. What ports, what changes, what is new
 
@@ -452,8 +353,8 @@ branch, newest first. **Do not port it.** Three reasons:
 3. There is no `*.spec` to key on — a CVLR spec is Rust under `certora/`, and the real discriminator
    is "does the lockfile resolve `cvlr`".
 
-certora-cvlr-kb already solved this: `projects/inventory.yaml` (curated, ~10 projects, with client,
-chain, disclosure, both branches) plus `tools/locate.py`, which emits per-project manifests under
+The capture survey already solved this, in `certora-cvlr-kb`: `projects/inventory.yaml` (curated,
+~10 projects, with client, chain, disclosure, both branches) plus `tools/locate.py`, which emits per-project manifests under
 `projects/manifests/` naming confs, rules files, env files, `expected.json`s, munge set, build
 scripts and resolved revisions. **Adopt it.** The audit sqlite db's only job — a resumable,
 deduplicated target list — is served by the manifest set, and `ProcessedRepos` already handles
@@ -557,9 +458,9 @@ tools, a result validator against the application's component set, memory, sourc
 non-slot-holding cache probe and app-task await (whose deadlock reasoning is documented on
 `get_task_spawner` and still applies). Three things change:
 
-1. **`with_cvl_context` → `with_cvlr_context`** (Part I W1). This is where the two halves of this
+1. **`with_cvl_context` → `with_cvlr_facts`** (§4.1). This is where the two halves of this
    document meet: the *practice* bundle is what lets the *property* extractor read the CVLR in front
-   of it. If W1 has not landed, fall back to `cvlr_rag_tools` alone and accept a weaker prompt.
+   of it. It takes the facts without the recipe index, because it holds no recipe tool.
 2. **A new `cvlr_spec_analysis_system_prompt.j2`.** Most of the existing prompt survives verbatim —
    the three property categories, the good/bad examples, "describe the property, not the spec", the
    draft/review/deliver procedure. What is replaced is Step 1 ("Understand Spec"), because CVLR has
@@ -653,8 +554,9 @@ non-slot-holding cache probe and app-task await (whose deadlock reasoning is doc
    `#[rule]` and `cvlr_rules!` scanning, `expected.json` reading (§9.2). Lift, don't rewrite.
 3. **`sanitize-denylist.txt`** — the blocklist seed for §12.1.
 
-If the two repos merge (`cvlr-todo.md` U6), these are the files that move. If they stay apart, the
-project manifest is the interface and should be schema-stable.
+**These live in `certora-cvlr-kb`, which is being retired, so they have to move before it goes.**
+certorag is the natural home: it is their only remaining consumer. Until they move, the project
+manifest is the interface and should be schema-stable. Tracked as `cvlr-todo.md` U6.
 
 ---
 
@@ -695,45 +597,21 @@ right behavior for EVM, and the Solana loader makes it twice as costly not to. P
 **12.5 Does cross-chain retrieval actually help?** Asserted here, not measured. Stage P2-6 ships with
 a same-chain-only flag so the contribution can be A/B'd on a real Solana run.
 
-**12.6 Vintage does not gate the property corpus.** certora-cvlr-kb's tiers, `cvlr_observed` ranges
-and currency gaps exist because **API idioms age**. Natural-language properties do not: a 2024
+**12.6 Vintage does not gate the property corpus.** The capture survey's tiers and currency axis
+(§4.4) exist because **API idioms age**. Natural-language properties do not: a 2024
 solvency property is still the solvency property. Record `cvlr_version` and prover version as
 provenance (§8.1) and stop — no ranking, no gating, no ladder. Two residues, both handled: cited rule
 names may use legacy `cvt_*` vocabulary (provenance strings, harmless), and a proof's scope can shift
 with prover version (that is `scope_caveat`'s job).
 
-**12.7 The repo boundary is still open.** `cvlr-todo.md` U6 asks whether the practice corpus moves
-into certorag, whether certorag adopts the manifest-and-importer split, and if they stay apart what
-the boundary is. This document does not decide it. It assumes they stay apart and names §11's three
-files as the interface.
-
-**12.8 Does Part I shrink `cvlr_kb` to the crate reference and the manual?** *Answered, and the
-answer moved:* it shrinks to **the manual alone**. This asked whether retiring the practice entries
-(§4.4) would leave the manual plus `cvlr-crates.rag.json`, and judged that a coherent corpus. Since
-then AutoProver generated its own crate reference from rustdoc into a separate corpus
-(`cvlr_api_kb`) and re-scoped `cvlr_kb` down to the manual, so the crate reference leaves too
-(§4.4, revised).
-
-Two consequences worth keeping. The producer/importer split of `rag-import-format.md` now serves
-*two* producers rather than one, but they live in different repositories and fill different
-corpora — which is what makes the authority ordering between them expressible at all. And when
-AutoProver checked its live database on 2026-09-29, `cvlr_kb` already held nothing but the manual:
-neither the crate reference nor the practice entries had been ingested there. The shrink this
-question anticipated had, in practice, already happened.
+**12.7 Where the inventory and the parsers go.** §11's three files live in a repository that is
+being retired. Part II assumes they move to certorag; if they move anywhere else, the manifest
+schema is the interface and §9.1–§9.2 are unchanged.
 
 ## 13. Sequencing
 
-**Part I — AutoProver.** W1 and W2 are one change and should land together: a bundle with nothing in
-it proves nothing, and factoring the 754-line prompt is only safe if the factored halves are wired at
-the same time.
-
-| # | Stage | Gate | Status (2026-09-29) |
-|---|---|---|---|
-| P1-1 | Generalize `kb_context.py` into `KnowledgeBundle`; `CVL_BUNDLE` is a no-op refactor | every existing CVL agent's rendered prompt is byte-identical | **Done**, `560e2327`. P1-4 later made one deliberate change to what CVL agents see: the channel legend now renders (§4.1). |
-| P1-2 | Factor `cvlr_property_generation_system_prompt.j2` → `cvlr_baseline_facts.md` + a slimmer prompt; add `with_cvlr_context`; wire the author | the CVLR authoring run is unchanged in behavior | **Done**, `0ad9d826`. 754 → 423 prompt lines + 388 bundle lines. Two places where the split differs from §4.2 are recorded there. |
-| P1-3 | Wire the bundle into the other CVLR agents that can use it; delete what they restate | no fact is stated in two places, and every citation of a bundle section names a heading the bundle has; no new knowledge is invented | **Done.** The judge's items 2, 5 and 7 cite the bundle's sections and keep only the reviewer's checks. Item 5 gained the `optimistic_loop` checks, and item 7 gained recipe K2's case. The judge's input shows `optimistic_loop` with the author's `why` (`HarnessAssumptions.settings`). The munge reviewer and `cvlr_research` get the facts without the recipe index; the munge editor gets no bundle (§4.1). A test checks each cited heading against the bundle. The gate originally read "each prompt shrinks"; item 5 grew, because it gained checks it had been missing, so the gate now names what it was for. |
-| P1-4 | `cvlr_recipes_index.yaml` + `get_cvlr_recipe`, channels from §4.3's table | an index with real triggers; recipe bodies compile under the §4.4 gate | **Started**, `0cd4c530`. The index, the tool, the channels and two recipes (K1, K2) are in. The compile half of the gate has not run: nothing compiles the recipe examples. Every entry has now been triaged: of the 27 `rule_shape` entries two survived, and the 3 `env_summaries` entries all restate the starting layers (§3). |
-| P1-5 | In certora-cvlr-kb: retire 55 entries to ledger evidence; re-aim the ledger at the P1-2 document | the ledger's questions name sections of that document | Not checked from AutoProver. |
+**Part I — AutoProver.** Done: the bundle (`2ffc1243`), the factored prompt (`f4c953fd`), the other
+CVLR agents wired to it, and the recipes (`e04f2dea`). It lands as the landing plan's K1.
 
 **Part II — certorag.** Stage P2-1 is the riskiest structural change and is deliberately first, while
 the only content is EVM and a mistake costs one rebuild.
@@ -753,5 +631,4 @@ P2-4 is where the money goes. Run P2-3 and P2-4 against the inventory's normativ
 first, then Project A — the hardest: macro-generated rules, split confs, heavy mocking, and a
 summary-gated proof. If the prompt survives Project A it survives the set.
 
-The two parts are independent except that P1-2 is a soft prerequisite for P2-4 (§6.3). They can run
-in parallel.
+Part I is a soft prerequisite for P2-4 (§6.3), and it has landed on the branch.
