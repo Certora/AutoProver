@@ -1,10 +1,10 @@
-"""The ninth munge kind: an imported name pointed at a stand-in.
+"""The import swap: an imported name pointed at a stand-in.
 
-``docs/cvlr-todo.md`` U10 is why it exists. Every other kind edits the item it is about, so the item
+Every other kind edits the item it is about, so the item
 has to belong to the program — and a CPI's does not: ``invoke`` is ``solana_program``'s, the call is
 an expression rather than an item, and the optimizer leaves no symbol to summarize. The ``use`` line
-is the program's, which is the seam this kind works on, and the corpus writes the same edit by hand
-(``solana-program-stake-pool-audit`` swaps ``solana_program::msg`` for its own).
+is the program's, which is the seam this kind works on, and hand-written CVLR projects make the same
+edit by hand.
 
 These tests are about what that makes true: the deployed build imports what the developer wrote,
 only the named binding moves, and a declaration this reader cannot take one leaf out of is refused
@@ -15,7 +15,6 @@ import pytest
 
 from composer.spec.cvlr.munge import (
     AlreadyMunged,
-    FunctionAmbiguous,
     ImportNotFound,
     ImportNotIsolable,
     ImportSwap,
@@ -23,6 +22,7 @@ from composer.spec.cvlr.munge import (
     apply_import_swap,
     munge_history,
 )
+from composer.spec.cvlr.rust_source import FunctionAmbiguous
 from composer.spec.cvlr.tree import replay
 
 FEATURE = "unit_vault_deposits"
@@ -52,8 +52,8 @@ def _swap(name: str = "invoke", **kw) -> ImportSwap:
         path=kw.pop("path", LIB),
         name=name,
         stand_in=kw.pop("stand_in", STAND_IN),
-        why=kw.pop(
-            "why",
+        why_sound=kw.pop(
+            "why_sound",
             "the CPI havocs the caller's deserialized Vault; the stand-in moves no lamports, so "
             "no property about account balances holds under it",
         ),
@@ -100,11 +100,6 @@ def test_the_gate_names_the_recording_unit():
     body = _applied(feature="unit_other")
     assert '#[cfg(feature = "unit_other")]' in body
     assert f'feature = "{FEATURE}"' not in body
-
-
-def test_it_creates_no_file():
-    """Unlike a module redirect: the stand-in is an item in the harness, reviewed with it."""
-    assert _swap().created == {}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -247,7 +242,7 @@ def test_the_edit_id_moves_with_the_stand_in():
 
 
 def test_the_edit_id_is_stable_across_rewordings():
-    assert _swap().edit_id == _swap(why="a better sentence").edit_id
+    assert _swap().edit_id == _swap(why_sound="a better sentence").edit_id
 
 
 def test_two_units_swapping_the_same_import_do_not_collide():
@@ -256,6 +251,11 @@ def test_two_units_swapping_the_same_import_do_not_collide():
 
 def test_it_reaches_version_history_like_every_other_kind():
     assert munge_history((_swap(),)) == (f"munge:{_swap().edit_id}",)
+
+
+def test_the_subject_is_the_binding_not_the_path():
+    assert _swap().subject == "invoke"
+    assert _swap(name="cpi").subject == "cpi"
 
 
 def test_describe_names_the_scope_it_has():

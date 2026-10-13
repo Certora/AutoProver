@@ -108,7 +108,7 @@ from composer.spec.cvlr.state import (
     tuning_history,
 )
 from composer.spec.cvlr.tree import (
-    NotInWorkdir,
+    NotInProject,
     NotProjectSource,
     Reconciled,
     SharedTree,
@@ -217,7 +217,7 @@ class HarnessTarget:
         finally:
             permit.release()
 
-    def pristine_source(self, relative: str) -> Path | NotInWorkdir | NotProjectSource:
+    def pristine_source(self, relative: str) -> Path | NotInProject | NotProjectSource:
         """The developer's copy of a file a munge names, or why the path is not one it may name.
 
         The tree's own answer (:meth:`composer.spec.cvlr.tree.SharedTree.pristine_of`), asked here

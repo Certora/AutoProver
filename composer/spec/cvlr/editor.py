@@ -76,11 +76,8 @@ from composer.spec.cvlr.munge import (
     DeriveSwap,
     DropMunges,
     EarlyPanic,
-    FunctionAmbiguous,
     FunctionExtraction,
-    FunctionItem,
     FunctionMunge,
-    FunctionNotFound,
     HookOnEntry,
     HookOnExit,
     ImportNotFound,
@@ -94,7 +91,6 @@ from composer.spec.cvlr.munge import (
     Munge,
     MungeKind,
     Munged,
-    NoFunctionBody,
     SwappedDerive,
     amended,
     apply_attribute,
@@ -103,13 +99,19 @@ from composer.spec.cvlr.munge import (
     apply_import_swap,
     apply_module_redirect,
     forwards_feature,
-    function_item,
-    function_names,
     latest,
     merge_munges,
 )
 
-from composer.spec.cvlr.tree import NotInWorkdir, NotProjectSource, munge_diff
+from composer.spec.cvlr.rust_source import (
+    FunctionAmbiguous,
+    FunctionItem,
+    FunctionNotFound,
+    NoFunctionBody,
+    function_item,
+    function_names,
+)
+from composer.spec.cvlr.tree import NotInProject, NotProjectSource, SharedTree, munge_diff
 from composer.spec.cvlr.tuning import SummaryDirective
 from composer.spec.cvlr.state import CvlrGenerationState
 from composer.spec.cvlr.verify import HarnessTarget
@@ -460,16 +462,15 @@ class MungeFunction(
             )
         with self.tool_deps() as target:
             match target.pristine_source(self.path):
-                case NotInWorkdir():
+                case NotInProject():
                     return (
                         f"{self.path} resolves outside this project. Munge the program's own "
                         f"source, with a path relative to the workspace root."
                     )
-                case NotProjectSource(directory=directory):
+                case NotProjectSource() as refusal:
                     return (
-                        f"{self.path} is under `{directory}`, which is not this project's source. "
-                        f"A munge changes the program under verification; `{directory}` holds "
-                        f"build output or the dependency sources cargo resolved, and modifying a "
+                        f"{refusal.describe()}. A munge changes the program under verification; "
+                        f"anything else is build output or a dependency's source, and modifying a "
                         f"dependency changes its behaviour for every crate in the graph — "
                         f"including the ones the author's property is about. If the code in the "
                         f"way is a dependency's, refuse and say so."
@@ -482,7 +483,7 @@ class MungeFunction(
                 path=self.path,
                 function=self.function,
                 kind=kind_of(self.munge),
-                why=self.why,
+                why_sound=self.why,
                 feature=self.state["feature"],
             )
             if any(m.edit_id == record.edit_id for m in _held(self.state)):
@@ -606,17 +607,16 @@ class ExtractFunction(
             )
         with self.tool_deps() as target:
             match target.pristine_source(self.path):
-                case NotInWorkdir():
+                case NotInProject():
                     return (
                         f"{self.path} resolves outside this project. Extract from the program's own "
                         f"source, with a path relative to the workspace root."
                     )
-                case NotProjectSource(directory=directory):
+                case NotProjectSource() as refusal:
                     return (
-                        f"{self.path} is under `{directory}`, which is not this project's source. "
-                        f"A munge changes the program under verification; `{directory}` holds build "
-                        f"output or the dependency sources cargo resolved. If the code in the way "
-                        f"is a dependency's, refuse and say so."
+                        f"{refusal.describe()}. A munge changes the program under verification; "
+                        f"anything else is build output or a dependency's source. If the code in "
+                        f"the way is a dependency's, refuse and say so."
                     )
                 case Path() as resolved:
                     pass
@@ -688,7 +688,7 @@ class ExtractFunction(
                 original=original.text,
                 replacement=self.replacement,
                 extracted=self.extracted,
-                why=self.why,
+                why_sound=self.why,
                 feature=self.state["feature"],
             )
             if any(m.edit_id == record.edit_id for m in _held(self.state)):
@@ -828,15 +828,14 @@ class SwapDerive(
             return "`swaps` is empty. Name at least the type whose derives are in the way."
         with self.tool_deps() as target:
             match target.pristine_source(self.path):
-                case NotInWorkdir():
+                case NotInProject():
                     return (
                         f"{self.path} resolves outside this project. Swap derives on the program's "
                         f"own types, with a path relative to the workspace root."
                     )
-                case NotProjectSource(directory=directory):
+                case NotProjectSource() as refusal:
                     return (
-                        f"{self.path} is under `{directory}`, which is not this project's source. "
-                        f"A type you cannot edit is a type whose derives you cannot swap — if the "
+                        f"{refusal.describe()}. A type you cannot edit is a type whose derives you cannot swap — if the "
                         f"code in the way is a dependency's, refuse and say so."
                     )
                 case Path() as resolved:
@@ -855,7 +854,7 @@ class SwapDerive(
                     )
                     for sw in self.swaps
                 ),
-                why=self.why,
+                why_sound=self.why,
                 feature=self.state["feature"],
             )
             for sw in record.swaps:
@@ -1005,15 +1004,13 @@ class RedirectModule(
             )
         with self.tool_deps() as target:
             match target.pristine_source(self.path):
-                case NotInWorkdir():
+                case NotInProject():
                     return (
                         f"{self.path} resolves outside this project. Redirect a module of the "
                         f"program under verification, with a path relative to the workspace root."
                     )
-                case NotProjectSource(directory=directory):
-                    return (
-                        f"{self.path} is under `{directory}`, which is not this project's source."
-                    )
+                case NotProjectSource() as refusal:
+                    return f"{refusal.describe()}."
                 case Path() as resolved:
                     pass
             if not resolved.is_file():
@@ -1053,7 +1050,7 @@ class RedirectModule(
                 path=self.path,
                 module=self.module,
                 substitute=self.substitute,
-                why=self.why,
+                why_sound=self.why,
                 feature=feature,
             )
             if any(m.edit_id == record.edit_id for m in _held(self.state)):
@@ -1215,15 +1212,14 @@ class SwapImport(
             )
         with self.tool_deps() as target:
             match target.pristine_source(self.path):
-                case NotInWorkdir():
+                case NotInProject():
                     return (
                         f"{self.path} resolves outside this project. Swap an import in the "
                         f"program's own source, with a path relative to the workspace root."
                     )
-                case NotProjectSource(directory=directory):
+                case NotProjectSource() as refusal:
                     return (
-                        f"{self.path} is under `{directory}`, which is not this project's source. "
-                        f"Swapping an import there would redirect the name for every crate that "
+                        f"{refusal.describe()}. Swapping an import there would redirect the name for every crate that "
                         f"compiles that file, including the ones the author's property is about."
                     )
                 case Path() as resolved:
@@ -1234,7 +1230,7 @@ class SwapImport(
                 path=self.path,
                 name=self.name,
                 stand_in=self.stand_in,
-                why=self.why,
+                why_sound=self.why,
                 feature=self.state["feature"],
             )
             if any(m.edit_id == record.edit_id for m in _held(self.state)):
@@ -1338,7 +1334,7 @@ class AmendMunge(
         if (munge := held.get(self.edit_id)) is None:
             listed = ", ".join(held) or "none"
             return f"No munge of yours has that id. You hold: {listed}."
-        if munge.why.strip() == self.why.strip():
+        if munge.why_sound.strip() == self.why.strip():
             return "That is what the record already says. Nothing to amend."
         return Command(
             update={
@@ -1451,7 +1447,7 @@ def build_reviewer(
 
 @dataclasses.dataclass(frozen=True)
 class ReviewDeps:
-    pristine: Path
+    tree: SharedTree
     review: ReviewThunk
 
 
@@ -1489,7 +1485,7 @@ class RequestReview(
                 "escapes."
             )
             parts.append("The diff of the proposed edits:")
-            parts.append(munge_diff(deps.pristine, tuple(proposed)))
+            parts.append(munge_diff(deps.tree.pristine, deps.tree.source, tuple(proposed)))
             verdict = await deps.review(parts, self.tool_call_id)
         if verdict.good:
             return Command(
@@ -1606,7 +1602,6 @@ class EditorDeps:
     """What the author-facing tool needs to run one editor conversation."""
 
     target: HarnessTarget
-    pristine: Path
     runner: Callable[[EditorInput, str], Awaitable[EditorState]]
 
 
@@ -1675,7 +1670,7 @@ class CodeEditor(
                     "record a skip naming the kind of change it would have needed."
                 )
             applied = state["proposed"]
-            diff = munge_diff(deps.pristine, tuple(applied))
+            diff = munge_diff(deps.target.tree.pristine, deps.target.tree.source, tuple(applied))
         listing = "\n".join(f"  {m.edit_id}" for m in applied)
         return tool_state_update(
             self.tool_call_id,
@@ -1736,7 +1731,6 @@ def editor_tools(
     env: ServiceHost,
     *,
     target: HarnessTarget,
-    pristine: Path,
     read_tools: Sequence[BaseTool],
 ) -> list[BaseTool]:
     """The author's two program-editing tools: commission an edit, and take one back.
@@ -1769,7 +1763,7 @@ def editor_tools(
                 DropMunge.as_tool("drop_munge"),
                 AmendMunge.as_tool("amend_munge"),
                 RequestReview.bind(
-                    ReviewDeps(pristine=pristine, review=reviewer)
+                    ReviewDeps(tree=target.tree, review=reviewer)
                 ).as_tool("request_review"),
                 SubmitEdits.bind(target).as_tool("submit_edits"),
                 GiveUpEditing.as_tool("give_up"),
@@ -1790,7 +1784,7 @@ def editor_tools(
 
     return [
         CodeEditor.bind(
-            EditorDeps(target=target, pristine=pristine, runner=runner)
+            EditorDeps(target=target, runner=runner)
         ).as_tool("code_editor"),
         RevertMunge.as_tool("revert_munge"),
     ]

@@ -9,7 +9,7 @@ No LLM, no network, no cargo except in the one test that reads a dep-info fixtur
 
 import asyncio
 import dataclasses
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import pytest
@@ -48,9 +48,10 @@ from composer.spec.cvlr.munge import (
     merge_munges,
     munge_history,
 )
-from composer.spec.cvlr.tree import SharedTree
+from composer.spec.cvlr.tree import ProjectSource, SharedTree
 
 _RESERVE = "programs/p/src/reserve.rs"
+_SOURCE_DIRS = ProjectSource(roots=(PurePosixPath("programs/p/src"),))
 _SOURCE = """\
 pub fn redeem_fees(reserve: &mut Reserve) -> Result<u64> {
     let amount = reserve.calculate_fees()?;
@@ -77,7 +78,7 @@ def _target(tmp_path: Path):
         package_root=root / "programs" / "p",
         tuning=SimpleNamespace(),  # type: ignore[arg-type]
         unit=HarnessModule("vault"),
-        tree=SharedTree(pristine=root, root=root),
+        tree=SharedTree(pristine=root, root=root, source=_SOURCE_DIRS),
         build_sem=asyncio.Semaphore(1),
     )
 
@@ -199,7 +200,7 @@ async def test_a_redirect_of_the_program_s_own_module_is_gated_on_the_unit(tmp_p
         package_root=root / "programs" / "p",
         tuning=SimpleNamespace(),  # type: ignore[arg-type]
         unit=HarnessModule("vault"),
-        tree=SharedTree(pristine=pristine, root=root),
+        tree=SharedTree(pristine=pristine, root=root, source=_SOURCE_DIRS),
         build_sem=asyncio.Semaphore(1),
     )
     result = await _run(
@@ -261,7 +262,7 @@ def test_every_choice_maps_to_a_kind_and_renders():
 
 def _munge(function: str = "calculate_fees") -> FunctionMunge:
     return FunctionMunge(
-        path=_RESERVE, function=function, kind=EarlyPanic(), why="w", feature="unit_vault"
+        path=_RESERVE, function=function, kind=EarlyPanic(), why_sound="w", feature="unit_vault"
     )
 
 
@@ -338,7 +339,7 @@ async def test_amending_rewrites_the_prose_and_leaves_the_edit_alone():
     )
     (amendment,) = result.update["proposed"]
     assert amendment.edit_id == one.edit_id
-    assert amendment.why == "superseded: the stand-in drops the whole cross-program effect"
+    assert amendment.why_sound == "superseded: the stand-in drops the whole cross-program effect"
     assert amendment.kind == one.kind and amendment.path == one.path
 
 
@@ -355,7 +356,7 @@ async def test_a_munge_committed_in_an_earlier_session_can_still_be_amended():
         why="corrected",
     )
     (amendment,) = result.update["proposed"]
-    assert amendment.why == "corrected"
+    assert amendment.why_sound == "corrected"
 
 
 @pytest.mark.asyncio
@@ -421,7 +422,7 @@ def test_an_amended_record_replaces_the_one_it_corrects():
     """Through the state reducer, since that is where the correction would otherwise be dropped:
     the ids match, so the old behaviour discarded the amendment as a duplicate."""
     one = _munge()
-    corrected = dataclasses.replace(one, why="corrected")
+    corrected = dataclasses.replace(one, why_sound="corrected")
     assert merge_munges([one], [corrected]) == [corrected]
     # And it does not move: a re-worded justification is not a re-ordering of the edits.
     other = _munge("redeem_fees")
@@ -432,7 +433,7 @@ def test_the_digest_ignores_prose_and_not_substance():
     """Keyed on `edit_id` for the reason `munge_history` is: re-wording a justification must not cost
     a review, and changing what the compiler sees must."""
     one = _munge()
-    reworded = dataclasses.replace(one, why="a clearer second wording")
+    reworded = dataclasses.replace(one, why_sound="a clearer second wording")
     other = _munge("redeem_fees")
     assert editor_mod._digest([one]) == editor_mod._digest([reworded])
     assert editor_mod._digest([one]) != editor_mod._digest([one, other])
@@ -442,7 +443,7 @@ def test_the_digest_ignores_prose_and_not_substance():
 async def test_reviewing_nothing_is_refused(tmp_path: Path):
     answer = await _run(
         RequestReview,
-        SimpleNamespace(pristine=tmp_path, review=None),
+        SimpleNamespace(tree=None, review=None),
         _editor_state(proposed=[]),
         summary=EditsProposed(executive_summary="s", why_sound="w"),
     )

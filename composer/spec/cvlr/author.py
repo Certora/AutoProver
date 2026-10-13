@@ -217,10 +217,8 @@ class Rebuttal(RebuttalBase):
 class FeedbackDependencies:
     thunk: ContextualFeedbackThunk[Rebuttal, HarnessAssumptions]
     stamper: ValidationStamper
-    #: The developer's project, so the judge is shown the munge *diff* rather than a description of
-    #: it (``docs/who-edits-the-program.md`` §4, move B).
-    pristine: Path
-    #: The run's shared tree, which holds *every* unit's munges. Needed because one kind is not
+    #: The run's shared tree, which holds *every* unit's munges, and the project the judge is shown
+    #: their *diff* against rather than a description of them. Needed because one kind is not
     #: scoped to the unit that recorded it: a redirect of a module in a local dependency is gated on
     #: the shared ``certora`` feature, so it is in force for this unit's build whoever asked for it
     #: (``docs/who-edits-the-program.md`` §11.3). A judge shown only its own unit's munges would be
@@ -262,7 +260,7 @@ class FeedbackTool(
         skipped = self.state["skipped"]
         with self.tool_deps() as deps:
             verdict = await deps.thunk(
-                harness_assumptions(self.state, deps.pristine, deps.tree.run_global_munges()),
+                harness_assumptions(self.state, deps.tree, deps.tree.run_global_munges()),
                 draft,
                 skipped,
                 self.rebuttals,
@@ -637,7 +635,6 @@ async def batch_cvlr_generation(
     cvlr_versions: str,
     target: HarnessTarget,
     verify: VerifyDeps,
-    pristine: Path,
 ) -> BatchHarnessResult:
     """Author one harness module covering ``props``.
 
@@ -648,9 +645,6 @@ async def batch_cvlr_generation(
     working tree and where this unit's draft is staged. One tree for every unit, because each unit's
     module is behind its own cargo feature and a module a build does not compile cannot break it
     (``docs/single-working-tree.md``).
-
-    ``pristine`` is the developer's project — the *from* side of every munge diff, and the only thing
-    the editor sub-agent needs that is not on ``target``.
 
     CVLR itself is not mounted here. The author and the judge both reach it through
     ``cvlr_research`` in ``env.rag_tools`` (``docs/cvlr-api-docs-plan.md`` §5), which is the one
@@ -674,7 +668,6 @@ async def batch_cvlr_generation(
             judge_ctx, env, props, component, program, cvlr_versions
         ),
         stamper=make_validation_stamper(FEEDBACK),
-        pristine=pristine,
         tree=target.tree,
     )
 
@@ -723,7 +716,7 @@ async def batch_cvlr_generation(
                     ),
                 ),
                 *editor_tools(
-                    ctx, env, target=target, pristine=pristine, read_tools=env.source_tools
+                    ctx, env, target=target, read_tools=env.source_tools
                 ),
                 FeedbackTool.bind(feedback_deps).as_tool("feedback_tool"),
                 PublishResultTool.bind(titles).as_tool("result"),

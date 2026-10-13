@@ -21,7 +21,7 @@ from typing import Any, Callable, Collection, Literal, Mapping, TypedDict
 
 from graphcore.tools.vfs import GlobalExcludeArg
 
-from composer.layout import INTERNAL_DIR
+from composer.layout import RUST_BUILD_DIRS
 from composer.spec.context import SourceCode
 from composer.spec.code_explorer import CodeExplorerPromptParams
 from composer.spec.gen_types import TypedTemplate
@@ -271,9 +271,9 @@ def _withheld_tree(directory: str) -> str:
     return rf"((.*/)?{d}(/.*)?)"
 
 
-#: Cargo/Anchor project layout: hide build output, VCS, lockfiles, and the JS side; keep the
-#: crate sources and `tests/`. A pattern suffices here — unlike the Foundry-shaped
-#: ``fs_forbidden_read``, nothing needs carving back out of an excluded directory.
+#: Cargo/Anchor project layout: hide build output (:data:`~composer.layout.RUST_BUILD_DIRS`), VCS
+#: and lockfiles; keep the crate sources and `tests/`. A pattern suffices here — unlike the
+#: Foundry-shaped ``fs_forbidden_read``, nothing needs carving back out of an excluded directory.
 #:
 #: ``INTERNAL_DIR`` is withheld whole, as :mod:`composer.layout` describes and as
 #: ``fs_forbidden_read`` does for Solidity: a confined Rust build fills it with hundreds of MB —
@@ -282,10 +282,8 @@ def _withheld_tree(directory: str) -> str:
 RUST_FORBIDDEN_READ = "|".join(
     (
         r"(^\.git.*)",
-        r"(^node_modules/.*)",
         r"(.*\.lock$)",
-        _withheld_tree(INTERNAL_DIR.as_posix()),
-        _withheld_tree("target"),
+        *(_withheld_tree(directory) for directory in RUST_BUILD_DIRS),
     )
 )
 

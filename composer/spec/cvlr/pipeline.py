@@ -242,7 +242,6 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
             cvlr_versions=self.deps.versions,
             target=target,
             verify=verify,
-            pristine=self.build.tree.pristine,
         )
 
     @override
@@ -301,12 +300,12 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
                         AppliedEditRecord(
                             edit_id=m.edit_id,
                             executive_summary=f"{m.subject} in {m.path}: {m.describe()}",
-                            why_sound=m.why,
+                            why_sound=m.why_sound,
                         )
                         for m in harness.munges
                     ],
                     cumulative_diff=await asyncio.to_thread(
-                        munge_diff, project, tuple(harness.munges)
+                        munge_diff, project, self.build.tree.source, tuple(harness.munges)
                     ),
                 )
             )
@@ -379,14 +378,12 @@ class CvlrStagedFormalizer(StagedFormalizer[GeneratedHarness, SolanaComponentIns
             len(added),
         )
 
-        tree = SharedTree(pristine=project, root=project / WORK_DIR / BUILD_DIR)
-        stale = await tree.materialize()
-        if stale:
-            _log.info(
-                "cvlr: the reused working tree was behind the project in %d file(s): %s",
-                len(stale),
-                ", ".join(stale[:20]) + (" …" if len(stale) > 20 else ""),
-            )
+        tree = SharedTree(
+            pristine=project,
+            root=project / WORK_DIR / BUILD_DIR,
+            source=self.deps.preflight.source,
+        )
+        await tree.materialize()
         session = CargoSession(
             workdir=tree.root, sandbox=self.deps.sandbox, toolchain=HOST_RUST_TOOLCHAIN
         )

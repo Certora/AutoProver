@@ -18,7 +18,7 @@ from composer.diagnostics.timing import RunSummary, install_run_summary
 from composer.spec.cvlr import verify as verify_mod
 from composer.spec.cvlr.harness import HarnessModule
 from composer.spec.cvlr.prover import BuildRejected, Prepared, Submission
-from composer.spec.cvlr.tree import SharedTree
+from composer.spec.cvlr.tree import ProjectSource, SharedTree
 from composer.spec.cvlr.verify import BuildPermit, HarnessTarget, _RunAccounting
 
 pytestmark = pytest.mark.asyncio
@@ -34,7 +34,7 @@ def _deps(tmp_path: Path, sem: asyncio.Semaphore) -> SimpleNamespace:
         package_root=tmp_path,
         tuning=SimpleNamespace(),  # type: ignore[arg-type]
         unit=HarnessModule("a"),
-        tree=SharedTree(pristine=tmp_path, root=tmp_path),
+        tree=SharedTree(pristine=tmp_path, root=tmp_path, source=ProjectSource(roots=())),
         build_sem=sem,
     )
 
