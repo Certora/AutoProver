@@ -278,8 +278,8 @@ is not reachable today. Skip it and say so.
 **Build the accounts struct field by field, from nondet account infos.** `cvlr-solana` hands you an
 array of unconstrained `AccountInfo`s; each field of the handler's `#[derive(Accounts)]` struct is
 then constructed from one of them — `Account::try_from`, `Signer::try_from`, `Program::try_from`,
-`AccountLoader::try_from` for a zero-copy account. Read `cvlr-solana`'s source for the current
-spelling of the nondet-accounts helper rather than guessing; it has changed across releases.
+`AccountLoader::try_from` for a zero-copy account. Ask `cvlr_research` for the current spelling of
+the nondet-accounts helper rather than guessing; it has changed across releases.
 
 **Put the account array on the heap.** `let accounts = Box::new(cvlr_deserialize_nondet_accounts());`
 The prover does not fully support stack-allocated arrays, and this one is large. The same advice

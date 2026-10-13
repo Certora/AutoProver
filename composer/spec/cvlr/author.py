@@ -20,9 +20,9 @@ Four things are CVLR's own:
 * **A failing rule may be the finding.** ``expect_rule_failure`` records that claim; the gate then
   stops treating the violation as unfinished work. Without it the incentive is to weaken the rule
   until the bug disappears.
-* **The CVLR crate source is mounted and authoritative** (§5.5). The prompt says so, because the
-  hallucination this backend is most exposed to is an invented macro, and the answer is on disk in
-  the version this build resolves.
+* **CVLR facts come from ``cvlr_research``.** The hallucination this backend is most exposed to is
+  an invented macro, and the researcher answers from a reference generated from the releases this
+  build resolves.
 """
 
 import asyncio
@@ -199,15 +199,15 @@ class Rebuttal(RebuttalBase):
     evidence_type: Literal[
         "compilation_failure",
         "prover_output",
-        "crate_source",
+        "cvlr_reference",
         "manual_citation",
         "reasoned",
     ] = Field(
         description=(
             "What backs this rebuttal. Use 'compilation_failure' for rustc output from trying the "
             "suggestion, 'prover_output' for a verdict or counterexample showing what the "
-            "suggestion actually does, 'crate_source' when the CVLR source you read contradicts it "
-            "(cite the versioned path), 'manual_citation' for a documentation citation, and "
+            "suggestion actually does, 'cvlr_reference' when cvlr_research's answer from the CVLR "
+            "API reference contradicts it (quote that answer), 'manual_citation' for a documentation citation, and "
             "'reasoned' for an argument backed by neither."
         )
     )
@@ -390,7 +390,7 @@ def build_feedback_thunk(
         if rebuttals:
             parts.append(
                 "The author has filed the following rebuttals against prior-round feedback. "
-                "Empirical evidence ('compilation_failure', 'prover_output', 'crate_source', "
+                "Empirical evidence ('compilation_failure', 'prover_output', 'cvlr_reference', "
                 "'manual_citation') carries near-binding weight; 'reasoned' rebuttals are a "
                 "conversation, not a veto."
             )
@@ -501,9 +501,9 @@ To enable you to continue effectively, summarize the current state of your task.
 3. Any rules you have marked expected-to-fail, and why you believe the violation is real.
 4. Any unresolved feedback: rustc errors from `cargo_check`, verdicts or counterexamples from
    `verify_rules`, or points from the feedback judge you have not yet addressed.
-5. What you learned from reading the CVLR crate source — which helpers and macros exist at the
-   version this project resolves, and the exact paths they live under — so the next iteration does
-   not have to look them up again.
+5. What `cvlr_research` established — which helpers and macros exist at the version this project
+   resolves, and their exact names and signatures — so the next iteration does not have to ask
+   again.
 """
 
     @override
