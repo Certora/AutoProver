@@ -243,8 +243,8 @@ logical behavior may not."*
 
 > **The count is wrong, and by a lot.** "The one project in the corpus that carries a source-level
 > munge" is nine of eleven: counting `cfg_attr`-with-`certora` outside `certora/` trees gives
-> restaking 73, spl 50, klend-audit 43, stake-pool 21, kamino 13, smart-account 12, manifest 10,
-> vault-tutorial 5, token 3; only fluid and SolanaExamples are clean. And the vocabulary across those
+> restaking 73, spl 50, Project A 43, stake-pool 21, a vault project 13, smart-account 12, manifest 10,
+> vault-tutorial 5, token 3; only the reference project and SolanaExamples are clean. And the vocabulary across those
 > is six *kinds*: beyond `early_panic` (152 sites) and `mock_fn` (~47) there are `certora_make_pub`
 > (6 — pure visibility widening, universally sound by construction, but a **project-local proc
 > macro** with no counterpart in `cvlr`, and Rust cannot make visibility conditional on a feature
@@ -258,7 +258,7 @@ logical behavior may not."*
 > trigger 5 asks about. Rewriting this section against that evidence has not been done.
 >
 > One thing the corpus also settles: `cvlr::mock_fn` takes a `when` parameter naming a cargo feature,
-> and the conf's `cargo_features` selects which mocks are live per run — kamino metavault declares
+> and the conf's `cargo_features` selects which mocks are live per run — a vault project declares
 > eleven such features under the comment *"Per-conf prover mocks; enabled via `cargo_features`. Inert
 > without `certora`."*. That is what makes a source munge scopable at all, and
 > [single-working-tree.md](single-working-tree.md) §2.3 is what this backend does with it.

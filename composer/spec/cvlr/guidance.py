@@ -21,7 +21,7 @@ things that genuinely have no rule.
 
 Everything asserted here is traceable: the Methodology chapter of the published Solana manual
 (items 4, 6, 7, 8, 10, 15). Where the
-manual and the surveyed projects disagree, the manual wins — see ``docs/cvlr-capture-plan.md`` §4.5
+manual and the surveyed projects disagree, the manual wins — see ``docs/cvlr-knowledge-plan.md`` §4.4
 for why recurrence alone is the wrong axis.
 
 **Soroban's counterpart is deliberately absent.** ``docs/cvlr-backend-plan.md`` §4.4 says not to

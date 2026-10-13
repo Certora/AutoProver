@@ -98,9 +98,9 @@ with the expected parse error.
 
 `cvlr::mock_fn` takes a `when` parameter (`cvlr-macros-0.6.1/src/mock.rs`) defaulting to `"certora"`,
 and expands to the original function under `#[cfg(not(feature = when))]`. The corpus uses it to keep
-a menu of mocks in the source, each dormant until a conf asks for it — kamino metavault declares
+a menu of mocks in the source, each dormant until a conf asks for it — a vault project declares
 eleven such features under the comment *"Per-conf prover mocks; enabled via `cargo_features`. Inert
-without `certora`."*, and klend-audit eleven more.
+without `certora`."*, and Project A eleven more.
 
 This backend used to do the opposite: `attribute_line` was always called with `DEFAULT_FEATURE`, so
 every munge was on for every unit. In a shared tree that is a semantic leak — unit A's mock silently
@@ -388,8 +388,8 @@ Two findings from the corpus survey that motivated this plan but belong in a rev
 [munge-and-working-copies.md](munge-and-working-copies.md) §4 and §7:
 
 * **Source munging is in 9 of 11 corpus projects, not one.** Counting `cfg_attr`-with-`certora`
-  outside `certora/` trees: restaking 73, spl 50, klend-audit 43, stake-pool 21, kamino 13,
-  smart-account 12, manifest 10, vault-tutorial 5, token 3. Only fluid and SolanaExamples are clean.
+  outside `certora/` trees: restaking 73, spl 50, Project A 43, stake-pool 21, a vault project 13,
+  smart-account 12, manifest 10, vault-tutorial 5, token 3. Only the reference project and SolanaExamples are clean.
 * **The vocabulary is six kinds, not two.** Beyond `early_panic` (152 sites) and `mock_fn` (~47):
   `certora_make_pub` (6 — pure visibility widening, universally sound by construction),
   `cvlr_hook_on_entry`/`on_exit` (9 — a call to a spec-side function at a function's entry or exit,

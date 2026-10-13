@@ -10,8 +10,9 @@ groups below belong in different places and one of them cannot be public.
 downgraded after the fact and one has replaced them, which is worth stating plainly because this file
 was wrong twice in the same direction. P1 does not block: production depends on `Certora/anchor`, a
 maintained fork whose `Error` is unboxed. P4 does not block either, and the cause turned out to be
-our own author prompt rather than the prover — see its correction. **P6 does block**, for any handler
-that performs a CPI and then updates its own state, which is most of them; it is the live one. **P7
+our own author prompt rather than the prover — see its correction. **P6 was downgraded too**: a
+direct probe on 2026-09-29 did not reproduce it, and the handler form it was observed in is
+unmeasured. **P7
 also blocks**, for any function that multiplies in `i128` — narrower, and already filed as CERT-10103
 with a fix in flight, which makes it the only entry in this group with a known landing. **P8 blocks
 nothing today and blocks a change we wanted**: two shipped flags that defeat each other, measured
@@ -30,6 +31,10 @@ entry, and unlike the others it was corrupting our own output rather than merely
 concrete fix we have already verified locally. `composer/spec/cvlr/env_paths.py` works around T1 at
 emit time and `composer/spec/cvlr/munge.py` works around T7 by writing the fork redirect the
 template omits; the rest are worked around by not reproducing them.
+
+**Group M — the published Solana manual.** Two examples in the manual that fail to compile
+against every CVLR release, found by compiling them. Small, public, and cheap to fix in the
+`Certora/Documentation` repository.
 
 **Group C — the CVLR crates.** The published `cvlr-*` releases the reference set pins. One entry, and
 it is the odd one here: not a bug but a release-cadence gap, recorded because its effect is a hard
@@ -61,6 +66,8 @@ the write-up gives the line number rather than the name.
 | [T6](#t6) | `[workspace.dependencies]` pins CVLR by hand | minor |
 | [T7](#t7) | Nothing points a new project at the Anchor fork it needs | **major** |
 | [T8](#t8) | A canonical summary is spelled for a `RawVec` symbol current toolchains no longer emit | major |
+| [M1](#m1) | The manual's `cvlr_rules!` example puts a trailing comma after `bases: [...]`, which the macro rejects | minor |
+| [M2](#m2) | The manual types `cvlr_deserialize_nondet_accounts()` as `[AccountInfo; 8]`; it returns 16 | minor |
 | [C1](#c1) | `cvlr-solana` is bound to `solana-program` 2.2, so no program on the current Solana SDK can be scaffolded at all | **blocking** for every SDK 3.x target |
 
 ---
@@ -942,9 +949,9 @@ Note this is a defect in the *files*, not in the prover: they were correct when 
 `cvlr_inlining_anchor.txt:39` is an `#[inline]` directive whose regex names a particular program's
 error enum and its module path. Two consequences. It is inert for every other project, which is
 harmless; and a file presented as canonical carries the name of somebody's codebase, which is a
-question about the file rather than about verification. The knowledge corpus we built separately
-records this pattern as the *project-specific* idiom belonging in the per-package layer, which is
-exactly where the template's own three-layer split says it should live.
+question about the file rather than about verification. Across the surveyed projects this is the
+*project-specific* idiom, and it belongs in the per-package layer, which is exactly where the
+template's own three-layer split says it should live.
 
 Fix: move it to the package layer, or drop it.
 
@@ -1111,9 +1118,33 @@ snapshot is defensible if it is declared. It does not work for a client on code 
 and it expires: the gap widens every time a maintained program bumps its SDK.
 
 Fix: a `cvlr-solana` release line per platform generation, which is how
-[`cvlr_reference.py`](../composer/spec/cvlr_reference.py) already models the world —
+[`reference.py`](../composer/spec/cvlr/reference.py) already models the world —
 `PlatformGeneration` exists precisely because a chain crate implies a generation. Widening the
 existing pin is not enough on its own: the identity of `AccountInfo` comes from the crate that
 defines it, so one release cannot satisfy both generations regardless of how the facade is pinned.
 Until such a release exists, `ChainReference.platform` is documentation of a constraint rather than
 a choice anyone can make.
+
+---
+
+## M1
+
+### The manual's `cvlr_rules!` example puts a trailing comma after `bases: [...]`
+
+The manual's parametric-rules example writes `cvlr_rules! { … bases: [a, b, c], }`. The macro arm is
+`bases: [ $($base:ident),* $(,)? ]`, which accepts a trailing comma *inside* the brackets and not
+after them, so the example fails to compile against every release.
+
+Fix: drop the comma after the closing bracket.
+
+## M2
+
+### The manual types `cvlr_deserialize_nondet_accounts()` as `[AccountInfo; 8]`; it returns 16
+
+The manual writes `let acc_infos: [AccountInfo; 8] = cvlr_deserialize_nondet_accounts();`. Both
+`cvlr-solana` 0.5.0 and its development branch return a hard-coded `[AccountInfo<'a>; 16]`, so the
+example is a type error. The research sub-agent caught the same disagreement at run time, between the
+manual and the generated API reference, and named the manual stale
+([cvlr-api-docs-plan.md](./cvlr-api-docs-plan.md) §8).
+
+Fix: `[AccountInfo; 16]`, or let the type be inferred.

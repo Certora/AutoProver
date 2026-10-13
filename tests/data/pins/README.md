@@ -34,8 +34,7 @@ than plausible, and both are worth repeating if another fixture is ever recovere
 ### Which component to pin
 
 `Pool_Initialization` is the wrong default despite being component 0. The normative hand-written
-verification of this program (`certora-cvlr-kb`, project `stake-pool`, spec branch
-`certora-ci/sep-2025`) has 23 rules and **verifies no Initialize rule at all**, and a probe
+verification of this program (spec branch `certora-ci/sep-2025`) has 23 rules and **verifies no Initialize rule at all**, and a probe
 confirmed why: with the accounts unconstrained, no successful `Initialize` execution exists in the
 Prover's model, so every success-path rule comes back `SANITY_FAILED`. A gate pinned there can fail
 for reasons that are not our fault, which is the opposite of what a gate is for.

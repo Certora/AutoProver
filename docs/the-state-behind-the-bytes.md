@@ -59,7 +59,7 @@ stand-in for it is a stand-in for all of them.
 
 ## 3. What the normative verification does
 
-`certora-cvlr-kb`'s `stake-pool` project (spec branch `certora-ci/sep-2025`, tier normative) verifies
+The normative stake-pool verification (spec branch `certora-ci/sep-2025`) verifies
 these handlers. It uses **two different techniques for two different shapes**, and conflating them is
 the mistake §8 records:
 
@@ -279,7 +279,7 @@ of the token-account check for the second.
 cannot be applied to an inherent method. Its macro emits `#vis use #mock_fn as #ident;`
 (`cvlr-macros-0.6.1/src/mock.rs:44`), and a `use` item inside an `impl` block is not a method — the
 attempt fails with `E0599: no method named check_manager_fee_info found`. That is why both the
-stake-pool verification and fluid replace methods with a *trait* rather than `mock_fn`. It is a
+stake-pool verification and the reference project replace methods with a *trait* rather than `mock_fn`. It is a
 second gap in the editor's charter, orthogonal to this document's: `mock_fn` reaches free functions
 only, and a large share of Solana state logic lives in `impl` blocks.
 
@@ -293,9 +293,9 @@ the survey is worth more than the guess. Of six local checkouts with CVLR specs:
 | **stake-pool** | native, borsh **derive** | the derived (de)serializer | **swap the derives**, hand-written impls over a global |
 | manifest | native, hypertree | accessor *functions* (`get_helper`) | replaced functions dispatching to globals |
 | restaking | Anchor | loader *functions* | `mock_fn` |
-| fluid | Anchor | `load`/`load_mut` *methods* | a `LoadMock` trait over a global DB |
+| the reference project | Anchor | `load`/`load_mut` *methods* | a `LoadMock` trait over a global DB |
 | smart-account | Anchor | — | `certora_make_pub`, nondet `Vec`; no state indirection |
-| klend / kvault | Anchor | — | no derive-level munge at all |
+| Project A / a vault project | Anchor | — | no derive-level munge at all |
 
 **No Anchor project swaps a derive.** The seam is always "wherever the program turns bytes into a
 typed value", but its *form* differs — and in every case except stake-pool that form is **a function
@@ -307,7 +307,7 @@ because a `derive` generated it. That is a narrower justification than §5 claim
 it says precisely when the seventh kind is the only option, and — for Anchor targets, which is most
 new Solana development — the answer is that it never is.
 
-Worth stating as a limit on this survey: I could not determine how fluid's `LoadMock` takes
+Worth stating as a limit on this survey: I could not determine how the reference project's `LoadMock` takes
 precedence over `BranchAccounts`'s *inherent* `load`, which Rust resolves first and which carries no
 `certora` gating in `branch.rs`. The mechanism is either something I missed or the specs call it
 explicitly; either way the row above describes what it replaces, not how it wins.
@@ -378,7 +378,7 @@ indirection and they do not agree:
 |---|---|---|---|
 | **stake-pool** | one `static mut *mut StakePool`; the borsh impls redirect to it | 1 | nothing — no second instance is representable |
 | **manifest** | named globals per instance (`MAIN_SEAT_PK`, `SECOND_SEAT_PK`, …) over one fixed backing array with constant indices; the accessors dispatch on the index | 2 seats, 1 bid, 1 ask | **`cvt_assert!(false)`** |
-| **fluid** | `[MaybeUninit<RefCell<T>>; 2]` per type, behind a `LoadMock::load(idx)` trait | 2 allocated | index discarded — see below |
+| **the reference project** | `[MaybeUninit<RefCell<T>>; 2]` per type, behind a `LoadMock::load(idx)` trait | 2 allocated | index discarded — see below |
 
 (The fourth, `smart-account`, uses `alloc_havoced` to build a nondet `Vec<T>` rather than to model
 state, and is not this pattern at all.)
@@ -401,7 +401,7 @@ seat *fails*, with a counterexample naming the index.
 It also generalises past accounts. The discriminator is whatever the program uses to tell instances
 apart — a `DataIndex` here, a `Pubkey` elsewhere — and the stand-in dispatches on it.
 
-**Fluid is the cautionary half, and worth reading before copying anything.** All three of its
+**The reference project is the cautionary half, and worth reading before copying anything.** All three of its
 `load`/`load_mut` implementations take an index and ignore it:
 
 ```rust
