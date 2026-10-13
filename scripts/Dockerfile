@@ -55,10 +55,10 @@ RUN git clone --depth 1 https://github.com/Certora/Documentation.git docs
 RUN python -m venv /venv \
  && /venv/bin/pip install --no-cache-dir -r /build/docs/requirements.txt
 
-# cvl -> the base rag_db (scripts/populate_rag.sh); solana -> the methodology half of cvlr_kb.
+# cvl -> the base rag_db (scripts/populate_rag.sh); solana -> cvlr_kb (scripts/populate_cvlr_rag.sh).
 # Both are built here, in the base image, even though only a chain image runs the backend that
-# reads the second: postgres is one compose service shared by every image, so a single setup-db
-# has to be able to populate every corpus whichever container is run against it next.
+# reads the second: postgres is one compose service shared by every image, so a setup-db from any
+# container populates every corpus this stage can build. (cvlr_api_kb is the exception; see below.)
 # TODO: Include extended_rag for sanity analyzer
 RUN set -eux; \
     mkdir -p /out; \
@@ -161,15 +161,10 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
       --extra cpu --extra ml --extra "$CERTORA_CLI_PACKAGE" --group ragbuild
 
 # Pre-built documentation HTML — the entrypoint's setup-db reads cvl.html to populate rag_db and
-# solana.html to populate the methodology half of cvlr_kb. PROVENANCE names the docs revision both
-# came from.
+# solana.html to populate cvlr_kb. PROVENANCE names the docs revision both came from. The other CVLR
+# corpus, cvlr_api_kb, is generated from the crates by rustdoc, so its manifest is baked into the
+# Solana image (scripts/Dockerfile.solana), which has the toolchain; this one carries none.
 COPY --from=docs-builder /out/cvl.html /out/solana.html /out/PROVENANCE $AUTOPROVE_HOME/prover-docs/
-
-# The rest of cvlr_kb is not baked in. The generated CVLR crate reference and the project-derived
-# practice entries are produced in the private certora-cvlr-kb repo and ship in its package, so the
-# entrypoint's setup-db finds them through CVLR_KB_REPO or an installed `certora_cvlr_kb`. An image
-# without them still has the manual; an image with neither half has no CVLR corpus, which the
-# backend reports rather than crashes on.
 
 # The `run-confined` command-sandbox launcher is intentionally NOT baked in here
 # (not every AutoProver image needs it). Services that select the `launcher`

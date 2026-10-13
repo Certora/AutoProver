@@ -57,45 +57,20 @@ if [[ "${1:-}" == "setup-db" ]]; then
   echo "[autoprove] populating LangGraph knowledge base ..."
   python -m composer.scripts.kb_populate
 
-  # The `cvlr_kb` corpus. Its methodology half is the Solana manual built into this image beside the
-  # CVL one, ingested by the same producer; its surface and practice halves are two manifests that
-  # share the tag, with the importer numbering their sections apart (docs/cvlr-capture-plan.md
-  # §8.2). Those two ship in the separate certora-cvlr-kb package, so they are here only if it is
-  # installed or CVLR_KB_REPO points at a checkout.
-  #
-  # An install with neither half is supported (the backend falls back to its static guidance), so
-  # finding nothing reports a skip rather than failing setup-db.
+  # The two CVLR corpora. `cvlr_kb` is the Solana manual, built into every image beside the CVL one
+  # so that a setup-db from any container populates it. `cvlr_api_kb` is generated from the pinned
+  # CVLR crates when the Solana image is built (scripts/Dockerfile.solana), because it needs a nightly
+  # toolchain the base image does not carry; a setup-db run from the base image skips it.
   echo "[autoprove] populating cvlr_kb from the Solana manual ..."
-  cvlr_conn="$(python -c 'from composer.rag.db import CVLR_DEFAULT_CONNECTION as c; print(c)')"
-  python -m composer.scripts.ragbuild \
-      --output "$cvlr_conn" \
+  python -m composer.scripts.ragbuild --corpus cvlr \
       "$AUTOPROVE_HOME/prover-docs/solana.html"
 
-  cvlr_manifests=()
-  if [[ -n "${CVLR_KB_REPO:-}" && -d "${CVLR_KB_REPO%/}/src/certora_cvlr_kb/data" ]]; then
-    shopt -s nullglob
-    cvlr_manifests+=("${CVLR_KB_REPO%/}"/src/certora_cvlr_kb/data/*.rag.json)
-    shopt -u nullglob
-  fi
-  # The installed package, consulted only when a checkout did not supply them, so a checkout you are
-  # actively editing always wins over an older installed copy.
-  if [[ ${#cvlr_manifests[@]} -eq 0 ]]; then
-    pkg_probe='
-try:
-    from certora_cvlr_kb import manifests
-    print("\n".join(str(p) for p in manifests()))
-except Exception:
-    pass
-'
-    while IFS= read -r line; do
-      [[ -n "$line" ]] && cvlr_manifests+=("$line")
-    done < <(python -c "$pkg_probe" 2>/dev/null || true)
-  fi
-  if [[ ${#cvlr_manifests[@]} -gt 0 ]]; then
-    echo "[autoprove] populating cvlr_kb from ${#cvlr_manifests[@]} manifest(s) ..."
-    python -m composer.scripts.rag_import "${cvlr_manifests[@]}"
+  cvlr_api_manifest="$AUTOPROVE_HOME/rag/cvlr_api_kb.rag.json"
+  if [[ -f "$cvlr_api_manifest" ]]; then
+    echo "[autoprove] populating cvlr_api_kb from ${cvlr_api_manifest} ..."
+    python -m composer.scripts.rag_import "$cvlr_api_manifest"
   else
-    echo "[autoprove] no cvlr_kb manifest found; the corpus has the manual but no crate reference"
+    echo "[autoprove] this image carries no CVLR API manifest; skipping cvlr_api_kb (run setup-db from autoprove-solana to populate it)"
   fi
 
   echo "[autoprove] setup-db done."

@@ -15,7 +15,8 @@
 #                  -f scripts/docker-compose.sandbox.yml \
 #                  -f scripts/docker-compose.solana.yml \
 #       --profile solana --profile sandbox build
-#   # setup-db populates every corpus against the shared postgres; either container can run it
+#   # setup-db populates every corpus against the shared postgres. Run it from this container: the
+#   # base one lacks the cvlr_api_kb manifest, which only this image can generate, and skips it
 #   docker compose -f scripts/docker-compose.yml \
 #                  -f scripts/docker-compose.sandbox.yml \
 #                  -f scripts/docker-compose.solana.yml \

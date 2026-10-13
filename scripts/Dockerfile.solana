@@ -3,7 +3,8 @@
 # The Solana AutoProver container — `console-solana` / `tui-solana` — layered on the lean base
 # image (scripts/Dockerfile), which carries no Rust on purpose. This adds a host Rust toolchain,
 # Certora's SBF build subcommand, and the Solana platform-tools release a CVLR run builds with:
-# roughly 3 GB, which is why it is an image of its own rather than a flag on the base one.
+# roughly 3 GB, which is why it is an image of its own rather than a flag on the base one. It also
+# bakes in the `cvlr_api_kb` manifest, which only a Rust toolchain can generate.
 #
 # It bundles no `run-confined` launcher. The CVLR backend confines every cargo build and its
 # provider is fail-closed, so this image is run with both overlays — see
@@ -70,6 +71,30 @@ RUN set -eux; \
         --tools-version "$SOLANA_TOOLS_VERSION"; \
     test -d "$CERTORA_PLATFORM_TOOLS_ROOT/$SOLANA_TOOLS_VERSION"; \
     rm -rf "$CARGO_HOME/registry" "$CARGO_HOME/git"
+
+# The `cvlr_api_kb` manifest, generated here from rustdoc over the CVLR crates
+# composer/spec/cvlr/reference.py pins, and ingested by the entrypoint's setup-db from the path
+# below. Only the manifest is kept: the nightly toolchain rustdoc JSON needs and the registry it
+# reads are removed in the same layer, so neither costs image size. composer.scripts.cvlr_api_docs
+# runs cargo `--offline`, so the registry is warmed first by fetching the same dependency block
+# into a throwaway crate. A failure here fails the build: an image without the manifest would run
+# with an empty API corpus and nothing to say so. The nightly is pinned because the producer accepts
+# exactly one rustdoc JSON format_version, and a floating nightly would change it under the build.
+ARG RUST_NIGHTLY=nightly-2026-07-06
+RUN set -eux; \
+    rustup toolchain install "$RUST_NIGHTLY" --profile minimal; \
+    warm="$(mktemp -d)"; \
+    mkdir "$warm/src"; \
+    touch "$warm/src/lib.rs"; \
+    { printf '[package]\nname = "registry-warmup"\nversion = "0.0.0"\nedition = "2021"\n\n[dependencies]\n'; \
+      python -c 'from composer.spec.cvlr.reference import reference_for; print(reference_for("solana").cargo_dependencies())'; \
+    } > "$warm/Cargo.toml"; \
+    cargo fetch --manifest-path "$warm/Cargo.toml"; \
+    mkdir -p "$AUTOPROVE_HOME/rag"; \
+    python -m composer.scripts.cvlr_api_docs --chain solana --toolchain "$RUST_NIGHTLY" \
+        --output "$AUTOPROVE_HOME/rag/cvlr_api_kb.rag.json"; \
+    rustup toolchain uninstall "$RUST_NIGHTLY"; \
+    rm -rf "$warm" "$CARGO_HOME/registry" "$CARGO_HOME/git"
 
 # An empty global git config, which a confined build with a git dependency cannot start without.
 # libgit2 reads it before it will open a cached repository at all, and under Landlock the open of a

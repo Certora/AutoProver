@@ -72,3 +72,51 @@ def test_the_solana_image_restores_the_host_c_toolchain():
     a linker error about a crate the author never wrote. The base image purges ``build-essential``
     once its own wheels are built, which makes restoring it this image's job."""
     assert "build-essential" in _SOLANA_DOCKERFILE.read_text()
+
+
+def _run_instructions(dockerfile: Path) -> list[str]:
+    """Each ``RUN`` of a Dockerfile, its continuation lines joined and its comments dropped."""
+    lines = [line for line in dockerfile.read_text().splitlines() if not line.startswith("#")]
+    joined = re.sub(r"\\\n", " ", "\n".join(lines))
+    return [line for line in joined.splitlines() if line.startswith("RUN ")]
+
+
+def _api_manifest_run() -> str:
+    runs = [
+        run
+        for run in _run_instructions(_SOLANA_DOCKERFILE)
+        if "composer.scripts.cvlr_api_docs" in run
+    ]
+    assert len(runs) == 1, f"{_SOLANA_DOCKERFILE} should generate the cvlr_api_kb manifest in one RUN"
+    return runs[0]
+
+
+def test_the_entrypoint_ingests_the_api_manifest_the_solana_image_bakes():
+    """The manifest is written at build time and read at setup-db time, by two files that name its
+    path separately. If they disagree, setup-db takes the branch for an image that carries none —
+    a clean skip, by design, so the Solana image would ship an API corpus nothing ever ingests."""
+    output = re.search(r"--output \"(\$AUTOPROVE_HOME/\S+\.rag\.json)\"", _api_manifest_run())
+    assert output is not None, "the cvlr_api_docs step writes no manifest under $AUTOPROVE_HOME"
+    entrypoint = _ENTRYPOINT.read_text()
+    assert f'cvlr_api_manifest="{output[1]}"' in entrypoint
+    assert 'composer.scripts.rag_import "$cvlr_api_manifest"' in entrypoint
+
+
+def test_the_api_manifest_step_discards_its_toolchain_and_registry():
+    """Only the manifest is needed at run time. The nightly toolchain and the warmed registry have
+    to go in the same ``RUN`` that made them, because a later layer that deletes them hides them
+    without shrinking the image."""
+    run = _api_manifest_run()
+    assert 'rustup toolchain uninstall "$RUST_NIGHTLY"' in run
+    assert '"$CARGO_HOME/registry"' in run
+
+
+def test_the_api_manifest_is_generated_by_a_dated_nightly():
+    """The producer accepts exactly one rustdoc JSON ``format_version``, so a floating nightly would
+    break the image build the day the format moves. The toolchain installed, the one rustdoc runs
+    under and the one removed must all be the pinned one."""
+    pin = re.search(r"^ARG RUST_NIGHTLY=(\S+)$", _SOLANA_DOCKERFILE.read_text(), re.MULTILINE)
+    assert pin is not None and re.fullmatch(r"nightly-\d{4}-\d{2}-\d{2}", pin.group(1))
+    run = _api_manifest_run()
+    assert 'rustup toolchain install "$RUST_NIGHTLY"' in run
+    assert '--toolchain "$RUST_NIGHTLY"' in run
