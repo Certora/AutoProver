@@ -57,7 +57,7 @@ def _redirect(module: str = "liquidity_layer", **kw) -> ModuleRedirect:
         path=kw.pop("path", DECLARING),
         module=module,
         substitute=kw.pop("substitute", STAND_IN),
-        why="the liquidity CPI raises [3308] and its effects are not what the property is about",
+        why_sound="the liquidity CPI raises [3308] and its effects are not what the property is about",
         feature=kw.pop("feature", FEATURE),
     )
 
@@ -116,12 +116,20 @@ def test_the_stand_in_is_carried_as_a_created_file():
     }
 
 
-def test_the_other_kinds_create_nothing():
-    """``created`` is on every kind so a caller need not match on which one it has."""
-    from composer.spec.cvlr.munge import DeriveSwap, FunctionMunge, InlineNever
+def test_replay_carries_the_stand_in_beside_the_declaring_file(tmp_path):
+    """The tree and the report both take their files from replay, so the substitute has to come out
+    of it too — for the tree to compile it, and for the report's diff to show the code that was
+    actually verified."""
+    from composer.spec.cvlr.tree import ProjectSource, replay_files
 
-    assert FunctionMunge(path="a.rs", function="f", kind=InlineNever(), why="w").created == {}
-    assert DeriveSwap(path="a.rs", swaps=(), why="w").created == {}
+    (tmp_path / DECLARING).parent.mkdir(parents=True)
+    (tmp_path / DECLARING).write_text("pub mod liquidity_layer;\n")
+    source = ProjectSource(roots=(PurePosixPath("programs/lending/src"),))
+
+    replayed, drifted = replay_files(tmp_path, source, (_redirect(),))
+
+    assert not drifted
+    assert replayed["programs/lending/src/certora/mocks/invokes/liquidity_layer.rs"] == STAND_IN
 
 
 # ---------------------------------------------------------------------------------------------
@@ -308,13 +316,15 @@ def test_the_run_global_munges_are_the_ones_no_unit_feature_gates():
     """A redirect inside a dependency is gated on the shared `certora`, so it is compiled into
     every unit's build whoever recorded it — and every unit's judge has to be shown it."""
     from composer.spec.cvlr.conf import DEFAULT_FEATURE
-    from composer.spec.cvlr.tree import SharedTree, UnitEdits
+    from composer.spec.cvlr.tree import ProjectSource, SharedTree, UnitEdits
     from pathlib import Path
 
     mine = _redirect(feature=FEATURE)
     shared = _redirect(module="safe_math", path="crates/library/src/math/mod.rs",
                        feature=DEFAULT_FEATURE)
-    tree = SharedTree(pristine=Path("/nonexistent"), root=Path("/nonexistent"))
+    tree = SharedTree(
+        pristine=Path("/nonexistent"), root=Path("/nonexistent"), source=ProjectSource(roots=())
+    )
     tree._units["a"] = UnitEdits(module_path=Path("a.rs"), draft="", munges=(mine, shared))
 
     assert tree.run_global_munges() == (shared,), "only the un-gateable one travels"
@@ -323,12 +333,14 @@ def test_the_run_global_munges_are_the_ones_no_unit_feature_gates():
 def test_two_units_recording_the_same_run_global_munge_yield_one():
     """Deduplicated by `edit_id`, so a judge does not read the same caveat twice."""
     from composer.spec.cvlr.conf import DEFAULT_FEATURE
-    from composer.spec.cvlr.tree import SharedTree, UnitEdits
+    from composer.spec.cvlr.tree import ProjectSource, SharedTree, UnitEdits
     from pathlib import Path
 
     shared = _redirect(module="safe_math", path="crates/library/src/math/mod.rs",
                        feature=DEFAULT_FEATURE)
-    tree = SharedTree(pristine=Path("/nonexistent"), root=Path("/nonexistent"))
+    tree = SharedTree(
+        pristine=Path("/nonexistent"), root=Path("/nonexistent"), source=ProjectSource(roots=())
+    )
     for unit in ("a", "b"):
         tree._units[unit] = UnitEdits(module_path=Path(f"{unit}.rs"), draft="", munges=(shared,))
 

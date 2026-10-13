@@ -15,10 +15,13 @@ replacing what ``input_parts`` built.
 No cargo, no network, no prover, no model.
 """
 
+from pathlib import PurePosixPath
+
 from composer.authoring.judge import JudgeInput
 from composer.spec.cvlr.author import with_assumptions
 from composer.spec.cvlr.conf import OptimisticLoop, TunableConf
 from composer.spec.cvlr.munge import EarlyPanic, FunctionMunge, MockFn
+from composer.spec.cvlr.tree import ProjectSource, SharedTree
 from composer.spec.cvlr.state import HarnessAssumptions, harness_assumptions
 from composer.spec.cvlr.tuning import SummaryDirective
 from composer.spec.types import CheckName
@@ -31,7 +34,7 @@ _PANIC = FunctionMunge(
     path="programs/vault/src/lib.rs",
     function="apply_withdrawal",
     kind=EarlyPanic(),
-    why="[3308] on the checked_sub error construction; no property here is about rejection",
+    why_sound="[3308] on the checked_sub error construction; no property here is about rejection",
 )
 
 
@@ -80,7 +83,7 @@ def test_a_munge_reaches_the_judge_naming_the_function_and_what_changed():
     assert "apply_withdrawal" in briefing
     assert "programs/vault/src/lib.rs" in briefing
     assert EarlyPanic().describe() in briefing
-    assert _PANIC.why in briefing
+    assert _PANIC.why_sound in briefing
 
 
 def test_the_stand_in_is_named_when_a_function_was_mocked():
@@ -90,7 +93,7 @@ def test_the_stand_in_is_named_when_a_function_was_mocked():
         path="programs/vault/src/lib.rs",
         function="fee_of",
         kind=MockFn(stand_in="crate::certora::specs::withdraw::flat_fee"),
-        why="the fee curve is not what this property is about",
+        why_sound="the fee curve is not what this property is about",
     )
     assert "crate::certora::specs::withdraw::flat_fee" in _text(
         HarnessAssumptions(summaries=(), munges=(mock,))
@@ -230,10 +233,8 @@ def test_the_briefing_lands_after_what_input_parts_built():
 
 
 def test_the_judge_is_shown_the_diff_and_not_only_a_description(tmp_path):
-    """The half of ``docs/munge-and-working-copies.md`` §8 gap 1 that stayed open: EVM's reviewer
-    receives a diff, and this judge received a sentence the editor wrote about its own work. The
-    diff is derived from the munge records, so no working tree is involved and none has to exist.
-    """
+    """A description is the editor's account of its own work; the diff is the work. It is derived
+    from the munge records, so no working tree is involved and none has to exist."""
     source = "pub fn calculate_fees(r: &Reserve) -> Result<u64> {\n    Ok(0)\n}\n"
     (tmp_path / "programs" / "p" / "src").mkdir(parents=True)
     (tmp_path / "programs/p/src/reserve.rs").write_text(source)
@@ -242,13 +243,17 @@ def test_the_judge_is_shown_the_diff_and_not_only_a_description(tmp_path):
         path="programs/p/src/reserve.rs",
         function="calculate_fees",
         kind=EarlyPanic(),
-        why="[3308] on the error type's Display impl",
+        why_sound="[3308] on the error type's Display impl",
         feature="unit_vault",
     )
     briefing = _text(
         harness_assumptions(
             {"summaries": [], "expected_failures": {}, "munges": [munge], "prover_settings": TunableConf()},  # type: ignore[arg-type]
-            tmp_path,
+            SharedTree(
+                pristine=tmp_path,
+                root=tmp_path / "tree",
+                source=ProjectSource(roots=(PurePosixPath("programs/p/src"),)),
+            ),
         )
     )
     assert '+#[cfg_attr(feature = "unit_vault", cvlr::early_panic)]' in briefing
@@ -259,7 +264,7 @@ def test_a_briefing_without_a_project_still_describes_the_munges(tmp_path):
     """The diff is an addition, not a replacement: a caller with no project on hand gets the weaker
     briefing rather than an error, and the descriptions it always had."""
     munge = FunctionMunge(
-        path="p.rs", function="f", kind=EarlyPanic(), why="w", feature="unit_vault"
+        path="p.rs", function="f", kind=EarlyPanic(), why_sound="w", feature="unit_vault"
     )
     briefing = _text(
         harness_assumptions({"summaries": [], "expected_failures": {}, "munges": [munge], "prover_settings": TunableConf()})  # type: ignore[arg-type]

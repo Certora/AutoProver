@@ -4,30 +4,32 @@ No cargo and no network.
 """
 
 import textwrap
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 
 import pytest
 
-from composer.layout import INTERNAL_DIR
-from composer.sandbox.recipes import SANDBOX_CARGO_DIR
 from composer.spec.cvlr.munge import (
     AlreadyMunged,
     EarlyPanic,
-    FunctionAmbiguous,
     FunctionExtraction,
-    FunctionItem,
     FunctionMunge,
-    FunctionNotFound,
     MockFn,
     Munged,
-    NoFunctionBody,
     SourceDrifted,
     amended,
     apply_munge,
-    function_item,
     latest,
     merge_munges,
     munge_history,
+)
+from composer.spec.cvlr.tree import ProjectSource
+from composer.spec.cvlr.rust_source import (
+    FunctionAmbiguous,
+    FunctionItem,
+    FunctionNotFound,
+    NoFunctionBody,
+    function_item,
 )
 
 
@@ -72,7 +74,7 @@ def _munge(
         path=path,
         function=function,
         kind=kind or EarlyPanic(),
-        why="[3308] on the `?` path",
+        why_sound="[3308] on the `?` path",
         feature=feature,
     )
 
@@ -158,13 +160,13 @@ def test_a_munge_invalidates_a_stamp_earned_before_it():
 
 def test_rewording_a_justification_does_not_cost_a_submission():
     """Keyed on what the prover sees differently — the file, the function, the attribute — and not
-    on `why`, exactly as `summary_history` is."""
+    on `why_sound`, exactly as `summary_history` is."""
     one = _munge("redeem_fees")
     two = FunctionMunge(
         path=one.path,
         function=one.function,
         kind=one.kind,
-        why="clearer wording",
+        why_sound="clearer wording",
         feature=one.feature,
     )
     assert munge_history((one,)) == munge_history((two,))
@@ -182,7 +184,7 @@ def test_the_same_munge_recorded_twice_lands_once():
 
 
 def test_a_re_record_of_a_held_munge_is_a_correction_of_its_prose():
-    """The ids match, so the two differ only in `why` — and the later one is the amendment. Keeping
+    """The ids match, so the two differ only in `why_sound` — and the later one is the amendment. Keeping
     the first instead would leave a landed justification uncorrectable."""
     one = _munge("redeem_fees")
     corrected = amended(one, "superseded by the harness as it now stands")
@@ -195,8 +197,8 @@ def test_a_re_record_of_a_held_munge_is_a_correction_of_its_prose():
 
 
 def test_latest_reduces_a_concatenation_the_same_way():
-    """`_held` in the editor is `committed + proposed`, and an amendment of a committed record lands
-    in `proposed` — so the two lists genuinely do carry the same id twice."""
+    """A list of committed munges followed by proposed ones can carry the same id twice, when a
+    proposal amends a committed record."""
     one = _munge("redeem_fees")
     assert latest([one, amended(one, "second")]) == [amended(one, "second")]
 
@@ -210,94 +212,13 @@ def test_latest_reduces_a_concatenation_the_same_way():
 # component's outcomes are claims about the modified code, not the code as shipped".
 
 
-def _target(workdir: Path, pristine: Path | None = None):
-    """A `HarnessTarget` for path questions only — the rest is not `pristine_source`'s business."""
-    import asyncio
-    from types import SimpleNamespace
-
-    from composer.spec.cvlr.harness import HarnessModule
-    from composer.spec.cvlr.tree import SharedTree
-    from composer.spec.cvlr.verify import HarnessTarget
-
-    return HarnessTarget(
-        session=SimpleNamespace(workdir=workdir),  # type: ignore[arg-type]
-        module_path=workdir / "src" / "spec.rs",
-        package="p",
-        package_root=workdir,
-        tuning=SimpleNamespace(),  # type: ignore[arg-type]
-        unit=HarnessModule("vault"),
-        tree=SharedTree(pristine=pristine or workdir, root=workdir),
-        build_sem=asyncio.Semaphore(1),
-    )
-
-
-def test_a_path_leaving_the_workdir_is_refused(tmp_path):
-    """The working tree is the run's copy of the project, so writing in it never touches the
-    user's tree — but only while every write stays inside it.
-
-    The path is validated against the tree and then *answered* against the pristine copy, because
-    those are the bytes `reconcile` replays onto: a tool that captured a region from a tree already
-    carrying a sibling's munges would record an edit no replay could apply.
-    """
-    from composer.spec.cvlr.verify import NotInWorkdir
-
-    workdir, project = tmp_path / "work", tmp_path / "project"
-    (workdir / "src").mkdir(parents=True)
-    target = _target(workdir, pristine=project)
-    assert target.pristine_source("src/lib.rs") == project / "src" / "lib.rs"
-    assert isinstance(target.pristine_source("../outside.rs"), NotInWorkdir)
-    assert isinstance(target.pristine_source("/etc/passwd"), NotInWorkdir)
-
-
-def test_a_dependency_inside_the_workdir_is_refused_too(tmp_path):
-    """Containment is not the question, and this is the case that shows why.
-
-    Confinement gives the run a private ``CARGO_HOME`` under ``<workdir>/.certora_internal``, so
-    every dependency's unpacked source sits inside the workdir, below the program. A
-    check that stopped at "is it in the workdir" would let a munge rewrite Anchor — for every crate
-    in the graph, including the ones the property is about. Same failure
-    ``validate_rule_subjects`` prevents one axis over.
-    """
-    from composer.spec.cvlr.tree import NotProjectSource
-
-    workdir = tmp_path / "work"
-    (workdir / "src").mkdir(parents=True)
-    target = _target(workdir)
-
-    anchor = str(
-        SANDBOX_CARGO_DIR / "registry/src/index.crates.io-6f17d22/anchor-lang-0.31.1/src/error.rs"
-    )
-    refusal = target.pristine_source(anchor)
-    assert isinstance(refusal, NotProjectSource)
-    # Judged on the first component: the cargo home lives under the internal directory, which is
-    # what the rule names — it needs no entry of its own.
-    assert refusal.directory == INTERNAL_DIR.name
-
-    for built in ("target/debug/build/x/out/gen.rs", ".certora_internal/x.rs", "certora_out/y.rs"):
-        assert isinstance(target.pristine_source(built), NotProjectSource), built
-
-
-def test_the_copy_and_the_munge_rule_are_one_list():
-    """What a copy of the project leaves out is what a munge of the project may not touch. Drift in
-    one direction is the dangerous one: a directory added to the copy's ignore list and not to this
-    one would become munge-able."""
-    from composer.spec.cvlr.tree import NOT_PROJECT_SOURCE, is_project_source
-    from composer.spec.cvlr.pipeline import WORK_DIR
-
-    assert WORK_DIR.name in NOT_PROJECT_SOURCE
-    # The sandbox's private CARGO_HOME is covered by the directory it lives under, not by an entry
-    # of its own — so the rule keeps holding if another scratch directory joins it there.
-    assert INTERNAL_DIR.name in NOT_PROJECT_SOURCE
-    assert not is_project_source(str(SANDBOX_CARGO_DIR / "registry/src/x/anchor/src/lib.rs"))
-    assert is_project_source("programs/vault/src/lib.rs")
-    assert not is_project_source("target/debug/deps/x.rs")
-    # An empty path names no file and is not source.
-    assert not is_project_source("")
+_BUILD = SimpleNamespace(
+    tree=SimpleNamespace(source=ProjectSource(roots=(PurePosixPath("programs/p/src"),)))
+)
 
 
 @pytest.mark.asyncio
 async def test_a_delivered_units_munges_reach_the_report_as_source_edits(tmp_path):
-    from types import SimpleNamespace
 
     from composer.pipeline.ptypes import Delivered
     from composer.spec.cvlr.harness import GeneratedHarness
@@ -316,7 +237,7 @@ async def test_a_delivered_units_munges_reach_the_report_as_source_edits(tmp_pat
     run = SimpleNamespace(source=SimpleNamespace(project_root=str(tmp_path)))
 
     formalizer = CvlrFormalizer(
-        GeneratedHarness, "prover", SimpleNamespace(), SimpleNamespace()  # type: ignore[arg-type]
+        GeneratedHarness, "prover", SimpleNamespace(), _BUILD  # type: ignore[arg-type]
     )
     (record,) = await formalizer.source_edits([outcome], run)  # type: ignore[arg-type]
 
@@ -336,7 +257,6 @@ async def test_a_delivered_units_munges_reach_the_report_as_source_edits(tmp_pat
 async def test_a_unit_that_munged_nothing_contributes_no_record(tmp_path):
     """The record's presence is the claim. An empty one would say the outcomes are about modified
     code when they are not."""
-    from types import SimpleNamespace
 
     from composer.pipeline.ptypes import Delivered, GaveUp
     from composer.spec.cvlr.harness import GeneratedHarness
@@ -351,7 +271,7 @@ async def test_a_unit_that_munged_nothing_contributes_no_record(tmp_path):
         feat=SimpleNamespace(slug="b", display_name="B"), result=GaveUp(reason="no")
     )
     formalizer = CvlrFormalizer(
-        GeneratedHarness, "prover", SimpleNamespace(), SimpleNamespace()  # type: ignore[arg-type]
+        GeneratedHarness, "prover", SimpleNamespace(), _BUILD  # type: ignore[arg-type]
     )
     assert await formalizer.source_edits([clean, gave_up], run) == []  # type: ignore[arg-type]
 
@@ -411,7 +331,7 @@ def _extraction(source: str = _EXTRACTABLE, feature: str = FEATURE, **over) -> F
         "original": item.text,
         "replacement": _REPLACEMENT,
         "extracted": _EXTRACTED,
-        "why": "the rule has to drive the accounting step",
+        "why_sound": "the rule has to drive the accounting step",
         "feature": feature,
     }
     return FunctionExtraction(**{**fields, **over})
@@ -483,7 +403,7 @@ def test_changing_the_rewrite_changes_the_edit_id_and_rewording_the_reason_does_
     sees two blocks of written Rust, and an id blind to them would let a re-recorded extraction
     inherit the previous one's review and the previous one's prover stamp."""
     base = _extraction()
-    assert base.edit_id == _extraction(why="a clearer sentence").edit_id
+    assert base.edit_id == _extraction(why_sound="a clearer sentence").edit_id
     changed = _extraction(extracted=_EXTRACTED.replace("+=", "= state.total +"))
     assert changed.edit_id != base.edit_id
     assert munge_history((changed,)) != munge_history((base,))
@@ -512,3 +432,9 @@ def test_an_extraction_reaches_the_report_through_the_same_channel_as_an_attribu
     edit = _extraction()
     assert "settle_transition" in edit.describe()
     assert edit.edit_id in munge_history((edit,))[0]
+
+
+def test_the_subject_of_a_function_kind_is_its_function() -> None:
+    """What a report or a prompt names as edited; the structural kinds name a type or an import."""
+    assert _munge("redeem_fees").subject == "redeem_fees"
+    assert _extraction().subject == "settle"

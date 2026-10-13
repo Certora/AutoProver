@@ -1,7 +1,6 @@
-"""The seventh munge kind: derives moved behind a unit's feature.
+"""The derive swap: derives moved behind a unit's feature.
 
-``docs/the-state-behind-the-bytes.md`` is why it exists — a derived trait impl has no function to
-name, so none of the other six reaches it. These tests are about the two things that make it safe to
+A derived trait impl has no function to name, so none of the function kinds reaches it. These tests are about the two things that make it safe to
 replay: the deployed build must see exactly what it saw before, and a cascade must land whole or not
 at all.
 """
@@ -13,13 +12,13 @@ from composer.spec.cvlr.munge import (
     DeriveAttributeUnreadable,
     DeriveNotFound,
     DeriveSwap,
-    FunctionAmbiguous,
     Munged,
     SourceDrifted,
     SwappedDerive,
     apply_derive_swap,
     munge_history,
 )
+from composer.spec.cvlr.rust_source import FunctionAmbiguous
 from composer.spec.cvlr.tree import replay
 
 FEATURE = "unit_admin_fee_configuration"
@@ -58,7 +57,7 @@ def _swap(*swaps: SwappedDerive, feature: str = FEATURE) -> DeriveSwap:
     return DeriveSwap(
         path="program/src/state.rs",
         swaps=swaps or (POOL,),
-        why="the harness supplies borsh over a havoc'd global",
+        why_sound="the harness supplies borsh over a havoc'd global",
         feature=feature,
     )
 
@@ -209,7 +208,7 @@ def test_the_edit_id_moves_with_what_the_compiler_sees() -> None:
 
 
 def test_the_edit_id_is_stable_across_rewordings() -> None:
-    """`why` is prose. Correcting it must not cost a prover submission."""
+    """`why_sound` is prose. Correcting it must not cost a prover submission."""
     a = DeriveSwap("program/src/state.rs", (POOL,), "one reason", FEATURE)
     b = DeriveSwap("program/src/state.rs", (POOL,), "another reason entirely", FEATURE)
 
@@ -230,6 +229,19 @@ def test_two_units_swapping_the_same_type_do_not_collide() -> None:
     assert mine != theirs
 
 
+def test_the_subject_names_every_type_the_swap_covers() -> None:
+    """A cascade is one record, so what a report says was edited has to name all of it."""
+    assert _swap(POOL, ACCOUNT_TYPE).subject == "StakePool, AccountType"
+
+
+def test_a_landed_swap_is_reported_by_its_subject() -> None:
+    once = _applied(POOL, ACCOUNT_TYPE)
+    result = apply_derive_swap(once, _swap(POOL, ACCOUNT_TYPE))
+
+    assert isinstance(result, AlreadyMunged)
+    assert result.subject == "StakePool, AccountType"
+
+
 def test_describe_reads_as_a_sentence_for_both_shapes() -> None:
     assert "stops deriving BorshDeserialize, BorshSerialize and derives Copy" in _swap(POOL).describe()
     assert "`AccountType` derives Copy" in _swap(ACCOUNT_TYPE).describe()
@@ -247,12 +259,9 @@ def test_the_gate_names_the_recording_unit(feature: str) -> None:
 
 
 def test_two_edits_in_one_step_do_not_kill_the_component() -> None:
-    """Run 9 died here after 21 minutes.
-
-    Every edit tool writes `reviewed_digest`, and the model may call two in one step — which is
+    """Every edit tool writes `reviewed_digest`, and the model may call two in one step — which is
     legitimate, and which `proposed` already merges. Without a reducer LangGraph rejects the step
-    with `InvalidUpdateError` and the component is lost. The bug was latent before there was a
-    third edit tool; adding one made parallel calls likely enough to hit it.
+    with `InvalidUpdateError` and the component is lost.
     """
     from composer.spec.cvlr.editor import _latest_review
 

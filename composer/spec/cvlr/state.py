@@ -52,7 +52,7 @@ from composer.spec.context import CacheKey, CvlrGeneration, CvlrJudge
 from composer.spec.cvlr.conf import DEFAULT_FEATURE, TunableConf, conf_history
 from composer.spec.cvlr.munge import Munge, merge_munges, munge_history
 from composer.spec.cvlr.rules import rule_names
-from composer.spec.cvlr.tree import munge_diff
+from composer.spec.cvlr.tree import SharedTree, munge_diff
 from composer.spec.cvlr.tuning import SummaryDirective, merge_summaries, summary_history
 from composer.spec.types import CheckName, PropertyTitle, RuleName
 
@@ -360,7 +360,7 @@ class HarnessAssumptions:
                     if m.feature == DEFAULT_FEATURE
                     else ""
                 )
-                + f"\n    Justification: {m.why}"
+                + f"\n    Justification: {m.why_sound}"
                 for m in self.munges
             ]
             if self.diff:
@@ -383,13 +383,13 @@ class HarnessAssumptions:
 
 def harness_assumptions(
     state: CvlrGenerationExtra,
-    pristine: Path | None = None,
+    tree: SharedTree | None = None,
     run_global: tuple[Munge, ...] = (),
 ) -> HarnessAssumptions:
     """The judge-facing read of what :func:`tuning_history` reads for the digest.
 
-    ``pristine`` is the developer's project, and giving it turns the munge briefing from a list of
-    descriptions into a diff. Optional because the diff is derived from the records — no working tree
+    ``tree`` is the run's working tree, whose project and source boundary turn the munge briefing
+    from a list of descriptions into a diff. Optional because the diff is derived from the records — no working tree
     is involved — so a caller with no project on hand still gets a correct, weaker briefing rather
     than an error.
 
@@ -404,7 +404,7 @@ def harness_assumptions(
     return HarnessAssumptions(
         summaries=tuple(state["summaries"]),
         munges=munges,
-        diff=munge_diff(pristine, munges) if pristine is not None and munges else "",
+        diff=munge_diff(tree.pristine, tree.source, munges) if tree is not None and munges else "",
         settings=state["prover_settings"],
         external_functions=state.get("external_functions", ()),
         expected_failures=tuple(state["expected_failures"].items()),

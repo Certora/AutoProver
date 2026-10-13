@@ -31,6 +31,7 @@ from composer.spec.cvlr.scaffold import (
     plan_scaffold,
 )
 from composer.spec.cvlr.reference import ChainReference
+from composer.spec.cvlr.tree import ProjectSource
 
 _log = logging.getLogger(__name__)
 
@@ -70,6 +71,8 @@ class CvlrPreflight:
     #: on another CVLR line before anything is written, and :func:`prepare_workspace` checks again
     #: afterwards. Kept so a run can say which reference-set crates this project does not have.
     gaps: tuple[Divergence, ...]
+    #: What a munge may rewrite. Read from the same scaffolded graph as :attr:`sources`.
+    source: ProjectSource
 
     def describe(self) -> str:
         lines = [self.scaffold.describe()]
@@ -209,6 +212,7 @@ async def prepare_workspace(
         applied=applied,
         sources=sources,
         gaps=sources.gaps(reference),
+        source=ProjectSource.of(resolved_in, project_root),
     )
 
 
