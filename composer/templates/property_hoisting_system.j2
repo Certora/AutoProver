@@ -22,13 +22,20 @@ Find the protocol-wide claims among the candidates and group the properties that
   entry points or under narrower conditions than others. Two properties about different quantities
   (solvency and conservation of value, say) are two claims, even when they cover the same entry
   points.
-- **Choose a representative for each group**: the member that states the claim most strongly and
-  over the most entry points. It is formalized in place of the whole group, exactly as written, and
-  the other members are dropped. So it must imply every other member. If no single member does,
-  split the group until each part has one that does.
-- **A representative must range over entry points outside its own component.** That is what makes
+- **Give each group one shared property**, formalized in place of the whole group; the members
+  are dropped from their components. Choose it or, only when you must, write it.
+  - **Choose a member** when one states the whole claim: the strongest, over the most entry
+    points. It is used exactly as written, so it must imply every other member. If no single
+    member does, split the group until each part has one that does, unless the next case applies.
+  - **Synthesize** when the members together cover the claim but none states it whole: each
+    states it for its own instructions, and no member states it for all of them. Write one property
+    that is exactly the conjunction of the members, over the union of the entry points they range
+    over. Name those entry points; do not name one no member names, and do not drop any member's.
+    Do not strengthen any member's condition, and do not add anything none of them says. Give it a
+    new snake_case title.
+- **A shared property must range over entry points outside a single component.** That is what makes
   it protocol-wide. A member may be narrower, including a slice confined to its own component's
-  entry points, as long as the representative implies it.
+  entry points.
 - **Leave out everything else.** A property about its own component's entry points, with no
   protocol-wide counterpart among the candidates, stays in its component. Do not put it in a group
   of one.

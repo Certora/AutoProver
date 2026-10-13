@@ -40,11 +40,20 @@ SPLIT = "0: Split & Merge"
 WITHDRAWAL = "1: Withdrawal"
 
 
-def _plan(*groups: tuple[tuple[str, str], list[tuple[str, str]]]) -> hoist.HoistPlan:
+def _plan(*groups: tuple[tuple[str, str] | PropertyFormulation, list[tuple[str, str]]]) -> hoist.HoistPlan:
+    """Each group is (shared, members): a key chooses that member, a property synthesizes it."""
     return hoist.HoistPlan(
         groups=[
-            hoist.HoistGroup(claim="claim", representative=rep, members=members)
-            for rep, members in groups
+            hoist.HoistGroup(
+                claim="claim",
+                shared=(
+                    hoist.Synthesized(property=shared)
+                    if isinstance(shared, PropertyFormulation)
+                    else hoist.Chosen(key=shared)
+                ),
+                members=members,
+            )
+            for shared, members in groups
         ],
         justification="j",
     )
@@ -63,7 +72,8 @@ def test_applying_a_plan_keeps_the_representative_verbatim_and_drops_the_rest_of
     applied = hoist.apply_plan(CANDIDATES, SOLVENCY)
     assert applied.shared == [SOLVENT_EVERYWHERE]
     assert applied.kept == {0: [SPLIT_LOCAL], 1: [WITHDRAW_LOCAL]}
-    assert ((WITHDRAWAL, "withdraw_solvent"), (SPLIT, "solvent")) in applied.absorbed
+    assert ((WITHDRAWAL, "withdraw_solvent"), "solvent") in applied.absorbed
+    assert applied.synthesized == []
 
 
 def test_an_empty_plan_leaves_every_unit_as_extracted():
@@ -78,6 +88,7 @@ def test_a_representative_confined_to_its_own_component_is_rejected():
     plan = _plan(((SPLIT, "split_divides"), [(SPLIT, "split_divides")]))
     problem = hoist.validate_plan(CANDIDATES, plan)
     assert problem is not None and "names no entry point outside its own component" in problem
+
 
 
 @pytest.mark.parametrize(
@@ -104,8 +115,71 @@ def test_a_malformed_plan_is_rejected_with_a_reason_the_model_can_act_on(plan, c
 
 def test_an_entry_point_is_matched_as_a_whole_name():
     """``merge`` in ``merged`` or ``split_merge`` is not the instruction."""
-    assert not hoist._names_outside("The merged account and split_merge helper.", set(), {"merge"})
-    assert hoist._names_outside("After `merge`, the account is solvent.", set(), {"merge"})
+    assert hoist._named("The merged account and split_merge helper.", {"merge"}) == set()
+    assert hoist._named("After `merge`, the account is solvent.", {"merge"}) == {"merge"}
+
+
+# --------------------------------------------------------------------------------------------
+# Synthesizing a shared property from slices
+# --------------------------------------------------------------------------------------------
+
+# The arm 3 shape: conservation stated per instruction group, never whole.
+CONSERVE_SPLIT = _prop("split_conserves", "`split` and `merge` conserve the two accounts' lamports.")
+CONSERVE_WITHDRAW = _prop("withdraw_conserves", "`withdraw` conserves the two accounts' lamports.")
+SLICES = hoist.build_candidates(
+    [
+        (0, "Split & Merge", ["split", "merge"], [CONSERVE_SPLIT]),
+        (1, "Withdrawal", ["withdraw"], [CONSERVE_WITHDRAW]),
+        (2, "Movement", ["move_stake"], [_prop("move_signer", "`move_stake` needs the staker.")]),
+    ]
+)
+CONSERVE_ALL = _prop(
+    "lamports_conserved", "`split`, `merge` and `withdraw` conserve the lamports they move."
+)
+BOTH = [(SPLIT, "split_conserves"), (WITHDRAWAL, "withdraw_conserves")]
+
+
+def test_slices_that_no_member_states_whole_can_be_synthesized_into_one_property():
+    plan = _plan((CONSERVE_ALL, BOTH))
+    assert hoist.validate_plan(SLICES, plan) is None
+    applied = hoist.apply_plan(SLICES, plan)
+    assert applied.shared == [CONSERVE_ALL]
+    assert applied.synthesized == ["lamports_conserved"]
+    assert applied.kept[0] == [] and applied.kept[1] == []
+
+
+def test_a_synthesized_property_may_not_name_an_entry_point_no_member_names():
+    """That would assert something no extractor proposed."""
+    wider = _prop("t", "`split`, `merge`, `withdraw` and `move_stake` conserve lamports.")
+    problem = hoist.validate_plan(SLICES, _plan((wider, BOTH)))
+    assert problem is not None and "names entry points no member names: ['move_stake']" in problem
+
+
+def test_a_synthesized_property_must_keep_every_member():
+    """Dropping a member's entry points would drop that member's property without a trace."""
+    without_withdraw = _prop("t", "`split` and `merge` conserve lamports.")
+    problem = hoist.validate_plan(SLICES, _plan((without_withdraw, BOTH)))
+    assert problem is not None and "names none of the entry points of these members" in problem
+
+
+def test_a_synthesized_property_may_leave_out_an_entry_point_a_member_only_excludes():
+    """A member names instructions it excludes, so its mentions overstate its scope."""
+    excluding = _prop(
+        "withdraw_conserves", "`withdraw`, unlike `move_stake`, conserves the two accounts' lamports."
+    )
+    candidates = hoist.build_candidates(
+        [
+            (0, "Split & Merge", ["split", "merge"], [CONSERVE_SPLIT]),
+            (1, "Withdrawal", ["withdraw"], [excluding]),
+            (2, "Movement", ["move_stake"], []),
+        ]
+    )
+    assert hoist.validate_plan(candidates, _plan((CONSERVE_ALL, BOTH))) is None
+
+
+def test_a_synthesized_property_needs_more_than_one_member():
+    problem = hoist.validate_plan(SLICES, _plan((CONSERVE_ALL, BOTH[:1])))
+    assert problem is not None and "from one member" in problem
 
 
 # --------------------------------------------------------------------------------------------
@@ -169,3 +243,16 @@ def test_the_shared_unit_carries_every_component_s_computations_once():
         comp["computations"] = [math]
     unit = protocol_unit(SolanaProgramInstance(0, SolanaApplication.model_validate(raw)))
     assert [c.function for c in unit.component.computations] == ["iface::Delegation::stake"]
+
+
+def test_salvage_keeps_the_valid_groups_of_a_plan_that_will_not_validate():
+    """One group the model keeps getting wrong should not cost the others their hoisting."""
+    bad = _prop("t", "`split`, `merge`, `withdraw` and `move_stake` conserve lamports.")
+    plan = _plan(
+        (CONSERVE_ALL, BOTH),
+        (bad, [(SPLIT, "split_conserves")]),
+    )
+    assert hoist.validate_plan(SLICES, plan) is not None
+    assert [g.shared for g in hoist.salvage(SLICES, plan).groups] == [
+        hoist.Synthesized(property=CONSERVE_ALL)
+    ]

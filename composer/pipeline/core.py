@@ -1039,12 +1039,12 @@ async def _hoist[P: enum.Enum, H, Main, U: FeatureUnit](
         COMPONENT_KEY(unit, plugins.plugin_digest),
         {**unit.context_tag(), "plugins": plugins.plugin_manifest},
     )
-    for member, representative in hoisted.absorbed:
-        if member != representative:
-            _log.info("hoisted: %s stands for %s", representative, member)
+    for member, title in hoisted.absorbed:
+        _log.info("hoisted: %s -> %s", member, title)
     _log.info(
-        "hoisted %d protocol-wide propert(ies) into %s, absorbing %d",
+        "hoisted %d protocol-wide propert(ies) into %s, absorbing %d; %d written by the hoist: %s",
         len(hoisted.shared), unit.display_name, len(hoisted.absorbed),
+        len(hoisted.synthesized), ", ".join(hoisted.synthesized) or "none",
     )
     kept = [
         _Batch(b.feat, props, b.feat_ctx)

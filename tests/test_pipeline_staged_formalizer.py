@@ -395,10 +395,10 @@ _SHARED = core.SharedUnit(make=lambda _main: _Unit("protocol", 99), entry_points
 
 
 def _plan(*groups):
-    """``groups`` are (representative, members) pairs of [component, title] keys."""
+    """``groups`` are (chosen, members) pairs of [component, title] keys."""
     return hoist.HoistPlan(
         groups=[
-            hoist.HoistGroup(claim="c", representative=rep, members=members)
+            hoist.HoistGroup(claim="c", shared=hoist.Chosen(key=rep), members=members)
             for rep, members in groups
         ],
         justification="j",

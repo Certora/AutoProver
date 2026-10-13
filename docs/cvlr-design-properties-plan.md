@@ -278,6 +278,62 @@ arithmetic, and is wrong whenever the belief is. Arm 1 already has 42 properties
 arm-2-style run: fresh analysis and extraction, about $40. Score it, and rescore the third run and
 both arms, with v2. The items to watch are R5 and the formula count.
 
+**Result (2026-10-12).** Arm 3 ran on a fresh worktree with the third run's design-doc discovery
+seeded and a fresh analysis, and stopped at the pin: about $40 at the log estimate plus 15%. All
+four property sets were scored with v2 by the same method as before.
+
+| | third run | arm 1 | arm 2 | arm 3 (computations) |
+| --- | --- | --- | --- | --- |
+| properties | 142 | 145 | 132 | 133 |
+| cross-component | 2 | 53 | 44 | 52 |
+| formula-restating | 23 | 13 | 16 | **7** |
+| R1 lamport conservation | parts | whole | whole | parts |
+| R2 stake-account solvency | parts | whole | whole | whole |
+| R3 staker/withdrawer separation | parts | whole | parts | parts |
+| R4 lockup on withdraw | whole | whole | whole | whole |
+| R5 stake-math bounds | absent | absent* | absent | **whole** |
+
+\* v2 labels arm 1's R5 "parts", but its own note says no property bounds the math; read by hand,
+it is absent.
+
+- **The computations change produced the stake-math properties.** The analysis listed
+  `Delegation::stake` for withdraw and `stake_activating_and_deactivating` for delegation and
+  splitting, described without formulas or constants. Arm 3's #58 states that effective plus
+  activating stake never exceeds the delegation, framed by how withdraw, split and merge use the
+  result. #59 states that the schedule is monotone over epochs. Neither restates the formula.
+- **The formula count fell rather than rose.** 7 against 13 to 23 elsewhere. The mitigations held.
+- **R1 regressed in arm 3, and that is variance, not this change.** Arm 3 states conservation per
+  instruction group (#64, #89, #101, with #7 and #43 for the instructions that move nothing), where
+  arms 1 and 2 each had one whole property. R3 also moves between arms. With one sample per arm,
+  whether a whole protocol property appears is not reliable.
+- **The hoist cannot repair that.** It only groups and chooses; it never writes. When no member
+  states the whole claim, the slices stay slices, each formalized in its own unit.
+- **The design-share metric is noise.** It ranges from 78% to 99% across arms and does not track
+  the rubric. Drop it.
+
+**Follow-up: the hoist may synthesize (2026-10-13).** To repair arm 3's sliced conservation, a
+group's shared property is now either `Chosen` (a member, verbatim) or `Synthesized` (one property
+written by the hoist, exactly the conjunction of its members). `Hoisted.synthesized` records which.
+Validation holds a synthesized property to its members: it may not name an entry point no member
+names, must name at least one of every member's, and must span more than one component. The rule
+first required exactly the union of the entry points members name, but members also name
+instructions they exclude ("every handler except `delegate_stake`"), and that rejected sound
+syntheses. On the last of three attempts, a plan that still does not validate keeps its valid,
+non-overlapping groups (`salvage`) instead of being discarded.
+
+Rerun on the fixtures alone (one model call each, a dollar or two):
+
+- **Arm 3** validated on its second attempt: 18 shared properties, 7 of them synthesized,
+  absorbing 80. Conservation came out whole, as `lamport_moving_handlers_conserve_lamports_exactly`,
+  the conjunction of its four slices (#7, #64, #89, #101) with nothing added. Read by hand, that
+  makes R1 whole after hoisting.
+- **Arm 1** validated on its first attempt with nothing synthesized: 15 shared properties absorbing
+  72, every one a member chosen verbatim. An earlier run of the same call failed three times on one
+  group, which is what `salvage` is for.
+
+The report still does not mark synthesized properties or say what was absorbed. That is now the
+main open item before a full run.
+
 ### 5. Formalize the shared unit, and measure
 
 The shared unit is one more formalization unit beside the components, with a synthetic component
