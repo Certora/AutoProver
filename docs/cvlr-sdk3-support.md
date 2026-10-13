@@ -11,6 +11,54 @@ This document covers what has to change, in CVLR and in AutoProver, for a run on
 `main` and on SDK 3 programs generally. The changes are sized against a probe that has already
 verified an SDK 3 program end to end.
 
+## Where things stand (2026-10-13)
+
+| Repository | Branch, PR | What it is | State |
+|---|---|---|---|
+| `Certora/cvlr-solana` | `eric/release-0.5.1`, [#22](https://github.com/Certora/cvlr-solana/pull/22) | 0.5.1 release commit `2e53877`: `main` (API docs #21, `rt` fix) released, SDK 2 line | open; tags local |
+| `Certora/cvlr-solana` | `eric/sdk3` | the SDK 3 port (C1, C2), rebased on 0.5.1 | pushed; PR after #22 |
+| `Certora/cvlr-solana` | `eric/release-0.6.0` | 0.6.0 release commit `f054348`, on `eric/sdk3` | pushed; tags local |
+| `Certora/cvlr` | `eric/release-0.6.2`, [#52](https://github.com/Certora/cvlr/pull/52) | 0.6.2 release commit `2313d51`: API docs #51, Soroban auto sanity #48, `no_std` `cvlr-spec` | open; tags local |
+| AutoProver | `eric/solanaProver` (`f17fc6f1`) | `cvlr-solana` 0.5.1, read from `2e53877` (A5) | committed |
+
+Each release commit is what `cargo-release` would produce: versions, CHANGELOG and README. Each
+passes the repository's CI checks and `cargo publish --dry-run --workspace`. Both PRs ask for a
+merge commit, so `main` contains the commit the tags and AutoProver's pin name. The tags are pushed
+after the merge.
+
+`cvlr` needs nothing for SDK 3. The core crates do not depend on the Solana SDK, and
+`cvlr-solana` 0.6.0 requires `cvlr` ≥ 0.6, which the published 0.6.1 meets. 0.6.2 is
+documentation and Soroban work. AutoProver stays on 0.6.1, and its API corpus can be built from
+the 0.6.2 commit with `--crate-source` until 0.6.2 is published.
+
+### Publishing, and git dependencies until then
+
+**Only one account can publish these crates.** Every crate in both repositories has one
+crates.io owner, the GitHub account `1arie1`, and neither repository publishes from CI. A release
+can be cut, tagged and merged, but nobody else can publish it.
+
+**The fix is a team owner.** `cargo owner --add github:certora:<team> <crate>`, run by the
+current owner for each crate, lets any member of that team publish. Team owners can publish but
+cannot add or remove owners, so control stays where it is.
+
+**Until then, AutoProver reads each unpublished release from its release commit** (A5). The
+reference set pins the crates.io version and names the commit, and the scaffold writes a
+`[patch.crates-io]` entry per crate:
+
+- **2.x:** `cvlr-solana` 0.5.1 is pinned to `2e53877` now.
+- **SDK 3:** A1 pins 0.6.0 to `f054348` the same way.
+- **`cvlr`:** not pinned this way. Patching the core would mean patching all twelve of its crates,
+  or a build gets two copies of each. Nothing AutoProver runs needs 0.6.2.
+
+**Fetching works before the PRs merge.** Cargo, starting from an empty cargo home, resolves
+`cvlr-solana` 0.5.1 from GitHub at `2e53877`; the pushed branch makes the commit reachable.
+
+**The pin has to follow the release commit.** A review change to a release commit gives it a new
+hash, and the pin in `reference.py` moves with it. Pushing the tags makes the commits permanent.
+
+**The exit is publication.** Once a release is on crates.io, its `GitCommit` is dropped and nothing
+else changes. U26 in `cvlr-todo.md` is the ship blocker that tracks this.
+
 ## What the probe established
 
 Stake `main` (`bed72d0`, 2026-10-01) builds against `solana-account-info` 3.1.1, `solana-pubkey`
@@ -74,11 +122,12 @@ producing vacuous rules. Every other public item keeps its name and signature.
 
 Released from the branch as it stands, SDK 3 would lose the docs the SDK 2.2 line has just gained.
 
-What AutoProver needs is a crates.io release, say `cvlr-solana` 0.6.0, built on SDK 3. Until then
-A5 is the stopgap.
+What AutoProver needs is a release built on SDK 3: `cvlr-solana` 0.6.0. Until it is on crates.io,
+A5 reads it from its release commit.
 
-**Status: ported, unreleased.** Branch `eric/sdk3` of `Certora/cvlr-solana`, local only, has the
-port cherry-picked onto `main` (`30a8dbd`), with these resolutions:
+**Status: ported, release prepared, not merged.** Branch `eric/sdk3` of `Certora/cvlr-solana` is
+pushed. It is the port cherry-picked onto `main` (`c61ee6f`), the model crates (C2, `61e8661`) and
+a release-notes commit, rebased onto the 0.5.1 release. The cherry-pick was resolved this way:
 
 - `main`'s documentation is kept.
 - `fun_acc_infos_with_mem_layout` is dropped, as the port did. The `acc_infos_with_mem_layout!`
@@ -90,7 +139,9 @@ port cherry-picked onto `main` (`30a8dbd`), with these resolutions:
 CI's checks pass on the branch: `fmt`, `clippy -D warnings`, `doc -D missing_docs`, and the tests.
 The stake probe verifies all ten rules against it
 ([job](https://prover.certora.com/jobStatus/37632/357dc4fa69324cb6be0509048e0c7b9d?anonymousKey=f559cc790f6f81ec87f20767473839f283569fcc)).
-What remains is review, merge and release.
+The 0.6.0 release commit is `f054348` on `eric/release-0.6.0`. The release notes say that SPL
+Token CPI substitution does not yet apply to SDK 3 programs (P1). What remains: a PR once #22 has
+merged, review, and publication.
 
 ### Release lines
 
@@ -125,6 +176,9 @@ about the generation:
 - `v0.5` stays the SDK 2 line. Fixes and new helpers are cherry-picked onto it, which is
   mechanical while the difference is one field.
 
+This is under way. 0.5.1 is `main`'s last SDK 2 release (#22). Once it merges, `v0.5` moves up to
+it, and `eric/sdk3` goes to `main` for 0.6.0. `v0.5` is still at the 0.5.0 release commit.
+
 The single-branch alternative is renamed dependencies on both `solana-account-info` majors,
 selected by mutually exclusive `sdk2` / `sdk3` features. Cargo features are meant to be additive,
 so a build fails as soon as anything in the graph enables the other one. The version would also no
@@ -144,11 +198,9 @@ The port comments `cvlr-solana-stake` and `cvlr-spl-token` out of the workspace.
 - **`cvlr-solana-stake`** does not block the stake benchmark, which withholds it from that target
   anyway. It is still needed for any other program that calls into stake.
 
-Until C2 is released, an SDK 3 run has no program models. A1's reference set says so: its
-`models` is empty, and a token program on SDK 3 is refused as missing the token model, rather than
-given the SDK 2.2 one.
-
-**Status: ported on `eric/sdk3` (`9d6a9e3`), compiled but not yet verified against a program.**
+**Status: ported on `eric/sdk3` (`61e8661`) and released with it at 0.6.0 (`f054348`), but only
+compiled, never verified against a program.** A1's reference set can include both models, read
+from the 0.6.0 commit.
 
 - `cvlr-spl-token` builds on `spl-token` 9. Its re-export of `spl_token::instruction`, which
   `spl-token` 9 deprecates, is kept because the crate stands in for `spl_token`.
@@ -206,8 +258,8 @@ The change:
   generation instead of one.
 - The SDK 3 reference:
   - `core` is `cvlr` 0.6.1, as now;
-  - `chain_crate` is the C1 release;
-  - `models` is empty until C2;
+  - `chain_crate` is `cvlr-solana` 0.6.0, read from `f054348` until it is published (A5);
+  - `models` are `cvlr-solana-stake` and `cvlr-spl-token` 0.6.0, from the same commit;
   - `forks` is empty (no Anchor fork applies);
   - its `PlatformGeneration` has label `solana-* 3.x`, witness `solana-account-info` 3.0 and SDK
     crate `solana-account-info` 3.
@@ -317,8 +369,8 @@ SDK 2.2 stake snapshot, with the pin pointed at a local `file://` clone, resolve
 0.5.1 from that commit. A second run of the scaffold changed nothing. The SDK 3 reference set
 (A1) pins the 0.6.0 release commit (`f054348`) the same way.
 
-**For a real run, the commits have to be on GitHub.** Today they are on local branches of
-`cvlr-solana`, with local tags.
+Both release commits are pushed (see *Where things stand*). Cargo fetches the 0.5.1 commit from
+GitHub with an empty cargo home.
 
 ### A6. Scope the API corpus to the run's generation
 
@@ -372,16 +424,29 @@ Little of it depends on the generation.
 
 ## Order
 
-1. **C1 + C2:** review and release `eric/sdk3`, which has both ports. **P1** goes to the Prover
-   team in parallel; nothing on the AutoProver side waits for it, but token programs on SDK 3 do.
-2. **A3**, with the vault check. It is independent of everything else, and unblocks the build.
-3. **A4.** Also independent, and testable on the probe worktree.
-4. **A1 + A2 + A5** together. A1 is the reference-set change, A2 the SDK 3 aliases it carries,
-   and A5 the pin that makes A1 usable before C1.
-5. **A6.** Required before the first SDK 3 run, because without it the author is misinformed.
-6. **A7, A8**, then the stake run on `main`.
+**Done:**
 
-When C1 releases, A5's pin becomes an ordinary `CrateRelease` and U26 closes.
+- C1 and C2, ported and released as commits.
+- A5, for the 2.x line.
+- 0.5.1 and `cvlr` 0.6.2, prepared and in review (#22, #52).
+
+**Next:**
+
+1. **A3**, with the vault check. It is independent of everything else, and unblocks the build.
+2. **A4.** Also independent, and testable on the probe worktree.
+3. **A1 + A2.** The SDK 3 reference set, pinned to `f054348` through A5, and the aliases it
+   carries.
+4. **A6.** Required before the first SDK 3 run, because without it the author is misinformed.
+5. **A7, A8**, then the stake run on `main`.
+
+**Alongside, outside AutoProver:**
+
+- Merge #22 and #52 with merge commits and push their tags.
+- Move `v0.5` up to 0.5.1, and open the `eric/sdk3` PR.
+- Ask for a team owner on the crates (*Publishing*), then publish. Each publication drops a
+  `GitCommit`, and the last one closes U26.
+- **P1** goes to the Prover team. Nothing on the AutoProver side waits for it, but token programs
+  on SDK 3 do.
 
 ## Reproducing the probe
 
