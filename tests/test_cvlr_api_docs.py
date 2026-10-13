@@ -20,11 +20,13 @@ from pathlib import Path
 
 import pytest
 
+from composer.cargo.doctest import Failed, Passed
 from composer.rag.import_format import ManualBlockKind
 from composer.scripts.cvlr_api_docs import (
     FORMAT_VERSION,
     _reachable,
     CrateDocs,
+    ExampleGate,
     Item,
     LocalCheckout,
     RustdocUnavailable,
@@ -32,10 +34,12 @@ from composer.scripts.cvlr_api_docs import (
     _probe_crate,
     build_manifest,
     cvlr_packages,
+    gated_sources,
     items_of,
     manifest_source,
     render_type,
     resolve_aliases,
+    undocumented_report,
 )
 from composer.tools.cvlr_api_rag import API_ROOT, SURFACE_HEADING
 
@@ -55,6 +59,11 @@ def _docs(name: str) -> CrateDocs:
     return CrateDocs(
         name=name, version=version, payload=json.loads((_DATA / f"{module}.json").read_text())
     )
+
+
+def _passing(crates: list[CrateDocs]) -> ExampleGate:
+    """The gate's verdict as if every example had compiled, for tests about everything else."""
+    return ExampleGate(verdicts={source: Passed() for source in gated_sources(crates)})
 
 
 @pytest.fixture
@@ -228,7 +237,7 @@ def test_the_surface_section_lists_exactly_what_the_walk_emitted(family):
     The old producer reconciled a regex item scan against a model's output; here the list a caller
     reads and the list the walk produced are the same list, and this is what says so.
     """
-    manifest = build_manifest(family, source="test")
+    manifest = build_manifest(family, "test", _passing(family))
     for crate in family:
         items = items_of(crate)
         headers = [API_ROOT, crate.name, crate.version, SURFACE_HEADING]
@@ -242,7 +251,7 @@ def test_the_surface_section_lists_exactly_what_the_walk_emitted(family):
 def test_every_item_is_addressable_by_its_own_header_path(family):
     # `cvlr_api_lookup` fetches a section by its header path, so an item the manual product did
     # not file under its own name could only ever be reached by vector search.
-    manifest = build_manifest(family, source="test")
+    manifest = build_manifest(family, "test", _passing(family))
     filed = {tuple(s.headers) for s in manifest.manual_sections}
     for crate in family:
         for item in items_of(crate):
@@ -252,7 +261,7 @@ def test_every_item_is_addressable_by_its_own_header_path(family):
 def test_the_signature_is_code_and_the_prose_is_not(family):
     # The importer holds code aside behind a <code-ref-N> placeholder so it stays out of the
     # keyword-searchable text. A signature mis-tagged as prose would pollute every keyword hit.
-    manifest = build_manifest(family, source="test")
+    manifest = build_manifest(family, "test", _passing(family))
     section = next(
         s for s in manifest.manual_sections if s.headers[-1] == "cvlr_assert_le"
     )
@@ -263,7 +272,7 @@ def test_the_signature_is_code_and_the_prose_is_not(family):
 def test_the_version_is_in_every_header_path(family):
     # One version is in the corpus at a time (the pin, §2), so this is provenance rather than a
     # retrieval axis — it is what makes a stale corpus visible in every answer.
-    manifest = build_manifest(family, source="test")
+    manifest = build_manifest(family, "test", _passing(family))
     versions = {c.version for c in family}
     for section in manifest.manual_sections:
         assert section.headers[0] == API_ROOT
@@ -292,9 +301,7 @@ def test_the_report_lists_exactly_the_items_with_no_prose(family):
     It has to be a list of *items*, not of doc-comment lines: what an agent hits is a specific
     name with nothing behind it, and the person fixing it needs that name.
     """
-    from composer.scripts.cvlr_api_docs import undocumented_report
-
-    report = undocumented_report(family)
+    report = undocumented_report(family, _passing(family))
     for crate in family:
         for item in items_of(crate):
             listed = f"`{item.name}`" in report
@@ -304,9 +311,7 @@ def test_the_report_lists_exactly_the_items_with_no_prose(family):
 def test_the_report_counts_what_it_lists(family):
     # The counts are the measure of whether the ask is being met, so they cannot drift from the
     # list under them.
-    from composer.scripts.cvlr_api_docs import undocumented_report
-
-    report = undocumented_report(family)
+    report = undocumented_report(family, _passing(family))
     total = sum(len(items_of(c)) for c in family)
     missing = sum(1 for c in family for i in items_of(c) if not i.docs)
     assert f"{missing} of {total} items carry no prose documentation." in report
@@ -315,9 +320,7 @@ def test_the_report_counts_what_it_lists(family):
 def test_the_report_carries_the_signature_of_each_missing_item(family):
     # Whoever writes the doc comment needs to see what they are documenting without opening the
     # crate; a bare name would send them looking for it.
-    from composer.scripts.cvlr_api_docs import undocumented_report
-
-    report = undocumented_report(family)
+    report = undocumented_report(family, _passing(family))
     item = _named(items_of(_docs("cvlr-asserts")), "cvlr_assert_le")
     assert item is not None and not item.docs
     assert item.signature.splitlines()[0] in report
@@ -371,7 +374,7 @@ def test_a_name_that_is_already_unique_is_left_alone(family):
 
 
 def test_no_two_sections_share_a_header_path(family):
-    manifest = build_manifest(family, source="test")
+    manifest = build_manifest(family, "test", _passing(family))
     headers = [tuple(s.headers) for s in manifest.manual_sections]
     assert len(set(headers)) == len(headers)
 
@@ -450,10 +453,12 @@ def test_a_checkout_corpus_is_indistinguishable_from_a_published_one():
     Provenance is recorded where no agent reads it — the manifest's source line and the log.
     """
     payload = json.loads((_DATA / "cvlr_asserts.json").read_text())
-    published = build_manifest([CrateDocs("cvlr-asserts", "0.6.1", payload)], source="s")
-    checkout = build_manifest(
-        [CrateDocs("cvlr-asserts", "0.6.1", payload, origin=_checkout("cvlr-asserts"))], source="s"
-    )
+    published_crates = [CrateDocs("cvlr-asserts", "0.6.1", payload)]
+    published = build_manifest(published_crates, "s", _passing(published_crates))
+    checkout_crates = [
+        CrateDocs("cvlr-asserts", "0.6.1", payload, origin=_checkout("cvlr-asserts"))
+    ]
+    checkout = build_manifest(checkout_crates, "s", _passing(checkout_crates))
     assert checkout == published
     assert "/home/eric/src" not in checkout.model_dump_json()
 
@@ -478,13 +483,11 @@ def test_the_manifest_source_names_every_checkout_it_read():
 def test_the_undocumented_report_records_that_it_measured_a_checkout():
     # The list is meant to shrink, and it shrinks in a checkout first. A report that did not say
     # which tree it counted would read as a measurement of the published crates.
-    from composer.scripts.cvlr_api_docs import undocumented_report
-
     docs = CrateDocs(
         "cvlr-asserts", "0.6.1", json.loads((_DATA / "cvlr_asserts.json").read_text()),
         origin=_checkout("cvlr-asserts"),
     )
-    report = undocumented_report([docs])
+    report = undocumented_report([docs], _passing([docs]))
     assert "local checkouts" in report
     assert "/home/eric/src/cvlr @ cvlr-v0.6.1-3-g8d9d463-dirty" in report
 
@@ -588,3 +591,84 @@ def test_a_public_module_keeps_its_own_path():
     # not resolve. The rule is reachability, not "shallowest always".
     paths = {i.name: i.path for i in items_of(_docs("cvlr-solana"))}
     assert any(p.startswith("cvlr_solana::pubkey::") for p in paths.values()), paths
+
+
+# ---------------------------------------------------------------------------------------------
+# the examples
+#
+# The verdicts come from `cargo check` (tests/test_cargo_doctest.py runs it for real); these pin
+# what the corpus does with a verdict, which needs no cargo.
+
+
+def test_only_blocks_rustdoc_would_build_are_sent_to_the_compiler(family):
+    gated = gated_sources(family)
+    assert list(gated.values()) == [["cvlr-solana::fun_acc_infos_with_mem_layout"]]
+    # An `ignore` block is not a compile candidate, however much it looks like Rust.
+    assert not any("cvlr_deserialize_nondet_accounts" in source for source in gated)
+
+
+_PROSE = "Lead.\n\n```rust\n# use cvlr::prelude::*;\nlet x = 1;\n```\n\nAfter.\n"
+
+
+def test_a_compiled_example_is_labelled_and_shows_what_was_compiled():
+    gate = ExampleGate(verdicts={"use cvlr::prelude::*;\nlet x = 1;\n": Passed()})
+    rendered = gate.render(_PROSE)
+    assert (
+        "_Compiled against the pinned crates:_\n```rust\nuse cvlr::prelude::*;\nlet x = 1;\n```\n"
+        in rendered
+    )
+    assert rendered.startswith("Lead.\n\n") and rendered.endswith("\n\nAfter.\n")
+
+
+def test_a_failed_example_is_removed_and_the_removal_said():
+    gate = ExampleGate(verdicts={"use cvlr::prelude::*;\nlet x = 1;\n": Failed("error[E0425]")})
+    rendered = gate.render(_PROSE)
+    assert "let x = 1" not in rendered
+    assert "did not compile against the pinned crates" in rendered
+    assert rendered.endswith("\n\nAfter.\n")
+
+
+@pytest.mark.parametrize("info", ["ignore", "rust,ignore", "text", "compile_fail"])
+def test_a_block_that_was_not_compiled_says_so(info):
+    docs = f"```{info}\nlet x = ;\n```\n"
+    rendered = ExampleGate(verdicts={}).render(docs)
+    assert f"_Not compiled (marked `{info}` upstream)" in rendered
+    assert f"```{info}\nlet x = ;\n```" in rendered
+    assert "_Compiled" not in rendered
+
+
+def test_an_example_with_no_verdict_is_refused_rather_than_shown():
+    from composer.cargo.doctest import GateUnavailable
+
+    with pytest.raises(GateUnavailable):
+        ExampleGate(verdicts={}).render("```\nlet x = 1;\n```\n")
+
+
+def test_the_corpus_carries_the_gate_s_labels(family):
+    source = next(iter(gated_sources(family)))
+    manifest = build_manifest(family, "test", ExampleGate(verdicts={source: Failed("error")}))
+    section = next(
+        s for s in manifest.manual_sections if s.headers[-1] == "fun_acc_infos_with_mem_layout"
+    )
+    prose = "\n".join(b.body for b in section.blocks)
+    assert "pub struct AccountInfo" not in prose
+    assert "did not compile" in prose
+    ignored = next(
+        s for s in manifest.manual_sections if s.headers[-1] == "cvlr_deserialize_nondet_accounts"
+    )
+    assert "_Not compiled (marked `ignore` upstream)" in "\n".join(b.body for b in ignored.blocks)
+
+
+def test_the_report_names_each_dropped_example_and_where_it_was(family):
+    source = next(iter(gated_sources(family)))
+    gate = ExampleGate(
+        verdicts={source: Failed("\nerror[E0433]: failed to resolve\n  --> x.rs")},
+        owners=gated_sources(family),
+    )
+    report = undocumented_report(family, gate)
+    assert "Examples that do not compile — 1 of 1" in report
+    assert (
+        "- `cvlr-solana::fun_acc_infos_with_mem_layout`: `error[E0433]: failed to resolve`"
+        in report
+    )
+    assert "Examples that do not compile" not in undocumented_report(family, _passing(family))

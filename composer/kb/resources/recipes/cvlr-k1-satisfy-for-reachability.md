@@ -11,11 +11,11 @@ execution satisfying `cond`, so it is an existence claim, and the opposite quant
 
 Two uses earn their place:
 
-```rust
+```rust,ignore
 // Reachability: does this setup execute at all, or has something pruned it away?
 #[rule]
 pub fn sanity_deposit_reachable() {
-    let mut ix = /* accounts, as an assert-rule would build them */;
+    let (ctx, amount) = /* accounts and arguments, built as an assert-rule would build them */;
     crate::vault_program::deposit(ctx, amount).unwrap();
     cvlr_satisfy!(true);
 }
@@ -23,9 +23,11 @@ pub fn sanity_deposit_reachable() {
 // Witness: show that the interesting branch is attainable, not just the trivial one.
 #[rule]
 pub fn witness_deposit_increases_balance() {
-    let before = /* ... */;
+    let (ctx, amount) = /* as above */;
+    let vault = /* the vault account, taken from the same accounts as `ctx` */;
+    let before = balance_of(&vault);
     crate::vault_program::deposit(ctx, amount).unwrap();
-    cvlr_satisfy!(balance_of(&ix) > before);
+    cvlr_satisfy!(balance_of(&vault) > before);
 }
 ```
 

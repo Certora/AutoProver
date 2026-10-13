@@ -26,6 +26,16 @@ it invites a dependency on a binding name that is nobody's promise.
   that answer a question nobody asks while burying the ones people do. Their methods are not
   emitted; the type's entry names the traits it implements instead.
 
+**Every example that claims to compile has compiled.** The doc comments' code blocks reach the
+corpus inside an item's prose, and an author copies them. :func:`gate_examples` type-checks every
+block rustdoc would build — ``cargo check``, host target, offline, in one invocation — against the
+whole pinned family, which is what a doctest of any one crate can name. A block that fails is
+dropped from the corpus and named in the log and in the ``--undocumented`` report; one that
+rustdoc would not build (``ignore``, ``text``, ``compile_fail``) is kept under a label saying it
+was not compiled, so nothing in the corpus reads as checked that was not. Upstream examples may
+lean on doctest context this does not reproduce, which is why a failure drops the block rather than
+the build; the build fails only when the check itself cannot run.
+
 **Documenting a working copy.** ``--crate-source`` points the probe at a local CVLR checkout:
 every CVLR package that checkout defines replaces the crates.io release through
 ``[patch.crates-io]``, so the pin still decides *which* crates the corpus holds and the checkout
@@ -42,8 +52,10 @@ Run it through :mod:`composer.scripts.populate_cvlr_rag`'s wrapper, or directly:
 
     uv run --no-sync python -m composer.scripts.cvlr_api_docs --output cvlr_api_kb.rag.json
 
-It needs a nightly toolchain for ``--output-format json`` and a populated cargo registry; it
-passes ``--offline`` so a warm cache needs no network.
+It needs a nightly toolchain for ``--output-format json`` (``--toolchain`` picks which; pin a
+dated one, since :data:`FORMAT_VERSION` accepts one schema) and a populated cargo registry; it
+passes ``--offline`` so a warm cache needs no network. The example check runs under the default
+toolchain.
 """
 
 import argparse
@@ -56,9 +68,18 @@ import sys
 import tempfile
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 
+from composer.cargo.doctest import (
+    Failed,
+    FenceClass,
+    GateUnavailable,
+    Verdict,
+    check_examples,
+    fences,
+    reveal_hidden_lines,
+)
 from composer.rag.import_format import (
     EmbeddedBlock,
     EmbeddedBlockKind,
@@ -105,6 +126,9 @@ DOCUMENTED_KINDS = frozenset(
 #: how the family is recognized — so it has to be excluded by name or the corpus documents the
 #: empty crate this producer wrote to resolve the family.
 PROBE_PACKAGE = "cvlr-api-probe"
+#: The crate the examples are compiled in. Kept apart from the probe so the probe's dependency
+#: block stays exactly the reference set.
+EXAMPLES_PACKAGE = "cvlr-api-examples"
 
 
 class RustdocUnavailable(RuntimeError):
@@ -836,7 +860,147 @@ def _surface_section(docs: CrateDocs, items: list[Item]) -> ManualSection:
     )
 
 
-def build_manifest(crates: list[CrateDocs], source: str) -> RagManifest:
+# ---------------------------------------------------------------------------------------------
+# the examples
+
+
+def _compiled_source(body: str) -> str:
+    """What a block is compiled as, and so what the corpus shows once it has compiled.
+
+    Hidden lines are shown rather than stripped: they are the setup the example needs, and an
+    example the reader can copy whole is the one the check actually vouches for.
+    """
+    return reveal_hidden_lines(body)
+
+
+def gated_sources(crates: list[CrateDocs]) -> dict[str, list[str]]:
+    """Every distinct example rustdoc would build, by compiled source, with the items carrying it.
+
+    Keyed by source rather than by item because the family repeats itself — ``cvlr_lemma!`` and
+    ``CvlrLemma`` share an example — and the same source compiles the same way wherever it is.
+    """
+    found: dict[str, list[str]] = {}
+    for docs in sorted(crates, key=lambda c: c.name):
+        for item in items_of(docs):
+            for fence in fences(item.docs or ""):
+                if fence.kind is FenceClass.COMPILED:
+                    found.setdefault(_compiled_source(fence.body), []).append(
+                        f"{docs.name}::{item.name}"
+                    )
+    return found
+
+
+#: Put ahead of a block that was not compiled, so a reader cannot take it for checked Rust.
+_NOT_COMPILED = (
+    "_Not compiled (marked `{info}` upstream); read it as a sketch, not as checked Rust:_"
+)
+_COMPILED = "_Compiled against the pinned crates:_"
+_DROPPED = "_An example here did not compile against the pinned crates and has been removed._"
+
+
+@dataclass(frozen=True)
+class ExampleGate:
+    """The verdict on every compiled example, and how an item's prose is rewritten from them."""
+
+    #: By compiled source (:func:`gated_sources`'s keys).
+    verdicts: Mapping[str, Verdict]
+    #: The items each source appears under, for the report. Empty where nobody needs it.
+    owners: Mapping[str, Sequence[str]] = MappingProxyType({})
+
+    def render(self, docs: str) -> str:
+        """``docs`` with each code block labelled by what was done with it.
+
+        A block that compiled is shown as compiled, hidden lines included; one that failed is
+        replaced by a line saying so, which keeps the prose around it from pointing at nothing; one
+        rustdoc would not build keeps its own fence under a label saying it was not compiled.
+        """
+        out: list[str] = []
+        cursor = 0
+        for fence in fences(docs):
+            out.append(docs[cursor : fence.start])
+            cursor = fence.end
+            trailing = "\n" if docs[fence.start : fence.end].endswith("\n") else ""
+            match fence.kind:
+                case FenceClass.COMPILED:
+                    source = _compiled_source(fence.body)
+                    verdict = self.verdicts.get(source)
+                    if verdict is None:
+                        raise GateUnavailable(
+                            f"an example reached the corpus without being compiled:\n{source}"
+                        )
+                    if isinstance(verdict, Failed):
+                        out.append(_DROPPED + trailing)
+                    else:
+                        out.append(f"{_COMPILED}\n```rust\n{source}```{trailing}")
+                case FenceClass.COMPILE_FAIL | FenceClass.IGNORED | FenceClass.NOT_RUST:
+                    label = _NOT_COMPILED.format(info=fence.info)
+                    out.append(f"{label}\n```{fence.info}\n{fence.body}```{trailing}")
+        out.append(docs[cursor:])
+        return "".join(out)
+
+    def failures(self) -> list[tuple[str, Failed]]:
+        return [(s, v) for s, v in self.verdicts.items() if isinstance(v, Failed)]
+
+    def summary(self) -> str:
+        failed = len(self.failures())
+        return (
+            f"examples: {len(self.verdicts)} compiled, {len(self.verdicts) - failed} passed, "
+            f"{failed} dropped"
+        )
+
+    def failure_report(self) -> list[str]:
+        """Markdown lines naming each dropped example, where it is, and rustc's first complaint."""
+        lines: list[str] = []
+        for source, verdict in self.failures():
+            where = ", ".join(f"`{o}`" for o in self.owners.get(source, ())) or "(unknown item)"
+            first = next((ln for ln in verdict.diagnostics.splitlines() if ln.strip()), "")
+            lines.append(f"- {where}: `{first.strip()}`")
+        return lines
+
+
+def _examples_crate(
+    root: pathlib.Path,
+    reference: ChainReference,
+    family: Sequence[tuple[str, str]],
+    sources: Mapping[str, LocalCheckout],
+) -> None:
+    """The crate the examples compile in: the reference set plus every family crate, direct.
+
+    A doctest can name its own crate whichever it is, so an example in ``cvlr-macros`` may write
+    ``use cvlr_macros::...``. Declaring the whole family at the versions the probe resolved is
+    that context for every crate at once. It is wider than a scaffolded project's, which declares
+    only the reference set and reaches the rest through the facade.
+    """
+    pinned = {c.name for c in reference.crates()}
+    extra = "".join(f'{name} = "={version}"\n' for name, version in family if name not in pinned)
+    _write_manifest(root, EXAMPLES_PACKAGE, reference.cargo_dependencies() + "\n" + extra, sources)
+
+
+def gate_examples(
+    crates: list[CrateDocs],
+    reference: ChainReference,
+    workdir: pathlib.Path,
+    *,
+    sources: Mapping[str, LocalCheckout] = MappingProxyType({}),
+) -> ExampleGate:
+    """Compile every example the corpus would carry; :func:`document_family` must have run here.
+
+    The probe's lockfile is copied so the examples compile against the releases rustdoc read.
+    """
+    owners = gated_sources(crates)
+    root = workdir / "example-check"
+    _examples_crate(root, reference, [(c.name, c.version) for c in crates], sources)
+    shutil.copyfile(workdir / "Cargo.lock", root / "Cargo.lock")
+    ordered = list(owners)
+    verdicts = check_examples(root, ordered)
+    gate = ExampleGate(verdicts=dict(zip(ordered, verdicts)), owners=owners)
+    _log.info(gate.summary())
+    for line in gate.failure_report():
+        _log.warning("example dropped: %s", line.removeprefix("- "))
+    return gate
+
+
+def build_manifest(crates: list[CrateDocs], source: str, examples: ExampleGate) -> RagManifest:
     """Both retrieval products for the whole family.
 
     The two want opposite things and are laid out separately rather than derived from each other:
@@ -852,7 +1016,7 @@ def build_manifest(crates: list[CrateDocs], source: str) -> RagManifest:
         manual.append(_surface_section(docs, items))
         for item, leaf in zip(items, _leaves(items)):
             headers = [API_ROOT, docs.name, docs.version, leaf]
-            body = item.body()
+            body = replace(item, docs=examples.render(item.docs) if item.docs else None).body()
             manual.append(
                 ManualSection(
                     headers=headers,
@@ -974,6 +1138,13 @@ def _probe_crate(
     off the pin therefore fails here, at cargo, rather than producing a corpus quietly describing
     a release this build does not support.
     """
+    _write_manifest(root, PROBE_PACKAGE, reference.cargo_dependencies(), sources)
+
+
+def _write_manifest(
+    root: pathlib.Path, package: str, dependencies: str, sources: Mapping[str, LocalCheckout]
+) -> None:
+    """An empty library crate with these dependencies and the checkouts as patches."""
     (root / "src").mkdir(parents=True, exist_ok=True)
     (root / "src" / "lib.rs").write_text("")
     patches = "".join(
@@ -981,10 +1152,10 @@ def _probe_crate(
     )
     (root / "Cargo.toml").write_text(
         "[package]\n"
-        f'name = "{PROBE_PACKAGE}"\n'
+        f'name = "{package}"\n'
         'version = "0.0.0"\n'
         'edition = "2021"\n\n'
-        "[dependencies]\n" + reference.cargo_dependencies() + "\n"
+        "[dependencies]\n" + dependencies.rstrip("\n") + "\n"
         + (f"\n[patch.crates-io]\n{patches}" if patches else "")
     )
 
@@ -1009,10 +1180,16 @@ def _family_packages(root: pathlib.Path) -> list[tuple[str, str]]:
     return sorted(set(found))
 
 
-def _rustdoc(root: pathlib.Path, package: str) -> pathlib.Path:
+#: The toolchain rustdoc runs under unless the caller names one. JSON output is nightly-only and
+#: :data:`FORMAT_VERSION` pins one schema, so a reproducible build names a dated nightly
+#: (``nightly-2026-07-05``) instead.
+DEFAULT_TOOLCHAIN = "nightly"
+
+
+def _rustdoc(root: pathlib.Path, package: str, toolchain: str) -> pathlib.Path:
     result = subprocess.run(
         [
-            "cargo", "+nightly", "rustdoc", "-q", "--offline",
+            "cargo", f"+{toolchain}", "rustdoc", "-q", "--offline",
             "-p", package, "-Z", "unstable-options", "--output-format", "json",
         ],
         cwd=root,
@@ -1022,8 +1199,8 @@ def _rustdoc(root: pathlib.Path, package: str) -> pathlib.Path:
     out = root / "target" / "doc" / f"{package.replace('-', '_')}.json"
     if result.returncode != 0 or not out.is_file():
         raise RustdocUnavailable(
-            f"cargo rustdoc failed for {package} (exit {result.returncode}). rustdoc JSON needs a "
-            f"nightly toolchain and a warm cargo registry.\n{result.stderr.strip()}"
+            f"cargo +{toolchain} rustdoc failed for {package} (exit {result.returncode}). rustdoc "
+            f"JSON needs a nightly toolchain and a warm cargo registry.\n{result.stderr.strip()}"
         )
     return out
 
@@ -1041,6 +1218,7 @@ def document_family(
     workdir: pathlib.Path,
     *,
     sources: Mapping[str, LocalCheckout] = MappingProxyType({}),
+    toolchain: str = DEFAULT_TOOLCHAIN,
 ) -> list[CrateDocs]:
     """Build the probe, run rustdoc over the whole family, and resolve re-exports across it.
 
@@ -1050,10 +1228,17 @@ def document_family(
     if shutil.which("cargo") is None:
         raise RustdocUnavailable("cargo is not on PATH, so there is nothing to document.")
     _probe_crate(workdir, reference, sources)
-    subprocess.run(
+    locked = subprocess.run(
         ["cargo", "generate-lockfile", "-q", "--offline"],
         cwd=workdir, capture_output=True, text=True, check=False,
     )
+    if locked.returncode != 0 or not (workdir / "Cargo.lock").is_file():
+        raise RustdocUnavailable(
+            f"cargo could not resolve the reference set offline (exit {locked.returncode}). This "
+            f"build never touches the network, so the pinned crates must already be in the cargo "
+            f"registry: run `cargo fetch` once in a crate depending on\n"
+            f"{reference.cargo_dependencies()}\n{locked.stderr.strip()}"
+        )
     packages = _family_packages(workdir)
     if not packages:
         raise RustdocUnavailable(
@@ -1064,7 +1249,7 @@ def document_family(
     for name, version in packages:
         origin = sources.get(name, Published())
         _log.info("rustdoc: %s %s from %s", name, version, origin.describe())
-        crates.append(load(_rustdoc(workdir, name), name, version, origin))
+        crates.append(load(_rustdoc(workdir, name, toolchain), name, version, origin))
     resolve_aliases(crates)
     return crates
 
@@ -1087,13 +1272,17 @@ def manifest_source(reference: ChainReference, sources: Mapping[str, LocalChecko
     return f"{base}, reading these from local checkouts rather than the published releases — {read}"
 
 
-def undocumented_report(crates: list[CrateDocs]) -> str:
-    """Every corpus item with no prose documentation, grouped by crate.
+def undocumented_report(crates: list[CrateDocs], examples: ExampleGate) -> str:
+    """Every corpus item with no prose documentation, grouped by crate, then every example that
+    did not compile.
 
     The corpus can only carry what the crates carry. rustdoc gives existence, signature, defining
     crate and feature gate with no doc comment at all — which is most of what the live run's tool
     census asked for — but *what an item is for* has to be written by someone, and this is the
     list of what nobody has written yet (``docs/cvlr-api-docs-plan.md`` §4.2).
+
+    An example that does not compile is the same kind of ask: the corpus drops it, so the item
+    reads as having no example at all.
 
     Regenerate rather than edit: the point of the list is to shrink.
     """
@@ -1131,6 +1320,11 @@ def undocumented_report(crates: list[CrateDocs]) -> str:
             + "; ".join(checkouts)
             + ".",
         ]
+    if failures := examples.failure_report():
+        lines += [
+            f"\n### Examples that do not compile — {len(failures)} of {len(examples.verdicts)}\n",
+            *failures,
+        ]
     return "\n".join(header + lines) + "\n"
 
 
@@ -1157,6 +1351,13 @@ def main() -> None:
              "manifest's source line is what records that a checkout was read.",
     )
     parser.add_argument(
+        "--toolchain", default=DEFAULT_TOOLCHAIN,
+        help=f"The rustup toolchain rustdoc runs under (default {DEFAULT_TOOLCHAIN}). rustdoc JSON "
+             f"is nightly-only and this parser speaks format {FORMAT_VERSION} only, so pin a dated "
+             "nightly for a reproducible build. The example check runs under the default "
+             "toolchain, whatever `cargo` resolves to.",
+    )
+    parser.add_argument(
         "--undocumented", action="store_true",
         help="Instead of a manifest, write the list of items that carry no prose documentation. "
              "That list is the ask against the CVLR crates, and it is meant to shrink.",
@@ -1165,22 +1366,27 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     reference = reference_for(args.chain)
+
+    def build(workdir: pathlib.Path) -> tuple[list[CrateDocs], ExampleGate]:
+        crates = document_family(reference, workdir, sources=sources, toolchain=args.toolchain)
+        return crates, gate_examples(crates, reference, workdir, sources=sources)
+
     try:
         sources = crate_sources(args.crate_source)
         if args.keep is not None:
             args.keep.mkdir(parents=True, exist_ok=True)
-            crates = document_family(reference, args.keep, sources=sources)
+            crates, examples = build(args.keep)
         else:
             with tempfile.TemporaryDirectory(prefix="cvlr-api-docs-") as tmp:
-                crates = document_family(reference, pathlib.Path(tmp), sources=sources)
-    except RustdocUnavailable as exc:
+                crates, examples = build(pathlib.Path(tmp))
+    except (RustdocUnavailable, GateUnavailable) as exc:
         raise SystemExit(f"cvlr_api_docs: {exc}") from exc
 
     if args.undocumented:
-        args.output.write_text(undocumented_report(crates))
+        args.output.write_text(undocumented_report(crates, examples))
         _log.info("wrote %s", args.output)
         return
-    manifest = build_manifest(crates, source=manifest_source(reference, sources))
+    manifest = build_manifest(crates, manifest_source(reference, sources), examples)
     args.output.write_text(manifest.model_dump_json(indent=1))
     _log.info(
         "wrote %s: %d sections, %d embedded groups",

@@ -4,10 +4,11 @@ The peer of :mod:`composer.spec.cvl_research`, and deliberately close to it — 
 two agents doing the same job costs review attention that neither earns. What differs is the two
 things CVLR has that CVL does not.
 
-**Two corpora, and an ordering between them.** ``cvlr_api_kb`` is generated from the CVLR crates
-and compile-gated; ``cvlr_kb`` is the Solana Prover manual, hand-written and allowed to
-lag. A retrieval hit carries no provenance, so the ordering cannot live in the rows — it lives
-in this agent, which holds both tool sets and is told which wins. That is what the source mount
+**Two corpora, and an ordering between them.** ``cvlr_api_kb`` is generated from the CVLR crates'
+rustdoc, and every doc-comment example it presents as Rust was type-checked against the pinned
+crates (the rest are labelled as not compiled); ``cvlr_kb`` is the Solana Prover manual,
+hand-written and allowed to lag. A retrieval hit carries no provenance, so the ordering cannot live
+in the rows — it lives in this agent, which holds both tool sets and is told which wins. That is what the source mount
 used to do by being the code (``docs/cvlr-api-docs-plan.md`` §5).
 
 **Nothing run-specific reaches it.** The version pin (§2) means the corpus describes exactly the
