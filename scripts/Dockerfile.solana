@@ -19,7 +19,7 @@ ARG RUST_VERSION=1.90.0
 ARG CARGO_CERTORA_SBF_VERSION=0.3.5
 # Must agree with PLATFORM_TOOLS_VERSION in composer/spec/cvlr/conf.py, which is the version every
 # build uses. tests/test_cvlr_image.py fails the routine gate if the two drift.
-ARG SOLANA_TOOLS_VERSION=v1.43
+ARG SOLANA_TOOLS_VERSION=v1.53
 # Inherited from the base service's build args through the compose template; the channel is baked
 # into $BASE_IMAGE rather than chosen here. Declared so the build does not warn about it.
 ARG CERTORA_CLI_PACKAGE

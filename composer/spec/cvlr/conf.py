@@ -100,9 +100,12 @@ def conf_history(tunable: TunableConf) -> tuple[str, ...]:
 
 #: The platform-tools release every build uses. The prover does not apply ``cargo_tools_version``
 #: itself: it reaches ``cargo certora-sbf`` only on the CLI's own build path, and this backend owns
-#: the build. One release serves every target because the reference set pins one platform
-#: generation (:class:`~composer.spec.cvlr.reference.PlatformGeneration`).
-PLATFORM_TOOLS_VERSION = "v1.43"
+#: the build.
+#:
+#: One release serves both Solana platform generations. v1.53 ships rustc and cargo 1.89. The
+#: older v1.43 shipped 1.79, whose cargo cannot parse an edition-2024 manifest, and the SDK 3
+#: crates' lockfiles are full of them. The SDK 2.2 vault builds under v1.53 too.
+PLATFORM_TOOLS_VERSION = "v1.53"
 
 
 #: The cargo feature that compiles the verification module into the program. The scaffold writes

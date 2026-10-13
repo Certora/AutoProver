@@ -1,11 +1,10 @@
 # Demangled symbols from test_scenarios/solana_vault_idl built for SBF with platform-tools
-# v1.43 (anchor-lang 0.31.1, solana-program 2.3.0). Filtered to the platform and Anchor
+# v1.53 (anchor-lang 0.31.1, solana-program 2.3.0). Filtered to the platform and Anchor
 # layers, which is what the tuning files address. Regenerate with:
-#   cargo certora-sbf --tools-version v1.43
-#   llvm-nm --defined-only target/sbf-solana-solana/release/vault.so \
+#   cargo certora-sbf --tools-version v1.53
+#   llvm-nm --defined-only target/sbpf-solana-solana/release/vault.so \
 #     | awk '{ $1=""; $2=""; sub(/^[ \t]+/,""); print }' | rustfilt | sort -u
 <anchor_lang::accounts::account::Account<T> as anchor_lang::Accounts<B>>::try_accounts
-anchor_lang::accounts::account::Account<T>::exit_with_expected_owner
 anchor_lang::accounts::account::Account<T>::try_from
 anchor_lang::accounts::account::Account<T>::try_from_unchecked
 <anchor_lang::accounts::program::Program<T> as anchor_lang::Accounts<B>>::try_accounts
@@ -23,7 +22,6 @@ anchor_lang::error::ErrorCode::name
 anchor_lang::error::Error::log
 anchor_lang::error::Error::with_account_name
 anchor_lang::error::Error::with_pubkeys
-anchor_lang::error::Error::with_values
 anchor_lang::error::<impl core::convert::From<anchor_lang::error::Error> for solana_program_error::ProgramError>::from
 anchor_lang::error::ProgramErrorWithOrigin::log
 anchor_lang::system_program::allocate
@@ -36,10 +34,6 @@ solana_account_info::AccountInfo::data_is_empty
 solana_account_info::AccountInfo::data_len
 solana_account_info::AccountInfo::lamports
 solana_account_info::AccountInfo::realloc
-solana_account_info::AccountInfo::try_borrow_data
-solana_account_info::AccountInfo::try_borrow_lamports
-solana_account_info::AccountInfo::try_borrow_mut_data
-solana_account_info::AccountInfo::try_borrow_mut_lamports
 solana_account_info::AccountInfo::try_data_len
 solana_cpi::invoke_signed_unchecked
 solana_instruction::Instruction::new_with_bincode

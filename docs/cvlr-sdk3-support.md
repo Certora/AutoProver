@@ -298,23 +298,36 @@ generic sysvar reads go through, and nothing tunes it. The probe shows it does n
 the syscall underneath is modelled. Record that in a comment beside the aliases, so a later reader
 does not add a summary for it.
 
-### A3. Platform tools per generation, or one newer release
+### A3. One newer platform-tools release
 
 `PLATFORM_TOOLS_VERSION = "v1.43"` (rustc 1.79) cannot build stake `main`. Its cargo cannot parse
 the edition-2024 manifests in the lockfile (`crypto-common` 0.2.2 is the first it meets). The
 author only sees this as a misleading `--offline` error (memory note:
 `platform-tools-cargo-1-79-edition2024`).
 
-Certora platform-tools **v1.53** (rustc 1.89) builds stake `main`, and it also builds the SDK 2.2
-vault tutorial. So the simpler change is one bump to v1.53, not a per-generation setting. The bump
-also removes the `zeroize` downgrades 2.2 targets have needed under v1.43.
+**Done: one bump to v1.53** (rustc and cargo 1.89), which builds stake `main` and the SDK 2.2
+vault. One release still serves every target, so there is no per-generation setting. What
+changed:
 
-Before the bump: run the CVLR e2e test (`cvlr-e2e-not-in-ci`) and one vault rule set under v1.53,
-because rustc 1.89 changes codegen, and with it the symbols the 2.2 aliases match. If the vault
-regresses, make the release a field of `PlatformGeneration` instead.
+- `PLATFORM_TOOLS_VERSION` and `scripts/Dockerfile.solana`'s `SOLANA_TOOLS_VERSION`, which the image
+  drift test keeps equal. `cargo-certora-sbf` 0.3.5, the image's pin, drives v1.53.
+- **The vault symbol fixture is regenerated under v1.53.** rustc 1.89 inlines six functions that
+  v1.43 kept as symbols: the four `AccountInfo::try_borrow_*`, plus two in Anchor. The tuning
+  files mark the four `#[inline]` anyway, so the Prover analyzes the same code, now inside the
+  callers. Every alias still names a path the binary defines, and the dialect still costs no
+  coverage. Only the counts in the coverage test moved: core 6 → 15 symbols, was 6 → 19.
+- **The loop-bound test recognizes v1.53's disassembly.** The new disassembler writes a backward
+  branch as `jge r2, 0x3, -0xa`, not `if … goto -0xa`. The test looked for the old spelling, so it
+  reported that the loop was optimized away. It was not. The test also called `write_submission`
+  without the `into` argument #258 added, so it failed under v1.43 too. And it now accepts that the two arms'
+  build scripts have different paths, since each is named after its submission. It checks that
+  their contents match instead. It passes under v1.53, with real Prover jobs on both arms.
 
-The conf comment that says one release serves every target "because the reference set pins one
-platform generation" has to be reworded either way.
+**The expensive build-and-prove tests under v1.53:**
+
+- Passed: the end-to-end gate, Anchor reach, both preflight tests, and the loop bound.
+- **Failing under v1.43 as well, so not caused by the bump:** `test_cvlr_dropped_writes`. Its
+  Prover job ends `FAILED` with no results under both releases.
 
 ### A4. Excluding the entrypoint when there is no `no-entrypoint`
 
