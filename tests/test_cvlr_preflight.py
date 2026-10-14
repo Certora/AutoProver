@@ -44,6 +44,7 @@ edition = "2021"
 crate-type = ["cdylib", "lib"]
 
 [dependencies]
+solana-program = "2"
 """
 
 PROGRAM = """\
@@ -74,7 +75,9 @@ async def test_a_bare_cargo_workspace_becomes_one_that_compiles_with_a_harness_i
     """
     main_source = project / "programs" / "vault" / "src" / "lib.rs"
 
-    selected = await select_package(project, None, main_source=main_source)
+    selected = await select_package(
+        project, None, candidates=(SOLANA_V2,), main_source=main_source
+    )
     assert selected.name == "vault"
     assert selected.package_dir == Path("programs/vault")
 
@@ -94,7 +97,9 @@ async def test_pointing_it_at_a_project_it_already_scaffolded_replaces_only_the_
     """The harness files are AutoProver's. A second run puts an edited one back and changes
     nothing else, so the manifests it already extended are not extended again."""
     main_source = project / "programs" / "vault" / "src" / "lib.rs"
-    selected = await select_package(project, None, main_source=main_source)
+    selected = await select_package(
+        project, None, candidates=(SOLANA_V2,), main_source=main_source
+    )
 
     first = await prepare_workspace(
         selected.workspace_root, reference=SOLANA_V2, package=selected.name

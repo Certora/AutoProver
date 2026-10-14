@@ -10,7 +10,7 @@ property because the read "is external".
 **Formula:** none of those. Both forms are analyzed. Drive the handler as it is. When a rule needs
 the account and the syscall to agree, say so with one assumption:
 
-```rust
+```rust,ignore
 let accounts = Box::new(cvlr_deserialize_nondet_accounts());
 let clock_info = &accounts[2];
 cvlr_assume!(*clock_info.key == sysvar::clock::id());

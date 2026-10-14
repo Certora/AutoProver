@@ -1284,11 +1284,15 @@ def document_family(
     *,
     sources: Mapping[str, LocalCheckout] = MappingProxyType({}),
     toolchain: str = DEFAULT_TOOLCHAIN,
+    fetch: bool = False,
 ) -> list[CrateDocs]:
     """Build the probe, run rustdoc over the whole family, and resolve re-exports across it.
 
     Returns the parsed crates rather than a manifest: the walk has two consumers now, and which
     one runs is a flag rather than a second pass over cargo.
+
+    ``fetch`` resolves and fetches the probe's graph over the network first, for a cold registry.
+    Without it the build is offline unless a release is read from a commit.
     """
     if shutil.which("cargo") is None:
         raise RustdocUnavailable("cargo is not on PATH, so there is nothing to document.")
@@ -1297,18 +1301,20 @@ def document_family(
     # A commit cargo has not fetched is not in the registry cache, so resolving one needs the
     # network, and so does the rest of a graph the cache has never held. Fetching it once lets every
     # rustdoc below stay offline.
+    online = fetch or bool(commits)
     locked = subprocess.run(
-        ["cargo", "generate-lockfile", "-q", *(() if commits else ("--offline",))],
+        ["cargo", "generate-lockfile", "-q", *(() if online else ("--offline",))],
         cwd=workdir, capture_output=True, text=True, check=False,
     )
     if locked.returncode != 0 or not (workdir / "Cargo.lock").is_file():
         raise RustdocUnavailable(
-            f"cargo could not resolve the reference set (exit {locked.returncode}). Without a "
-            f"release read from its commit this build never touches the network, so the pinned "
-            f"crates must already be in the cargo registry: run `cargo fetch` once in a crate "
-            f"depending on\n{reference.cargo_dependencies()}\n{locked.stderr.strip()}"
+            f"cargo could not resolve the reference set (exit {locked.returncode}). Without "
+            f"--fetch or a release read from its commit this build never touches the network, so "
+            f"the pinned crates must already be in the cargo registry: pass --fetch, or run "
+            f"`cargo fetch` once in a crate depending on\n{reference.cargo_dependencies()}\n"
+            f"{locked.stderr.strip()}"
         )
-    if commits:
+    if online:
         subprocess.run(
             ["cargo", "fetch", "-q"], cwd=workdir, capture_output=True, text=True, check=False
         )
@@ -1344,6 +1350,7 @@ def document_generations(
     sources: Mapping[str, LocalCheckout],
     *,
     toolchain: str = DEFAULT_TOOLCHAIN,
+    fetch: bool = False,
 ) -> tuple[list[CrateDocs], ExampleGate]:
     """Every generation's crates, each documented and its examples compiled in a probe of its
     own, a crate the generations share (the core) once.
@@ -1358,7 +1365,7 @@ def document_generations(
         probe.mkdir(parents=True, exist_ok=True)
         generation_sources = sources_for(reference, sources)
         family = document_family(
-            reference, probe, sources=generation_sources, toolchain=toolchain
+            reference, probe, sources=generation_sources, toolchain=toolchain, fetch=fetch
         )
         gates.append(gate_examples(family, reference, probe, sources=generation_sources))
         for docs in family:
@@ -1476,6 +1483,12 @@ def main() -> None:
              "toolchain, whatever `cargo` resolves to.",
     )
     parser.add_argument(
+        "--fetch", action="store_true",
+        help="Resolve and fetch each generation's crates over the network before documenting "
+             "them, for a cold cargo registry. Without it the build is offline, except for a "
+             "release the reference set reads from a commit.",
+    )
+    parser.add_argument(
         "--undocumented", action="store_true",
         help="Instead of a manifest, write the list of items that carry no prose documentation. "
              "That list is the ask against the CVLR crates, and it is meant to shrink.",
@@ -1489,12 +1502,13 @@ def main() -> None:
         if args.keep is not None:
             args.keep.mkdir(parents=True, exist_ok=True)
             crates, examples = document_generations(
-                references, args.keep, sources, toolchain=args.toolchain
+                references, args.keep, sources, toolchain=args.toolchain, fetch=args.fetch
             )
         else:
             with tempfile.TemporaryDirectory(prefix="cvlr-api-docs-") as tmp:
                 crates, examples = document_generations(
-                    references, pathlib.Path(tmp), sources, toolchain=args.toolchain
+                    references, pathlib.Path(tmp), sources, toolchain=args.toolchain,
+                    fetch=args.fetch,
                 )
     except (RustdocUnavailable, GateUnavailable) as exc:
         raise SystemExit(f"cvlr_api_docs: {exc}") from exc

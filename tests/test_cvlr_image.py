@@ -117,6 +117,12 @@ def test_the_api_manifest_step_discards_its_toolchain_and_registry():
     assert '"$CARGO_HOME/registry"' in run
 
 
+def test_the_api_manifest_step_fetches_its_own_crates():
+    """The registry is cold in a fresh layer, and the producer resolves offline unless told
+    otherwise, so the step has to ask it to fetch rather than warm the registry by hand."""
+    assert "--fetch" in _api_manifest_run()
+
+
 def test_the_api_manifest_is_generated_by_a_dated_nightly():
     """The producer accepts exactly one rustdoc JSON ``format_version``, so a floating nightly would
     break the image build the day the format moves. The toolchain installed, the one rustdoc runs
