@@ -157,10 +157,9 @@ type-safe framework.
 - **Tools** are Pydantic models with `run()` implementations and mixins for injecting graph
   state / tool-call id. Tools return either a string, a `Command` that merges into state, or an
   `interrupt()` that pauses the graph for human input.
-- **[composer/llm/](composer/llm/)** binds models by provider (Anthropic, OpenAI, OpenRouter):
-  thinking budgets, interleaved thinking, the memory-tool beta, cache control.
-- **[composer/workflow/](composer/workflow/)** wires graphcore to this application: Postgres
-  checkpointer + store services
+- **[composer/workflow/](composer/workflow/)** wires graphcore to this application: model
+  capability parsing ([llm.py](composer/workflow/llm.py) — thinking budgets, interleaved
+  thinking, memory-tool beta, cache control), Postgres checkpointer + store services
   ([services.py](composer/workflow/services.py)), and summarization tuned for long spec runs
   ([summarization.py](composer/workflow/summarization.py)).
 - **[composer/io/](composer/io/)** is the execution and observability layer. `run_task`
@@ -278,10 +277,6 @@ the authoring agent. A callback protocol streams per-rule outcomes to the UI and
   Every cargo build runs in the command sandbox
   ([docs/command-sandbox.md](docs/command-sandbox.md)). Entry points: `console-solana`,
   `tui-solana`. Design: [docs/cvlr-backend-plan.md](docs/cvlr-backend-plan.md).
-- **Rust applications** ([composer/rustapp/](composer/rustapp/)) — a host for backends written in
-  Rust: a wheel exports a descriptor and callouts, and the host synthesizes the CLI, phases,
-  frontend and artifact store around them
-  ([docs/rust-applications.md](docs/rust-applications.md)).
 - **NatSpec** ([composer/spec/natspec/](composer/spec/natspec/)) — a *greenfield* workflow
   (its own asyncio orchestrator, not the generic driver) that goes from a design doc to Solidity
   interfaces, stub implementations, and CVL. A semaphore-serialized "semantic registry"
@@ -292,13 +287,13 @@ the authoring agent. A callback protocol streams per-rule outcomes to the UI and
 
 - **Entry points** ([composer/cli/](composer/cli/)) — `console-autoprove` (headless, prints to
   stdout; best for `print`/log debugging) and `tui-autoprove` (Textual UI with per-phase panels
-  and live prover-output logs); `console-`/`tui-` pairs for Foundry, Solana and codegen too. Both build the context and call the same pipeline; CLI args are
+  and live prover-output logs). Both build the context and call the same pipeline; CLI args are
   parsed by introspecting `Annotated` protocol definitions in [composer/input/](composer/input/).
 - **TUI** ([composer/ui/](composer/ui/)) — observes the pipeline purely through the IO event
   stream, rendering per-task lanes, tool calls, and streamed prover output.
 - **Diagnostics** ([composer/diagnostics/](composer/diagnostics/) + [scripts/](scripts/)) —
   per-phase timing/token aggregation; `snapshot_viewer.py` replays a single agent's conversation
-  by mnemonic; `autoprove_cache_explorer.py` inspects
+  by mnemonic; `traceDump.py` renders a full run to HTML; `autoprove_cache_explorer.py` inspects
   (and edits) cached phase results and agent memories.
 
 ## 12. Testing — deterministic replay tapes
@@ -317,11 +312,11 @@ All state lives in Postgres (a single `pgvector/pgvector:pg16` container provisi
 
 | Database | Holds |
 |---|---|
-| `rag_db` | RAG embeddings: the CVL manual, the extended Prover docs, and the two CVLR corpora, each under its own user |
+| `rag_db` | CVL-manual embeddings for RAG search |
 | `langgraph_store_db` | LangGraph document/index store — phase cache, KB articles |
 | `langgraph_checkpoint_db` | Per-node workflow checkpoints (resume / time-travel) |
 | `memory_tool_db` | Hierarchical LLM context memory (per agent) |
-| `audit_db` | Run history, VFS snapshots, prover results, summaries (resumption) |
+| `audit_db` | Run history, VFS snapshots, prover results, summaries (resumption + `traceDump`) |
 
 ## 14. Top-level packages at a glance
 
@@ -332,11 +327,12 @@ All state lives in Postgres (a single `pgvector/pgvector:pg16` container provisi
 | [certora_autosetup/](certora_autosetup/) | Solidity project analysis, compilation, harness/conf generation (Phase 1) |
 | [analyzer/](analyzer/) | Standalone counterexample analyzer (also used inline by the prover backend) |
 | [sanity_analyzer/](sanity_analyzer/) | Diagnoses unsatisfiable / sanity-failed prover runs |
-| [scripts/](scripts/) | Docker entry, DB/RAG setup, snapshot debugging tools |
+| [scripts/](scripts/) | Docker entry, DB/RAG setup, trace & snapshot debugging tools |
 | [tests/](tests/), [test_scenarios/](test_scenarios/) | Unit tests and tape-based smoke scenarios |
 
 ---
 
-*This document is a high-level map. For runtime/setup details see [README.md](README.md); for the canonical contract between the driver and a
+*This document is a high-level map. For runtime/setup details see [README.md](README.md) and
+[AICOMPOSER_INFRA.md](AICOMPOSER_INFRA.md); for the canonical contract between the driver and a
 backend, read the module docstring and protocols in
 [composer/pipeline/core.py](composer/pipeline/core.py).*

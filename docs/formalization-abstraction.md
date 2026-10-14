@@ -197,10 +197,10 @@ class StagedFormalizer[FormT: BackendResult, U: FeatureUnit](ABC):
 ```
 
 Which of the two a backend returns is its own declared signature, so a backend with no shared
-artifact never mentions staging at all. The prover is not one of those backends: its units share
-only AutoSetup's config and summaries, which are not authored from anyone's properties. The one
-`StagedFormalizer` in the tree is the CVLR backend's (`CvlrStagedFormalizer`,
-[composer/spec/cvlr/pipeline.py](../composer/spec/cvlr/pipeline.py)).
+artifact never mentions staging at all. The prover is one of those: its shared peer
+The prover is not one of those backends: its units share only AutoSetup's config and summaries,
+which are not authored from anyone's properties. The one `StagedFormalizer` in the tree is
+Rust/Crucible's.
 
 ### 3.4 The outcome types the driver produces
 

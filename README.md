@@ -39,6 +39,8 @@ The rest of this document covers the **host `uv` flow** for development.
 
 ## Prerequisites
 
+You need everything from the [AIComposer infrastructure setup](AICOMPOSER_INFRA.md):
+
 - Python 3.12+, `uv`, Docker with compose
 - `rustup` — a default `uv sync` builds the `rust/` crates (see below)
 - `ANTHROPIC_API_KEY` in your environment
@@ -111,10 +113,6 @@ The RAG database must be populated before running auto-prove. This is a two-step
 ```
 
 `gen_docs.sh` clones the [Certora Documentation](https://github.com/Certora/Documentation) repo and builds single-page HTML files via Sphinx. `populate_rag.sh` then chunks and indexes the CVL documentation into `rag_db`.
-
-The sanity analyzer (`sanity_analyzer/`, run by AutoSetup) defaults to a second, extended corpus: CVL plus the Prover docs. Populate it with `./scripts/populate_extended_rag.sh` after `gen_docs.sh`.
-
-The RAG is read-only at runtime and derived entirely from the documentation HTML, so when the docs change, rebuild it. `./scripts/refresh_rag.sh` regenerates the docs, wipes the database and repopulates it (`--all` also rebuilds the extended corpus; `--skip-gen-docs` reuses the HTML already built). Run it when nothing is querying the RAG: search returns nothing while it re-embeds.
 
 ### 3. Populate the CVL Knowledge Base
 
@@ -290,15 +288,3 @@ On top of the EVM prerequisites:
 ### Output
 
 The harness is a Rust module inside the verified crate, under `<pkg>/src/certora/` (rules in `specs/`), wired into the crate's `Cargo.toml` and `lib.rs`. Everything else — the report, the property→rule mapping, per-rule reports — goes under `certora/cvlr/` in the project root. Edits the pipeline made to the program itself (munges) are recorded in the report.
-
-## AI Composer (code generation)
-
-AI Composer generates a Solidity implementation that satisfies a CVL spec. It shares this repo's setup (databases, RAG, Prover credentials); the Prover runs in the cloud unless `--local-prover` is given.
-
-```bash
-console-codegen spec.spec Interface.sol system_doc.txt   # or tui-codegen
-```
-
-`spec.spec` is the CVL the implementation must satisfy, `Interface.sol` holds the `interface` it must implement, and `system_doc.txt` describes the system. The run is semi-automatic: it can ask for help, propose spec changes, or ask to relax a requirement, so watch it.
-
-`--thread-id` (logged at start) and `--checkpoint-id` (printed as the run goes) resume from any checkpoint, not only the latest. `--debug-fs DIR` with both dumps the generated files at that checkpoint and exits. `--help` lists the rest.
