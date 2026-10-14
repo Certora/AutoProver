@@ -7,7 +7,9 @@
 #                the releases composer/spec/cvlr/reference.py pins.
 #
 # Each manifest declares its own knowledge_base, and rag_import routes by that tag, so both land
-# from one call. See docs/cvlr-api-docs-plan.md. Any source can be missing and the others still
+# from one call. Each corpus is emptied right before it is refilled (--replace): ingest
+# only inserts, so filling a populated corpus would add a second copy of every row. A dry run
+# (-- --print) empties nothing. See docs/cvlr-api-docs-plan.md. Any source can be missing and the others still
 # land; all missing is an error.
 #
 # Manifest resolution, in order:
@@ -43,7 +45,7 @@ ingest_manual() {
     # PROVENANCE names the docs revision, which is the only record of what this HTML is.
     [[ -f "$docs_dir/PROVENANCE" ]] && cat "$docs_dir/PROVENANCE" >&2
     (cd "$parent"; uv run --isolated --group ragbuild \
-        python -m composer.scripts.ragbuild --corpus cvlr "$docs_dir/solana.html")
+        python -m composer.scripts.ragbuild --corpus cvlr --replace "$docs_dir/solana.html")
 }
 
 # The API corpus is built here rather than found: it needs cargo and a nightly toolchain and
@@ -84,6 +86,13 @@ if [[ $want_source -eq 1 ]]; then
     exit 2
 fi
 
+# A dry run (-- --print) reaches only rag_import, which writes nothing. Ingesting the manual would
+# write to the database, so a dry run skips it.
+dry_run=0
+for arg in "${forward[@]+"${forward[@]}"}"; do
+    [[ "$arg" == "--print" ]] && dry_run=1
+done
+
 # An explicit manifest list skips generation entirely, so a checkout passed with one would be
 # silently ignored -- and "it ingested the published API" is indistinguishable from success.
 if [[ ${#crate_sources[@]} -gt 0 && ${#manifests[@]} -gt 0 ]]; then
@@ -109,6 +118,10 @@ if [[ ${#manifests[@]} -eq 0 ]]; then
 fi
 
 if [[ ${#manifests[@]} -eq 0 ]]; then
+    if [[ $dry_run -eq 1 ]]; then
+        echo "Dry run, and the API corpus could not be generated: nothing to print." >&2
+        exit 1
+    fi
     if ingest_manual; then
         echo "The API corpus could not be generated; ingested the manual alone." >&2
         exit 0
@@ -124,10 +137,14 @@ MSG
     exit 1
 fi
 
-ingest_manual || true
+if [[ $dry_run -eq 1 ]]; then
+    echo "Dry run: the manual is not re-ingested." >&2
+else
+    ingest_manual || true
+fi
 
 # No --output: each manifest carries its own knowledge_base and rag_import groups by the
 # connection that resolves to, which is what lets one call fill two corpora.
 echo "Ingesting ${#manifests[@]} manifest(s) ..." >&2
 (cd "$parent"; uv run --isolated --group ragbuild \
-    python -m composer.scripts.rag_import "${manifests[@]}" "${forward[@]+"${forward[@]}"}")
+    python -m composer.scripts.rag_import --replace "${manifests[@]}" "${forward[@]+"${forward[@]}"}")

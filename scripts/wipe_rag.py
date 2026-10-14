@@ -26,8 +26,6 @@ is no unwipe. Automated callers that wipe-then-immediately-rebuild (e.g.
 `refresh_rag.sh`) can pass `--skip-confirmation` to bypass the prompt.
 """
 
-from __future__ import annotations
-
 import argparse
 import asyncio
 import pathlib
@@ -37,22 +35,8 @@ composer_dir = str(pathlib.Path(__file__).parent.parent.absolute())
 if composer_dir not in sys.path:
     sys.path.append(composer_dir)
 
-from psycopg import AsyncConnection
-
 from composer.rag.db import DEFAULT_CONNECTION
-
-
-# Hardcoded so the script cannot accidentally clobber a non-RAG table that
-# happens to share the database. Order matters for CASCADE-free TRUNCATE,
-# but we use CASCADE below so dependent tables get cleaned regardless;
-# RESTART IDENTITY resets the SERIAL counters so the next ragbuild starts
-# at id=1.
-_TABLES = (
-    "manual_section_code_refs",
-    "manual_sections",
-    "code_refs",
-    "documents",
-)
+from composer.rag.wipe import RAG_TABLES, empty_corpus
 
 _CONFIRMATION = "Yes, delete the rag"
 
@@ -64,7 +48,7 @@ def _confirm(conn_string: str) -> bool:
     print("=" * 72)
     print(f"  Connection: {conn_string}")
     print(f"  Tables that will be TRUNCATEd (RESTART IDENTITY CASCADE):")
-    for t in _TABLES:
+    for t in RAG_TABLES:
         print(f"    - {t}")
     print()
     print("  This is destructive and not recoverable. Schema stays; rows do not.")
@@ -77,20 +61,12 @@ def _confirm(conn_string: str) -> bool:
 
 
 async def _wipe(conn_string: str) -> None:
-    async with await AsyncConnection.connect(conn_string, autocommit=False) as conn:
-        async with conn.cursor() as cur:
-            # One TRUNCATE statement covering all tables — CASCADE handles
-            # the documents → code_refs and manual_sections →
-            # manual_section_code_refs FK chains; RESTART IDENTITY resets
-            # the SERIAL counters.
-            target = ", ".join(_TABLES)
-            print(f"TRUNCATE TABLE {target} RESTART IDENTITY CASCADE")
-            await cur.execute(
-                f"TRUNCATE TABLE {target} RESTART IDENTITY CASCADE"
-            )
-        await conn.commit()
+    tables = await empty_corpus(conn_string)
     print()
-    print("Done. RAG tables are empty.")
+    if tables:
+        print(f"Done. Truncated {', '.join(tables)}; the RAG tables are empty.")
+    else:
+        print("None of the RAG tables exist in this connection's schema; nothing to do.")
 
 
 def main() -> int:

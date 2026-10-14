@@ -30,6 +30,7 @@ from composer.rag.db import (
 from composer.rag.types import BlockChunk
 from composer.rag.text import get_code_refs
 from composer.rag.models import get_model
+from composer.rag.wipe import empty_corpus
 from composer.scripts.text_processors import (
     BlockBuilder, BuilderConfig, TextCollector, TextStreamer,
 )
@@ -291,11 +292,19 @@ async def main() -> None:
     target.add_argument('--output', '-o',
         help='Ingest into this ChromaDB directory or PostgreSQL connection string '
              'instead of a named corpus.')
+    parser.add_argument('--replace', action='store_true',
+        help='Empty the target corpus before ingesting into it. Ingest only inserts, so without '
+             'this a corpus that already has rows gets a second copy of each. PostgreSQL only.')
     args = parser.parse_args()
 
     file_entries = [{"file": (path:=pathlib.Path(f)), "section": path.stem} for f in args.files]
 
     output = args.output or NAMED_CORPORA[args.corpus]
+    if args.replace:
+        if not output.startswith("postgresql"):
+            parser.error("--replace empties a PostgreSQL corpus; this target is not one")
+        emptied = await empty_corpus(output)
+        logger.info("emptied %s in %s", ", ".join(emptied) or "nothing", output)
     db = await get_rag_db(output, get_model())
 
     buffer: list[BlockChunk] = []
