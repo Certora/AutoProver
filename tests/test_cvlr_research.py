@@ -15,6 +15,7 @@ nothing else.
 """
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -66,11 +67,15 @@ class _FakeDB:
         return "\n\n".join(b.body for b in section.blocks)
 
     async def search_manual_keywords(self, query, *, min_depth=0, limit=10):
-        terms = [t.strip('"') for t in query.split() if t.strip('"')]
+        """Each quoted phrase, or each bare word, must occur in the section's text. Like
+        Postgres's full-text search here, the headers are not searched: a tool that found a row by
+        its headers would pass this fake and find nothing in the real corpus."""
+        terms = re.findall(r'"([^"]+)"|(\S+)', query)
+        wanted = [quoted or bare for quoted, bare in terms]
         hits = [
             ManualSectionHit(headers=list(h), relevance=1.0)
             for h, s in self._sections.items()
-            if all(any(t in part for part in h) or t in self._content(s) for t in terms)
+            if all(t in self._content(s) for t in wanted)
         ]
         return hits[:limit]
 

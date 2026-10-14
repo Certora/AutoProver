@@ -31,6 +31,10 @@ from graphcore.tools.schemas import WithAsyncDependencies
 #: producer writes it and :class:`CvlrApiSurface` reads it, so the string lives in one place.
 SURFACE_HEADING = "Complete public surface"
 
+#: Words every complete-surface section's text opens with. The keyword search reads a section's
+#: text and not its headers, so this, not :data:`SURFACE_HEADING`, is what finds a surface.
+SURFACE_PHRASE = "exports, in full"
+
 #: The root of every header path in this corpus. Present in the path so a row read out of context
 #: still says which corpus it came from.
 API_ROOT = "CVLR API"
@@ -187,9 +191,9 @@ class CvlrApiSurface(WithAsyncDependencies[str, ApiCorpus]):
             db = corpus.db
             # The version level sits between the root and the crate, and a caller does not know
             # it — the point of the pin is that they never have to. Keyword search over the
-            # heading finds the crate's surface rows, one per version the corpus holds, and the
-            # run's pin chooses among them.
-            hits = await db.search_manual_keywords(f'"{self.crate}" "{SURFACE_HEADING}"', limit=10)
+            # surface text finds the crate's surface rows, one per version the corpus holds, and
+            # the run's pin chooses among them.
+            hits = await db.search_manual_keywords(f'"{self.crate}" "{SURFACE_PHRASE}"', limit=10)
             for hit in hits:
                 headers = list(hit.headers)
                 if self.crate in headers and SURFACE_HEADING in headers and corpus.admits(headers):

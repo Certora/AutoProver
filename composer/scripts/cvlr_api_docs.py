@@ -70,7 +70,7 @@ from composer.rag.import_format import (
 )
 from composer.spec.cvlr.crates import CVLR_PREFIX
 from composer.spec.cvlr.reference import ChainReference, GitCommit, generations
-from composer.tools.cvlr_api_rag import API_ROOT, SURFACE_HEADING
+from composer.tools.cvlr_api_rag import API_ROOT, SURFACE_HEADING, SURFACE_PHRASE
 
 _log = logging.getLogger(__name__)
 
@@ -842,7 +842,7 @@ def _surface_section(docs: CrateDocs, items: list[Item]) -> ManualSection:
             ManualBlock(
                 kind=ManualBlockKind.TEXT,
                 body=(
-                    f"Everything `{docs.name}` {docs.version} exports, in full — "
+                    f"Everything `{docs.name}` {docs.version} {SURFACE_PHRASE} — "
                     f"{len(items)} items. This list is closed: a name that is not on it is not in "
                     f"this crate at the release this build pins.\n\n{listing}"
                 ),
