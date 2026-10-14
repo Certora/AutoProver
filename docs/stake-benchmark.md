@@ -46,6 +46,10 @@ by hand is in scope, or is part of what is being measured. Those are different e
 
 ## The blocker: the CVLR line is behind the Solana SDK
 
+> **Resolved 2026-10-14.** AutoProver supports both platform generations, and the benchmark has
+> moved to stake `main`. See *Moving the benchmark to stake `main`* at the end of this document,
+> and `docs/cvlr-sdk3-support.md`.
+
 `plan_scaffold` refuses current `main` outright:
 
 ```
@@ -70,6 +74,10 @@ Pointing the backend at any current Foundation program is what surfaced it, and 
 next one too.
 
 ## The workaround, and what it costs
+
+> **Retired 2026-10-14.** The three runs recorded below used this snapshot, and their results stand
+> as recorded. Later runs are on `main`, which is different code, so a comparison across the move
+> is not like for like.
 
 Check out the last commit before the program moved to SDK 3.0:
 
@@ -150,7 +158,7 @@ caught in the act, by the loop rather than by a human.
 
 ## Open, and not worked around
 
-**The SDK 3.x gap.** A `cvlr-solana` release targeting the post-split platform generation unblocks
+**The SDK 3.x gap.** *Closed 2026-10-14; see the last section.* A `cvlr-solana` release targeting the post-split platform generation unblocks
 every current Foundation program at once. Until there is one, this workaround is the only route and
 it expires as targets age out. This belongs with whoever owns CVLR releases.
 
@@ -492,3 +500,61 @@ cannot be routed around: `is_bootstrap()` and `merge.rs:96` compare account-deri
 
 None of this touches the third run's main finding: `process_withdraw` with the source equal to
 the destination truncates the account through `realloc(0)`.
+
+## Moving the benchmark to stake `main`, 2026-10-14
+
+**Why now.** AutoProver now supports Solana's SDK 3 crates, which is what kept the benchmark on a
+year-old snapshot. The plan and its evidence are in `docs/cvlr-sdk3-support.md`. In brief:
+
+- **CVLR.** `cvlr-solana` 0.6.0 is the SDK 3 line. The port and both program models are on
+  `Certora/cvlr-solana`'s `eric/sdk3`, released at `f054348`. Until it is published, AutoProver
+  reads it from that commit (U26).
+- **AutoProver:**
+  - two Solana reference sets, chosen per target by the platform crate it links;
+  - the SDK 3 tuning-path aliases;
+  - platform-tools v1.53;
+  - one host Rust toolchain whatever the target pins;
+  - `custom-heap` for a program with no `no-entrypoint`;
+  - an API corpus scoped to the run's generation.
+- **Checked on stake `main` itself:**
+  - a hand-written probe verifies all ten of its rules, with nothing set by hand;
+  - the real preflight scaffolds the program and passes the confined compile gate.
+
+**The target.** `solana-program/stake` `main` at `bed72d0` (2026-10-01), the commit every probe
+used. It has the same 18 instructions as the snapshot.
+
+**What changes for the expert review's points:**
+
+- **Point 1 does not arise.** `main` reads `Clock` and `Rent` through the syscalls
+  (`Clock::get()`, `Rent::get()`), and stake history through `StakeHistorySysvar`, never from
+  accounts. The probe verified all three on the Prover. Nothing remains for a unit to rewrite
+  around.
+- **Point 2's stake math is integer arithmetic now.** `Delegation::stake_v2` and
+  `warmup_cooldown_allowance.rs` replace the `f64` path, which is deprecated. The probe verified
+  that effective stake never exceeds the delegation. The bounds the review asked for (effective
+  ≤ delegated, deactivation monotone, activating + effective = delegated) have no float to
+  excuse skipping them.
+- **Solvency's rent half is stated differently.** `main` recomputes the rent-exempt reserve from
+  `Rent` at each instruction. `meta.rent_exempt_reserve` is deprecated and set to a fixed pseudo
+  value. So the reserve is a fresh `Rent::minimum_balance`, which is still `f64`, and recipe K3's
+  integer stand-in is how to state it.
+- **Point 3** is independent of the target.
+
+**Other differences an author meets:**
+
+- `solana-stake-interface` is a workspace member on `main`, so the scaffold forwards the `certora`
+  feature into it, and `StakeStateV2` can be munged. On the snapshot it was a registry dependency.
+- The program's entrypoint is unconditional, and the scaffold turns on `custom-heap` to keep its
+  allocator out.
+- `main` pins Rust 1.93.0. AutoProver runs its host commands with 1.90.0 and builds with
+  platform-tools v1.53 (rustc 1.89), whatever the pin.
+
+**What it costs.** `main` is a new project root, so no cache from the snapshot carries over.
+Discovery, analysis and extraction are paid again, under the cache namespace `stake-main`.
+
+**The run, set up and not launched.** The worktree is `~/src/stake-benchmark/run-main`, on branch
+`eric/autoprover-main` of the local stake checkout, clean at `bed72d0`; AutoProver scaffolds it
+itself. `~/src/stake-benchmark/run-main.sh <budget>` launches it. It withholds `cvlr-solana-stake`,
+as every run here has, and writes the extraction pin beside the log. The budget is a required
+argument. The third run spent its $600, and this one formalizes a shared protocol unit as well.
+

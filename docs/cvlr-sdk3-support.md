@@ -545,6 +545,12 @@ Little of it depends on the generation.
 
 ### A8. The stake benchmark
 
+**Set up; not launched.** `stake-benchmark.md` records the move to `main`, the snapshot's
+retirement, and what changes for each review point. The run is in its own worktree on branch
+`eric/autoprover-main`, and `run-main.sh` takes the budget as a required argument.
+
+What follows is the original plan.
+
 - Point the benchmark at stake `main` once A1–A5 are in. Record in `stake-benchmark.md` that the
   `sdk-2.2` snapshot is retired, and why.
 - Point 1 of the expert review is moot on `main` (see *What the probe established*). Re-check
@@ -560,17 +566,12 @@ Little of it depends on the generation.
 **Done:**
 
 - C1 and C2, ported and released as commits.
-- A5, for the 2.x line.
 - 0.5.1 and `cvlr` 0.6.2, prepared and in review (#22, #52).
+- Every AutoProver item: A1 to A7, with A3b, and A8's setup.
+- The two-generation API corpus, generated and ingested.
 
-**Next:**
-
-1. **A3**, with the vault check. It is independent of everything else, and unblocks the build.
-2. **A4.** Also independent, and testable on the probe worktree.
-3. **A1 + A2.** The SDK 3 reference set, pinned to `f054348` through A5, and the aliases it
-   carries.
-4. **A6.** Required before the first SDK 3 run, because without it the author is misinformed.
-5. **A7, A8**, then the stake run on `main`.
+**Next:** the stake run on `main` (`~/src/stake-benchmark/run-main.sh <budget>`), once a budget is
+chosen.
 
 **Alongside, outside AutoProver:**
 
