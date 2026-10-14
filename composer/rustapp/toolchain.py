@@ -19,9 +19,7 @@ follows from the wheel's declared ``ecosystem``, not from inspecting keys.
 That is what makes a new ecosystem a registration rather than an edit to
 :mod:`composer.rustapp.wire`.
 
-**Solana is registered** (:class:`composer.cargo.toolchain.SolanaToolchain`); the other chains are
-not. The two methods are therefore reached in deliberately different ways, which still matters for
-every unregistered chain and for the half of Solana's entry that is deliberately incomplete:
+**No chain has an entry yet.** The two methods are therefore reached in deliberately different ways:
 
 * :func:`source_unit` **degrades**. An empty answer is already a documented state — it is what a
   language with no such unit yields, and what an unreadable layout yields — and the wheel fills the
@@ -39,7 +37,6 @@ request its chain's toolchain understands) — so the network posture stays Pyth
 
 from typing import Any, Protocol
 
-from composer.cargo.toolchain import SolanaToolchain
 from composer.pipeline.ecosystem import ChainTag
 from composer.rustapp.wire import AuthorInput, WorkspacePrep
 from composer.sandbox.config import SandboxConfig
@@ -52,7 +49,7 @@ class ProjectToolchain(Protocol):
     One object per chain rather than two registries, because both questions are the same knowledge:
     the thing that can read a Cargo manifest is the thing that can drive Cargo."""
 
-    async def source_unit(self, source: SourceFields) -> dict[str, Any]:
+    def source_unit(self, source: SourceFields) -> dict[str, Any]:
         """Where ``source``'s code lives as a unit of this chain's build system — for Cargo, the crate
         whose manifest owns the main source file, and what that crate is called.
 
@@ -112,19 +109,17 @@ class ProjectToolchain(Protocol):
         ...
 
 
-#: Registered implementations, by chain. Spelled as a literal beside the seam, as ``ECOSYSTEMS`` and
-#: ``rag_env._FACTORIES`` are, so "which chains have one" is answered where the question is asked. An
-#: entry is added together with the module it binds — a tag whose implementation doesn't exist would
-#: pass every check here and then fail at the first plan that needs it. Empty is a working state: see
-#: the module docstring for what each method does then.
-PROJECT_TOOLCHAINS: dict[ChainTag, ProjectToolchain] = {"solana": SolanaToolchain()}
+#: Registered implementations, by chain. An entry is added together with the module it binds — a tag
+#: whose implementation doesn't exist would pass every check here and then fail at the first plan that
+#: needs it. Empty is a working state: see the module docstring for what each method does then.
+PROJECT_TOOLCHAINS: dict[ChainTag, ProjectToolchain] = {}
 
 
-async def source_unit(chain: ChainTag, source: SourceFields) -> dict[str, Any]:
+def source_unit(chain: ChainTag, source: SourceFields) -> dict[str, Any]:
     """Where ``source``'s code lives as a build-system unit, per ``chain``'s toolchain — empty when
     the chain has none, which the wheel reads as "apply your own convention"."""
     toolchain = PROJECT_TOOLCHAINS.get(chain)
-    return await toolchain.source_unit(source) if toolchain is not None else {}
+    return toolchain.source_unit(source) if toolchain is not None else {}
 
 
 def project_toolchain(chain: ChainTag) -> ProjectToolchain:

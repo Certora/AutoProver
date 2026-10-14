@@ -51,18 +51,15 @@ from composer.cargo.sbf import (
     write_build_script,
 )
 from composer.cargo.session import CargoSession, CompileFailed
-from composer.cargo.toolchain import SolanaToolchain, ToolchainRequestUnsupported
 from composer.diagnostics.timing import (
     RunSummary,
     install_run_summary,
     set_current_task_id,
 )
 from composer.sandbox.config import SandboxConfig
-from composer.spec.context import SourceFields
 from composer.spec.cvlr.prover import Submission, write_submission
 from composer.spec.cvlr.verify import CexAnalysis, _CaptureCallbacks, _RunAccounting
 from composer.spec.source.cex_capture import CexAnalysisStore
-from composer.spec.system_model import SolidityIdentifier
 
 
 # --------------------------------------------------------------------------------------------
@@ -878,47 +875,6 @@ async def test_a_build_past_its_timeout_is_stopped_with_everything_it_started(tm
     while not _is_gone(child) and time.monotonic() < deadline:
         time.sleep(0.05)
     assert _is_gone(child)
-
-
-def _source(root: Path) -> SourceFields:
-    return SourceFields(
-        project_root=str(root),
-        contract_name=SolidityIdentifier("lend"),
-        relative_path="src/lib.rs",
-        forbidden_read=None,
-    )
-
-
-@pytest.mark.asyncio
-async def test_a_project_that_is_not_a_cargo_workspace_resolves_no_source_unit(tmp_path):
-    """The empty answer the seam documents as "apply your own convention" — not an exception, because
-    it is a state the wheel already handles."""
-    assert await SolanaToolchain().source_unit(_source(tmp_path)) == {}
-
-
-@pytest.mark.asyncio
-async def test_a_prep_asking_for_an_idl_is_refused_before_any_work(tmp_path):
-    """Refusing up front is the point: today an unregistered chain fails immediately, and a partial
-    registration that failed after a multi-minute build would be a regression."""
-    from composer.rustapp.wire import WorkspacePrep
-
-    plan = WorkspacePrep(files={}, toolchain_request={"idl_dest": "fuzz/idls/lend.json"})
-    with pytest.raises(ToolchainRequestUnsupported, match="IDL"):
-        await SolanaToolchain().prepare(
-            plan, None, source=_source(tmp_path), sandbox=None, timeout_s=60  # type: ignore[arg-type]
-        )
-
-
-@pytest.mark.asyncio
-async def test_a_prep_key_nothing_acts_on_is_refused_rather_than_ignored(tmp_path):
-    """A request nothing acts on is a plan that believes work happened."""
-    from composer.rustapp.wire import WorkspacePrep
-
-    plan = WorkspacePrep(files={}, toolchain_request={"transmute_program": True})
-    with pytest.raises(ToolchainRequestUnsupported, match="transmute_program"):
-        await SolanaToolchain().prepare(
-            plan, None, source=_source(tmp_path), sandbox=None, timeout_s=60  # type: ignore[arg-type]
-        )
 
 
 def test_a_failed_compile_carries_the_compilers_own_words():

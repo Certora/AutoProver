@@ -58,7 +58,7 @@ source ─analyze─▶ App model ─extract─▶ properties ─formalize─▶
 | Per-component `units()` split | **Built** | both models |
 | Null Solana backend (front-half test double) | **Built** | [solana/null_backend.py](../composer/spec/solana/null_backend.py) |
 | Sandbox: Landlock+seccomp launcher, `rust_build_policy`, private per-run `CARGO_HOME`, offline | **Built; the CLI now defaults to it** (§7.8.1) — but every run so far, the expensive gate included, has been unconfined, so no CVLR build has yet been made under it | [composer/sandbox/](../composer/sandbox/), [rust/run-confined/](../rust/run-confined/) |
-| `project_toolchain` seam (the analyzed project's build system, keyed by `ChainTag`) | **Solana registered** (§7.2); Soroban still has no entry | [rustapp/toolchain.py](../composer/rustapp/toolchain.py), [cargo/toolchain.py](../composer/cargo/toolchain.py) |
+| `project_toolchain` seam (the analyzed project's build system, keyed by `ChainTag`) | **Not used by this backend** (§4.3): CVLR builds through `composer/cargo/` directly. No chain is registered | [rustapp/toolchain.py](../composer/rustapp/toolchain.py) |
 | Munge subsystem: editor agent, versioned edit store, VFS diff, compile-check gate, staleness oracle | **Built for EVM**; spine reusable | [source/munge/](../composer/spec/source/munge/) |
 | Prover result parsing (treeView JSON → `RuleResult`), cloud polling, callbacks | **Built, chain-neutral** | [prover/results.py](../composer/prover/results.py), [prover/cloud.py](../composer/prover/cloud.py) |
 | `certoraSolanaProver` / `certoraSorobanProver` CLIs | **Already installed in the venv** | `certora_cli` |
@@ -150,6 +150,12 @@ rule honestly, because [soroban/model.py](../composer/spec/soroban/model.py) and
 docs already exist and can be consulted while writing each piece.
 
 ### 4.3 Reuse the existing build-system registry
+
+> **Not done, deliberately.** The CVLR backend builds through `composer/cargo/` directly and never
+> needed the registry, whose only reader is the Rust-application adapter. A `SolanaToolchain` entry
+> was written and then removed: Solana's entry belongs with the Crucible work that registers one
+> ([#98](https://github.com/Certora/AutoProver/pull/98)). See the landing plan's "Deferred: Solana's
+> entry in the project-toolchain registry".
 
 The build step should register into the **existing**
 [`project_toolchain`](../composer/rustapp/toolchain.py) registry (`ChainTag` → implementation),
@@ -415,7 +421,7 @@ This phase is short but blocking: Phases 2, 3, and 4 all consume its output.
 
 ### 7.2 Phase 1b — Deterministic plumbing (no LLM)
 
-Solana backend skeleton · `project_toolchain` registration · sandboxed build,
+Solana backend skeleton · sandboxed build,
 two-tier · warm-workdir lifecycle · conf generation · `certoraSolanaProver` submission ·
 cloud polling · treeView → verdicts · provider selection (launcher default, explicit
 `none` opt-out, production assertion) · resolving the CVLR crate versions and source
@@ -443,7 +449,6 @@ only what speaks to the Prover is CVLR's:
 | [cargo/metadata.py](../composer/cargo/metadata.py) | `cargo metadata`, typed: the crate owning a file, and the version every dependency resolves to |
 | [cargo/session.py](../composer/cargo/session.py) | The warm workdir + the fast tier. Confined `cargo check`, unconfined `cargo fetch` |
 | [cargo/sbf.py](../composer/cargo/sbf.py) | The slow tier (`cargo certora-sbf`), its build manifest, and the build script handed to the prover |
-| [cargo/toolchain.py](../composer/cargo/toolchain.py) | `PROJECT_TOOLCHAINS["solana"]` — the registry's first entry |
 | [spec/cvlr/conf.py](../composer/spec/cvlr/conf.py) | Building every conf: fixed settings, the `ProverSettings` the author may change, and one run's keys. A project's own conf is not read |
 | [spec/cvlr/crates.py](../composer/spec/cvlr/crates.py) | §5.5: which CVLR the build resolves, and where it disagrees with the corpus's reference set |
 | [spec/cvlr/prover.py](../composer/spec/cvlr/prover.py) | Build → configure → submit, on the shared `run_prover` |
@@ -2518,7 +2523,7 @@ there for the fourth.
 |---|---|
 | Backend implementation | In-tree Python, `composer/spec/cvlr/`, mirroring `spec/source/` |
 | Chain sharing | Piecemeal — no per-chain bundle; each concern shared by the mechanism that already fits it; default chain-neutral |
-| Build-system seam | Register into the existing `project_toolchain` registry |
+| Build-system seam | Not registered: the backend builds through `composer/cargo/` directly; Solana's `project_toolchain` entry is the Crucible work's (§4.3) |
 | Prover | Cloud only |
 | Builds | Local to AutoProver, always sandboxed |
 | macOS | Unconfined local builds allowed for dev via an explicit opt-out; never in production or CI |

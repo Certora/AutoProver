@@ -120,7 +120,7 @@ class _FakeToolchain:
     (``composer.rustapp.toolchain``). It does what any implementation must: read the request in its
     own shape, do the work, and report what it established."""
 
-    async def source_unit(self, _source):
+    def source_unit(self, _source):
         return SOURCE_UNIT
 
     async def prepare(self, plan, _input, *, source, sandbox, timeout_s):
