@@ -1,7 +1,9 @@
+from collections.abc import Sequence
 from dataclasses import dataclass
 import hashlib
 from typing import cast
 from langgraph.store.base import BaseStore
+from pydantic import BaseModel
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,15 @@ def _attribution_of(v: object) -> EditAttribution:
             raise ValueError(f"Unrecognized edit attribution payload: {v!r}")
 
 
+def vfs_digest(vfs: dict[str, str]) -> str:
+    """A digest of an overlay's contents: an edit's id in the store, and what a review approves."""
+    hasher = hashlib.sha256()
+    for nm in sorted(vfs.keys()):
+        hasher.update(vfs[nm].encode("utf-8"))
+        hasher.update(b'\0')
+    return hasher.hexdigest()
+
+
 @dataclass(frozen=True)
 class StoredEdit:
     """A committed edit: the full VFS snapshot, the committer's account of it,
@@ -70,20 +81,11 @@ class EditStore:
             attribution=_attribution_of(v.get("attribution")),
         )
 
-    @classmethod
-    def _deterministic_hash(cls, vfs: dict[str, str]) -> str:
-        sorted_keys = sorted(vfs.keys())
-        hasher = hashlib.sha256()
-        for nm in sorted_keys:
-            hasher.update(vfs[nm].encode("utf-8"))
-            hasher.update(b'\0')
-        return hasher.hexdigest()
-
     async def commit(
         self, vfs: dict[str, str], *, executive_summary: str, why_sound: str,
         attribution: EditAttribution,
     ) -> str:
-        id = self._deterministic_hash(vfs)
+        id = vfs_digest(vfs)
         await self._store.aput(self._target_ns, id, {
             "vfs": {**vfs},
             "executive_summary": executive_summary,
@@ -91,3 +93,29 @@ class EditStore:
             "attribution": _attribution_payload(attribution),
         })
         return id
+
+
+class AppliedEdit(BaseModel):
+    """Provenance of one applied source edit: its edit-store id and the
+    editor's account of what changed and why it is acceptable."""
+    edit_id: str
+    executive_summary: str
+    why_sound: str
+
+
+async def applied_edits(store: EditStore, history: Sequence[str]) -> list[AppliedEdit]:
+    """The editor's account of each edit in an author's ``version_history``, in order.
+
+    Raises :class:`LookupError` for an id the store does not hold: a history is only ever written
+    from ids the store handed out, so a missing one means the store and the checkpoint disagree."""
+    accounts: list[AppliedEdit] = []
+    for edit_id in history:
+        rec = await store.read(edit_id)
+        if rec is None:
+            raise LookupError(f"edit {edit_id} in history but absent from the edit store")
+        accounts.append(AppliedEdit(
+            edit_id=edit_id,
+            executive_summary=rec.executive_summary,
+            why_sound=rec.why_sound,
+        ))
+    return accounts

@@ -84,3 +84,14 @@ def summarize_changes(
         return _decode(accessor.get(baseline, path))
 
     return compute_diff(old, state["vfs"])
+
+
+def edited_paths(
+    state: VFSState,
+    accessor: VFSAccessor[VFSState],
+    original: dict[str, str],
+) -> list[str]:
+    """The paths of ``state``'s overlay whose content differs from the ``original`` view, sorted —
+    the files :func:`summarize_changes` would show a hunk for."""
+    baseline: VFSState = {"vfs": original}
+    return changed_paths(lambda path: _decode(accessor.get(baseline, path)), state["vfs"])

@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import NotRequired, Any, Callable, Awaitable, override, Protocol, Iterable
+from typing import NotRequired, Callable, Awaitable, override, Protocol, Iterable, Sequence
 from typing_extensions import TypedDict
 from pydantic import BaseModel, Field
 
@@ -10,7 +10,7 @@ from langgraph.types import Command
 from langchain_core.tools import BaseTool
 from langchain_core.messages import ToolMessage
 
-from .edit_store import EditStore, MungeEditor
+from .edit_store import EditStore, MungeEditor, vfs_digest
 from .vfs_diff import summarize_changes
 from composer.spec.source.conf_maps import (
     CompilerSettings, MapViolations, extend_compiler_maps, map_violation_message,
@@ -22,7 +22,7 @@ from .tool_names import (
     REQUEST_REVIEW, SUBMIT_EDIT,
 )
 
-from graphcore.graph import FlowInput
+from graphcore.graph import Builder, FlowInput
 from graphcore.tools.vfs import VFSState, VFSAccessor, VFSInput
 from graphcore.tools.schemas import (
     WithAsyncDependencies, WithImplementation, WithInjectedState, WithInjectedId,
@@ -101,6 +101,33 @@ class MungeStateDeps(TypedDict):
     config: dict
     vfs: dict[str, str]
 
+def committed_edit_message(
+    d: CommonMungeDescription, application_key: str, diff: str, *, notes: str = ""
+) -> str:
+    """What the author is told about an edit the editor finished: its account, the key that
+    applies it, and the diff."""
+    return f"""
+The editor finished responding to your request.
+
+**Executive Summary**:
+{d.executive_summary}
+
+**Soundness Argument**:
+{d.why_sound}
+
+**Integration notes**:
+{"(None provided)" if not d.how_to_apply else d.how_to_apply}
+{notes}
+You can apply this edit to your working source by calling `{COMMIT_EDIT}({application_key})`
+
+-----
+
+The diff of the edit is as follows:
+
+{diff}
+"""
+
+
 class EditMungeTool(WithAsyncDependencies[str, MungeToolDeps], WithInjectedId, WithInjectedState[MungeStateDeps]):
     """
     Call this tool to request for a dedicated agent to make small,
@@ -169,27 +196,7 @@ class EditMungeTool(WithAsyncDependencies[str, MungeToolDeps], WithInjectedId, W
                 "prover will never compile them.\n"
                 if d.added_files else ""
             )
-            result_msg = f"""
-The editor finished responding to your request.
-
-**Executive Summary**:
-{d.executive_summary}
-
-**Soundness Argument**:
-{d.why_sound}
-
-**Integration notes**:
-{"(None provided)" if not d.how_to_apply else d.how_to_apply}
-{added_note}
-You can apply this edit to your working source by calling `{COMMIT_EDIT}({application_key})`
-
------
-
-The diff of the edit is as follows:
-
-{diff}
-"""
-            return result_msg
+            return committed_edit_message(d, application_key, diff, notes=added_note)
 
 class EditToolsHost(
     Protocol
@@ -228,16 +235,31 @@ class MungeFeedbackInput(FlowInput, RoughDraftState, VFSState):
 # (current vfs, review parts, calling tool_call_id) -> verdict
 MungeFeedbackThunk = Callable[[dict[str, str], list[str | dict], str], Awaitable[MungeFeedback]]
 
+type FeedbackBuilder = Builder[MungeFeedbackState, None, MungeFeedbackInput]
+
+
+def _solidity_review_prompts(b: FeedbackBuilder) -> FeedbackBuilder:
+    return b.with_sys_prompt_template(
+        "munge_feedback_system.j2"
+    ).with_initial_prompt_template(
+        "munge_feedback_prompt.j2"
+    )
+
 
 def munge_feedback_judge(
     ctx: WorkflowContext[EditorAgent],
     env: ServiceHost,
     edit_tools: "EditToolsHost",
+    *,
+    prompts: Callable[[FeedbackBuilder], FeedbackBuilder] = _solidity_review_prompts,
 ) -> MungeFeedbackThunk:
     """Build the editor's feedback judge. Its read-only VFS tools inspect the
     *editor's* current VFS: the caller seeds that VFS into the judge's own state
     at invocation time (see ``the_tool``), so the judge reviews the edited source
-    rather than the on-disk baseline."""
+    rather than the on-disk baseline.
+
+    ``prompts`` sets the system and initial prompts, which are what one chain's
+    review differs from another's in."""
     feedback_ctx = ctx.child(JUDGE_KEY)
 
     rough_draft_tools = get_rough_draft_tools(MungeFeedbackState)
@@ -251,10 +273,8 @@ def munge_feedback_judge(
         env.builder_heavy(), MungeFeedbackState, validator=wrote_rough_draft
     ).with_input(
         MungeFeedbackInput
-    ).with_sys_prompt_template(
-        "munge_feedback_system.j2"
-    ).with_initial_prompt_template(
-        "munge_feedback_prompt.j2"
+    ).inject(
+        prompts
     ).with_tools(
         [*rough_draft_tools, feedback_ctx.get_memory_tool(), *edit_tools.read_tools]
     ).compile_async()
@@ -306,6 +326,9 @@ class ReviewStateSlice(VFSState):
 class ReviewDeps:
     accessor: VFSAccessor[VFSState]
     feedback: MungeFeedbackThunk
+    #: What the reviewer must know about this editor's commission that neither the request nor
+    #: the diff says, placed just before the diff.
+    briefing: Sequence[str] = ()
 
 
 class RequestReviewTool(
@@ -322,7 +345,7 @@ class RequestReviewTool(
     """
     summary: CommonMungeDescription = Field(description="A holistic description of the changes you want reviewed.")
 
-    def _review(self, diff: str) -> list[str | dict]:
+    def _review(self, diff: str, briefing: Sequence[str]) -> list[str | dict]:
         parts: list[str | dict] = [
             f"The author's original request to the editor:\n\n{self.state['request']}",
             "The editor proposes the following changes to the source under verification.",
@@ -331,6 +354,7 @@ class RequestReviewTool(
         ]
         if self.summary.how_to_apply:
             parts.append(f"Integration notes:\n{self.summary.how_to_apply}")
+        parts.extend(briefing)
         parts.append("The diff of the edit:")
         parts.append(diff)
         return parts
@@ -340,11 +364,13 @@ class RequestReviewTool(
         with self.tool_deps() as deps:
             current: VFSState = {"vfs": self.state["vfs"]}
             diff = summarize_changes(current, deps.accessor, self.state["orig_vfs"])
-            verdict = await deps.feedback(self.state["vfs"], self._review(diff), self.tool_call_id)
+            verdict = await deps.feedback(
+                self.state["vfs"], self._review(diff, deps.briefing), self.tool_call_id
+            )
             if verdict.good:
                 # Stamp the hash of exactly what was approved; submit_edit checks it
                 # against the live VFS, so a later edit invalidates the approval.
-                digest = EditStore._deterministic_hash(self.state["vfs"])
+                digest = vfs_digest(self.state["vfs"])
                 body = f"The reviewer approved these edits. You may now {SUBMIT_EDIT} (do not change anything first)."
             else:
                 digest = None
@@ -355,9 +381,32 @@ class RequestReviewTool(
             })
 
 
-class SubmitStateSlice(VFSState):
-    compile_conf: dict
+class ApprovalSlice(VFSState):
     reviewed_digest: str | None
+
+
+def unapproved(state: ApprovalSlice) -> str | None:
+    """Why the edits in ``state`` may not be submitted yet, or None when an approving review covers
+    exactly them. Every submit tool asks this first."""
+    if state["reviewed_digest"] != vfs_digest(state["vfs"]):
+        return (
+            f"These edits have not been approved as they stand. Call {REQUEST_REVIEW} "
+            "on your current edits first — any change since your last review voids "
+            "the approval."
+        )
+    return None
+
+
+def accept_edits(tool_call_id: str, summary: CommonMungeDescription) -> Command:
+    """The submit tool's success: the editor's account becomes its result."""
+    return Command(update={
+        "result": summary,
+        "messages": [ToolMessage(tool_call_id=tool_call_id, content="Edits accepted.")],
+    })
+
+
+class SubmitStateSlice(ApprovalSlice):
+    compile_conf: dict
 
 
 @dataclass
@@ -380,12 +429,8 @@ class SubmitEditTool(
 
     @override
     async def run(self) -> Command | str:
-        if self.state["reviewed_digest"] != EditStore._deterministic_hash(self.state["vfs"]):
-            return (
-                f"These edits have not been approved as they stand. Call {REQUEST_REVIEW} "
-                "on your current edits first — any change since your last review voids "
-                "the approval."
-            )
+        if (lapsed := unapproved(self.state)) is not None:
+            return lapsed
         with self.tool_deps() as deps:
             current: VFSState = {"vfs": self.state["vfs"]}
 
@@ -439,10 +484,7 @@ class SubmitEditTool(
                     f"them in (or list them in added_files): {sorted(check.files)}"
                 )
 
-            return Command(update={
-                "result": self.summary,
-                "messages": [ToolMessage(tool_call_id=self.tool_call_id, content="Edits accepted.")],
-            })
+            return accept_edits(self.tool_call_id, self.summary)
 
 
 def editor_tool(
