@@ -132,18 +132,41 @@ def test_both_chains_share_one_core_release():
     assert ref.SOLANA_V2.core == ref.SOROBAN.core
 
 
+def _from_commits(reference: ref.ChainReference, repo: str) -> list[ref.CommitPatch]:
+    return [p for p in reference.from_commits() if p.commit.repo == repo]
+
+
+_CVLR_SOLANA_REPO = "https://github.com/Certora/cvlr-solana.git"
+_CVLR_REPO = "https://github.com/Certora/cvlr.git"
+
+
 def test_the_crates_of_one_repository_are_read_from_one_commit():
     """``cvlr-solana`` releases its three crates together. Patching them from two commits would
     build a chain crate and a model that were never released together."""
-    commits = {commit for _, commit in ref.SOLANA_V2.from_commits()}
-    assert {c.name for c, _ in ref.SOLANA_V2.from_commits()} == {
-        "cvlr-solana", "cvlr-solana-stake", "cvlr-spl-token"
-    }
-    assert len(commits) == 1
+    patches = _from_commits(ref.SOLANA_V2, _CVLR_SOLANA_REPO)
+    assert {p.name for p in patches} == {"cvlr-solana", "cvlr-solana-stake", "cvlr-spl-token"}
+    assert len({p.commit for p in patches}) == 1
+
+
+def test_the_whole_core_is_read_from_the_core_s_commit():
+    """``cvlr`` depends on every crate of its repository, and the chain crates depend on several of
+    them directly. Patching ``cvlr`` alone would leave those resolving from crates.io beside the
+    commit's copies, two of each crate, whose types do not unify."""
+    for reference in (ref.SOLANA_V2, ref.SOLANA_V3, ref.SOROBAN):
+        patches = _from_commits(reference, _CVLR_REPO)
+        assert {p.name for p in patches} == {
+            "cvlr", "cvlr-asserts", "cvlr-decimal", "cvlr-derive", "cvlr-early-panic",
+            "cvlr-fixed", "cvlr-hook", "cvlr-log", "cvlr-macros", "cvlr-mathint", "cvlr-nondet",
+            "cvlr-spec",
+        }
+        assert {(p.version, p.commit) for p in patches} == {
+            (reference.core.version, reference.core.unpublished)
+        }
 
 
 def test_a_commit_is_pinned_by_hash_and_never_by_a_name_that_can_move():
-    for _, commit in ref.SOLANA_V2.from_commits():
+    for patch in (*ref.SOLANA_V2.from_commits(), *ref.SOLANA_V3.from_commits()):
+        commit = patch.commit
         assert len(commit.rev) == 40 and all(ch in "0123456789abcdef" for ch in commit.rev)
 
 
@@ -164,9 +187,10 @@ def test_solana_has_one_reference_set_per_generation_newest_first():
 def test_the_sdk3_line_is_released_whole_from_one_commit():
     """Chain crate and models together, at one version, and on the same core as 2.x."""
     v3 = ref.SOLANA_V3
-    assert {(c.name, c.version) for c, _ in v3.from_commits()} == {
+    chain = _from_commits(v3, _CVLR_SOLANA_REPO)
+    assert {(p.name, p.version) for p in chain} == {
         ("cvlr-solana", "0.6.0"), ("cvlr-solana-stake", "0.6.0"), ("cvlr-spl-token", "0.6.0")
     }
-    assert len({commit for _, commit in v3.from_commits()}) == 1
+    assert len({p.commit for p in chain}) == 1
     assert v3.core == ref.SOLANA_V2.core
     assert [w.name for w in v3.platform.witnesses] == ["solana-account-info"]

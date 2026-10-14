@@ -67,7 +67,7 @@ from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.env_paths import PathDialect, dialect_for
 from composer.spec.cvlr import forks
 from composer.spec.cvlr.tuning import ENV_FAMILIES, INLINING, SUMMARIES, compose_env
-from composer.spec.cvlr.reference import ChainReference, CrateRequirement
+from composer.spec.cvlr.reference import ChainReference, CrateRequirement, commit_patches
 
 #: Where the harness module goes in the target package.
 HARNESS_DIR = Path("src") / "certora"
@@ -869,8 +869,8 @@ def _plan_unpublished(workspace: Workspace, reference: ChainReference, plan: _Pl
     """Add ``[patch.crates-io]`` entries reading the reference set's unpublished releases from the
     commits they were cut from (:class:`~composer.spec.cvlr.reference.GitCommit`).
 
-    Only for the crates the project is given. A patch for a crate nothing depends on is one cargo
-    warns about on every build.
+    Only for the crates the project is given, and the crates each was released with. A patch for a
+    crate nothing depends on is one cargo warns about on every build.
 
     A crate the project's patch table already names is checked against the resolved graph rather
     than redirected again: a second entry for one crate is a manifest cargo refuses. The pinned
@@ -884,30 +884,28 @@ def _plan_unpublished(workspace: Workspace, reference: ChainReference, plan: _Pl
         Comment("Unreleased CVLR crates, read from the commit each release was cut from until"),
         Comment("crates.io has it."),
     )
-    for crate in reference.scaffold_crates():
-        commit = crate.unpublished
-        if commit is None:
-            continue
-        if crate.name not in patched:
+    for patch in commit_patches(reference.scaffold_crates()):
+        commit = patch.commit
+        if patch.name not in patched:
             plan.add_manifest_edit(
                 path,
-                AddTable(("patch", "crates-io", crate.name), (*preamble, *commit.patch_body())),
-                f"read {crate.name} {crate.version} from {commit.repo} at {commit.rev[:12]} "
+                AddTable(("patch", "crates-io", patch.name), (*preamble, *commit.patch_body())),
+                f"read {patch.name} {patch.version} from {commit.repo} at {commit.rev[:12]} "
                 f"until it is on crates.io",
             )
             preamble = ()
             continue
-        sources = [c.source for c in workspace.resolved(crate.name)]
+        sources = [c.source for c in workspace.resolved(patch.name)]
         if not sources:
             plan.add_satisfied(
-                f"{crate.name} is already redirected in this workspace's [patch.crates-io] table"
+                f"{patch.name} is already redirected in this workspace's [patch.crates-io] table"
             )
         elif all(
             isinstance(s, GitSource) and s.is_from(commit.repo) and s.commit == commit.rev
             for s in sources
         ):
             plan.add_satisfied(
-                f"{crate.name} {crate.version} is already read from {commit.repo} at "
+                f"{patch.name} {patch.version} is already read from {commit.repo} at "
                 f"{commit.rev[:12]}"
             )
         else:
@@ -918,11 +916,11 @@ def _plan_unpublished(workspace: Workspace, reference: ChainReference, plan: _Pl
                 Blocked(
                     path=path,
                     problem=(
-                        f"this project's [patch.crates-io] table reads {crate.name} from "
-                        f"{elsewhere}, and this build pins {crate.name} {crate.version} at "
+                        f"this project's [patch.crates-io] table reads {patch.name} from "
+                        f"{elsewhere}, and this build pins {patch.name} {patch.version} at "
                         f"{commit.repo} {commit.rev}"
                     ),
-                    resolution=f"remove the [patch.crates-io] entry for {crate.name}",
+                    resolution=f"remove the [patch.crates-io] entry for {patch.name}",
                 )
             )
 

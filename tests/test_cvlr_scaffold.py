@@ -979,7 +979,10 @@ def test_the_forks_planned_are_the_reference_chains_own(tmp_path):
         cvlr_resolved={"anchor-lang": "0.30.0"},
     )
     plan = plan_scaffold(workspace, package, SOROBAN)
-    assert not [a for a in _additions(plan) if a.table[0] == "patch"]
+    core_commits = {p.name for p in SOROBAN.from_commits()}
+    assert not [
+        a for a in _additions(plan) if a.table[0] == "patch" and a.table[-1] not in core_commits
+    ]
     assert not [b for b in plan.blocked if "anchor-lang" in b.problem], plan.blocked
     assert not [note for note in plan.satisfied if "anchor" in note]
 
@@ -1003,10 +1006,10 @@ def test_an_unpublished_release_is_read_from_its_commit(tmp_path):
     plan, _ = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
     assert not plan.blocked
     patches = _commit_patches(plan)
-    assert set(patches) == {c.name for c, _ in SOLANA_V2.from_commits()}
-    for crate, commit in SOLANA_V2.from_commits():
-        body = patches[crate.name].body
-        assert ("git", commit.repo) in body and ("rev", commit.rev) in body
+    assert set(patches) == {p.name for p in SOLANA_V2.from_commits()}
+    for patch in SOLANA_V2.from_commits():
+        body = patches[patch.name].body
+        assert ("git", patch.commit.repo) in body and ("rev", patch.commit.rev) in body
     tomllib.loads(apply_and_read(plan, tmp_path))
 
 
@@ -1028,7 +1031,8 @@ def test_a_project_already_reading_the_commit_is_left_as_it_is(tmp_path):
     workspace, package = _project(tmp_path, **kwargs)
     apply(plan_scaffold(workspace, package, SOLANA_V2), tmp_path)
 
-    (crate, commit), *_ = SOLANA_V2.from_commits()
+    crate = next(p for p in SOLANA_V2.from_commits() if p.name == "cvlr-solana")
+    commit = crate.commit
     at_commit = GitSource.parse(f"git+{commit.repo}?rev={commit.rev}#{commit.rev}")
     workspace, package = _project(
         tmp_path, **kwargs,
@@ -1044,7 +1048,8 @@ def test_a_project_already_reading_the_commit_is_left_as_it_is(tmp_path):
 def test_a_project_reading_the_crate_from_elsewhere_is_refused(tmp_path):
     """Its entry is somebody's decision, and building on it verifies against a release this build
     does not pin."""
-    (crate, commit), *_ = SOLANA_V2.from_commits()
+    crate = next(p for p in SOLANA_V2.from_commits() if p.name == "cvlr-solana")
+    commit = crate.commit
     manifest = STANDALONE + f'\n[patch.crates-io]\n{crate.name} = {{ path = "../cvlr-solana" }}\n'
     workspace, package = _project(
         tmp_path, manifest=manifest, workspace_manifest=manifest,

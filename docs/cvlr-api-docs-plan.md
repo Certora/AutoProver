@@ -172,12 +172,14 @@ byte-identical to what the same crates emit once released; where the build came 
 only in the manifest's `source` line and the log, which no agent reads. That is how documentation is
 tried before it is published.
 
-**The macros are documented upstream, and not yet released.** The published crates document 66 of
-284 items; `cvlr-asserts`, for one, has 31 items and no prose. The `eric/docs` branches of
-`Certora/cvlr` and `Certora/cvlr-solana` document all of them, and both repositories now check for
-it in CI. Until they publish, a corpus built from crates.io carries signatures without contracts for
-most of the surface — measured in [cvlr-undocumented-api.md](./cvlr-undocumented-api.md), and
-tracked as [cvlr-todo.md](./cvlr-todo.md) U28.
+**Every exported item is documented, read from the commits that document it.** The published
+crates document 66 of 284 items; `cvlr-asserts`, for one, has 31 items and no prose. Both
+repositories have since documented every item and check for it in CI, and neither documented
+release is published. The reference set reads both from commits: `cvlr-solana` from its release
+commits, and the core from `Certora/cvlr`'s main branch, which is still version 0.6.1. Built from
+those pins, the corpus has 0 of 346 items without prose (2026-10-14). The producer's
+`--undocumented` report is how that is rechecked after a bump. Moving the core back to crates.io is
+[cvlr-todo.md](./cvlr-todo.md) U28.
 
 ### 4.3 Header paths
 

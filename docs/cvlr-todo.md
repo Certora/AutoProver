@@ -620,14 +620,16 @@ recorded turns, which moves everything after them out of order. Nobody has run t
 needs a re-recording under the corpus, and before that the researcher needs its own lane, so that
 its turns are recorded and replayed apart from its caller's. Landing plan P9.
 
-**U28. A CVLR release with documentation means rebuilding the API corpus, and nothing says so.**
-`cvlr` and `cvlr-solana` carry prose for every exported item on the `eric/docs` branches of the
-local checkouts, and neither is released: crates.io's newest are still 0.6.1 and 0.5.0. Until they
-publish, `cvlr_api_kb` built from crates.io has 218 undocumented items, and
-[cvlr-undocumented-api.md](./cvlr-undocumented-api.md) measures that. When they publish, the pin in
-`composer/spec/cvlr/reference.py` moves, the corpus is rebuilt, and that list is regenerated, which
-should leave it close to empty. `reference.py`'s docstring should say that a bump means an API
-corpus rebuild; today nothing connects the two.
+**U28. Ship blocker: the core is read from a git commit, because its documented release is
+unpublished.** `cvlr` 0.6.1 on crates.io leaves 176 of the API corpus's items without prose. Every
+item is documented on `Certora/cvlr`'s main branch, which is still version 0.6.1, so the reference
+set ([reference.py](../composer/spec/cvlr/reference.py)) reads the whole core workspace from that
+commit (`465a022`), by the same mechanism as U26. All twelve crates are patched together, because
+`cvlr-solana` depends on the sub-crates directly and a lone `cvlr` patch would put two copies of each
+in the graph. Built from the pins, the corpus has 0 of 346 items without prose (2026-10-14). Once a
+documented release is on crates.io, pin it and drop the commit, then rebuild the corpus and check the
+producer's `--undocumented` report is still empty. `reference.py`'s docstring should also say that a
+bump means an API corpus rebuild; today nothing connects the two.
 
 **U29. A scaffold could offer to move an off-reference project onto the pin.** The scaffold refuses a
 project on another CVLR line (`Mismatched`). Offering to rewrite its pins instead is the obvious next

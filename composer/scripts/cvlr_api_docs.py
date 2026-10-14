@@ -1211,7 +1211,7 @@ def _write_manifest(
     (root / "src").mkdir(parents=True, exist_ok=True)
     (root / "src" / "lib.rs").write_text("")
     entries = {
-        crate.name: commit.patch_line(crate.name) for crate, commit in reference.from_commits()
+        patch.name: patch.commit.patch_line(patch.name) for patch in reference.from_commits()
     }
     entries |= {name: f'{name} = {{ path = "{source.crate_dir}" }}' for name, source in sources.items()}
     patches = "".join(f"{entries[name]}\n" for name in sorted(entries))
@@ -1338,9 +1338,9 @@ def _commits(
 ) -> dict[str, ReleaseCommit]:
     """The unpublished releases the probe reads from their commits: those no checkout replaces."""
     return {
-        crate.name: ReleaseCommit(commit)
-        for crate, commit in reference.from_commits()
-        if crate.name not in sources
+        patch.name: ReleaseCommit(patch.commit)
+        for patch in reference.from_commits()
+        if patch.name not in sources
     }
 
 

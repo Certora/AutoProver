@@ -422,10 +422,10 @@ def test_a_probe_with_no_checkouts_patches_only_the_unpublished_releases(tmp_pat
     _probe_crate(tmp_path, SOLANA_V2, {})
     _, patch = (tmp_path / "Cargo.toml").read_text().split("[patch.crates-io]")
     assert {line.split(" = ")[0] for line in patch.strip().splitlines()} == {
-        crate.name for crate, _ in SOLANA_V2.from_commits()
+        p.name for p in SOLANA_V2.from_commits()
     }
-    for crate, commit in SOLANA_V2.from_commits():
-        assert commit.patch_line(crate.name) in patch
+    for p in SOLANA_V2.from_commits():
+        assert p.commit.patch_line(p.name) in patch
 
 
 def test_a_checkout_replaces_the_commit_for_the_crates_it_defines(tmp_path):
@@ -495,7 +495,7 @@ def test_the_manifest_source_names_every_checkout_it_read():
     from composer.spec.cvlr.reference import SOLANA_V2
 
     assert "checkout" not in manifest_source(SOLANA_V2, {})
-    (_, commit), *_ = SOLANA_V2.from_commits()
+    commit = SOLANA_V2.from_commits()[0].commit
     assert f"{commit.repo} @ {commit.rev[:12]}" in manifest_source(SOLANA_V2, {})
     source = manifest_source(
         SOLANA_V2, {"cvlr-asserts": _checkout("cvlr-asserts"), "cvlr-log": _checkout("cvlr-log")}

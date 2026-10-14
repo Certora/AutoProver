@@ -143,7 +143,7 @@ def reference_crate(root: Path) -> Path:
         pytest.skip("cargo is not on PATH")
     (root / "src").mkdir(parents=True, exist_ok=True)
     patches = "".join(
-        f"{commit.patch_line(crate.name)}\n" for crate, commit in SOLANA_V3.from_commits()
+        f"{patch.commit.patch_line(patch.name)}\n" for patch in SOLANA_V3.from_commits()
     )
     (root / "Cargo.toml").write_text(
         '[package]\nname = "examples"\nversion = "0.0.0"\nedition = "2021"\n\n'
