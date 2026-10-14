@@ -49,12 +49,9 @@ from graphcore.tools.schemas import (
 from composer.authoring.buffer import apply_spec_update, get_spec_tool
 from composer.authoring.judge import (
     ContextualFeedbackThunk,
-    JudgeBuilder,
     JudgeInput,
-    JudgeState,
     RebuttalBase,
     build_feedback_judge_generic,
-    judge_host_of,
 )
 from composer.authoring.state import (
     SkippedProperty,
@@ -73,7 +70,7 @@ from composer.llm.types import CacheLevel
 from composer.spec.context import CacheKey, CvlrGeneration, CvlrJudge, WorkflowContext
 from composer.spec.cvlr.anchor_surface import read_surface
 from composer.spec.cvlr.conf import tunable_conf
-from composer.spec.cvlr.editor import editor_tools
+from composer.spec.cvlr.editor import EditingJudgeHost, ProgramEditing, editor_tools
 from composer.spec.cvlr.example import WorkedExample, worked_example
 from composer.spec.cvlr.harness import GeneratedHarness
 from composer.spec.cvlr.rules import rule_names
@@ -92,7 +89,6 @@ from composer.spec.cvlr.state import (
     validate_property_rules,
     validate_rule_subjects,
 )
-from composer.spec.cvlr.tree import SharedTree
 from composer.spec.cvlr.vacuity import vacuity_analyzer
 from composer.spec.cvlr.verify import (
     ExpectRuleFailure,
@@ -104,7 +100,12 @@ from composer.spec.cvlr.verify import (
 from composer.kb.kb_context import with_cvlr_context
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import run_to_completion
+from composer.spec.feedback import VfsJudgeInput, VfsJudgeState
 from composer.spec.service_host import ServiceHost
+from composer.spec.source.munge.edit_store import applied_edits
+from composer.spec.source.munge.tool_names import EDIT_HISTORY_LOG
+from composer.spec.source.munge.vfs_diff import diff_against_baseline
+from graphcore.graph import Builder
 from composer.spec.solana.model import SolanaComponentInstance
 from composer.spec.system_model import component_context
 from composer.spec.types import Curtailed, PropertyFormulation, PropertyTitle
@@ -213,17 +214,24 @@ class Rebuttal(RebuttalBase):
     )
 
 
+@dataclasses.dataclass(frozen=True)
+class JudgeContext:
+    """What one review is conditional on beyond the draft: the assumptions to brief, and the unit's
+    edited program for the judge's source tools to read."""
+
+    assumptions: HarnessAssumptions
+    vfs: dict[str, str]
+    version_history: list[str]
+
+
 @dataclasses.dataclass
 class FeedbackDependencies:
-    thunk: ContextualFeedbackThunk[Rebuttal, HarnessAssumptions]
+    thunk: ContextualFeedbackThunk[Rebuttal, JudgeContext]
     stamper: ValidationStamper
-    #: The run's shared tree, which holds *every* unit's munges, and the project the judge is shown
-    #: their *diff* against rather than a description of them. Needed because one kind is not
-    #: scoped to the unit that recorded it: a redirect of a module in a local dependency is gated on
-    #: the shared ``certora`` feature, so it is in force for this unit's build whoever asked for it
-    #: (``docs/who-edits-the-program.md`` §11.3). A judge shown only its own unit's munges would be
-    #: reviewing a program that is not the one the prover analyzed.
-    tree: SharedTree
+    #: Where the applied edits' accounts are, and the project their diff is taken against: the judge
+    #: is shown the change itself as well as the editor's account of it.
+    editing: ProgramEditing
+    project: Path
 
 
 @tool_display("Getting feedback", "Feedback")
@@ -259,8 +267,15 @@ class FeedbackTool(
             )
         skipped = self.state["skipped"]
         with self.tool_deps() as deps:
+            history = self.state["version_history"]
+            vfs = self.state["vfs"]
+            assumptions = harness_assumptions(
+                self.state,
+                edits=tuple(await applied_edits(deps.editing.store, history)),
+                diff=await asyncio.to_thread(diff_against_baseline, vfs, deps.project),
+            )
             verdict = await deps.thunk(
-                harness_assumptions(self.state, deps.tree, deps.tree.run_global_munges()),
+                JudgeContext(assumptions=assumptions, vfs=vfs, version_history=list(history)),
                 draft,
                 skipped,
                 self.rebuttals,
@@ -325,13 +340,18 @@ _PropertyGenSysTemplate = TypedTemplate[CvlrAuthorSystemParams](
 )
 
 
-def with_assumptions(base: JudgeInput, assumptions: HarnessAssumptions) -> JudgeInput:
-    """The judge's ``input_lift``: append what the draft cannot show to what ``input_parts`` built.
+def with_assumptions(base: JudgeInput, ctx: JudgeContext) -> VfsJudgeInput:
+    """The judge's ``input_lift``: append what the draft cannot show to what ``input_parts`` built,
+    and seed the unit's edited program for the judge's source tools.
 
     Appended rather than prepended because the order is a claim about what the review opens on —
     the artifact first, then the caveats attached to it.
     """
-    return {**base, "input": [*base["input"], *assumptions.briefing()]}
+    return VfsJudgeInput(
+        **{**base, "input": [*base["input"], *ctx.assumptions.briefing()]},
+        vfs=ctx.vfs,
+        version_history=ctx.version_history,
+    )
 
 
 def build_feedback_thunk(
@@ -341,7 +361,8 @@ def build_feedback_thunk(
     component: SolanaComponentInstance | None,
     program: str,
     cvlr_versions: str,
-) -> ContextualFeedbackThunk[Rebuttal, HarnessAssumptions]:
+    editing: ProgramEditing,
+) -> ContextualFeedbackThunk[Rebuttal, JudgeContext]:
     """The CVLR feedback judge.
 
     It gets ``cvlr_research`` through ``env.rag_tools``, and it needs it more than the author does:
@@ -350,16 +371,16 @@ def build_feedback_thunk(
     the compiler will reject.
 
     Contextual rather than plain because the draft is not the whole artifact under review: the
-    summaries and munges the author has accumulated ride in per invocation, since they change what
-    a green rule means and the judge cannot see either in the source it reads.
+    summaries and edits the author has accumulated ride in per invocation, since they change what
+    a green rule means and the judge cannot see either in the draft it reads.
     """
 
     def apply_prompt(
-        builder: JudgeBuilder,
+        builder: Builder[VfsJudgeState, None, VfsJudgeInput],
         _draft: str,
         _skipped: Sequence[SkippedProperty],
         _rebuttals: Sequence[Rebuttal],
-    ) -> JudgeBuilder:
+    ) -> Builder[VfsJudgeState, None, VfsJudgeInput]:
         return builder.with_initial_prompt(with_cvlr_context(
             _JudgeTemplate.bind(
                 {
@@ -375,7 +396,7 @@ def build_feedback_thunk(
         draft: str, skipped: Sequence[SkippedProperty], rebuttals: Sequence[Rebuttal]
     ) -> list[str | dict]:
         """Everything the review needs that the draft yields. What it does not — the author's
-        summaries and munges — arrives through :func:`with_assumptions`, which is the only
+        summaries and edits — arrives through :func:`with_assumptions`, which is the only
         callback that sees the invocation's context."""
         parts: list[str | dict] = ["The proposed CVLR harness module is", draft]
         declared = rule_names(draft)
@@ -401,16 +422,16 @@ def build_feedback_thunk(
         return parts
 
     return build_feedback_judge_generic(
-        st=JudgeState,
-        inp=JudgeInput,
+        st=VfsJudgeState,
+        inp=VfsJudgeInput,
         ctx=judge_ctx,
-        host=judge_host_of(env),
+        host=EditingJudgeHost(env, editing),
         apply_system=lambda b: _JudgeSystemTemplate.bind(
             {"cvlr_versions": cvlr_versions}
         ).render_to(b.with_sys_prompt_template),
         apply_prompt=apply_prompt,
         input_parts=input_parts,
-        readback=get_harness_tool(JudgeState),
+        readback=get_harness_tool(VfsJudgeState),
         description="CVLR harness feedback judge",
         thread_prefix="cvlr-feedback",
         input_lift=with_assumptions,
@@ -546,21 +567,15 @@ _log = logging.getLogger(__name__)
 class LastCvlrAttempt(BaseModel):
     """What a unit carries out of one run and into the next.
 
-    The peer of ``cvl_generation._LastAttemptCache``, and it needs two fields where CVL needs one,
-    because a CVLR draft is not self-contained: the rules call handlers the *munges* made reachable,
-    so a draft restored without them does not compile.
-
-    The munges are carried as their ``describe()`` lines rather than as :data:`Munge` values. Two
-    reasons, and the second is the load-bearing one. ``Munge`` is a five-way union of frozen
-    dataclasses with no discriminator, so round-tripping it through a cache is a silent-mismatch
-    risk for no gain. And a munge is an edit to the *program*, which reaches the tree only through
-    the editor and its reviewer (``docs/who-edits-the-program.md``); restoring one from a cache
-    would put a program edit into a run that never reviewed it. Handing the agent the list and
-    letting it re-apply what it still needs keeps that gate where it belongs.
+    The peer of ``cvl_generation._LastAttemptCache`` and of the EVM author's ``_LastAttemptEdits``
+    together, because a CVLR draft is not self-contained: the rules call handlers the program's
+    *edits* made reachable, so a draft restored without them does not compile. The edits are carried
+    as their edit-store ids, and the working copy is restored as the store's snapshot of the last
+    one — every id in the store was reviewed and compiled before it got there.
     """
 
     spec: str
-    munges: list[str] = []
+    version_history: list[str] = []
 
 
 #: Per unit, so two units of one run do not read each other's drafts. ``cache_ns`` scopes it to
@@ -593,7 +608,7 @@ async def _remember_attempt(
     graph: CompiledStateGraph[CvlrGenerationState, None, CvlrGenerationInput, Any],
     tid: str,
 ) -> None:
-    """Cache this unit's draft and the munges it was written against, for the next run.
+    """Cache this unit's draft and the edits it was written against, for the next run.
 
     Reads the graph's last checkpoint rather than the returned state, because the interesting case
     is the one that did not return: a budget cut raises out of ``run_to_completion``, and the draft
@@ -618,8 +633,9 @@ async def _remember_attempt(
         if values.get("budget_curtailed") and await slot.cache_get(LastCvlrAttempt) is not None:
             _log.info("cvlr: curtailed draft not cached; a fuller one is already held")
             return
-        munges = [m.describe() for m in values.get("munges", ())]
-        await slot.cache_put(LastCvlrAttempt(spec=draft, munges=munges))
+        await slot.cache_put(
+            LastCvlrAttempt(spec=draft, version_history=list(values.get("version_history", ())))
+        )
     except Exception:
         _log.warning("cvlr: could not cache this unit's draft for a later run", exc_info=True)
 
@@ -635,6 +651,7 @@ async def batch_cvlr_generation(
     cvlr_versions: str,
     target: HarnessTarget,
     verify: VerifyDeps,
+    editing: ProgramEditing,
 ) -> BatchHarnessResult:
     """Author one harness module covering ``props``.
 
@@ -645,6 +662,9 @@ async def batch_cvlr_generation(
     working tree and where this unit's draft is staged. One tree for every unit, because each unit's
     module is behind its own cargo feature and a module a build does not compile cannot break it
     (``docs/who-edits-the-program.md`` §14).
+
+    ``editing`` is the run's program-editing kit, whose source tools every agent of this unit reads
+    the program through, so that each reads this unit's edits and no sibling's.
 
     CVLR itself is not mounted here. The author and the judge both reach it through
     ``cvlr_research`` in ``env.rag_tools`` (``docs/cvlr-api-docs-plan.md`` §5), which is the one
@@ -665,11 +685,14 @@ async def batch_cvlr_generation(
     judge_ctx = ctx.child(CVLR_JUDGE_KEY)
     feedback_deps = FeedbackDependencies(
         thunk=build_feedback_thunk(
-            judge_ctx, env, props, component, program, cvlr_versions
+            judge_ctx, env, props, component, program, cvlr_versions, editing
         ),
         stamper=make_validation_stamper(FEEDBACK),
-        tree=target.tree,
+        editing=editing,
+        project=target.tree.pristine,
     )
+    live = editing.live
+    source_tools = (*live.read_tools, live.explorer, live.doc_tool)
 
     sys_prompt: list[RawPromptInput | type[CacheMarker]] = [
         _PropertyGenSysTemplate.bind(
@@ -695,7 +718,7 @@ async def batch_cvlr_generation(
         .with_state(CvlrGenerationState)
         .with_input(CvlrGenerationInput)
         .with_output_key("result")
-        .with_tools(env.source_tools)
+        .with_tools(source_tools)
         .with_tools(env.rag_tools)
         .with_tools(
             [
@@ -711,13 +734,11 @@ async def batch_cvlr_generation(
                     verify,
                     vacuity_analyzer(
                         env.models,
-                        (*env.source_tools, *env.rag_tools),
+                        (*live.read_tools, *env.rag_tools),
                         recursion_limit=ctx.recursion_limit,
                     ),
                 ),
-                *editor_tools(
-                    ctx, env, target=target, read_tools=env.source_tools
-                ),
+                *editor_tools(ctx, env, target=target, editing=editing),
                 FeedbackTool.bind(feedback_deps).as_tool("feedback_tool"),
                 PublishResultTool.bind(titles).as_tool("result"),
                 give_up_tool(
@@ -754,19 +775,29 @@ async def batch_cvlr_generation(
     # which on the stake benchmark meant re-authoring thousands of lines it had already written.
     last = await ctx.child(LAST_ATTEMPT_KEY).cache_get(LastCvlrAttempt)
     resumed_input: list[str | dict[Any, Any]] = []
+    restored_history: list[str] = []
+    restored_vfs: dict[str, str] = {}
     if last is not None:
         resumed_input.append(
             "Your last working draft on this task is below; it has been automatically placed "
             "into your working buffer."
         )
         resumed_input.append(last.spec)
-        if last.munges:
-            resumed_input.append(
-                "That draft was written against these munges, which are NOT restored — the tree "
-                "is the pristine program again. Re-apply the ones the draft still needs, through "
-                "the editor as usual, before expecting it to compile:\n"
-                + "\n".join(f"- {m}" for m in last.munges)
-            )
+        if last.version_history:
+            tail = await editing.store.read(last.version_history[-1])
+            if tail is None:
+                _log.warning(
+                    "cvlr: edit %s from the last attempt is absent from the edit store; "
+                    "not restoring the program's edits",
+                    last.version_history[-1],
+                )
+            else:
+                restored_history = list(last.version_history)
+                restored_vfs = tail.vfs
+                resumed_input.append(
+                    "The edits to the program that draft was written against have been restored "
+                    f"to your working copy; use `{EDIT_HISTORY_LOG}` to review them."
+                )
 
     init_state = CvlrGenerationInput(
         curr_spec=last.spec if last is not None else None,
@@ -776,7 +807,8 @@ async def batch_cvlr_generation(
         property_rules=[],
         rule_subjects=[],
         summaries=[],
-        munges=[],
+        vfs=restored_vfs,
+        version_history=restored_history,
         prover_settings=verify.submission.settings,
         validations={},
         expected_failures={},
@@ -819,7 +851,8 @@ async def batch_cvlr_generation(
         property_rules=res_state["property_rules"],
         rule_subjects=res_state["rule_subjects"],
         summaries=res_state["summaries"],
-        munges=res_state["munges"],
+        applied_edits=await applied_edits(editing.store, res_state["version_history"]),
+        vfs=res_state["vfs"],
         expected_failures=res_state["expected_failures"],
         declared_rules=list(rule_names(draft)),
         final_link=res_state.get("prover_link"),

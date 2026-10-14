@@ -14,14 +14,15 @@ the validation stamps and the digest gate. What is CVLR's own:
 * ``summaries`` — the points-to summaries the author added (:mod:`composer.spec.cvlr.tuning`). These
   feed the digest through ``version_history``, because a summary changes what the prover checked:
   a stamp earned before one was added is about a different build.
-* ``munges`` — verification-only attributes the author put on the *program's* own functions
-  (:mod:`composer.spec.cvlr.munge`). Same digest channel as ``summaries`` and for the same reason,
-  and carried into the report through the shared ``source_edits`` hook: a property proved against
-  munged source is a property of the munged program.
+* ``vfs`` and ``version_history`` — the unit's edits to the *program's* own source, as whole files
+  over the project, and the edit-store ids that produced them.
+  The history is the same digest channel as ``summaries`` and for the same reason, and the edits
+  are carried into the report through the shared ``source_edits`` hook: a property proved against
+  edited source is a property of the edited program.
 
-Those last two, and an ``optimistic_loop`` in ``prover_settings``, are also what the feedback judge
-is shown beyond the draft (:class:`HarnessAssumptions`), since none of them leaves a mark in the
-harness source it reads.
+The summaries, the edits, and an ``optimistic_loop`` in ``prover_settings``, are also what the
+feedback judge is shown beyond the draft (:class:`HarnessAssumptions`), since none of them leaves a
+mark in the harness source it reads.
 
 **The ground truth is the buffer, not the run.** ``validate_check_mapping``'s docstring notes that
 forge names every test it ran and a backend whose checker does not is passed ``None``; the prover
@@ -49,11 +50,11 @@ from composer.authoring.state import (
     validate_check_mapping,
 )
 from composer.spec.context import CacheKey, CvlrGeneration, CvlrJudge
-from composer.spec.cvlr.conf import DEFAULT_FEATURE, TunableConf, conf_history
-from composer.spec.cvlr.munge import Munge, merge_munges, munge_history
+from composer.spec.cvlr.conf import TunableConf, conf_history
 from composer.spec.cvlr.rules import rule_names
-from composer.spec.cvlr.tree import SharedTree, munge_diff
 from composer.spec.cvlr.tuning import SummaryDirective, merge_summaries, summary_history
+from composer.spec.source.live_explorer import VersionedHistory
+from composer.spec.source.munge.edit_store import AppliedEdit
 from composer.spec.types import CheckName, PropertyTitle, RuleName
 
 #: Stamped by the prover gate when a run comes back with every rule accounted for. There is
@@ -198,16 +199,17 @@ class LastVerdicts(BaseModel):
     stamp: dict[str, str]
 
 
-class CvlrGenerationExtra(AuthoringExtra):
+class CvlrGenerationExtra(AuthoringExtra, VersionedHistory):
     property_rules: list[PropertyRuleMapping]
     #: One entry per declared rule, naming what it drives. See :data:`RuleSubject`.
     rule_subjects: list[RuleSubject]
     #: Points-to summaries the author added, in the order added, deduplicated by pattern. Reduced
     #: rather than replaced: several ``summarize_for_prover`` calls can land in one graph step.
     summaries: Annotated[list[SummaryDirective], merge_summaries]
-    #: Verification-only edits the editor made to the program's own source on this unit's behalf,
-    #: in the order applied. Reduced for the same reason ``summaries`` is.
-    munges: Annotated[list[Munge], merge_munges]
+    #: The unit's edits to the program's own source: whole files by project-relative path, over
+    #: the project. Replaced wholesale, never merged — ``commit_edit`` and ``revert_to_edit`` each
+    #: write a complete snapshot from the edit store, which is what ``version_history`` names.
+    vfs: dict[str, str]
     #: The prover settings this unit submits under. Every unit starts from the defaults. Per-unit
     #: rather than per-run because the author can change them, and a change one unit makes to answer
     #: its own timeout has no business reaching a sibling's verdicts.
@@ -245,15 +247,16 @@ def tuning_history(state: CvlrGenerationExtra) -> tuple[str, ...]:
 
     The generic digest already takes a history so that "a stamp earned before a source edit goes
     stale with it". A summary is such an edit, and the sharpest kind — it changes what the prover
-    analyzed without changing a character of the draft. A munge is the literal kind: it changes the
-    program. The conf is the third: it decides the loop bound, the solver flags and whether vacuity
+    analyzed without changing a character of the draft. An applied edit is the literal kind: it
+    changes the program, and its edit-store id is already a ``version_history`` token. The conf is
+    the third: it decides the loop bound, the solver flags and whether vacuity
     is checked, so a verdict earned under one conf is not a verdict under another. Every stamp site
     passes this, so changing any of the three after a green run costs the run rather than silently
     keeping its verdicts.
     """
     return (
         summary_history(tuple(state["summaries"]))
-        + munge_history(tuple(state["munges"]))
+        + tuple(state["version_history"])
         + conf_history(state["prover_settings"])
     )
 
@@ -272,11 +275,12 @@ class HarnessAssumptions:
     """
 
     summaries: tuple[SummaryDirective, ...]
-    munges: tuple[Munge, ...]
-    #: A unified diff from the project's own source to what the munges make of it. Empty when there
-    #: are none. The judge gets the change itself rather than a description of it, which is what
-    #: EVM's munge reviewer has always had and this one did not — a description is the editor's
-    #: account, and reviewing an account is how a change nobody described slips through.
+    #: The editor's account of each edit applied to the program, in the order applied.
+    edits: tuple[AppliedEdit, ...] = ()
+    #: A unified diff from the project's own source to the unit's edited copy. Empty when there are
+    #: no edits. The judge gets the change itself rather than a description of it — a description
+    #: is the editor's account, and reviewing an account is how a change nobody described slips
+    #: through.
     diff: str = ""
     #: The whole settings rather than only ``optimistic_loop``: what the assumption covers is "every
     #: loop finishes within ``loop_iter``", and the bound is half of that sentence.
@@ -311,13 +315,13 @@ class HarnessAssumptions:
         optimistic = self.settings.optimistic_loop
         if (
             not self.summaries
-            and not self.munges
+            and not self.edits
             and optimistic is None
             and not self.external_functions
         ):
             return [
-                "The author has added no points-to summaries, has not munged any of the "
-                "program's functions, and has left `optimistic_loop` off. The verdicts this "
+                "The author has added no points-to summaries, has not edited the program's "
+                "source, and has left `optimistic_loop` off. The verdicts this "
                 "harness earns are conditional on nothing beyond the harness itself, so there is "
                 "nothing to weigh on that axis."
             ]
@@ -346,22 +350,14 @@ class HarnessAssumptions:
                 f"    Author's justification: {d.why}"
                 for d in self.summaries
             ]
-        if self.munges:
+        if self.edits:
             parts.append(
                 "The author has also edited the program's own source. What the prover analyzed is "
                 "the modified program, not the one in the repository, and these edits are "
                 "likewise absent from the harness:"
             )
             parts += [
-                f"  {m.subject} ({m.path}): {m.describe()}"
-                + (
-                    "\n    IN FORCE FOR EVERY UNIT OF THIS RUN, not only this one: it is inside a "
-                    "dependency crate, which cannot be gated per unit."
-                    if m.feature == DEFAULT_FEATURE
-                    else ""
-                )
-                + f"\n    Justification: {m.why_sound}"
-                for m in self.munges
+                f"  {e.executive_summary}\n    Justification: {e.why_sound}" for e in self.edits
             ]
             if self.diff:
                 parts.append(
@@ -383,28 +379,19 @@ class HarnessAssumptions:
 
 def harness_assumptions(
     state: CvlrGenerationExtra,
-    tree: SharedTree | None = None,
-    run_global: tuple[Munge, ...] = (),
+    edits: tuple[AppliedEdit, ...] = (),
+    diff: str = "",
 ) -> HarnessAssumptions:
     """The judge-facing read of what :func:`tuning_history` reads for the digest.
 
-    ``tree`` is the run's working tree, whose project and source boundary turn the munge briefing
-    from a list of descriptions into a diff. Optional because the diff is derived from the records — no working tree
-    is involved — so a caller with no project on hand still gets a correct, weaker briefing rather
-    than an error.
-
-    ``run_global`` is the run's munges that are *not* scoped to one unit
-    (:meth:`~composer.spec.cvlr.tree.SharedTree.run_global_munges`) — today only a module redirect
-    inside a local dependency, which has to be gated on the shared ``certora`` feature and is
-    therefore compiled into this unit's build whoever recorded it. Folded in by ``edit_id`` so a
-    unit that recorded one itself does not see it twice.
+    ``edits`` and ``diff`` are the applied edits' accounts and the unit's cumulative diff. Passed in
+    rather than read from ``state``, which holds only the edit ids and the files: the accounts live
+    in the edit store and the diff needs the project.
     """
-    own = {m.edit_id: m for m in state["munges"]}
-    munges = tuple(own.values()) + tuple(m for m in run_global if m.edit_id not in own)
     return HarnessAssumptions(
         summaries=tuple(state["summaries"]),
-        munges=munges,
-        diff=munge_diff(tree.pristine, tree.source, munges) if tree is not None and munges else "",
+        edits=edits,
+        diff=diff,
         settings=state["prover_settings"],
         external_functions=state.get("external_functions", ()),
         expected_failures=tuple(state["expected_failures"].items()),

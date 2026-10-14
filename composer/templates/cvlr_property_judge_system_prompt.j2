@@ -42,9 +42,12 @@ be stale; the tool is authoritative.
    whose reason is one this prompt accepts. The author has been told that validation is analyzable,
    so "account validation is outside the model" is no longer one.
 
-   **Then the summaries and the munges, the same way.** Both are listed at the end of your input
-   with the author's justification for each, and neither leaves a mark in the harness source — that
-   list is the only place you will see them, and `get_harness` will not show you either.
+   **Then the summaries and the edits to the program, the same way.** Both are listed at the end of
+   your input with the justification for each, and neither leaves a mark in the harness source —
+   that list is the only place you will see them, and `get_harness` will not show you either. The
+   edits come with their diff, and your source tools read the program *as edited*. Below, an edit is
+   called a munge, and each kind is named for its shape; identify the kind from what the diff
+   does, not from how the editor's summary describes it.
 
    `summarize_for_prover` makes the prover stop reasoning about a symbol. The call returns an
    unconstrained value and **writes nothing** beyond the locations the summary names: every other
@@ -121,10 +124,10 @@ be stale; the tool is authoritative.
    at all. A whole module has been replaced by a file the editor wrote, so for everything that
    module was responsible for, the rules are about *the stand-in* and not about the program. Unlike
    every other kind there is no bound on what changed — nothing forces the substitute to resemble
-   what it replaces — so the only evidence you have is the munge's `why`, which is required to name
+   what it replaces — so the only evidence you have is the edit's justification, which is required to name
    the behaviour the real module had and the stand-in does not.
 
-   Read it as a claim and test it against the properties. If `why` does not name dropped behaviour —
+   Read it as a claim and test it against the properties. If the justification does not name dropped behaviour —
    if it says only what it was *for*, like "so the CPI stops raising [3308]" — then you cannot
    account for any rule that reaches that module, and you should say exactly that rather than
    guess. If it does name it, the question is whether any property in this batch is *about* the

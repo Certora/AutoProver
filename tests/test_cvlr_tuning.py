@@ -183,7 +183,8 @@ def test_a_summary_invalidates_a_stamp_earned_before_it():
         "curr_spec": draft,
         "skipped": [],
         "summaries": [],
-        "munges": [],
+        "vfs": {},
+        "version_history": [],
         "prover_settings": TunableConf(),
         "validations": {},
         "required_validations": [PROVER_VALIDATION_KEY],
@@ -200,24 +201,32 @@ def test_rewording_a_justification_does_not_cost_a_submission():
     six-minute run for it would teach the author to leave justifications alone."""
     one = (SummaryDirective(pattern=_DISPLAY, why="first wording"),)
     two = (dataclasses.replace(one[0], why="a clearer second wording"),)
-    assert tuning_history({"summaries": list(one), "munges": [], "prover_settings": TunableConf()}) == tuning_history({"summaries": list(two), "munges": [], "prover_settings": TunableConf()})  # type: ignore[arg-type]
+    assert tuning_history({"summaries": list(one), "version_history": [], "prover_settings": TunableConf()}) == tuning_history({"summaries": list(two), "version_history": [], "prover_settings": TunableConf()})  # type: ignore[arg-type]
 
 
 def test_changing_the_return_shape_does_cost_one():
     one = (SummaryDirective(pattern="^f$", why="w"),)
     two = (SummaryDirective(pattern="^f$", why="w", returns="(*i32)(r1+0):num"),)
-    assert tuning_history({"summaries": list(one), "munges": [], "prover_settings": TunableConf()}) != tuning_history({"summaries": list(two), "munges": [], "prover_settings": TunableConf()})  # type: ignore[arg-type]
+    assert tuning_history({"summaries": list(one), "version_history": [], "prover_settings": TunableConf()}) != tuning_history({"summaries": list(two), "version_history": [], "prover_settings": TunableConf()})  # type: ignore[arg-type]
 
 
 def test_the_conf_is_always_in_the_history_and_the_tuning_files_only_when_used():
     """A run that never touches a tuning file contributes nothing from one — but it always
     contributes its conf, because there is no such thing as submitting without one and a verdict
     earned under a different loop bound or a different `rule_sanity` is not this run's verdict."""
-    empty = tuning_history({"summaries": [], "munges": [], "prover_settings": TunableConf()})  # type: ignore[arg-type]
+    empty = tuning_history({"summaries": [], "version_history": [], "prover_settings": TunableConf()})  # type: ignore[arg-type]
     assert len(empty) == 1 and empty[0].startswith("conf:")
 
-    changed = tuning_history({"summaries": [], "munges": [], "prover_settings": TunableConf(loop_iter=3)})  # type: ignore[arg-type]
+    changed = tuning_history({"summaries": [], "version_history": [], "prover_settings": TunableConf(loop_iter=3)})  # type: ignore[arg-type]
     assert changed != empty
+
+
+def test_an_applied_edit_moves_the_history():
+    """`commit_edit` and `revert_to_edit` write `version_history`, so a stamp earned before an edit
+    to the program goes stale with it, as it does on EVM."""
+    before = tuning_history({"summaries": [], "version_history": [], "prover_settings": TunableConf()})  # type: ignore[arg-type]
+    after = tuning_history({"summaries": [], "version_history": ["e1"], "prover_settings": TunableConf()})  # type: ignore[arg-type]
+    assert "e1" in after and before != after
 
 
 def test_a_skip_still_moves_the_digest():

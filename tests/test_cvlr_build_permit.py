@@ -53,7 +53,7 @@ def _deps(tmp_path: Path, sem: asyncio.Semaphore) -> SimpleNamespace:
 def _submit(deps: SimpleNamespace):
     return verify_mod._stage_and_submit(
         deps,  # type: ignore[arg-type]
-        {"summaries": [], "munges": []},  # type: ignore[arg-type]
+        {"summaries": [], "vfs": {}},  # type: ignore[arg-type]
         "draft",
         Submission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
         callbacks=_RunAccounting(),
@@ -99,7 +99,7 @@ async def test_the_permit_is_held_until_the_upload_and_not_through_the_cloud_job
             pass
 
     cloud_done.set()
-    assert await first == (None, "outcome")
+    assert await first == "outcome"
     assert not sem.locked()
 
 
@@ -112,7 +112,7 @@ async def test_a_cli_failure_before_the_upload_frees_the_permit(tmp_path, monkey
 
     monkeypatch.setattr(verify_mod, "run_submission", run_submission)
 
-    assert await _submit(_deps(tmp_path, sem)) == (None, "no link")
+    assert await _submit(_deps(tmp_path, sem)) == "no link"
     assert not sem.locked()
 
 
@@ -129,7 +129,7 @@ async def test_a_rejected_build_frees_the_permit_without_submitting(tmp_path, mo
     monkeypatch.setattr(verify_mod, "prepare_submission", prepared)
     monkeypatch.setattr(verify_mod, "run_submission", run_submission)
 
-    assert await _submit(_deps(tmp_path, sem)) == (None, rejected)
+    assert await _submit(_deps(tmp_path, sem)) == rejected
     assert not sem.locked()
 
 

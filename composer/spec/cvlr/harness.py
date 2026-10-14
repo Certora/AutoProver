@@ -30,10 +30,10 @@ from composer.authoring.state import SkippedProperty
 from composer.cargo.features import CargoFeature
 from composer.diagnostics.timing import RunSummary
 from composer.spec.artifacts import ArtifactStore
-from composer.spec.cvlr.munge import Munge
 from composer.spec.cvlr.scaffold import SPECS_DIR
 from composer.spec.cvlr.state import PropertyRuleMapping, RuleSubject
 from composer.spec.cvlr.tuning import SummaryDirective
+from composer.spec.source.munge.edit_store import AppliedEdit
 from composer.spec.types import CheckName, PropertyTitle, RuleName
 from composer.spec.util import ensure_dir
 
@@ -120,10 +120,13 @@ class GeneratedHarness(BaseModel):
     #: replaced a function with an unconstrained stand-in: the verdicts are conditional on them
     #: being sound for these properties, and the ``why`` is the only argument that they were.
     summaries: list[SummaryDirective] = Field(default_factory=list)
-    #: Verification-only edits to the program's own source. Reported for a stronger version of the
-    #: same reason: the verdicts are about the munged program, and the report's ``source_edits`` is
-    #: where that is said in the shared vocabulary every backend uses.
-    munges: list[Munge] = Field(default_factory=list)
+    #: The editor's account of each edit applied to the program's own source. Reported for a
+    #: stronger version of the same reason: the verdicts are about the edited program, and the
+    #: report's ``source_edits`` is where that is said in the shared vocabulary every backend uses.
+    applied_edits: list[AppliedEdit] = Field(default_factory=list)
+    #: The edited files themselves, whole, by project-relative path: what the report diffs against
+    #: the project to give the user a patch.
+    vfs: dict[str, str] = Field(default_factory=dict)
     #: Every rule the draft declares, as read from the draft rather than transcribed by the model.
     declared_rules: list[RuleName] = Field(default_factory=list)
     final_link: str | None = None
@@ -181,7 +184,7 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
                 {
                     "rule_subjects": [s.model_dump() for s in artifact.rule_subjects],
                     "summaries": [dataclasses.asdict(s) for s in artifact.summaries],
-                    "munges": [dataclasses.asdict(m) for m in artifact.munges],
+                    "applied_edits": [e.model_dump() for e in artifact.applied_edits],
                 },
                 indent=2,
             )

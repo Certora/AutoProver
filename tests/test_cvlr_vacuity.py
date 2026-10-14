@@ -24,7 +24,6 @@ from composer.spec.cvlr.conf import (
 )
 from composer.spec.cvlr.prover import Checked, Prepared
 from composer.spec.cvlr.prover import Submission as CvlrSubmission
-from composer.spec.cvlr.tree import Reconciled
 from composer.spec.cvlr.vacuity import (
     AssertionInCore,
     AssertionNotInCore,
@@ -153,7 +152,8 @@ def _state(draft: str = _DRAFT) -> dict:
         "expected_failures": {},
         "skipped": [],
         "summaries": [],
-        "munges": [],
+        "vfs": {},
+        "version_history": [],
         "property_rules": [],
         "rule_subjects": [],
         "prover_settings": TunableConf(loop_iter=3),
@@ -164,8 +164,8 @@ def _state(draft: str = _DRAFT) -> dict:
     }
 
 
-async def _stubbed_stage(draft, summaries=(), munges=()) -> Reconciled:
-    return Reconciled(drifted=())
+async def _stubbed_stage(draft, summaries=(), overlay={}) -> None:
+    return None
 
 
 class _FakeAnalyzer:

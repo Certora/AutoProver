@@ -1,4 +1,4 @@
-"""The one working tree, and reconciling it to what the run's state says it should contain.
+"""The one working tree, and reconciling it to what the staging unit's state says it should contain.
 
 A unit is one batch of a run's properties, whose rules are one harness module in the program's
 crate. Every unit of a run builds in one shared copy of the project, so the dependency graph is
@@ -9,38 +9,36 @@ What this module does is make the tree **derived**:
 
 .. code-block:: text
 
-    tree = the project + each unit's draft + the union of every unit's munges
+    tree = the project + each unit's draft + the staging unit's edits to the program
 
 Every term after the first is in the run's checkpointed state, so the tree is a build cache rather
 than state. Each run starts it fresh, and losing it costs a rebuild and never correctness, which is
-what lets a resumed run, or one replayed from cache, pick up where it left off. Three things keep
-it so:
+what lets a resumed run, or one replayed from cache, pick up where it left off.
 
-* **A munge dropped from state disappears from the file.** Each munged file is rebuilt from the
-  project's copy and then replayed, rather than edited in place, so rewinding to an earlier
-  checkpoint cannot leave an attribute on disk that nothing in state knows about.
-* **The union is replayed, not one unit's share.** A unit's munge is dormant for every other unit
-  (:class:`~composer.spec.cvlr.munge.Munge`), so the union is well defined; replaying only the
-  staging unit's would delete its siblings' lines and have them re-added on their next gate,
-  churning the file and rebuilding the crate for nothing.
-* **Writes are content-compared.** Cargo fingerprints on mtime, so rewriting a file with identical
-  bytes forces a rebuild. Comparing first is what keeps a unit's gate from recompiling what nothing
-  changed.
+**Only the staging unit's edits are in the tree.** A unit's
+edits to the program are whole files — its overlay — and two units' copies of one file have no
+defined union. They do not need one: the tree is only ever read by a build, and every build holds the
+run's build permit from staging until the Prover has uploaded what it built, so each build has the
+tree to itself and the tree can hold the building unit's copy of each edited file. A path the next
+unit's overlay does not serve is put back to the project's copy, which is how a sibling's edit
+reverts.
+
+Writes are content-compared. Cargo fingerprints on mtime, so rewriting a file with identical bytes
+forces a rebuild; comparing first is what keeps restaging the same unit from recompiling what nothing
+changed. Alternating units that edit files does rebuild the program crate, and that is the price of
+this arrangement: on klend, about 20s per SBF build and 1s per ``cargo check``, the same rebuild a
+unit pays whenever its own draft changed.
 
 The tree is a graphcore :class:`~graphcore.tools.vfs.PersistentMaterializer`: the project is its
-base, copied once per run by :meth:`SharedTree.materialize`, and the drafts and munged files are
-one overlay above it. A path the overlay stops serving is put back to the project's copy.
-
-The report's diff does not need a tree at all. :func:`munge_diff` replays a unit's munges into an
-in-memory overlay, so one unit's diff shows only its own edits, and is available after the tree has
-been deleted.
+base, copied once per run by :meth:`SharedTree.materialize`, and the drafts and the staging unit's
+edited files are one overlay above it.
 """
 
 import asyncio
 import functools
 import logging
 import shutil
-from collections.abc import Iterable
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePath, PurePosixPath
 
@@ -48,19 +46,6 @@ from graphcore.tools.vfs import DictBackend, DirBackend, PersistentMaterializer
 
 from composer.cargo.metadata import Workspace
 from composer.layout import RUST_BUILD_DIRS
-from composer.spec.cvlr.conf import DEFAULT_FEATURE
-from composer.spec.cvlr.munge import (
-    DeriveSwap,
-    FunctionExtraction,
-    FunctionMunge,
-    ImportSwap,
-    ModuleRedirect,
-    Munge,
-    Munged,
-    MungeAttempt,
-    apply_munge,
-)
-from composer.spec.source.munge.vfs_diff import diff_against_baseline, fs_resolver
 
 _log = logging.getLogger(__name__)
 
@@ -81,7 +66,8 @@ def _excluded_directory(directories: tuple[str, ...]) -> str | None:
 
 @dataclass(frozen=True)
 class ProjectSource:
-    """The files a munge may rewrite: the sources of the project's own library crates.
+    """The files an edit to the program may touch: the sources and manifests of the project's own
+    crates.
 
     An allowlist, taken from cargo rather than inferred from directory names. A library is the
     project's when cargo resolves its package from a path — a workspace member or a path dependency —
@@ -89,25 +75,36 @@ class ProjectSource:
     the project's, wherever its source is unpacked; under confinement that is inside the tree, in
     the run's private ``CARGO_HOME``.
 
+    The manifests are there because an edit inside a local dependency crate is gated on a feature
+    that crate's manifest does not declare, so the same edit has to declare it there and forward it
+    from the program's manifest.
+
     A crate whose root sits at its package root makes the whole package its source directory, build
     output included, so :data:`NOT_PROJECT_SOURCE` is refused inside a source directory as well.
     """
 
     #: Project-relative.
     roots: tuple[PurePosixPath, ...]
+    #: Project-relative ``Cargo.toml`` paths of the same packages.
+    manifests: tuple[PurePosixPath, ...] = ()
 
     @classmethod
     def of(cls, workspace: Workspace, project: Path) -> "ProjectSource":
-        """The source directories of ``workspace``'s local libraries that are inside ``project``."""
+        """The source directories and manifests of ``workspace``'s local libraries that are inside
+        ``project``."""
         project = project.resolve()
         roots: set[PurePosixPath] = set()
+        manifests: set[PurePosixPath] = set()
         for package in workspace.packages:
             if not package.is_local or package.lib is None:
                 continue
             directory = package.lib.src_path.parent.resolve()
             if directory.is_relative_to(project):
                 roots.add(PurePosixPath(directory.relative_to(project).as_posix()))
-        return cls(roots=tuple(sorted(roots)))
+            manifest = package.manifest_path.resolve()
+            if manifest.is_relative_to(project):
+                manifests.add(PurePosixPath(manifest.relative_to(project).as_posix()))
+        return cls(roots=tuple(sorted(roots)), manifests=tuple(sorted(manifests)))
 
     def contains(self, relative: PurePosixPath | str) -> bool:
         """Whether a project-relative path names a file of one of the project's own crates."""
@@ -118,10 +115,15 @@ class ProjectSource:
             and _excluded_directory(path.parts[:-1]) is None
         )
 
+    def may_edit(self, relative: PurePosixPath | str) -> bool:
+        """Whether an edit to the program may write this project-relative path."""
+        return self.contains(relative) or PurePosixPath(relative) in self.manifests
+
 
 @dataclass(frozen=True)
 class NotProjectSource:
-    """The path is inside the project but is not the source of one of its crates.
+    """The path is inside the project but is neither the source nor the manifest of one of its
+    crates.
 
     Almost always a dependency: confinement puts the run's ``CARGO_HOME`` under
     ``.certora_internal/sandbox/cargo``, so every crate the build resolves has its unpacked source
@@ -135,7 +137,7 @@ class NotProjectSource:
         roots = ", ".join(str(r) for r in self.source.roots) or "none"
         return (
             f"{self.path} is not in the source of any of the project's own crates "
-            f"(their source directories: {roots})"
+            f"(their source directories: {roots}), nor one of their manifests"
         )
 
 
@@ -157,31 +159,29 @@ class NotInProject:
         return f"{self.path} resolves outside the project"
 
 
-def project_file(
+def refuse_edit(
     pristine: Path, source: ProjectSource, relative: str
-) -> Path | NotInProject | NotProjectSource:
-    """The project's file a munge names — what replay reads — or why a munge may not name it.
+) -> NotInProject | NotProjectSource | None:
+    """Why an edit to the program may not write ``relative``, or None when it may.
 
-    The one answer to that question: whatever records a munge asks it first, and replay asks again,
-    because by then the record has come back from a checkpoint rather than from the call that
-    validated it. Replay writes the tree's file at the same relative path, so a path inside the
-    project is inside the tree too.
+    The one answer to that question: the editor's write tools ask it before accepting a write, and
+    staging asks again, because by then the overlay has come back from a checkpoint or the edit
+    store rather than from the call that validated it.
 
     Two things have to hold and they are not the same one. The path must stay **inside** the
-    project, which is what keeps a munge from reaching anything else on the machine. And it must
+    project, which is what keeps an edit from reaching anything else on the machine. And it must
     name the **project's own source** (``source``), which containment does not establish:
     confinement puts ``CARGO_HOME`` under ``.certora_internal/sandbox/cargo``, so every dependency's
-    unpacked source is inside the tree, and a check that stopped at containment would let a munge
+    unpacked source is inside the tree, and a check that stopped at containment would let an edit
     rewrite Anchor for every crate in the graph.
     """
     root = pristine.resolve()
     candidate = (root / relative).resolve()
     if not candidate.is_relative_to(root):
         return NotInProject(relative)
-    inside = candidate.relative_to(root)
-    if not source.contains(PurePosixPath(inside.as_posix())):
+    if not source.may_edit(PurePosixPath(candidate.relative_to(root).as_posix())):
         return NotProjectSource(path=relative, source=source)
-    return pristine / inside
+    return None
 
 
 @dataclass(frozen=True)
@@ -191,135 +191,8 @@ class UnitEdits:
     #: Absolute, inside the tree: the unit's harness is a module of the crate under verification.
     module_path: Path
     draft: str
-    munges: tuple[Munge, ...] = ()
-
-
-@dataclass(frozen=True)
-class Drifted:
-    """A munge in state could not be replayed onto the pristine source.
-
-    The pristine copy is the developer's tree, and it can move between the run that recorded a munge
-    and the run that replays it. ``why`` is one of the typed refusals applying a munge returns
-    (:data:`~composer.spec.cvlr.munge.MungeAttempt`) — the function or import is gone or ambiguous,
-    the edit is already there, or, for a kind located by the text it captured,
-    :class:`~composer.spec.cvlr.munge.SourceDrifted` — the same refusals the tool uses, which is why replay onto drifted source is detectable at all rather than silently
-    mis-applied. Or one of the two path refusals, or prose for the file simply being unreadable.
-    """
-
-    munge: Munge
-    why: MungeAttempt | NotInProject | NotProjectSource | str
-
-    def describe(self) -> str:
-        match self.why:
-            case NotInProject() | NotProjectSource() as refusal:
-                detail = refusal.describe()
-            case str() as prose:
-                detail = prose
-            case attempt:
-                detail = str(attempt)
-        return f"{self.munge.edit_id}: {detail}"
-
-
-@dataclass(frozen=True)
-class Reconciled:
-    """The munges in state that could not be carried into the tree. Truthy when there are none."""
-
-    drifted: tuple[Drifted, ...]
-
-    def __bool__(self) -> bool:
-        return not self.drifted
-
-
-def replay(source: str, munges: tuple[Munge, ...]) -> tuple[str, tuple[Drifted, ...]]:
-    """Apply ``munges`` to pristine ``source``, reporting the ones that did not take.
-
-    Ordered rather than taken as recorded, because the order decides the file's bytes: two munges of
-    one function each insert a line immediately above its signature, and bytes that depended on
-    which unit happened to stage first would make the crate's fingerprint depend on scheduling.
-
-    Import swaps, module redirects and derive swaps go on first and interact with nothing: they sit
-    at a ``use``, a ``mod`` declaration and a ``struct`` or ``enum`` respectively, where the
-    remaining two address functions. They are ordered anyway, because "does not interact today" is
-    not a property worth depending on for the crate's bytes.
-
-    Attributes go on before extractions, and that is the interesting half of the order. An
-    extraction replaces a function with a gated pair, so an attribute applied afterwards would find
-    two definitions of one name and refuse; applied first, its ``cfg_attr`` line ends up above the
-    ``#[cfg(not(..))]`` the pair opens with — which is the *right* place, because a unit that
-    recorded an attribute is a unit building with somebody else's extraction feature off, and the
-    half it compiles is the original.
-    """
-    def _replay_rank(m: Munge) -> int:
-        match m:
-            case ImportSwap():
-                return 0
-            case ModuleRedirect():
-                return 1
-            case DeriveSwap():
-                return 2
-            case FunctionMunge():
-                return 3
-            case FunctionExtraction():
-                return 4
-
-    drifted: list[Drifted] = []
-    for munge in sorted(munges, key=lambda m: (_replay_rank(m), m.edit_id)):
-        match apply_munge(source, munge):
-            case Munged(source=updated):
-                source = updated
-            case other:
-                drifted.append(Drifted(munge=munge, why=other))
-    return source, tuple(drifted)
-
-
-def replay_files(
-    pristine: Path, source: ProjectSource, munges: Iterable[Munge]
-) -> tuple[dict[str, str], tuple[Drifted, ...]]:
-    """Each file ``munges`` name, replayed onto the project's copy, by project-relative path; and
-    the munges that could not be carried into it.
-
-    A module redirect's substitute is in the result too, whole: it has no project copy to replay
-    onto, so it is the munge's own content rather than something derived from the project.
-    """
-    by_path: dict[str, list[Munge]] = {}
-    for munge in munges:
-        by_path.setdefault(munge.path, []).append(munge)
-    read = fs_resolver(pristine)
-    replayed: dict[str, str] = {}
-    drifted: list[Drifted] = []
-    for path, for_file in sorted(by_path.items()):
-        match project_file(pristine, source, path):
-            case NotInProject() | NotProjectSource() as refusal:
-                drifted += [Drifted(munge=m, why=refusal) for m in for_file]
-                continue
-            case Path():
-                pass
-        text = read(path)
-        if text is None:
-            drifted += [
-                Drifted(munge=m, why="the project's copy is unreadable or not UTF-8")
-                for m in for_file
-            ]
-            continue
-        updated, file_drift = replay(text, tuple(for_file))
-        replayed[path] = updated
-        drifted += file_drift
-        for munge in for_file:
-            if isinstance(munge, ModuleRedirect):
-                replayed.update(munge.created)
-    return replayed, tuple(drifted)
-
-
-def munge_diff(pristine: Path, source: ProjectSource, munges: tuple[Munge, ...]) -> str:
-    """A unified diff from the project's own source to what ``munges`` make of it.
-
-    Computed from state rather than read off a working tree, which is what makes it both correct and
-    durable. Correct, because the tree holds every unit's munges and this is one unit's report;
-    durable, because it survives the tree being deleted, which the tree is designed to allow.
-    """
-    replayed, drifted = replay_files(pristine, source, munges)
-    notes = "".join(f"# {d.describe()}\n" for d in drifted)
-    return diff_against_baseline(replayed, pristine) + notes
+    #: The unit's edits to the program: whole files, by project-relative path.
+    overlay: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -335,10 +208,11 @@ class SharedTree:
     pristine: Path
     #: The tree every unit builds in.
     root: Path
-    #: What a munge may rewrite and where a unit's module may go.
+    #: What an edit to the program may write and where a unit's module may go.
     source: ProjectSource
-    _units: dict[str, UnitEdits] = field(default_factory=dict)
-    #: Every known unit's draft and every munged file's replayed content, as an overlay above the
+    #: Every unit that has staged, by unit: the tree-relative path of its module and its draft.
+    _drafts: dict[str, tuple[str, str]] = field(default_factory=dict)
+    #: Every known unit's draft and the staging unit's edited files, as an overlay above the
     #: project, by tree-relative path.
     _derived: DictBackend = field(default_factory=DictBackend)
 
@@ -346,9 +220,9 @@ class SharedTree:
     def _materializer(self) -> PersistentMaterializer:
         """The writer of the tree.
 
-        Content-compared, so a file whose replayed bytes have not changed keeps its mtime and cargo
-        does not rebuild for it. A path the overlay stops serving is restored from the project, or
-        removed if the project has no such file.
+        Content-compared, so a file whose bytes have not changed keeps its mtime and cargo does not
+        rebuild for it. A path the overlay stops serving is restored from the project, or removed if
+        the project has no such file.
         """
         return PersistentMaterializer(
             DirBackend(self.pristine),
@@ -372,75 +246,37 @@ class SharedTree:
             await asyncio.to_thread(shutil.rmtree, self.root)
         await self._materializer.dump_to(self.root)
 
-    def pristine_of(self, relative: str) -> Path | NotInProject | NotProjectSource:
-        """The developer's copy of the file a munge names — what replay actually reads.
+    def refuse_edit(self, relative: str) -> NotInProject | NotProjectSource | None:
+        """Why an edit to the program may not write ``relative``, or None when it may."""
+        return refuse_edit(self.pristine, self.source, relative)
 
-        The tool that records an edit has to look at the same bytes :meth:`reconcile` will replay
-        onto, and those are the pristine project's rather than the tree's. For an attribute the
-        difference is cosmetic; for an extraction it is not, because the text it captures *is* its
-        identity, and capturing a sibling unit's already-derived version of the file would record an
-        edit that can never be replayed onto anything.
-        """
-        return project_file(self.pristine, self.source, relative)
+    async def reconcile(self, unit: str, edits: UnitEdits) -> None:
+        """Make the tree hold every known unit's draft and ``unit``'s edits to the program.
 
-    def run_global_munges(self) -> tuple[Munge, ...]:
-        """Every munge in the tree that is **not** scoped to the unit that recorded it.
-
-        The per-unit cargo feature is what makes a sibling's munge dormant, and one kind cannot have
-        one: a :class:`~composer.spec.cvlr.munge.ModuleRedirect` of a module in a *local dependency*
-        is gated on the shared ``certora`` feature, because a dependency's manifest does not declare
-        this program's unit features. Such a munge is compiled into every unit's build whoever asked
-        for it, so every unit's judge has to be shown it — a judge reviewing only its own unit's
-        munges would be reviewing a program the prover did not analyze.
-
-        Ordered by ``edit_id`` rather than by unit, so what a judge reads does not depend on which
-        unit happened to stage first.
-        """
-        return tuple(
-            sorted(
-                {
-                    m.edit_id: m
-                    for staged in self._units.values()
-                    for m in staged.munges
-                    if m.feature == DEFAULT_FEATURE
-                }.values(),
-                key=lambda m: m.edit_id,
-            )
-        )
-
-    async def reconcile(self, unit: str, edits: UnitEdits) -> Reconciled:
-        """Make the tree agree with state, and report the munges that could not be carried over.
-
-        Rebuilds the overlay from every known unit's state — each draft, and each munged file
-        replayed onto the *project's* copy — and materializes it. The result depends only on state,
-        and a munge dropped from state is a path the overlay stops serving, which the materializer
-        restores.
-
-        A unit is known once it has reconciled. Until then its module is the project's placeholder
-        and its munges are absent, which is safe because both are ``cfg``'d out of every other
-        unit's build.
+        A unit is known once it has reconciled. Until then its module is the project's placeholder,
+        which is safe because it is ``cfg``'d out of every other unit's build. Another unit's edits
+        are never in the tree once this returns: a file only it edited is a path the overlay stops
+        serving, which the materializer restores from the project.
 
         Raises :class:`ValueError` if the module path is outside the tree, is not project source,
-        or is another unit's.
+        or is another unit's, or if the unit's edits write a path an edit may not.
         """
         module = self._module_key(edits.module_path)
-        for other, staged in self._units.items():
-            if other != unit and self._module_key(staged.module_path) == module:
+        for other, (other_module, _) in self._drafts.items():
+            if other != unit and other_module == module:
                 raise ValueError(f"units {other!r} and {unit!r} both name {module} as their module")
-        self._units[unit] = edits
-
-        replayed, drifted = replay_files(
-            self.pristine, self.source, (m for staged in self._units.values() for m in staged.munges)
-        )
         drafts = {
-            self._module_key(staged.module_path): staged.draft for staged in self._units.values()
-        }
-        self._derived.files = {**replayed, **drafts}
-        await self._materializer.dump_to(self.root)
+            path: draft for other, (path, draft) in self._drafts.items() if other != unit
+        } | {module: edits.draft}
+        for path in edits.overlay:
+            if (refusal := self.refuse_edit(path)) is not None:
+                raise ValueError(f"unit {unit!r}'s edits write {refusal.describe()}")
+            if path in drafts:
+                raise ValueError(f"unit {unit!r}'s edits write the harness module {path}")
+        self._drafts[unit] = (module, edits.draft)
 
-        for drift in drifted:
-            _log.warning("cvlr: munge not replayed — %s", drift.describe())
-        return Reconciled(drifted=drifted)
+        self._derived.files = {**edits.overlay, **drafts}
+        await self._materializer.dump_to(self.root)
 
     def _module_key(self, module_path: Path) -> str:
         """``module_path`` relative to the tree, refusing one outside it or outside the source."""

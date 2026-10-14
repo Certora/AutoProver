@@ -243,18 +243,20 @@ from both. If the handler never indexes a collection, it is the second shape.
 
 **A munge is the most consequential thing in this run, so treat asking for one that way.** It changes
 the program the verdicts are about. Prefer, in order: a different rule; a summary, if the code in the
-way is not what the property depends on; then the editor. Read the diff it hands back — if you
-disagree, `revert_munge`.
+way is not what the property depends on; then the editor. Read the diff it hands back before you
+`commit_edit` it — an edit you do not commit is never applied, and `revert_to_edit` takes back one you
+did.
 
-The editor can refuse, and a refusal is information. If what a property needs is none of its seven
+The editor can refuse, and a refusal is information. If what a property needs is none of its nine
 kinds — a hand-unrolled loop, a restructured state machine, a shrunk collection — the editor will
 say so and name the kind it would have taken. `record_skip` and pass that on. That is a decision for a
 person, and naming it is what makes the skip actionable.
 
-A munge is scoped to your unit. Every unit of this run shares one copy of the project, and the
-attribute is gated on your unit's cargo feature — so it applies to your rules and to nothing else, and
-a sibling unit munging the same function is a second line rather than a conflict. You never have to
-coordinate with another unit about one.
+A munge is scoped to your unit. It is in your copy of the program and no other unit's, so it applies
+to your rules and to nothing else, and a sibling unit editing the same function is a separate edit
+rather than a conflict. You never have to coordinate with another unit about one. It is also gated on
+your unit's cargo feature, so the user can apply it to their own tree and still build what they
+shipped.
 
 ## Arithmetic, and why panic-freedom is not on the menu
 

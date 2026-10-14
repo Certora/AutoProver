@@ -47,13 +47,18 @@ from composer.diagnostics.timing import RunSummary, install_run_summary
 from composer.io.multi_job import TaskInfo, run_task
 import composer.llm.registry as llm_registry
 from composer.rag.models import DefaultEmbedder
-from composer.spec.context import WorkflowContext
-from composer.spec.cvlr.author import build_feedback_thunk
+from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ, SOLANA
+from composer.spec.agent_index import AgentIndex, AgentIndexConfig
+from composer.spec.context import SourceCode, WorkflowContext
+from composer.spec.cvlr.author import JudgeContext, build_feedback_thunk
+from composer.spec.cvlr.editor import EditingServices, program_editing
+from composer.spec.cvlr.tree import ProjectSource
+from composer.spec.source.munge.edit_store import EditStore
 from composer.spec.cvlr.pipeline import CvlrPhase
 from composer.spec.cvlr.state import CVLR_JUDGE_KEY, HarnessAssumptions
 from composer.rustapp.frontend import GenericRustConsoleHandler
 from composer.spec.service_host import ModelProvider, PureServiceHost
-from composer.spec.types import PropertyFormulation, PropertyTitle
+from composer.spec.types import PropertyFormulation, PropertyTitle, RustIdentifier
 from composer.testing.record_tape import install_recorder
 from composer.ui.tool_display import async_tool_context
 from composer.workflow.services import standard_connections
@@ -127,8 +132,8 @@ async def test_one_review_round_emits_one_verdict(langgraph_db, tmp_path, capsys
     second verdict here means the completion validator rejected the first — the round-trip this
     measures the absence of.
 
-    **What this round is not.** The judge here has no source tools, so it reads the harness and goes
-    straight to drafting; a production round first spends a dozen calls exploring the program and
+    **What this round is not.** The judge's source tools read an empty project here, so it reads the
+    harness and goes straight to drafting; a production round first spends a dozen calls exploring the program and
     the CVLR crates (95 ``get_file`` in the recorded unit alone). That head is unchanged by the gate
     and deliberately left out — including it would make the measurement slower, dearer and dominated
     by the part that did not change. What is measured is the tail the gate governs: draft, then
@@ -169,6 +174,33 @@ async def test_one_review_round_emits_one_verdict(langgraph_db, tmp_path, capsys
             cache_namespace=None,
             memory_namespace=None,
         )
+        services = EditingServices(
+            store=EditStore(conns.store, ("judge_round_cost", "edits")),
+            explorer_index=AgentIndex(
+                store=conns.indexed_store,
+                config=AgentIndexConfig(base_layer=("judge_round_cost", "src")),
+            ),
+            indexed_store=conns.indexed_store,
+            source_key="judge_round_cost",
+            forbidden_read=RUST_FORBIDDEN_READ,
+            recursion_limit=100,
+        )
+        project = tmp_path / "project"
+        project.mkdir()
+        editing = program_editing(
+            services,
+            env,
+            SourceCode(
+                content=None,
+                project_root=str(project),
+                contract_name=RustIdentifier("vault"),
+                relative_path="src/lib.rs",
+                forbidden_read=RUST_FORBIDDEN_READ,
+            ),
+            ProjectSource(roots=()),
+            Path("."),
+            SOLANA,
+        )
         thunk = build_feedback_thunk(
             ctx.child(CVLR_JUDGE_KEY),
             env,
@@ -176,14 +208,20 @@ async def test_one_review_round_emits_one_verdict(langgraph_db, tmp_path, capsys
             None,
             "vault",
             "cvlr 0.6.1, cvlr-solana 0.5.0",
-            (),
+            editing,
         )
         # Inside a task scope, as the authoring loop calls it: that is what installs the IO handler
         # the graph runner requires, and it gives the recorder a named lane instead of parking the
         # calls where ``HarnessFakeLLM`` could never route them.
         async def review():
             return await thunk(
-                HarnessAssumptions(summaries=(), munges=()), draft, (), (), "measure"
+                JudgeContext(
+                    assumptions=HarnessAssumptions(summaries=()), vfs={}, version_history=[]
+                ),
+                draft,
+                (),
+                (),
+                "measure",
             )
 
         feedback = await run_task(
