@@ -562,6 +562,13 @@ class DeriveSwap:
     Unlike :class:`FunctionExtraction` this does not gate an *item*, only its attributes, so the
     ``cfg_attr`` form is safe here: a derive list is one attribute, and gating it cannot leave two
     definitions of one name.
+
+    The harness's replacement impls read and write one shared value per type, because a rule that
+    reads state back after a handler writes it needs the write to be visible. That makes the swap
+    sound only where a unit's handlers reach one account of the type: two accounts of it alias, and
+    nothing reports it. The trait methods carry no discriminator to dispatch on — a writer wrapping
+    the account's data does not say which account — so the bound cannot be checked in the impls
+    the way an accessor stand-in can assert on its index.
     """
 
     path: str

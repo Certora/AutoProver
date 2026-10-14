@@ -2368,8 +2368,8 @@ no section here at all. Read it to choose something; read this to understand wha
 3. ~~**`mock_fn` cannot reach an inherent method.**~~ **Worked around.** `mock_fn` replaces an item
    with a `use`, and a `use` inside an `impl` block is not a method, so it reaches free functions
    only. The corpus's answer turned out not to be a trait that shadows the method but a redirect of
-   the module that defines it, with `#[path]`, and that is the `ModuleRedirect` munge kind. Evidence
-   in [the-state-behind-the-bytes.md](./the-state-behind-the-bytes.md) §9.2 and §9.3.
+   the module that defines it, with `#[path]`, and that is the `ModuleRedirect` munge kind
+   ([who-edits-the-program.md](./who-edits-the-program.md) §11).
 5. **The rest of Phase 7** (§7.8): ~~the Docker image's Rust + Solana platform-tools toolchain~~
    (**built**, §7.8.3 — and building it found three things a confined build needs that no host run
    ever did), ~~the replay tape and the LLM-free smoke scenario it drives~~ (**built**, and recorded

@@ -18,8 +18,8 @@ Four things make it distant from the corpus:
 
 - **Native lamports, not SPL token balances.** No token account model applies.
 - **An enum state machine** (`StakeStateV2`), not share accounting over a struct.
-- **bincode**, not borsh derives and not `bytemuck`. `docs/the-state-behind-the-bytes.md` surveyed
-  six seam shapes and bincode is not among them.
+- **bincode**, not borsh derives and not `bytemuck`. A survey of six local CVLR projects found six
+  serialization seams (borsh derives, accessor functions, Anchor loaders) and bincode among none.
 - **Sysvars throughout** — `Clock`, `StakeHistory`, `Rent`.
 
 The state seam is `get_stake_state` / `set_stake_state`, free functions in `program/src/processor.rs`

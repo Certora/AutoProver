@@ -107,9 +107,12 @@ not one. So:
 
 Every other kind addresses a function: annotate it, replace it, split it. A `#[derive(..)]` generates
 an impl with no name to give it, so when the Prover cannot follow the program's own
-(de)serialization — `[3005] memcpy with dynamically sized length`, `[3308] illegal dereference of an
-absolute address`, or an internal failure out of `sbf.domains.ScalarDomain` — the derive itself is
-the only handle there is.
+(de)serialization — `[3005] memcpy with dynamically sized length` or `[3308] illegal dereference of
+an absolute address` — the derive itself is the only handle there is.
+
+An internal failure out of `sbf.domains.ScalarDomain` is usually not this. Where it has been traced,
+it came from a method unpacking an SPL token account, and swapping the state type's derives left the
+crash in place. A method is reached by `redirect_module`, below.
 
 What lands is two `cfg_attr` lines above the type. Derives the swap does not name stay on an ungated
 `derive`, so the deployed build sees exactly what it saw:
@@ -121,7 +124,7 @@ What lands is two `cfg_attr` lines above the type. Derives the swap does not nam
 pub struct StakePool { .. }
 ```
 
-Three things make this the most consequential kind you have:
+Four things make this the most consequential kind you have:
 
 - **It cascades.** `derive(Copy)` needs every field type to be `Copy`, so a struct drags its enums
   along. Record them in one call: they do not compile apart, and half a cascade reverted is a broken
@@ -135,6 +138,10 @@ Three things make this the most consequential kind you have:
   own module like a `mock_fn` stand-in. Say in `how_to_apply` which traits they now owe, and that a
   rule reading state back after the handler writes it needs those impls to share one value rather
   than mint a fresh one per call. Nothing else will catch either mistake.
+- **One value stands in for every account of the type.** That shared value is one per type, so a
+  handler that reaches two accounts of the swapped type sees them as the same account. Swap a type
+  only where the unit's handlers reach one account of it — a merge or a transfer between two of
+  them is where this breaks — and say in `why` that you checked.
 
 - **Never write a `mock_fn` stand-in yourself** — you cannot; the author writes it and names it to
   you. If the request needs a stand-in that does not exist yet, say so and refuse.

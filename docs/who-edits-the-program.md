@@ -482,7 +482,7 @@ first bullet is the next thing to build. It did, and it was; §10.
 
 §8.4's gated pair, and §9.4's first bullet. The vocabulary was six kinds at this point, five of
 which are one attribute above a signature and one of which is not. It is seven now: the derive swap
-(`the-state-behind-the-bytes.md`) and §11's module redirect.
+(`DeriveSwap` in [munge.py](../composer/spec/cvlr/munge.py)) and §11's module redirect.
 
 ### 10.1 The shape, and the two things the tool refuses to delegate
 

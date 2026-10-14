@@ -754,8 +754,10 @@ class SwapDerive(
 
     The kind for code no function names. `mock_fn` replaces a function; a `#[derive(..)]` generates
     an impl with no name to give it, so when the Prover cannot follow a program's own
-    (de)serialization — `[3005] memcpy with dynamically sized length`, `[3308] illegal dereference`,
-    or an internal `sbf.domains.ScalarDomain` failure — the derive itself is the only handle.
+    (de)serialization — `[3005] memcpy with dynamically sized length`, `[3308] illegal dereference`
+    — the derive itself is the only handle. An internal `sbf.domains.ScalarDomain` failure is usually
+    a method unpacking an SPL token account rather than the state type's encoding, and a swap leaves
+    it in place; that is `redirect_module`'s case.
 
     What lands is two `cfg_attr` lines above the type; derives you do not name stay on an ungated
     `derive`, so the deployed build sees exactly what it saw:
@@ -777,6 +779,10 @@ class SwapDerive(
     so a struct usually drags its enums with it. Record them together: they stand or fall as one,
     and half a cascade does not compile. rustc names them one at a time, so read its error and add
     the next.
+
+    **One value per type stands in for every account of that type.** The author's impls read and
+    write one shared value, so a handler that reaches two accounts of the swapped type sees them
+    alias. Swap a type only where the unit's handlers reach one account of it, and say so in `why`.
 
     Three things you do not do here. You do not write the impls — the author does, in their own
     module, because their harness is where a stand-in belongs. You do not choose what the replacement
