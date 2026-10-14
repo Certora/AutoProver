@@ -17,7 +17,7 @@ one calls a typed tool per munge kind and accumulates
 is scoped to one unit because it is an attribute gated on that unit's cargo feature, and *a free-form
 text edit has no ``cfg_attr``* — two units editing one file through an overlay is a collision with no
 defined answer, where two units' records are two dormant lines. A text overlay would take the shared
-working tree with it (``docs/single-working-tree.md`` §2.3). So the model never names the feature:
+working tree with it (``docs/who-edits-the-program.md`` §14.3). So the model never names the feature:
 the tool does, from the requesting unit's identity.
 
 Three things follow from records rather than text, and each replaces a piece of EVM machinery:
@@ -248,7 +248,7 @@ class NotCompiled:
     The Solana ``EditsNotCompiled``, and the failure it catches is the quietest one this backend
     has: an attribute in a file no enabled feature reaches changes nothing, reports nothing, and
     leaves the report carrying a source-edit record for a change that had no effect
-    (``docs/munge-and-working-copies.md`` §8 gap 2).
+    (``docs/who-edits-the-program.md`` §9.2).
     """
 
     paths: tuple[str, ...]
@@ -280,7 +280,7 @@ async def gate_edits(
 
     Nothing needs undoing afterwards. The tree is derived from state, so the author's next stage
     rewrites every munged file from the pristine copy and a candidate that was never committed
-    simply is not there (``docs/single-working-tree.md`` §4).
+    simply is not there (``docs/who-edits-the-program.md`` §15).
     """
     async with target.build_slot():
         await target.stage(draft, summaries, candidate)

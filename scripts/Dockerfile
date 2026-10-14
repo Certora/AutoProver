@@ -6,8 +6,8 @@
 #
 # This image carries no Rust and no chain toolchain. Each chain-specific front end is a
 # separate image layered on this one — scripts/Dockerfile.solana for `console-solana` /
-# `tui-solana`, scripts/Dockerfile.crucible for `console-crucible` — so an EVM run does not
-# carry gigabytes of a toolchain it never invokes, and the chains do not have to agree on one.
+# `tui-solana` — so an EVM run does not carry gigabytes of a toolchain it never invokes, and
+# the chains do not have to agree on one.
 #
 # AutoProver bundles both the `composer` pipeline and `certora_autosetup` in a
 # single `ai-composer` distribution, so this image installs them directly — no

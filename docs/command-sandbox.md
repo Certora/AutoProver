@@ -3,10 +3,8 @@
 **Status:** implemented. The mechanism lives in this repo — [`composer/sandbox/`](../composer/sandbox/)
 (policy, provider seam, launcher mapping, recipes) plus the
 [`run-confined`](../rust/run-confined) launcher binary — and is validated by the escape suite
-(§10 A). It was built for, and first consumed by, the Crucible backend; **Crucible itself and the
-Solana build step now live outside this repository**, so the run-level gates that exercised the
-legitimate path (§10 B, the LLM e2e) run there, and the per-consumer notes below say which side
-each piece is on. Open items are in §11.
+(§10 A). It is needed by the CVLR backends (Solana and Soroban) and by Crucible. Open items are in
+§11.
 
 **One-line summary.** Every toolchain command a formalization backend runs compiles and/or runs
 LLM-authored *native* code (§2). Unconfined, that runs with the full ambient environment of the
@@ -24,7 +22,8 @@ AutoProver's own secrets, network access, and filesystem from code running *insi
 backend's toolchain steps deliberately run untrusted native code:
 
 - `cargo build-sbf` on the **user-supplied program** compiles it natively — running its
-  `build.rs`, its proc-macros, and (for a future Prover/CVLR backend) LLM-munged source.
+  `build.rs`, its proc-macros, and (for the CVLR backend) the LLM-authored harness module and
+  LLM-munged source. The CVLR backend does this with `cargo check` and `cargo certora-sbf`.
 - `crucible run` compiles the **LLM-authored harness** (its `setup()`, `action_*`, `build.rs`)
   and then runs it as a native LiteSVM-in-process binary (verified native — there is no SVM sandbox
   around it).
@@ -73,8 +72,8 @@ their real needs:
 
 | Command | Reads (grant **ro+x**) | Writes (grant **rw**) | Network |
 |---|---|---|---|
-| `cargo build-sbf <program>` | rust toolchain (`RUSTUP_HOME`), solana platform-tools (the sBPF toolchain), warm cargo registry (`CARGO_HOME/registry`), program crate source | program crate `target/` | none (offline) |
-| `crucible run <prog> <test> …` | the `crucible` binary + its libs, rust toolchain, cargo registry, the **checker's checkout crates** (the path deps the wheel's manifest names), the built `.so` + IDL | the harness crate `target/`, corpus/output dirs | none (offline) |
+| `cargo build-sbf <program>`, or CVLR's `cargo check` / `cargo certora-sbf` | rust toolchain (`RUSTUP_HOME`), solana platform-tools (the sBPF toolchain), warm cargo registry (`CARGO_HOME/registry`), program crate source | program crate `target/` | none (offline) |
+| `crucible run <prog> <test> …` (Crucible) | the `crucible` binary + its libs, rust toolchain, cargo registry, the **checker's checkout crates** (the path deps the wheel's manifest names), the built `.so` + IDL | the harness crate `target/`, corpus/output dirs | none (offline) |
 | `cargo build` (harness, if run directly) | as above | harness `target/` | none (offline) |
 
 Common surface, resolved once at sandbox-config time and expressed as Landlock rules (§6):
@@ -463,13 +462,12 @@ the sandbox is unavailable: refuse to run, loudly, rather than run untrusted nat
      a `rustc`-compiled malicious program run through the real launcher has every vector *denied*
      (secret env, `/proc/<ppid>/environ`, host file outside the workdir, external TCP, and
      `169.254.169.254`), with an unconfined control confirming the leaks would otherwise happen.
-   - **Part B (the legitimate path) — green when it was validated, and now lives with the
-     consumer**: a real `cargo-build-sbf` of a Solana program under the launcher (offline, confined)
+   - **Part B (the legitimate path) — green, and lives with each consumer**: a real `cargo-build-sbf` of a Solana program under the launcher (offline, confined)
      produced the `.so` — this is what caught the relative-policy-path bug, so grants must be
      absolute — and a real checker dry-run under the launcher built the harness *offline* and ran
-     LiteSVM. Those gates moved out with the Crucible backend; nothing in this repo exercises a real
-     toolchain build under the launcher, so a change to the *grants* (§3) can only be re-validated
-     against a consumer.
+     LiteSVM (Crucible's gates). For CVLR, the end-to-end test runs a real confined
+     `cargo certora-sbf` build; it is `expensive` and not in CI, so after a change to the *grants*
+     (§3), run it by hand.
    - **Full LLM vertical — green** at the time, under `COMPOSER_SANDBOX_PROVIDER=launcher`: analysis
      → properties → shared fixture authored → per-unit harness build + fuzz, all confined + offline,
      with every unit delivered with fuzz verdicts. Getting there required the `/tmp` fix below and the

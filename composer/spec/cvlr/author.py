@@ -644,7 +644,7 @@ async def batch_cvlr_generation(
     ``target`` and ``verify`` are the caller's: they carry the shared cargo session, the run's one
     working tree and where this unit's draft is staged. One tree for every unit, because each unit's
     module is behind its own cargo feature and a module a build does not compile cannot break it
-    (``docs/single-working-tree.md``).
+    (``docs/who-edits-the-program.md`` §14).
 
     CVLR itself is not mounted here. The author and the judge both reach it through
     ``cvlr_research`` in ``env.rag_tools`` (``docs/cvlr-api-docs-plan.md`` §5), which is the one

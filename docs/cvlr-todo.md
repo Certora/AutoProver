@@ -827,10 +827,10 @@ makes the end-to-end form the only check that has not been re-run.
 
 **12. Residue from the VFS migration.** Its task half is now **done**: the persistent materializer
 has landed on graphcore master and `pyproject.toml` pins it there, so this is no longer a private
-fork of a shared library. Three open questions remain, all answered only by a real run — listing
-caches over a directory the build is writing, materialization completeness before the prover globs
-the real filesystem, and non-UTF-8 files being outside the model. See
-[the-tree-is-a-vfs.md](./the-tree-is-a-vfs.md) §6.
+fork of a shared library. The listing cache is off over the tree. Two open questions remain, both
+answered only by a real run — materialization completeness before the prover globs the real
+filesystem, and non-UTF-8 files being outside the model. See
+[who-edits-the-program.md](./who-edits-the-program.md) §16.3.
 
 **13. Latency under contention.** One shared tree is predicted to win cold and lose warm. Neither
 half has been timed.
@@ -849,8 +849,8 @@ no Soroban entry.
 
 ## Documentation debt
 
-**17.** [munge-and-working-copies.md](./munge-and-working-copies.md) §4 needs rewriting against the
-wider corpus survey — its counts are one project's where the evidence is nine of eleven.
+**~~17.~~** Done: the working-copy note is retired, and the wider corpus survey is
+[who-edits-the-program.md](./who-edits-the-program.md) §14.7.
 
 **18.** Several shipped changes have no section in the plan: the `composer/layout.py` path
 consolidation, `cvlr-spl-token` entering the reference set, and `preflight.select_package`.

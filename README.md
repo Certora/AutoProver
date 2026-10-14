@@ -2,6 +2,8 @@
 
 Auto-prove is a multi-agent pipeline that automatically generates and verifies CVL specifications for Solidity smart contracts. Given a project root, a main contract, and a design document, it analyzes the system's components, formulates properties, and generates CVL specs — running the Certora Prover in a loop to verify them.
 
+The same pipeline also writes [CVLR](https://docs.certora.com/en/latest/docs/solana/index.html) rules for Solana programs and verifies them with the Certora Solana Prover; see [Solana (CVLR)](#solana-cvlr) below.
+
 ## Quickstart (Docker)
 
 The fastest way from a clean clone to a working run. Everything — Python deps, the JRE, all `solcX.Y` compilers, the RAG knowledge base, and Postgres — is provisioned inside containers; the only host requirement is Docker (with Compose + BuildKit).
@@ -36,8 +38,6 @@ The prover runs in the Certora cloud. Add `--tui` for the interactive UI, `--reb
 The rest of this document covers the **host `uv` flow** for development.
 
 ## Prerequisites
-
-You need everything from the [AIComposer infrastructure setup](AICOMPOSER_INFRA.md):
 
 - Python 3.12+, `uv`, Docker with compose
 - `rustup` — a default `uv sync` builds the `rust/` crates (see below)
@@ -111,6 +111,10 @@ The RAG database must be populated before running auto-prove. This is a two-step
 ```
 
 `gen_docs.sh` clones the [Certora Documentation](https://github.com/Certora/Documentation) repo and builds single-page HTML files via Sphinx. `populate_rag.sh` then chunks and indexes the CVL documentation into `rag_db`.
+
+The sanity analyzer (`sanity_analyzer/`, run by AutoSetup) defaults to a second, extended corpus: CVL plus the Prover docs. Populate it with `./scripts/populate_extended_rag.sh` after `gen_docs.sh`.
+
+The RAG is read-only at runtime and derived entirely from the documentation HTML, so when the docs change, rebuild it. `./scripts/refresh_rag.sh` regenerates the docs, wipes the database and repopulates it (`--all` also rebuilds the extended corpus; `--skip-gen-docs` reuses the HTML already built). Run it when nothing is querying the RAG: search returns nothing while it re-embeds.
 
 ### 3. Populate the CVL Knowledge Base
 
@@ -249,3 +253,52 @@ This should load up a TUI frame that lets you inspect the currently cached value
 ### Debugging Agents
 
 In headless mode, the CVL Generation agents will produce a mnemonic name. You can pass this mnemonic into the `snapshot_viewer.py` to view the conversation history of that agent.
+
+## Solana (CVLR)
+
+`console-solana` and `tui-solana` write CVLR rules for a Solana program and verify them with the Certora Solana Prover in the cloud. They take the same shape of arguments as the EVM entry points:
+
+```bash
+console-solana <cargo_workspace_root> programs/<pkg>/src/lib.rs:<program> [design_doc]
+```
+
+The path picks the crate the harness is written into (`--package` overrides it); the identifier is the program the analysis must name. `--help` lists the rest.
+
+### Docker
+
+The Solana image (`scripts/Dockerfile.solana`) layers the Rust toolchain, `cargo certora-sbf` and the Solana platform-tools onto the base image, so build the base image first. The header of `scripts/docker-compose.solana.yml` has the full recipe; in short:
+
+```bash
+docker compose -f scripts/docker-compose.yml --profile autoprove build
+COMPOSE="docker compose -f scripts/docker-compose.yml -f scripts/docker-compose.sandbox.yml -f scripts/docker-compose.solana.yml --profile solana --profile sandbox"
+$COMPOSE build
+$COMPOSE run --rm autoprove-solana setup-db     # once; populates the CVLR corpora too
+export HOST_UID=$(id -u) HOST_GID=$(id -g) HOST_WORK_DIR=/path/to/projects
+$COMPOSE run --rm autoprove-solana console-solana /work/<proj> programs/<pkg>/src/lib.rs:<program>
+```
+
+All three compose files are needed: every cargo build of the target project runs inside the `run-confined` sandbox (Landlock + seccomp; see [docs/command-sandbox.md](docs/command-sandbox.md)), and the sandbox overlay is what provides the launcher.
+
+### Host
+
+On top of the EVM prerequisites:
+
+- `cargo install --locked cargo-certora-sbf`, then fetch the platform-tools release the pipeline builds with (`PLATFORM_TOOLS_VERSION` in `composer/spec/cvlr/conf.py`): `cargo certora-sbf --no-build --tools-version <version>`. They land under `~/.cache/solana`; set `CERTORA_PLATFORM_TOOLS_ROOT` if you put them elsewhere.
+- The CVLR corpora: `./scripts/populate_cvlr_rag.sh` after `gen_docs.sh`. Generating the API corpus needs a nightly toolchain (`rustup toolchain install nightly`).
+- The sandbox launcher: `uv sync` builds `rust/run-confined` into `.venv/bin`. The sandbox fails closed. For trusted inputs during development, `COMPOSER_SANDBOX_PROVIDER=none` runs builds unconfined, and the run says so on stderr.
+
+### Output
+
+The harness is a Rust module inside the verified crate, under `<pkg>/src/certora/` (rules in `specs/`), wired into the crate's `Cargo.toml` and `lib.rs`. Everything else — the report, the property→rule mapping, per-rule reports — goes under `certora/cvlr/` in the project root. Edits the pipeline made to the program itself (munges) are recorded in the report.
+
+## AI Composer (code generation)
+
+AI Composer generates a Solidity implementation that satisfies a CVL spec. It shares this repo's setup (databases, RAG, Prover credentials); the Prover runs in the cloud unless `--local-prover` is given.
+
+```bash
+console-codegen spec.spec Interface.sol system_doc.txt   # or tui-codegen
+```
+
+`spec.spec` is the CVL the implementation must satisfy, `Interface.sol` holds the `interface` it must implement, and `system_doc.txt` describes the system. The run is semi-automatic: it can ask for help, propose spec changes, or ask to relax a requirement, so watch it.
+
+`--thread-id` (logged at start) and `--checkpoint-id` (printed as the run goes) resume from any checkpoint, not only the latest. `--debug-fs DIR` with both dumps the generated files at that checkpoint and exits. `--help` lists the rest.

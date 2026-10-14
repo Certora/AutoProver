@@ -354,7 +354,7 @@ of the contrast:
 | | autoprove (`ProverBackend`) | foundry (`FoundryBackend`) |
 |---|---|---|
 | `FormT` | `GeneratedCVL` | `GeneratedFoundryTest` |
-| `preflight` | none | none (a building backend — Crucible — puts its build here, overlapping analysis) |
+| `preflight` | none | none (a building backend puts its build here, overlapping analysis: CVLR scaffolds and compile-gates the crate) |
 | `prepare_system` | harness lift + build prover tool | identity (`main_instance` only) |
 | `prepare_formalization` | AutoSetup, then custom summaries | trivial (formalizer already built) |
 | `formalize` | author CVL, run prover, revise on CEX | author `.t.sol`, run `forge test` |

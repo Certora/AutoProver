@@ -3,9 +3,10 @@
 ## Problem
 
 Multi-agent pipelines run N concurrent LLM agents, each needing its
-own event stream, tool display, HITL channel, and detail panel.  The
-NatSpec pipeline is the first consumer; future pipelines will reuse
-the same infrastructure with different domain behavior.
+own event stream, tool display, HITL channel, and detail panel.  Every
+multi-agent TUI is built on it: auto-prove (`AutoProveApp`), Foundry
+(`FoundryApp`), NatSpec (`NatspecPipelineApp`), and the Rust/Solana
+host (`GenericRustApp`, which `tui-solana` uses).
 `MultiJobApp` factors out the generic parts so that subclasses only
 provide phase definitions, tool configs, HITL schemas, and
 completion handling.
@@ -73,7 +74,8 @@ Two subclass hooks:
 The contract between the pipeline orchestrator and the app:
 
 ```python
-type HandlerFactory[P: HasName] = Callable[[TaskInfo[P]], Awaitable[TaskHandle[Any, Any]]]
+class HandlerFactory[P: HasName, H](Protocol):
+    def __call__(self, /, info: TaskInfo[P]) -> Awaitable[TaskHandle[H]]: ...
 ```
 
 `MultiJobApp.make_handler` is the concrete implementation. It
@@ -106,16 +108,14 @@ Three views in a `ContentSwitcher`:
 
 The `EventHandler` is created separately from the `IOHandler`
 because structural events (messages, start/end) and domain events
-(prover output, spec updates) have different consumers. Three
-patterns are anticipated:
+(prover output, spec updates) have different consumers. Two patterns
+are in use:
 
-- **Separate handler** (NatSpec): `PipelineEventHandler` holds a
-  reference to the task handler, renders content links for spec/stub
-  updates.
-- **Self-handling**: a future consumer could have the task handler
-  double as the event handler by implementing `handle_event`
-  directly — useful when custom events need direct access to the
-  handler's panel (e.g. streaming prover output).
+- **Self-handling**: the task handler doubles as the event handler.
+  It derives `NullEventHandler`, overrides `handle_event`, and
+  `create_event_handler` returns the handler itself. This gives custom
+  events direct access to the handler's panel (e.g. streaming prover
+  output). Every app above does this.
 - **Null** (default): `NullEventHandler` ignores all events. Used
   when a pipeline phase has no custom events. This is the default
   returned by `create_event_handler`.
@@ -135,10 +135,10 @@ A subclass provides:
 
 - `NatspecTaskHandler` detects `curr_spec` in state, renders content
   links. Formats HITL from `HumanQuestionSchema`.
-- `PipelineEventHandler` renders master spec and stub update events
-  as clickable content links.
-- On completion: previews results in VS Code (accept/reject) or
-  writes to disk.
+  Its `handle_event` renders master spec and stub update events as
+  clickable content links.
+- On completion: writes every contract's interface, stub and specs
+  under `natspec_output/` and lists them in the summary view.
 
 ## Event Flow
 

@@ -1,16 +1,19 @@
-# The state behind the bytes
+# The state behind the bytes: the derive swap
 
-> A seventh munge kind, proposed. The six in
-> [who-edits-the-program.md](who-edits-the-program.md) §8.4 annotate or split *functions*; this one
-> changes how a *type* is serialized, which is the only thing that reaches a class of Prover failure
-> the CVLR backend has now hit on every run against SPL stake-pool.
+> The munge kind for code no function names. The other kinds in
+> [who-edits-the-program.md](who-edits-the-program.md) annotate, replace, split or redirect
+> *functions* and modules; this one changes how a *type* is serialized, which is the only thing that
+> reaches a class of Prover failure the CVLR backend hit on every run against SPL stake-pool.
 >
-> **Status: design, not built — but the technique is now measured.** §10 has the probe: the same
-> rule fails with the shipped derives and **verifies, non-vacuously, with them swapped**. That is
-> the first rule this backend has verified about stake-pool at all.
+> **Built** (2026-09-08): `DeriveSwap` and `SwappedDerive` in
+> [munge.py](../composer/spec/cvlr/munge.py), the editor's `swap_derive` tool
+> ([editor.py](../composer/spec/cvlr/editor.py)), a reviewer check, guidance in the author's
+> prompt, and the judge's gate (§11.2). §5 and §7 describe what was built; §1–§4 and §8–§11 are the
+> evidence and reasoning behind it. §10's probe is the measurement: the same rule fails with the
+> shipped derives and **verifies, non-vacuously, with them swapped**.
 >
-> §6 is still the part to argue with — the kind is unsound in ways the existing six are not, and
-> the checks in §7 are what would have to carry that.
+> §6 is the part to argue with: the kind is unsound in ways the others are not, and §7 and §11.2 are
+> what carry that.
 
 ---
 
@@ -117,7 +120,7 @@ writing `impl BorshDeserialize for StakePool` itself — exactly as it already w
 stand-ins. The target crate has no `forbid(unsafe_code)`, only `deny(missing_docs)`, which the
 scaffold's files already satisfy.
 
-So the seventh kind is **not** "replace serialization". It is one narrow thing:
+So the kind is **not** "replace serialization". It is one narrow thing:
 
 > **`swap_derive`** — under this unit's feature, remove named derives from a type and optionally add
 > others, so the harness can supply the impls instead.
@@ -125,20 +128,29 @@ So the seventh kind is **not** "replace serialization". It is one narrow thing:
 ## 5. The record
 
 Shaped after `FunctionExtraction`, which is the precedent for a kind that rewrites rather than
-annotates:
+annotates. One record covers every type the swap needs **in one file**:
 
 ```python
-@dataclasses.dataclass(frozen=True)
-class DeriveSwap:
-    path: str                      # the file the type is defined in
+@dataclass(frozen=True)
+class SwappedDerive:
     type_name: str                 # "StakePool"
+    original: str                  # the derive line through the declaration line, verbatim
     removed: tuple[str, ...]       # ("BorshDeserialize", "BorshSerialize")
-    added: tuple[str, ...]         # ("Copy",)
-    original: str                  # the pristine derive attributes, verbatim
+    added: tuple[str, ...] = ()    # ("Copy",)
+
+@dataclass(frozen=True)
+class DeriveSwap:
+    path: str                      # the file the types are defined in
+    swaps: tuple[SwappedDerive, ...]
+    why_sound: str
+    feature: str                   # the recording unit's cargo feature
 ```
 
 `original` is content-addressed for the same reason the extraction's is: a replay onto source that
-has moved must report `SourceDrifted` rather than rewrite whatever is there now.
+has moved must report `SourceDrifted` rather than rewrite whatever is there now. It captures the
+declaration line as well as the derive, because a bare derive list recurs many times in a state
+module and the capture has to be unique. `edit_id` digests the rendered result, because the compiler
+sees a derive list this record computed rather than a name it spelled out.
 
 Rendered as the gated pair — the derives that are *not* being swapped stay on an ungated `derive`,
 so the deployed build is byte-identical:
@@ -160,15 +172,16 @@ second `cfg_attr(feature = "certora", derive(Copy))` on that enum. `Fee` and `Fu
 derived `Copy` and needed nothing, so the closure is not the whole field graph — it is the non-`Copy`
 subset of it, which rustc computes for free and reports one type at a time.
 
-Two ways to carry that, and it is an open design question rather than a settled one: record a
-*set* of `(type, removed, added)` triples as one munge, so the cascade is one reviewable unit; or
-have the editor compute the closure and record each type separately, which reads better in a diff
-and loses the fact that they stand or fall together. The first is probably right, because reverting
-half a cascade leaves a program that does not build.
+**Settled: the cascade is one record per file.** The types stand or fall together, and reverting
+half a cascade leaves a program that does not build, so they are one reviewable unit, and the
+editor refuses a second swap in a file this unit already swaps in. A cascade that crosses files is
+one record per file, because replay applies munges per file. A half-applied cross-file cascade is
+refused by the compiler, loudly and at once, so that is a sharp edge rather than a hazard. The
+editor learns the closure from rustc, which names the next non-`Copy` field type one at a time.
 
 ## 6. What it erases — the part to argue with
 
-The six existing kinds are all defensible in one line. This one is not, and the charter has to say so
+The function-level kinds are all defensible in one line. This one is not, and the charter has to say so
 rather than leaving the judge to notice.
 
 1. **Encoding properties become unstatable, and may pass vacuously.** "A truncated account is
@@ -189,25 +202,31 @@ rather than leaving the judge to notice.
 
 ## 7. Refusals
 
-Modelled on the extraction's five, which each catch something the build would accept or report too
-late:
+What `swap_derive` refuses at record time, each catching something the build would accept or
+report too late:
 
-1. **A derive that is not there.** `removed` names something absent → the munge is a silent no-op.
-2. **A type not defined in this project.** A foreign type cannot have its derives edited, and the
-   author's impl would break the orphan rule.
-3. **More than one account of the swapped type reachable in the unit's handlers.** §6.2. Not
-   statically decidable, and the corpus says not to try: §11's answer is to model a bounded number
-   of instances and make exceeding the bound a *reported violation* rather than a refusal. So this
-   is not a record-time refusal at all — it is a shape the author's stand-ins must have, and the
-   reviewer's job is to check that the fall-through asserts rather than aliasing silently.
-4. **A second swap of the same type for one unit** — last-write-wins on a type is not a thing the
-   dep-info check can see.
-5. **`added` containing a trait with a blanket impl conflict** — the compile gate catches this, but
-   naming it at record time is cheaper than a build round trip.
+1. **A derive that is not there** (`DeriveNotFound`). `removed` names something absent, which would
+   make the munge a silent no-op. The refusal lists what the type does derive.
+2. **A type not defined in this project** (`NotInProject`, `NotProjectSource`). A dependency's type
+   cannot have its derives edited, and the author's impl would break the orphan rule.
+3. **Captured text with no single `#[derive(..)]` list** (`DeriveAttributeUnreadable`): two derive
+   attributes on the item, or none. The swap has to know exactly which derives survive.
+4. **Captured text no longer in the file** (`SourceDrifted`), at record time and at replay.
+5. **A second swap in a file this unit already swaps in.** The cascade has to be one record (§5).
+6. **A swap that removes nothing and adds nothing**, and an empty `why`.
 
-And one obligation rather than a refusal: the author must supply the impls in the same commit as the
-swap. A swap without them does not compile, which the gate catches immediately — so this is a
-sequencing note, not a hazard.
+Not refused at record time:
+
+- **More than one account of the swapped type reachable in the unit's handlers** (§6.2). Not
+  statically decidable, and the corpus says not to try: §11's answer is to model a bounded number
+  of instances and make exceeding the bound a *reported violation*. So it is a shape the author's
+  stand-ins must have, which the editor tells the author when the swap lands.
+- **`added` containing a trait with a conflicting blanket impl.** The compile gate catches it.
+
+And one obligation rather than a refusal: the author must supply the impls. A swap without them does
+not compile, which the gate catches immediately. The reviewer checks that every derive that left
+the ungated `derive` reappears under `not(feature)`, so a build without the feature keeps every
+impl, and that the `Copy` cascade is complete.
 
 ## 8. What I got wrong first, recorded because the next person will
 
@@ -304,7 +323,7 @@ or method**, which `mock_fn` already reaches. restaking and manifest do exactly 
 So the generalization argument runs the other way. `swap_derive` is not a special case of a broader
 kind waiting to be found; it is the residue left over when the code has **no function to name**
 because a `derive` generated it. That is a narrower justification than §5 claimed, and a better one:
-it says precisely when the seventh kind is the only option, and — for Anchor targets, which is most
+it says precisely when this kind is the only option, and — for Anchor targets, which is most
 new Solana development — the answer is that it never is.
 
 Worth stating as a limit on this survey: I could not determine how the reference project's `LoadMock` takes
@@ -312,7 +331,7 @@ precedence over `BranchAccounts`'s *inherent* `load`, which Rust resolves first 
 `certora` gating in `branch.rs`. The mechanism is either something I missed or the specs call it
 explicitly; either way the row above describes what it replaces, not how it wins.
 
-### 9.4 Who writes the impls on an unfamiliar type? — *answered: nobody should*
+### 9.4 Who writes the impls on an unfamiliar type? — *answered: nobody should; not built*
 
 The impls are boilerplate. Four `BorshDeserialize` methods all returning `*get_global()`, one
 `BorshSerialize` method assigning `*self` to it — the only thing that varies is the type name. §10's
@@ -324,7 +343,8 @@ it ships), so the answer is to generate it on our side: the scaffold already wri
 `cvlr_global_state!(StakePool)` would reduce the author's share of this munge to one line plus the
 init call.
 
-That removes the objection this question was raised for. It does **not** remove §6 — a one-line macro
+Not built: the author still writes the impls by hand. That would remove the objection this
+question was raised for. It does **not** remove §6 — a one-line macro
 makes the technique *easy to apply*, which is the opposite of what an unsound-by-default technique
 wants, and is exactly why the judge gate in §11.2 has to exist before the macro does.
 
@@ -488,5 +508,6 @@ the prover job is spent. That is the price of the reviewer's blindness, and it i
 catching a meaningless green verdict late beats blocking a faithful edit early on a judgement the
 reviewer cannot make.
 
-Until that line exists, this kind is safe to use by hand and unsafe to hand to an agent that applies
-it wherever it sees `[3005]` — which is exactly what the guidance in `56b2b78e` would have led to.
+**That line exists**, in `cvlr_property_judge_system_prompt.j2`: in a unit carrying a
+`swap_derive`, an encoding-shaped property cannot have a green verdict, and the judge says so and
+names the rule.

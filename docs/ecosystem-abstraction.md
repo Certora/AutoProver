@@ -8,8 +8,9 @@ and how it is split into units. Everything downstream of properties (how a prope
 verified artifact) belongs to the **backend**, a separate axis.
 
 Today three ecosystems are implemented: `EVM` (Solidity, wired to the CVL/prover and Foundry
-backends), `SOLANA` (Rust front half, gated by a null backend), and `SOROBAN` (Rust front half,
-with no backend yet).
+backends), `SOLANA` (Rust front half, wired to the CVLR backend, which verifies with the Certora
+Solana Prover), and `SOROBAN` (Rust front half, with no backend yet). Each Rust ecosystem also has
+a null backend that records extracted properties without verifying them, as a test double.
 
 ---
 
@@ -161,13 +162,12 @@ SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaComponentInsta
 - **Per-component units.** `units` returns one `SolanaComponentInstance` per `ProgramComponent`
   of the main program — the same shape as `_evm_units`. A component is a *capability* (a named
   cluster of instructions plus the account state they maintain), produced by system analysis. It
-  is an authoring and attribution scope, not an execution scope: Crucible still fuzzes the whole
-  program in one action sequence, and a symbolic backend would not execute sequences at all.
-  Note `units` is on the **ecosystem** axis, so *every* Solana backend inherits this split —
-  Crucible today, a Certora Solana Prover (CVLR) backend later — which is why it is chosen on
-  backend-neutral grounds rather than to suit a fuzzer's cost model. The full design note —
-  the per-backend analysis and the measurements behind this choice — is **not yet in the tree**;
-  it lands with the verification backend later in this stack.
+  is an authoring and attribution scope, not an execution scope: the CVLR backend writes one
+  harness module per unit but builds and verifies the whole program, and a fuzzer would still
+  run the whole program in one action sequence. Note `units` is on the **ecosystem** axis, so
+  *every* Solana backend inherits this split, which is why it is chosen on backend-neutral
+  grounds rather than to suit one backend's cost model. How the CVLR backend maps units onto one
+  crate (a cargo feature per unit) is in [cvlr-backend-plan.md](./cvlr-backend-plan.md).
 - **Validation** — `_solana_validate` mirrors `validate_solidity_connectivity`'s structure over
   `SolanaApplication`: unique program identifiers and names, unique instruction slugs within a
   program, unique component names/slugs, component interactions resolving to a declared
@@ -320,6 +320,7 @@ async def run_pipeline[..., U, Main, App](
 | EVM system model + prompts | [composer/spec/system_model.py](../composer/spec/system_model.py) · `composer/templates/application_analysis_*.j2` · `property_analysis_*.j2` |
 | Solana system model | [composer/spec/solana/model.py](../composer/spec/solana/model.py) |
 | Solana prompts + shared Rust fragment | `composer/templates/solana/*.j2` · `composer/templates/rust/vulnerability_patterns_fragment.j2` |
+| Solana verification backend (CVLR) | [composer/spec/cvlr/](../composer/spec/cvlr/) |
 | Code-explorer prompts (per ecosystem) | `composer/templates/code_explorer/` · `Ecosystem.code_explorer_prompt` |
 | Soroban system model | [composer/spec/soroban/model.py](../composer/spec/soroban/model.py) |
 | Soroban prompts (+ platform primer) | `composer/templates/soroban/*.j2` · [its README](../composer/templates/soroban/README.md) |

@@ -8,6 +8,17 @@ no CVLR dependency lands first.
 It is a decomposition, not a schedule. Nothing here says who does the work or when, and the sizes
 are the argument for the split rather than an estimate of effort.
 
+**The source branch is `feature/solana`, from 2026-10-14.** It was cut from
+`eric/solanaProverRebase`, the line rebased onto master after #258, and takes master by merge from
+then on. `eric/solanaProver` carries parallel work and is merged into `feature/solana` later, as
+its own task. New Solana work lands on `feature/solana` before master. So every
+`git checkout <branch> -- <paths>` below names `feature/solana`, and the counts in the next two
+paragraphs describe `eric/solanaProver` and the rebased line as they were then.
+
+New work on `feature/solana` rides the slice that owns the files it changes, under rule 5: the
+first unlanded PR whose capability it extends. Work on files a merged PR owns is a follow-up PR to
+master. Work that needs a new file names its slice in the appendix in the same commit.
+
 **Re-cut 2026-09-18.** The first draft split the branch along its module DAG — leaves first, wiring
 last. [#243](https://github.com/Certora/AutoProver/pull/243) is what that produces: `composer/cargo/`,
 1,242 lines, eight new files, no caller anywhere in the diff. The review feedback was that it cannot
@@ -43,7 +54,7 @@ and it changed four of its slices:
   [Dropped: the practice manifest](#dropped-the-practice-manifest).
 * **The branch re-registered the corpora by tag.** It did this for both corpora, which goes against
   [Dropped: naming the CVLR corpus by tag](#dropped-naming-the-cvlr-corpus-by-tag). This plan keeps
-  the drop. That leaves code to undo in C7b and P7 before they are cut; see
+  the drop. The branch has since been reworked to match (`008a7397`); see
   [decision 8](#decisions-to-make-before-starting).
 
 ---
@@ -59,7 +70,7 @@ below touches shared code that somebody else may also be fixing, so the first st
 
 **2. Assemble by file-set, not by commit range.** The branch's history interleaves shared-code edits
 with CVLR ones — a single commit routinely does both, because that is how the work was done. So a
-PR is built by branching from `origin/master`, `git checkout eric/solanaProver -- <paths>`, and
+PR is built by branching from `origin/master`, `git checkout feature/solana -- <paths>`, and
 committing once with a message written for a reader who has no Solana context. Cherry-picking the
 branch's commits does not produce these PRs and will fight you.
 
@@ -72,8 +83,18 @@ wave 1 look the way they do.
 **4. Shared-code work goes to master directly.** The rough-draft gate fix
 ([#233](https://github.com/Certora/AutoProver/pull/233)) was written on this branch and landed on
 master as its own PR, and the branch then dropped it in a rebase at no cost. That is the pattern.
-Every shared fix that instead waits on this branch is a rebase conflict being saved up. The
+Every shared fix that instead waits on this branch is a merge conflict being saved up. The
 exception rule 5 carves out is a *refactor* with no second user, which is not a fix.
+
+**`feature/solana` takes master by merge, never by rebase.** A rebase rewrites the commits
+`feature/solana` shares with `eric/solanaProver`, and the later merge of that branch would then
+replay every one of them as a duplicate. After a PR lands, merge `origin/master` into
+`feature/solana`. Where the PR changed in review, the merge conflicts on its files. Resolve each
+conflict to master's reviewed version plus whatever the branch has added to that file since the
+cut.
+
+The history below is from the rebase era, before `feature/solana`. Its one lesson still applies: a
+file's conflict resolution must start from history that has merged.
 
 The rebase is free only when the PR lands as it was cut. #240 and #248 did not: #248 merged after
 61 review commits. Replaying the branch's own history of those files onto the reviewed versions
@@ -620,8 +641,8 @@ confined build can also write grants nothing.
 **Documentation moves with its subject.** The old **D** was 8,153 lines in one PR — the single worst
 offender against the criterion this plan now applies, since a document describing code is exactly a
 thing that cannot be evaluated apart from it. `docs/cvlr-backend-plan.md` splits along its own
-section boundaries and each part rides the slice it describes; `the-tree-is-a-vfs.md` and
-`munge-and-working-copies.md` stay in D, because P3a1's modules carry their own explanation; `who-edits-the-program.md` with P5;
+section boundaries and each part rides the slice it describes; `who-edits-the-program.md`, which
+now also holds the working-tree design (§14–§16), goes with P5;
 `application-abstraction.md`, `ecosystem-abstraction.md` and `formalization-abstraction.md` with
 P7. What is left in **D** is the material that describes the work rather than the code.
 
@@ -988,7 +1009,7 @@ master's, and `KNOWLEDGE_BASES` holds only `cvlr_api_kb`, for `rag_import`.
 
 ## Appendix: the paths each PR takes
 
-What to hand `git checkout eric/solanaProver -- …` after branching from `origin/master`. Every file
+What to hand `git checkout feature/solana -- …` after branching from `origin/master`. Every file
 the branch changes appears below, except those carrying only the dropped build-environment field.
 A path under two PRs, and the shared pipeline files marked *(hunks)*, are the overlaps noted in
 wave 1 — take the feature's hunks there, not the whole file. Rows for merged PRs are kept as the
@@ -1015,7 +1036,7 @@ already local to the functions that need them.
 | P3b | `composer/spec/cvlr/{state,harness,verify,rules}.py` `tests/test_cvlr_rules.py` `tests/test_cvlr_build_permit.py` `composer/prover/core.py` *(hunk: `UnanalyzedCexHandler`)* `composer/spec/cvlr/tuning.py` *(split: `SummaryDirective`, `TuningFiles`, appended to what P1 landed)* `composer/spec/cvlr/conf.py` *(hunks: `OptimisticLoop`, `CollectUnsatCore`)* `composer/spec/source/report_prover.py` *(hunks: `job_input`, `fetch_unsat_cores`)* `composer/cargo/symbols.py` `tests/test_cvlr_symbols.py` `tests/test_cvlr_tuning.py` `tests/test_cvlr_tree.py` *(split: the harness cases)* `tests/test_cvlr_plumbing.py` *(split: `_CaptureCallbacks`, `_RunAccounting`)* `tests/test_cvlr_anchor_reach.py` `tests/data/anchor_reach_probe.rs` |
 | P4 | `composer/spec/cvlr/{anchor_surface,example,guidance}.py` `tests/test_cvlr_anchor_surface.py` `tests/test_cvlr_worked_example.py` |
 | C7b | `composer/scripts/cvlr_api_docs.py` `composer/cargo/doctest.py` `composer/tools/cvlr_api_rag.py` `composer/tools/cvlr_rag.py` *(hunks: the docstrings)* `composer/scripts/init-db.sql` *(hunks: `cvlr_api_rag`)* `composer/rag/db.py` *(hunks: `CVLR_API_DEFAULT_CONNECTION`, the `cvlr_api_kb` entry and its comment — not `cvlr_kb`'s; decision 8)* `scripts/populate_cvlr_rag.sh` `scripts/gen_docs.sh` `.gitignore` `docs/rag-import-format.md` *(hunks, after the fix above)* `tests/test_cvlr_api_docs.py` `tests/data/cvlr_rustdoc/` `tests/test_cvlr_research.py` *(split: the tool cases, through `test_the_surface_heading_is_shared_by_the_producer_and_the_tool`)* `tests/test_cargo_doctest.py` `tests/test_cvlr_recipe_examples.py` |
-| K1 | `composer/kb/kb_context.py` `composer/kb/knowledge_base.py` `composer/kb/resources/cvlr_baseline_facts.md` `composer/templates/kb_index.j2` `composer/templates/cvl_kb_index.j2` `tests/test_kb_bundle.py` `tests/test_cvlr_bundle.py` `composer/kb/resources/cvlr_recipes_index.yaml` `composer/kb/resources/recipes/cvlr-*.md` |
+| K1 | `composer/kb/kb_context.py` `composer/kb/knowledge_base.py` `composer/kb/resources/cvlr_baseline_facts.md` `composer/templates/kb_index.j2` `composer/templates/cvl_kb_index.j2` *(deleted: `git rm` it; `kb_index.j2` replaces it)* `tests/test_kb_bundle.py` `tests/test_cvlr_bundle.py` `composer/kb/resources/cvlr_recipes_index.yaml` `composer/kb/resources/recipes/cvlr-*.md` |
 | P5 | `composer/spec/cvlr/editor.py` `composer/cargo/depinfo.py` `composer/templates/cvlr_munge_editor_system.j2` `composer/templates/cvlr_munge_review_system.j2` `tests/test_cvlr_editor.py` `tests/test_cvlr_derive_swap.py` *(split: the `editor` case)* |
 | P6 | `composer/spec/cvlr/author.py` `composer/spec/cvlr_research.py` `composer/templates/cvlr_{feedback_prompt,property_generation_prompt,property_generation_system_prompt,property_judge_system_prompt,research,research_system_prompt}.j2` `composer/templates/cvlr_rag_tools.j2` *(new work: delete)* `composer/ui/tool_display.py` *(hunks: `cvlr_research` and the `cvlr_api_*` / manual entries)* `composer/spec/source/source_env.py` `template_manifest.json` `tests/test_cvlr_judge_input.py` `tests/test_cvlr_knowledge.py` `tests/test_cvlr_research.py` *(split: the corpora, researcher and prompt cases)* `tests/test_cvlr_rag.py` *(new work: drop the template case)* `tests/data/cvlr_judge/` |
 | P7 | `composer/spec/source/report/{schema,collect,build}.py` *(hunks: `Abandoned`, `reason`, 3.2)* `composer/pipeline/core.py` *(hunks: `_abandonment`)* `tests/test_autoprove_report.py` *(hunks: the give-up cases)* `composer/spec/cvlr/pipeline.py` `composer/spec/cvlr/entry.py` *(the whole file, now including the parser P1 did not take)* the `cvlr-preflight` console script *(new work, still to write)* `composer/spec/cvlr/reference.py` *(hunks: `ProgramModel`, `withholding`)* `tests/test_cvlr_reference.py` *(hunks)* `composer/spec/source/report_prover.py` *(hunk: `make_run_link_fetcher`)* `composer/cli/console_solana.py` `composer/cli/tui_solana.py` `composer/spec/context.py` `composer/spec/services.py` `composer/ui/tool_display.py` *(the remainder)* `composer/rustapp/toolchain.py` `tests/test_cvlr_entry.py` `tests/test_cvlr_findings.py` `tests/test_cvlr_author.py` `tests/test_cvlr_munge.py` *(split: the three `CvlrFormalizer` cases)* `tests/test_cvlr_judge_round_cost.py` `tests/test_cvlr_plumbing.py` *(the remainder)* `tests/test_autoprove_integration.py` `.github/workflows/integration-tests.yml` |

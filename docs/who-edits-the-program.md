@@ -4,16 +4,16 @@
 > munge agent — including the property-relative kinds the author applies today — and let the author
 > write only its own unit's spec.
 >
-> Companion to [munge-and-working-copies.md](munge-and-working-copies.md) §5, which argued this could
-> not work, and to [single-working-tree.md](single-working-tree.md), which changed one of the three
-> premises that argument rested on.
+> An earlier note argued this could not work; §2 quotes its three reasons and answers them. The
+> shared working tree (§14–§16) changed one of the premises that argument rested on, and is
+> documented here too.
 >
 > **Built, as a Solana-only editor** ([editor.py](../composer/spec/cvlr/editor.py)). §4's three moves
 > all landed; §8 is the design it was built to, and §9 records where the build differed and what was
 > deliberately left out. §9.4's first bullet — extraction, the gated pair — has since been built
 > too; §10 is what that took.
 >
-> **Coming from the EVM backend and new to Solana?** Read the appendix first — three differences
+> **Coming from the EVM backend and new to Solana?** Read the appendix (§17) first — three differences
 > account for everything below, and the first one causes the other two.
 
 ---
@@ -25,14 +25,13 @@ its own unit's harness module and its own tuning file, and nothing else. `munge_
 author's tool belt.
 
 The claim that makes it askable is that a munge is now **scoped to one unit** — the attribute is
-gated on that unit's cargo feature, so it is dormant in every sibling's build
-([single-working-tree.md](single-working-tree.md) §2.3). Cross-unit soundness stopped being a
+gated on that unit's cargo feature, so it is dormant in every sibling's build (§14.3). Cross-unit soundness stopped being a
 judgement call.
 
 ## 2. What changed underneath the old objection
 
-[munge-and-working-copies.md](munge-and-working-copies.md) §5 gave three reasons the EVM topology
-could not transfer. They have not aged equally.
+The earlier note gave three reasons the EVM topology (a dedicated editor sub-agent, reviewed by a
+second agent) could not transfer to CVLR. They have not aged equally.
 
 ### 2.1 "The soundness argument would be written by the wrong party" — dissolved
 
@@ -88,8 +87,8 @@ A judge asked to check this would be checking a property of the build system usi
 leave it where it is and spend the judge's attention on §2.1.
 
 **One invariant is not enforced and is the real exposure.** A munge inserted into a file the
-`certora` feature gates out changes nothing and reports nothing — [munge-and-working-copies.md](munge-and-working-copies.md)
-§8 gap 2, still open. Under this proposal it gets worse, not better: the entity that would notice
+`certora` feature gates out changes nothing and reports nothing, and nothing checked that a munge
+reached the build (since closed, §9.2). Under this proposal it gets worse, not better: the entity that would notice
 (the author, from an unchanged prover result) is now two hops from the edit. A munge that reached the
 build has to become a checked fact before the agent is worth having.
 
@@ -159,21 +158,20 @@ They have very different costs and only the third needs an agent.
 
 **A — make the boundary structural.** Remove `munge_function` from the author's belt; give the
 program-source write to one place. The boundary already exists in code as
-`SharedTree.resolve` plus the `certora/` subtree; this turns a check into an ownership rule. Cheap,
+`project_file` and `ProjectSource` (`composer/spec/cvlr/tree.py`) plus the `certora/` subtree; this
+turns a check into an ownership rule. Cheap,
 and it is most of what "the only entity entrusted with modifying the user's code" asks for.
 
 Note the rule needs stating precisely, because several things already write into the checkout and
 should go on writing: the preflight scaffold, `declare_modules`, `declare_unit_features`, and
 `write_artifact`. The line is between **the program under verification** and **the verification
-scaffolding around it** — which is exactly the line `is_project_source` and the `certora/` subtree
+scaffolding around it** — which is exactly the line `ProjectSource` and the `certora/` subtree
 already draw.
 
 **B — give the judge the diff instead of the description.** `HarnessAssumptions.briefing()` hands the
 judge `f"{m.function} ({m.path}): {m.kind.describe()}"` and the author's `why`. `munge_diff` already
-computes a real unified diff from state with no working tree
-([single-working-tree.md](single-working-tree.md) §4). Passing it closes the half of
-[munge-and-working-copies.md](munge-and-working-copies.md) §8 gap 1 that is still open — *"EVM's
-reviewer receives a diff and its approval is void the moment anything changes, whereas this judge
+computes a real unified diff from state with no working tree (§15). Passing it closes the open half
+of the gap "the judge cannot see what the author changed" — *"EVM's reviewer receives a diff and its approval is void the moment anything changes, whereas this judge
 receives a description"* — and it is a few lines. **This is the whole of "the judge could ensure
 this", and it does not need A or C.**
 
@@ -217,11 +215,11 @@ sentence that carried the error is *"a sub-agent could report faithfully what it
 not argue the change was acceptable"* — true, and the wrong entity was being asked to argue.
 
 **Do A and B now; they stand on their own and are small.** A gives one owner for the program source.
-B gives the judge the artifact it should have had since §8 gap 1 was written.
+B gives the judge the artifact it should have had from the start.
 
 ~~**Do not do C yet, and collect one number first: munges per unit per run.**~~ **Done, and the
-reason to reorder was §8.5's**: the editor's submit gate closes
-[munge-and-working-copies.md](munge-and-working-copies.md) §8 gap 2, which is a correctness hole
+reason to reorder was §8.5's**: the editor's submit gate closes the gap "nothing checks that a munge reached the build", which is a
+correctness hole
 rather than an ergonomic one, and it comes with the topology rather than before it. The number is
 still worth collecting — it decides whether the round trip pays for itself — but it is no longer what
 the decision waits on.
@@ -285,11 +283,10 @@ Solana an editor and they differ here.
 **Option 1 — hand Solana a VFS.** Reuses the machinery almost verbatim. It also forces the per-unit
 workdir back, and the reason is not the VFS: it is that **a free-form text edit has no `cfg_attr`.**
 A munge is scoped to one unit because it is an attribute gated on that unit's cargo feature, which is
-what makes two units' munges of one function two dormant lines rather than a conflict
-([single-working-tree.md](single-working-tree.md) §2.3). An overlay entry is a whole file's text and
+what makes two units' munges of one function two dormant lines rather than a conflict (§14.3). An overlay entry is a whole file's text and
 `merge_vfs` is last-writer-wins, so two units editing one file is a collision with no defined answer.
 Recovering isolation means one overlay per unit and one materialization per unit — which is the
-arrangement [single-working-tree.md](single-working-tree.md) exists to have removed. Rejected.
+arrangement the shared tree (§14) exists to have removed. Rejected.
 
 **Option 2 — a typed write surface over the munge records.** The editor's state carries
 `list[SourceEdit]`, not `dict[str, str]`. Its write tools are one per kind. The diff is `munge_diff`,
@@ -298,8 +295,8 @@ is `session.check(features=(certora, unit_x))`. Every property survives, and one
 *because* the model never touches the feature: the tool sets it, from the requesting unit's identity.
 
 Option 2 is the one that works, and it means the editor reuses the **control flow** and almost none of
-the **machinery**. [munge-and-working-copies.md](munge-and-working-copies.md) §6 found that the
-boundary between the two backends was agent topology rather than Solidity-versus-Rust; adopt the
+the **machinery**. The appendix (§17) records that the boundary between the two backends was agent
+topology rather than Solidity-versus-Rust; adopt the
 topology and the boundary moves to the edit representation. That is the same seam seen from the other
 side, and it is where the shared code has to be cut.
 
@@ -419,8 +416,8 @@ the boundary is enforced by which agent holds which tool rather than by a rule i
 
 **B — the judge gets the diff.** `HarnessAssumptions` carries a `diff` computed by `munge_diff` from
 the records, and the briefing tells the judge to read it *rather than* the summary, because the
-summary is the editor's account of its own work. That closes the half of
-[munge-and-working-copies.md](munge-and-working-copies.md) §8 gap 1 that stayed open.
+summary is the editor's account of its own work. That closes the half of "the judge cannot see what
+the author changed" that stayed open.
 
 **C — the editor.** `code_editor` runs one conversation: read the program, apply munges,
 `request_review`, `submit_edits`, or `give_up`. The approval is a hash of the record list, so
@@ -435,8 +432,8 @@ variant by looking for a file only this build compiles — the unit's own harnes
 whether the munged paths are in it. Measured on a real cargo build before anything was written: with
 `unit_b` disabled, `src/b.rs` is simply absent from the dep-info.
 
-That closes [munge-and-working-copies.md](munge-and-working-copies.md) §8 gap 2, which had been open
-since the backend was written and is the quietest failure it had — an attribute in a file no enabled
+That closes the gap "nothing checks that a munge reached the build", which had been open since the
+backend was written and is the quietest failure it had — an attribute in a file no enabled
 feature reaches changes nothing, reports nothing, and leaves the report claiming a source edit that
 did not happen. A build whose dep-info cannot be identified reports `NotChecked` and says so, rather
 than passing.
@@ -452,8 +449,7 @@ Not scope creep: an editor choosing between two kinds is §2.3's objection at fu
   vocabulary's only instrument for reaching a point *inside* an execution, which is what two of the
   eight skips in the last gate run actually wanted.
 
-**`certora_make_pub` was dropped, and the reason corrects this document.** §2 and the appendix
-described it as a corpus munge kind, which it is — but it is a **project-local proc macro**, defined
+**`certora_make_pub` was dropped, and the reason corrects this document.** §2 described it as a corpus munge kind, which it is — but it is a **project-local proc macro**, defined
 in the one project that uses it, with no counterpart in `cvlr`. And Rust cannot make visibility
 conditional on a feature without duplicating the item, so even a hand-rolled version would be the
 gated-pair shape of §8.4 rather than an attribute. It is not available and should not have been
@@ -671,7 +667,7 @@ edit a second crate's manifest mid-run after the feature set a build resolved is
 **The alternative was rejected on build economics.** Forwarding *per-unit* features
 (`unit_x = ["library/unit_x"]`) preserves isolation and gives every dependency a distinct feature
 set per unit, which reinstates the per-unit dependency build the shared tree exists to remove —
-`single-working-tree.md` §2.1, where 4 of 519 artifacts vary today. That is not a trade the shared
+§14.5, where 4 of 515 artifacts vary today. That is not a trade the shared
 tree survives.
 
 **What it costs instead is a reporting obligation.** A redirect gated on `certora` is compiled into
@@ -926,3 +922,343 @@ not a patch. The options are not equivalent: digesting the stand-in's *source* i
 invalidate a review on every unrelated edit to the harness file; digesting only the named item needs
 a resolver this module does not have; and simply prompting the author to `amend_munge` after
 rewriting a stand-in is what already happened, one judge round late.
+
+---
+
+## 14. One working tree for the run
+
+Every unit of a run builds in one shared copy of the project, at `.cvlr_work/build/`. This replaced
+a per-unit workdir, which [cvlr-backend-plan.md](./cvlr-backend-plan.md) §7.5.2 had recorded as
+*forced*: its argument was that the compile gate is whole-crate, so in a shared tree unit A's gate
+fails whenever unit B's draft is momentarily broken. That is true only while every unit's module is
+compiled. Three mechanisms together make it false, and each is inert without the others.
+
+### 14.1 Per-unit cargo features gate the harness modules
+
+`specs/mod.rs` declares each unit's module behind its own feature, and the package manifest gains
+one empty feature per unit:
+
+```rust
+#[cfg(feature = "unit_deposits")] pub mod deposits;
+#[cfg(feature = "unit_admin")]    pub mod admin;
+```
+
+```toml
+certora = ["no-entrypoint", "dep:cvlr", "dep:cvlr-solana"]
+unit_deposits = []
+unit_admin = []
+```
+
+A unit gates with `cargo check --features certora,unit_deposits` and submits with the same set
+through the conf's `cargo_features`. `HarnessTarget.features` ([verify.py](../composer/spec/cvlr/verify.py))
+is the one place that pairs `certora` with the unit's feature, for both, so the gate build and the
+prover's rerun cannot end up with different feature sets. `declare_modules`
+([harness.py](../composer/spec/cvlr/harness.py)) and `declare_unit_features`
+([scaffold.py](../composer/spec/cvlr/scaffold.py)) write both declarations once, in the staged
+formalizer's `begin`, when every unit is known.
+
+**The features must stay empty.** A unit feature that enabled a dependency feature would change the
+dependencies' resolved feature set, give them separate fingerprints, and reinstate the per-unit
+dependency build this removes. The same rule holds for the munge gates in §14.3.
+
+The gate also removes a fragility: under a `cfg` gate, a unit whose module file does not exist yet is
+invisible to everyone else, where before every declared module had to exist or no unit compiled. And
+it fixed a latent `E0119`: two units each writing `impl Nondet for Foo` in their own module no longer
+meet, because at most one of the modules is compiled.
+
+### 14.2 rustc's dep-info is what makes it correct
+
+rustc emits, per compilation, the list of source files it actually read, and cargo fingerprints
+against that list. A module behind a disabled `cfg` is never read, so it never appears in the
+dep-info, so **the `unit_admin` variant's fingerprint does not depend on `deposits.rs`**. That holds
+for dirtiness as well as breakage: A's edits do not force B to rebuild.
+
+**Measured:** with `unit_b`'s module made syntactically invalid on disk, `--features
+certora,unit_a` finished in 0.00s having compiled nothing, while `--features certora,unit_b` failed
+with the expected parse error.
+
+### 14.3 Munges are gated on the unit's feature, so they are additive
+
+`cvlr::mock_fn` takes a `when` parameter naming a cargo feature (default `"certora"`) and expands to
+the original function under `#[cfg(not(feature = when))]`. The corpus uses it to keep a menu of mocks
+in the source, each dormant until a conf asks for it: a vault project declares eleven such features
+under the comment *"Per-conf prover mocks; enabled via `cargo_features`. Inert without `certora`."*
+
+This backend does the same thing by gating the whole `cfg_attr` on the recording unit's feature
+rather than using `when`. Both produce the identical result, and the `cfg_attr` form is one mechanism
+for every kind, where `when` would not reach `cvlr::early_panic`, which has no such parameter. (The
+corpus gates `early_panic` by wrapping the `cfg_attr` condition too, 60 times.) So two units' munges
+of one file coexist as two dormant lines, and the union of every unit's munges is the single
+well-defined content of that file. Every kind in [munge.py](../composer/spec/cvlr/munge.py) carries
+its unit's `feature`, and its `edit_id` includes it.
+
+### 14.4 The build permit
+
+One `asyncio.Semaphore(1)` for the run (`SharedBuild.build_sem`,
+[pipeline.py](../composer/spec/cvlr/pipeline.py)), held across staging and the local cargo
+invocation, and, for a submission, until the Prover has uploaded what it built.
+
+It is not what makes a `cargo check` correct; §14.1 and §14.2 do that, and concurrent cargo
+invocations against one `target/` serialize on cargo's own lock anyway. What the permit buys is a
+queue the host can report ("waiting for a build slot" instead of a silent stall), no N sandboxed
+processes parked holding grants, and one place for ordering if a unit ever starves.
+
+**For a submission it is what makes the tree correct.** Every SBF build of the crate produces the
+same `.so`, and `certoraSolanaProver`'s local phase rebuilds it and then uploads it. A sibling
+building for its own feature in between would replace the file this unit's job uploads, so the job
+would verify the wrong program (found reviewing #258). A target directory per unit fixes that too,
+and was tried and backed out: it costs a cold dependency build and about 1 GB of disk per unit. So
+`_stage_and_submit` ([verify.py](../composer/spec/cvlr/verify.py)) holds the permit until the job's
+link arrives, which `certoraRun` reports after the upload. What is serialized is each submission's
+local phase, a warm rebuild of the program crate plus the upload. The cloud job's minutes stay
+concurrent. Every derived write is `os.replace`-atomic, so a concurrent reader sees the old file or
+the new one.
+
+### 14.5 What it costs
+
+Measured on the repository's three-unit Solana test scenario (213 crates resolved):
+
+| | Per-unit workdirs (N units) | One tree |
+|---|---|---|
+| source copy | 104 KB × N | 104 KB |
+| `.sandbox_cargo/registry` | 119 MB × N, **re-downloaded per unit** | 119 MB, fetched once |
+| `target/` | 955 MB × N, **dependencies recompiled per unit** | ~955 MB + N × the program crate's own artifacts |
+| dependency builds | N | 1 |
+
+`target/debug/deps` held 515 artifacts, of which **4** belong to the program's own crate. The rest
+are dependencies that cannot differ between units: same lockfile, same `certora` feature, same
+toolchain. Feature-varying duplicates the 4, not the 515. **Measured** on a synthetic crate with one
+dependency and two empty unit features: the dependency compiled once and kept one `-C metadata`
+hash across both feature sets, and returning to `unit_a` after `unit_b` ran zero rustc invocations.
+
+**What gets worse is wall clock in steady state.** Units used to build concurrently: N× the work,
+but max-latency rather than sum. Serialized, a gate can queue behind N−1 others. On a cold run the
+sum should still beat the old max, because each queued gate is one crate-variant recompile rather
+than a dependency build; on a warm run it will not. Only the local build queues (§14.4), so the
+queue is seconds deep, not minutes. This has not been measured (§15.4 item 5).
+
+### 14.6 Confinement
+
+The sandbox gives a build a private `CARGO_HOME` because a confined build runs untrusted `build.rs`
+and proc-macro code, and *"a malicious build could overwrite an extracted source under
+`registry/src` and poison a **later** run that compiles that crate"*
+([recipes.py](../composer/sandbox/recipes.py)). One tree means one cargo home shared by every unit of
+a run. Within a run, isolation drops from per-unit to per-run, but the untrusted code is the target
+program's own build scripts, identical for every unit, so unit A poisoning a cache unit B reads is
+the same code either way. Across runs the protection holds because each run starts a fresh tree
+(§15.2). [command-sandbox.md](./command-sandbox.md) §11 owns the confinement posture.
+
+### 14.7 What the corpus does, and why the spec cannot leave the crate
+
+Source munging is not one project's habit. Counting `cfg_attr`-with-`certora` outside `certora/`
+trees, nine of eleven corpus projects carry it: restaking 73, spl 50, Project A 43, stake-pool 21, a
+vault project 13, smart-account 12, manifest 10, vault-tutorial 5, token 3. Only the reference
+project and SolanaExamples are clean. The vocabulary across them is six kinds: `early_panic` (152
+sites), `mock_fn` (~47), `certora_make_pub` (6), `cvlr_hook_on_entry`/`on_exit` (9),
+`inline(never)` (5) and `derive(Copy)` (2). §9.3 records which of these the editor offers.
+
+A fully separate spec crate, the Crucible shape, is **not** available, and the reason is not Rust
+versus Solidity. A fuzzing harness can live outside the crate because it is black-box: it drives the
+program through transactions and reads accounts back. A CVLR rule is white-box: it calls handlers
+directly, which is what `no-entrypoint` is for. Three blocks: 0 of 12 corpus projects use a separate
+spec crate (all are `<program-crate>/src/certora/`, and multi-crate workspaces put a `certora/`
+subtree in each crate they verify); `mock_fn` and the hooks expand at the program's own definition
+site and name `crate::certora::…`, so a separate crate would have to be a dependency of the program;
+and `certora_make_pub` shows specs reaching items that are not even `pub(crate)`. What transfers
+from the fuzzer is the other half: make the source-side footprint inert and per-unit selectable,
+share one crate, and serialize the builds.
+
+### 14.8 What would change this answer
+
+1. **Cargo stops sharing dependency artifacts across the units' feature sets**, or a future resolver
+   change makes a leaf feature propagate. The cost case is that one fact.
+2. **A munge kind that cannot be made dormant.** Every kind so far is gated on the unit's feature;
+   a change that cannot be (a hand-unrolled loop) would make one tree hold two incompatible versions
+   of a file.
+3. **Unit counts grow past the point where serialization dominates.** At some N the queue is the
+   bottleneck, and the answer is a permit count above 1 with per-unit target directories for the
+   overflow, which nobody has costed.
+4. **Confinement tightens** to require per-unit isolation of untrusted build code. §14.1–§14.3
+   survive, but the cargo-home saving does not, and most of §14.5's win goes with it.
+
+---
+
+## 15. The tree is derived, not state
+
+### 15.1 A pure function of checkpointed state
+
+```
+tree = the project + each unit's draft + the union of every unit's munges
+```
+
+Every term after the first is in the run's checkpointed state: munges and summaries are reduced
+state keys ([state.py](../composer/spec/cvlr/state.py)), and the draft is the authoring buffer, of
+which state.py says *"The ground truth is the buffer, not the run."* Replay is pure, and the tuning
+files are rewritten wholesale from their directives rather than appended to. So the tree is a build
+cache: losing it costs a rebuild and never correctness, which is what lets a resumed run, or one
+replayed from cache, pick up where it left off.
+
+This is a stronger position than the EVM backend's. EVM must checkpoint its VFS overlay verbatim,
+because its edits *are* file text: an agent rewrote a Solidity file and the bytes are the only
+description of what it did. CVLR's edits are records, and the text is derived from them, so
+dropping a record from state removes the edit, which a text overlay cannot express. That is what
+`revert_munge` and `DropMunges` rely on.
+
+### 15.2 A fresh tree per run
+
+`SharedTree.materialize` ([tree.py](../composer/spec/cvlr/tree.py)) deletes any tree a previous run
+left and copies the project afresh, once per run, before any unit stages. Within the run the tree is
+reconciled in place, so the warm `target/` and the private `CARGO_HOME` persist across units and
+gates. It is never reused across runs, because the tree holds the run's private `CARGO_HOME`, whose
+unpacked sources a dependency's build script can rewrite, and a tree carried into a later run would
+carry that rewrite into its build. The previous run's tree is left until the next run starts, so it
+can be inspected.
+
+An earlier version reused an existing tree on resume (`if dest.exists(): return`). That failed for
+reasons unrelated to how many trees there are: a crash between a tool call and the checkpoint write
+leaves the tree *ahead* of state; resuming a checkpoint that is not the latest leaves it ahead by an
+arbitrary amount, with munges its state no longer knows about; and a cache replay has no tree at all.
+
+### 15.3 Three care points
+
+1. **Replay the union of all units' munges, not the current unit's.** Replaying one unit's would
+   leave a sibling's munge lines absent until that sibling next stages, and units would fight over
+   the file on alternating gates. Feature gating (§14.3) is what makes the union safe, and it is the
+   only stable fixed point. Replay is ordered by `edit_id`, because two munges of one function each
+   insert a line above its signature, and bytes that depended on which unit staged first would make
+   the crate's fingerprint depend on it too.
+2. **Content-compare before writing.** Cargo fingerprints on mtime, so rewriting identical bytes
+   forces a rebuild. The materializer reads, compares, and writes only on a difference.
+3. **Surface drift, do not log it.** Reconstruction reads the developer's project, which can move
+   between a cached run and its replay. Replay returns typed refusals (`FunctionNotFound`,
+   `FunctionAmbiguous`, `AlreadyMunged`, `SourceDrifted`), so a munge that no longer applies is
+   detectable, and the gate puts it in front of the author (`Reconciled.drifted`). A munge that did
+   not reach the build is as much a part of why a rule failed as of what a passing rule means.
+
+The run-level declarations (`specs/mod.rs`, the package manifest's unit features, the placeholder
+module files) are not derived from any unit's state. They are a function of the job list, and they
+are written into the project, as deliverables, before the tree is copied.
+
+### 15.4 The checks, and which are still open
+
+1. **Multi-variant caching** passes on host cargo (§14.5). Still open for `cargo certora-sbf`, which
+   is the same cargo with a different triple and ought to behave identically; it belongs in the
+   expensive gate.
+2. **Dependency fingerprints do not vary with the unit feature.** Passes (§14.5).
+3. **Cross-unit independence.** Passes (§14.2).
+4. **The disposability invariant** is covered by unit tests
+   ([test_cvlr_tree.py](../tests/test_cvlr_tree.py)): deleting the tree and reconciling reproduces
+   it byte for byte, and a munge dropped from state leaves the file.
+5. **Latency under contention.** Not measured. Time a three-unit run with and without the shared
+   tree before believing either half of §14.5.
+
+---
+
+## 16. The tree is a VFS
+
+### 16.1 Why: a run that read its own working tree
+
+The first authoring run against a real program (SPL stake-pool, 2026-09-04, run
+`73968efd08574d93b162da1176d3d10f`) died in formalization:
+
+```
+FORMALIZATION: Pool Initialization & Admin Configuration (5 properties)
+  16.5s   AnthropicContextOverflowError
+  prompt is too long: 2,272,575 tokens > 1,000,000 maximum
+```
+
+The author's third tool call was `list_files`, and it returned 4,087,756 characters, 28,739 lines of
+them under `.cvlr_work`, the run's own working tree. The immediate cause was an exclusion pattern
+that missed the sandbox's `CARGO_HOME` one level down. The deeper one was that the author's read
+tools and the build were rooted in different places: the reads in the pristine project, the build
+in the tree. Four gaps followed from that:
+
+| gap | consequence |
+|---|---|
+| `get_file` read the pristine project; the build read the tree | an author asking what a function does got an answer about a different text from the one verified |
+| `mock_fn` replaces a function body | the author reasoned about a body the build did not use |
+| the munge list reached the author once, in a tool result | after summarization nothing restated which functions were munged |
+| `cargo check` runs in the tree | diagnostics named `.cvlr_work/build/...` paths the author could not open |
+
+Every one is "the read path and the build path disagree", which is the condition a VFS exists to
+prevent. The earlier objection, that materializing for cargo means a cold fetch and a full rebuild
+per compile check, was a property of graphcore's `TempDirectoryProvider` (a fresh directory per
+materialization), not of materialization. A materializer that writes into a persistent directory
+and skips unchanged files leaves `target/` and the `CARGO_HOME` alone, because they are not VFS
+content.
+
+### 16.2 What was built
+
+- **The tree** is a graphcore `PersistentMaterializer` (graphcore #39): the project as its base
+  (`DirBackend`), and one overlay (`DictBackend`) holding every unit's draft and every munged file's
+  replayed content. A path the overlay stops serving is put back to the project's copy, or removed
+  if the project has no such file. The base/overlay split is load-bearing: a dropped munge must
+  restore the developer's file, and a departed unit's draft must disappear, and only the base can
+  tell the two apart. Paths the tree is never filled from (`target/`, the sandbox's directories) are
+  excluded by `_NOT_MATERIALIZED`.
+- **Every agent reads through a two-layer stack**, the tree above the project, built by
+  `build_layered_source_tools` (`fs_tools_layered`) in [entry.py](../composer/spec/cvlr/entry.py).
+  Before the tree exists, during analysis and extraction, every read falls through to the project.
+  Once it exists, a munged file reads as munged. The listing cache is off on both layers, because
+  the build writes the tree while agents read it.
+- **Diagnostics paths needed no rewriting.** cargo prints paths relative to its workdir, which is the
+  tree, and the read stack serves the same paths: a deliberate error produced `-->
+  program/src/lib.rs:2:5`, and `get_file` on that string opens the file.
+- **The munge boundary** is `project_file` and `ProjectSource` in
+  [tree.py](../composer/spec/cvlr/tree.py), with typed refusals (`NotInProject`, `NotProjectSource`)
+  rather than a VFS path check.
+
+What was planned and not built: a three-layer stack per unit (draft, munges, project), with one
+`fs_tools_layered` call yielding both a unit's read tools and its materializer. The tree holds every
+unit's draft instead, since a sibling's module is inert behind its feature (§14.1), and the read
+stack and the materializer are built separately over the same directories.
+
+### 16.3 Risks
+
+1. **Listing a tree that holds a warm `target/` and a 730 MB `CARGO_HOME`.** Answered: the exclusion
+   is passed, and a probe over a tree seeded with a 500-file vendored registry listed two entries,
+   the project's own sources.
+2. **A cached listing over a directory the build is writing.** Answered by turning the cache off
+   (§16.2).
+3. **The Prover uploads from disk.** `certoraBuildRust.collect_files_from_rust_sources` globs the
+   real filesystem, so materialization must be complete before submission. It is, because staging
+   runs under the permit before the submission (§14.4). A lazier materializer would break this
+   silently.
+4. **`get` returns `str`.** Anything non-UTF-8 in the tree is outside the model. Rust sources are
+   fine; nothing else has been checked.
+
+---
+
+## 17. Appendix: the EVM and CVLR backends, side by side
+
+For a reader who knows the EVM backend. Three differences account for this document, and the first
+causes the other two.
+
+1. **The spec lives inside the program.** A CVL spec is a separate file beside the contracts. A CVLR
+   rule is Rust compiled into the program's own crate (§14.7), and it calls handlers directly. So
+   the program and its harness are one build, and every edit to the program reaches every unit's
+   build unless it is gated (§14.3).
+2. **There is no spec-side approximation that computes.** EVM keeps property-relative approximation
+   on the spec side, in CVL summaries the author owns, and gives an agent only behaviour-preserving
+   rewriting of the source. CVLR's only spec-side instrument, `summarize_for_prover`, havocs rather
+   than computes. So `early_panic` and `mock_fn`, which are property-relative, have to be source
+   edits, and something that holds the properties has to rule on them: the judge (§2.1).
+3. **The build is cargo.** solc's input is a source tree, so EVM materializes its VFS overlay into a
+   temporary directory per compile check and pays a file copy. cargo's input is a source tree plus a
+   `CARGO_HOME` plus a `target/`, so CVLR materializes into one persistent tree per run (§15, §16).
+
+How each backend gives an agent a modifiable copy:
+
+| | EVM | CVLR |
+|---|---|---|
+| the edits | file text, in a `dict[str, str]` overlay in graph state (`VFSState`) | records (`Munge`), in graph state; the text is derived |
+| what a build sees | a `TemporaryDirectory` written from the overlay and the project, per compile check | `.cvlr_work/build/`, a fresh copy per run, reconciled in place |
+| reverting an edit | pick an older snapshot from the edit store | drop the record from state; the tree is re-derived |
+| who edits | a munge editor, reviewed behaviourally; it never sees the properties | a munge editor with its own reviewer, and the property judge rules on what the munges did to each rule |
+| what may change | Exposure, Refactor, Standardize; behaviour-preserving | a closed set of kinds ([munge.py](../composer/spec/cvlr/munge.py)); property-relative |
+
+What CVLR reuses from the EVM munge machinery: the report's `SourceEditRecord` and
+`AppliedEditRecord` (a munge reaches `report.json`'s `source_edits`), the `Formalizer.source_edits()`
+hook, and `munge/vfs_diff.py`'s diff. What it does not reuse is everything that follows from EVM's
+agent topology and solc: `munge_agent.py`, `compile_check.py` (solc-specific), `edit_store.py`,
+`edit_oracle.py`, `erc7201.py`, and the three munge templates.

@@ -24,9 +24,9 @@ The pipeline has two kinds of work:
 
 The **formalization abstraction** is the seam between the two. It lets the driver in
 [composer/pipeline/core.py](../composer/pipeline/core.py) own all the shared work while
-delegating every backend-specific decision through a small, typed protocol. The CVL and
-Foundry backends are two implementations of that protocol; the driver never imports
-either.
+delegating every backend-specific decision through a small, typed protocol. The CVL,
+Foundry and CVLR (Solana) backends implement that protocol; the driver never imports
+any of them. The examples below are mostly the first two.
 
 ### Design goals
 
@@ -94,9 +94,9 @@ CVL backend, launching `prepare_formalization` before awaiting extraction is wha
 AutoSetup / summary work with per-component property inference — so Foundry
 gets the same overlap with zero extra code.
 
-`preflight` is the earlier peer, for pre-work that needs *nothing at all* from the run: Crucible
-builds the program under test and gates a skeleton harness through the real toolchain there, since
-neither reads the analyzed model. The two share a task group, so whichever side fails first cancels
+`preflight` is the earlier peer, for pre-work that needs *nothing at all* from the run: the CVLR
+backend scaffolds the harness module into the program's crate and proves the crate still builds
+with it there, since neither reads the analyzed model. The two share a task group, so whichever side fails first cancels
 the one still running: an agent would otherwise keep spending on a run that can no longer complete,
 and a workspace build — the run's slowest non-LLM step — would keep running for a result nothing will
 read. That is what makes the preflight a *gate*: a broken workspace stops the run while it has spent
@@ -180,9 +180,10 @@ class PreparedSystem[FormT: BackendResult, U: FeatureUnit, Main](ABC):
 `SolanaProgramInstance`), a different axis from `U` — the driver treats it opaquely and only hands
 it to `ecosystem.units(main)`.
 
-The union return is for a backend whose units all build on **one shared artifact** (Crucible's
-fixture; whatever setup module a CVLR backend needs). Such an artifact must be authored from the
-union of every unit's properties, which pins it to exactly one point in the run — and
+The union return is for a backend whose units all build on **one shared artifact** (the CVLR
+backend's `specs/mod.rs` and per-unit cargo features; a fuzzer's shared fixture). Such an artifact
+must be written from every unit at once (their properties, or just the set of units), which pins it
+to exactly one point in the run — and
 `prepare_formalization` is not it, because that overlaps extraction, so no properties exist there
 yet. Nor can it be lazy on first `formalize`: whichever unit won the race would decide the artifact
 every other unit is then told to work within — harmless at one unit, silently wrong at several. So
@@ -196,10 +197,10 @@ class StagedFormalizer[FormT: BackendResult, U: FeatureUnit](ABC):
 ```
 
 Which of the two a backend returns is its own declared signature, so a backend with no shared
-artifact never mentions staging at all. The prover is one of those: its shared peer
-The prover is not one of those backends: its units share only AutoSetup's config and summaries,
-which are not authored from anyone's properties. The one `StagedFormalizer` in the tree is
-Rust/Crucible's.
+artifact never mentions staging at all. The prover is not one of those backends: its units share
+only AutoSetup's config and summaries, which are not authored from anyone's properties. The one
+`StagedFormalizer` in the tree is the CVLR backend's (`CvlrStagedFormalizer`,
+[composer/spec/cvlr/pipeline.py](../composer/spec/cvlr/pipeline.py)).
 
 ### 3.4 The outcome types the driver produces
 
@@ -613,7 +614,8 @@ A backend author's checklist:
    filling in its eight type arguments is what the in-tree backends do. `preflight` returns `None`
    unless the backend has pre-work that needs nothing from the run — if it must *build* something,
    that is where the build belongs, so it overlaps system analysis and can fail the run before the
-   model has been spent (Crucible: [rust-applications.md §4.2](./rust-applications.md)).
+   model has been spent (CVLR: `CvlrBackend.preflight` in
+   [composer/spec/cvlr/pipeline.py](../composer/spec/cvlr/pipeline.py)).
 4. Implement `PreparedSystem.prepare_formalization` returning a fully-constructed
    `Formalizer` — or, if every unit builds on one shared artifact, a `StagedFormalizer` whose
    `begin` authors it from the union of all units' properties (§3.3).

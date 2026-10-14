@@ -165,23 +165,14 @@ on demand.  The orchestrator owns the concurrency model (semaphore,
 task grouping); the factory owns the UI allocation (panels, status
 rows).
 
-## IDE Integration
+## Content Viewing
 
-The IO layer supports an optional IDE bridge (WebSocket connection
-to a VS Code extension) for richer content viewing.  This is
-implemented as a mixin rather than baked into the handler
-infrastructure, since it is a UI concern orthogonal to event
-dispatch.
+TUIs can surface content carried by events (an updated spec or stub) as
+clickable links. This is a mixin, `FileContentMixin`
+(`composer/ui/file_content.py`), rather than part of the handler
+infrastructure, since it is a UI concern orthogonal to event dispatch.
 
-### IDEBridge
-
-A WebSocket client that sends JSON-RPC requests to the VS Code
-extension.  Capabilities include showing files, opening diffs, and
-previewing results with an accept/reject flow.  The bridge is
-optional — `IDEBridge.connect()` returns `None` if no extension is
-available.
-
-### IDEContentMixin
+### FileContentMixin
 
 A mixin for Textual `App` subclasses that provides reusable
 infrastructure for content snapshot viewing:
@@ -192,11 +183,10 @@ infrastructure for content snapshot viewing:
   returns Rich markup with a `@click` action.
   `_make_content_link_widget(snap_id, prefix, text)` returns a
   ready-to-mount `Static` widget.
-- **Show action:** `action_show_content(snap_id)` — when the IDE
-  bridge is available, sends the content to VS Code.  Otherwise,
-  delegates to `_show_content_fallback()`, an override point for
-  app-specific no-IDE behavior (e.g. mounting a temporary
-  syntax-highlighted pane in a `ContentSwitcher`).
+- **Show action:** `action_show_content(snap_id)` delegates to
+  `_show_content_fallback()`, the override point for app-specific
+  behavior (e.g. mounting a temporary syntax-highlighted pane in a
+  `ContentSwitcher`).
 
 The mixin uses a `TYPE_CHECKING` conditional base class
 (`App` for static analysis, `object` at runtime) so it can
@@ -212,7 +202,7 @@ surfaced as clickable links in the TUI:
 2. `EventHandler.handle_event()` receives the payload
 3. Handler calls `app._store_snapshot(...)` to store the content
 4. Handler mounts a widget from `app._make_content_link_widget(...)`
-5. User clicks → `action_show_content(snap_id)` → IDE or fallback
+5. User clicks → `action_show_content(snap_id)` → `_show_content_fallback`
 
 This pattern decouples event handling (knowing *what* to show) from
 content viewing (knowing *how* to show it).
@@ -223,13 +213,14 @@ content viewing (knowing *how* to show it).
 |------|-------|---------|
 | `events.py` | Core | Event dataclasses |
 | `stream.py` | Core | `EventQueue` |
-| `protocol.py` | Core | `IOHandler[H, P]` protocol |
+| `protocol.py` | Core | `IOHandler[H]` protocol |
 | `event_handler.py` | Core | `EventHandler` ABC |
 | `graph_runner.py` | Core | Low-level graph streaming, event emission |
 | `context.py` | Core | `with_handler`, `run_graph` wrapper, `_queue_drainer`, nesting |
-| `ide_content.py` | UI infra | `IDEContentMixin` — snapshots, clickable links |
-| `ide_bridge.py` | UI infra | `IDEBridge` — WebSocket to VS Code extension |
-| `message_renderer.py` | UI infra | Renders messages, manages nested widget containers |
-| `rich_console.py` | UI | `BaseRichConsoleApp[H, P]` — base TUI for single-graph workflows |
-| `codegen_rich.py` | UI | `CodeGenRichApp` — codegen TUI |
-| `pipeline_app.py` | UI | `PipelineApp` — multi-agent pipeline TUI |
+| `multi_job.py` | Core | `TaskHandle`, `HandlerFactory`, `run_task` |
+| `../ui/file_content.py` | UI infra | `FileContentMixin` — snapshots, clickable links |
+| `../ui/message_renderer.py` | UI infra | Renders messages, manages nested widget containers |
+| `../ui/rich_console.py` | UI | `BaseRichConsoleApp[H, P]` — base TUI for single-graph workflows |
+| `../ui/codegen_rich.py` | UI | `CodeGenRichApp` — codegen TUI |
+| `../ui/pipeline_app.py` | UI | `NatspecPipelineApp` — NatSpec pipeline TUI |
+| `../ui/multi_job_app.py` | UI | `MultiJobApp` — multi-task TUI (see `../ui/MULTI_JOB_DESIGN.md`) |

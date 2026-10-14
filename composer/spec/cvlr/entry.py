@@ -393,7 +393,7 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
             # a file the run has munged reads as munged, because the tree is the same bytes the
             # compiler is given. The alternative, which cost a run, is an agent reasoning about
             # pristine source while the prover verifies something else
-            # (``docs/the-tree-is-a-vfs.md``).
+            # (``docs/who-edits-the-program.md`` §16).
             project = pathlib.Path(staged.source.project_root)
             basic = build_layered_source_tools(
                 [

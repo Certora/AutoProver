@@ -235,7 +235,7 @@ class TuningFiles:
     convention in a second place.
 
     ``unit`` names the file this unit's directives land in. Every unit now shares one working tree
-    (``docs/single-working-tree.md``), and a summary is the one thing a cargo feature cannot scope:
+    (``docs/who-edits-the-program.md`` §14), and a summary is the one thing a cargo feature cannot scope:
     it is a regex over symbols that the prover applies to the whole build, so a shared file would
     apply one unit's summaries to another unit's submission. Since
     :mod:`composer.spec.cvlr.tuning`'s own warning is that a wrong summary produces "a green rule
@@ -265,7 +265,7 @@ class TuningFiles:
         recorded and the file on disk cannot drift — and a run that ends up with no directives
         leaves a layer with nothing in it but the header, which composes to the starting
         configuration alone. That is what makes this a *derived* file in the sense
-        ``docs/single-working-tree.md`` §4 needs: dropping a directive from state removes it from
+        ``docs/who-edits-the-program.md`` §15 needs: dropping a directive from state removes it from
         disk, where an appending writer would have kept it forever.
 
         Called from the build path rather than from the tool that records a directive. One writer,

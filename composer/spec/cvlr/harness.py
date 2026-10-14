@@ -82,7 +82,7 @@ class HarnessModule:
     def feature(self) -> CargoFeature:
         """The cargo feature that compiles this unit — and only this unit — into the crate.
 
-        The whole of ``docs/single-working-tree.md`` rests on this name. Every unit's module is
+        The whole of ``docs/who-edits-the-program.md`` §14 rests on this name. Every unit's module is
         declared behind ``#[cfg(feature = "<this>")]``, so a module that is not selected is never
         read by rustc, never appears in its dep-info, and therefore cannot break or dirty another
         unit's build. That is the property the per-unit workdir used to buy.
@@ -214,7 +214,7 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
         unit knows them all. Each declaration is gated on :attr:`HarnessModule.feature`, which is
         what lets the units share one working tree: a module behind a disabled ``cfg`` is never
         compiled, never enters rustc's dep-info, and so cannot break — or force a rebuild of —
-        another unit's build (``docs/single-working-tree.md`` §2.1–2.2).
+        another unit's build (``docs/who-edits-the-program.md`` §14.1–14.2).
 
         Files are still created up front. Under the gate a missing file is only an error for the
         unit that selects it, but an empty module is a better starting state than a compile error

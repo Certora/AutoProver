@@ -16,7 +16,7 @@ half wrong is the failure ``docs/command-sandbox.md`` §11 item 8 records on the
 ``--features`` a shared crate does not declare fails with "Package does not contain this feature",
 and the unit it belongs to is dropped.
 
-**Why every unit shares one workdir.** ``docs/single-working-tree.md`` is the argument; this is the
+**Why every unit shares one workdir.** ``docs/who-edits-the-program.md`` §14 is the argument; this is the
 summary. §7.5.2 answered open question 3 with "per unit, and forced", on the grounds that the compile
 gate is whole-crate — unit A's gate would fail whenever unit B's draft was momentarily broken. That
 is true of a shared tree and false of this one, because each unit's module is declared behind its own
@@ -217,7 +217,7 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
                 msg=f"{self.deps.preflight.package}: {label}",
                 stem=identity.stem,
                 # The harness feature and this unit's own: what compiles exactly one unit's rules
-                # out of the shared crate (docs/single-working-tree.md §2.1).
+                # out of the shared crate (docs/who-edits-the-program.md §14.1).
                 features=(DEFAULT_FEATURE, identity.feature),
                 # Workdir-relative, which is how certoraSolanaProver reads a conf path.
                 summaries=(
@@ -275,7 +275,7 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
         (:func:`composer.spec.cvlr.tree.munge_diff`). Two reasons, and both are consequences of the
         tree being shared: the tree holds every unit's munges, so reading it would show one unit's
         report its siblings' dormant lines; and a diff derived from state survives the tree being
-        deleted, which ``docs/single-working-tree.md`` §4 makes a routine thing to do. Only the
+        deleted, which ``docs/who-edits-the-program.md`` §15 makes a routine thing to do. Only the
         munged files are diffed — the harness module is a new file and this unit's own deliverable,
         not a modification of the program.
         """

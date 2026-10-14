@@ -18,6 +18,16 @@ component's verification ran against edited source, its report outcomes are clai
 about the modified code — and the report now says so, per component, with the full
 diff.
 
+**Scope.** This guide was written for the EVM prover backend, and its examples are
+Solidity. The CVLR (Solana) backend uses the same `source_edits` field for its
+*munges*, which are verification-only attributes the author puts on the program's
+own functions (`composer/spec/cvlr/munge.py`). The record has the same shape: one entry
+per delivered component that has munges, with the diff of the munged files. Munges are
+virtual in the same sense: they live in a per-run copy of the project, and the
+project on disk keeps the code as shipped. What differs is the harness. The CVLR
+harness is a new Rust module written into the program's crate (`<pkg>/src/certora/`).
+It is the component's deliverable, not a source edit, so it is not in the diff.
+
 ## 1. `source_edits` in `report.json`
 
 `schema_version` moves to `"3.1"`. The change is purely additive — a `"3.0"`

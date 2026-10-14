@@ -1,9 +1,12 @@
 # Upstream defects found while building the CVLR backend
 
 Everything here was found by pointing the CVLR backend (`docs/cvlr-backend-plan.md`) at real Anchor
-programs, and every entry is reproducible. **One is filed** — P7 is CERT-10103, with a fix in flight
-at [EVMVerifier#8673](https://github.com/Certora/EVMVerifier/pull/8673). The rest are not, and this
-document exists so that routing is a decision somebody makes rather than one I guess at, since the
+programs, and every entry is reproducible. **Two have Prover tickets:** P7 is CERT-10103, with a fix
+in flight at [EVMVerifier#8673](https://github.com/Certora/EVMVerifier/pull/8673), and P8 is
+CERT-10061, which the Prover's own source names. Two more Prover bugs, CERT-10183 (float comparisons)
+and CERT-10184 (a memory-partitioning crash on `realloc`'s zero-fill), were filed from the
+starting-layer investigation in [cvlr-todo.md](./cvlr-todo.md) L1 and are recorded there, not here.
+The rest are not filed, and this document exists so that routing is a decision somebody makes rather than one I guess at, since the
 groups below belong in different places and one of them cannot be public.
 
 **Group P — the Solana Prover.** Closed source, so these can only be reported. Two of them have been
@@ -29,7 +32,7 @@ entry, and unlike the others it was corrupting our own output rather than merely
 
 **Group T — the recommended starting template.** A public repository, and every one of these has a
 concrete fix we have already verified locally. `composer/spec/cvlr/env_paths.py` works around T1 at
-emit time and `composer/spec/cvlr/munge.py` works around T7 by writing the fork redirect the
+emit time and `composer/spec/cvlr/forks.py` works around T7 by writing the fork redirect the
 template omits; the rest are worked around by not reproducing them.
 
 **Group M — the published Solana manual.** Two examples in the manual that fail to compile
@@ -174,7 +177,7 @@ and here is its result" that works on a function in the inlining allowlist — t
 suggests they cannot today, which is arguably the more tractable ask.
 
 **And a fourth workaround, which is the one that works.** Depend on the fork. This backend now writes
-that `[patch.crates-io]` itself ([munge.py](../composer/spec/cvlr/munge.py)); the gap it fills is T7.
+that `[patch.crates-io]` itself ([forks.py](../composer/spec/cvlr/forks.py)); the gap it fills is T7.
 
 ---
 
@@ -865,9 +868,10 @@ false negative in the deliverable, arrived at silently, from a run that was gree
 `output.json` said `SUCCESS` for all seven rules at the same time as the report said `UNKNOWN`.
 
 **The fix upstream** is a `jobStatus` branch taking the segment after the user id. **The workaround
-here** is that POU's public entry points accept a bare job id as well as a URL, so
-`composer/spec/source/report_prover.py` extracts the id and hands that over, passing every shape POU
-already parses through untouched.
+here**, in `composer/spec/source/report_prover.py`, has two halves. The verdict fetch rewrites the
+link to its `/output/` view, which POU parses. Every other call goes through `job_input`, which
+hands POU the bare job id (its public entry points accept one) and passes every shape POU already
+parses through untouched.
 
 ## T1
 

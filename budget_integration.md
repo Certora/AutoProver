@@ -14,7 +14,7 @@ dedicated appendix of `report.json` rather than in the main property/rule tables
 
 ## 1. The budget file and the `--budget` / `--budget-total` flags
 
-Both pipeline entry points (prover and foundry) accept either:
+The pipeline entry points (prover, foundry and solana) accept either:
 
 ```
 --budget path/to/budget.json    # the pool plus per-phase caps
@@ -162,6 +162,11 @@ One more report-level behavior: when *zero* properties were formalized run-wide
 grouping step is skipped — expect `groups: []` with a populated appendix.
 
 ## 3. Disk semantics
+
+The examples here are EVM ones; the CVLR (Solana) backend follows the same rules. Its
+quarantined partial is the harness module with the suffix (for example,
+`programs/vault/src/certora/specs/withdrawals.rs.unverified`), which cargo does not
+compile.
 
 **Quarantine.** A curtailed component's partial encoding is persisted for inspection
 under a poisoned name: the normal artifact filename plus the suffix `.unverified`

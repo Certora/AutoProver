@@ -157,7 +157,7 @@ class HarnessTarget:
     (:meth:`composer.spec.cvlr.harness.CvlrArtifactStore.declare_modules`).
 
     Every unit shares ``tree`` and ``build_sem`` and has its own everything else
-    (``docs/single-working-tree.md``). The unit's cargo feature is what keeps that safe: a build
+    (``docs/who-edits-the-program.md`` §14). The unit's cargo feature is what keeps that safe: a build
     selects ``certora`` plus :attr:`~composer.spec.cvlr.harness.HarnessModule.feature`, so no other
     unit's module is compiled and no other unit's draft can break this gate.
     """
@@ -200,7 +200,7 @@ class HarnessTarget:
 
         For a cargo check, concurrent runs against one ``target/`` would serialize on cargo's own
         build-directory lock anyway, and the per-unit feature is what keeps the shared tree correct
-        (``docs/single-working-tree.md`` §2.4). What the permit buys there is a queue the host can
+        (``docs/who-edits-the-program.md`` §14.4). What the permit buys there is a queue the host can
         see instead of a silent stall inside cargo, and not having several sandboxed builds parked
         holding grants.
 
@@ -260,7 +260,7 @@ class HarnessTarget:
         a directive dropped from state has to disappear. The munges are replayed onto the pristine
         source by :meth:`composer.spec.cvlr.tree.SharedTree.reconcile`, which is what makes the tree
         derivable after a crash, a rewind, or a cache replay with no tree at all
-        (``docs/single-working-tree.md`` §4).
+        (``docs/who-edits-the-program.md`` §15).
 
         Call it while holding :meth:`build_slot`. It is the tree's only writer, and the permit is
         what keeps two units out of it at once.
@@ -545,7 +545,7 @@ def _drift_note(reconciled: Reconciled) -> str:
     moved since the munge was recorded — a resumed run, a cache replay, or a developer editing
     underneath the run — and the failure is otherwise mute: the build succeeds, the report still
     carries a source-edit record, and the property was checked against code the record does not
-    describe. ``docs/single-working-tree.md`` §4.3 is the argument for this being a return value.
+    describe. ``docs/who-edits-the-program.md`` §15.3 is the argument for this being a return value.
     """
     if not reconciled.drifted:
         return ""
@@ -633,7 +633,7 @@ async def _stage_and_submit(
     (:func:`composer.spec.cvlr.prover.prepare_submission`). The permit is released when the job's
     link arrives, which is after the upload, or when ``run_submission`` returns without one. The
     cloud job's minutes are not covered: the files a sibling stages meanwhile are behind its own
-    feature (``docs/single-working-tree.md`` §2.4).
+    feature (``docs/who-edits-the-program.md`` §14.4).
     """
     async with deps.target.build_slot() as permit:
         reconciled = await deps.target.stage(draft, state["summaries"], state["munges"])

@@ -38,7 +38,7 @@ _NODE_TO_OUTCOME: dict[NodeStatus, Outcome] = {
 #: The Solana Prover's report link. ``prover_output_utility`` recognizes ``/output/<user>/<job>``
 #: and ``/job/<job>`` and has no ``jobStatus`` branch, so it raises rather than returning an id.
 #: ``_fetch`` sidesteps that by rewriting the link to its ``/output/`` view; a call that takes the
-#: link as given goes through :func:`job_input`. See ``docs/upstream-defects.md`` P5.
+#: link as given goes through :func:`job_input`. See ``docs/upstream-defects.md`` U1.
 _JOB_STATUS_LINK = re.compile(r"/jobStatus/\d+/(?P<job>[0-9A-Za-z]+)")
 
 

@@ -358,7 +358,7 @@ async def test_the_source_surface_is_cargos_not_soliditys(project, monkeypatch, 
 async def test_the_author_reads_the_working_tree_above_the_project(project, monkeypatch, wiring):
     """First hit wins, so a file the run has munged reads as munged and everything else reads as
     the developer wrote it. Reading pristine source while the prover verifies the tree is what cost
-    a run (``docs/the-tree-is-a-vfs.md`` §1)."""
+    a run (``docs/who-edits-the-program.md`` §16.1)."""
     await _run([str(project), "programs/vault/src/lib.rs:vault"], monkeypatch, wiring)
 
     tree, checkout = wiring.env["source_tools"]  # type: ignore[index]
