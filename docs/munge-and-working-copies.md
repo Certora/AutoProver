@@ -1,5 +1,7 @@
 # Two working copies, two munge strategies
 
+> **Partly superseded.** §4.2's CVLR charter and §5-6 are superseded by [cvlr-munges-as-text.md](cvlr-munges-as-text.md).
+
 > How the EVM and CVLR backends each give an agent a modifiable copy of the code under
 > verification, how each lets an agent modify it, and the chain of forced decisions that produced two
 > answers with almost nothing in common.

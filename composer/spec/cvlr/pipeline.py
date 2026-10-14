@@ -29,9 +29,9 @@ crate's own artifacts vary.
 Two things follow. Builds are serialized behind one permit, because every unit shares one
 ``target/`` — cargo would serialize them anyway on its own build-directory lock, and an explicit
 permit is a queue the host can see. And the tree is **derived** rather than state: it is the pristine
-project plus each unit's draft plus the union of the munges plus the tuning files, all of which are
-in the checkpoint, so it can be deleted and rebuilt and a resumed or cache-replayed run still
-produces the same submission (:mod:`composer.spec.cvlr.tree`).
+project plus each unit's draft plus the staging unit's edits to the program plus the tuning files,
+all of which are in the checkpoint, so it can be deleted and rebuilt and a resumed or cache-replayed
+run still produces the same submission (:mod:`composer.spec.cvlr.tree`).
 """
 
 import asyncio
@@ -59,13 +59,14 @@ from composer.prover.core import ProverOptions
 from composer.sandbox.config import SandboxConfig
 from composer.spec.context import CvlrGeneration, WorkflowContext
 from composer.spec.cvlr.author import batch_cvlr_generation
+from composer.spec.cvlr.editor import EditingServices, ProgramEditing, program_editing
 from composer.spec.cvlr.conf import DEFAULT_FEATURE, HOST_RUST_TOOLCHAIN
 from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness, HarnessModule
 from composer.spec.cvlr.preflight import CvlrPreflight, gate_workspace, prepare_workspace
 from composer.spec.cvlr.prover import Submission
 from composer.spec.cvlr.scaffold import ENVS_DIR, SPECS_DIR, declare_unit_features
-from composer.spec.cvlr.tree import SharedTree, munge_diff
+from composer.spec.cvlr.tree import SharedTree
 from composer.spec.cvlr.tuning import SUMMARIES, TuningFiles
 from composer.spec.cvlr.state import PROVER_VALIDATION_KEY
 from composer.spec.cvlr.verify import (
@@ -92,6 +93,7 @@ from composer.spec.source.report.collect import (
 from composer.spec.source.report.schema import (
     AppliedEditRecord, BuildEnvironment, ConfinedBuilds, SourceEditRecord, UnconfinedBuilds,
 )
+from composer.spec.source.munge.vfs_diff import diff_against_baseline
 from composer.spec.source.report_prover import make_run_link_fetcher
 from composer.spec.source.report.schema import RuleName
 from composer.spec.types import PropertyFormulation
@@ -144,6 +146,9 @@ class CvlrDeps:
     versions: str
     #: Where each violated rule's analysis lands, for the report to reshape into findings.
     cex_analysis: CexAnalysisStore
+    #: The source tools every unit's agents read the program through, and the store their edits
+    #: to it are committed to.
+    editing: ProgramEditing
 
 
 @dataclasses.dataclass(frozen=True)
@@ -242,6 +247,7 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
             cvlr_versions=self.deps.versions,
             target=target,
             verify=verify,
+            editing=self.deps.editing,
         )
 
     @override
@@ -265,47 +271,39 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
         outcomes: list[ComponentOutcome[GeneratedHarness, SolanaComponentInstance]],
         run: PipelineRun,
     ) -> list[SourceEditRecord]:
-        """The munges each delivered unit's verdicts were earned against.
+        """The edits each delivered unit's verdicts were earned against, as one patch per unit.
 
-        Reported through the shared hook rather than a CVLR-specific one, because a munge *is* a
-        source edit and the report already has a vocabulary for that — ``SourceEditRecord``'s own
-        docstring says its presence means "the component's outcomes are claims about the modified
-        code, not the code as shipped", which is exactly the disclosure a munge owes. A second
-        channel saying the same thing would be §7.6.7's mistake in a new place.
+        Reported through the shared hook rather than a CVLR-specific one, because an edit to the
+        program *is* a source edit and the report already has a vocabulary for that —
+        ``SourceEditRecord``'s own docstring says its presence means "the component's outcomes are
+        claims about the modified code, not the code as shipped". The same shape EVM reports.
 
-        The diff is computed from the munge records rather than read off the working tree
-        (:func:`composer.spec.cvlr.tree.munge_diff`). Two reasons, and both are consequences of the
-        tree being shared: the tree holds every unit's munges, so reading it would show one unit's
-        report its siblings' dormant lines; and a diff derived from state survives the tree being
-        deleted, which ``docs/single-working-tree.md`` §4 makes a routine thing to do. Only the
-        munged files are diffed — the harness module is a new file and this unit's own deliverable,
-        not a modification of the program.
+        Each unit's diff is its own overlay against the project, so it is a patch the user can apply
+        on its own, and it survives the working tree being deleted. Two units' patches to one file
+        are not merged: that is left to the user (``docs/cvlr-munges-as-text.md`` §1). The harness
+        module is never in an overlay — it is a new file and this unit's own deliverable, not a
+        modification of the program.
         """
         records: list[SourceEditRecord] = []
         project = Path(run.source.project_root)
         for outcome in outcomes:
-            # Delivered only. A curtailed partial's munges are on disk, but its verdicts are
+            # Delivered only. A curtailed partial's edits are in its state, but its verdicts are
             # unreliable by construction, and a SourceEditRecord means "these outcomes are claims
             # about the modified code" — which says nothing useful about outcomes that are not
             # claims at all.
             if not isinstance(outcome.result, Delivered):
                 continue
             harness = outcome.result.result
-            if not harness.munges:
+            if not harness.applied_edits:
                 continue
             records.append(
                 SourceEditRecord(
                     component=outcome.feat.display_name,
                     applied_edits=[
-                        AppliedEditRecord(
-                            edit_id=m.edit_id,
-                            executive_summary=f"{m.subject} in {m.path}: {m.describe()}",
-                            why_sound=m.why_sound,
-                        )
-                        for m in harness.munges
+                        AppliedEditRecord(**e.model_dump()) for e in harness.applied_edits
                     ],
                     cumulative_diff=await asyncio.to_thread(
-                        munge_diff, project, self.build.tree.source, tuple(harness.munges)
+                        diff_against_baseline, harness.vfs, project
                     ),
                 )
             )
@@ -442,6 +440,9 @@ class CvlrBackend:
     #: because the right one depends on the target
     #: (:func:`~composer.spec.cvlr.scaffold.select_generation`).
     reference: ChainReference
+    #: The run's services for editing the program, finished in :meth:`prepare_system` once
+    #: preflight has said which crates are the project's own.
+    editing: EditingServices
     #: The package to verify. ``None`` lets preflight pick it when there is only one candidate; a
     #: workspace with several is refused rather than guessed at.
     package: str | None = None
@@ -508,6 +509,14 @@ class CvlrBackend:
             package_dir=preflight.package_dir,
             versions=versions,
             cex_analysis=self.cex_analysis,
+            editing=program_editing(
+                self.editing,
+                run.env,
+                run.source,
+                preflight.source,
+                preflight.package_dir,
+                SOLANA,
+            ),
         )
         return CvlrPrepared(SOLANA.locate_main(analyzed, run.source), deps)
 

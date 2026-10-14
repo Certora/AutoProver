@@ -1,5 +1,7 @@
 # The working tree is a VFS
 
+> **Partly superseded.** The run-wide munge layer of §5 is superseded by [cvlr-munges-as-text.md](cvlr-munges-as-text.md): agents read their own unit's overlay over the project. The layering stands, per unit.
+
 > [munge-and-working-copies.md](munge-and-working-copies.md) §3 steps (5) and (6) argued that a
 > virtual filesystem is the wrong instrument for this backend. Steps (1)–(4) were superseded by
 > [single-working-tree.md](single-working-tree.md); this document retires the other two. (5) rests

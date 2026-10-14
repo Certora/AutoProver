@@ -1,5 +1,7 @@
 # One working tree
 
+> **Partly superseded.** §2.3, §4 and the first half of §2.4 are superseded by [cvlr-munges-as-text.md](cvlr-munges-as-text.md): the tree holds only the staging unit's edits, not a union of records. §2.1, §2.2, the permit and §3 stand.
+
 > The per-unit workdir replaced by a single shared tree, per-unit cargo features, and a build
 > permit — and the tree made derivable from checkpointed state rather than being state itself.
 >

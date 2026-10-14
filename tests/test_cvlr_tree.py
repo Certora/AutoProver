@@ -1,8 +1,9 @@
 """The one working tree, and the claim that it is derived rather than state.
 
 Every unit of a run shares one copy of the project, which is safe because each unit's module is
-behind its own cargo feature — and *resumable* because everything in the tree that the run put there
-can be recomputed from the checkpoint.
+behind its own cargo feature and only the staging unit's edits to the program are in it — and
+*resumable* because everything in the tree that the run put there can be recomputed from the
+checkpoint.
 
 No cargo, no network, no prover.
 """
@@ -18,7 +19,6 @@ from composer.cargo.metadata import CratePackage, LibTarget, RegistrySource, Wor
 from composer.layout import INTERNAL_DIR
 from composer.sandbox.recipes import SANDBOX_CARGO_DIR
 
-from composer.spec.cvlr.munge import EarlyPanic, FunctionMunge, MockFn
 from composer.spec.cvlr.harness import CvlrArtifactStore, HarnessModule
 from composer.spec.cvlr.scaffold import declare_unit_features
 from composer.spec.cvlr.tree import (
@@ -28,7 +28,6 @@ from composer.spec.cvlr.tree import (
     ProjectSource,
     SharedTree,
     UnitEdits,
-    munge_diff,
 )
 
 _RESERVE = "programs/p/src/reserve.rs"
@@ -61,21 +60,23 @@ async def _tree(tmp_path: Path) -> SharedTree:
     return tree
 
 
-def _munge(function: str, feature: str, kind=None) -> FunctionMunge:
-    return FunctionMunge(
-        path=_RESERVE,
-        function=function,
-        kind=kind or EarlyPanic(),
-        why_sound="[3308] on the `?` path",
-        feature=feature,
-    )
+def _early_panic_overlay(feature: str) -> dict[str, str]:
+    """An overlay putting one gated attribute on ``redeem_fees``."""
+    return {
+        _RESERVE: _SOURCE.replace(
+            "pub fn redeem_fees",
+            f'#[cfg_attr(feature = "{feature}", cvlr::early_panic)]\npub fn redeem_fees',
+        )
+    }
 
 
-def _edits(tree: SharedTree, unit: str, draft: str, *munges: FunctionMunge) -> UnitEdits:
+def _edits(
+    tree: SharedTree, unit: str, draft: str, overlay: dict[str, str] | None = None
+) -> UnitEdits:
     return UnitEdits(
         module_path=tree.root / _SPECS / f"{unit}.rs",
         draft=draft,
-        munges=munges,
+        overlay=overlay or {},
     )
 
 
@@ -94,7 +95,7 @@ async def test_deleting_the_tree_and_reconciling_reproduces_it(tmp_path: Path):
     rebuild and never correctness, which is what makes a cache replay — where there is no tree at
     all — a resume rather than a fresh start."""
     tree = await _tree(tmp_path)
-    edits = _edits(tree, "vault", "// draft\n", _munge("redeem_fees", "unit_vault"))
+    edits = _edits(tree, "vault", "// draft\n", _early_panic_overlay("unit_vault"))
     await tree.reconcile("vault", edits)
     before = (tree.root / _RESERVE).read_text()
 
@@ -108,11 +109,11 @@ async def test_deleting_the_tree_and_reconciling_reproduces_it(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_a_munge_dropped_from_state_leaves_the_file(tmp_path: Path):
-    """A rewound checkpoint must not leave an attribute on disk that nothing in state knows about.
-    Rebuilding each munged file from the pristine copy is what makes rewinding mean something."""
+async def test_an_edit_dropped_from_state_leaves_the_file(tmp_path: Path):
+    """A reverted edit or a rewound checkpoint must not leave a change on disk that nothing in state
+    knows about. A path the overlay stops serving is restored from the project."""
     tree = await _tree(tmp_path)
-    await tree.reconcile("vault", _edits(tree, "vault", "//\n", _munge("redeem_fees", "unit_vault")))
+    await tree.reconcile("vault", _edits(tree, "vault", "//\n", _early_panic_overlay("unit_vault")))
     assert "early_panic" in (tree.root / _RESERVE).read_text()
 
     await tree.reconcile("vault", _edits(tree, "vault", "//\n"))
@@ -121,11 +122,11 @@ async def test_a_munge_dropped_from_state_leaves_the_file(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_a_new_run_starts_from_the_project(tmp_path: Path):
-    """Nothing a previous run put in the tree survives into the next: not its munges and drafts,
+    """Nothing a previous run put in the tree survives into the next: not its edits and drafts,
     which a resumed run rederives from state, and not its build output and cargo home, which a
     dependency's build script can write to and which a later run must not inherit."""
     tree = await _tree(tmp_path)
-    await tree.reconcile("vault", _edits(tree, "vault", "// draft\n", _munge("redeem_fees", "unit_vault")))
+    await tree.reconcile("vault", _edits(tree, "vault", "// draft\n", _early_panic_overlay("unit_vault")))
     built = tree.root / "target" / "debug" / "x.rlib"
     cached = tree.root / SANDBOX_CARGO_DIR / "registry" / "src" / "anchor" / "lib.rs"
     for leftover in (built, cached):
@@ -178,7 +179,7 @@ async def test_re_reconciling_the_same_state_writes_nothing(tmp_path: Path):
     and costs a rebuild. This is what keeps a unit's next gate from recompiling what nothing
     changed."""
     tree = await _tree(tmp_path)
-    edits = _edits(tree, "vault", "// draft\n", _munge("redeem_fees", "unit_vault"))
+    edits = _edits(tree, "vault", "// draft\n", _early_panic_overlay("unit_vault"))
     await tree.reconcile("vault", edits)
     before = _mtimes(tree, _RESERVE, f"{_SPECS}/vault.rs")
 
@@ -191,7 +192,7 @@ async def test_no_scratch_file_is_left_behind(tmp_path: Path):
     """Derived files are replaced atomically, because the agents' source tools read the tree without
     the build permit. A leftover scratch file would also be collected as a source and uploaded."""
     tree = await _tree(tmp_path)
-    await tree.reconcile("vault", _edits(tree, "vault", "//\n", _munge("redeem_fees", "unit_vault")))
+    await tree.reconcile("vault", _edits(tree, "vault", "//\n", _early_panic_overlay("unit_vault")))
     assert sorted(p.name for p in (tree.root / "programs" / "p" / "src").iterdir()) == [
         "certora",
         "reserve.rs",
@@ -204,54 +205,38 @@ async def test_no_scratch_file_is_left_behind(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_the_union_of_both_units_munges_is_replayed(tmp_path: Path):
-    """Replaying only the staging unit's would delete its sibling's line, and the sibling would add
-    it back on its next gate — churning the file and rebuilding the crate for nothing."""
+async def test_staging_swaps_one_units_edits_in_and_a_siblings_out(tmp_path: Path):
+    """Two units' copies of one file have no union, and need none: every build holds the permit from
+    staging to upload, so the tree only ever has to hold the building unit's copy."""
     tree = await _tree(tmp_path)
-    await tree.reconcile("a", _edits(tree, "a", "//a\n", _munge("redeem_fees", "unit_a")))
-    await tree.reconcile("b", _edits(tree, "b", "//b\n", _munge("calculate_fees", "unit_b")))
+    await tree.reconcile("a", _edits(tree, "a", "//a\n", _early_panic_overlay("unit_a")))
+    assert '"unit_a"' in (tree.root / _RESERVE).read_text()
 
+    await tree.reconcile("b", _edits(tree, "b", "//b\n", _early_panic_overlay("unit_b")))
     text = (tree.root / _RESERVE).read_text()
-    assert '#[cfg_attr(feature = "unit_a", cvlr::early_panic)]' in text
-    assert '#[cfg_attr(feature = "unit_b", cvlr::early_panic)]' in text
+    assert '"unit_b"' in text
+    assert '"unit_a"' not in text
 
 
 @pytest.mark.asyncio
-async def test_two_units_munging_one_function_are_two_dormant_lines(tmp_path: Path):
-    """The reason the tree can be shared at all. Each attribute is gated on the recording unit's own
-    feature, so neither is in effect in the other's build — and neither is a conflict."""
+async def test_a_sibling_that_edited_nothing_builds_the_project_as_shipped(tmp_path: Path):
     tree = await _tree(tmp_path)
-    await tree.reconcile("a", _edits(tree, "a", "//a\n", _munge("redeem_fees", "unit_a")))
-    await tree.reconcile(
-        "b",
-        _edits(
-            tree,
-            "b",
-            "//b\n",
-            _munge("redeem_fees", "unit_b", MockFn(stand_in="crate::certora::mocks::f")),
-        ),
-    )
-    text = (tree.root / _RESERVE).read_text()
-    assert '#[cfg_attr(feature = "unit_a", cvlr::early_panic)]' in text
-    assert 'feature = "unit_b", cvlr::mock_fn(with = crate::certora::mocks::f)' in text
+    await tree.reconcile("a", _edits(tree, "a", "//a\n", _early_panic_overlay("unit_a")))
+    await tree.reconcile("b", _edits(tree, "b", "//b\n"))
+    assert (tree.root / _RESERVE).read_text() == _SOURCE
 
 
 @pytest.mark.asyncio
-async def test_the_replay_order_does_not_depend_on_who_staged_first(tmp_path: Path):
-    """Bytes that depended on scheduling would make the crate's fingerprint depend on it too, and
-    two runs of the same state would rebuild for no reason anybody could see."""
-    a = _munge("redeem_fees", "unit_a")
-    b = _munge("redeem_fees", "unit_b")
-
-    one = await _tree(tmp_path / "one")
-    await one.reconcile("a", _edits(one, "a", "//\n", a))
-    await one.reconcile("b", _edits(one, "b", "//\n", b))
-
-    two = await _tree(tmp_path / "two")
-    await two.reconcile("b", _edits(two, "b", "//\n", b))
-    await two.reconcile("a", _edits(two, "a", "//\n", a))
-
-    assert (one.root / _RESERVE).read_text() == (two.root / _RESERVE).read_text()
+async def test_a_swap_back_writes_the_same_bytes(tmp_path: Path):
+    """Swapping costs a rebuild of the program crate, and only that: the unit's file comes back
+    byte for byte, so its next build sees exactly the source of its last one."""
+    tree = await _tree(tmp_path)
+    a = _edits(tree, "a", "//a\n", _early_panic_overlay("unit_a"))
+    await tree.reconcile("a", a)
+    first = (tree.root / _RESERVE).read_bytes()
+    await tree.reconcile("b", _edits(tree, "b", "//b\n", _early_panic_overlay("unit_b")))
+    await tree.reconcile("a", a)
+    assert (tree.root / _RESERVE).read_bytes() == first
 
 
 @pytest.mark.asyncio
@@ -265,72 +250,40 @@ async def test_a_siblings_module_is_left_alone(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------------------------
-# drift
+# what an overlay may write
 
 
 @pytest.mark.asyncio
-async def test_a_munge_onto_moved_source_is_reported_rather_than_lost(tmp_path: Path):
-    """Replay happens against the pristine project, which can move between the run that recorded a
-    munge and the run that replays it. The failure is otherwise mute: the build succeeds, the report
-    still carries a source-edit record, and the property was checked against code the record does
-    not describe."""
-    tree = await _tree(tmp_path)
-    result = await tree.reconcile("a", _edits(tree, "a", "//\n", _munge("gone_away", "unit_a")))
-    assert not result
-    (drift,) = result.drifted
-    assert drift.munge.function == "gone_away"
-    assert "gone_away" in drift.describe()
-
-
-@pytest.mark.asyncio
-async def test_a_munge_of_something_that_is_not_project_source_is_refused(tmp_path: Path):
-    """The tool checked this when it recorded the munge, but the record now arrives from a
-    checkpoint. Confinement puts `CARGO_HOME` inside the tree, so containment alone would let a
-    replay rewrite a dependency for every crate in the graph."""
+async def test_an_overlay_writing_a_dependency_is_refused(tmp_path: Path):
+    """The editor's tools refused this when the edit was made, but the overlay now arrives from a
+    checkpoint or the edit store. Confinement puts `CARGO_HOME` inside the tree, so containment
+    alone would let a stage rewrite a dependency for every crate in the graph."""
     tree = await _tree(tmp_path)
     dependency = str(SANDBOX_CARGO_DIR / "registry/src/idx/anchor-lang-0.31.1/src/error.rs")
-    munge = FunctionMunge(
-        path=dependency, function="f", kind=EarlyPanic(), why_sound="w", feature="unit_a"
-    )
-    result = await tree.reconcile("a", _edits(tree, "a", "//\n", munge))
-    assert not result
-    assert "programs/p/src" in result.drifted[0].describe()
-
-
-# ---------------------------------------------------------------------------------------------
-# the report's diff, without a tree
-
-
-def test_the_diff_is_computed_from_state_with_no_tree(tmp_path: Path):
-    """A report is the last thing in a run and the tree is disposable by design, so a diff that
-    needed one would be the thing that stopped it being disposable."""
-    project = _project(tmp_path)
-    diff = munge_diff(project, _SOURCE_DIRS, (_munge("redeem_fees", "unit_a"),))
-    assert '+#[cfg_attr(feature = "unit_a", cvlr::early_panic)]' in diff
-    assert f"a/{_RESERVE}" in diff
-
-
-def test_the_diff_refuses_a_path_reconcile_would_refuse(tmp_path: Path):
-    """One answer to which paths a munge may name, whether the munge is being built or reported."""
-    project = _project(tmp_path)
-    outside = FunctionMunge(
-        path="../elsewhere.rs", function="f", kind=EarlyPanic(), why_sound="w", feature="unit_a"
-    )
-    diff = munge_diff(project, _SOURCE_DIRS, (outside,))
-    assert "resolves outside the project" in diff
-    assert "+++" not in diff
+    with pytest.raises(ValueError, match="programs/p/src"):
+        await tree.reconcile("a", _edits(tree, "a", "//\n", {dependency: "x"}))
+    assert not (tree.root / dependency).exists()
 
 
 @pytest.mark.asyncio
-async def test_a_munged_crlf_file_is_written_once(tmp_path: Path):
-    """Replay works on the file's text, so a CRLF file is munged with LF line endings. What matters
-    is that its content compares equal from then on: a file that never did would be rewritten, and
-    the crate rebuilt, on every gate."""
+async def test_an_overlay_writing_a_harness_module_is_refused(tmp_path: Path):
+    """The modules are the authors', and the tree overlays them from state."""
+    tree = await _tree(tmp_path)
+    await tree.reconcile("a", _edits(tree, "a", "// a\n"))
+    with pytest.raises(ValueError, match="harness module"):
+        await tree.reconcile("b", _edits(tree, "b", "//\n", {f"{_SPECS}/a.rs": "// b"}))
+    assert (tree.root / _SPECS / "a.rs").read_text() == "// a\n"
+
+
+@pytest.mark.asyncio
+async def test_an_edited_crlf_file_is_written_once(tmp_path: Path):
+    """An overlay holds the file's text as the editor read it. What matters is that it compares equal
+    from then on: a file that never did would be rewritten, and the crate rebuilt, on every gate."""
     project = _project(tmp_path)
     (project / _RESERVE).write_bytes(_SOURCE.replace("\n", "\r\n").encode())
     tree = SharedTree(pristine=project, root=tmp_path / "work" / "build", source=_SOURCE_DIRS)
     await tree.materialize()
-    edits = _edits(tree, "a", "//\n", _munge("redeem_fees", "unit_a"))
+    edits = _edits(tree, "a", "//\n", _early_panic_overlay("unit_a"))
     await tree.reconcile("a", edits)
     before = _mtimes(tree, _RESERVE)
 
@@ -338,14 +291,6 @@ async def test_a_munged_crlf_file_is_written_once(tmp_path: Path):
 
     assert "early_panic" in (tree.root / _RESERVE).read_text()
     assert _mtimes(tree, _RESERVE) == before
-
-
-def test_one_units_diff_does_not_show_a_siblings_dormant_lines(tmp_path: Path):
-    """Reading the diff off the tree would show every unit's munges in every unit's report, and a
-    `SourceEditRecord` is a claim about what *this* component's outcomes were earned against."""
-    project = _project(tmp_path)
-    diff = munge_diff(project, _SOURCE_DIRS, (_munge("redeem_fees", "unit_a"),))
-    assert "unit_b" not in diff
 
 
 # ---------------------------------------------------------------------------------------------
@@ -491,33 +436,28 @@ async def test_two_units_naming_one_module_are_refused(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------------------------
-# which paths a munge may name
+# which paths an edit may write
 
 
-def test_a_munge_path_is_answered_against_the_pristine_project(tmp_path: Path):
-    """The path is answered against the pristine copy, because those are the bytes `reconcile`
-    replays onto: a tool that captured a region from a tree already carrying a sibling's munges
-    would record an edit no replay could apply."""
+def test_a_path_outside_the_project_is_refused(tmp_path: Path):
     project = _project(tmp_path)
     tree = SharedTree(pristine=project, root=tmp_path / "work" / "build", source=_SOURCE_DIRS)
-    tree.root.mkdir(parents=True)
-    assert tree.pristine_of(_RESERVE) == project / _RESERVE
-    assert isinstance(tree.pristine_of("../outside.rs"), NotInProject)
-    assert isinstance(tree.pristine_of("/etc/passwd"), NotInProject)
+    assert tree.refuse_edit(_RESERVE) is None
+    assert isinstance(tree.refuse_edit("../outside.rs"), NotInProject)
+    assert isinstance(tree.refuse_edit("/etc/passwd"), NotInProject)
 
 
 def test_a_dependency_inside_the_tree_is_not_project_source(tmp_path: Path):
     """Containment is not the question, and this is the case that shows why. Confinement gives the
     run a private ``CARGO_HOME`` under ``<tree>/.certora_internal``, so every dependency's unpacked
-    source sits inside the tree. A check that stopped at "is it in the tree" would let a munge
+    source sits inside the tree. A check that stopped at "is it in the tree" would let an edit
     rewrite Anchor for every crate in the graph."""
     tree = SharedTree(
         pristine=_project(tmp_path), root=tmp_path / "work" / "build", source=_SOURCE_DIRS
     )
-    tree.root.mkdir(parents=True)
 
     anchor = str(SANDBOX_CARGO_DIR / "registry/src/index.crates.io-6f17d22/anchor-lang-0.31.1/src/error.rs")
-    assert isinstance(tree.pristine_of(anchor), NotProjectSource)
+    assert isinstance(tree.refuse_edit(anchor), NotProjectSource)
 
     for built in (
         "target/debug/build/x/out/gen.rs",
@@ -525,7 +465,20 @@ def test_a_dependency_inside_the_tree_is_not_project_source(tmp_path: Path):
         "node_modules/pkg/index.rs",
         "certora_out/y.rs",
     ):
-        assert isinstance(tree.pristine_of(built), NotProjectSource), built
+        assert isinstance(tree.refuse_edit(built), NotProjectSource), built
+
+
+def test_a_local_crates_manifest_may_be_edited(tmp_path: Path):
+    """An edit inside a local dependency gates on a feature that crate does not declare, so the same
+    edit has to declare it there and forward it from the program's manifest."""
+    source = ProjectSource(
+        roots=(PurePosixPath("programs/p/src"),),
+        manifests=(PurePosixPath("programs/p/Cargo.toml"), PurePosixPath("crates/m/Cargo.toml")),
+    )
+    assert source.may_edit("crates/m/Cargo.toml")
+    assert not source.contains("crates/m/Cargo.toml")
+    assert not source.may_edit("Cargo.toml")
+    assert not source.may_edit("crates/m/build.rs")
 
 
 def test_build_output_inside_a_source_directory_is_not_project_source():
@@ -599,3 +552,6 @@ def test_project_source_is_read_off_the_workspace(tmp_path: Path):
     source = ProjectSource.of(workspace, project)
 
     assert source.roots == (PurePosixPath("crates/m/lib"), PurePosixPath("programs/p/src"))
+    assert source.manifests == (
+        PurePosixPath("crates/m/Cargo.toml"), PurePosixPath("programs/p/Cargo.toml")
+    )

@@ -53,13 +53,16 @@ from composer.prover.core import make_prover_options
 from composer.rag.models import DefaultEmbedder
 from composer.rustapp.frontend import GenericRustConsoleHandler
 from composer.spec.context import SourceCode, WorkflowContext
+from composer.spec.agent_index import AgentIndex, AgentIndexConfig
 from composer.spec.cvlr.conf import PLATFORM_TOOLS_VERSION
+from composer.spec.cvlr.editor import EditingServices
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness
 from composer.spec.cvlr.pipeline import CvlrBackend
 from composer.pipeline.ptypes import Curtailed, Delivered
 from composer.spec.cvlr.rules import rule_names
 from composer.spec.service_host import ModelProvider, PureServiceHost
 from composer.spec.source.cex_capture import CexAnalysisStore
+from composer.spec.source.munge.edit_store import EditStore
 from composer.spec.source.source_env import build_basic_source_tools, build_source_tools
 from composer.spec.types import RustIdentifier
 from composer.ui.tool_display import async_tool_context
@@ -265,6 +268,17 @@ async def test_the_backend_authors_cvlr_rules_for_the_vault(
             # the report's findings possible at all: without it the backend opts out of findings
             # synthesis, which is what `findings: []` meant in every run before §7.7.
             cex_analysis=CexAnalysisStore(store=conns.store, namespace=("cvlr_cex", "cvlr_gate")),
+            editing=EditingServices(
+                store=EditStore(conns.store, ("cvlr_gate", "edits")),
+                explorer_index=AgentIndex(
+                    store=conns.indexed_store,
+                    config=AgentIndexConfig(base_layer=("cvlr_gate", "src")),
+                ),
+                indexed_store=conns.indexed_store,
+                source_key="cvlr_gate",
+                forbidden_read=RUST_FORBIDDEN_READ,
+                recursion_limit=DEFAULT_RECURSION_LIMIT,
+            ),
             package=_PACKAGE,
         )
         run = PipelineRun(

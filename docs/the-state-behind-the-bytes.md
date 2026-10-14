@@ -1,5 +1,7 @@
 # The state behind the bytes
 
+> **Partly superseded.** The `DeriveSwap` record and its refusals are superseded by [cvlr-munges-as-text.md](cvlr-munges-as-text.md); the derive swap is now charter text in `cvlr_munge_editor_system.j2`. The case for swapping derives stands.
+
 > A seventh munge kind, proposed. The six in
 > [who-edits-the-program.md](who-edits-the-program.md) §8.4 annotate or split *functions*; this one
 > changes how a *type* is serialized, which is the only thing that reaches a class of Prover failure

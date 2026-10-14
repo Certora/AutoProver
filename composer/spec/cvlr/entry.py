@@ -51,7 +51,8 @@ from composer.prover.core import make_prover_options
 from composer.sandbox.config import SandboxConfig
 from composer.spec.context import SourceFields
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness
-from composer.spec.cvlr.pipeline import BUILD_DIR, WORK_DIR, CvlrBackend, CvlrPhase
+from composer.spec.cvlr.editor import EditingServices
+from composer.spec.cvlr.pipeline import WORK_DIR, CvlrBackend, CvlrPhase
 from composer.spec.cvlr.preflight import SelectedPackage, select_package
 from composer.spec.cvlr.reference import generations
 from composer.spec.service_host import PureServiceHost
@@ -59,7 +60,8 @@ from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.source_env import build_layered_source_tools, build_source_tools
 from composer.kb.kb_context import CVLR_BUNDLE
 from composer.kb.knowledge_base import kb_tools
-from composer.spec.agent_index import agent_index_config_from_env
+from composer.spec.agent_index import AgentIndex, AgentIndexConfig, agent_index_config_from_env
+from composer.spec.source.munge.edit_store import EditStore
 from composer.spec.cvlr_research import (
     DEFAULT_CVLR_AGENT_INDEX_NS,
     corpus_tools,
@@ -186,11 +188,10 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-#: The working tree, withheld from the agent's own listing. Every source file in it is a copy of
-#: one the project layer already serves at the same relative path, so listing it doubles the tree
-#: and offers a second, *derived* spelling of every file — and reading the wrong one of a pair is
-#: quieter than reading nothing. The tree still reaches the agent, as the layer above the project;
-#: what is withheld is the path *through* ``.cvlr_work``, not the content.
+#: The working tree, withheld from every agent. Every source file in it is a copy of one the project
+#: already serves at the same relative path, and the copies are not any one unit's: the tree holds
+#: whichever unit staged last. A unit's agents read its own edits through its overlay instead
+#: (``docs/cvlr-munges-as-text.md`` §4.3).
 _WORK_TREE_EXCLUDE = rf"(^{re.escape(WORK_DIR.as_posix())}/.*)"
 
 
@@ -392,21 +393,16 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
             package=selected.name,
             confined=sandbox.enabled,
         ) as (staged, cont):
-            # Two layers, first hit wins: the run's derived working tree above the developer's
-            # checkout. Before the tree exists — analysis and extraction — every read falls through
-            # to the project, which is what those phases are about. Once the formalizer has made it,
-            # a file the run has munged reads as munged, because the tree is the same bytes the
-            # compiler is given. The alternative, which cost a run, is an agent reasoning about
-            # pristine source while the prover verifies something else
-            # (``docs/the-tree-is-a-vfs.md``).
+            # The project as shipped. A unit's own agents read through its overlay instead, with
+            # the VFS-aware tools the formalizer builds (``composer.spec.cvlr.editor``): an agent
+            # reasoning about the project while the prover verifies the unit's edited copy is the
+            # mismatch ``docs/the-tree-is-a-vfs.md`` records costing a run.
             project = pathlib.Path(staged.source.project_root)
+            surface = _source_surface(staged.source.forbidden_read)
             basic = build_layered_source_tools(
-                [
-                    DirBackend(project / WORK_DIR / BUILD_DIR, cache_listing=False),
-                    DirBackend(project, cache_listing=False),
-                ],
-                forbidden_read=_source_surface(staged.source.forbidden_read),
+                [DirBackend(project, cache_listing=False)], forbidden_read=surface
             )
+            source_cache_ns = user_ns("source_agent", "cache", staged.root_key)
             # The code explorer reads only the project. Which CVLR crates the target resolves is
             # not known until preflight, which runs after this; the backend mounts them for the
             # *author* from ``prepare_system``, where the resolved graph is in hand.
@@ -414,7 +410,7 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
                 basic,
                 staged.llm_models,
                 staged.conns.indexed_store,
-                user_ns("source_agent", "cache", staged.root_key),
+                source_cache_ns,
                 recursion_limit=args.recursion_limit,
                 ecosystem=SOLANA,
             )
@@ -459,6 +455,19 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
                 ),
                 package=selected.name,
                 reference=selected.reference.withholding(*args.withhold_crate),
+                editing=EditingServices(
+                    store=EditStore(
+                        staged.conns.store, user_ns("edit_snapshots", staged.root_key)
+                    ),
+                    explorer_index=AgentIndex(
+                        store=staged.conns.indexed_store,
+                        config=AgentIndexConfig(base_layer=source_cache_ns),
+                    ),
+                    indexed_store=staged.conns.indexed_store,
+                    source_key=staged.root_key,
+                    forbidden_read=surface,
+                    recursion_limit=args.recursion_limit,
+                ),
             )
             return await cont(env, backend)
 

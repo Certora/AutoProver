@@ -77,17 +77,6 @@ from composer.spec.cvlr.conf import (
     OptimisticLoop,
     tunable_conf,
 )
-from composer.spec.cvlr.munge import (
-    AlreadyMunged,
-    EarlyPanic,
-    FunctionAmbiguous,
-    Munge,
-    FunctionNotFound,
-    MockFn,
-    MungeKind,
-    Munged,
-    apply_munge,
-)
 from composer.spec.cvlr.prover import (
     BuildRejected,
     Checked,
@@ -107,13 +96,7 @@ from composer.spec.cvlr.state import (
     LastVerdicts,
     tuning_history,
 )
-from composer.spec.cvlr.tree import (
-    NotInProject,
-    NotProjectSource,
-    Reconciled,
-    SharedTree,
-    UnitEdits,
-)
+from composer.spec.cvlr.tree import SharedTree, UnitEdits
 from composer.spec.cvlr.tuning import SummaryDirective, TuningFiles
 from composer.spec.cvlr.vacuity import VacuityAnalyzer, core_finding
 from composer.spec.source.cex_capture import CexAnalysisStore
@@ -165,10 +148,7 @@ class HarnessTarget:
     session: CargoSession
     module_path: Path
     package: str
-    #: The package's directory inside the tree. Carried because a munge has to know whether a path
-    #: is inside the crate under verification: an edit outside it cannot be gated on this unit's
-    #: feature, since the feature is declared on this package's manifest
-    #: (``docs/who-edits-the-program.md`` §11.3).
+    #: The package's directory inside the tree.
     package_root: Path
     #: The package's tuning files, which ``summarize_for_prover`` rewrites.
     tuning: TuningFiles
@@ -217,60 +197,33 @@ class HarnessTarget:
         finally:
             permit.release()
 
-    def pristine_source(self, relative: str) -> Path | NotInProject | NotProjectSource:
-        """The developer's copy of a file a munge names, or why the path is not one it may name.
-
-        The tree's own answer (:meth:`composer.spec.cvlr.tree.SharedTree.pristine_of`), asked here
-        so a munge is refused when it is *recorded* rather than only when it is replayed. One
-        implementation, because a check the tool and the replay could disagree about is a check that
-        lets an edit through on one path and not the other.
-
-        Pristine rather than the tree's copy for the same reason: replay acts on the pristine
-        source, so a tool that dry-runs an edit against a tree already carrying a sibling unit's
-        must reach a different verdict from the replay that follows it.
-        """
-        return self.tree.pristine_of(relative)
-
-    def in_package(self, pristine: Path) -> bool:
-        """Whether a file :meth:`pristine_source` answered with belongs to the package under
-        verification.
-
-        Asked on the pristine side because that is where :meth:`pristine_source` points, while
-        :attr:`package_root` names the package inside the tree — comparing one against the other
-        finds every file of the package foreign to it.
-        """
-        pristine_package = self.tree.pristine / self.package_root.relative_to(self.tree.root)
-        return pristine.resolve().is_relative_to(pristine_package.resolve())
-
     async def stage(
         self,
         draft: str,
         summaries: Sequence[SummaryDirective] = (),
-        munges: Sequence[Munge] = (),
-    ) -> Reconciled:
-        """Make the tree agree with this unit's state, and report what could not be carried over.
+        overlay: Mapping[str, str] = {},
+    ) -> None:
+        """Make the tree agree with this unit's state.
 
         All three inputs from one place, because all three are inputs to the build: the prover reads
-        the tuning file through the conf, and a munge changes the program it compiles. Each comes
-        from already-merged state rather than from the tool that recorded one, so two concurrent
-        calls cannot each write their own view of the list and lose the other's.
+        the tuning file through the conf, and an edited file changes the program it compiles. Each
+        comes from already-merged state rather than from the tool that recorded one, so two
+        concurrent calls cannot each write their own view and lose the other's.
 
         Everything here is written **from state**, not edited in place. The summaries file is
         rewritten wholesale even when there are none — the composite the conf names has to exist, and
-        a directive dropped from state has to disappear. The munges are replayed onto the pristine
-        source by :meth:`composer.spec.cvlr.tree.SharedTree.reconcile`, which is what makes the tree
-        derivable after a crash, a rewind, or a cache replay with no tree at all
-        (``docs/single-working-tree.md`` §4).
+        a directive dropped from state has to disappear. The overlay replaces whichever unit's edited
+        files the tree held (:meth:`composer.spec.cvlr.tree.SharedTree.reconcile`), which is what
+        makes the tree derivable after a crash, a rewind, or a cache replay with no tree at all.
 
         Call it while holding :meth:`build_slot`. It is the tree's only writer, and the permit is
-        what keeps two units out of it at once.
+        what keeps two units out of it at once — and, now that the tree holds only the staging
+        unit's edits, what keeps a sibling's edits out of this unit's build.
         """
         self.tuning.write(tuple(summaries))
-        return await self.tree.reconcile(
+        await self.tree.reconcile(
             self.unit.module,
-            UnitEdits(
-                module_path=self.module_path, draft=draft, munges=tuple(munges)
-            ),
+            UnitEdits(module_path=self.module_path, draft=draft, overlay=overlay),
         )
 
 
@@ -511,7 +464,7 @@ def _externals_note(externals: Sequence[str]) -> str | None:
         "verdict. You cannot add inlining directives.\n"
         "If a rule's property depends on the value one of these computes, and the program's own "
         "code makes the call, you can bound the value instead of losing it. Ask `code_editor` to "
-        "extract the call into a function of its own (`extract_function`), then to replace that "
+        "extract the call into a function of its own (an extraction), then to replace that "
         "function with a stand-in you write (`mock_fn`) that returns `nondet()` values constrained "
         "by what the real function guarantees, such as a result no larger than its input. Use "
         "only bounds the real function provably keeps: a tighter one can pass a rule the program "
@@ -538,26 +491,6 @@ def _wrongly_expected(status: dict[str, bool], expected_failures: dict[CheckName
     return sorted(name for name in expected_failures if status.get(name) is True)
 
 
-def _drift_note(reconciled: Reconciled) -> str:
-    """What to tell the author when a munge in state did not reach the file.
-
-    Surfaced rather than logged. A munge is replayed onto the *pristine* project, which can have
-    moved since the munge was recorded — a resumed run, a cache replay, or a developer editing
-    underneath the run — and the failure is otherwise mute: the build succeeds, the report still
-    carries a source-edit record, and the property was checked against code the record does not
-    describe. ``docs/single-working-tree.md`` §4.3 is the argument for this being a return value.
-    """
-    if not reconciled.drifted:
-        return ""
-    lines = "\n".join(f"  - {d.describe()}" for d in reconciled.drifted)
-    return (
-        f"\n\nWARNING: {len(reconciled.drifted)} recorded munge(s) could not be applied to the "
-        f"program source, so this build does not contain them:\n{lines}\n"
-        "The source they name has changed since they were recorded. Re-record them against the "
-        "code as it is now, or drop the rules that depended on them."
-    )
-
-
 @tool_display("Compiling the harness", "Compile")
 class CargoCheck(
     WithInjectedState[CvlrGenerationState],
@@ -579,9 +512,7 @@ class CargoCheck(
             return "No harness written yet — put a draft first."
         with self.tool_deps() as target:
             async with target.build_slot():
-                reconciled = await target.stage(
-                    draft, self.state["summaries"], self.state["munges"]
-                )
+                await target.stage(draft, self.state["summaries"], self.state["vfs"])
                 run = await target.session.check(
                     manifest_dir=target.package_dir, features=target.features
                 )
@@ -591,13 +522,12 @@ class CargoCheck(
                 names = ", ".join(declared) if declared else "none"
                 return tool_return(
                     self.tool_call_id,
-                    f"Compiled in {run.duration_ms}ms. Rules declared: {names}."
-                    + _drift_note(reconciled),
+                    f"Compiled in {run.duration_ms}ms. Rules declared: {names}.",
                 )
             case CompileFailed(diagnostics=diagnostics):
                 return tool_return(
                     self.tool_call_id,
-                    f"Does not compile:\n{diagnostics}" + _drift_note(reconciled),
+                    f"Does not compile:\n{diagnostics}",
                 )
 
 
@@ -624,8 +554,8 @@ async def _stage_and_submit(
     callbacks: _RunAccounting,
     cex: CexHandler,
     tool_call_id: str,
-) -> tuple[Reconciled, CvlrOutcome]:
-    """Stage ``draft`` with the unit's summaries and munges, build it, and submit it.
+) -> CvlrOutcome:
+    """Stage ``draft`` with the unit's summaries and edits, build it, and submit it.
 
     One build permit covers all of it until the Prover has uploaded. ``run_submission`` rebuilds the
     crate into the target directory every build shares and uploads that ``.so``, so a sibling must
@@ -636,12 +566,12 @@ async def _stage_and_submit(
     feature (``docs/single-working-tree.md`` §2.4).
     """
     async with deps.target.build_slot() as permit:
-        reconciled = await deps.target.stage(draft, state["summaries"], state["munges"])
+        await deps.target.stage(draft, state["summaries"], state["vfs"])
         prepared = await prepare_submission(
             deps.target.session, submission, into=deps.submissions
         )
         if isinstance(prepared, BuildRejected):
-            return reconciled, prepared
+            return prepared
         callbacks.release_on_upload(permit)
         outcome = await run_submission(
             deps.target.session,
@@ -651,7 +581,7 @@ async def _stage_and_submit(
             cex=cex,
             tool_call_id=tool_call_id,
         )
-    return reconciled, outcome
+    return outcome
 
 
 @tool_display("Running the Solana Prover", "Prover")
@@ -692,7 +622,7 @@ class VerifyRules(
                 # to read, so *every* submission this backend made failed until this line named
                 # them. Not every rule either — a build compiles this unit's module and the artifact
                 # declares every unit's rules, so this unit would be graded on its siblings' drafts.
-                reconciled, outcome = await _stage_and_submit(
+                outcome = await _stage_and_submit(
                     deps,
                     self.state,
                     draft,
@@ -706,7 +636,6 @@ class VerifyRules(
                 deps,
                 capture.incomplete if capture is not None else {},
                 declared=declared,
-                drift=_drift_note(reconciled),
             )
 
     def _nothing_to_submit(self) -> Command | str:
@@ -785,12 +714,8 @@ class VerifyRules(
         incomplete: Mapping[str, str],
         *,
         declared: Sequence[str],
-        drift: str = "",
     ) -> Command | str:
-        """What the gate says, with any replay drift appended.
-
-        ``drift`` rides on every branch rather than only the green one: a munge that did not reach
-        the build is as much a part of why a rule failed as of what a passing rule means."""
+        """What the gate says."""
         stamper = deps.stamper
         expected = self.state["expected_failures"]
         match outcome:
@@ -807,13 +732,13 @@ class VerifyRules(
                 )
                 return tool_return(
                     self.tool_call_id,
-                    f"The chain build failed, so nothing was submitted:\n{said}" + drift,
+                    f"The chain build failed, so nothing was submitted:\n{said}",
                 )
             case SubmissionFailed(build=build, reason=reason):
                 said = [f"The prover run did not produce results: {reason}"]
                 if (inert := self._inert_summaries(build)) is not None:
                     said.append(inert)
-                return tool_return(self.tool_call_id, "\n\n".join(said) + drift)
+                return tool_return(self.tool_call_id, "\n\n".join(said))
             case Checked(build=build, report=report):
                 status = report.rule_status
                 unaccounted = _unaccounted(status, expected, incomplete)
@@ -864,15 +789,14 @@ class VerifyRules(
                 if unaccounted or unverdicted:
                     return tool_state_update(
                         self.tool_call_id,
-                        "\n\n".join(lines) + drift,
+                        "\n\n".join(lines),
                         prover_link=report.link,
                         external_functions=report.external_functions,
                         last_verdicts=last,
                     )
                 return tool_state_update(
                     self.tool_call_id,
-                    "\n\n".join([*lines, "Every rule is accounted for. This draft is stamped."])
-                    + drift,
+                    "\n\n".join([*lines, "Every rule is accounted for. This draft is stamped."]),
                     prover_link=report.link,
                     external_functions=report.external_functions,
                     last_verdicts=last,
@@ -952,7 +876,7 @@ class ExplainVacuity(
                     # Its own conf file: the unit's is part of the deliverable.
                     stem=f"{verify.submission.stem}_unsat_core",
                 )
-                reconciled, outcome = await _stage_and_submit(
+                outcome = await _stage_and_submit(
                     verify,
                     self.state,
                     draft,
@@ -965,7 +889,7 @@ class ExplainVacuity(
                 case BuildRejected():
                     return (
                         "The chain build failed, so nothing was submitted. Run verify_rules to see "
-                        "the compiler's diagnostics." + _drift_note(reconciled)
+                        "the compiler's diagnostics."
                     )
                 case SubmissionFailed(reason=reason):
                     return f"The diagnostic run did not produce results: {reason}"
@@ -1000,6 +924,7 @@ class ExplainVacuity(
                 core=core,
                 harness=draft,
                 conf=tunable_conf(self.state["prover_settings"]),
+                vfs=self.state["vfs"],
                 within_tool=self.tool_call_id,
             )
             return "\n\n".join(
@@ -1013,10 +938,10 @@ def gate_tools(
     """The gate tools and the one tool that changes what they check, named as the prompt refers to
     them.
 
-    ``munge_function`` is deliberately absent. Editing the program under verification belongs to one
-    entity and it is not the author (:mod:`composer.spec.cvlr.editor`,
-    ``docs/who-edits-the-program.md`` §4); what the author gets instead is ``code_editor`` and
-    ``revert_munge``, bound where the rest of its tools are."""
+    No tool here edits the program under verification. That belongs to one entity and it is not the
+    author (:mod:`composer.spec.cvlr.editor`, ``docs/who-edits-the-program.md`` §4); what the author
+    gets instead is ``code_editor`` and the edit-history tools, bound where the rest of its tools
+    are."""
     return [
         CargoCheck.bind(target).as_tool("cargo_check"),
         VerifyRules.bind(deps).as_tool("verify_rules"),

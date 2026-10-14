@@ -30,6 +30,7 @@ from composer.spec.service_host import ModelProvider
 from composer.spec.util import uniq_thread_id
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 from graphcore.graph import FlowInput
+from graphcore.tools.vfs import VFSState
 
 #: The rule's own assertion as a core line: ``[in UC] 66: ASSERT B548:bool [assertion failed] (…)``.
 _CORE_ASSERT = re.compile(r"^\[in UC\]\s+\d+:\s+ASSERT\b", re.MULTILINE)
@@ -149,11 +150,11 @@ class VacuityAnalysis(BaseModel):
         return "\n".join(lines)
 
 
-class _VacuityInput(FlowInput, RoughDraftState):
+class _VacuityInput(FlowInput, RoughDraftState, VFSState):
     pass
 
 
-class _VacuityST(MessagesState, RoughDraftState):
+class _VacuityST(MessagesState, RoughDraftState, VFSState):
     result: NotRequired[VacuityAnalysis]
 
 
@@ -181,8 +182,11 @@ class VacuityAnalyzer:
         core: str,
         harness: str,
         conf: Conf,
+        vfs: dict[str, str],
         within_tool: str | None,
     ) -> VacuityAnalysis:
+        """``vfs`` is the unit's edits to the program, which the analyzer's source tools read
+        through: the core is of the edited program."""
         state = await run_to_completion(
             graph=self.graph,
             context=None,
@@ -199,6 +203,7 @@ class VacuityAnalyzer:
                 ],
                 drafted=False,
                 memory=None,
+                vfs=vfs,
             ),
             within_tool=within_tool,
         )
@@ -212,7 +217,8 @@ def vacuity_analyzer(
     """The analyzer, reading the program and the harness through ``tools``.
 
     ``tools`` are the author's own source and reference tools: the analyzer has to map core commands
-    back to the same Rust the author reads, and to the CVLR crates the harness calls into.
+    back to the same Rust the author reads, and to the CVLR crates the harness calls into. The source
+    tools must be VFS-aware ones, since the unit's overlay is seeded into the analyzer's state.
 
     On the heavy tier, as the counterexample analysis is: tracing a core back to the assumption that
     cuts off every path is reasoning, not retrieval.

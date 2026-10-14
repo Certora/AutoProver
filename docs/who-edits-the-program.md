@@ -1,5 +1,7 @@
 # Who edits the program
 
+> **Partly superseded.** §8.2-8.6, §9.3 and §10-13 are superseded by [cvlr-munges-as-text.md](cvlr-munges-as-text.md): edits are text in a per-unit overlay, not records. §1-7 stand.
+
 > Whether the CVLR backend can move *every* modification of the program under verification behind a
 > munge agent — including the property-relative kinds the author applies today — and let the author
 > write only its own unit's spec.

@@ -406,7 +406,7 @@ def test_the_author_is_warned_that_a_summary_is_unsound():
 def test_the_judge_weighs_summaries_the_same_way_it_weighs_mirrors():
     prompt = _flat(_judge_system_prompt())
     item_one = prompt.split("2. **Vacuity")[0]
-    assert "the summaries and the munges, the same way" in item_one
+    assert "the summaries and the edits to the program, the same way" in item_one
     assert "hollows out" in item_one
 
 

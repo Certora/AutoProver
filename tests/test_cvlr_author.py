@@ -325,12 +325,12 @@ def test_the_author_is_told_which_functions_were_external_and_what_that_means():
     assert "writes nothing else" in note and "cannot add inlining directives" in note
 
 
-def test_the_author_is_shown_how_to_bound_an_external_value_with_munges_it_has():
+def test_the_author_is_shown_how_to_bound_an_external_value_with_edits_it_can_ask_for():
     """Without this the note's only remedies were commentary and skips, so a property over the stake
-    program's activation math, which an author can bound with two munges, went unchecked."""
+    program's activation math, which an author can bound with two edits, went unchecked."""
     note = _externals_note(("solana_stake_interface::state::Delegation::stake_activating_and_deactivating",))
     assert note is not None
-    assert "`extract_function`" in note and "`mock_fn`" in note and "`rule_subjects`" in note
+    assert "an extraction" in note and "`mock_fn`" in note and "`rule_subjects`" in note
 
 
 def test_a_rule_marked_expected_to_fail_that_verifies_is_reported():
@@ -383,7 +383,8 @@ def _verify_state(draft: str) -> dict:
         "property_rules": [],
         "rule_subjects": [],
         "summaries": [],
-        "munges": [],
+        "vfs": {},
+        "version_history": [],
         "prover_settings": TunableConf(),
         "required_validations": [],
         "validations": {},
@@ -542,10 +543,8 @@ async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeyp
     import contextlib
 
     from composer.spec.cvlr import verify as verify_mod
-    from composer.spec.cvlr.tree import Reconciled
-
-    async def _stubbed_stage(draft, summaries=(), munges=()) -> Reconciled:
-        return Reconciled(drifted=())
+    async def _stubbed_stage(draft, summaries=(), overlay={}) -> None:
+        return None
 
     captured: dict = {}
 
@@ -801,22 +800,22 @@ class _RecordingCtx:
         self.put = value
 
 
-def test_a_units_draft_and_its_munges_are_carried_to_the_next_run():
+def test_a_units_draft_and_its_edits_are_carried_to_the_next_run():
     """The expensive half is authoring, and a budget-cut unit used to lose all of it: measured on
-    the stake benchmark as thousands of lines re-written at full price. Munges travel as their
-    `describe()` lines, not as values — restoring a program edit from a cache would put it into a
-    run whose reviewer never saw it."""
+    the stake benchmark as thousands of lines re-written at full price. The edits travel as their
+    edit-store ids, as EVM's do: every id in the store was reviewed and compiled before it got
+    there, and the next run restores the working copy from the last one."""
     ctx = _RecordingCtx()
     graph = _FakeGraph({
         "curr_spec": "#[rule]\npub fn rule_x() {}",
-        "munges": [SimpleNamespace(describe=lambda: "split so `f_inner` is a function a rule can drive")],
+        "version_history": ["edit-1", "edit-2"],
     })
 
     asyncio.run(author._remember_attempt(ctx, graph, "tid"))  # type: ignore[arg-type]
 
     assert ctx.put is not None
     assert ctx.put.spec == "#[rule]\npub fn rule_x() {}"
-    assert ctx.put.munges == ["split so `f_inner` is a function a rule can drive"]
+    assert ctx.put.version_history == ["edit-1", "edit-2"]
 
 
 def test_a_unit_that_authored_nothing_caches_nothing():
@@ -840,7 +839,7 @@ def test_a_curtailed_unit_does_not_overwrite_a_fuller_draft():
     draft is often a fraction of what it held. Writing that over an earlier run's fuller draft loses
     work nobody reconsidered — measured on the stake benchmark as 6,176 cached lines replaced by
     1,609."""
-    held = author.LastCvlrAttempt(spec="#[rule]\n" * 40, munges=[])
+    held = author.LastCvlrAttempt(spec="#[rule]\n" * 40)
     ctx = _RecordingCtx(held=held)
     graph = _FakeGraph({"curr_spec": "#[rule]\npub fn rule_survivor() {}", "budget_curtailed": True})
 
@@ -863,7 +862,7 @@ def test_a_curtailed_unit_still_seeds_an_empty_slot():
 def test_a_unit_that_finished_on_its_own_terms_still_overwrites():
     # Not curtailed: the last draft is the considered one even when it is smaller, and CVL's
     # unconditional overwrite is the behaviour to keep here.
-    held = author.LastCvlrAttempt(spec="#[rule]\n" * 40, munges=[])
+    held = author.LastCvlrAttempt(spec="#[rule]\n" * 40)
     ctx = _RecordingCtx(held=held)
     graph = _FakeGraph({"curr_spec": "#[rule]\npub fn rule_considered() {}"})
 

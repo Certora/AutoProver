@@ -58,7 +58,7 @@ def _no_memory(namespace: str) -> BaseTool:
 async def _draft(
     checkpointer: BaseCheckpointSaver[str], thread_id: str, *, largest: bool
 ) -> LastCvlrAttempt | None:
-    """A thread's draft and the munges recorded alongside it, or ``None`` if it never held one.
+    """A thread's draft and the edits applied alongside it, or ``None`` if it never held one.
 
     ``alist`` walks newest-first, so the first hit is where the unit stopped. ``largest`` keeps
     walking for its high-water mark instead; see the ``--draft`` help for when that is wanted.
@@ -73,7 +73,7 @@ async def _draft(
         if best is None or len(draft) > len(best.spec):
             best = LastCvlrAttempt(
                 spec=draft,
-                munges=[m.describe() for m in values.get("munges") or ()],
+                version_history=list(values.get("version_history") or ()),
             )
         if not largest:
             break
@@ -101,8 +101,10 @@ async def _recover(
             continue
         found += 1
         lines = attempt.spec.count("\n") + 1
-        munged = f", {len(attempt.munges)} munge(s)" if attempt.munges else ""
-        print(f"  {lines:5d} lines{munged}  {'.'.join(tail)}")
+        edited = (
+            f", {len(attempt.version_history)} edit(s)" if attempt.version_history else ""
+        )
+        print(f"  {lines:5d} lines{edited}  {'.'.join(tail)}")
         if not dry_run:
             ctx = WorkflowContext.create(
                 services=_no_memory,

@@ -4,7 +4,9 @@
 > edits: a per-unit overlay of whole files, written by the munge editor, with the editor writing the
 > cargo-feature gating itself and the report handing the user one patch per unit.
 >
-> **Planned, not started.** Reverses the decision in
+> **Implemented and measured.** §7 steps 1-6 are done (the rebuild cost is §10 item 1); step 7
+> (re-recording the vault tape, running the CVLR e2e test) is not, and step 8 is a decision about
+> the PR's shape. Reverses the decision in
 > [who-edits-the-program.md](who-edits-the-program.md) §8.2 ("Option 2 — a typed write surface over
 > the munge records") and supersedes the munge halves of
 > [single-working-tree.md](single-working-tree.md) §2.3 and §4 and of
@@ -71,7 +73,8 @@ reverts.
 * **A program-crate rebuild when consecutive builds come from different units and either has munged
   a file.** With the union, a munged file's bytes are the same for every unit, so each unit's
   compiled variant stays cached in `target/`. With swapping, the bytes change, so cargo recompiles
-  the program crate (and any local crate whose file was munged). Not measured; §10 item 1.
+  the program crate (and any local crate whose file was munged). Measured on klend: about 20s per
+  SBF build, about 1s per `cargo check` (§10 item 1).
 * **Drift detection on resume.** A record replay refuses when the project's source has moved since
   the munge was recorded. A stored whole-file overlay silently overwrites the developer's newer
   copy. EVM has the same gap. Within one run the project copy does not move.
@@ -161,10 +164,15 @@ gate changed; a dependency edit declares and forwards the feature.
 
 ### 4.5 The author's surface
 
-`code_editor(request)` stays. Today an edit is applied to the author's build on return; EVM instead
-returns an application key for `commit_edit`. Keep CVLR's auto-apply (§10 item 2), backed by
-`EditStore` so EVM's `revert_to_edit` and `edit_history_log` work unchanged and replace
-`revert_munge`. `amend_munge` goes: re-wording a justification is a new edit with the same overlay.
+EVM's surface, unchanged. `code_editor(request)` stays, but an approved edit is no longer applied to
+the author's build on return: the editor's result is committed to `EditStore` and the author gets
+the summary, the soundness argument, the diff and an application key, and applies the edit by
+calling `commit_edit(key)`. An edit the author never commits is never in force. `edit_history_log`
+and `revert_to_edit` replace `revert_munge`. `amend_munge` goes: re-wording a justification is a new
+edit with the same overlay.
+
+This costs the author one tool call per edit, and buys one author surface for both backends: the
+same tool names, the same prompt text about editing, and the same tools (§4.8).
 
 ### 4.6 The judge
 
@@ -184,8 +192,14 @@ on a record's kind. The "IN FORCE FOR EVERY UNIT" note goes with the shared gate
 [who-edits-the-program.md](who-edits-the-program.md) §8.6 recommended building Solana's editor
 against a local protocol first and lifting a shared core "once there are two implementations to
 generalise from". With one edit representation that condition is met. Lift from `munge_agent.py`:
-`RequestReviewTool`, `GiveUpTool`, the digest gate, and `SubmitEditTool` with its gate and
-completion model made parameters; `EditStore` and `vfs_diff` are already shared. The conf-map
+`RequestReviewTool` (with a backend `briefing` placed before the diff), `GiveUpTool`, the reviewer
+(`munge_feedback_judge`, its prompts a parameter), the digest gate (`unapproved`) and the acceptance
+(`accept_edits`); and from `author.py`, the author's side: `ApplyEditTool` (`commit_edit`),
+`EditHistoryLog` and `RevertToEdit`, now in `munge/edit_tools.py` and typed on `VersionedHistory`,
+the only state they read, with `AppliedEdit` and `applied_edits` beside `EditStore`. `EditStore` and
+`vfs_diff` are already shared. Each backend keeps its own submit tool: the
+gates' inputs differ too much (a conf and added files on EVM, the harness draft and summaries on
+CVLR) for one parameterized class to be smaller than two that call the shared helpers. The conf-map
 extension, `added_files`, ERC-7201 tools and Solidity prompts stay behind the EVM side.
 `EditToolsHost` is already the seam.
 
@@ -224,8 +238,8 @@ extension, `added_files`, ERC-7201 tools and Solidity prompts stay behind the EV
   `test_ap_trail_recover.py`.
 * **New tests:** staging swaps one unit's overlay in and a sibling's out; a swap back writes the
   same bytes; a read sees the unit's own overlay, not the last staged one; the submit gate refuses
-  an overlay path outside `ProjectSource` and one rustc never read; `source_edits` produces one
-  patch per unit.
+  an overlay path outside `ProjectSource` and one rustc never read; an approved edit is not
+  staged until the author commits it; `source_edits` produces one patch per unit.
 * **The vault tape** (`composer/testing/ui_harness_cvlr_vault.py`) records editor turns calling
   `swap_import` and `munge_function`. It is re-recorded (`scripts/record_cvlr_tape.sh`) once the
   editor's tools change.
@@ -249,7 +263,7 @@ extension, `added_files`, ERC-7201 tools and Solidity prompts stay behind the EV
 
 ## 7. Order of work
 
-1. **Measure the rebuild cost** (§10 item 1) on klend, so the trade in §3 has a number before
+1. ~~**Measure the rebuild cost**~~ (done, §10 item 1) on klend, so the trade in §3 has a number before
    anything is deleted.
 2. **Lift the shared editor core** out of `munge_agent.py` with EVM still passing unchanged.
 3. **Per-unit overlays in state and the tree** (§4.1, §4.2), and per-unit reads (§4.3).
@@ -300,11 +314,24 @@ Each gets a one-line banner pointing here; none is deleted.
 
 ## 10. Open questions
 
-1. **How long is a program-crate rebuild on a large target?** If it is seconds, §3's first cost is
-   noise. If it is a minute, alternating units on a munged file needs a mitigation, such as ordering
-   the build queue by unit.
-2. **Auto-apply or `commit_edit`?** CVLR applies an approved edit on return and EVM makes the author
-   commit it. The plan keeps auto-apply; adopting `commit_edit` would make the two backends' author
-   surfaces identical at the cost of one more tool call per edit.
+1. ~~**How long is a program-crate rebuild on a large target?**~~ **Measured on klend
+   (2026-10-14): a swap costs one rebuild of the program crate and nothing else.** Two units each
+   gating one attribute in `state/reserve.rs`, staged alternately through `SharedTree.reconcile`,
+   three rounds each way (37k lines of program source, 287 crates in the host graph):
+
+   | build | cold | restage, no change | swap |
+   |---|---|---|---|
+   | host `cargo check` (rustc 1.74.1) | 25.6s | 0.1s | 1.2s |
+   | `cargo-build-sbf` (solana 1.17.34) | 67.2s | 0.4s | 19.5s |
+
+   Every swap rebuilt exactly one crate. The SBF figure is the one a submission pays, and it is
+   the same rebuild a unit already pays whenever its own draft changed since its last build, which
+   is the usual reason to run `verify_rules`. So the marginal cost is about 20s only on a build
+   whose draft did not change. No mitigation is needed yet. Not measured: the `certora` and unit
+   features (the harness modules and the CVLR crates were not compiled), and the Prover's own
+   rebuild. The host check ran on klend's pinned 1.74.1, because the backend's
+   `HOST_RUST_TOOLCHAIN` (1.90.0) cannot compile klend's `farms` dependency: its static size
+   assertions fail under the `u128` alignment change in rustc 1.77.
+2. ~~**Auto-apply or `commit_edit`?**~~ **Decided: `commit_edit`, as EVM does** (§4.5).
 3. **Does the report need merge guidance?** Two units' patches to one file conflict textually but
    not semantically. A note in the rendered report may be enough.

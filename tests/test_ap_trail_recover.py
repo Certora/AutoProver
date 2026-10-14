@@ -22,14 +22,6 @@ UNIT = ("solana-properties", "comp1", "batch1")
 THREAD_ROOT = "cvlr_abc123"
 
 
-class _Munge:
-    def __init__(self, text: str):
-        self._text = text
-
-    def describe(self) -> str:
-        return self._text
-
-
 class _Checkpointer:
     """Enough of the saver to answer ``alist``: drafts oldest-first per thread, served newest-first."""
 
@@ -67,7 +59,7 @@ def _store_with_unit() -> InMemoryStore:
 async def test_a_units_thread_id_is_rebuilt_from_its_namespace():
     store = _store_with_unit()
     thread = f"{THREAD_ROOT}-solana-properties-comp1-batch1"
-    found = await _run(store, _Checkpointer({thread: [{"curr_spec": "rule a", "munges": []}]}))
+    found = await _run(store, _Checkpointer({thread: [{"curr_spec": "rule a", "version_history": []}]}))
 
     assert found == 1
     got = await _cached(store, UNIT)
@@ -78,20 +70,20 @@ async def test_a_units_thread_id_is_rebuilt_from_its_namespace():
 async def test_the_final_draft_is_taken_by_default_and_the_peak_on_request():
     thread = f"{THREAD_ROOT}-solana-properties-comp1-batch1"
     history = [
-        {"curr_spec": "a\nb\nc\nd", "munges": [_Munge("swap x")]},
-        {"curr_spec": "a", "munges": []},
+        {"curr_spec": "a\nb\nc\nd", "version_history": ["edit-1"]},
+        {"curr_spec": "a", "version_history": []},
     ]
 
     store = _store_with_unit()
     await _run(store, _Checkpointer({thread: history}))
     final = await _cached(store, UNIT)
-    assert final is not None and final.spec == "a" and final.munges == []
+    assert final is not None and final.spec == "a" and final.version_history == []
 
     store = _store_with_unit()
     await _run(store, _Checkpointer({thread: history}), largest=True)
     peak = await _cached(store, UNIT)
-    # The munges travel from the same checkpoint as the draft, not from the newest one.
-    assert peak is not None and peak.spec == "a\nb\nc\nd" and peak.munges == ["swap x"]
+    # The edits travel from the same checkpoint as the draft, not from the newest one.
+    assert peak is not None and peak.spec == "a\nb\nc\nd" and peak.version_history == ["edit-1"]
 
 
 @pytest.mark.asyncio
@@ -100,7 +92,7 @@ async def test_a_thread_that_never_held_a_draft_is_passed_over():
     # empty attempt for one would seed a later run with a blank buffer.
     store = _store_with_unit()
     thread = f"{THREAD_ROOT}-solana-properties-comp1-batch1"
-    found = await _run(store, _Checkpointer({thread: [{"curr_spec": "   ", "munges": []}]}))
+    found = await _run(store, _Checkpointer({thread: [{"curr_spec": "   ", "version_history": []}]}))
 
     assert found == 0
     assert await _cached(store, UNIT) is None
@@ -111,7 +103,7 @@ async def test_a_dry_run_reports_without_writing():
     store = _store_with_unit()
     thread = f"{THREAD_ROOT}-solana-properties-comp1-batch1"
     found = await _run(
-        store, _Checkpointer({thread: [{"curr_spec": "rule a", "munges": []}]}), dry_run=True
+        store, _Checkpointer({thread: [{"curr_spec": "rule a", "version_history": []}]}), dry_run=True
     )
 
     assert found == 1

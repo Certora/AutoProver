@@ -18,7 +18,7 @@ from composer.cargo.metadata import CratePackage, LibTarget, RegistrySource, Wor
 from composer.spec.cvlr.reference import SOLANA_V2, generations
 from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ, SOLANA
 from composer.spec.cvlr import entry, preflight
-from composer.spec.cvlr.pipeline import BUILD_DIR, WORK_DIR, CvlrPhase
+from composer.spec.cvlr.pipeline import WORK_DIR, CvlrPhase
 
 
 def _package(root: Path, name: str, *, lib: bool = True) -> CratePackage:
@@ -406,24 +406,32 @@ async def test_the_source_surface_is_cargos_not_soliditys(project, monkeypatch, 
 
 
 @pytest.mark.asyncio
-async def test_the_author_reads_the_working_tree_above_the_project(project, monkeypatch, wiring):
-    """First hit wins, so a file the run has munged reads as munged and everything else reads as
-    the developer wrote it. Reading pristine source while the prover verifies the tree is what cost
-    a run (``docs/the-tree-is-a-vfs.md`` §1)."""
+async def test_shared_agents_read_the_project_as_shipped(project, monkeypatch, wiring):
+    """The working tree holds whichever unit staged last, so it is no agent's view. A unit's own
+    agents read its edits through its overlay (``docs/cvlr-munges-as-text.md`` §4.3); everything
+    else reads the project."""
     await _run([str(project), "programs/vault/src/lib.rs:vault"], monkeypatch, wiring)
 
-    tree, checkout = wiring.env["source_tools"]  # type: ignore[index]
-    assert tree.root == project / WORK_DIR / BUILD_DIR
+    (checkout,) = wiring.env["source_tools"]  # type: ignore[index]
     assert checkout.root == project
-    # Re-enumerated per call: the tree appears mid-run, and a cached listing taken before the
-    # formalizer made it would never show it.
-    assert not tree.cache_listing and not checkout.cache_listing
+    # Re-enumerated per call: preflight scaffolds the project while analysis reads it.
+    assert not checkout.cache_listing
+
+
+@pytest.mark.asyncio
+async def test_the_units_editing_kit_reads_the_project_without_the_tree(project, monkeypatch, wiring):
+    await _run([str(project), "programs/vault/src/lib.rs:vault"], monkeypatch, wiring)
+
+    import re as _re
+
+    editing = wiring.backend.editing  # type: ignore[union-attr]
+    assert isinstance(editing.forbidden_read, str)
+    assert _re.fullmatch(editing.forbidden_read, f"{WORK_DIR.as_posix()}/build/programs/vault/src/lib.rs")
 
 
 def test_the_working_tree_itself_is_not_listed():
-    """It is served as a *layer*; the path through it is withheld. Otherwise every source file
-    appears twice — once pristine, once derived — and the derived spelling is the one that reads
-    like an ordinary project file."""
+    """Every source file in it is a copy of one the project serves at the same path, and the copies
+    are whichever unit staged last."""
     import re as _re
 
     surface = entry._source_surface(SOLANA.language.default_forbidden_read)
