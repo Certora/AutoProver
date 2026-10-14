@@ -515,6 +515,24 @@ it.
 
 ### A7. Knowledge and prompt text
 
+**Done.**
+
+- Where a prompt, or `swap_import`'s tool description, said `invoke` is `solana_program`'s, it now
+  says it is the SDK's: `solana_program`'s, or `solana_cpi`'s on SDK 3. That covers the
+  property-generation prompt, the munge editor's prompt, `editor.py` and `munge.py`. The vacuity
+  prompt describes handlers written against either SDK. The Anchor examples are unchanged, since
+  they are right for Anchor.
+- **Recipe K3:**
+  - It gives the SDK 3 spellings: `from_account_info` is on `SysvarSerialize`, and the address is
+    `Clock::id()`.
+  - It notes that syscall reads, `StakeHistorySysvar` included, need no account.
+  - It says what to do when the program recomputes the rent reserve at each instruction instead of
+    storing it. Stake on SDK 3 does that, and the integer stand-in for `minimum_balance` is then the
+    way to state the property. SDK 3's `solana-rent` still computes `minimum_balance` in `f64`, so
+    the float caveat stands.
+
+What follows is the original plan.
+
 Little of it depends on the generation.
 
 - The munge editor's examples (`use anchor_lang::solana_program::program::invoke`) are Anchor

@@ -1154,8 +1154,8 @@ class SwapImport(
 
     The kind for code the program calls but does not own. `munge_function` needs the function to be
     the program's, because an attribute goes on a definition, and a munge may not touch a dependency.
-    A CPI is the case where neither holds: `invoke` belongs to `solana_program`, the call is an
-    expression rather than an item, and the optimizer has usually left no symbol to summarize. What
+    A CPI is the case where neither holds: `invoke` belongs to the SDK (`solana_program`, or
+    `solana_cpi` on the split SDK 3 crates), the call is an expression rather than an item, and the optimizer has usually left no symbol to summarize. What
     *is* the program's is the `use` line that puts the name in scope, and that is what this rewrites:
 
     ```rust

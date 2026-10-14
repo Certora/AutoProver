@@ -134,7 +134,8 @@ The editor's charter is nine kinds, and knowing them tells you what is worth ask
   it. Mocking a
   hash, a clock, or a CPI the property does not speak about is the case this is for.
 * **`swap_import`** is `mock_fn` reached from the calling side, for a function the program
-  does not own. An attribute goes on a definition, and `invoke` is `solana_program`'s — but
+  does not own. An attribute goes on a definition, and `invoke` is the SDK's (`solana_program`'s,
+  or `solana_cpi`'s on the split SDK 3 crates) — but
   the `use` line that puts it in scope is the program's, and the editor can point that at a
   stand-in you wrote. **You write the stand-in**, the same way as for `mock_fn`, with the
   signature the call sites use. It is scoped to the file rather than to the call, so every

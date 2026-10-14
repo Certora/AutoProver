@@ -836,7 +836,8 @@ class ModuleRedirect:
 # the import swap: the kind for code in a dependency the program only calls
 #
 # Every kind above edits the item it is about, which requires the item to be the program's. A CPI is
-# the case where it is not: ``invoke`` is ``solana_program``'s, a munge may not touch a dependency,
+# the case where it is not: ``invoke`` is the SDK's (``solana_program``'s, or ``solana_cpi``'s on
+# SDK 3), a munge may not touch a dependency,
 # and the call the program makes to it is an expression rather than an item. What *is* the program's
 # is the ``use`` line that puts the name in scope.
 
