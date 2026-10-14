@@ -6,7 +6,7 @@ It implements the full ``PipelineBackend`` contract over the Solana ecosystem's
 ``fetch_verdicts`` returns nothing.
 
 **Role:** a **test double** for the Solana front half (analysis + property extraction)
-without a real verifier — see ``tests/test_solana_gate.py``. Production Solana
+without a real verifier — see ``tests/test_null_solana_backend.py``. Production Solana
 verification is the Crucible fuzzer backend — a Rust wheel hosted by
 :mod:`composer.rustapp`.
 """

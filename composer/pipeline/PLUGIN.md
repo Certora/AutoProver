@@ -151,6 +151,16 @@ Invocation model:
   what inference (or an earlier plugin in the chain) produced automatically
   lands you in a fresh namespace.
 
+### Formalization tools
+
+A plugin can also hand the formalization agent extra tools. It opts in by
+deriving a tool-provider subclass of `PipelinePlugin` rather than the base:
+the prover backend's `CertoraProverTools`
+(`composer/spec/source/plugin.py`), Foundry's `FoundryTools`
+(`composer/foundry/plugin.py`), or `AnyBackendTools`
+(`composer/pipeline/plugin_api.py`) for tools that suit every backend. The
+docstrings there are the reference.
+
 ## `PluginContext` — what a hook receives
 
 Both hooks receive `run: PluginContext[C]`, where `C` is the hook's marker
@@ -166,7 +176,7 @@ things:
     handing to an agent.
   * `ctx.thread_id`, `ctx.recursion_limit` — pass through to
     `run_to_completion` when running your own graph.
-  * `PrePropertyInference`/`PostPropertyInferece` is a generic "marker" context type, you should
+  * `PrePropertyInference`/`PostPropertyInference` is a generic "marker" context type, you should
     implement a `CacheKey[PrePropertyInference, MyModelType]` and navigate
     (via `child_ctx = ctx.child(...)`) to the `MyModelType` context
   * `await child_ctx.cache_get(MyModelType)` / `await child_ctx.cache_put(value)` -

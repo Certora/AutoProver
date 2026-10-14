@@ -2,8 +2,7 @@
 
 The null backend is a pure test double for the Solana front half — it records extracted
 properties without verifying them. These tests exercise it in isolation: no LLM, no Postgres,
-no prover. (The end-to-end live gate that drives real models through it is
-``tests/test_solana_gate.py``, marked ``expensive``.)
+no prover.
 """
 
 import json

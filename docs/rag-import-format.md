@@ -1,14 +1,14 @@
-# Design Doc — A common JSON format for RAG entries + a single importer
+# A common JSON format for RAG entries, and a single importer
 
-> Today every documentation corpus that feeds a search tool ships its **own** RAG builder:
-> a bespoke Python module that parses that corpus's native format *and* talks to the RAG
-> database, plus a shell wrapper. Adding a new corpus (notably: a new Rust application that
-> wants its own `*_kb`) means writing another builder wired to the DB.
+> Before this layer, every documentation corpus that fed a search tool shipped its **own** RAG
+> builder: a bespoke Python module that parsed that corpus's native format *and* talked to the RAG
+> database, plus a shell wrapper. Adding a corpus (notably: a Rust application that wants its own
+> `*_kb`) meant writing another builder wired to the DB.
 >
-> This proposes splitting that seam: a **producer** emits a corpus as a common JSON document,
-> and one shared **importer** ingests any such document into the RAG DB. The DB coupling,
-> chunking, embedding, batching and dual-path ingestion move into the importer — once — and a
-> producer shrinks to "parse my docs → emit JSON", with no dependency on the RAG stack.
+> This layer splits that seam: a **producer** emits a corpus as a common JSON document, and one
+> shared **importer** ingests any such document into the RAG DB. The DB coupling, chunking,
+> embedding, batching and dual-path ingestion live in the importer, once, and a producer is just
+> "parse my docs → emit JSON", with no dependency on the RAG stack.
 >
 > **Scope:** this layer ships the *mechanism* — the format, the importer, and the tag→connection
 > registry — with **no corpus on it**; the first adopter is the Crucible application, which lands
@@ -278,20 +278,17 @@ both non-trivial corpora cleanly; the design isn't Crucible-only.
 
 Under the descriptor model a Rust app is a wheel + a declarative `AppDescriptor`; it already
 names its corpus via `rag_db_default`. The missing piece is *contributing the corpus content*
-without writing composer-resident Python glued to the RAG DB. Two levels:
+without writing composer-resident Python glued to the RAG DB:
 
-- **Level 1 (what this layer enables):** the app ships a `<kb>.rag.json` next to its crate (built
+- **What this layer enables:** the app ships a `<kb>.rag.json` next to its crate (built
   however it likes — a script in the app's own repo, checked-in output, a CI artifact) and the
   generic `rag_import.py` ingests it. No checkout of the upstream doc source at build or run time.
   Composer ships the importer and the schema, nothing corpus-specific. Crucible is the first app to
   do this; see its own docs for that corpus.
-- **Level 2 (optional, natural follow-on):** add a wheel FFI callout — `rag_entries() -> str`
-  returning the manifest JSON — so RAG content becomes part of the app package exactly like
-  `descriptor()`. The importer could then ingest straight from a loaded wheel
-  (`rag_import --from-wheel <app>`), and a Rust app contributes a corpus with **zero**
-  Python. This is out of scope for v1 but is the reason the manifest is self-describing
-  (`knowledge_base` inside the document, not a CLI arg): a wheel can emit a complete, resolvable
-  corpus with no external metadata.
+- **Not planned:** a wheel FFI callout (`rag_entries() -> str`) that would let the importer read
+  a manifest straight from a loaded wheel. Nothing needs it yet. The manifest is self-describing
+  (`knowledge_base` inside the document, not a CLI arg), so adding one later needs no schema
+  change.
 
 ---
 
@@ -338,6 +335,6 @@ No runtime code changes — the search tools, `rag_env.py`, and the DB API are t
 - **Persist richer per-row metadata** (source URL, doc version, tags). Deferred: the current DB
   schema is header-only, so v1 keeps provenance at the manifest level (logs only). Revisit with
   a schema change if retrieval ever needs to filter on it.
-- **One physical DB per corpus vs. one shared DB.** Orthogonal to this proposal — the
+- **One physical DB per corpus vs. one shared DB.** Orthogonal to this format — the
   `KNOWLEDGE_BASES` registry expresses whatever the deployment already does (today: shared
-  `rag_db`, distinct roles; `extended_rag_db` separate). The format doesn't dictate topology.
+  `rag_db`, with a role and schema per corpus). The format doesn't dictate topology.

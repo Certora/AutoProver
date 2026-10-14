@@ -23,13 +23,14 @@ set -euo pipefail
 script_dir="$(realpath "$(dirname "$0")")"
 parent="$(realpath "$script_dir/..")"
 
-# extended_rag_db connection (mirrors populate_extended_rag.sh / SANITY_DEFAULT_CONNECTION)
-ext_conn="postgresql://extended_rag_user:rag_password@localhost:5432/extended_rag_db"
+# The extended corpus: its own role on rag_db, whose search_path selects the extended_rag schema
+# (mirrors SANITY_DEFAULT_CONNECTION)
+ext_conn="postgresql://extended_rag_user:rag_password@localhost:5432/rag_db"
 
 # --- options (defaults: regenerate docs, refresh the CVL-only rag_db) ---
 do_gen=1        # 0 with --skip-gen-docs to reuse existing scripts/prover-docs/*.html
 do_default=1    # refresh rag_db        (CVL only; used by AI Composer + cex-analyzer)
-do_extended=0   # refresh extended_rag_db (CVL + prover + user-guide; used by sanity-analyzer)
+do_extended=0   # refresh the extended corpus (CVL + prover + user-guide; used by sanity-analyzer)
 
 usage() {
     cat <<'EOF'
@@ -40,10 +41,10 @@ Regenerate the documentation and rebuild the CVL-manual RAG from scratch.
 Options:
   --skip-gen-docs   Skip the gen_docs.sh step and rebuild from the HTML already
                     present in scripts/prover-docs/. Use when the docs are fresh.
-  --extended        ALSO refresh extended_rag_db (CVL + prover + user-guide).
-                    Requires that DB / user to already be provisioned.
-  --all             Refresh both rag_db and extended_rag_db.
-  --only-extended   Refresh ONLY extended_rag_db (skip rag_db).
+  --extended        ALSO refresh the extended corpus (CVL + prover + user-guide).
+                    Requires its role and schema (init-db.sql) to exist.
+  --all             Refresh both rag_db and the extended corpus.
+  --only-extended   Refresh ONLY the extended corpus (skip rag_db).
   -h, --help        Show this help.
 
 Default (no options): regenerate docs, then wipe+rebuild rag_db only.
@@ -80,7 +81,7 @@ echo "============================================================"
 echo "  RAG refresh"
 echo "    regenerate docs : $([[ $do_gen -eq 1 ]] && echo yes || echo 'no (reuse prover-docs/)')"
 echo "    rag_db          : $([[ $do_default -eq 1 ]] && echo 'wipe + rebuild' || echo skip)"
-echo "    extended_rag_db : $([[ $do_extended -eq 1 ]] && echo 'wipe + rebuild' || echo skip)"
+echo "    extended corpus : $([[ $do_extended -eq 1 ]] && echo 'wipe + rebuild' || echo skip)"
 echo "  This empties the target database(s) then rebuilds. Run offline."
 echo "============================================================"
 
@@ -97,10 +98,10 @@ if [[ $do_default -eq 1 ]]; then
     bash "$script_dir/populate_rag.sh"
 fi
 
-# 2+3. extended_rag_db (CVL + prover + user-guide)
+# 2+3. the extended corpus (CVL + prover + user-guide)
 if [[ $do_extended -eq 1 ]]; then
-    wipe_db "extended_rag_db (CVL + prover + user-guide)" --conn-string "$ext_conn"
-    echo "==> Rebuilding extended_rag_db (populate_extended_rag.sh) ..."
+    wipe_db "the extended corpus (CVL + prover + user-guide)" --conn-string "$ext_conn"
+    echo "==> Rebuilding the extended corpus (populate_extended_rag.sh) ..."
     bash "$script_dir/populate_extended_rag.sh"
 fi
 
