@@ -10,7 +10,7 @@ from langchain_core.tools import BaseTool
 from langgraph.store.base import BaseStore
 from langgraph.graph import MessagesState
 
-from graphcore.tools.vfs import VFSState, VFSInput, VFSAccessor, vfs_tools
+from graphcore.tools.vfs import GlobalExcludeArg, VFSState, VFSInput, VFSAccessor, vfs_tools
 from graphcore.tools.schemas import WithAsyncDependencies, WithInjectedId, WithInjectedState
 from graphcore.graph import Builder
 from graphcore.tools.results import result_tool_generator
@@ -142,7 +142,12 @@ def setup_live_edits(
     oracle: MigrationOracle,
     recursion_limit: int,
     ecosystem: Ecosystem,
+    # Specs are the author's domain; confs are reached through config_edit —
+    # a conf edit can never pass the compile gate (it is never parsed by solc).
+    forbidden_write: GlobalExcludeArg = r'^.+\.(spec|conf)$',
 ) -> LiveEditTools:
+    """``forbidden_write`` is what the editor may not write, in either of graphcore's exclusion
+    forms; the default is the Solidity pipeline's."""
     x = VersionedAgentIndex(
         _wrapped=base_store,
         _store=store,
@@ -158,9 +163,7 @@ def setup_live_edits(
 
     write_tools, _ = vfs_tools({
         "forbidden_read": sc.forbidden_read,
-        # Specs are the author's domain; confs are reached through config_edit —
-        # a conf edit can never pass the compile gate (it is never parsed by solc).
-        'forbidden_write': r'^.+\.(spec|conf)$',
+        "forbidden_write": forbidden_write,
         "immutable": False,
         "fs_layer": sc.project_root,
         "global_exclude": _prover_output_dirs,

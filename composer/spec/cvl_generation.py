@@ -32,6 +32,7 @@ from composer.spec.context import (
 )
 from composer.spec.guidance import ERC20TokenGuidance, UnresolvedCallGuidance
 from composer.spec.types import CheckName, PropertyTitle, RuleName
+from composer.spec.source.munge.edit_store import AppliedEdit
 from composer.spec.graph_builder import run_to_completion
 from composer.cvl.tools import put_cvl_raw, put_cvl, get_cvl, edit_cvl
 from composer.ui.tool_display import tool_display
@@ -85,14 +86,6 @@ def _output_link(link: str | None) -> str | None:
     """Rewrite a prover ``/jobStatus/`` URL to its ``/output/`` view; local result dirs (and
     ``None``) pass through unchanged."""
     return link.replace("/jobStatus/", "/output/") if link else None
-class AppliedEdit(BaseModel):
-    """Provenance of one applied source edit: its edit-store id and the
-    editor's account of what changed and why it is acceptable."""
-    edit_id: str
-    executive_summary: str
-    why_sound: str
-
-
 class GeneratedCVL(BaseModel):
     commentary: str
     skipped: list[SkippedProperty] = Field(default_factory=list)

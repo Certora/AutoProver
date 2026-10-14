@@ -15,7 +15,6 @@ from graphcore.tools.schemas import (
     WithAsyncDependencies
 )
 from graphcore.graph import tool_state_update, tool_return, RawPromptInput, CacheMarker, SummaryConfig
-from graphcore.tools.vfs import VFSAccessor, VFSState
 
 from composer.authoring.judge import PropertyFeedbackProtocol
 from composer.authoring.state import SkippedProperty
@@ -24,10 +23,10 @@ from composer.spec.guidance import StructuralInvariantGuidance
 from composer.spec.cvl_generation import (
     cvl_guidance_tools, skip_tools, CVLGenerationExtra, FEEDBACK_VALIDATION_KEY,
     CVL_JUDGE_KEY, run_cvl_generator,
-    GeneratedCVL, PropertyRuleMapping, AppliedEdit, FeedbackToolBase,
+    GeneratedCVL, PropertyRuleMapping, FeedbackToolBase,
 )
 from composer.prover.core import run_prover, CexHandler, ProverCallbacks, ProverReport
-from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools, WIPE_HISTORY
+from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools
 from composer.spec.source.prover import (
     buffer_conf, component_slug, materialize_buffers, rule_selection, setup_prover_config_in,
 )
@@ -79,12 +78,10 @@ from .monitor import monitor
 from composer.spec.source.conf_maps import (
     CompilerSettings, MapViolations, extend_compiler_maps, map_violation_message,
 )
-from composer.spec.source.munge.edit_store import EditStore, PluginEditor
+from composer.spec.source.munge.edit_store import EditStore, PluginEditor, applied_edits
 from composer.spec.source.munge.munge_agent import editor_tool
-from composer.spec.source.munge.tool_names import (
-    COMMIT_EDIT, CONFIG_EDIT, EDIT_HISTORY_LOG, REVERT_TO_EDIT,
-)
-from composer.spec.source.munge.vfs_diff import summarize_changes
+from composer.spec.source.munge.edit_tools import edit_history_tools
+from composer.spec.source.munge.tool_names import CONFIG_EDIT, EDIT_HISTORY_LOG
 
 from graphcore.graph import FlowInput, MonitorReturn
 
@@ -481,108 +478,6 @@ class ConfigEditTool(WithAsyncImplementation[Command | str], WithInjectedId, Wit
             config=curr_config
         )
 
-class ApplyEditTool(WithAsyncDependencies[str | Command, EditStore], WithInjectedState[SourceCVLGenerationExtra], WithInjectedId):
-    """
-     Apply the edit staged by the edit agent to your working tree.
-    """
-    edit_id: str = Field(description="The unique edit ID produced by the editor you want to apply")
-
-    @override
-    async def run(self) -> str | Command:
-        with self.tool_deps() as dep:
-            if self.edit_id in self.state["version_history"]:
-                return f"{self.edit_id} has already been applied; if you want to revert to that state, use the {REVERT_TO_EDIT} tool"
-            new_state = await dep.read(self.edit_id)
-            if new_state is None:
-                return f"{self.edit_id} does not denote any known edit"
-            return tool_state_update(
-                tool_call_id=self.tool_call_id,
-                content="Edit applied",
-                vfs=new_state.vfs,
-                version_history=[self.edit_id]
-            )
-
-@dataclass
-class HistoryDeps:
-    mat: VFSAccessor[VFSState]
-    edit_store: EditStore
-
-class EditHistoryLog(WithAsyncDependencies[str, HistoryDeps], WithInjectedState[SourceCVLGenerationExtra]):
-    """
-    Use this to view a list of the applied edit ids, and the changes to the source code made on
-    each edit
-    """
-
-    @override
-    async def run(self) -> str:
-        hist = self.state["version_history"]
-        if len(hist) == 0:
-            return "No edits applied, working against clean project directory"
-        fetched_states: list[dict[str, str]] = []
-        history : list[tuple[str, str, str]] = []
-        with self.tool_deps() as dep:
-            for (i, edit_id) in enumerate(hist):
-                edit_state = await dep.edit_store.read(edit_id)
-                if edit_state is None:
-                    return "Something has gone very wrong; your edit history has an orphan ID. This is an unrecoverable error; terminate your task immediately"
-                if i == 0:
-                    prev = {}
-                else:
-                    prev = fetched_states[i - 1]
-                diff = summarize_changes(
-                    {"vfs": edit_state.vfs}, dep.mat, prev
-                )
-                history.append((edit_id, edit_state.executive_summary, diff))
-                fetched_states.append(edit_state.vfs)
-        to_format = [
-            f"""
---- Edit #{i} (ID: {t})
-
-Summary: {summary}
-
-Diff from {"prior edit" if i > 0 else "project directory"}:
-
-{diff}
-"""
-            for (i,(t, summary, diff)) in enumerate(history)
-        ]
-        return "\n\n".join(to_format)
-
-class RevertToEdit(WithAsyncDependencies[Command | str, EditStore], WithInjectedId, WithInjectedState[SourceCVLGenerationExtra]):
-    """
-    Call this tool to revert to a prior edit in your history, or (with a null
-    edit id) to discard every applied edit and return to the unedited project
-    directory.
-    """
-    edit_id: str | None = Field(description="An edit ID to revert to (it must appear in your history), or null to revert to the unedited project directory")
-
-    async def run(self) -> str | Command:
-        if self.edit_id is None:
-            if not self.state["version_history"]:
-                return "No edits are applied; the working copy is already the unedited project directory"
-            return tool_state_update(
-                self.tool_call_id,
-                "Reverted to the unedited project directory",
-                vfs={},
-                version_history=[WIPE_HISTORY],
-            )
-        if self.edit_id not in self.state["version_history"]:
-            return f"{self.edit_id} does not appear in your edit history, nothing to revert to"
-        if self.state["version_history"][-1] == self.edit_id:
-            return f"Already at edit id {self.edit_id}, nothing to do"
-        with self.tool_deps() as dep:
-            i = self.state["version_history"].index(self.edit_id)
-            target = await dep.read(self.edit_id)
-            if target is None:
-                return f"{self.edit_id} is in your history but absent from the edit store; this is an unrecoverable error"
-            return tool_state_update(
-                self.tool_call_id,
-                f"Reverted to id {self.edit_id}",
-                vfs=target.vfs,
-                version_history=[WIPE_HISTORY, *self.state["version_history"][:i+1]]
-            )
-
-
 def generate_edit_management_tools(
     ctx: WorkflowContext[CVLGeneration],
     source_env: ServiceHost,
@@ -597,9 +492,7 @@ def generate_edit_management_tools(
     )
     return [
         editor,
-        ApplyEditTool.bind(edit).as_tool(COMMIT_EDIT),
-        EditHistoryLog.bind(HistoryDeps(live_tools.mat, edit)).as_tool(EDIT_HISTORY_LOG),
-        RevertToEdit.bind(edit).as_tool(REVERT_TO_EDIT),
+        *edit_history_tools(edit, live_tools.mat),
         ConfigEditTool.as_tool(CONFIG_EDIT),
     ]
 
@@ -1197,15 +1090,7 @@ async def batch_cvl_generation(
             return Curtailed(None, detail=res_state["result"])
         return GaveUp(reason=res_state["result"])
     _buffers = res_state.get("buffers") or {}
-    applied_edits: list[AppliedEdit] = []
-    for edit_id in res_state["version_history"]:
-        rec = await editing.store.read(edit_id)
-        assert rec is not None, f"edit {edit_id} in history but absent from the edit store"
-        applied_edits.append(AppliedEdit(
-            edit_id=edit_id,
-            executive_summary=rec.executive_summary,
-            why_sound=rec.why_sound,
-        ))
+    edits = await applied_edits(editing.store, res_state["version_history"])
     # Persist the base prover config and last run link from the final state so a later cache
     # hit (which skips the prover) can still reconstruct certora/confs and retain the link.
 
@@ -1233,7 +1118,7 @@ async def batch_cvl_generation(
         final_link=(run_link_specs[0][0] if run_link_specs else None),
         run_link_specs=run_link_specs,
         vfs=res_state["vfs"],
-        applied_edits=applied_edits,
+        applied_edits=edits,
         spec_files={name: b.cvl for name, b in _buffers.items()},
         entrypoint_specs=[b.name for b in run_targets(_buffers)],
     )
