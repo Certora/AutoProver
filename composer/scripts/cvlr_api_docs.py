@@ -1092,11 +1092,16 @@ def document_family(
     _probe_crate(workdir, reference, sources)
     commits = _commits(reference, sources)
     # A commit cargo has not fetched is not in the registry cache, so resolving one needs the
-    # network. Everything after this reads what resolution fetched.
+    # network, and so does the rest of a graph the cache has never held. Fetching it once lets every
+    # rustdoc below stay offline.
     subprocess.run(
         ["cargo", "generate-lockfile", "-q", *(() if commits else ("--offline",))],
         cwd=workdir, capture_output=True, text=True, check=False,
     )
+    if commits:
+        subprocess.run(
+            ["cargo", "fetch", "-q"], cwd=workdir, capture_output=True, text=True, check=False
+        )
     packages = _family_packages(workdir)
     if not packages:
         raise RustdocUnavailable(

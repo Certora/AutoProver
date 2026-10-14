@@ -30,7 +30,8 @@ Two failure modes, deliberately opposite:
 """
 
 import logging
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -41,23 +42,25 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
-#: A corpus's search-tool factory. Every import a factory needs is local to it, so the generic host
-#: pulls in a corpus module only when a descriptor actually selects that corpus.
-type _ToolsFactory = Callable[["ComposerRAGDB"], "Iterable[BaseTool]"]
+#: A corpus's search-tool factory, given the run's pinned releases (see :func:`build_rag_tools`).
+#: Every import a factory needs is local to it, so the generic host pulls in a corpus module only
+#: when a descriptor actually selects that corpus.
+type _ToolsFactory = Callable[["ComposerRAGDB", Mapping[str, str]], "Iterable[BaseTool]"]
 
 
-def _cvlr_tools(db: "ComposerRAGDB") -> "Iterable[BaseTool]":
+def _cvlr_tools(db: "ComposerRAGDB", pinned: Mapping[str, str]) -> "Iterable[BaseTool]":
     """Deferred import: a corpus module is pulled in only when a descriptor selects that corpus,
-    so registering a tag costs nothing at import time."""
+    so registering a tag costs nothing at import time. The manual is not versioned, so the pins
+    do not apply."""
     from composer.tools.cvlr_rag import get_tools
 
     return get_tools(db)
 
 
-def _cvlr_api_tools(db: "ComposerRAGDB") -> "Iterable[BaseTool]":
+def _cvlr_api_tools(db: "ComposerRAGDB", pinned: Mapping[str, str]) -> "Iterable[BaseTool]":
     from composer.tools.cvlr_api_rag import get_tools
 
-    return get_tools(db)
+    return get_tools(db, pinned)
 
 
 #: Registered corpora, by tag. An entry is added together with the ``composer/tools/<corpus>_rag.py``
@@ -89,7 +92,10 @@ def validate_rag_db(rag_db: str | None) -> None:
 
 
 def build_rag_tools(
-    rag_db: str, model: "SentenceTransformer | None" = None
+    rag_db: str,
+    model: "SentenceTransformer | None" = None,
+    *,
+    pinned: Mapping[str, str] = MappingProxyType({}),
 ) -> "tuple[BaseTool, ...]":
     """Search tools for the declared corpus, or ``()`` if it can't be opened (best-effort — the
     author still has the static cheat-sheet). An unregistered tag raises; see the module docstring
@@ -98,6 +104,10 @@ def build_rag_tools(
     ``model`` is the embedding model to query with. It is worth passing whenever the caller already
     has one: :func:`composer.rag.models.get_model` is not memoized, so omitting it loads a second
     copy of a multi-hundred-megabyte transformer that does the same job as the one the run staged.
+
+    ``pinned`` maps each CVLR crate the run builds to its version. The API corpus holds every
+    platform generation's releases and shows only these (:class:`composer.tools.cvlr_api_rag.ApiCorpus`).
+    Empty shows every generation, which is right only for a caller with no run to scope to.
     """
     validate_rag_db(rag_db)
     try:
@@ -108,7 +118,7 @@ def build_rag_tools(
         db = PostgreSQLRAGDatabase(
             KNOWLEDGE_BASES[rag_db], model if model is not None else get_model()
         )
-        return tuple(_FACTORIES[rag_db](db))
+        return tuple(_FACTORIES[rag_db](db, pinned))
     except Exception as e:  # noqa: BLE001 — RAG is optional; the cheat-sheet suffices
         _log.warning("RAG %r unavailable (%s); using the static cheat-sheet only", rag_db, e)
         return ()

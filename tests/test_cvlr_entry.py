@@ -288,6 +288,8 @@ class _Wiring:
     backend: object = None
     ecosystem: object = None
     env: object = None
+    #: The releases each corpus's tools were scoped to, by corpus tag.
+    pinned: dict = dataclasses.field(default_factory=dict)
 
 
 @pytest.fixture
@@ -330,7 +332,11 @@ def wiring(monkeypatch, tmp_path):
             bind_source_tools=lambda tools: {**kw, "source_tools": tools}
         ),
     )
-    monkeypatch.setattr(entry, "build_rag_tools", lambda tag, model: (f"tools:{tag}:{model}",))
+    def fake_rag_tools(tag, model, *, pinned=None):
+        recorded.pinned[tag] = dict(pinned) if pinned is not None else None
+        return (f"tools:{tag}:{model}",)
+
+    monkeypatch.setattr(entry, "build_rag_tools", fake_rag_tools)
     # The researcher is a compiled sub-agent graph over a real model provider; these tests are
     # about which tools reach which agent, so it records its inputs and stands in for itself.
     monkeypatch.setattr(
@@ -489,6 +495,16 @@ async def test_both_corpora_reach_the_researcher_and_neither_reaches_the_author(
     assert not any(isinstance(t, str) and t.startswith("tools:") for t in rag_tools), (
         "the corpus search tools belong to the researcher, not to the author"
     )
+
+
+@pytest.mark.asyncio
+async def test_the_api_corpus_shows_the_releases_of_the_generation_the_run_selected(
+    project, monkeypatch, wiring
+):
+    """The corpus holds every generation's releases. The run sees its own: here, the SDK 2 line."""
+    await _run([str(project), "programs/vault/src/lib.rs:vault"], monkeypatch, wiring)
+    assert wiring.pinned["cvlr_api_kb"] == {c.name: c.version for c in SOLANA_V2.crates()}
+    assert wiring.backend.reference.platform == SOLANA_V2.platform
 
 
 @pytest.mark.asyncio

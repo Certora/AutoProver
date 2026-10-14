@@ -442,7 +442,11 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
             corpus_tools = (
                 (
                     build_rag_tools(args.rag_corpus, staged.embed_model)
-                    + build_rag_tools(CVLR_API_CORPUS, staged.embed_model)
+                    + build_rag_tools(
+                        CVLR_API_CORPUS,
+                        staged.embed_model,
+                        pinned={c.name: c.version for c in selected.reference.crates()},
+                    )
                 )
                 if args.rag_corpus != "none" else ()
             )

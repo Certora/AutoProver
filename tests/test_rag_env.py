@@ -62,7 +62,7 @@ def test_the_message_says_so_when_nothing_is_registered_at_all(monkeypatch: pyte
 def test_half_a_registration_is_not_a_corpus(monkeypatch: pytest.MonkeyPatch):
     # Tools but no connection: nothing to search. A half-registration must fail validation, not
     # validate and then silently produce no tools.
-    monkeypatch.setitem(rag_env._FACTORIES, "tools_only", lambda _db: ())
+    monkeypatch.setitem(rag_env._FACTORIES, "tools_only", lambda _db, _pinned: ())
     with pytest.raises(ValueError, match="not a registered RAG corpus"):
         rag_env.validate_rag_db("tools_only")
 
@@ -73,7 +73,7 @@ def test_half_a_registration_is_not_a_corpus(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_a_registered_tag_validates(monkeypatch: pytest.MonkeyPatch):
-    _register(monkeypatch, "stub_kb", lambda _db: ())
+    _register(monkeypatch, "stub_kb", lambda _db, _pinned: ())
     assert rag_env.validate_rag_db("stub_kb") is None
 
 
@@ -84,7 +84,7 @@ def test_building_tools_for_an_unregistered_tag_raises_rather_than_degrading():
 
 
 def test_an_unavailable_corpus_degrades_to_no_rag(monkeypatch: pytest.MonkeyPatch, caplog):
-    def explodes(_db):
+    def explodes(_db, _pinned):
         raise RuntimeError("connection refused")
 
     _register(monkeypatch, "stub_kb", explodes)
@@ -104,5 +104,5 @@ def test_the_cvlr_factory_binds_its_three_tools():
     ``build_rag_tools`` would swallow that as an "unavailable corpus" and degrade silently. Binding
     is lazy, so no database is needed to check the wiring."""
     factory = rag_env._FACTORIES["cvlr_kb"]
-    names = {t.name for t in factory(object())}  # type: ignore[arg-type]  # bind() is lazy
+    names = {t.name for t in factory(object(), {})}  # type: ignore[arg-type]  # bind() is lazy
     assert names == {"cvlr_get_section", "cvlr_manual_search", "cvlr_keyword_search"}

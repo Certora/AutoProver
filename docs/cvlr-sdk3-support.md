@@ -469,6 +469,26 @@ GitHub with an empty cargo home.
 
 ### A6. Scope the API corpus to the run's generation
 
+**Done.**
+
+- **The tools are scoped.** `cvlr_api_search`, `cvlr_api_lookup` and `cvlr_api_surface` read
+  through an `ApiCorpus`, which holds the run's pins: crate to version, from
+  `selected.reference.crates()`. A row for a crate the run pins at another version is dropped,
+  and the search and lookup ask the database for extra rows to make up for it. A crate the run
+  does not pin, such as the core's sub-crates, is shown at any version: the generations share it.
+- **The scope reaches the tools.** `build_rag_tools` takes the pins (`pinned=`) and hands them to
+  the corpus factory. `entry.py` passes the selected generation's. The manual corpus ignores them.
+- **The producer documents both generations** (A1). When a probe crate needs the network to
+  resolve a pinned commit, it now fetches the whole graph before running rustdoc offline.
+- **Generated for real:** 362 sections. There is one surface per crate and version: the core once
+  at 0.6.1, and the three `cvlr-solana` crates at both 0.5.1 and 0.6.0. There are no duplicate
+  header paths. `fun_acc_infos_with_mem_layout` appears only under 0.5.1.
+
+**Not ingested yet.** The corpus in the database is still the earlier single-generation build,
+until `scripts/populate_cvlr_rag.sh` is rerun.
+
+What follows is the original plan.
+
 `cvlr_api_kb` is generated from rustdoc over the releases the reference set pins, and its tools
 tell the author it is authoritative at those releases. The version is already a level in every
 header path (`CVLR API > cvlr-solana > 0.5.0 > …`), but the tools ignore it:
