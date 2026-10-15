@@ -50,9 +50,9 @@ from composer.layout import RUST_BUILD_DIRS
 #:
 #: :data:`~composer.layout.RUST_BUILD_DIRS` are build output, which is what the agent's source tools
 #: withhold too. The rest are this backend's: ``.git`` is neither needed nor ours to duplicate,
-#: ``certora_out`` is the prover's output, and the work directory is where the tree itself goes, so
-#: copying it would nest the tree inside itself. Matched at any depth because a workspace member can
-#: have its own ``target``, at the cost of also skipping a source directory named like one of these.
+#: ``certora_out`` is the prover's output, and ``.cvlr_work`` is this backend's work directory.
+#: Matched at any depth because a workspace member can have its own ``target``, at the cost of also
+#: skipping a source directory named like one of these.
 NOT_PROJECT_SOURCE = (*RUST_BUILD_DIRS, ".git", "certora_out", ".cvlr_work")
 
 
@@ -160,21 +160,19 @@ class NotProjectSource:
         )
 
 
-def _tree_deletes_project(pristine: Path, root: Path) -> str | None:
-    """Why ``root`` must not be deleted, or None when deleting it leaves the project alone.
+def _overlap(pristine: Path, root: Path) -> str | None:
+    """Why ``root`` cannot hold the tree of ``pristine``, or None when the two are disjoint.
 
-    A tree under a :data:`NOT_PROJECT_SOURCE` directory is the copy's own directory. Anywhere else
-    inside the project, deleting the tree deletes source, and the copy then walks back into itself.
+    The tree is deleted and refilled from the project at the start of every run. A tree that is the
+    project or contains it would have that delete remove the project. A tree inside the project
+    would be copied into itself, and its delete would remove whatever source shares its path.
     """
     project = pristine.resolve()
     tree = root.resolve()
     if project.is_relative_to(tree):
         return f"the working tree {root} is or contains the project {pristine}"
-    if tree.is_relative_to(project) and _excluded_directory(tree.relative_to(project).parts) is None:
-        return (
-            f"the working tree {root} is inside the project {pristine} "
-            f"and is not under a directory the copy skips"
-        )
+    if tree.is_relative_to(project):
+        return f"the working tree {root} is inside the project {pristine}"
     return None
 
 
@@ -281,6 +279,11 @@ class SharedTree:
     #: project, by tree-relative path.
     _derived: DictBackend = field(default_factory=DictBackend)
 
+    def __post_init__(self) -> None:
+        """Raises :class:`ValueError` if the tree and the project overlap."""
+        if refusal := _overlap(self.pristine, self.root):
+            raise ValueError(refusal)
+
     @functools.cached_property
     def _materializer(self) -> PersistentMaterializer:
         """The writer of the tree.
@@ -302,14 +305,7 @@ class SharedTree:
         holds the run's private ``CARGO_HOME``, whose unpacked sources a dependency's build script
         can rewrite, and a tree carried into a later run would carry that rewrite into its build.
         The previous run's tree is left until here so that it can be inspected after that run.
-
-        Raises :class:`ValueError` if deleting the tree would delete the project. That is a tree
-        that is the project, contains it, or sits inside it outside a directory the copy skips
-        (:data:`NOT_PROJECT_SOURCE`). A tree under one of those directories is where the copy
-        itself goes.
         """
-        if refusal := _tree_deletes_project(self.pristine, self.root):
-            raise ValueError(refusal)
         if self.root.exists():
             await asyncio.to_thread(shutil.rmtree, self.root)
         await self._materializer.dump_to(self.root)

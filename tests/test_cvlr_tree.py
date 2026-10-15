@@ -160,34 +160,17 @@ async def test_a_new_run_sees_the_project_as_it_is_now(tmp_path: Path):
     assert not (tree.root / "Cargo.toml").exists()
 
 
-@pytest.mark.asyncio
-async def test_a_tree_that_is_or_holds_the_project_is_refused(tmp_path: Path):
-    """Starting a run deletes the tree, so a tree that is the project, or one of its ancestors,
-    would delete the developer's checkout."""
+def test_a_tree_that_overlaps_the_project_is_refused(tmp_path: Path):
+    """Starting a run deletes the tree and copies the project into it. A tree that is the project or
+    one of its ancestors would delete the developer's checkout; one inside the project would delete
+    source sharing its path and be copied into itself."""
     project = _project(tmp_path)
     for root in (project, tmp_path):
         with pytest.raises(ValueError, match="is or contains the project"):
-            await SharedTree(pristine=project, root=root, source=_SOURCE_DIRS).materialize()
-    assert (project / _RESERVE).read_text() == _SOURCE
-
-
-@pytest.mark.asyncio
-async def test_a_tree_inside_the_project_is_refused_unless_the_copy_skips_it(tmp_path: Path):
-    """Deleting the tree is how a run starts. A root inside the project deletes source, then the
-    copy walks back into the directory it is filling. A root under a skipped directory is the
-    copy's own place."""
-    project = _project(tmp_path)
-    kept = project / "programs" / "p" / "extra"
-    kept.mkdir()
-    (kept / "keep.rs").write_text("keep\n")
-    with pytest.raises(ValueError, match="inside the project"):
-        await SharedTree(pristine=project, root=kept, source=_SOURCE_DIRS).materialize()
-    assert (kept / "keep.rs").read_text() == "keep\n"
-
-    root = project / "target" / "build"
-    await SharedTree(pristine=project, root=root, source=_SOURCE_DIRS).materialize()
-    assert (root / _RESERVE).read_text() == _SOURCE
-    assert (project / _RESERVE).read_text() == _SOURCE
+            SharedTree(pristine=project, root=root, source=_SOURCE_DIRS)
+    for root in (project / "programs" / "p" / "extra", project / "target" / "build"):
+        with pytest.raises(ValueError, match="inside the project"):
+            SharedTree(pristine=project, root=root, source=_SOURCE_DIRS)
 
 
 @pytest.mark.asyncio
@@ -388,7 +371,7 @@ async def test_build_output_and_tooling_are_not_copied_at_any_depth(tmp_path: Pa
         (project / junk).parent.mkdir(parents=True, exist_ok=True)
         (project / junk).write_text("x")
 
-    tree = SharedTree(pristine=project, root=project / ".cvlr_work" / "build", source=_SOURCE_DIRS)
+    tree = SharedTree(pristine=project, root=tmp_path / "work" / "build", source=_SOURCE_DIRS)
     await tree.materialize()
 
     assert sorted(p.name for p in tree.root.iterdir()) == [MATERIALIZED_MANIFEST, "programs"]
