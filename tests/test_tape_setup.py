@@ -21,7 +21,6 @@ from composer.diagnostics.budget import BUDGET_PRESSURE_THRESHOLD
 import composer.pipeline.cli as pipeline_cli
 from composer.pipeline.cli import parse_budget_file
 from composer.layout import INTERNAL_DIR
-from composer.spec.cvlr.pipeline import WORK_DIR
 from composer.spec.cvlr.scaffold import HARNESS_DIR
 from composer.testing import cvlr_tape
 
@@ -74,7 +73,6 @@ def test_staging_leaves_out_everything_a_run_generates(tmp_path):
     for generated in (
         dirty / "target",
         dirty / INTERNAL_DIR,
-        dirty / WORK_DIR,
         dirty / "certora" / "cvlr",
         package / HARNESS_DIR,
     ):

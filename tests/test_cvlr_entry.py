@@ -18,7 +18,7 @@ from composer.cargo.metadata import CratePackage, LibTarget, RegistrySource, Wor
 from composer.spec.cvlr.reference import SOLANA_V2, generations
 from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ, SOLANA
 from composer.spec.cvlr import entry, preflight
-from composer.spec.cvlr.pipeline import WORK_DIR, CvlrPhase
+from composer.spec.cvlr.pipeline import CvlrPhase
 
 
 def _package(root: Path, name: str, *, lib: bool = True) -> CratePackage:
@@ -418,24 +418,16 @@ async def test_shared_agents_read_the_project_as_shipped(project, monkeypatch, w
 
 
 @pytest.mark.asyncio
-async def test_the_units_editing_kit_reads_the_project_without_the_tree(project, monkeypatch, wiring):
+async def test_the_work_directory_is_outside_the_project_and_gone_after_the_run(
+    project, monkeypatch, wiring
+):
+    """The tree is a copy of the project, so inside it the copy would include itself. Nothing in it
+    outlives the run: a resumed run rebuilds it from the checkpointed state."""
     await _run([str(project), "programs/vault/src/lib.rs:vault"], monkeypatch, wiring)
 
-    import re as _re
-
-    editing = wiring.backend.editing  # type: ignore[union-attr]
-    assert isinstance(editing.forbidden_read, str)
-    assert _re.fullmatch(editing.forbidden_read, f"{WORK_DIR.as_posix()}/build/programs/vault/src/lib.rs")
-
-
-def test_the_working_tree_itself_is_not_listed():
-    """Every source file in it is a copy of one the project serves at the same path, and the copies
-    are whichever unit staged last."""
-    import re as _re
-
-    surface = entry._source_surface(SOLANA.language.default_forbidden_read)
-    assert _re.fullmatch(surface, ".cvlr_work/build/program/src/processor.rs")
-    assert not _re.fullmatch(surface, "program/src/processor.rs")
+    work = wiring.backend.work_dir  # type: ignore[union-attr]
+    assert not work.resolve().is_relative_to(project.resolve())
+    assert not work.exists()
 
 
 @pytest.mark.asyncio

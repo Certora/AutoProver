@@ -14,7 +14,7 @@ what makes it testable in the routine env — and the machinery is where the int
   to weaken rules until findings disappear, and accepting anything makes the gate decorative.
 """
 
-from pathlib import Path, PurePath
+from pathlib import Path
 
 import asyncio
 import json
@@ -593,7 +593,8 @@ async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeyp
     assert conf["rule"] == ["rule_balance_conserved", "rule_only_authority_withdraws"]
 
 
-def test_the_working_tree_is_not_inside_a_prover_internal_directory():
+@pytest.mark.asyncio
+async def test_the_run_work_directory_is_not_inside_a_prover_internal_directory():
     """Where the run's workspace lives changes what the prover receives.
 
     The collector skips paths under ``.certora_internal``, so a workspace placed there uploads its
@@ -602,18 +603,13 @@ def test_the_working_tree_is_not_inside_a_prover_internal_directory():
     ``.certora_sources`` — come up empty, much later. Confirmed by moving one project between the
     two paths with nothing else changed: seven ``.rs`` files collected from a plain path, zero from
     under ``.certora_internal``.
-
-    Also pins the two places the directory's name has to appear, because forgetting either is its
-    own quiet failure: uncopied, or the tree nesting inside itself on the next run.
     """
-    from composer.spec.cvlr.pipeline import WORK_DIR
-    from composer.spec.cvlr.scaffold import GITIGNORE_LINES
-    from composer.spec.cvlr.tree import _NOT_MATERIALIZED
+    from composer.spec.cvlr.pipeline import run_work_directory
 
-    assert ".certora_internal" not in WORK_DIR.parts
-    assert WORK_DIR.name in GITIGNORE_LINES
-    assert _NOT_MATERIALIZED(PurePath(WORK_DIR.name) / "build" / "x.rs")
-    assert not _NOT_MATERIALIZED(PurePath("src") / "lib.rs")
+    async with run_work_directory() as work:
+        assert work.is_dir()
+        assert ".certora_internal" not in work.parts
+    assert not work.exists()
 
 
 def test_the_default_conf_enables_vacuity_checking():

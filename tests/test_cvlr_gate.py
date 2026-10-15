@@ -264,6 +264,7 @@ async def test_the_backend_authors_cvlr_rules_for_the_vault(
                 recursion_limit=DEFAULT_RECURSION_LIMIT,
             ),
             package=_PACKAGE,
+            work_dir=project.parent / "cvlr_work",
         )
         run = PipelineRun(
             ctx=ctx,

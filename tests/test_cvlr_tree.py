@@ -162,15 +162,17 @@ async def test_a_new_run_sees_the_project_as_it_is_now(tmp_path: Path):
     assert not (tree.root / "Cargo.toml").exists()
 
 
-@pytest.mark.asyncio
-async def test_a_tree_that_is_or_holds_the_project_is_refused(tmp_path: Path):
-    """Starting a run deletes the tree, so a tree that is the project, or one of its ancestors,
-    would delete the developer's checkout."""
+def test_a_tree_that_overlaps_the_project_is_refused(tmp_path: Path):
+    """Starting a run deletes the tree and copies the project into it. A tree that is the project or
+    one of its ancestors would delete the developer's checkout; one inside the project would delete
+    source sharing its path and be copied into itself."""
     project = _project(tmp_path)
     for root in (project, tmp_path):
         with pytest.raises(ValueError, match="is or contains the project"):
-            await SharedTree(pristine=project, root=root, source=_SOURCE_DIRS).materialize()
-    assert (project / _RESERVE).read_text() == _SOURCE
+            SharedTree(pristine=project, root=root, source=_SOURCE_DIRS)
+    for root in (project / "programs" / "p" / "extra", project / "target" / "build"):
+        with pytest.raises(ValueError, match="inside the project"):
+            SharedTree(pristine=project, root=root, source=_SOURCE_DIRS)
 
 
 @pytest.mark.asyncio
@@ -362,7 +364,7 @@ def test_the_gate_and_the_submission_ask_for_the_same_two_features(tmp_path: Pat
         package_root=tmp_path,
         tuning=SimpleNamespace(),  # type: ignore[arg-type]
         unit=unit,
-        tree=SharedTree(pristine=tmp_path, root=tmp_path, source=_SOURCE_DIRS),
+        tree=SharedTree(pristine=tmp_path / "project", root=tmp_path / "build", source=_SOURCE_DIRS),
         build_sem=asyncio.Semaphore(1),
     )
     assert target.features == (DEFAULT_FEATURE, unit.feature)
@@ -385,7 +387,7 @@ async def test_the_build_permit_serializes_staging_and_the_build(tmp_path: Path)
         package_root=tmp_path,
         tuning=SimpleNamespace(),  # type: ignore[arg-type]
         unit=HarnessModule("d"),
-        tree=SharedTree(pristine=tmp_path, root=tmp_path, source=_SOURCE_DIRS),
+        tree=SharedTree(pristine=tmp_path / "project", root=tmp_path / "build", source=_SOURCE_DIRS),
         build_sem=sem,
     )
     async with target.build_slot():
@@ -404,7 +406,7 @@ async def test_build_output_and_tooling_are_not_copied_at_any_depth(tmp_path: Pa
         (project / junk).parent.mkdir(parents=True, exist_ok=True)
         (project / junk).write_text("x")
 
-    tree = SharedTree(pristine=project, root=project / ".cvlr_work" / "build", source=_SOURCE_DIRS)
+    tree = SharedTree(pristine=project, root=tmp_path / "work" / "build", source=_SOURCE_DIRS)
     await tree.materialize()
 
     assert sorted(p.name for p in tree.root.iterdir()) == [MATERIALIZED_MANIFEST, "programs"]

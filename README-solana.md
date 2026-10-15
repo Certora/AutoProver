@@ -58,7 +58,7 @@ You need the EVM pipeline's prerequisites from [README.md](README.md#prerequisit
 
 The harness is a Rust module inside the verified crate, under `<pkg>/src/certora/`, with the rules in `specs/`. It is wired into the crate's `Cargo.toml` (a `certora` feature) and `lib.rs`. Everything else goes under `certora/cvlr/` in the project root: the report, the property-to-rule mapping and the per-rule reports. Edits the pipeline made to the program itself (munges) are listed in the report.
 
-`.cvlr_work/` holds per-unit working state and can be deleted between runs. The pipeline adds it, along with the Prover's output directories, to the project's `.gitignore`.
+The run builds in a copy of the project in a temporary directory, which is deleted when the run ends. The pipeline adds the Prover's output directories to the project's `.gitignore`.
 
 ## Tests
 

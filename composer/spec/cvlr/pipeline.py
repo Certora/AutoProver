@@ -38,6 +38,10 @@ import asyncio
 import dataclasses
 import enum
 import logging
+import shutil
+import tempfile
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Sequence, override
 
@@ -100,26 +104,31 @@ from composer.spec.types import PropertyFormulation
 
 _log = logging.getLogger(__name__)
 
-#: Where the run's working copy goes. A real directory rather than a temp dir, because a failed
-#: authoring session's workspace is the most useful thing to look at afterwards and a temp dir is
-#: gone by the time anyone asks.
-#:
-#: **Deliberately not under ``.certora_internal``**, which is where this started. The prover's source
-#: collector skips paths inside that directory, so a run whose whole workspace lived there uploaded
-#: its ``.so`` and tuning files and *none* of its Rust — silently, with the job still succeeding.
-#: Confirmed by moving one project between the two paths with nothing else changed: seven ``.rs``
-#: files collected from a plain path, zero from under ``.certora_internal``.
-WORK_DIR = Path(".cvlr_work")
-
-#: The one tree, under :data:`WORK_DIR`. Named rather than being :data:`WORK_DIR` itself so that the
-#: build output, the sandbox's private ``CARGO_HOME`` and anything a later version keeps beside them
-#: are visibly separate things in one place.
+#: The one tree, in the run's work directory (:func:`run_work_directory`). A subdirectory rather than
+#: the work directory itself so that the build output, the sandbox's private ``CARGO_HOME`` and
+#: anything a later version keeps beside them are visibly separate things in one place.
 BUILD_DIR = "build"
 
 #: Each submission's build script, its command file and its conf, beside :data:`BUILD_DIR` rather
 #: than in it: the Prover runs the script unconfined, so nothing the confined build can write may
 #: hold it (:func:`composer.cargo.sbf.write_build_script`).
 SUBMISSIONS_DIR = "submissions"
+
+
+@asynccontextmanager
+async def run_work_directory() -> AsyncIterator[Path]:
+    """The run's work directory, outside the project and deleted when the run ends.
+
+    Everything in it is derived from the project and the run's checkpointed state, so a resumed run
+    rebuilds it rather than needing it kept. Never under ``.certora_internal``: the Prover's source
+    collector skips paths inside that directory, so a submission built there uploads its ``.so``
+    and none of its Rust, and the job still succeeds.
+    """
+    work = Path(await asyncio.to_thread(tempfile.mkdtemp, prefix="cvlr_work_"))
+    try:
+        yield work
+    finally:
+        await asyncio.to_thread(shutil.rmtree, work, ignore_errors=True)
 
 
 class CvlrPhase(enum.Enum):
@@ -149,6 +158,8 @@ class CvlrDeps:
     #: The source tools every unit's agents read the program through, and the store their edits
     #: to it are committed to.
     editing: ProgramEditing
+    #: Where the run's tree and submissions go (:func:`run_work_directory`).
+    work_dir: Path
 
 
 @dataclasses.dataclass(frozen=True)
@@ -377,14 +388,14 @@ class CvlrStagedFormalizer(StagedFormalizer[GeneratedHarness, SolanaComponentIns
 
         tree = SharedTree(
             pristine=project,
-            root=project / WORK_DIR / BUILD_DIR,
+            root=self.deps.work_dir / BUILD_DIR,
             source=self.deps.preflight.source,
         )
         await tree.materialize()
         session = CargoSession(
             workdir=tree.root, sandbox=self.deps.sandbox, toolchain=HOST_RUST_TOOLCHAIN
         )
-        submissions = project / WORK_DIR / SUBMISSIONS_DIR
+        submissions = self.deps.work_dir / SUBMISSIONS_DIR
         submissions.mkdir(parents=True, exist_ok=True)
         warmed = await session.warm()
         failure = (
@@ -442,6 +453,8 @@ class CvlrBackend:
     #: The run's services for editing the program, finished in :meth:`prepare_system` once
     #: preflight has said which crates are the project's own.
     editing: EditingServices
+    #: Where the run's tree and submissions go (:func:`run_work_directory`).
+    work_dir: Path
     #: The package to verify. ``None`` lets preflight pick it when there is only one candidate; a
     #: workspace with several is refused rather than guessed at.
     package: str | None = None
@@ -516,6 +529,7 @@ class CvlrBackend:
                 preflight.package_dir,
                 SOLANA,
             ),
+            work_dir=self.work_dir,
         )
         return CvlrPrepared(SOLANA.locate_main(analyzed, run.source), deps)
 

@@ -42,8 +42,8 @@ divergence rather than merely a symptom:
   stays mocked on replay: the researcher's dominant traffic is keyword-then-fetch, which does not
   depend on it.
 * **The scenario is staged as a copy, without the generated directories.** A run scaffolds the
-  crate, writes a harness into ``src/certora`` and a working tree into ``.cvlr_work``; recording
-  against a tree that already has them would record a run that skipped the scaffold.
+  crate and writes a harness into ``src/certora``; recording against a tree that already has them
+  would record a run that skipped the scaffold.
 
 Deliberately *not* pinned: the design document is passed explicitly rather than discovered. Doc
 discovery is shared code with the EVM pipeline and already taped there, so what it would buy here
@@ -64,7 +64,7 @@ from composer.layout import INTERNAL_DIR
 from composer.spec.cvlr.entry import (
     CvlrArgs, CvlrPipelineResult, build_parser, cvlr_executor,
 )
-from composer.spec.cvlr.pipeline import WORK_DIR, CvlrPhase
+from composer.spec.cvlr.pipeline import CvlrPhase
 from composer.spec.cvlr.scaffold import HARNESS_DIR
 from composer.spec.cvlr_research import CVLR_CORPORA
 
@@ -127,7 +127,6 @@ def stage_scenario(into: Path, source: Path | None = None) -> Path:
         ignore=shutil.ignore_patterns(
             "target",
             str(INTERNAL_DIR),
-            str(WORK_DIR),
             # One pattern for two directories, since `ignore_patterns` matches basenames anywhere:
             # the scaffold's harness module, which lives *inside* the crate's sources
             # (`src/certora`), and the deliverable directory the artifact store writes at the

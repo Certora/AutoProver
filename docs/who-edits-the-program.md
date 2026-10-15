@@ -929,7 +929,8 @@ rewriting a stand-in is what already happened, one judge round late.
 
 ## 14. One working tree for the run
 
-Every unit of a run builds in one shared copy of the project, at `.cvlr_work/build/`. This replaced
+Every unit of a run builds in one shared copy of the project, in a temporary directory outside it
+that lasts for the run (`.cvlr_work/build/` until 2026-10-15). This replaced
 a per-unit workdir, which [cvlr-backend-plan.md](./cvlr-backend-plan.md) §7.5.2 had recorded as
 *forced*: its argument was that the compile gate is whole-crate, so in a shared tree unit A's gate
 fails whenever unit B's draft is momentarily broken. That is true only while every unit's module is

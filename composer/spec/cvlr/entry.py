@@ -33,7 +33,7 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Awaitable, Callable, Protocol, cast
 
-from graphcore.tools.vfs import DirBackend, GlobalExcludeArg
+from graphcore.tools.vfs import DirBackend
 
 from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, sbf_subcommand_version
 from composer.core.user import get_uid
@@ -52,7 +52,7 @@ from composer.sandbox.config import SandboxConfig
 from composer.spec.context import SourceFields
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness
 from composer.spec.cvlr.editor import EditingServices
-from composer.spec.cvlr.pipeline import WORK_DIR, CvlrBackend, CvlrPhase
+from composer.spec.cvlr.pipeline import CvlrBackend, CvlrPhase, run_work_directory
 from composer.spec.cvlr.preflight import SelectedPackage, select_package
 from composer.spec.cvlr.reference import generations
 from composer.spec.service_host import PureServiceHost
@@ -186,26 +186,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--time-budget", default=None, type=float, help="Total wall time to run the entire execution. Omit to run without in process limit")
     add_extra_context_args(parser)
     return parser
-
-
-#: The working tree, withheld from every agent. Every source file in it is a copy of one the project
-#: already serves at the same relative path, and the copies are not any one unit's: the tree holds
-#: whichever unit staged last. A unit's agents read its own edits through its overlay instead.
-_WORK_TREE_EXCLUDE = rf"(^{re.escape(WORK_DIR.as_posix())}/.*)"
-
-
-def _source_surface(ecosystem_default: GlobalExcludeArg) -> GlobalExcludeArg:
-    """The ecosystem's file-exclusion rule, plus this backend's own working tree.
-
-    Composed here rather than in ``RUST_FORBIDDEN_READ`` because the tree is this backend's, not
-    the Rust language facet's: Soroban will have one too and a wheel-based Rust backend need not.
-    """
-    if not isinstance(ecosystem_default, str):
-        raise TypeError(
-            f"the Rust source-exclusion rule is expected to be a regex to compose with, got "
-            f"{type(ecosystem_default).__name__}"
-        )
-    return f"{ecosystem_default}|{_WORK_TREE_EXCLUDE}"
 
 
 # ---------------------------------------------------------------------------
@@ -378,7 +358,7 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
     announce_confinement(sandbox)
 
     async def runner(fact: HandlerFactory[CvlrPhase, None]) -> CvlrPipelineResult:
-        async with cli_pipeline(
+        async with run_work_directory() as work_dir, cli_pipeline(
             args=args,
             thread_id=thread_id,
             summary=summary,
@@ -397,7 +377,7 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
             # reasoning about the project while the prover verifies the unit's edited copy is the
             # mismatch that cost a run (``docs/who-edits-the-program.md`` §16).
             project = pathlib.Path(staged.source.project_root)
-            surface = _source_surface(staged.source.forbidden_read)
+            surface = staged.source.forbidden_read
             basic = build_layered_source_tools(
                 [DirBackend(project, cache_listing=False)], forbidden_read=surface
             )
@@ -453,6 +433,7 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
                     store=staged.conns.store, namespace=("cvlr_cex", thread_id)
                 ),
                 package=selected.name,
+                work_dir=work_dir,
                 reference=selected.reference.withholding(*args.withhold_crate),
                 editing=EditingServices(
                     store=EditStore(
