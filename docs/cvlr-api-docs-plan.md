@@ -69,9 +69,9 @@ researcher gives, and there is no such flag for CVL either. Two consequences are
 
 * **A bump means a corpus rebuild**, and the two must land together or every answer is about the
   wrong release. `reference.py`'s docstring does not yet say so ([cvlr-todo.md](./cvlr-todo.md)
-  U26).
+  U28).
 * **The scaffold could offer to bump an off-reference project** instead of refusing it. That edits
-  the client's dependency graph, so it is a decision rather than a task (U27).
+  the client's dependency graph, so it is a decision rather than a task (U29).
 
 ### 2.3 `--withhold-crate` does not reach the researcher
 
@@ -172,12 +172,14 @@ byte-identical to what the same crates emit once released; where the build came 
 only in the manifest's `source` line and the log, which no agent reads. That is how documentation is
 tried before it is published.
 
-**The macros are documented upstream, and not yet released.** The published crates document 66 of
-284 items; `cvlr-asserts`, for one, has 31 items and no prose. The `eric/docs` branches of
-`Certora/cvlr` and `Certora/cvlr-solana` document all of them, and both repositories now check for
-it in CI. Until they publish, a corpus built from crates.io carries signatures without contracts for
-most of the surface — measured in [cvlr-undocumented-api.md](./cvlr-undocumented-api.md), and
-tracked as [cvlr-todo.md](./cvlr-todo.md) U26.
+**Every exported item is documented, read from the commits that document it.** The published
+crates document 66 of 284 items; `cvlr-asserts`, for one, has 31 items and no prose. Both
+repositories have since documented every item and check for it in CI, and neither documented
+release is published. The reference set reads both from commits: `cvlr-solana` from its release
+commits, and the core from `Certora/cvlr`'s main branch, which is still version 0.6.1. Built from
+those pins, the corpus has 0 of 346 items without prose (2026-10-14). The producer's
+`--undocumented` report is how that is rechecked after a bump. Moving the core back to crates.io is
+[cvlr-todo.md](./cvlr-todo.md) U28.
 
 ### 4.3 Header paths
 
@@ -346,7 +348,7 @@ to the corpus; the client has since been made to retry it.
 
 **Step 7: the tape and the live gate still run without the corpus.** The replay tape was recorded
 under `--rag-corpus none` and now replays with the corpus bound, so it needs re-recording, and the
-researcher needs its own lane first ([cvlr-todo.md](./cvlr-todo.md) U25). The live gate still passes
+researcher needs its own lane first ([cvlr-todo.md](./cvlr-todo.md) U27). The live gate still passes
 `rag_tools=()`, which measures an author with no CVLR reference at all — a configuration nobody ships
 (landing plan P8). And the cache's benefit is unmeasured: an indexed tool injects prior findings
 into an invocation rather than skipping it, so the saving is in turns and tokens per question, and

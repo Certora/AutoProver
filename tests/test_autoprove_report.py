@@ -653,6 +653,37 @@ def test_render_html_names_the_mechanism_that_confined_a_run():
     assert "Unconfined builds:" not in h
 
 
+def test_render_html_lists_what_each_protocol_wide_property_stands_for():
+    """A component's property folded into the shared unit otherwise disappears from the report, and
+    a property the run wrote rather than extracted must be visible as such."""
+    from composer.spec.source.report.schema import (
+        ChosenShared, ComponentProperty, HoistedClaim, SynthesizedShared,
+    )
+
+    def absorbed(component, title, desc):
+        return ComponentProperty(component=component, title=title, sort="invariant", description=desc)
+
+    hoisted = [
+        HoistedClaim(
+            shared=absorbed("Protocol invariants", "lamports_conserved", "every handler conserves lamports"),
+            origin=SynthesizedShared(),
+            absorbed=[absorbed("Split", "split_conserves", "split conserves lamports"),
+                      absorbed("Withdraw", "withdraw_conserves", "withdraw conserves lamports")],
+        ),
+        HoistedClaim(
+            shared=absorbed("Protocol invariants", "solvent", "every handler leaves accounts solvent"),
+            origin=ChosenShared(source=("Split", "solvent")),
+            absorbed=[absorbed("Split", "solvent", "every handler leaves accounts solvent")],
+        ),
+    ]
+    h = render_html(_mini_report().model_copy(update={"hoisted": hoisted}))
+    assert "Protocol-wide properties (2)" in h
+    assert "withdraw conserves lamports" in h
+    assert "every handler conserves lamports" in h
+    assert h.count("written when hoisted</span>") == 1
+    assert "from Split" in h
+
+
 def test_render_html_shows_finding_message():
     # A backend diagnostic (a counterexample / failed-assertion message, for a backend that
     # supplies one) is surfaced on the rule row, so a non-GOOD verdict explains itself.

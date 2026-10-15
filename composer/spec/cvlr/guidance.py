@@ -39,9 +39,10 @@ nobody will check.
 
 What makes a property checkable here:
 
-1. **It names one instruction handler**, not the program's dispatcher. Verification starts at a
-   concrete handler (`deposit`, `withdraw`, an Anchor instruction), never at `process_instruction`
-   — starting there is the single most reliable way to produce a rule that times out.
+1. **It names the instruction handlers it is checked at**, not the program's dispatcher.
+   Verification starts at concrete handlers (`deposit`, `withdraw`, an Anchor instruction), never
+   at `process_instruction`: starting there is the single most reliable way to produce a rule that
+   times out. One handler or all of them, but named.
 2. **It has a before and an after.** The most useful shape by far is "before the handler ran, X held;
    after it ran, Y holds." State the precondition as well as the conclusion; a property whose
    precondition is left implicit becomes a rule with an unjustified assumption in it.
@@ -54,13 +55,18 @@ What makes a property checkable here:
    moves funds preserves solvency" is a *better* extraction than five separate per-handler
    restatements — say it once, and name the handlers it ranges over.
 
-Property classes that are especially well served, and worth looking for specifically:
+Property classes that are especially well served, and worth looking for specifically, in order of
+value:
 
-- **Account validation.** Missing signer, owner, or authority checks; an account substituted for
-  another of the same shape; a PDA whose seeds or bump go unverified; duplicate mutable accounts;
-  reinitialization. These are the highest-value properties on this chain and they express directly.
-- **Arithmetic invariants** — solvency, monotonicity, conservation, no share dilution. These are
-  first-class, and are checked over exact integers rather than wrapping ones.
+- **Design invariants**: solvency, conservation of value, monotonicity, no share dilution, bounds
+  the protocol's math must respect. These hold for every correct implementation of the protocol,
+  which is what makes them worth most, and each is usually checked across every handler that
+  writes the state it is about. They are checked over exact integers rather than wrapping ones.
+- **Authority over value and control**: who can move funds, and who can change who controls
+  them. State these as that guarantee. A missing signer, owner or authority check, an account
+  substituted for another of the same shape, a PDA whose seeds or bump go unverified, duplicate
+  mutable accounts and reinitialization all express directly as rules, but they are how the program
+  defends a guarantee, so name the guarantee and its consequence, not only the check.
 - **Exact-integer arithmetic.** Rules reason over unbounded integers rather than wrapping ones, so
   "the fee is exactly one percent", "supply is conserved" and "no share dilution" are stated
   directly. Where an unchecked operation would *wrap* rather than abort, the wrong value is a real
@@ -86,7 +92,9 @@ What has no rule, and should not be extracted as a property:
   unconstrained stand-ins, so a claim about the callee's behavior is an assumption the rule makes,
   not something it checks. A property about *which* program is invoked, or with whose authority, is
   fine — that is the caller's code.
-- Log or event emission, and anything about fees, rent economics, or compute-unit budgets.
+- Log or event emission, compute-unit budgets, and rent economics: fee levels and rent collection.
+  The rent-exempt minimum an account must keep is not economics. It is part of what a program's
+  accounts must hold, and a solvency property that includes it belongs above.
 - Anything implied by the type system alone (a `u64` is non-negative), and anything already enforced
   by a framework the code uses — an Anchor `Account<T>` has its owner checked for you.
 

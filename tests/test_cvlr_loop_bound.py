@@ -32,6 +32,7 @@ the missing piece — rather than failing when one is absent.
 import dataclasses
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -63,7 +64,7 @@ from composer.spec.cvlr.prover import (
 )
 from composer.spec.cvlr.rules import rule_names
 from composer.spec.cvlr.scaffold import SPECS_DIR, apply, plan_scaffold
-from composer.spec.cvlr.reference import SOLANA
+from composer.spec.cvlr.reference import SOLANA_V2
 
 pytestmark = [pytest.mark.expensive, pytest.mark.asyncio]
 
@@ -119,8 +120,8 @@ def _has_a_loop(artifact: Path, objdump: Path) -> bool:
     The probe's premise, and the one thing about it that cannot be read off the source: two earlier
     drafts compiled to straight-line code — one close-formed, one fully unrolled against a
     fixed-size array — and both would have verified under every bound while appearing to measure the
-    bound. Textual because a disassembly is text; `goto -` is how the SBF disassembler spells a
-    backward branch.
+    bound. Textual because a disassembly is text. The SBF disassembler spells a backward branch
+    `if r1 > r2 goto -0xb` up to platform-tools v1.43, and `jgt r1, r2, -0xb` from v1.53 on.
     """
     disassembly = subprocess.run(
         [str(objdump), "-d", "--no-show-raw-insn", str(artifact)],
@@ -128,7 +129,7 @@ def _has_a_loop(artifact: Path, objdump: Path) -> bool:
         text=True,
         check=True,
     ).stdout
-    return "goto -" in disassembly
+    return re.search(r"(?:\bgoto|^\s*[0-9a-f]+:\s+j[a-z0-9]*\b.*,)\s+-0x", disassembly, re.M) is not None
 
 
 class _Recorded(UnanalyzedCexHandler):
@@ -179,13 +180,13 @@ def _violation(results: list[RuleResult], rule: str) -> RuleResult:
     return matching[0]
 
 
-async def test_raising_the_loop_bound_is_what_turns_the_rule_green(project, capsys):
+async def test_raising_the_loop_bound_is_what_turns_the_rule_green(project, tmp_path, capsys):
     workspace = await Workspace.read(project)
     assert isinstance(workspace, Workspace), workspace
     package = workspace.member(PACKAGE)
     assert package is not None, f"no {PACKAGE} member in {project}"
 
-    plan = plan_scaffold(workspace, package, SOLANA)
+    plan = plan_scaffold(workspace, package, SOLANA_V2)
     assert plan.blocked == (), plan.blocked
     apply(plan, project)
     (package.root / SPECS_DIR / "mod.rs").write_text(PROBE.read_text())
@@ -242,8 +243,14 @@ async def test_raising_the_loop_bound_is_what_turns_the_rule_green(project, caps
             "for the two drafts that got this wrong."
         )
 
+    # Beside the project, not in it: the prover runs the build script unconfined, so it goes where
+    # no build in the session can write.
+    submissions = tmp_path / "submission"
+    submissions.mkdir()
     confs = {
-        arm: await write_submission(session, _submission(settings, f"loop_bound_{arm}"))
+        arm: await write_submission(
+            session, _submission(settings, f"loop_bound_{arm}"), into=submissions
+        )
         for arm, settings in (("default", default), ("raised", raised))
     }
     # Sanity off, as `tests/test_cvlr_anchor_reach.py` does and for the same reason: it doubles the
@@ -260,6 +267,11 @@ async def test_raising_the_loop_bound_is_what_turns_the_rule_green(project, caps
     # `msg` differs too and is excluded by name: it is how the two jobs are told apart in the
     # dashboard, and it reaches no part of the verification.
     differing.pop("msg", None)
+    # Each arm's build script is named after its submission, so the paths differ. What they build
+    # must not.
+    scripts = {arm: Path(written[arm]["build_script"]).read_text() for arm in written}
+    assert scripts["default"].replace("loop_bound_default", "loop_bound_raised") == scripts["raised"]
+    differing.pop("build_script", None)
     assert differing == {"loop_iter": str(RAISED)}, (
         f"the two arms differ in more than the loop bound: {differing}. Whatever this run "
         f"measures, "

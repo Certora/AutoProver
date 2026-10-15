@@ -21,7 +21,7 @@ from composer.cargo.doctest import (
     reveal_hidden_lines,
     wrap,
 )
-from composer.spec.cvlr.reference import SOLANA
+from composer.spec.cvlr.reference import SOLANA_V3
 
 
 @pytest.mark.parametrize(
@@ -142,9 +142,13 @@ def reference_crate(root: Path) -> Path:
     if shutil.which("cargo") is None:
         pytest.skip("cargo is not on PATH")
     (root / "src").mkdir(parents=True, exist_ok=True)
+    patches = "".join(
+        f"{patch.commit.patch_line(patch.name)}\n" for patch in SOLANA_V3.from_commits()
+    )
     (root / "Cargo.toml").write_text(
         '[package]\nname = "examples"\nversion = "0.0.0"\nedition = "2021"\n\n'
-        f"[dependencies]\n{SOLANA.cargo_dependencies()}\n"
+        f"[dependencies]\n{SOLANA_V3.cargo_dependencies()}\n"
+        + (f"\n[patch.crates-io]\n{patches}" if patches else "")
     )
     return root
 

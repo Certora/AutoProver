@@ -1,0 +1,45 @@
+# Demangled symbols from solana-program/stake `main` (bed72d0, SDK 3: solana-account-info 3.1.1,
+# solana-pubkey 4.4) scaffolded with cvlr-solana 0.6.0 and built for SBF with platform-tools v1.53.
+# Filtered to the platform crates, which is what the tuning files address. Regenerate with:
+#   cargo certora-sbf --tools-version v1.53 --features certora
+#   llvm-nm --defined-only target/sbpf-solana-solana/release/solana_stake_program.so \
+#     | awk '{ $1=""; $2=""; sub(/^[ \t]+/,""); print }' | rustfilt | sort -u
+solana_account_info::AccountInfo::data_len
+solana_account_info::AccountInfo::lamports
+solana_account_info::AccountInfo::new
+solana_account_info::AccountInfo::resize
+solana_address::Address::create_with_seed
+solana_address::_::<impl serde_core::de::Deserialize for solana_address::Address>::deserialize
+solana_clock::sysvar::<impl solana_sysvar_id::SysvarId for solana_clock::Clock>::check_id
+solana_cpi::set_return_data
+solana_get_sysvar::get_sysvar
+solana_program_entrypoint::deserialize
+<solana_program_error::ProgramError as core::fmt::Debug>::fmt
+<solana_program_error::ProgramError as core::fmt::Display>::fmt
+solana_rent::sysvar::<impl solana_sysvar_id::SysvarId for solana_rent::Rent>::check_id
+solana_sdk_ids::sysvar::clock::check_id
+solana_sdk_ids::sysvar::rent::check_id
+solana_serialize_utils::cursor::read_pubkey_into
+solana_sha256_hasher::hashv
+<solana_stake_history::sysvar::StakeHistorySysvar as solana_stake_history::StakeHistoryGetEntry>::get_entry
+<solana_stake_interface::error::StakeError as core::fmt::Display>::fmt
+solana_stake_interface::state::Authorized::authorize
+solana_stake_interface::state::Authorized::check
+solana_stake_interface::state::Delegation::new
+solana_stake_interface::state::Delegation::stake_activating_and_deactivating_v2
+solana_stake_interface::state::_::<impl serde_core::ser::Serialize for solana_stake_interface::state::Meta>::serialize
+solana_stake_interface::state::Lockup::is_in_force
+solana_stake_interface::state::Meta::set_lockup
+solana_stake_interface::tools::acceptable_reference_epoch_credits
+solana_stake_interface::warmup_cooldown_allowance::calculate_activation_allowance
+solana_stake_interface::warmup_cooldown_allowance::calculate_deactivation_allowance
+solana_sysvar::clock::<impl solana_sysvar::Sysvar for solana_clock::Clock>::get
+solana_sysvar::epoch_rewards::<impl solana_sysvar::Sysvar for solana_epoch_rewards::EpochRewards>::get
+solana_sysvar::rent::<impl solana_sysvar::Sysvar for solana_rent::Rent>::get
+solana_vote_interface::state::vote_state_deserialize::deserialize_vote_state_into_v4
+solana_vote_interface::state::vote_state_deserialize::read_authorized_voters
+solana_vote_interface::state::vote_state_deserialize::read_epoch_credits
+solana_vote_interface::state::vote_state_deserialize::read_last_timestamp
+solana_vote_interface::state::vote_state_deserialize::read_option_bls_public_key_compressed
+solana_vote_interface::state::vote_state_deserialize::read_votes
+solana_vote_interface::state::vote_state_v4::VoteStateV4::deserialize_into_uninit

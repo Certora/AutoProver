@@ -118,6 +118,32 @@ class AuthorityInteraction(BaseModel):
 type ComponentInteraction = InterComponentInteraction | AuthorityInteraction
 
 
+class Computation(BaseModel):
+    """A function where the protocol's arithmetic happens, named so the property extractor can ask
+    what its result must respect. It may live in the program or in a dependency the program relies
+    on: the stake program's activation schedule is `solana_stake_interface`'s, and a stake account's
+    withdrawable balance depends on it.
+
+    ``computes`` says what, never how. The extractor states properties from it, and a formula here
+    becomes a property that restates the formula, which holds for this implementation only."""
+
+    function: str = Field(
+        description="The function's Rust path as the program calls it, e.g. "
+        "`solana_stake_interface::state::Delegation::stake` or `crate::helpers::calculate_split`."
+    )
+    crate: str = Field(
+        description="The crate that defines the function: the program's own, or a dependency's."
+    )
+    computes: str = Field(
+        description="What the result is, in the protocol's terms: 'the part of a delegation that "
+        "is effective at an epoch'. No formula and no constants: say what it computes, not how."
+    )
+    used_by: list[str] = Field(
+        description="The instructions whose behavior depends on the result. Each must match the "
+        "`name` of an instruction declared on the program."
+    )
+
+
 class ProgramComponent(BaseModel):
     """A single major "component" of a program — a named *capability*: a semantic cluster of the
     program's instructions together with the account state they maintain.
@@ -148,6 +174,11 @@ class ProgramComponent(BaseModel):
     )
     requirements: list[str] = Field(
         description="Natural-language requirements for this component — its behavioral specification."
+    )
+    computations: list[Computation] = Field(
+        default_factory=list,
+        description="The functions where this component's arithmetic happens, including functions "
+        "in dependencies whose results the program relies on. Empty if the component does none.",
     )
 
 
@@ -314,3 +345,50 @@ class SolanaComponentInstance:
             "slug": self.slug,
             "instructions": [i.model_dump(mode="json") for i in self.instructions],
         }
+
+
+#: The shared unit's name, and the base of its slug.
+PROTOCOL_UNIT_NAME = ComponentName("Protocol invariants")
+
+
+def protocol_unit(main: SolanaProgramInstance) -> SolanaComponentInstance:
+    """A unit spanning every instruction of ``main``, for properties hoisted out of the components.
+
+    It is a component like the others, appended to a copy of the analyzed model, so every consumer
+    of a :class:`SolanaComponentInstance` (prompts, the worked example, artifact names) handles it
+    unchanged. The copy is this unit's alone: the extracted units keep the model they were
+    extracted under, whose cache keys depend on it.
+    """
+    program = main.program
+    taken = {slugify_filename(c.name) for c in program.components}
+    name = PROTOCOL_UNIT_NAME
+    while slugify_filename(name) in taken:
+        name = ComponentName(f"{name} (shared)")
+    component = ProgramComponent(
+        name=name,
+        description=(
+            "Properties that hold across the whole program, not within one component: each was "
+            "extracted by one or more components and ranges over instructions of several. A "
+            "property here is checked against every instruction it names, as one specification "
+            "applied to each handler."
+        ),
+        instructions=[i.name for i in program.instructions],
+        account_types=list(program.account_types),
+        interactions=[],
+        requirements=[],
+        computations=list(
+            {c.function: c for comp in program.components for c in comp.computations}.values()
+        ),
+    )
+    extended = program.model_copy(update={"components": [*program.components, component]})
+    # Validated rather than ``model_copy``-ed: a copy carries the instance's ``cached_property``
+    # values with it, and ``programs`` would still name the program without this component.
+    app = SolanaApplication.model_validate(
+        {
+            **dict(main.app),
+            "components": [extended if c is program else c for c in main.app.components],
+        }
+    )
+    return SolanaComponentInstance(
+        ind=len(program.components), _program=SolanaProgramInstance(main.ind, app)
+    )

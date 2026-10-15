@@ -90,8 +90,8 @@ from composer.rag.import_format import (
     RagManifest,
 )
 from composer.spec.cvlr.crates import CVLR_PREFIX
-from composer.spec.cvlr.reference import ChainReference, reference_for
-from composer.tools.cvlr_api_rag import API_ROOT, SURFACE_HEADING
+from composer.spec.cvlr.reference import ChainReference, GitCommit, generations
+from composer.tools.cvlr_api_rag import API_ROOT, SURFACE_HEADING, SURFACE_PHRASE
 
 _log = logging.getLogger(__name__)
 
@@ -154,6 +154,9 @@ class LocalCheckout:
 
     root: pathlib.Path
     crate_dir: pathlib.Path
+    #: The crate's version in the checkout, as cargo reports it. A generation that pins the crate
+    #: at another version does not take this checkout (:func:`sources_for`).
+    version: str
     #: ``git describe`` of :attr:`root`, ``-dirty`` included. The only thing that distinguishes
     #: one build of a checkout from another, and uncommitted edits are the case that matters.
     revision: str
@@ -162,10 +165,22 @@ class LocalCheckout:
         return f"{self.root} @ {self.revision}"
 
 
-#: Where one crate's documentation came from. A corpus mixes the two: a caller who points at the
-#: ``cvlr`` checkout still gets ``cvlr-solana`` from crates.io. It reaches the manifest's source
-#: line, the undocumented report and the log, and deliberately not the rows.
-type Origin = Published | LocalCheckout
+@dataclass(frozen=True)
+class ReleaseCommit:
+    """A release the reference set reads from the commit it was cut from, because crates.io does
+    not have it yet (:class:`~composer.spec.cvlr.reference.GitCommit`)."""
+
+    commit: GitCommit
+
+    def describe(self) -> str:
+        return f"{self.commit.repo} @ {self.commit.rev[:12]}"
+
+
+#: Where one crate's documentation came from. A corpus mixes them: a caller who points at the
+#: ``cvlr`` checkout still gets ``cvlr-solana`` from wherever the reference set reads it. It
+#: reaches the manifest's source line, the undocumented report and the log, and deliberately not
+#: the rows.
+type Origin = Published | LocalCheckout | ReleaseCommit
 
 
 @dataclass(frozen=True)
@@ -851,7 +866,7 @@ def _surface_section(docs: CrateDocs, items: list[Item]) -> ManualSection:
             ManualBlock(
                 kind=ManualBlockKind.TEXT,
                 body=(
-                    f"Everything `{docs.name}` {docs.version} exports, in full — "
+                    f"Everything `{docs.name}` {docs.version} {SURFACE_PHRASE} — "
                     f"{len(items)} items. This list is closed: a name that is not on it is not in "
                     f"this crate at the release this build pins.\n\n{listing}"
                 ),
@@ -938,6 +953,24 @@ class ExampleGate:
         out.append(docs[cursor:])
         return "".join(out)
 
+    @staticmethod
+    def combined(gates: Sequence["ExampleGate"]) -> "ExampleGate":
+        """One gate over several generations' compiles.
+
+        A crate the generations share carries its examples into each, and the corpus holds it
+        once, so an example is kept only if it compiled in every generation that checked it.
+        """
+        verdicts: dict[str, Verdict] = {}
+        owners: dict[str, list[str]] = {}
+        for gate in gates:
+            for source, verdict in gate.verdicts.items():
+                if not isinstance(verdicts.get(source), Failed):
+                    verdicts[source] = verdict
+            for source, items in gate.owners.items():
+                seen = owners.setdefault(source, [])
+                seen += [i for i in items if i not in seen]
+        return ExampleGate(verdicts=verdicts, owners=owners)
+
     def failures(self) -> list[tuple[str, Failed]]:
         return [(s, v) for s, v in self.verdicts.items() if isinstance(v, Failed)]
 
@@ -973,7 +1006,9 @@ def _examples_crate(
     """
     pinned = {c.name for c in reference.crates()}
     extra = "".join(f'{name} = "={version}"\n' for name, version in family if name not in pinned)
-    _write_manifest(root, EXAMPLES_PACKAGE, reference.cargo_dependencies() + "\n" + extra, sources)
+    _write_manifest(
+        root, EXAMPLES_PACKAGE, reference.cargo_dependencies() + "\n" + extra, reference, sources
+    )
 
 
 def gate_examples(
@@ -1113,14 +1148,36 @@ def crate_sources(roots: Sequence[pathlib.Path]) -> dict[str, LocalCheckout]:
                 f"cargo metadata failed in {resolved}:\n{result.stderr.strip()}"
             )
         revision = _revision(resolved)
-        for name, crate_dir in cvlr_packages(json.loads(result.stdout), resolved).items():
+        metadata = json.loads(result.stdout)
+        versions = {p["name"]: p["version"] for p in metadata.get("packages", [])}
+        for name, crate_dir in cvlr_packages(metadata, resolved).items():
             if (prior := sources.get(name)) is not None:
                 raise RustdocUnavailable(
                     f"both {prior.root} and {resolved} define {name}. Pass one of them: which "
                     f"copy the corpus would describe is not something this can choose for you."
                 )
-            sources[name] = LocalCheckout(root=resolved, crate_dir=crate_dir, revision=revision)
+            sources[name] = LocalCheckout(
+                root=resolved, crate_dir=crate_dir, version=versions[name], revision=revision
+            )
     return sources
+
+
+def sources_for(
+    reference: ChainReference, sources: Mapping[str, LocalCheckout]
+) -> dict[str, LocalCheckout]:
+    """The checkouts one generation can take: all but those of a crate it pins at another version.
+
+    A ``cvlr-solana`` checkout is one release line, and the generations pin different ones.
+    Patched into the other generation's probe it would fail there at cargo, so it is left to the
+    generation it belongs to. A crate the reference set does not pin, such as ``cvlr-asserts``
+    under the core, is taken by every generation.
+    """
+    pinned = {c.name: c.version for c in reference.crates()}
+    return {
+        name: source
+        for name, source in sources.items()
+        if pinned.get(name, source.version) == source.version
+    }
 
 
 def _probe_crate(
@@ -1136,20 +1193,28 @@ def _probe_crate(
     those two questions apart: the pin still says which crates resolve and at what version, and
     the patch only redirects where their source is read from. A checkout whose version has moved
     off the pin therefore fails here, at cargo, rather than producing a corpus quietly describing
-    a release this build does not support.
+    a release this build does not support. An unpublished release enters the same way, from its
+    commit, unless a checkout replaces it.
     """
-    _write_manifest(root, PROBE_PACKAGE, reference.cargo_dependencies(), sources)
+    _write_manifest(root, PROBE_PACKAGE, reference.cargo_dependencies(), reference, sources)
 
 
 def _write_manifest(
-    root: pathlib.Path, package: str, dependencies: str, sources: Mapping[str, LocalCheckout]
+    root: pathlib.Path,
+    package: str,
+    dependencies: str,
+    reference: ChainReference,
+    sources: Mapping[str, LocalCheckout],
 ) -> None:
-    """An empty library crate with these dependencies and the checkouts as patches."""
+    """An empty library crate with these dependencies, patched to the reference set's unpublished
+    releases and to the checkouts."""
     (root / "src").mkdir(parents=True, exist_ok=True)
     (root / "src" / "lib.rs").write_text("")
-    patches = "".join(
-        f'{name} = {{ path = "{source.crate_dir}" }}\n' for name, source in sorted(sources.items())
-    )
+    entries = {
+        patch.name: patch.commit.patch_line(patch.name) for patch in reference.from_commits()
+    }
+    entries |= {name: f'{name} = {{ path = "{source.crate_dir}" }}' for name, source in sources.items()}
+    patches = "".join(f"{entries[name]}\n" for name in sorted(entries))
     (root / "Cargo.toml").write_text(
         "[package]\n"
         f'name = "{package}"\n'
@@ -1219,25 +1284,39 @@ def document_family(
     *,
     sources: Mapping[str, LocalCheckout] = MappingProxyType({}),
     toolchain: str = DEFAULT_TOOLCHAIN,
+    fetch: bool = False,
 ) -> list[CrateDocs]:
     """Build the probe, run rustdoc over the whole family, and resolve re-exports across it.
 
     Returns the parsed crates rather than a manifest: the walk has two consumers now, and which
     one runs is a flag rather than a second pass over cargo.
+
+    ``fetch`` resolves and fetches the probe's graph over the network first, for a cold registry.
+    Without it the build is offline unless a release is read from a commit.
     """
     if shutil.which("cargo") is None:
         raise RustdocUnavailable("cargo is not on PATH, so there is nothing to document.")
     _probe_crate(workdir, reference, sources)
+    commits = _commits(reference, sources)
+    # A commit cargo has not fetched is not in the registry cache, so resolving one needs the
+    # network, and so does the rest of a graph the cache has never held. Fetching it once lets every
+    # rustdoc below stay offline.
+    online = fetch or bool(commits)
     locked = subprocess.run(
-        ["cargo", "generate-lockfile", "-q", "--offline"],
+        ["cargo", "generate-lockfile", "-q", *(() if online else ("--offline",))],
         cwd=workdir, capture_output=True, text=True, check=False,
     )
     if locked.returncode != 0 or not (workdir / "Cargo.lock").is_file():
         raise RustdocUnavailable(
-            f"cargo could not resolve the reference set offline (exit {locked.returncode}). This "
-            f"build never touches the network, so the pinned crates must already be in the cargo "
-            f"registry: run `cargo fetch` once in a crate depending on\n"
-            f"{reference.cargo_dependencies()}\n{locked.stderr.strip()}"
+            f"cargo could not resolve the reference set (exit {locked.returncode}). Without "
+            f"--fetch or a release read from its commit this build never touches the network, so "
+            f"the pinned crates must already be in the cargo registry: pass --fetch, or run "
+            f"`cargo fetch` once in a crate depending on\n{reference.cargo_dependencies()}\n"
+            f"{locked.stderr.strip()}"
+        )
+    if online:
+        subprocess.run(
+            ["cargo", "fetch", "-q"], cwd=workdir, capture_output=True, text=True, check=False
         )
     packages = _family_packages(workdir)
     if not packages:
@@ -1247,11 +1326,51 @@ def document_family(
         )
     crates: list[CrateDocs] = []
     for name, version in packages:
-        origin = sources.get(name, Published())
+        origin: Origin = sources.get(name) or commits.get(name) or Published()
         _log.info("rustdoc: %s %s from %s", name, version, origin.describe())
         crates.append(load(_rustdoc(workdir, name, toolchain), name, version, origin))
     resolve_aliases(crates)
     return crates
+
+
+def _commits(
+    reference: ChainReference, sources: Mapping[str, LocalCheckout]
+) -> dict[str, ReleaseCommit]:
+    """The unpublished releases the probe reads from their commits: those no checkout replaces."""
+    return {
+        patch.name: ReleaseCommit(patch.commit)
+        for patch in reference.from_commits()
+        if patch.name not in sources
+    }
+
+
+def document_generations(
+    references: Sequence[ChainReference],
+    workdir: pathlib.Path,
+    sources: Mapping[str, LocalCheckout],
+    *,
+    toolchain: str = DEFAULT_TOOLCHAIN,
+    fetch: bool = False,
+) -> tuple[list[CrateDocs], ExampleGate]:
+    """Every generation's crates, each documented and its examples compiled in a probe of its
+    own, a crate the generations share (the core) once.
+
+    One probe per generation, because the generations cannot share one: their chain crates are
+    bound to different platform crates, which is the reason there are two.
+    """
+    crates: dict[tuple[str, str], CrateDocs] = {}
+    gates: list[ExampleGate] = []
+    for n, reference in enumerate(references):
+        probe = workdir / f"generation-{n}"
+        probe.mkdir(parents=True, exist_ok=True)
+        generation_sources = sources_for(reference, sources)
+        family = document_family(
+            reference, probe, sources=generation_sources, toolchain=toolchain, fetch=fetch
+        )
+        gates.append(gate_examples(family, reference, probe, sources=generation_sources))
+        for docs in family:
+            crates.setdefault((docs.name, docs.version), docs)
+    return list(crates.values()), ExampleGate.combined(gates)
 
 
 def manifest_source(reference: ChainReference, sources: Mapping[str, LocalCheckout]) -> str:
@@ -1263,6 +1382,12 @@ def manifest_source(reference: ChainReference, sources: Mapping[str, LocalChecko
     """
     pinned = ", ".join(f"{c.name} {c.version}" for c in reference.crates())
     base = f"rustdoc over the CVLR family pinned at {pinned}"
+    if commits := _commits(reference, sources):
+        by_commit: dict[str, list[str]] = {}
+        for name, commit in sorted(commits.items()):
+            by_commit.setdefault(commit.describe(), []).append(name)
+        read = "; ".join(f"{where}: {', '.join(names)}" for where, names in by_commit.items())
+        base += f", reading these unpublished releases from their release commits — {read}"
     if not sources:
         return base
     by_checkout: dict[str, list[str]] = {}
@@ -1335,7 +1460,7 @@ def main() -> None:
         help="Where to write the manifest. Feed it to composer.scripts.rag_import.",
     )
     parser.add_argument(
-        "--chain", default="solana", help="Which reference set to document (solana, soroban)."
+        "--chain", default="solana", help="Which chain to document (solana, soroban): every platform generation it supports."
     )
     parser.add_argument(
         "--keep", type=pathlib.Path, default=None,
@@ -1358,6 +1483,12 @@ def main() -> None:
              "toolchain, whatever `cargo` resolves to.",
     )
     parser.add_argument(
+        "--fetch", action="store_true",
+        help="Resolve and fetch each generation's crates over the network before documenting "
+             "them, for a cold cargo registry. Without it the build is offline, except for a "
+             "release the reference set reads from a commit.",
+    )
+    parser.add_argument(
         "--undocumented", action="store_true",
         help="Instead of a manifest, write the list of items that carry no prose documentation. "
              "That list is the ask against the CVLR crates, and it is meant to shrink.",
@@ -1365,20 +1496,20 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
-    reference = reference_for(args.chain)
-
-    def build(workdir: pathlib.Path) -> tuple[list[CrateDocs], ExampleGate]:
-        crates = document_family(reference, workdir, sources=sources, toolchain=args.toolchain)
-        return crates, gate_examples(crates, reference, workdir, sources=sources)
-
+    references = generations(args.chain)
     try:
         sources = crate_sources(args.crate_source)
         if args.keep is not None:
             args.keep.mkdir(parents=True, exist_ok=True)
-            crates, examples = build(args.keep)
+            crates, examples = document_generations(
+                references, args.keep, sources, toolchain=args.toolchain, fetch=args.fetch
+            )
         else:
             with tempfile.TemporaryDirectory(prefix="cvlr-api-docs-") as tmp:
-                crates, examples = build(pathlib.Path(tmp))
+                crates, examples = document_generations(
+                    references, pathlib.Path(tmp), sources, toolchain=args.toolchain,
+                    fetch=args.fetch,
+                )
     except (RustdocUnavailable, GateUnavailable) as exc:
         raise SystemExit(f"cvlr_api_docs: {exc}") from exc
 
@@ -1386,7 +1517,10 @@ def main() -> None:
         args.output.write_text(undocumented_report(crates, examples))
         _log.info("wrote %s", args.output)
         return
-    manifest = build_manifest(crates, manifest_source(reference, sources), examples)
+    source = " | ".join(
+        f"{r.platform.label}: {manifest_source(r, sources_for(r, sources))}" for r in references
+    )
+    manifest = build_manifest(crates, source, examples)
     args.output.write_text(manifest.model_dump_json(indent=1))
     _log.info(
         "wrote %s: %d sections, %d embedded groups",

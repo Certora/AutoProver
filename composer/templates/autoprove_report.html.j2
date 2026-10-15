@@ -431,6 +431,33 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
 </section>
 {%- endfor %}
 
+{%- if hoisted %}
+<section class="gaps" id="hoisted">
+  <h2>Protocol-wide properties ({{ hoisted | length }})</h2>
+  <p class="desc">Several components stated each of these claims, so each was formalized once, in
+  the shared unit, and the components' own versions were not formalized separately. A claim marked
+  <em>written when hoisted</em> is the conjunction of its components' properties, worded by the run
+  because none of them stated it whole; check it against them.</p>
+  {%- for h in hoisted %}
+  <h3>{{ h.shared.title }}
+    {%- if h.origin.kind == "synthesized" %} <span class="badge badge-warn">written when hoisted</span>
+    {%- else %} <span class="sort-tag">from {{ h.origin.source[0] }}</span>{% endif %}</h3>
+  <p class="note">{{ h.shared.description }} <span class="sort-tag">{{ h.shared.sort }}</span></p>
+  <table class="rules">
+    <thead><tr><th>Component</th><th>Property it stands for</th></tr></thead>
+    <tbody>
+      {%- for a in h.absorbed %}
+      <tr>
+        <td>{{ a.component }}</td>
+        <td>{{ a.description }} <span class="sort-tag">{{ a.sort }}</span></td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+  {%- endfor %}
+</section>
+{%- endif %}
+
 {%- if skipped or gave_up %}
 <section class="gaps">
   <h2>Formalization gaps</h2>

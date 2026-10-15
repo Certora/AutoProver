@@ -14,7 +14,8 @@ from types import SimpleNamespace
 import pytest
 
 from composer.cargo import sbf as entry_sbf
-from composer.cargo.metadata import CratePackage, LibTarget, Workspace
+from composer.cargo.metadata import CratePackage, LibTarget, RegistrySource, Workspace
+from composer.spec.cvlr.reference import SOLANA_V2, generations
 from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ, SOLANA
 from composer.spec.cvlr import entry, preflight
 from composer.spec.cvlr.pipeline import WORK_DIR, CvlrPhase
@@ -35,8 +36,21 @@ def _package(root: Path, name: str, *, lib: bool = True) -> CratePackage:
 
 
 def _workspace(root: Path, *members: CratePackage) -> Workspace:
+    """``members``, each linking the SDK 2 platform crate, so that a generation can be read."""
+    platform = CratePackage(
+        name="solana-program",
+        version="2.2.1",
+        manifest_path=root / "vendor" / "solana-program" / "Cargo.toml",
+        lib=None,
+        features=(),
+        source=RegistrySource("registry+https://github.com/rust-lang/crates.io-index"),
+    )
     return Workspace(
-        root=root, target_directory=root / "target", members=members, packages=members
+        root=root,
+        target_directory=root / "target",
+        members=members,
+        packages=(*members, platform),
+        links={m: (platform,) for m in members},
     )
 
 
@@ -44,7 +58,7 @@ def _workspace(root: Path, *members: CratePackage) -> Workspace:
 def fake_cargo(monkeypatch):
     """``Workspace.read`` replaced by a canned answer, as in ``test_cvlr_scaffold``."""
     def install(workspace: Workspace):
-        async def fake(root, *, offline=False, features=(), timeout_s=0):
+        async def fake(root, *, offline=False, features=(), toolchain=None, timeout_s=0):
             return workspace
         monkeypatch.setattr(Workspace, "read", fake)
     return install
@@ -63,12 +77,34 @@ async def test_the_crate_owning_the_main_program_is_the_package(tmp_path, fake_c
     fake_cargo(_workspace(tmp_path, lending, farms))
 
     selected = await preflight.select_package(
-        tmp_path, None, main_source=tmp_path / "programs" / "farms" / "src" / "lib.rs"
+        tmp_path,
+        None,
+        candidates=generations("solana"),
+        main_source=tmp_path / "programs" / "farms" / "src" / "lib.rs",
     )
 
     assert selected.name == "farms"
     assert selected.package_dir == Path("programs/farms")
     assert selected.workspace_root == tmp_path
+    assert selected.reference == SOLANA_V2
+
+
+@pytest.mark.asyncio
+async def test_a_package_on_no_supported_generation_fails_before_the_run(tmp_path, fake_cargo):
+    """`solana-program` 1.18 defines its own `AccountInfo`, which neither CVLR line can take."""
+    farms = _package(tmp_path, "farms")
+    workspace = _workspace(tmp_path, farms)
+    (old,) = [p for p in workspace.packages if p.name == "solana-program"]
+    fake_cargo(dataclasses.replace(
+        workspace,
+        packages=(farms, dataclasses.replace(old, version="1.18.26")),
+        links={farms: (dataclasses.replace(old, version="1.18.26"),)},
+    ))
+    with pytest.raises(preflight.PreflightFailed) as caught:
+        await preflight.select_package(tmp_path, "farms", candidates=generations("solana"))
+    message = str(caught.value)
+    assert "solana-program 1.18.26" in message
+    assert "solana-* 3.x" in message and "solana-program 2.x" in message
 
 
 @pytest.mark.asyncio
@@ -79,7 +115,10 @@ async def test_an_explicit_package_wins_over_the_owning_crate(tmp_path, fake_car
     fake_cargo(_workspace(tmp_path, lending, farms))
 
     selected = await preflight.select_package(
-        tmp_path, "lending", main_source=tmp_path / "programs" / "farms" / "src" / "lib.rs"
+        tmp_path,
+        "lending",
+        candidates=generations("solana"),
+        main_source=tmp_path / "programs" / "farms" / "src" / "lib.rs",
     )
 
     assert selected.name == "lending"
@@ -93,7 +132,10 @@ async def test_a_main_program_outside_every_member_still_refuses_to_guess(tmp_pa
     fake_cargo(_workspace(tmp_path, _package(tmp_path, "lending"), _package(tmp_path, "farms")))
 
     with pytest.raises(preflight.PreflightFailed, match="name the one to verify"):
-        await preflight.select_package(tmp_path, None, main_source=tmp_path / "docs" / "notes.md")
+        await preflight.select_package(
+            tmp_path, None, candidates=generations("solana"),
+            main_source=tmp_path / "docs" / "notes.md",
+        )
 
 
 @pytest.mark.asyncio
@@ -105,7 +147,10 @@ async def test_a_binary_only_owner_is_not_a_verifiable_package(tmp_path, fake_ca
     fake_cargo(_workspace(tmp_path, tool, lending))
 
     selected = await preflight.select_package(
-        tmp_path, None, main_source=tmp_path / "programs" / "xtask" / "src" / "main.rs"
+        tmp_path,
+        None,
+        candidates=generations("solana"),
+        main_source=tmp_path / "programs" / "xtask" / "src" / "main.rs",
     )
 
     assert selected.name == "lending"
@@ -116,7 +161,7 @@ async def test_a_package_that_is_not_a_member_fails_before_the_run(tmp_path, fak
     fake_cargo(_workspace(tmp_path, _package(tmp_path, "lending")))
 
     with pytest.raises(preflight.PreflightFailed, match="is not a member"):
-        await preflight.select_package(tmp_path, "typo")
+        await preflight.select_package(tmp_path, "typo", candidates=generations("solana"))
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +288,8 @@ class _Wiring:
     backend: object = None
     ecosystem: object = None
     env: object = None
+    #: The releases the corpora's tools were scoped to.
+    pinned: dict = dataclasses.field(default_factory=dict)
 
 
 @pytest.fixture
@@ -285,7 +332,11 @@ def wiring(monkeypatch, tmp_path):
             bind_source_tools=lambda tools: {**kw, "source_tools": tools}
         ),
     )
-    monkeypatch.setattr(entry, "corpus_tools", lambda model: (f"search:{model}",))
+    def fake_corpus_tools(model, *, pinned):
+        recorded.pinned = dict(pinned)
+        return (f"search:{model}",)
+
+    monkeypatch.setattr(entry, "corpus_tools", fake_corpus_tools)
     # The researcher is a compiled sub-agent graph over a real model provider; these tests are
     # about which tools reach which agent, so it records its inputs and stands in for itself.
     monkeypatch.setattr(
@@ -451,6 +502,16 @@ async def test_both_corpora_reach_the_researcher_and_neither_reaches_the_author(
     assert not any(isinstance(t, str) and t.startswith("search:") for t in rag_tools), (
         "the corpus search tools belong to the researcher, not to the author"
     )
+
+
+@pytest.mark.asyncio
+async def test_the_api_corpus_shows_the_releases_of_the_generation_the_run_selected(
+    project, monkeypatch, wiring
+):
+    """The corpus holds every generation's releases. The run sees its own: here, the SDK 2 line."""
+    await _run([str(project), "programs/vault/src/lib.rs:vault"], monkeypatch, wiring)
+    assert wiring.pinned == {c.name: c.version for c in SOLANA_V2.crates()}
+    assert wiring.backend.reference.platform == SOLANA_V2.platform
 
 
 @pytest.mark.asyncio

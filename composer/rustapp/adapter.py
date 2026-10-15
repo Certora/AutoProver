@@ -654,6 +654,10 @@ class RustBackend:
         return self.descriptor.backend_guidance
 
     @property
+    def shared_unit(self) -> None:
+        return None
+
+    @property
     def analysis_spec(self) -> SystemAnalysisSpec:
         return SystemAnalysisSpec(self.descriptor.analysis_key, "rust-properties")
 

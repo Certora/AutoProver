@@ -158,6 +158,7 @@ class FoundrySystem(PreparedSystem[GeneratedFoundryTest, ContractComponentInstan
 @dataclass
 class FoundryBackend:
     backend_guidance = FOUNDRY_BACKEND_GUIDANCE
+    shared_unit = None
 
     core_phases = CorePhases({
         "analysis": FoundryPhase.SYSTEM_ANALYSIS,

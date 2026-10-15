@@ -71,9 +71,9 @@ to avoid — that lands, compiles, and abstracts nothing, leaving the same prove
 indication why.
 
 **And one thing none of the eight can do: reach a function the program does not own.** Every kind
-above edits the item it is about, so the item has to be the program's — and `invoke` is
-`solana_program`'s. `swap_import` is the kind for that, and it works from the calling side: the
-`use` line is the program's even when the function is not.
+above edits the item it is about, so the item has to be the program's — and `invoke` is the SDK's
+(`solana_program`'s, or `solana_cpi`'s on the split SDK 3 crates). `swap_import` is the kind for that,
+and it works from the calling side: the `use` line is the program's even when the function is not.
 
 ### Extraction, the one kind that rearranges code
 
@@ -181,8 +181,8 @@ The commonest instance is a CPI. `vault_program::deposit` calls
 `invoke(&system_instruction::transfer(..), ..)`, and building that instruction runs a loop no loop
 bound discharges, so a rule through the handler stops before it reaches what the *program* recorded
 after the transfer. (The Prover's own model of the call moves nothing, so the stand-in costs nothing
-against it.) `invoke` belongs to `solana_program`, the call is an expression rather than an item,
-and the optimizer has usually inlined the chain so there is no symbol left to summarize either.
+against it.) `invoke` belongs to the SDK, the call is an expression rather than an item, and the
+optimizer has usually inlined the chain so there is no symbol left to summarize either.
 
 What *is* the program's is the `use` line. `mock_fn` replaces a definition with a `use`; this
 replaces a `use` with a `use`:

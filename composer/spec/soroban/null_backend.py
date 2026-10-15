@@ -154,6 +154,7 @@ class NullSorobanBackend:
 
     artifact_store: NullSorobanArtifactStore
     backend_guidance = SOROBAN_NULL_GUIDANCE
+    shared_unit = None
     analysis_spec = SystemAnalysisSpec("soroban-analysis", "soroban-properties")
     core_phases = CorePhases(
         {

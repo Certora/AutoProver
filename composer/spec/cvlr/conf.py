@@ -29,15 +29,25 @@ from composer.spec.util import string_hash
 #:
 #: ``prover_args`` has none of the ``-solanaOptimistic*`` flags: they are unsound, and they do not
 #: fix the [3308] they were meant to.
+#:
+#: ``-solanaTACSoundSignedMath`` is on because without it a ``u64`` compared against a constant at
+#: or above ``2^63`` (``u64::MAX``) is modelled as a comparison against a negative number
+#: (``docs/upstream-defects.md`` P11). The fixes that make it affordable alongside
+#: ``-solanaTACMathInt`` (P8) are on the Prover's master branch and not yet released, hence
+#: ``prover_version``.
+#:
+#: TODO(cvlr-todo U25): remove ``prover_version`` before the Solana AutoProver ships.
 BASE_CONF: Conf = {
     "smt_timeout": "6000",
     "rule_sanity": "basic",
+    "prover_version": "master",
     "prover_args": [
         "-unsatCoresForAllAsserts true",
         "-solanaSkipCallRegInst true",
         "-solanaTACOptimize 2",
         "-solanaStackSize 8192",
         "-solanaTACMathInt true",
+        "-solanaTACSoundSignedMath true",
     ],
 }
 
@@ -90,9 +100,21 @@ def conf_history(tunable: TunableConf) -> tuple[str, ...]:
 
 #: The platform-tools release every build uses. The prover does not apply ``cargo_tools_version``
 #: itself: it reaches ``cargo certora-sbf`` only on the CLI's own build path, and this backend owns
-#: the build. One release serves every target because the reference set pins one platform
-#: generation (:class:`~composer.spec.cvlr.reference.PlatformGeneration`).
-PLATFORM_TOOLS_VERSION = "v1.43"
+#: the build.
+#:
+#: One release serves both Solana platform generations. v1.53 ships rustc and cargo 1.89. The
+#: older v1.43 shipped 1.79, whose cargo cannot parse an edition-2024 manifest, and the SDK 3
+#: crates' lockfiles are full of them. The SDK 2.2 vault builds under v1.53 too.
+PLATFORM_TOOLS_VERSION = "v1.53"
+
+#: The host Rust toolchain every cargo command of a CVLR run uses, whatever the target's
+#: ``rust-toolchain.toml`` pins. The pin is for the project's own builds: host checks and Anza's SBF
+#: toolchain. The program this backend verifies is compiled by the platform tools' rustc whatever the
+#: pin says, so the host toolchain only runs ``cargo metadata``, ``cargo check`` and build scripts.
+#: Following the pin instead fails in the Solana image: the runtime user cannot write the image's
+#: rustup home, so a toolchain the image lacks cannot be installed, and cargo does not start.
+#: ``scripts/Dockerfile.solana`` installs this one.
+HOST_RUST_TOOLCHAIN = "1.90.0"
 
 
 #: The cargo feature that compiles the verification module into the program. The scaffold writes

@@ -301,6 +301,9 @@ async def write_build_script(
                 "cwd": str(session.workdir.resolve()),
                 "argv_prefix": spec["argv_prefix"],
                 "argv": build.argv(),
+                # The prover runs the script with its own environment, so the session's toolchain
+                # has to travel with the command.
+                "env": session.toolchain_env,
                 "timeout_s": spec["timeout_s"],
             },
             indent=2,

@@ -351,6 +351,13 @@ def _validate_program_components(prog: SolanaProgram) -> list[str]:
                     f"Component {comp.name!r} of {prog.name} lists an instruction {ins_name!r} "
                     f"that {prog.name} does not declare."
                 )
+        for computation in comp.computations:
+            for ins_name in computation.used_by:
+                if ins_name not in prog.instructions_by_name:
+                    errors.append(
+                        f"Computation `{computation.function}` of component {comp.name!r} is used "
+                        f"by an instruction {ins_name!r} that {prog.name} does not declare."
+                    )
     referenced = {n for comp in prog.components for n in comp.instructions}
     unassigned = [i.name for i in prog.instructions if i.name not in referenced]
     if unassigned:

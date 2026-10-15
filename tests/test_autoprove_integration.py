@@ -195,6 +195,7 @@ async def test_autoprove_dumps_job_info_when_pipeline_crashes(scenario_provider,
     
     class _Crasher:
         backend_guidance = "empty"
+        shared_unit = None
 
         core_phases = CorePhases(
             analysis=AutoProvePhase.COMPONENT_ANALYSIS,

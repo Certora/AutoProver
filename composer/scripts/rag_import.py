@@ -41,6 +41,7 @@ from composer.rag.import_format import (
 from composer.rag.models import get_model
 from composer.rag.text import code_ref_tag
 from composer.rag.types import BlockChunk
+from composer.rag.wipe import empty_corpus
 from composer.scripts.text_processors import BlockBuilder, BuilderConfig
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -157,6 +158,9 @@ async def _async_main(args: argparse.Namespace) -> None:
         groups[_resolve_output(m, args.output)].append(m)
 
     for output, group in groups.items():
+        if args.replace:
+            emptied = await empty_corpus(output)
+            logger.info("emptied %s in %s", ", ".join(emptied) or "nothing", output)
         db = await get_rag_db(output, model)
         seen_paths: dict[tuple[str, ...], int] = {}
         n_docs = n_manual = 0
@@ -179,6 +183,11 @@ def main() -> None:
         help="RAG DB connection string. Overrides the manifest's knowledge_base -> connection lookup.",
     )
     parser.add_argument("--print", action="store_true", help="Dry-run: print both products, no DB writes.")
+    parser.add_argument(
+        "--replace", action="store_true",
+        help="Empty each target corpus before ingesting into it. Ingest only inserts, so without "
+             "this a corpus that already has rows gets a second copy of each.",
+    )
     asyncio.run(_async_main(parser.parse_args()))
 
 

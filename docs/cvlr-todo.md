@@ -590,7 +590,28 @@ It also covers every read-only and writable grant in `rust_build_policy` and the
 unsandboxed warm `cargo fetch`, and the environment allowlist. The open questions in
 command-sandbox.md §11 are where it starts, not its scope.
 
-**U25. The replay tape was recorded without the corpus and now replays with it.**
+
+**U25. Ship blocker: the Solana conf pins `prover_version: master`.**
+`BASE_CONF` ([conf.py](../composer/spec/cvlr/conf.py)) turns on `-solanaTACSoundSignedMath`. Without
+it, a `u64` compared against a constant at or above `2^63` is modelled as a negative comparison, so
+a program's `== u64::MAX` branches are never taken ([upstream-defects.md](./upstream-defects.md)
+P11). The fixes that let the flag coexist with `-solanaTACMathInt` (P8) are on the Prover's master
+branch but not all released, so the conf also names `prover_version: master`. That is right for
+development and wrong for a shipped product. Remove `prover_version` once those fixes are in a
+release, and rerun the CVLR gate against the released Prover first, since P8's two-hour timeouts are
+what the release has to have fixed.
+
+**U26. Ship blocker: the Solana reference set reads `cvlr-solana` from a git commit.**
+`cvlr-solana` 0.5.1 (the documented API and the `rt` fix) is cut and tagged, but only the crates'
+owner can publish to crates.io, and it is not published yet. The reference set
+([reference.py](../composer/spec/cvlr/reference.py)) pins its three crates at that version and
+names the release commit (`GitCommit`), and the scaffold writes a `[patch.crates-io]` entry per
+crate so cargo reads them from the commit. A shipped product should not send every target to a git
+repository. Once the release is on crates.io, drop the `GitCommit`s; the pins and everything else
+stay. The SDK 3 line (`docs/cvlr-sdk3-support.md`, C1 and A5) uses the same mechanism and
+the same exit.
+
+**U27. The replay tape was recorded without the corpus and now replays with it.**
 The tape was recorded under `--rag-corpus none`, and seven of its turns call `cvlr_research`
 anyway: each got an unknown-tool result. Since `e8f807e0` the replay binds the shipping corpus, so
 those calls reach a real researcher, and the researcher runs inside the caller's `run_task` with no
@@ -599,27 +620,29 @@ recorded turns, which moves everything after them out of order. Nobody has run t
 needs a re-recording under the corpus, and before that the researcher needs its own lane, so that
 its turns are recorded and replayed apart from its caller's. Landing plan P9.
 
-**U26. A CVLR release with documentation means rebuilding the API corpus, and nothing says so.**
-`cvlr` and `cvlr-solana` carry prose for every exported item on the `eric/docs` branches of the
-local checkouts, and neither is released: crates.io's newest are still 0.6.1 and 0.5.0. Until they
-publish, `cvlr_api_kb` built from crates.io has 218 undocumented items, and
-[cvlr-undocumented-api.md](./cvlr-undocumented-api.md) measures that. When they publish, the pin in
-`composer/spec/cvlr/reference.py` moves, the corpus is rebuilt, and that list is regenerated, which
-should leave it close to empty. `reference.py`'s docstring should say that a bump means an API
-corpus rebuild; today nothing connects the two.
+**U28. Ship blocker: the core is read from a git commit, because its documented release is
+unpublished.** `cvlr` 0.6.1 on crates.io leaves 176 of the API corpus's items without prose. Every
+item is documented on `Certora/cvlr`'s main branch, which is still version 0.6.1, so the reference
+set ([reference.py](../composer/spec/cvlr/reference.py)) reads the whole core workspace from that
+commit (`465a022`), by the same mechanism as U26. All twelve crates are patched together, because
+`cvlr-solana` depends on the sub-crates directly and a lone `cvlr` patch would put two copies of each
+in the graph. Built from the pins, the corpus has 0 of 346 items without prose (2026-10-14). Once a
+documented release is on crates.io, pin it and drop the commit, then rebuild the corpus and check the
+producer's `--undocumented` report is still empty. `reference.py`'s docstring should also say that a
+bump means an API corpus rebuild; today nothing connects the two.
 
-**U27. A scaffold could offer to move an off-reference project onto the pin.** The scaffold refuses a
+**U29. A scaffold could offer to move an off-reference project onto the pin.** The scaffold refuses a
 project on another CVLR line (`Mismatched`). Offering to rewrite its pins instead is the obvious next
 step, and an open question rather than a decision: it edits the client's dependency graph, which a
 refusal never does ([cvlr-api-docs-plan.md](./cvlr-api-docs-plan.md) §2).
 
-**U28. A `GraphRecursionError` discards a finished draft.** A unit that hits the recursion limit with
+**U30. A `GraphRecursionError` discards a finished draft.** A unit that hits the recursion limit with
 a compiling draft on disk loses it, where a budget stop would have kept it, and no backend catches
 the error. Production's default limit is high enough that this was last seen at a test-scale limit,
 which is why the live gate now runs at the default ([cvlr-backend-plan.md](./cvlr-backend-plan.md)
 §7.5.5).
 
-**U29. Two retrieval questions about the manual corpus.** Whether `prover.html` belongs in `cvlr_kb`
+**U31. Two retrieval questions about the manual corpus.** Whether `prover.html` belongs in `cvlr_kb`
 beside `solana.html`: its diagnostics and timeout chapters are on-topic and its EVM CLI surface is
 not. And vector search missed *Parametric Rules & Macros* for "one rule covering every instruction",
 which keyword search found. Neither has been looked at since the corpus became the manual alone.
@@ -856,4 +879,4 @@ no Soroban entry.
 consolidation, `cvlr-spl-token` entering the reference set, and `preflight.select_package`.
 
 **~~19. The plan has two stale items.~~** — **corrected there.** §7.12 item 5 now says the tape
-exists (and needs re-recording, U25), and item 12 that the materializer has landed.
+exists (and needs re-recording, U27), and item 12 that the materializer has landed.

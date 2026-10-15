@@ -37,7 +37,7 @@ from composer.cargo.metadata import (
 from composer.prover import conf as prover_conf
 from composer.spec.cvlr import conf as cvlr_conf
 from composer.spec.cvlr.crates import Absent, CvlrSources
-from composer.spec.cvlr.reference import SOLANA
+from composer.spec.cvlr.reference import SOLANA_V2
 from composer.cargo.sbf import (
     BUILD_TIMEOUT_ENV,
     DEFAULT_BUILD_TIMEOUT_S,
@@ -367,18 +367,18 @@ def test_a_project_on_the_reference_core_but_without_the_chain_crate_reports_tha
     """Two different statements, and only one of them stops a run: an old ``cvlr-solana`` and no
     ``cvlr-solana`` at all. They are separate types so a caller cannot conflate them."""
     sources = CvlrSources.of(_workspace(_METADATA))
-    gaps = {g.crate: g for g in sources.gaps(SOLANA)}
+    gaps = {g.crate: g for g in sources.gaps(SOLANA_V2)}
     assert "cvlr" not in gaps, "the fixture pins the reference core, so it is not a gap"
     assert isinstance(gaps["cvlr-solana"], Absent)
     assert "is not a dependency of this project" in gaps["cvlr-solana"].describe()
-    assert sources.mismatched(SOLANA) == (), "absence is not something to refuse over"
+    assert sources.mismatched(SOLANA_V2) == (), "absence is not something to refuse over"
 
 
 def test_an_older_cvlr_than_the_pin_is_a_mismatch_that_stops_the_run():
     payload = json.loads(json.dumps(_METADATA))
     payload["packages"][2]["version"] = "0.4.1"
     sources = CvlrSources.of(_workspace(payload))
-    mismatched = {g.crate: g for g in sources.mismatched(SOLANA)}
+    mismatched = {g.crate: g for g in sources.mismatched(SOLANA_V2)}
     assert mismatched["cvlr"].resolved == "0.4.1"
     assert mismatched["cvlr"].reference == "0.6.1"
 
@@ -388,7 +388,7 @@ def test_an_older_cvlr_beside_the_pinned_one_is_still_a_mismatch():
     older = json.loads(json.dumps(payload["packages"][2]))
     older.update(id=f"{older['source']}#cvlr@0.4.1", version="0.4.1")
     payload["packages"].append(older)
-    (mismatch,) = CvlrSources.of(_workspace(payload)).mismatched(SOLANA)
+    (mismatch,) = CvlrSources.of(_workspace(payload)).mismatched(SOLANA_V2)
     assert (mismatch.crate, mismatch.resolved) == ("cvlr", "0.4.1")
 
 
@@ -411,6 +411,24 @@ def test_the_base_enables_no_optimistic_solana_flags():
     they were meant to."""
     flags = cvlr_conf.tunable_conf(cvlr_conf.TunableConf())["prover_args"]
     assert not [f for f in flags if f.startswith("-solanaOptimistic")]
+
+
+def test_the_base_models_top_bit_constants_soundly():
+    """Without ``-solanaTACSoundSignedMath`` no ``u64`` can equal ``u64::MAX`` (upstream-defects P11),
+    so a program's sentinel branches are never taken."""
+    flags = cvlr_conf.tunable_conf(cvlr_conf.TunableConf())["prover_args"]
+    assert "-solanaTACSoundSignedMath true" in flags
+
+
+def test_the_master_prover_pin_is_still_tracked_as_a_ship_blocker():
+    """``prover_version: master`` is for development only. This fails once the pin is removed, so
+    whoever removes it also closes cvlr-todo U25."""
+    from pathlib import Path
+
+    conf = cvlr_conf.tunable_conf(cvlr_conf.TunableConf())
+    todo = (Path(__file__).parent.parent / "docs" / "cvlr-todo.md").read_text()
+    assert conf.get("prover_version") == "master"
+    assert "**U25. Ship blocker: the Solana conf pins `prover_version: master`.**" in todo
 
 
 def test_every_conf_checks_vacuity():
@@ -939,3 +957,60 @@ def test_counterexamples_are_explained_on_the_authors_bound_model():
     bound = FakeListChatModel(responses=["x"])
     analysis.model.bind(bound)
     assert analysis.handler(state).llm is bound  # type: ignore[arg-type, attr-defined]
+
+
+# --------------------------------------------------------------------------------------------
+# the host toolchain
+
+
+_PRINT_TOOLCHAIN = ["-c", "import os; print(os.environ.get('RUSTUP_TOOLCHAIN', '-'))"]
+
+
+@pytest.mark.asyncio
+async def test_a_session_runs_every_command_with_its_toolchain(tmp_path):
+    """Whatever the project's rust-toolchain.toml pins: the Solana image cannot install it."""
+    session = replace(_unconfined(tmp_path), toolchain="1.90.0")
+    for run in (session.run_unconfined, session.run_confined):
+        result = await run(sys.executable, _PRINT_TOOLCHAIN, timeout_s=30)
+        assert result.stdout.strip() == "1.90.0"
+
+
+@pytest.mark.asyncio
+async def test_a_session_with_no_toolchain_follows_the_project(tmp_path, monkeypatch):
+    monkeypatch.delenv("RUSTUP_TOOLCHAIN", raising=False)
+    result = await _unconfined(tmp_path).run_unconfined(sys.executable, _PRINT_TOOLCHAIN, timeout_s=30)
+    assert result.stdout.strip() == "-"
+
+
+@pytest.mark.asyncio
+async def test_the_build_script_runs_its_command_with_the_sessions_toolchain(tmp_path, monkeypatch):
+    """certoraRun runs the script with its own environment, not the session's."""
+    monkeypatch.delenv("RUSTUP_TOOLCHAIN", raising=False)
+    session = replace(_unconfined(tmp_path), toolchain="1.90.0")
+    script = await write_build_script(session, _build(), into=_outside(tmp_path), name="unit")
+    command_file = build_command_path(script)
+    command = json.loads(command_file.read_text())
+    assert command["env"] == {"RUSTUP_TOOLCHAIN": "1.90.0"}
+    command["argv"] = [sys.executable, *_PRINT_TOOLCHAIN]
+    command_file.write_text(json.dumps(command))
+    ran = subprocess.run([str(script), "--json"], capture_output=True, text=True, check=True)
+    assert ran.stdout.strip() == "1.90.0"
+
+
+def test_reading_a_workspace_runs_cargo_with_the_toolchain_asked_for(tmp_path, monkeypatch):
+    seen: list[dict[str, str] | None] = []
+
+    def fake_run(args, **kwargs):
+        seen.append(kwargs.get("env"))
+        return subprocess.CompletedProcess(args, 1, "", "no manifest")
+
+    monkeypatch.setattr(metadata.shutil, "which", lambda _: "/usr/bin/cargo")
+    monkeypatch.setattr(metadata.subprocess, "run", fake_run)
+    for toolchain in ("1.90.0", None):
+        metadata._cargo_metadata(
+            tmp_path, offline=True, features=(), toolchain=toolchain, timeout_s=5
+        )
+    with_toolchain, without = seen
+    assert with_toolchain is not None and with_toolchain["RUSTUP_TOOLCHAIN"] == "1.90.0"
+    assert without is None
+

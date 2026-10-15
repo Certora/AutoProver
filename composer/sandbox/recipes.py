@@ -14,7 +14,9 @@ was and wasn't granted).
 
 import os
 import shutil
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 
 from composer.layout import INTERNAL_DIR
 from composer.sandbox.policy import SandboxPolicy
@@ -147,6 +149,7 @@ def rust_build_policy(
     extra_ro: tuple[Path, ...] = (),
     extra_rw: tuple[Path, ...] = (),
     env_passthrough: tuple[str, ...] = DEFAULT_ENV_PASSTHROUGH,
+    env: Mapping[str, str] = MappingProxyType({}),
     offline: bool = True,
     mem_bytes: int | None = None,
     cpu_seconds: int | None = None,
@@ -154,6 +157,9 @@ def rust_build_policy(
     fsize_bytes: int | None = None,
 ) -> SandboxPolicy:
     """Build a network-off policy for compiling/running Rust in ``workdir``.
+
+    ``env`` sets variables in the child on top of ``env_passthrough``. The ones this policy
+    owns (``CARGO_HOME``, the temp dirs, ``CARGO_NET_OFFLINE``) cannot be overridden.
 
     Grants: ``workdir`` + the device nodes (+ ``extra_rw``) read-write; the Rust
     toolchain (``RUSTUP_HOME``), the shared cargo **bin/** only (not the cargo-home
@@ -195,9 +201,10 @@ def rust_build_policy(
     wd = Path(workdir).resolve()
     rw_paths = (wd, *dev, *(p.resolve() for p in extra_rw))
 
-    env = {name: os.environ[name] for name in env_passthrough if name in os.environ}
+    child_env = {name: os.environ[name] for name in env_passthrough if name in os.environ}
+    child_env |= env
     if offline:
-        env["CARGO_NET_OFFLINE"] = "true"
+        child_env["CARGO_NET_OFFLINE"] = "true"
     # A private temp dir UNDER the (writable) workdir, so tools that need scratch space
     # — notably the linker, which writes to $TMPDIR (default /tmp) during `cargo build` —
     # work without granting the shared /tmp (which may hold host/other-run secrets and
@@ -205,7 +212,7 @@ def rust_build_policy(
     sandbox_tmp = wd / SANDBOX_TMP_DIR
     sandbox_tmp.mkdir(parents=True, exist_ok=True)
     for var in ("TMPDIR", "TMP", "TEMP"):
-        env[var] = str(sandbox_tmp)
+        child_env[var] = str(sandbox_tmp)
 
     # Point CARGO_HOME at a PRIVATE per-run cargo home under the workdir (see
     # sandbox_cargo_home for the reasoning). The shared ~/.cargo root is *not*
@@ -219,12 +226,12 @@ def rust_build_policy(
         src = shared_cargo / cfg
         if src.is_file() and not (cargo_home / cfg).exists():
             shutil.copy(src, cargo_home / cfg)
-    env["CARGO_HOME"] = str(cargo_home)
+    child_env["CARGO_HOME"] = str(cargo_home)
 
     return SandboxPolicy(
         rw_paths=rw_paths,
         ro_paths=ro_paths,
-        env_allowlist=env,
+        env_allowlist=child_env,
         network=False,
         mem_bytes=mem_bytes,
         cpu_seconds=cpu_seconds,

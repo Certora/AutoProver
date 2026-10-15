@@ -63,9 +63,11 @@ be stale; the tool is authoritative.
    A munge edits the program itself, so every verdict is about the modified program rather than the
    one in the repository. `early_panic` rewrites every `?` in a function to `.unwrap()`, which makes
    its error paths panic and the prover prune them: sound for a property about what a *successful*
-   call does, and fatal to any property about rejection, because the path that rejects is the path
-   it deleted. A rule asserting that some input is refused, driving a function that carries
-   `early_panic`, is vacuous — say so and name the rule.
+   call does, and fatal to a rejection rule written as `cvlr_assert!(handler(..).is_err())`, because
+   the path that rejects is the path it deleted. Such a rule, driving a function that carries
+   `early_panic`, is vacuous — say so and name the rule. The contrapositive form is unaffected:
+   `handler(..).unwrap(); cvlr_assert!(!x);` checks that no success admits X, and a panic is not a
+   success.
 
    `mock_fn` is the harness-mirror problem wearing an attribute. It replaces the function's body
    with a named stand-in, so ask the question you asked of the rules: whose code is at the bottom. A

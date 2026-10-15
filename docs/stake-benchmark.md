@@ -46,6 +46,10 @@ by hand is in scope, or is part of what is being measured. Those are different e
 
 ## The blocker: the CVLR line is behind the Solana SDK
 
+> **Resolved 2026-10-14.** AutoProver supports both platform generations, and the benchmark has
+> moved to stake `main`. See *Moving the benchmark to stake `main`* at the end of this document,
+> and `docs/cvlr-sdk3-support.md`.
+
 `plan_scaffold` refuses current `main` outright:
 
 ```
@@ -70,6 +74,10 @@ Pointing the backend at any current Foundation program is what surfaced it, and 
 next one too.
 
 ## The workaround, and what it costs
+
+> **Retired 2026-10-14.** The three runs recorded below used this snapshot, and their results stand
+> as recorded. Later runs are on `main`, which is different code, so a comparison across the move
+> is not like for like.
 
 Check out the last commit before the program moved to SDK 3.0:
 
@@ -150,7 +158,7 @@ caught in the act, by the loop rather than by a human.
 
 ## Open, and not worked around
 
-**The SDK 3.x gap.** A `cvlr-solana` release targeting the post-split platform generation unblocks
+**The SDK 3.x gap.** *Closed 2026-10-14; see the last section.* A `cvlr-solana` release targeting the post-split platform generation unblocks
 every current Foundation program at once. Until there is one, this workaround is the only route and
 it expires as targets age out. This belongs with whoever owns CVLR releases.
 
@@ -352,3 +360,201 @@ named the experiment: add `clog!`s to the owner comparison so the counterexample
 pin the owner to a concrete distinct key rather than assuming a disequality over an opaque 32-byte
 value. Do that before authoring anything new — a second batch of rules built on the same
 `assume_stake_shape` would inherit the same weakness.
+
+## Expert review of the third run, 2026-10-12
+
+The third run (2026-10-01/02, written up in the stake repo as
+`docs/autoprover-benchmark-2026-10-02.md`) published 7 of 8 components: 111 rules, 69 of 119
+properties covered, 50 skipped. Certora's Solana specialists reviewed the generated spec. They
+raised three points, and each one holds up against the run's own record.
+
+### 1. Rent and Clock are standard, and the spec rewrote the program to avoid them
+
+> AP says it doesn't know how to handle Rent and Clock syscalls, and because of this, it does
+> heavy rewriting of the client. To the point where lots of rules are mainly about the rewritten
+> code itself and not the client code. … One can look at related SF projects (P-Token, Stake
+> Pool) to see how we handle both.
+
+**The cause is our tuning file, not the Prover.** The generated `cvlr_inlining.txt` never-inlines
+every `solana-*` crate the program links: `solana_sysvar`, `solana_rent`, `solana_clock` and
+`solana_stake_interface` among them. That blanket is AutoProver's. `644bf82f` widened the upstream
+`^solana_program::.*$` to cover the crates the monolith split into, and `a18a7637` narrowed it to
+the linked crates. The allowlist exempts `Clock::get`, `Rent::get` and `Rent::minimum_balance`,
+but nothing exempts `solana_sysvar::Sysvar::from_account_info`. That default trait method is how
+the handlers read both sysvars (`Clock::from_account_info(clock_info)?`), so the Prover treats it
+as external. It returns an unconstrained `Result` and writes nothing, so a rule that reaches it
+measured as never returning `Ok`.
+
+The units then did what they had to. They split the handlers with `extract_function` so the
+sysvar arrived as a parameter, and the rules entered below the handlers. That is the rewriting the
+reviewers saw: 15 of the delivered munges, across six of the seven components, exist to move a
+`Clock` or `Rent` read out of the way. Thirteen skips, also across six components, cite
+`Sysvar::from_account_info` by name.
+
+**What practitioners run.** Stake Pool is on the same platform generation (`solana-program`
+2.2.1), and its `cvlr_inlining_core.txt` still carries only the upstream blanket. That blanket
+matches almost nothing after the split, so `solana_sysvar` and `solana_rent` are analyzed. Its
+specs call `Clock::get()`, `Rent::get()` and `Clock::from_account_info` directly and tie the
+account to the syscall with one assume (`cvlr_initialize_rent_account`). P-Token does the same
+with Pinocchio's `Rent`, and pins the parameters to mainnet defaults
+(`cvlr_assume_rent_defaults`).
+
+**One real limit remains.** `solana_rent::Rent::minimum_balance` computes in `f64`, and the
+float builtins are summarized as `r0:num`, so two calls with the same length can disagree. The
+practitioners' answer is to read `meta.rent_exempt_reserve` from state rather than recompute it.
+The split unit's integer stand-in for `Rent` was a reasonable answer to a real problem; the
+`from_account_info` workaround was not needed.
+
+**The same blanket explains most of the other skips.** `Authorized::check`,
+`Authorized::authorize`, `Meta::set_lockup`, `Lockup::is_in_force` and
+`Delegation::stake_activating_and_deactivating` are all in `solana_stake_interface`, which the
+blanket also made external. 29 of the 50 skips cite that crate, including 14 of Authorization &
+Lockup's 15, and the skipped staking math (point 2).
+
+### 2. The specs describe the code, not the design
+
+> A good spec is one that holds for an entire class of implementations. … Solvency is a good spec
+> because all protocols must remain solvent. But rules that check so and so fields are set
+> correctly, or the program reverts under some condition are not very interesting. … Solvency is
+> attempted, but only partially. Properties about math of staking and de-staking was skipped,
+> because AP said it believed the certora prover cannot handle that (I am not so sure).
+
+Three causes, in order of weight.
+
+- **Extraction is per component.** Properties are extracted per component, and the components are
+  instruction groups. A protocol-wide invariant has no single component to belong to. Solvency is
+  one: every stake account keeps `lamports >= rent_exempt_reserve + delegation.stake` after every
+  instruction. Lamport conservation across all eighteen instructions is another. Each component
+  sees a slice of it, which is the "partially" the reviewers noticed.
+- **The extraction prompt invites implementation checks.** `solana/property_prompt.j2` says to
+  derive properties "from first principles", but its third category, attack vectors, is
+  illustrated with "if the `authority` account is not constrained to sign…". Most of the 111 rules
+  are that category: a field set, a check present, an error returned.
+- **The backend guidance ranks implementation checks first.** `SOLANA_CVLR_GUIDANCE`
+  (`composer/spec/cvlr/guidance.py`), which goes verbatim into the extractor's system prompt, calls
+  account validation "the highest-value properties on this chain". It also excludes "rent
+  economics", which keeps the rent-exempt reserve, half of the stake program's solvency condition,
+  off the list.
+- **The staking math was skipped for the blanket, not the arithmetic.** The skips name
+  `stake_activating_and_deactivating` as external, which is point 1. The arithmetic does use
+  `f64` (the warmup/cooldown rate, `state.rs:739-830`), but the properties worth stating don't
+  need exact values. Effective stake never exceeds the delegation. Deactivation is monotone across
+  epochs. Activating plus effective equals the delegated amount. Each holds whatever the float
+  multiply returns, because the code clamps and saturates around it.
+
+### 3. Revert rules should unwrap and assert the negation
+
+> I see lots of rules with the following structure: … `assume(some_cond_on_pre_state); let res =
+> process_fn(accounts, ...); cvlr_assert!(res.is_err());` In my experience, it is much better to
+> unwrap() the call and assert the negation without assuming. This works better because the
+> prover cuts out error paths resulting in smaller formulas eventually.
+
+The delivered spec has 26 `cvlr_assert!(….is_err())` rules, 14 of them in Split & Merge. The
+preferred form is the contrapositive: `process_fn(…).unwrap(); cvlr_assert!(!some_cond)`. A panic
+in `unwrap` is assumed away, so every error path is dropped from the formula, and the rule states
+the same thing: success implies the condition did not hold. Nothing in the CVLR authoring guidance
+recommends either form. The one `is_err` example in `cvlr_baseline_facts.md` is there to illustrate
+a different trap.
+
+### What follows from this
+
+| | fix | where |
+|---|---|---|
+| 1 | Stop never-inlining the split `solana-*` crates, matching what Stake Pool runs on the same generation; teach the sysvar idiom | **done**: the blanket is back to `^solana_program::.*$`; recipe K3 |
+| 2 | Extract protocol-wide invariants once, across components (solvency, conservation, the stake math as bounds); steer the attack-vector category toward design consequences | property extraction prompts and pipeline |
+| 3 | Teach the unwrap-and-negate form for revert properties | CVLR authoring guidance |
+
+**The point 1 fix, checked on the Prover.** A hand-written probe against the pristine snapshot,
+scaffolded with the corrected tuning files
+([job](https://prover.certora.com/jobStatus/37632/ad46e66071c64143995d0ab7e6ef69de?anonymousKey=b839038d820c244c1782e546e039d03f551daa59)):
+
+| rule | verdict |
+|---|---|
+| `Clock::from_account_info` can return `Ok` on the sysvar's account | VERIFIED |
+| `Rent::from_account_info` can return `Ok` on the sysvar's account | VERIFIED |
+| a successful `Clock::from_account_info` implies the canonical key | VERIFIED |
+| `Lockup::is_in_force` is in force before the lockup epoch | VERIFIED |
+| `Delegation::stake` never exceeds the delegated amount | SANITY_FAILED |
+
+The first four were out of reach in the third run: the read never succeeded, and the address check
+and the lockup decision were oracles.
+
+**The stake math is checkable.** The fifth rule was vacuous because of its own setup, not the
+arithmetic. It assumed `deactivation_epoch == u64::MAX`, and under the default conf a `u64` cannot
+equal any constant at or above `2^63` (upstream-defects P11). Restated without that assumption, the
+property verifies with its sanity check passing, in three forms: a stake that never deactivates, one
+that deactivates after the target epoch, and an unconstrained activation and deactivation schedule
+within the loop bound
+([job](https://prover.certora.com/jobStatus/37632/5fe23edd4ee04ddcb45482ac5e8abc50?anonymousKey=d27dc644070d97886e2a8a22dd216cf70add168a)).
+They verify under `-solanaTACSoundSignedMath` too
+([job](https://prover.certora.com/jobStatus/37632/5a3d3e4b3dbf4db1a687b9d4b9f74b7e?anonymousKey=f9e0a89e6523c9e357bf9cf6445d7d611078d2ea)).
+The warmup rate's `f64` multiply is summarized as unconstrained, and the bound holds anyway because
+the code clamps around it. The reviewers were right to doubt the run's claim that the Prover cannot
+handle this.
+
+**P11 matters to this program beyond that one rule.** `u64::MAX` is the stake program's sentinel
+for "not deactivating" and "bootstrap". The third run's Deactivation unit measured the harness side
+of it and assigned the sentinel instead of assuming it (`deactivation.rs:73`). The program side
+cannot be routed around: `is_bootstrap()` and `merge.rs:96` compare account-derived epochs against
+`u64::MAX`, and under the default conf those branches are never taken.
+
+None of this touches the third run's main finding: `process_withdraw` with the source equal to
+the destination truncates the account through `realloc(0)`.
+
+## Moving the benchmark to stake `main`, 2026-10-14
+
+**Why now.** AutoProver now supports Solana's SDK 3 crates, which is what kept the benchmark on a
+year-old snapshot. The plan and its evidence are in `docs/cvlr-sdk3-support.md`. In brief:
+
+- **CVLR.** `cvlr-solana` 0.6.0 is the SDK 3 line. The port and both program models are on
+  `Certora/cvlr-solana`'s `eric/sdk3`, released at `f054348`. Until it is published, AutoProver
+  reads it from that commit (U26).
+- **AutoProver:**
+  - two Solana reference sets, chosen per target by the platform crate it links;
+  - the SDK 3 tuning-path aliases;
+  - platform-tools v1.53;
+  - one host Rust toolchain whatever the target pins;
+  - `custom-heap` for a program with no `no-entrypoint`;
+  - an API corpus scoped to the run's generation.
+- **Checked on stake `main` itself:**
+  - a hand-written probe verifies all ten of its rules, with nothing set by hand;
+  - the real preflight scaffolds the program and passes the confined compile gate.
+
+**The target.** `solana-program/stake` `main` at `bed72d0` (2026-10-01), the commit every probe
+used. It has the same 18 instructions as the snapshot.
+
+**What changes for the expert review's points:**
+
+- **Point 1 does not arise.** `main` reads `Clock` and `Rent` through the syscalls
+  (`Clock::get()`, `Rent::get()`), and stake history through `StakeHistorySysvar`, never from
+  accounts. The probe verified all three on the Prover. Nothing remains for a unit to rewrite
+  around.
+- **Point 2's stake math is integer arithmetic now.** `Delegation::stake_v2` and
+  `warmup_cooldown_allowance.rs` replace the `f64` path, which is deprecated. The probe verified
+  that effective stake never exceeds the delegation. The bounds the review asked for (effective
+  ≤ delegated, deactivation monotone, activating + effective = delegated) have no float to
+  excuse skipping them.
+- **Solvency's rent half is stated differently.** `main` recomputes the rent-exempt reserve from
+  `Rent` at each instruction. `meta.rent_exempt_reserve` is deprecated and set to a fixed pseudo
+  value. So the reserve is a fresh `Rent::minimum_balance`, which is still `f64`, and recipe K3's
+  integer stand-in is how to state it.
+- **Point 3** is independent of the target.
+
+**Other differences an author meets:**
+
+- `solana-stake-interface` is a workspace member on `main`, so the scaffold forwards the `certora`
+  feature into it, and `StakeStateV2` can be munged. On the snapshot it was a registry dependency.
+- The program's entrypoint is unconditional, and the scaffold turns on `custom-heap` to keep its
+  allocator out.
+- `main` pins Rust 1.93.0. AutoProver runs its host commands with 1.90.0 and builds with
+  platform-tools v1.53 (rustc 1.89), whatever the pin.
+
+**What it costs.** `main` is a new project root, so no cache from the snapshot carries over.
+Discovery, analysis and extraction are paid again, under the cache namespace `stake-main`.
+
+**The run, set up and not launched.** The worktree is `~/src/stake-benchmark/run-main`, on branch
+`eric/autoprover-main` of the local stake checkout, clean at `bed72d0`; AutoProver scaffolds it
+itself. `~/src/stake-benchmark/run-main.sh <budget>` launches it. It withholds `cvlr-solana-stake`,
+as every run here has, and writes the extraction pin beside the log. The budget is a required
+argument. The third run spent its $600, and this one formalizes a shared protocol unit as well.
+

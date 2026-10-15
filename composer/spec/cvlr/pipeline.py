@@ -49,6 +49,7 @@ from composer.pipeline.core import (
     Formalizer,
     PipelineRun,
     PreparedSystem,
+    SharedUnit,
     StagedFormalizer,
     SystemAnalysisSpec,
     ToolBinder,
@@ -59,7 +60,7 @@ from composer.sandbox.config import SandboxConfig
 from composer.spec.context import CvlrGeneration, WorkflowContext
 from composer.spec.cvlr.author import batch_cvlr_generation
 from composer.spec.cvlr.editor import EditingServices, ProgramEditing, program_editing
-from composer.spec.cvlr.conf import DEFAULT_FEATURE
+from composer.spec.cvlr.conf import DEFAULT_FEATURE, HOST_RUST_TOOLCHAIN
 from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness, HarnessModule
 from composer.spec.cvlr.preflight import CvlrPreflight, gate_workspace, prepare_workspace
@@ -74,11 +75,12 @@ from composer.spec.cvlr.verify import (
     VerifyDeps,
     prover_stamper,
 )
-from composer.spec.cvlr.reference import SOLANA, ChainReference
+from composer.spec.cvlr.reference import ChainReference
 from composer.spec.solana.model import (
     SolanaApplication,
     SolanaComponentInstance,
     SolanaProgramInstance,
+    protocol_unit,
 )
 from composer.io.multi_job import TaskInfo
 from composer.spec.source.cex_capture import CexAnalysisStore
@@ -379,7 +381,9 @@ class CvlrStagedFormalizer(StagedFormalizer[GeneratedHarness, SolanaComponentIns
             source=self.deps.preflight.source,
         )
         await tree.materialize()
-        session = CargoSession(workdir=tree.root, sandbox=self.deps.sandbox)
+        session = CargoSession(
+            workdir=tree.root, sandbox=self.deps.sandbox, toolchain=HOST_RUST_TOOLCHAIN
+        )
         submissions = project / WORK_DIR / SUBMISSIONS_DIR
         submissions.mkdir(parents=True, exist_ok=True)
         warmed = await session.warm()
@@ -427,20 +431,28 @@ class CvlrBackend:
     #: counterexamples be read as another's. Required rather than defaulted to ``None``: a run that
     #: produces no findings should be somebody's decision, not a forgotten argument.
     cex_analysis: CexAnalysisStore
+    #: The CVLR releases this run scaffolds the target with. Beside :attr:`package` because it is
+    #: the same kind of decision: what this run is pointed at. Narrowed by
+    #: :meth:`~composer.spec.cvlr.reference.ChainReference.withholding` when the target is itself
+    #: the program one of the :class:`~composer.spec.cvlr.reference.ProgramModel` crates models,
+    #: which is the only narrowing there is. One per platform generation; there is no default,
+    #: because the right one depends on the target
+    #: (:func:`~composer.spec.cvlr.scaffold.select_generation`).
+    reference: ChainReference
     #: The run's services for editing the program, finished in :meth:`prepare_system` once
     #: preflight has said which crates are the project's own.
     editing: EditingServices
     #: The package to verify. ``None`` lets preflight pick it when there is only one candidate; a
     #: workspace with several is refused rather than guessed at.
     package: str | None = None
-    #: The CVLR releases this run scaffolds the target with. Beside :attr:`package` because it is
-    #: the same kind of decision: what this run is pointed at. Narrowed by
-    #: :meth:`~composer.spec.cvlr.reference.ChainReference.withholding` when the target is itself
-    #: the program one of the :class:`~composer.spec.cvlr.reference.ProgramModel` crates models,
-    #: which is the only narrowing there is.
-    reference: ChainReference = SOLANA
 
     backend_guidance = SOLANA_CVLR_GUIDANCE
+    #: A CVLR rule drives the handlers it names; nothing checks a property against every handler
+    #: by itself, as a CVL invariant is. Properties several components state go to one unit.
+    shared_unit = SharedUnit(
+        make=protocol_unit,
+        entry_points=lambda unit: [i.name for i in unit.instructions],
+    )
     analysis_spec = SystemAnalysisSpec("solana-analysis", "solana-properties")
     core_phases = CorePhases(
         {

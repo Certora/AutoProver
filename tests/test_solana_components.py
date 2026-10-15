@@ -233,3 +233,34 @@ def test_multiple_errors_are_all_reported():
     assert problem is not None
     assert problem.startswith("Multiple validation errors")
     assert "Duplicate component names" in problem and "Pyth" in problem
+
+
+# --- computations: where the arithmetic lives (docs/cvlr-design-properties-plan.md, step 4) -----
+
+
+_SHARE_MATH = {
+    "function": "crate::math::shares_for_deposit",
+    "crate": "vault",
+    "computes": "the shares a deposit is worth against the vault's balance",
+    "used_by": ["deposit"],
+}
+
+
+def test_a_component_without_computations_still_parses():
+    """Every analysis cached before the field existed has none, and must replay."""
+    assert all(c.computations == [] for c in _app().programs[0].components)
+
+
+def test_a_computation_used_by_a_declared_instruction_validates():
+    def add(raw):
+        _components(raw)[0]["computations"] = [_SHARE_MATH]
+
+    assert _solana_validate(_app(add), VAULT_ID, None, None) is None
+
+
+def test_a_computation_used_by_an_undeclared_instruction_is_rejected():
+    def add(raw):
+        _components(raw)[0]["computations"] = [{**_SHARE_MATH, "used_by": ["mint"]}]
+
+    problem = _solana_validate(_app(add), VAULT_ID, None, None)
+    assert problem is not None and "used by an instruction 'mint'" in problem

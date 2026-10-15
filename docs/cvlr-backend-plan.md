@@ -1064,9 +1064,9 @@ generation says how to spell those concepts. (They were a byte-identical copy of
 the time; they are maintained here now, §7.4.1.)
 
 * [`reference.py`](../composer/spec/cvlr/reference.py) gains `PathAlias` — a canonical path
-  prefix and this generation's spellings of it — and `NamespacePattern` for the one directive that is
-  a blanket rather than a path. `PlatformGeneration.path_aliases` is where Solana's twelve are
-  declared.
+  prefix and this generation's spellings of it. `PlatformGeneration.path_aliases` is where Solana's
+  twelve are declared. (A `NamespacePattern` once widened the never-inline blanket too. It was
+  removed on 2026-10-12; see the correction under the blanket bullet below.)
 * [`env_paths.py`](../composer/spec/cvlr/env_paths.py) is the seam: `dialect_for(workspace,
   reference)` resolves the declarations against the target's own graph, and `PathDialect.render`
   rewrites a tuning file line by line. The scaffold threads a dialect into `starting_env` and
@@ -1092,6 +1092,12 @@ gets wrong:
   `^solana_[a-z0-9_]*::.*$`: a superset, so it is correct on either generation and cannot go stale
   when the next crate splits out. Widening is only safe because the directive is a *suppression* —
   over-matching a never-inline default errs toward analyzing less library code.
+
+  **Corrected 2026-10-12: that reasoning was wrong, and the widening is gone.** A non-inlined
+  function is external: it returns an arbitrary value and writes nothing. On solana-program-stake
+  that made `Sysvar::from_account_info` and the program's interface crate oracles, and cost 29 of
+  50 properties (`docs/stake-benchmark.md`, "Expert review"). The blanket stays
+  `^solana_program::.*$`, which is what projects verified on this generation run.
 
 Deliberately not aliased, and recorded so the absence reads as a decision:
 `solana_program::instruction::get_stack_height`, real in the monolith on this generation, and
@@ -2379,7 +2385,7 @@ no section here at all. Read it to choose something; read this to understand wha
    (**built**, §7.8.3 — and building it found three things a confined build needs that no host run
    ever did), ~~the replay tape and the LLM-free smoke scenario it drives~~ (**built**, and recorded
    before the research sub-agent existed, so it needs re-recording: [cvlr-todo.md](./cvlr-todo.md)
-   U25), and user-facing documentation.
+   U27), and user-facing documentation.
 6. **Cross-unit learning** — §7.11. ~~The deterministic half is the cheapest item on this list~~ —
    **built**: the authoring prompt's worked example is now rendered against the analyzed program
    (`composer/spec/cvlr/example.py`), so a unit reads its own handler, its own accounts and their

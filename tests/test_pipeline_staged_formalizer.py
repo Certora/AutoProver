@@ -18,6 +18,7 @@ import pytest
 
 from composer.pipeline.run_mode import RunMode
 from composer.authoring.state import SkippedProperty
+from composer.spec import hoist
 from composer.spec.prioritize import PropertyGroup, PropertyRanking, RankedProperty
 import composer.pipeline.core as core
 from composer.pipeline.core import run_pipeline
@@ -73,6 +74,8 @@ class _Formalizer:
     def findings_evidence(self): return None
     async def fetch_verdicts(self, _inp): return {}
     async def finalize(self, _outcomes, _run): return None
+    async def source_edits(self, _outcomes, _run): return []
+    def build_environment(self): return None
 
 
 class _Staged(core.StagedFormalizer):
@@ -101,7 +104,9 @@ class _Backend:
     backend_guidance = "guidance"
     artifact_store = _Store()
 
-    def __init__(self, prepared): self._prepared = prepared
+    def __init__(self, prepared, shared_unit=None):
+        self._prepared = prepared
+        self.shared_unit = shared_unit
 
     async def preflight(self, _run): return None
 
@@ -126,7 +131,12 @@ class _Cache:
 class _Ctx:
     recursion_limit = 10
 
-    def child(self, *_a, **_kw): return self
+    def child(self, key, tags=None):
+        if tags is None:
+            return self
+        async def thunk():
+            return _FeatCtx()
+        return thunk()
 
     async def cache_get(self, _ty): return None
 
@@ -151,9 +161,10 @@ class _Source:
 
 
 class _Env:
-    """Only the model accessor the ranker's call site reaches for."""
+    """Only the model accessors the ranker's and the report's call sites reach for."""
 
     def llm_heavy(self): return None
+    def llm_lite(self): return None
 
 
 class _Run:
@@ -174,7 +185,10 @@ async def _drive[F: (_Staged, _Formalizer)](
     monkeypatch, units: dict[str, list[str]], formalizer: F, *,
     run_mode: RunMode = RunMode.COMPREHENSIVE,
     ranking=None,
+    shared_unit=None,
+    reported: dict | None = None,
 ) -> F:
+    reported = {} if reported is None else reported
     async def fake_analysis(*_a, **_kw): return "analyzed"
 
     async def fake_extract_all(*_a, **_kw):
@@ -186,7 +200,9 @@ async def _drive[F: (_Staged, _Formalizer)](
             [],  # nothing failed extraction
         )
 
-    async def fake_report(*_a, **_kw): return object()
+    async def fake_report(*_a, **kw):
+        reported.update(kw)
+        return object()
 
     monkeypatch.setattr(core, "run_component_analysis", fake_analysis)
     monkeypatch.setattr(core, "_extract_all", fake_extract_all)
@@ -197,7 +213,7 @@ async def _drive[F: (_Staged, _Formalizer)](
 
     run = _Run()
     run.run_mode = run_mode  # type: ignore[misc]
-    await run_pipeline(_Backend(_Prepared(formalizer)), run, max_bug_rounds=1, ecosystem=EVM)  # type: ignore[arg-type]
+    await run_pipeline(_Backend(_Prepared(formalizer), shared_unit), run, max_bug_rounds=1, ecosystem=EVM)  # type: ignore[arg-type]
     return formalizer
 
 
@@ -375,3 +391,100 @@ async def test_ranking_does_not_wait_for_pre_formalization(monkeypatch):
     assert order == ["prep:start", "rank", "prep:done"], (
         f"ranking must run while pre-formalization is still in flight; got {order}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Hoisting protocol-wide properties into a shared unit
+# ---------------------------------------------------------------------------
+
+
+_SHARED = core.SharedUnit(make=lambda _main: _Unit("protocol", 99), entry_points=lambda _u: [])
+
+
+def _plan(*groups):
+    """``groups`` are (chosen, members) pairs of [component, title] keys."""
+    return hoist.HoistPlan(
+        groups=[
+            hoist.HoistGroup(claim="c", shared=hoist.Chosen(key=rep), members=members)
+            for rep, members in groups
+        ],
+        justification="j",
+    )
+
+
+async def test_hoisted_properties_are_formalized_once_in_a_shared_unit_dispatched_first(monkeypatch):
+    async def fake_plan(**_kw):
+        return _plan((("1: admin", "solvent"), [("0: deposits", "solvent-slice"), ("1: admin", "solvent")]))
+
+    monkeypatch.setattr(core.hoist, "plan_hoist", fake_plan)
+    s = await _drive(
+        monkeypatch,
+        {"deposits": ["solvent-slice", "a"], "admin": ["solvent", "b"]},
+        _Staged(),
+        shared_unit=_SHARED,
+    )
+    assert s.calls[0] == ("begin", ["solvent", "a", "b"])
+    assert ("formalize:protocol", ["solvent"]) in s.calls
+    assert ("formalize:deposits", ["a"]) in s.calls
+    assert ("formalize:admin", ["b"]) in s.calls
+
+
+async def test_a_unit_whose_properties_were_all_hoisted_is_not_formalized(monkeypatch):
+    async def fake_plan(**_kw):
+        return _plan((("0: deposits", "x"), [("0: deposits", "x"), ("1: admin", "y")]))
+
+    monkeypatch.setattr(core.hoist, "plan_hoist", fake_plan)
+    s = await _drive(monkeypatch, {"deposits": ["x", "a"], "admin": ["y"]}, _Staged(), shared_unit=_SHARED)
+    assert sorted(c[0] for c in s.calls[1:]) == ["formalize:deposits", "formalize:protocol"]
+
+
+async def test_a_plan_that_does_not_validate_leaves_every_unit_as_extracted(monkeypatch):
+    # Duplicates cost money; failing the run over them would cost the run.
+    async def fake_plan(**_kw):
+        raise ValueError("Hoist plan did not validate after 2 attempts")
+
+    monkeypatch.setattr(core.hoist, "plan_hoist", fake_plan)
+    s = await _drive(monkeypatch, {"deposits": ["a"], "admin": ["b"]}, _Staged(), shared_unit=_SHARED)
+    assert sorted(c[0] for c in s.calls) == ["begin", "formalize:admin", "formalize:deposits"]
+
+
+async def test_a_backend_without_a_shared_unit_never_hoists(monkeypatch):
+    def boom(**_kw):
+        raise AssertionError("no shared unit, no hoisting")
+
+    monkeypatch.setattr(core.hoist, "plan_hoist", boom)
+    s = await _drive(monkeypatch, {"deposits": ["a"], "admin": ["b"]}, _Staged())
+    assert sorted(c[0] for c in s.calls) == ["begin", "formalize:admin", "formalize:deposits"]
+
+
+async def test_a_prioritized_run_does_not_hoist(monkeypatch):
+    def boom(**_kw):
+        raise AssertionError("a prioritized run formalizes one claim; there is nothing to hoist")
+
+    monkeypatch.setattr(core.hoist, "plan_hoist", boom)
+    units = {"deposits": ["a"], "admin": ["b"]}
+    order = [("0: deposits", "a"), ("1: admin", "b")]
+    s = await _drive(
+        monkeypatch, units, _Staged(), run_mode=RunMode.PRIORITIZED,
+        ranking=_ranking(("1: admin", "b"), [], order), shared_unit=_SHARED,
+    )
+    assert [c[0] for c in s.calls] == ["begin", "formalize:admin"]
+
+
+async def test_the_report_is_told_what_each_shared_property_stands_for_by_component_name(monkeypatch):
+    """The plan names units by their prompt label ("1: admin"); the report names components."""
+    async def fake_plan(**_kw):
+        return _plan((("1: admin", "solvent"), [("0: deposits", "solvent-slice"), ("1: admin", "solvent")]))
+
+    monkeypatch.setattr(core.hoist, "plan_hoist", fake_plan)
+    reported: dict = {}
+    await _drive(
+        monkeypatch, {"deposits": ["solvent-slice", "a"], "admin": ["solvent", "b"]}, _Staged(),
+        shared_unit=_SHARED, reported=reported,
+    )
+    (claim,) = reported["hoisted"]
+    assert claim.shared.key == ("protocol", "solvent")
+    assert claim.origin.kind == "chosen" and claim.origin.source == ("admin", "solvent")
+    assert [(a.component, a.title) for a in claim.absorbed] == [
+        ("deposits", "solvent-slice"), ("admin", "solvent")
+    ]

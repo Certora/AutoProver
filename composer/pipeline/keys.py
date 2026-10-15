@@ -17,8 +17,9 @@ traverses below the run root, in tree order::
         │       └── plugin-artifacts           PLUGIN_ARTIFACTS_KEY → RegisteredArtifacts
         ├── {unit digest}-{plugin}-pre         PRE_PROPERTY_KEY     → PrePropertyInference
         ├── {unit digest}-{plugin}-{props}     POST_PROPERTY_KEY    → PostPropertyInference
-        └── prioritization-{all props}[-tm-…][-xc-…]
-                                               PRIORITIZATION_KEY   → PropertyRanking
+        ├── prioritization-{all props}[-tm-…][-xc-…]
+        │                                      PRIORITIZATION_KEY   → PropertyRanking
+        └── hoist-{all props}                  HOIST_KEY            → HoistPlan
 
 The extraction-layer families (bug analysis, agent rounds) are declared
 in ``composer.spec.prop_inference`` beside their cache models and
@@ -33,6 +34,7 @@ from composer.pipeline.ptypes import FinalProperties, RegisteredArtifacts
 from composer.spec.context import CacheKey, ComponentGroup, Properties
 from composer.spec.key_family import KeyFamily, PolyKeyFamily
 from composer.pipeline.run_mode import RunModeName
+from composer.spec.hoist import HoistPlan
 from composer.spec.prioritize import PropertyRanking
 from composer.spec.prop_inference import (
     AGENT_RESULT_KEY, AGENT_ROUND_KEY, BUG_ANALYSIS_KEY,
@@ -51,6 +53,7 @@ __all__ = [
     "COMPONENT_KEY",
     "FINAL_PROPERTIES_KEY",
     "FORMALIZATION_KEY",
+    "HOIST_KEY",
     "PLUGIN_ARTIFACTS_KEY",
     "POST_PROPERTY_KEY",
     "PRIORITIZATION_KEY",
@@ -200,3 +203,12 @@ def candidates_digest(batches: list[tuple[FeatureUnit, list[PropertyFormulation]
 #: one step that sees every component at once, so it hangs off ``Properties`` rather than off
 #: any single component.
 PRIORITIZATION_KEY = KeyFamily(Properties, PropertyRanking, _prioritization_key)
+
+
+def _hoist_key(candidates_digest: str) -> str:
+    return "hoist-" + candidates_digest
+
+
+#: The run-wide hoist plan. Like the ranking it sees every unit at once, so it hangs off
+#: ``Properties``. Its input is the extracted properties and nothing else.
+HOIST_KEY = KeyFamily(Properties, HoistPlan, _hoist_key)

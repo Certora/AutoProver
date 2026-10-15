@@ -19,7 +19,7 @@ the live run's tool census recorded 50 crate-source calls in a single run, and e
 becomes a sub-agent invocation unless it is answered from the index.
 """
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, override
 
 from dataclasses import dataclass
@@ -67,19 +67,27 @@ class CvlrCorpus:
 
     name: str
     connection: str
-    tools: Callable[[ComposerRAGDB], Iterable[BaseTool]]
+    #: Given the run's pinned releases, crate to version. The manual is not versioned and ignores
+    #: them.
+    tools: Callable[[ComposerRAGDB, Mapping[str, str]], Iterable[BaseTool]]
 
 
 #: Both corpora, opened by their connections rather than resolved by a registered name. The
 #: researcher needs both or neither, so nothing ever chooses one, and no wheel declares either.
 CVLR_CORPORA: tuple[CvlrCorpus, ...] = (
-    CvlrCorpus("cvlr_kb", CVLR_DEFAULT_CONNECTION, cvlr_rag.get_tools),
+    CvlrCorpus("cvlr_kb", CVLR_DEFAULT_CONNECTION, lambda db, _pinned: cvlr_rag.get_tools(db)),
     CvlrCorpus("cvlr_api_kb", CVLR_API_DEFAULT_CONNECTION, cvlr_api_rag.get_tools),
 )
 
 
-def corpus_tools(model: "SentenceTransformer") -> tuple[BaseTool, ...]:
+def corpus_tools(
+    model: "SentenceTransformer", *, pinned: Mapping[str, str]
+) -> tuple[BaseTool, ...]:
     """The search tools over both CVLR corpora, querying with ``model``.
+
+    ``pinned`` maps each CVLR crate the run builds to its version. The API corpus holds every
+    platform generation's releases and shows only these
+    (:class:`composer.tools.cvlr_api_rag.ApiCorpus`).
 
     A corpus that cannot be opened contributes no tools rather than failing the run: search is an
     aid, and what is load-bearing is in the bundle. The pools open lazily, so an absent database
@@ -88,7 +96,7 @@ def corpus_tools(model: "SentenceTransformer") -> tuple[BaseTool, ...]:
     tools: list[BaseTool] = []
     for corpus in CVLR_CORPORA:
         try:
-            tools.extend(corpus.tools(PostgreSQLRAGDatabase(corpus.connection, model)))
+            tools.extend(corpus.tools(PostgreSQLRAGDatabase(corpus.connection, model), pinned))
         except Exception as e:  # noqa: BLE001 — a search aid must never fail a run
             _log.warning("CVLR corpus %s unavailable (%s); searching without it", corpus.name, e)
     return tuple(tools)

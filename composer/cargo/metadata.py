@@ -15,6 +15,7 @@ dependency graph, which needs a warm cache or the network; see
 """
 
 import asyncio
+import os
 import shutil
 import subprocess
 from collections.abc import Mapping
@@ -285,6 +286,7 @@ class Workspace:
         *,
         offline: bool = False,
         features: tuple[CargoFeature, ...] = (),
+        toolchain: str | None = None,
         timeout_s: int = METADATA_TIMEOUT_S,
     ) -> "Workspace | MetadataFailure":
         """The workspace containing ``project_root``, or why there is none.
@@ -303,12 +305,16 @@ class Workspace:
         then reports them as absent. Features resolve against the package cargo
         considers current, so pass the package directory as ``project_root`` when
         naming one.
+
+        ``toolchain`` is the rustup toolchain to run cargo with, in place of the project's pin, as
+        :attr:`~composer.cargo.session.CargoSession.toolchain` is for a session.
         """
         payload = await asyncio.to_thread(
             _cargo_metadata,
             project_root,
             offline=offline,
             features=features,
+            toolchain=toolchain,
             timeout_s=timeout_s,
         )
         return parse_metadata(payload) if isinstance(payload, CargoMetadataJson) else payload
@@ -406,7 +412,12 @@ def parse_metadata(payload: CargoMetadataJson) -> Workspace:
 
 
 def _cargo_metadata(
-    project_root: Path, *, offline: bool, features: tuple[CargoFeature, ...], timeout_s: int
+    project_root: Path,
+    *,
+    offline: bool,
+    features: tuple[CargoFeature, ...],
+    toolchain: str | None,
+    timeout_s: int,
 ) -> CargoMetadataJson | MetadataFailure:
     if shutil.which("cargo") is None:
         raise CargoUnavailable(
@@ -419,7 +430,12 @@ def _cargo_metadata(
         args += ["--features", ",".join(features)]
     try:
         completed = subprocess.run(
-            args, cwd=project_root, capture_output=True, text=True, timeout=timeout_s
+            args,
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            env={**os.environ, "RUSTUP_TOOLCHAIN": toolchain} if toolchain is not None else None,
         )
     except subprocess.TimeoutExpired:
         return CargoTimedOut(timeout_s)

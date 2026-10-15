@@ -52,7 +52,10 @@ The module is held in a buffer reached through `get_harness` / `put_harness`. A 
   program, and go back to an earlier one (or, with a null id, to the program as shipped). Reverting
   invalidates the prover stamp too.
 * `record_skip(property_title, reason)` / `unskip_property(property_title)` — declare a property
-  unformalizable, with justification.
+  unformalizable, with justification. A reason that blames the Prover ("cannot handle the
+  arithmetic", "cannot model this") must cite the job that showed it: a probe rule and its verdict.
+  A belief about what the Prover can do is not a reason. Write the probe; it usually costs one
+  small submission, and it is sometimes wrong in the direction that loses the property.
 * `expect_rule_failure(rule_name, reason)` / `expect_rule_passage(rule_name)` — mark a rule as
   expected to fail. See "When a rule should fail" below.
 * `feedback_tool(rebuttals=[])` — submit the current draft and any skips to the feedback judge. An
@@ -134,7 +137,8 @@ The editor's charter is nine kinds, and knowing them tells you what is worth ask
   it. Mocking a
   hash, a clock, or a CPI the property does not speak about is the case this is for.
 * **`swap_import`** is `mock_fn` reached from the calling side, for a function the program
-  does not own. An attribute goes on a definition, and `invoke` is `solana_program`'s — but
+  does not own. An attribute goes on a definition, and `invoke` is the SDK's (`solana_program`'s,
+  or `solana_cpi`'s on the split SDK 3 crates) — but
   the `use` line that puts it in scope is the program's, and the editor can point that at a
   stand-in you wrote. **You write the stand-in**, the same way as for `mock_fn`, with the
   signature the call sites use. It is scoped to the file rather than to the call, so every
@@ -310,6 +314,21 @@ an Anchor program that means the `#[error_code]` enum's generated `Display`, whi
 
 Measured directly: two rules in one job, same program, same property, differing only in this — the
 `.unwrap()` rule verified and its vacuity check passed, the `.is_ok()` rule errored with [3308].
+
+**A rejection property takes the same shape, by its contrapositive.** "The handler refuses X" says
+the same thing as "if the handler succeeds, X did not hold". So write
+
+```rust
+handler(ctx, ..).unwrap();
+cvlr_assert!(!x);
+```
+
+and not `cvlr_assume!(x); cvlr_assert!(handler(ctx, ..).is_err());`. Leave the input unconstrained
+by X: the rule ranges over every input, and a success where X held is the counterexample. Capture
+whatever X reads from pre-state into locals before the call. The `is_err()` form keeps every error
+path in the formula, so the query is larger and slower, and on an Anchor program it is the [3308]
+above. The contrapositive prunes them all, and it stays sound where the program's own `?` has been
+turned into a panic, because a panic is not a success either.
 
 **What `.unwrap()` cannot do, and this is the important half.** It *assumes* the call succeeded. So it
 is right for a property of the form "**if** the handler succeeds, the state moved like this" — which

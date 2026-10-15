@@ -78,6 +78,7 @@ class _Backend:
     analysis_spec = core.SystemAnalysisSpec("analysis-key", "properties-key")
     core_phases = {"analysis": 1, "extraction": 2, "formalization": 3, "report": 4}
     backend_guidance = "guidance"
+    shared_unit = None
     artifact_store = _Store()
 
     def __init__(self, prepared: _Prepared, preflight: _Step | None = None):

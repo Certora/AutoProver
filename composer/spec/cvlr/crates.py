@@ -4,8 +4,9 @@ The version comes from the resolved graph. ``RUST_FORBIDDEN_READ`` hides ``Cargo
 agents, and source for a different version than the build compiles is worse than no source.
 :meth:`CvlrSources.of` reports each crate together with the directory it came from.
 
-:mod:`composer.spec.cvlr.reference` records the one CVLR line this build supports.
-:meth:`CvlrSources.gaps` reports where a project's graph and that line disagree, which
+:mod:`composer.spec.cvlr.reference` records the CVLR line this build supports for each platform
+generation. :meth:`CvlrSources.gaps` reports where a project's graph and its generation's line
+disagree, which
 :mod:`composer.spec.cvlr.scaffold` refuses over before anything is written. It runs again after the
 scaffold as a backstop: a :class:`Mismatched` at that point means a release reached the graph some
 way the scaffold's gate does not see, such as a ``[patch]`` table.

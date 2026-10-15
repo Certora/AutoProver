@@ -180,6 +180,16 @@ def test_the_worked_example_unwraps_the_handler_rather_than_branching_on_it():
     )
 
 
+def test_a_rejection_property_is_written_as_its_contrapositive():
+    """Reviewers of the stake run found 26 rules of the form ``assume(x); assert(handler(..).is_err())``.
+    ``handler(..).unwrap(); assert(!x)`` states the same property and lets the prover prune every
+    error path, which is a smaller formula, and on Anchor the difference between [3308] and a verdict.
+    """
+    prompt = _flat(_author_system_prompt())
+    assert _flat("A rejection property takes the same shape, by its contrapositive") in prompt
+    assert "cvlr_assert!(!x);" in prompt
+
+
 def test_the_author_is_warned_that_re_reading_an_account_yields_pre_state():
     """The idiom that silently produces a *wrong answer* rather than an error, so it is the one worth
     guarding. An Anchor ``Account<T>`` is a deserialized copy written back only in ``exit``, which
@@ -430,6 +440,18 @@ def test_the_judge_is_told_a_missing_clog_can_make_a_counterexample_wrong():
     assert "K2" in {r.id for r in _kb_model(CVLR_RECIPES).recipes}
 
 
+def test_the_author_is_told_sysvars_are_read_directly():
+    """The stake run split handlers in six of seven components to pass `Clock` and `Rent` in as
+    parameters, because the tuning files made `Sysvar::from_account_info` external. With that fixed,
+    the recipe is what keeps an author from reaching for the workaround out of habit."""
+    from composer.kb.kb_context import CVLR_RECIPES, _kb_model, kb_loader
+
+    (k3,) = [r for r in _kb_model(CVLR_RECIPES).recipes if r.id == "K3"]
+    assert "from_account_info" in k3.search_terms
+    text = kb_loader(CVLR_RECIPES)("K3")
+    assert text is not None and "cvlr_assume!(*clock_info.key == sysvar::clock::id());" in text
+
+
 def test_the_judge_is_told_where_optimistic_loop_is_and_what_justifies_it():
     """The setting is in the conf, which the judge never reads. What justifies it is one
     observation — the reported iteration rising with the bound — and anything short of that leaves
@@ -472,10 +494,12 @@ def test_the_judge_is_told_the_instruments_are_in_its_input_and_nowhere_else():
 def test_the_judge_is_told_early_panic_makes_a_rejection_property_vacuous():
     """The unsoundness specific to this munge, and one the verdict cannot show: `early_panic`
     deletes the error path, so a rule asserting that bad input is refused goes green over a program
-    that no longer has a way to refuse it."""
+    that no longer has a way to refuse it. Only the ``is_err()`` form: the contrapositive the author
+    is taught counts a panic as a non-success, so the judge must not reject that one."""
     item_one = _flat(_judge_system_prompt()).split("2. **Vacuity")[0]
-    assert "fatal to any property about rejection" in item_one
+    assert "fatal to a rejection rule written as" in item_one
     assert "is vacuous" in item_one
+    assert "The contrapositive form is unaffected" in item_one
 
 
 def test_the_judge_is_told_a_mock_is_the_mirror_problem_one_level_down():
@@ -723,3 +747,104 @@ def test_both_prompts_name_the_release_the_answers_are_about():
     for prompt in (_author_system_prompt(), _judge_system_prompt()):
         assert "cvlr 0.6.1" in prompt
     assert "no other release" in _flat(_author_system_prompt())
+
+
+# --------------------------------------------------------------------------------------------
+# Design properties over implementation checks (docs/cvlr-design-properties-plan.md, step 1)
+# --------------------------------------------------------------------------------------------
+
+
+def test_the_guidance_ranks_design_invariants_above_account_checks():
+    """Certora's reviewers on the stake run: the spec described the code, not the design. The
+    guidance had called account validation "the highest-value properties on this chain"."""
+    assert "highest-value properties" not in SOLANA_CVLR_GUIDANCE
+    ranked = SOLANA_CVLR_GUIDANCE.split("in order of\nvalue:")[1]
+    assert ranked.index("Design invariants") < ranked.index("Authority over value and control")
+
+
+def test_the_rent_exempt_minimum_is_not_excluded_as_rent_economics():
+    """The exclusion kept half of the stake program's solvency condition off the property list."""
+    excluded = _flat(SOLANA_CVLR_GUIDANCE.split("should not be extracted as a property")[1])
+    assert "The rent-exempt minimum an account must keep is not economics" in excluded
+
+
+def _stake_component_prompt(ind: int) -> str:
+    from composer.pipeline.ecosystem import _render_solana_property_prompt
+    from composer.spec.solana.model import (
+        SolanaApplication,
+        SolanaComponentInstance,
+        SolanaProgramInstance,
+    )
+
+    app = SolanaApplication.model_validate(
+        {
+            "application_type": "Staking",
+            "description": "One program, one account type every instruction writes.",
+            "components": [
+                {
+                    "name": "Stake",
+                    "program_identifier": "stake",
+                    "program_id": None,
+                    "description": "The program.",
+                    "account_types": ["StakeState: all of the program's state."],
+                    "instructions": [
+                        {
+                            "name": name,
+                            "description": f"{name} a stake account.",
+                            "args": [],
+                            "accounts": [],
+                            "signers": [],
+                            "cpis": [],
+                            "requirements": [],
+                        }
+                        for name in ("split", "merge", "withdraw")
+                    ],
+                    "components": [
+                        {
+                            "name": "Split & Merge",
+                            "description": "Split and merge.",
+                            "instructions": ["split", "merge"],
+                            "account_types": ["StakeState"],
+                            "requirements": [],
+                            "interactions": [],
+                        },
+                        {
+                            "name": "Withdrawal",
+                            "description": "Withdraw lamports.",
+                            "instructions": ["withdraw"],
+                            "account_types": ["StakeState"],
+                            "requirements": [],
+                            "interactions": [],
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+    unit = SolanaComponentInstance(ind=ind, _program=SolanaProgramInstance(0, app))
+    return _render_solana_property_prompt(unit, "existing", [])
+
+
+def test_a_component_may_state_an_invariant_over_its_siblings_instructions():
+    """The prompt forbade properties about sibling components, so solvency came out of the stake run
+    as four partial properties, one per component. Sibling instructions are listed by name so a
+    property can say which handlers it ranges over."""
+    prompt = _stake_component_prompt(1)
+    assert "do not write properties about them" not in prompt
+    assert "name every instruction it ranges over" in _flat(prompt)
+    assert "**Split & Merge** (`split`, `merge`)" in prompt
+
+
+def test_computations_reach_the_extractor_with_a_warning_against_restating_them():
+    """Naming where the arithmetic lives invites properties that restate the formula, which hold
+    for this implementation only: the reviewers' complaint in a new form. Bounds, not formulas."""
+    prompt = _flat(_stake_component_prompt(1))
+    assert "Do not restate how the result is computed" in prompt
+    assert "cite the source line each such property rests on" in prompt
+
+
+def test_the_analysis_is_told_not_to_describe_a_computation_by_its_formula():
+    from composer.templates.loader import load_jinja_template
+
+    text = _flat(load_jinja_template("solana/analysis_prompt.j2", has_doc=False))
+    assert "Do not give the formula or its constants" in text

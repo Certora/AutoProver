@@ -77,12 +77,26 @@ always belong to the same component. Administrative/configuration instructions u
 component of their own. (For example, a vault program might have "Deposits & share accounting",
 "Withdrawals", and "Admin & configuration".)
 
+Many Solana programs keep all their state in one account type that every instruction reads and
+writes (a single pool, position or config account). Grouping by shared state would then put
+the whole program in one component, so group by the **operation** each instruction performs
+instead, and say in each component's description that its state is shared with the other
+components and name them. That sharing is what tells the later stages that an invariant over the
+state has to hold across components, not within one.
+
 For each component provide:
 
 - `instructions`: the names of the instructions that make up this component. Every instruction
   you declared for the program **must appear in at least one component**. An instruction may
   appear in more than one component when it genuinely serves two capabilities.
 - `account_types`: which of the program's declared account/state types this component maintains.
+- `computations`: the functions where this component's arithmetic happens: balances, shares, fees,
+  rewards, rates, activation or vesting schedules. Include functions in dependencies when the
+  program relies on their result, such as an interface crate's activation math or a token library's
+  conversion, and name each by the path the program calls it through. For each, say what its result
+  is in the protocol's terms and which instructions depend on it. Do not give the formula or its
+  constants: a later stage states properties from this description, and a property that restates
+  a formula holds for this implementation and no other. Empty if the component does no arithmetic.
 - `requirements`: any requirements or assumptions on the component's behavior, stated as
   implementation requirements ("The implementation must ...").
 - `interactions`: a description of this component's interactions, either with components of this

@@ -15,6 +15,7 @@ and a CVLR pin that does not match the platform generation the project is alread
 """
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,13 +23,14 @@ from composer.cargo.features import CargoFeature
 from composer.cargo.metadata import CargoUnavailable, CratePackage, Workspace
 from composer.cargo.session import CargoSession, CompileFailed, Compiled, WarmFailed
 from composer.sandbox.config import SandboxConfig
-from composer.spec.cvlr.conf import DEFAULT_FEATURE
+from composer.spec.cvlr.conf import DEFAULT_FEATURE, HOST_RUST_TOOLCHAIN
 from composer.spec.cvlr.crates import CvlrSources, Divergence
 from composer.spec.cvlr.scaffold import (
     ScaffoldBlocked,
     ScaffoldPlan,
     apply,
     plan_scaffold,
+    select_generation,
 )
 from composer.spec.cvlr.reference import ChainReference
 from composer.spec.cvlr.tree import ProjectSource
@@ -118,12 +120,20 @@ class SelectedPackage:
     #: The package directory relative to the workspace root, the same relation as
     #: :attr:`CvlrPreflight.package_dir`. Both come from one workspace read.
     package_dir: Path
+    #: The reference set for the platform generation the package is on
+    #: (:func:`~composer.spec.cvlr.scaffold.select_generation`).
+    reference: ChainReference
 
 
 async def select_package(
-    project_root: Path, package: str | None = None, *, main_source: Path | None = None
+    project_root: Path,
+    package: str | None = None,
+    *,
+    candidates: Sequence[ChainReference],
+    main_source: Path | None = None,
 ) -> SelectedPackage:
-    """Resolve ``package`` against the workspace at ``project_root``.
+    """Resolve ``package`` against the workspace at ``project_root``, and the reference set in
+    ``candidates`` for the platform generation it is on.
 
     An explicit name wins. Otherwise the member that owns the main program's source file wins,
     which is cargo's own view of which member a path belongs to. A workspace with several
@@ -138,16 +148,34 @@ async def select_package(
         if package is None and owner is not None and owner.lib is not None
         else _pick_package(workspace, package)
     )
+    reference = select_generation(workspace, member, candidates)
+    if reference is None:
+        linked = workspace.linked_into(member)
+        witnesses = dict.fromkeys(w.name for r in candidates for w in r.platform.witnesses)
+        builds = [
+            f"{name} {', '.join(c.version for c in copies)}"
+            for name in witnesses
+            if (copies := [c for c in linked if c.name == name])
+        ]
+        supported = "; ".join(f"{r.platform.label} ({r.line()})" for r in candidates)
+        raise PreflightFailed(
+            f"{member.name} is on no Solana platform generation this build supports. It builds "
+            f"{', '.join(builds) or 'none of the platform crates that identify one'}. Supported: "
+            f"{supported}."
+        )
     return SelectedPackage(
         workspace_root=workspace.root,
         name=member.name,
         package_dir=member.root.resolve().relative_to(workspace.root.resolve()),
+        reference=reference,
     )
 
 
 async def _workspace_at(root: Path, *, features: tuple[CargoFeature, ...] = ()) -> Workspace:
     try:
-        workspace = await Workspace.read(root, features=features)
+        workspace = await Workspace.read(
+            root, features=features, toolchain=HOST_RUST_TOOLCHAIN
+        )
     except CargoUnavailable as exc:
         raise PreflightFailed(str(exc)) from exc
     if not isinstance(workspace, Workspace):
@@ -229,7 +257,9 @@ async def gate_workspace(
     The SBF build is a later gate, and running it here would cost more than the failure it would
     be catching.
     """
-    session = CargoSession(workdir=pre.workspace_root, sandbox=sandbox)
+    session = CargoSession(
+        workdir=pre.workspace_root, sandbox=sandbox, toolchain=HOST_RUST_TOOLCHAIN
+    )
     warmed = await session.warm()
     if isinstance(warmed, WarmFailed):
         raise PreflightFailed(

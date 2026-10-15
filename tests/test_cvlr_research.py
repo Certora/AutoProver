@@ -15,6 +15,7 @@ nothing else.
 """
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -49,7 +50,7 @@ def test_the_api_manifest_tag_resolves_for_the_importer():
 
 def test_both_corpora_bind_their_tools():
     """The pools open lazily, so binding needs no database: this checks the wiring alone."""
-    names = {t.name for t in cvlr_research.corpus_tools(object())}  # type: ignore[arg-type]
+    names = {t.name for t in cvlr_research.corpus_tools(object(), pinned={})}  # type: ignore[arg-type]
     assert names == {
         "cvlr_manual_search", "cvlr_keyword_search", "cvlr_get_section",
         "cvlr_api_search", "cvlr_api_lookup", "cvlr_api_surface",
@@ -65,7 +66,7 @@ def test_a_corpus_that_cannot_be_opened_leaves_the_other(monkeypatch: pytest.Mon
         return real(connection, model)  # type: ignore[arg-type]
 
     monkeypatch.setattr(cvlr_research, "PostgreSQLRAGDatabase", opener)
-    names = {t.name for t in cvlr_research.corpus_tools(object())}  # type: ignore[arg-type]
+    names = {t.name for t in cvlr_research.corpus_tools(object(), pinned={})}  # type: ignore[arg-type]
     assert names == {"cvlr_api_search", "cvlr_api_lookup", "cvlr_api_surface"}
 
 
@@ -83,11 +84,15 @@ class _FakeDB:
         return "\n\n".join(b.body for b in section.blocks)
 
     async def search_manual_keywords(self, query, *, min_depth=0, limit=10):
-        terms = [t.strip('"') for t in query.split() if t.strip('"')]
+        """Each quoted phrase, or each bare word, must occur in the section's text. Like
+        Postgres's full-text search here, the headers are not searched: a tool that found a row by
+        its headers would pass this fake and find nothing in the real corpus."""
+        terms = re.findall(r'"([^"]+)"|(\S+)', query)
+        wanted = [quoted or bare for quoted, bare in terms]
         hits = [
             ManualSectionHit(headers=list(h), relevance=1.0)
             for h, s in self._sections.items()
-            if all(any(t in part for part in h) or t in self._content(s) for t in terms)
+            if all(t in self._content(s) for t in wanted)
         ]
         return hits[:limit]
 
@@ -117,7 +122,7 @@ def corpus():
 
 @pytest.fixture
 def tools(corpus):
-    return {t.name: t for t in get_tools(corpus)}  # type: ignore[arg-type]
+    return {t.name: t for t in get_tools(corpus, {})}  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
@@ -160,7 +165,7 @@ async def test_an_unknown_crate_is_reported_as_unusable_rather_than_missing(tool
 @pytest.mark.asyncio
 async def test_an_empty_vector_search_denies_being_evidence_of_absence(corpus):
     empty = _FakeDB([])
-    search = {t.name: t for t in get_tools(empty)}["cvlr_api_search"]  # type: ignore[arg-type]
+    search = {t.name: t for t in get_tools(empty, {})}["cvlr_api_search"]  # type: ignore[arg-type]
     out = await search.ainvoke({"query": "anything at all"})
     assert "does not mean the item does not exist" in out
     assert "cvlr_api_surface" in out
@@ -281,3 +286,50 @@ def test_the_prompt_asks_for_the_path_that_compiles_over_the_defining_crate():
     ).read_text()
     assert "Give the path that compiles" in prompt
     assert "E0433" in prompt
+
+
+# ---------------------------------------------------------------------------------------------
+# one corpus, two platform generations
+
+
+@pytest.fixture
+def two_generations():
+    """``cvlr-solana`` at both release lines, and a core crate the generations share. The 0.5.x
+    payload stands in for both lines: what is under test is which version a run is shown."""
+    payload = json.loads((_DATA / "cvlr_solana.json").read_text())
+    crates = [
+        CrateDocs("cvlr-solana", "0.5.1", payload),
+        CrateDocs("cvlr-solana", "0.6.0", payload),
+        CrateDocs("cvlr-asserts", "0.6.1", json.loads((_DATA / "cvlr_asserts.json").read_text())),
+    ]
+    return _FakeDB(build_manifest(crates, "test", _passing(crates)).manual_sections)
+
+
+def _scoped(db, pinned):
+    return {t.name: t for t in get_tools(db, pinned)}  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_a_run_is_shown_only_the_release_it_builds(two_generations):
+    """An SDK 3 run told about 0.5.1 is told, with full authority, about an API its build lacks."""
+    tools = _scoped(two_generations, {"cvlr-solana": "0.6.0", "cvlr": "0.6.1"})
+    for out in (
+        await tools["cvlr_api_lookup"].ainvoke({"name": "cvlr_deserialize_nondet_accounts"}),
+        await tools["cvlr_api_surface"].ainvoke({"crate": "cvlr-solana"}),
+    ):
+        assert "cvlr-solana > 0.6.0" in out
+        assert "0.5.1" not in out
+    # The fake's vector search ignores the query, so what it returns says nothing about ranking;
+    # what it must not return is the other generation.
+    out = await tools["cvlr_api_search"].ainvoke({"query": "nondeterministic accounts"})
+    assert "0.5.1" not in out
+
+
+@pytest.mark.asyncio
+async def test_a_crate_the_run_does_not_pin_is_shown_at_the_version_the_corpus_holds(
+    two_generations,
+):
+    """The core's sub-crates are shared by the generations, and pinned through the core only."""
+    tools = _scoped(two_generations, {"cvlr-solana": "0.5.1"})
+    out = await tools["cvlr_api_lookup"].ainvoke({"name": "cvlr_assert_le"})
+    assert "cvlr-asserts > 0.6.1" in out

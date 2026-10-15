@@ -16,7 +16,7 @@ The fast tier is a host-target ``cargo check``, not the chain build.
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 
@@ -95,6 +95,9 @@ class CargoSession:
 
     workdir: Path
     sandbox: SandboxConfig
+    #: The rustup toolchain every cargo command in this session runs with, in place of the one the
+    #: project's ``rust-toolchain.toml`` pins. ``None`` follows the project.
+    toolchain: str | None = None
     #: Keyed by the cargo binary. Two cargos do not share a git cache, so a
     #: cache filled by one is not warm for the other.
     _warmed: set[str] = field(default_factory=set, repr=False, compare=False)
@@ -111,6 +114,17 @@ class CargoSession:
     @property
     def confined(self) -> bool:
         return self.sandbox.enabled
+
+    @property
+    def toolchain_env(self) -> dict[str, str]:
+        """What selects :attr:`toolchain` in a child's environment. rustup reads
+        ``RUSTUP_TOOLCHAIN`` ahead of a ``rust-toolchain.toml``; a cargo rustup does not manage
+        ignores it."""
+        return {"RUSTUP_TOOLCHAIN": self.toolchain} if self.toolchain is not None else {}
+
+    @property
+    def _confinement(self) -> SandboxConfig:
+        return replace(self.sandbox, env={**self.sandbox.env, **self.toolchain_env})
 
     @property
     def cargo_home(self) -> Path | None:
@@ -136,7 +150,8 @@ class CargoSession:
             workdir=self.workdir,
             timeout_s=timeout_s,
             provider=self.sandbox.resolve_provider() if self.sandbox.enabled else None,
-            policy=self.sandbox.build_policy(self.workdir),
+            policy=self._confinement.build_policy(self.workdir),
+            env_overlay=self.toolchain_env or None,
         )
 
     def build_can_write(self, path: Path) -> bool:
@@ -150,7 +165,7 @@ class CargoSession:
     async def backend_spec(self, *, timeout_s: int) -> BackendSpec:
         """The confinement :meth:`run_confined` applies, as an argv prefix for a
         command launched later."""
-        return await self.sandbox.backend_spec(self.workdir, timeout_s=timeout_s)
+        return await self._confinement.backend_spec(self.workdir, timeout_s=timeout_s)
 
     async def run_unconfined(
         self, program: str, args: list[str], *, timeout_s: int
@@ -169,7 +184,10 @@ class CargoSession:
             {},
             workdir=self.workdir,
             timeout_s=timeout_s,
-            env_overlay={"CARGO_HOME": str(home)} if home is not None else None,
+            env_overlay=(
+                {**self.toolchain_env, **({"CARGO_HOME": str(home)} if home is not None else {})}
+                or None
+            ),
         )
 
     async def warm(

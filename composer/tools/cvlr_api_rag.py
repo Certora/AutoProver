@@ -18,7 +18,8 @@ Three tools for three questions, and the middle one is not the shape
   one section per crate listing its whole public surface, and this is the tool that fetches it.
 """
 
-from typing import Iterable
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 
 from langchain_core.tools import BaseTool
 from pydantic import Field
@@ -29,6 +30,10 @@ from graphcore.tools.schemas import WithAsyncDependencies
 #: The heading a crate's complete-surface section is filed under, below its version level. The
 #: producer writes it and :class:`CvlrApiSurface` reads it, so the string lives in one place.
 SURFACE_HEADING = "Complete public surface"
+
+#: Words every complete-surface section's text opens with. The keyword search reads a section's
+#: text and not its headers, so this, not :data:`SURFACE_HEADING`, is what finds a surface.
+SURFACE_PHRASE = "exports, in full"
 
 #: The root of every header path in this corpus. Present in the path so a row read out of context
 #: still says which corpus it came from.
@@ -43,11 +48,39 @@ _AUTHORITY = (
 )
 
 
+#: How many rows to ask the database for, per row a tool returns. Rows of the other platform
+#: generation are dropped after the query (:meth:`ApiCorpus.admits`), and with two generations up to
+#: half of them can be.
+_OVERFETCH = 3
+
+
 def _header_string(s: list[str]) -> str:
     return " > ".join(i for i in s if i)
 
 
-class CvlrApiSearch(WithAsyncDependencies[str, ComposerRAGDB]):
+@dataclass(frozen=True)
+class ApiCorpus:
+    """The corpus as one run sees it: the releases that run builds.
+
+    The corpus holds every platform generation's crates (``cvlr-solana`` 0.5.x and 0.6.x side by
+    side), and each row's header path is ``[API_ROOT, crate, version, ...]``. A row for a crate the
+    run pins at another version is another generation's, and a tool that showed it would describe,
+    with full authority, an API the run's build does not have.
+    """
+
+    db: ComposerRAGDB
+    #: Crate name → the version this run builds. A crate the run does not pin, such as one of the
+    #: core's sub-crates, is admitted at any version: the generations share it.
+    pinned: Mapping[str, str]
+
+    def admits(self, headers: Sequence[str]) -> bool:
+        if len(headers) < 3:
+            return True
+        crate, version = headers[1], headers[2]
+        return self.pinned.get(crate, version) == version
+
+
+class CvlrApiSearch(WithAsyncDependencies[str, ApiCorpus]):
     __doc__ = (
         "Search the generated CVLR API reference with a natural-language question. Use it when "
         "you know what you want to *do* but not what it is called — 'how do I give an account "
@@ -66,12 +99,16 @@ class CvlrApiSearch(WithAsyncDependencies[str, ComposerRAGDB]):
     max_results: int = Field(default=10, description="Maximum number of results to return.")
 
     async def run(self) -> str:
-        with self.tool_deps() as db:
-            res = await db.find_refs(
-                self.query,
-                similarity_cutoff=self.similarity_cutoff,
-                top_k=self.max_results,
-            )
+        with self.tool_deps() as corpus:
+            res = [
+                r
+                for r in await corpus.db.find_refs(
+                    self.query,
+                    similarity_cutoff=self.similarity_cutoff,
+                    top_k=self.max_results * _OVERFETCH,
+                )
+                if corpus.admits(r.headers)
+            ][: self.max_results]
             if not res:
                 return (
                     "(No results found. This does not mean the item does not exist — vector "
@@ -85,7 +122,7 @@ class CvlrApiSearch(WithAsyncDependencies[str, ComposerRAGDB]):
             )
 
 
-class CvlrApiLookup(WithAsyncDependencies[str, ComposerRAGDB]):
+class CvlrApiLookup(WithAsyncDependencies[str, ApiCorpus]):
     __doc__ = (
         "Look up one CVLR item by name and get its entry in full: the signature, the crate that "
         "*defines* it, its feature gate, and whatever the crate documents about it. Use this "
@@ -104,10 +141,17 @@ class CvlrApiLookup(WithAsyncDependencies[str, ComposerRAGDB]):
     limit: int = Field(default=5, description="How many candidate entries to return at most.")
 
     async def run(self) -> str:
-        with self.tool_deps() as db:
+        with self.tool_deps() as corpus:
+            db = corpus.db
             # Keyword search finds the candidates; the fetch is what makes this one call instead
             # of two. A bare identifier is already a websearch-style query for one term.
-            hits = await db.search_manual_keywords(self.name, limit=self.limit)
+            hits = [
+                hit
+                for hit in await db.search_manual_keywords(
+                    self.name, limit=self.limit * _OVERFETCH
+                )
+                if corpus.admits(hit.headers)
+            ][: self.limit]
             if not hits:
                 return (
                     f"Nothing in the generated CVLR API reference matches {self.name!r}. Check "
@@ -127,7 +171,7 @@ class CvlrApiLookup(WithAsyncDependencies[str, ComposerRAGDB]):
             return "\n".join(sections)
 
 
-class CvlrApiSurface(WithAsyncDependencies[str, ComposerRAGDB]):
+class CvlrApiSurface(WithAsyncDependencies[str, ApiCorpus]):
     __doc__ = (
         "List a CVLR crate's **complete** public surface — every item it exports, at the release "
         "this build pins.\n\n"
@@ -145,14 +189,16 @@ class CvlrApiSurface(WithAsyncDependencies[str, ComposerRAGDB]):
     ))
 
     async def run(self) -> str:
-        with self.tool_deps() as db:
+        with self.tool_deps() as corpus:
+            db = corpus.db
             # The version level sits between the root and the crate, and a caller does not know
             # it — the point of the pin is that they never have to. Keyword search over the
-            # heading finds the one row whatever the version is.
-            hits = await db.search_manual_keywords(f'"{self.crate}" "{SURFACE_HEADING}"', limit=5)
+            # surface text finds the crate's surface rows, one per version the corpus holds, and
+            # the run's pin chooses among them.
+            hits = await db.search_manual_keywords(f'"{self.crate}" "{SURFACE_PHRASE}"', limit=10)
             for hit in hits:
                 headers = list(hit.headers)
-                if self.crate in headers and SURFACE_HEADING in headers:
+                if self.crate in headers and SURFACE_HEADING in headers and corpus.admits(headers):
                     content = await db.get_manual_section(headers)
                     if content is not None:
                         return f"{_header_string(headers)}\n\n{content}"
@@ -163,9 +209,11 @@ class CvlrApiSurface(WithAsyncDependencies[str, ComposerRAGDB]):
             )
 
 
-def get_tools(db: ComposerRAGDB) -> Iterable[BaseTool]:
+def get_tools(db: ComposerRAGDB, pinned: Mapping[str, str]) -> Iterable[BaseTool]:
+    """The three tools over ``db``, showing only the releases in ``pinned`` (:class:`ApiCorpus`)."""
+    corpus = ApiCorpus(db, pinned)
     return [
-        CvlrApiSearch.bind(db).as_tool("cvlr_api_search"),
-        CvlrApiLookup.bind(db).as_tool("cvlr_api_lookup"),
-        CvlrApiSurface.bind(db).as_tool("cvlr_api_surface"),
+        CvlrApiSearch.bind(corpus).as_tool("cvlr_api_search"),
+        CvlrApiLookup.bind(corpus).as_tool("cvlr_api_lookup"),
+        CvlrApiSurface.bind(corpus).as_tool("cvlr_api_surface"),
     ]
