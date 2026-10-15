@@ -34,7 +34,7 @@ def api(monkeypatch: pytest.MonkeyPatch):
         return fake
 
     async def succeeded(*_args, **_kwargs) -> dict:
-        return {"jobStatus": "SUCCEEDED"}
+        return {"job_status": "SUCCEEDED"}
 
     async def no_sleep(_s: float) -> None:
         pass
