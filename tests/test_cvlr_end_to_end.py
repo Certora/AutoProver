@@ -30,7 +30,7 @@ from composer.prover.conf import dump_conf
 from composer.sandbox.recipes import PLATFORM_TOOLS_ROOT
 from composer.sandbox.config import SandboxConfig
 from composer.sandbox.policy import SandboxUnavailable, ensure_available
-from composer.spec.cvlr.conf import PLATFORM_TOOLS_VERSION
+from composer.spec.cvlr.conf import HOST_RUST_TOOLCHAIN, PLATFORM_TOOLS_VERSION
 from composer.spec.cvlr.prover import (
     BuildRejected,
     Checked,
@@ -146,7 +146,11 @@ async def test_the_examples_project_verifies_exactly_as_its_authors_expect(
             f"Solana platform tools {wanted_tools} are not installed under {PLATFORM_TOOLS_ROOT}"
         )
 
-    session = CargoSession(workdir=workdir, sandbox=cvlr_confinement)
+    # The host toolchain the pipeline runs, not the examples' rust-toolchain.toml pin, which the
+    # Solana image does not carry and cannot install: its RUSTUP_HOME is read-only.
+    session = CargoSession(
+        workdir=workdir, sandbox=cvlr_confinement, toolchain=HOST_RUST_TOOLCHAIN
+    )
     assert isinstance(await session.warm(manifest_dirs=(EXAMPLE,)), Warmed)
 
     # Same crate as the slow build below. Both durations are printed.
