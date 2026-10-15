@@ -21,6 +21,7 @@ from composer.sandbox.recipes import SANDBOX_CARGO_DIR
 from composer.spec.cvlr.scaffold import declare_unit_features
 from composer.spec.cvlr.tree import (
     NOT_PROJECT_SOURCE,
+    Editable,
     NotInProject,
     NotProjectRelative,
     NotProjectSource,
@@ -409,10 +410,10 @@ async def test_two_units_naming_one_module_are_refused(tmp_path: Path):
 def test_a_path_outside_the_project_is_refused(tmp_path: Path):
     project = _project(tmp_path)
     tree = SharedTree(pristine=project, root=tmp_path / "work" / "build", source=_SOURCE_DIRS)
-    assert tree.refuse_edit(_RESERVE) is None
-    assert isinstance(tree.refuse_edit("../outside.rs"), NotInProject)
-    assert isinstance(tree.refuse_edit("/etc/passwd"), NotInProject)
-    assert isinstance(tree.refuse_edit("programs/p/src/foo/../reserve.rs"), NotProjectRelative)
+    assert tree.check_edit(_RESERVE) == Editable(_RESERVE)
+    assert isinstance(tree.check_edit("../outside.rs"), NotInProject)
+    assert isinstance(tree.check_edit("/etc/passwd"), NotInProject)
+    assert isinstance(tree.check_edit("programs/p/src/foo/../reserve.rs"), NotProjectRelative)
 
 
 def test_a_dependency_inside_the_tree_is_not_project_source(tmp_path: Path):
@@ -425,7 +426,7 @@ def test_a_dependency_inside_the_tree_is_not_project_source(tmp_path: Path):
     )
 
     anchor = str(SANDBOX_CARGO_DIR / "registry/src/index.crates.io-6f17d22/anchor-lang-0.31.1/src/error.rs")
-    assert isinstance(tree.refuse_edit(anchor), NotProjectSource)
+    assert isinstance(tree.check_edit(anchor), NotProjectSource)
 
     for built in (
         "target/debug/build/x/out/gen.rs",
@@ -433,7 +434,7 @@ def test_a_dependency_inside_the_tree_is_not_project_source(tmp_path: Path):
         "node_modules/pkg/index.rs",
         "certora_out/y.rs",
     ):
-        assert isinstance(tree.refuse_edit(built), NotProjectSource), built
+        assert isinstance(tree.check_edit(built), NotProjectSource), built
 
 
 def test_a_local_crates_manifest_may_be_edited(tmp_path: Path):

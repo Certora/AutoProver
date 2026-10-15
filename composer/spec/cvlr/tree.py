@@ -208,10 +208,18 @@ class NotProjectRelative:
         return f"{self.path} is not a project-relative path"
 
 
-def refuse_edit(
-    pristine: Path, source: ProjectSource, relative: str
-) -> NotInProject | NotProjectSource | NotProjectRelative | None:
-    """Why an edit to the program may not write ``relative``, or None when it may.
+@dataclass(frozen=True)
+class Editable:
+    """An edit to the program may write the path, which the tree keys as ``key``."""
+
+    key: str
+
+
+type EditCheck = Editable | NotInProject | NotProjectSource | NotProjectRelative
+
+
+def check_edit(pristine: Path, source: ProjectSource, relative: str) -> EditCheck:
+    """Whether an edit to the program may write ``relative``: the key it writes, or why not.
 
     The one answer to that question: the editor's write tools ask it before accepting a write, and
     staging asks again, because by then the overlay has come back from a checkpoint or the edit
@@ -236,7 +244,7 @@ def refuse_edit(
     resolved = candidate.relative_to(root).as_posix()
     if not source.may_edit(key) or not source.may_edit(resolved):
         return NotProjectSource(path=relative, source=source)
-    return None
+    return Editable(key)
 
 
 @dataclass(frozen=True)
@@ -310,9 +318,9 @@ class SharedTree:
             await asyncio.to_thread(shutil.rmtree, self.root)
         await self._materializer.dump_to(self.root)
 
-    def refuse_edit(self, relative: str) -> NotInProject | NotProjectSource | NotProjectRelative | None:
-        """Why an edit to the program may not write ``relative``, or None when it may."""
-        return refuse_edit(self.pristine, self.source, relative)
+    def check_edit(self, relative: str) -> EditCheck:
+        """Whether an edit to the program may write ``relative``: the key it writes, or why not."""
+        return check_edit(self.pristine, self.source, relative)
 
     async def reconcile(self, unit: str, edits: UnitEdits) -> None:
         """Make the tree hold every known unit's draft and ``unit``'s edits to the program.
@@ -335,11 +343,10 @@ class SharedTree:
         } | {module: edits.draft}
         overlay: dict[str, str] = {}
         for path, text in edits.overlay.items():
-            if (refusal := self.refuse_edit(path)) is not None:
-                raise ValueError(f"unit {unit!r}'s edits write {refusal.describe()}")
-            key = _relative_key(path)
-            if key is None:
-                raise ValueError(f"unit {unit!r}'s edits write {path}, which is not a project-relative path")
+            check = self.check_edit(path)
+            if not isinstance(check, Editable):
+                raise ValueError(f"unit {unit!r}'s edits write {check.describe()}")
+            key = check.key
             if key in drafts:
                 raise ValueError(f"unit {unit!r}'s edits write the harness module {key}")
             if key in overlay:
