@@ -25,9 +25,12 @@ pursue a single claim, and no more.
 
 Two things, over the candidate listing you are given.
 
-**Score every candidate.** How badly is the protocol hurt if this property does not hold? Score the
-consequence of a violation. Do not score how hard the property looks to prove; a hard property that
-matters beats an easy one that does not.
+**Score every candidate.** Ask two questions. How badly is the protocol hurt if this property does
+not hold? And does it take formal verification to know that it holds? A score is high only when both
+answers are high. A property that an auditor confirms with a quick read of the code, or that one
+short unit test exercises completely, gains little from a proof, however bad its violation would be.
+Do not lower a score because a property looks hard to prove; a hard property that matters beats an
+easy one that does not. Lower it because the code already makes it evident.
 
 **Group the candidates into claims.** Several properties often say one thing between them. Put each
 candidate in exactly one group and name what that group, taken together, establishes. A group of
@@ -58,19 +61,30 @@ component's copies on their own merits.
 
     Score 100
       Good example: "Total assets backing the pool are always at least the sum of user claims"
-        (violation means the protocol is insolvent and users cannot be made whole)
-      Good example: "Only an account holding the admin role can change the fee recipient"
-        (violation hands protocol revenue to an attacker)
+        (violation means the protocol is insolvent and users cannot be made whole, and the claim
+        depends on every path that moves assets or claims, so no single function shows it)
+      Good example: "Converting assets to shares and back never returns more than was put in"
+        (rounding across several code paths decides it; reading one function does not)
 
     Score 70
       Good example: "Shares minted on deposit equal assets deposited times the current exchange rate"
         (violation leaks value on every deposit, silently and cumulatively)
       Good example: "A withdrawal request cannot be fulfilled twice"
+        (it depends on queue state that several entry points update)
 
     Score 40
       Good example: "The pause flag blocks deposits while set"
         (a stated rule of the protocol, but breaking it does not directly move funds)
       Good example: "Oracle price updates are rejected when older than the staleness window"
+
+    Score 30
+      Bad example: "Only an account holding the admin role can change the fee recipient", where the
+        setter carries an `onlyAdmin` modifier
+        (a violation would hand revenue to an attacker, but the modifier is visible at a glance
+        and a two-line unit test checks it; a proof adds almost nothing)
+      Bad example: "fundWithdrawal sends exactly the requested amount to the caller", where the
+        function body is one guarded transfer
+        (a reader sees the whole behaviour in three lines)
 
     Score 10
       Bad example: "The version string is set at construction"
@@ -84,8 +98,25 @@ component with the most properties.
 # What raises a score
 
   - **Real loss.** Funds, access, or an accounting identity — not a cosmetic deviation.
+  - **Solvency.** Properties that say the protocol can pay what it owes: assets cover liabilities,
+    the exchange rate matches the backing, rounding never favours the user, queued claims stay
+    fundable. These are the properties whose failure leaves the last users unpaid, and they are
+    the hardest to confirm by reading. Score them above other properties of similar consequence.
+  - **Not evident from the code.** The property depends on several functions, on state that many
+    paths update, on arithmetic and rounding, or on sequences of calls. A reviewer cannot check it
+    in one function, and a unit test covers only the cases someone thought to write.
   - **Falsifiable against this code.** A property that restates a compiler guarantee, or that no
     implementation of this contract could violate, buys nothing however grand it sounds.
+
+# What lowers a score
+
+  - **Evident from a quick read.** A single modifier or `require` decides it, or the function that
+    decides it is a few lines with no branching on stored state. Access-control checks on one
+    setter and "this function transfers the amount it was given" are typical.
+  - **Fully covered by a simple unit test.** One call with fixed inputs and one assertion
+    exercises every case that matters.
+  - **Decided outside the contract under test.** The property holds only because another
+    contract behaves correctly, and that contract is not part of this run.
 
 # The `critical_match` flag
 
