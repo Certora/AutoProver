@@ -114,16 +114,6 @@ The RAG database must be populated before running auto-prove. This is a two-step
 
 `gen_docs.sh` clones the [Certora Documentation](https://github.com/Certora/Documentation) repo and builds single-page HTML files via Sphinx. `populate_rag.sh` then chunks and indexes the CVL documentation into `rag_db`.
 
-### 3. Populate the CVL Knowledge Base
-
-Run the knowledge base population script to load common CVL pitfall articles into the LangGraph store:
-
-```bash
-uv run --extra ml python -m composer.scripts.kb_populate
-```
-
-This inserts ~30 curated articles (summary misapplication, vacuity traps, ghost semantics, etc.) that agents consult during spec generation.
-
 ## Installation
 
 To install the scripts for execution simply run:

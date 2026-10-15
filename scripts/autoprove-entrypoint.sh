@@ -5,8 +5,8 @@
 #   1. Patch /etc/passwd for the host UID compose is running us as, so
 #      libraries that call pwd.getpwuid() (torch via getpass.getuser(), etc.)
 #      don't crash.
-#   2. One-time `setup-db` subcommand — populates rag_db and the LangGraph
-#      knowledge base against the compose-managed postgres.
+#   2. One-time `setup-db` subcommand — populates the RAG corpora against the
+#      compose-managed postgres.
 #   3. For console-autoprove / tui-autoprove, transparently inject --rag-db
 #      pointing at the in-network postgres service.
 #   4. For console-solana / tui-solana, refuse to start when this container was
@@ -54,8 +54,6 @@ if [[ "${1:-}" == "setup-db" ]]; then
   python -m composer.scripts.ragbuild \
       --output "$RAG_CONN" \
       "$AUTOPROVE_HOME/prover-docs/cvl.html"
-  echo "[autoprove] populating LangGraph knowledge base ..."
-  python -m composer.scripts.kb_populate
 
   # The two CVLR corpora. `cvlr_kb` is the Solana manual, built into every image beside the CVL one
   # so that a setup-db from any container populates it. `cvlr_api_kb` is generated from the pinned
