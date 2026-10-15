@@ -8,6 +8,7 @@ storage path, which we combine with the signature database to find implementing 
 """
 
 import os
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from certora_autosetup.setup.signature_types import SignatureDatabase, extract_sighash_from_callee, normalize_selector
+from certora_autosetup.utils.cvl_keywords import is_cvl_keyword
 from certora_autosetup.utils.paths import user_harness_path, user_harnesses_dir
 from certora_autosetup.utils.scope import Scope
 
@@ -106,6 +108,12 @@ class LinkingDecision:
     # established. Each entry is the sighash.
     missing_selectors: List[str] = field(default_factory=list)
 
+
+def _cvl_keyword_segments(path: str) -> List[str]:
+    """The field names in a prover storage path (e.g. "holder.token", "fixedTokens[0]") that are
+    CVL keywords, in path order."""
+    fields = re.sub(r"\[[^\]]*\]", "", path).split(".")
+    return [f for f in fields if is_cvl_keyword(f)]
 
 
 class ContractLinker:
@@ -256,6 +264,26 @@ class ContractLinker:
         for (base_contract, path), calls in storage_path_groups.items():
             # Skip paths already processed in a previous iteration
             if (base_contract, path) in self._processed_paths:
+                continue
+
+            # A `links {}` path segment that is a CVL keyword makes the whole call-resolution spec
+            # unparseable, and every later phase imports that spec. Leave such a path unlinked;
+            # its calls fall through to the dispatcher.
+            # TODO: lift this limitation by auto-munging the source — rename the colliding storage
+            # field in a harnessed copy so the link can be emitted.
+            keyword_segments = _cvl_keyword_segments(path)
+            if keyword_segments:
+                reason = f"Storage path segment(s) {keyword_segments} are CVL keywords; cannot link in CVL"
+                self._linking_decisions[f"{base_contract}:{path}"] = LinkingDecision(
+                    contract_name=base_contract,
+                    variable_name=path,
+                    selectors=[],
+                    status=LinkStatus.UNRESOLVED,
+                    reason=reason,
+                )
+                self._processed_paths.add((base_contract, path))
+                logger.warning(f"Not linking {base_contract}.{path}: {reason}")
+                remaining_for_dispatcher.extend(calls)
                 continue
 
             # Collect all distinct selectors for this storage path

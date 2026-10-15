@@ -33,11 +33,22 @@ CVL_RESERVED_WORDS: FrozenSet[str] = frozenset({
 #: shape with `havoc` or `rule` is a syntax error.
 #:
 #: Note uppercase "UNRESOLVED" is a distinct summary keyword and stays reserved above.
+#:
+#: Usable is per grammar position: a `links {}` storage path does not accept these — a
+#: `Main.hook => Impl;` entry is a syntax error — so see `is_cvl_keyword` for that context.
 CVL_USABLE_KEYWORDS: FrozenSet[str] = frozenset({
     "as", "builtin", "description", "exists", "forall", "hook", "import", "invariant",
     "old", "onTransactionBoundary", "override", "preserved", "sig", "strong", "sum",
     "unresolved", "use", "using", "usum", "weak",
 })
+
+
+def is_cvl_keyword(name: str) -> bool:
+    """Whether `name` is any CVL keyword, reserved or usable-as-identifier.
+
+    For grammar positions that only take a plain identifier, such as a `links {}` storage path.
+    """
+    return name in CVL_RESERVED_WORDS or name in CVL_USABLE_KEYWORDS
 
 
 def escape_reserved(name: str) -> str:
