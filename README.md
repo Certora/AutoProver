@@ -2,7 +2,7 @@
 
 Auto-prove is a multi-agent pipeline that automatically generates and verifies CVL specifications for Solidity smart contracts. Given a project root, a main contract, and a design document, it analyzes the system's components, formulates properties, and generates CVL specs — running the Certora Prover in a loop to verify them.
 
-The same pipeline also writes [CVLR](https://docs.certora.com/en/latest/docs/solana/index.html) rules for Solana programs and verifies them with the Certora Solana Prover; see [Solana (CVLR)](#solana-cvlr) below.
+The same pipeline also writes [CVLR](https://docs.certora.com/en/latest/docs/solana/index.html) rules for Solana programs and verifies them with the Certora Solana Prover; see [README-solana.md](README-solana.md).
 
 ## Quickstart (Docker)
 
@@ -244,37 +244,4 @@ In headless mode, the CVL Generation agents will produce a mnemonic name. You ca
 
 ## Solana (CVLR)
 
-`console-solana` and `tui-solana` write CVLR rules for a Solana program and verify them with the Certora Solana Prover in the cloud. They take the same shape of arguments as the EVM entry points:
-
-```bash
-console-solana <cargo_workspace_root> programs/<pkg>/src/lib.rs:<program> [design_doc]
-```
-
-The path picks the crate the harness is written into (`--package` overrides it); the identifier is the program the analysis must name. `--help` lists the rest.
-
-### Docker
-
-The Solana image (`scripts/Dockerfile.solana`) layers the Rust toolchain, `cargo certora-sbf` and the Solana platform-tools onto the base image, so build the base image first. The header of `scripts/docker-compose.solana.yml` has the full recipe; in short:
-
-```bash
-docker compose -f scripts/docker-compose.yml --profile autoprove build
-COMPOSE="docker compose -f scripts/docker-compose.yml -f scripts/docker-compose.sandbox.yml -f scripts/docker-compose.solana.yml --profile solana --profile sandbox"
-$COMPOSE build
-$COMPOSE run --rm autoprove-solana setup-db     # once; populates the CVLR corpora too
-export HOST_UID=$(id -u) HOST_GID=$(id -g) HOST_WORK_DIR=/path/to/projects
-$COMPOSE run --rm autoprove-solana console-solana /work/<proj> programs/<pkg>/src/lib.rs:<program>
-```
-
-All three compose files are needed: every cargo build of the target project runs inside the `run-confined` sandbox (Landlock + seccomp; see [docs/command-sandbox.md](docs/command-sandbox.md)), and the sandbox overlay is what provides the launcher.
-
-### Host
-
-On top of the EVM prerequisites:
-
-- `cargo install --locked cargo-certora-sbf`, then fetch the platform-tools release the pipeline builds with (`PLATFORM_TOOLS_VERSION` in `composer/spec/cvlr/conf.py`): `cargo certora-sbf --no-build --tools-version <version>`. They land under `~/.cache/solana`; set `CERTORA_PLATFORM_TOOLS_ROOT` if you put them elsewhere.
-- The CVLR corpora: `./scripts/populate_cvlr_rag.sh` after `gen_docs.sh`. Generating the API corpus needs a nightly toolchain (`rustup toolchain install nightly`).
-- The sandbox launcher: `uv sync` builds `rust/run-confined` into `.venv/bin`. The sandbox fails closed. For trusted inputs during development, `COMPOSER_SANDBOX_PROVIDER=none` runs builds unconfined, and the run says so on stderr.
-
-### Output
-
-The harness is a Rust module inside the verified crate, under `<pkg>/src/certora/` (rules in `specs/`), wired into the crate's `Cargo.toml` and `lib.rs`. Everything else — the report, the property→rule mapping, per-rule reports — goes under `certora/cvlr/` in the project root. Edits the pipeline made to the program itself (munges) are recorded in the report.
+`console-solana` and `tui-solana` write CVLR rules for a Solana program and verify them with the Certora Solana Prover in the cloud. Setup, the Docker image, what a target project must look like, and the known limitations are in [README-solana.md](README-solana.md).
