@@ -71,7 +71,8 @@ class CvlrPreflight:
     #: on another CVLR line before anything is written, and :func:`prepare_workspace` checks again
     #: afterwards. Kept so a run can say which reference-set crates this project does not have.
     gaps: tuple[Divergence, ...]
-    #: What a munge may rewrite. Read from the same scaffolded graph as :attr:`sources`.
+    #: What an edit to the program may write. Read from the same scaffolded graph as
+    #: :attr:`sources`.
     source: ProjectSource
 
     def describe(self) -> str:
