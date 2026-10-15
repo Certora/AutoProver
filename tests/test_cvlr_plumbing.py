@@ -568,6 +568,17 @@ def test_the_build_never_touches_rustup():
     assert "--no-rustup" in _build().argv()
 
 
+def test_the_build_names_the_platform_tools_root(monkeypatch):
+    """The launcher drops ``$CERTORA_PLATFORM_TOOLS_ROOT``, so a root the tool would not find by
+    default reaches it only on the command line."""
+    from composer.cargo import sbf
+
+    root = Path("/opt/autoprove/solana")
+    monkeypatch.setattr(sbf, "PLATFORM_TOOLS_ROOT", root)
+    argv = _build().argv()
+    assert argv[argv.index("--platform-tools-root") + 1] == str(root)
+
+
 class TestResolvedBuildTimeout:
     def test_unset_returns_default(self, monkeypatch):
         monkeypatch.delenv(BUILD_TIMEOUT_ENV, raising=False)

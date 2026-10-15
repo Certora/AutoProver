@@ -41,8 +41,7 @@ RUN apt-get update \
 # $HOME, which the base image makes world-*writable*: a read-only Landlock grant over a tree the
 # confined build can also write is not a grant of anything. The sandbox policy follows these
 # variables rather than assuming the installers' default locations
-# (composer.sandbox.recipes.rust_build_policy reads the first two; composer.spec.cvlr.entry grants
-# the third).
+# (composer.sandbox.recipes reads all three).
 ENV RUSTUP_HOME=/opt/autoprove/rustup \
     CARGO_HOME=/opt/autoprove/cargo \
     CERTORA_PLATFORM_TOOLS_ROOT=/opt/autoprove/solana \

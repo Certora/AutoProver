@@ -188,12 +188,17 @@ class SbfBuild:
         ``--no-rustup`` is required. Without it the tool registers a
         ``certora-solana`` rustup toolchain and writes ``RUSTUP_HOME``, which
         is read-only under confinement.
+
+        ``--platform-tools-root`` is passed rather than left to the tool's
+        default, because the launcher drops ``$CERTORA_PLATFORM_TOOLS_ROOT``.
         """
         args = [
             "cargo",
             SBF_SUBCOMMAND,
             "--json",
             "--no-rustup",
+            "--platform-tools-root",
+            str(PLATFORM_TOOLS_ROOT),
             "--manifest-path",
             str(self.manifest_path),
         ]

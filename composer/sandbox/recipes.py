@@ -47,8 +47,17 @@ SANDBOX_INTERNAL_DIR = INTERNAL_DIR / "sandbox"
 SANDBOX_CARGO_DIR = SANDBOX_INTERNAL_DIR / "cargo"
 SANDBOX_TMP_DIR = SANDBOX_INTERNAL_DIR / "tmp"
 
-#: Where ``cargo certora-sbf`` installs the Solana platform tools by default.
-PLATFORM_TOOLS_ROOT = Path.home() / ".cache" / "solana"
+def platform_tools_root(environ: Mapping[str, str]) -> Path:
+    """Where the Solana platform tools are: ``$CERTORA_PLATFORM_TOOLS_ROOT``, else where
+    ``cargo certora-sbf`` installs them by default.
+
+    The Solana image sets the variable, because its tools live in a root-owned tree outside the
+    world-writable ``$HOME`` (``scripts/Dockerfile.solana``). Empty reads as unset.
+    """
+    return Path(environ.get("CERTORA_PLATFORM_TOOLS_ROOT") or Path.home() / ".cache" / "solana")
+
+
+PLATFORM_TOOLS_ROOT = platform_tools_root(os.environ)
 
 # Read-only system directories the toolchain + its dynamic linker need. ``/etc`` is
 # included because glibc NSS (``getpwuid`` via ``getuser``, CA-cert lookup) reads

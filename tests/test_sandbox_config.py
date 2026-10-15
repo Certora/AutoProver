@@ -196,6 +196,16 @@ def test_rust_build_policy_grants_the_platform_tools_root(tmp_path, monkeypatch)
     assert root.resolve() in pol.ro_paths
 
 
+def test_the_platform_tools_root_is_the_one_the_environment_names(tmp_path):
+    """The Solana image keeps its tools outside ``$HOME`` and says where in the variable."""
+    assert recipes.platform_tools_root({"CERTORA_PLATFORM_TOOLS_ROOT": str(tmp_path)}) == tmp_path
+
+
+@pytest.mark.parametrize("environ", [{}, {"CERTORA_PLATFORM_TOOLS_ROOT": ""}])
+def test_the_platform_tools_root_defaults_to_where_the_tool_installs(environ):
+    assert recipes.platform_tools_root(environ) == Path.home() / ".cache" / "solana"
+
+
 def test_shared_cargo_ro_paths_excludes_credentials(tmp_path):
     """Unit-level: grant bin/ only, never the home root that holds credentials."""
     cargo = tmp_path / "cargo_home"
