@@ -20,5 +20,5 @@ INTERNAL_DIR = Path(".certora_internal")
 #: source, wherever they sit in it: cargo's ``target``, the TypeScript test tooling most Anchor
 #: projects carry in ``node_modules``, and :data:`INTERNAL_DIR`. The agent's Rust source surface
 #: (``RUST_FORBIDDEN_READ``) withholds them, and the CVLR working tree is never filled from them
-#: nor munged in them.
+#: nor edited in them.
 RUST_BUILD_DIRS = ("target", "node_modules", INTERNAL_DIR.name)
