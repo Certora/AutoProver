@@ -22,6 +22,7 @@ from composer.spec.cvlr.scaffold import declare_unit_features
 from composer.spec.cvlr.tree import (
     NOT_PROJECT_SOURCE,
     NotInProject,
+    NotProjectRelative,
     NotProjectSource,
     ProjectSource,
     SharedTree,
@@ -171,6 +172,25 @@ async def test_a_tree_that_is_or_holds_the_project_is_refused(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_a_tree_inside_the_project_is_refused_unless_the_copy_skips_it(tmp_path: Path):
+    """Deleting the tree is how a run starts. A root inside the project deletes source, then the
+    copy walks back into the directory it is filling. A root under a skipped directory is the
+    copy's own place."""
+    project = _project(tmp_path)
+    kept = project / "programs" / "p" / "extra"
+    kept.mkdir()
+    (kept / "keep.rs").write_text("keep\n")
+    with pytest.raises(ValueError, match="inside the project"):
+        await SharedTree(pristine=project, root=kept, source=_SOURCE_DIRS).materialize()
+    assert (kept / "keep.rs").read_text() == "keep\n"
+
+    root = project / "target" / "build"
+    await SharedTree(pristine=project, root=root, source=_SOURCE_DIRS).materialize()
+    assert (root / _RESERVE).read_text() == _SOURCE
+    assert (project / _RESERVE).read_text() == _SOURCE
+
+
+@pytest.mark.asyncio
 async def test_re_reconciling_the_same_state_writes_nothing(tmp_path: Path):
     """Cargo fingerprints on mtime, so rewriting identical bytes is indistinguishable from an edit
     and costs a rebuild. This is what keeps a unit's next gate from recompiling what nothing
@@ -270,6 +290,38 @@ async def test_an_overlay_writing_a_harness_module_is_refused(tmp_path: Path):
     with pytest.raises(ValueError, match="harness module"):
         await tree.reconcile("b", _edits(tree, "b", "//\n", {f"{_SPECS}/a.rs": "// b"}))
     assert (tree.root / _SPECS / "a.rs").read_text() == "// a\n"
+
+
+@pytest.mark.asyncio
+async def test_an_overlay_path_with_dotdot_is_refused(tmp_path: Path):
+    """The overlay is keyed by the path that is written. ``foo/../a.rs`` is a different string, and
+    removing that key unlinks ``a.rs``."""
+    tree = await _tree(tmp_path)
+    await tree.reconcile("a", _edits(tree, "a", "// a\n"))
+    with pytest.raises(ValueError, match="not a project-relative path"):
+        await tree.reconcile(
+            "b",
+            _edits(tree, "b", "// b\n", {f"{_SPECS}/foo/../a.rs": "// pwned\n"}),
+        )
+    await tree.reconcile("b", _edits(tree, "b", "// b2\n"))
+    assert (tree.root / _SPECS / "a.rs").read_text() == "// a\n"
+    assert not (tree.root / _SPECS / "foo").exists()
+
+
+@pytest.mark.asyncio
+async def test_two_spellings_of_one_file_are_refused(tmp_path: Path):
+    tree = await _tree(tmp_path)
+    with pytest.raises(ValueError, match="twice"):
+        await tree.reconcile(
+            "a",
+            _edits(
+                tree,
+                "a",
+                "//\n",
+                {_RESERVE: "A\n", "programs/p/src/./reserve.rs": "B\n"},
+            ),
+        )
+    assert (tree.root / _RESERVE).read_text() == _SOURCE
 
 
 @pytest.mark.asyncio
@@ -377,6 +429,7 @@ def test_a_path_outside_the_project_is_refused(tmp_path: Path):
     assert tree.refuse_edit(_RESERVE) is None
     assert isinstance(tree.refuse_edit("../outside.rs"), NotInProject)
     assert isinstance(tree.refuse_edit("/etc/passwd"), NotInProject)
+    assert isinstance(tree.refuse_edit("programs/p/src/foo/../reserve.rs"), NotProjectRelative)
 
 
 def test_a_dependency_inside_the_tree_is_not_project_source(tmp_path: Path):
@@ -442,6 +495,8 @@ def test_only_the_project_crates_sources_are_project_source():
         "programs/p/tests/t.rs",
         "programs/q/src/lib.rs",
         "cargo-home/registry/src/x/anchor/src/lib.rs",
+        "programs/p/src/../../programs/q/src/lib.rs",
+        "programs/p/src/foo/../lib.rs",
         "",
     ):
         assert not _SOURCE_DIRS.contains(elsewhere), elsewhere

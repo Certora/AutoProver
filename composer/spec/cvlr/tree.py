@@ -36,7 +36,6 @@ edited files are one overlay above it.
 
 import asyncio
 import functools
-import logging
 import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -46,8 +45,6 @@ from graphcore.tools.vfs import DictBackend, DirBackend, PersistentMaterializer
 
 from composer.cargo.metadata import Workspace
 from composer.layout import RUST_BUILD_DIRS
-
-_log = logging.getLogger(__name__)
 
 #: Directories the working tree is never filled from, wherever they sit in the project.
 #:
@@ -62,6 +59,19 @@ NOT_PROJECT_SOURCE = (*RUST_BUILD_DIRS, ".git", "certora_out", ".cvlr_work")
 def _excluded_directory(directories: tuple[str, ...]) -> str | None:
     """The first of ``directories`` that is in :data:`NOT_PROJECT_SOURCE`, if any."""
     return next((d for d in directories if d in NOT_PROJECT_SOURCE), None)
+
+
+def _relative_key(relative: str) -> str | None:
+    """``relative`` as a project-relative path, or None if it is not one.
+
+    Absolute paths and paths with ``..`` are not. ``..`` collapses to a different string than the
+    one a later removal unlinks, so the overlay is keyed only by the path that is written. ``.`` is
+    collapsed by :class:`PurePosixPath`.
+    """
+    path = PurePosixPath(relative)
+    if path.is_absolute() or not path.parts or ".." in path.parts:
+        return None
+    return path.as_posix()
 
 
 @dataclass(frozen=True)
@@ -107,17 +117,26 @@ class ProjectSource:
         return cls(roots=tuple(sorted(roots)), manifests=tuple(sorted(manifests)))
 
     def contains(self, relative: PurePosixPath | str) -> bool:
-        """Whether a project-relative path names a file of one of the project's own crates."""
-        path = PurePosixPath(relative)
-        return (
-            bool(path.parts)
-            and any(path.is_relative_to(root) for root in self.roots)
-            and _excluded_directory(path.parts[:-1]) is None
+        """Whether a project-relative path names a file of one of the project's own crates.
+
+        A path that is absolute or contains ``..`` does not. ``is_relative_to`` does not collapse
+        ``..``, so ``src/../../other`` would otherwise count as inside ``src``.
+        """
+        key = _relative_key(str(relative))
+        if key is None:
+            return False
+        path = PurePosixPath(key)
+        return any(path.is_relative_to(root) for root in self.roots) and (
+            _excluded_directory(path.parts[:-1]) is None
         )
 
     def may_edit(self, relative: PurePosixPath | str) -> bool:
         """Whether an edit to the program may write this project-relative path."""
-        return self.contains(relative) or PurePosixPath(relative) in self.manifests
+        key = _relative_key(str(relative))
+        if key is None:
+            return False
+        path = PurePosixPath(key)
+        return self.contains(path) or path in self.manifests
 
 
 @dataclass(frozen=True)
@@ -141,6 +160,24 @@ class NotProjectSource:
         )
 
 
+def _tree_deletes_project(pristine: Path, root: Path) -> str | None:
+    """Why ``root`` must not be deleted, or None when deleting it leaves the project alone.
+
+    A tree under a :data:`NOT_PROJECT_SOURCE` directory is the copy's own directory. Anywhere else
+    inside the project, deleting the tree deletes source, and the copy then walks back into itself.
+    """
+    project = pristine.resolve()
+    tree = root.resolve()
+    if project.is_relative_to(tree):
+        return f"the working tree {root} is or contains the project {pristine}"
+    if tree.is_relative_to(project) and _excluded_directory(tree.relative_to(project).parts) is None:
+        return (
+            f"the working tree {root} is inside the project {pristine} "
+            f"and is not under a directory the copy skips"
+        )
+    return None
+
+
 def _NOT_MATERIALIZED(path: PurePath) -> bool:
     """Whether a tree-relative path is, or is under, a directory the tree is never filled from.
 
@@ -159,9 +196,23 @@ class NotInProject:
         return f"{self.path} resolves outside the project"
 
 
+@dataclass(frozen=True)
+class NotProjectRelative:
+    """The path stays in the project but is not the project-relative path of one file.
+
+    A key with ``..`` is a different string from the file it writes. The overlay is removed by
+    that string, so the key has to be the path itself.
+    """
+
+    path: str
+
+    def describe(self) -> str:
+        return f"{self.path} is not a project-relative path"
+
+
 def refuse_edit(
     pristine: Path, source: ProjectSource, relative: str
-) -> NotInProject | NotProjectSource | None:
+) -> NotInProject | NotProjectSource | NotProjectRelative | None:
     """Why an edit to the program may not write ``relative``, or None when it may.
 
     The one answer to that question: the editor's write tools ask it before accepting a write, and
@@ -179,7 +230,13 @@ def refuse_edit(
     candidate = (root / relative).resolve()
     if not candidate.is_relative_to(root):
         return NotInProject(relative)
-    if not source.may_edit(PurePosixPath(candidate.relative_to(root).as_posix())):
+    key = _relative_key(relative)
+    if key is None:
+        return NotProjectRelative(relative)
+    # ``key`` is the path the tree writes. ``resolved`` is where it lands, which differs when a
+    # symlink in the project points somewhere else; that target has to be editable too.
+    resolved = candidate.relative_to(root).as_posix()
+    if not source.may_edit(key) or not source.may_edit(resolved):
         return NotProjectSource(path=relative, source=source)
     return None
 
@@ -193,6 +250,14 @@ class UnitEdits:
     draft: str
     #: The unit's edits to the program: whole files, by project-relative path.
     overlay: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _UnitDraft:
+    """One unit's harness file in the tree."""
+
+    module: str
+    draft: str
 
 
 @dataclass
@@ -210,8 +275,8 @@ class SharedTree:
     root: Path
     #: What an edit to the program may write and where a unit's module may go.
     source: ProjectSource
-    #: Every unit that has staged, by unit: the tree-relative path of its module and its draft.
-    _drafts: dict[str, tuple[str, str]] = field(default_factory=dict)
+    #: Every unit that has staged, by unit.
+    _drafts: dict[str, _UnitDraft] = field(default_factory=dict)
     #: Every known unit's draft and the staging unit's edited files, as an overlay above the
     #: project, by tree-relative path.
     _derived: DictBackend = field(default_factory=DictBackend)
@@ -238,15 +303,18 @@ class SharedTree:
         can rewrite, and a tree carried into a later run would carry that rewrite into its build.
         The previous run's tree is left until here so that it can be inspected after that run.
 
-        Raises :class:`ValueError` if the tree is the project or contains it, since this deletes it.
+        Raises :class:`ValueError` if deleting the tree would delete the project. That is a tree
+        that is the project, contains it, or sits inside it outside a directory the copy skips
+        (:data:`NOT_PROJECT_SOURCE`). A tree under one of those directories is where the copy
+        itself goes.
         """
-        if self.pristine.resolve().is_relative_to(self.root.resolve()):
-            raise ValueError(f"the working tree {self.root} is or contains the project {self.pristine}")
+        if refusal := _tree_deletes_project(self.pristine, self.root):
+            raise ValueError(refusal)
         if self.root.exists():
             await asyncio.to_thread(shutil.rmtree, self.root)
         await self._materializer.dump_to(self.root)
 
-    def refuse_edit(self, relative: str) -> NotInProject | NotProjectSource | None:
+    def refuse_edit(self, relative: str) -> NotInProject | NotProjectSource | NotProjectRelative | None:
         """Why an edit to the program may not write ``relative``, or None when it may."""
         return refuse_edit(self.pristine, self.source, relative)
 
@@ -259,23 +327,31 @@ class SharedTree:
         serving, which the materializer restores from the project.
 
         Raises :class:`ValueError` if the module path is outside the tree, is not project source,
-        or is another unit's, or if the unit's edits write a path an edit may not.
+        or is another unit's, or if the unit's edits write a path an edit may not or name one file
+        twice.
         """
         module = self._module_key(edits.module_path)
-        for other, (other_module, _) in self._drafts.items():
-            if other != unit and other_module == module:
+        for other, staged in self._drafts.items():
+            if other != unit and staged.module == module:
                 raise ValueError(f"units {other!r} and {unit!r} both name {module} as their module")
         drafts = {
-            path: draft for other, (path, draft) in self._drafts.items() if other != unit
+            staged.module: staged.draft for other, staged in self._drafts.items() if other != unit
         } | {module: edits.draft}
-        for path in edits.overlay:
+        overlay: dict[str, str] = {}
+        for path, text in edits.overlay.items():
             if (refusal := self.refuse_edit(path)) is not None:
                 raise ValueError(f"unit {unit!r}'s edits write {refusal.describe()}")
-            if path in drafts:
-                raise ValueError(f"unit {unit!r}'s edits write the harness module {path}")
-        self._drafts[unit] = (module, edits.draft)
+            key = _relative_key(path)
+            if key is None:
+                raise ValueError(f"unit {unit!r}'s edits write {path}, which is not a project-relative path")
+            if key in drafts:
+                raise ValueError(f"unit {unit!r}'s edits write the harness module {key}")
+            if key in overlay:
+                raise ValueError(f"unit {unit!r}'s edits name {key} twice")
+            overlay[key] = text
+        self._drafts[unit] = _UnitDraft(module, edits.draft)
 
-        self._derived.files = {**edits.overlay, **drafts}
+        self._derived.files = {**overlay, **drafts}
         await self._materializer.dump_to(self.root)
 
     def _module_key(self, module_path: Path) -> str:
