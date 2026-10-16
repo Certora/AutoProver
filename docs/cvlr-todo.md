@@ -89,7 +89,8 @@ version, decide
 whether a completeness check belongs on our side, and route it with the rest of
 [upstream-defects.md](./upstream-defects.md).
 
-**U8. A report whose grouping failed does not say so.**
+**~~U8. A report whose grouping failed does not say so.~~** — **fixed 2026-10-16 (fffe1b42).**
+*The reason is the report's `grouping_fallback_reason` (schema 3.5), a report-level field rendered above the groups.*
 [build.py](../composer/spec/source/report/build.py) degrades to a single `general` bucket when the
 grouping LLM raises, when validation rejects the grouping, or when it covers no properties. It
 computes a `fallback_reason` describing which, logs it at warning, and puts it in no field of
@@ -449,7 +450,8 @@ The fix is small and there are two halves worth separating: a periodic line on t
 how anyone answers this twice. Distinct from [[U17]], which is about the *reference set* a run used
 rather than what it spent.
 
-**U19. A dangling symlink in the target kills the run after extraction is paid for.**
+**~~U19. A dangling symlink in the target kills the run after extraction is paid for.~~** — **fixed 2026-10-16 (21b1a827).**
+*Fixed on this side, not upstream: graphcore's `global_exclude` takes a callable, and `SharedTree`'s now skips a symlink whose target is missing.*
 `SharedTree.materialize()` reaches `shutil.copytree(root, target, dirs_exist_ok=True, ignore=ignore)`
 in graphcore's `tools/vfs.py` with no `symlinks=True`, so a link whose target does not exist is
 dereferenced and raises `shutil.Error`. The stake program ships exactly that: a git-tracked
@@ -474,7 +476,8 @@ It is one argument to add, but **do not add it on its own** — see [[U22]]. The
 curtailed run overwrite a better cached draft, and CVL is currently shielded from that only by
 having the hole. The guard against regressing and the opt-in belong in the same change.
 
-**U21. A run that delivered partials under budget pressure reports itself as a total failure.**
+**~~U21. A run that delivered partials under budget pressure reports itself as a total failure.~~** — **fixed 2026-10-16 (3dae956b).**
+*Item 1 below is done (`n_partial`; `all_failed` counts a curtailed partial as output; the consoles print `RUN CURTAILED` and exit 0). Item 2, folding the three console summaries, is not.*
 The 2026-09-24 stake run printed `RUN FAILED: every component failed to generate or gave up` after
 four components had published 12 rules, documented dispositions for every property they held
 (Splitting & Merging covered 36 of 36), and established three soundness limits by measurement. The
@@ -827,7 +830,8 @@ analyzed program, so a unit reads its own handler and accounts. What it was buil
 measurement: do units still spend turns reaching the program, and is the gated probe half worth its
 serial submission? Nobody has looked.
 
-**9. A malformed finding draft is data loss rather than a retry.**
+**~~9. A malformed finding draft is data loss rather than a retry.~~** — **fixed 2026-10-16 (7e0bcbbb).**
+*Three asks per draft; the rules still without one are the report's `findings_unwritten` (schema 3.5).*
 `_one` in [findings.py](../composer/spec/source/report/findings.py) catches every exception, logs a
 warning and drops the finding. Observed twice: the model omitted the required `FindingDraft.title`
 and two of three findings vanished, on a partly different rule set each run. A structured-output
