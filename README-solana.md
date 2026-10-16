@@ -51,6 +51,7 @@ You need the EVM pipeline's prerequisites from [README.md](README.md#prerequisit
 
 - **The host toolchain:** `rustup toolchain install 1.90.0`.
 - **`cargo-certora-sbf` and the platform tools.** Run `cargo install --locked cargo-certora-sbf`, then fetch the platform-tools release the pipeline builds with, `PLATFORM_TOOLS_VERSION` in `composer/spec/cvlr/conf.py` (currently v1.53): `cargo certora-sbf --no-build --tools-version v1.53`. They go under `~/.cache/solana`. If you put them somewhere else, set `CERTORA_PLATFORM_TOOLS_ROOT`.
+- **`rustfilt` on `$PATH`:** `cargo install rustfilt`. It is the demangler the Solana Prover names functions with. Without it, the check that each summary directive matches a symbol in the build is skipped, with a warning.
 - **The sandbox launcher.** `uv sync` builds `rust/run-confined` into `.venv/bin`. The sandbox fails closed. For trusted inputs during development, `COMPOSER_SANDBOX_PROVIDER=none` runs builds unconfined, and the run says so on stderr.
 - **The CVLR corpora.** Run `./scripts/gen_docs.sh`, then `./scripts/populate_cvlr_rag.sh`. This fills `cvlr_kb` from the Solana manual and `cvlr_api_kb` from rustdoc over the pinned CVLR crates. Generating the API corpus needs a nightly toolchain: `rustup toolchain install nightly`. A run without the corpora still works, without corpus search; `--no-corpus` makes that explicit.
 
