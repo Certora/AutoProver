@@ -132,3 +132,10 @@ def test_the_api_manifest_is_generated_by_a_dated_nightly():
     run = _api_manifest_run()
     assert 'rustup toolchain install "$RUST_NIGHTLY"' in run
     assert '--toolchain "$RUST_NIGHTLY"' in run
+
+
+def test_the_solana_image_installs_the_demangler_the_prover_uses():
+    """Without ``rustfilt`` the check that each summary directive matches a symbol in the build is
+    skipped with only a warning, so an image that lacks it runs every unit without that check and
+    nothing fails."""
+    assert re.search(r"cargo install .*\brustfilt\b", _SOLANA_DOCKERFILE.read_text())

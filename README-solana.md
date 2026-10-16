@@ -25,7 +25,7 @@ The program's own `rust-toolchain.toml` is not used. Every cargo command a run m
 
 ## Docker
 
-The Solana image (`scripts/Dockerfile.solana`) adds the Rust toolchain, `cargo certora-sbf`, the platform tools and the CVLR API corpus to the base image. Build the base image first. The header of `scripts/docker-compose.solana.yml` has the full recipe. In short:
+The Solana image (`scripts/Dockerfile.solana`) adds the Rust toolchain, `cargo certora-sbf`, `rustfilt`, the platform tools and the CVLR API corpus to the base image. Build the base image first. The header of `scripts/docker-compose.solana.yml` has the full recipe. In short:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-... CERTORAKEY=...   # compose refuses to load without the first, even to build

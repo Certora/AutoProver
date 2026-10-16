@@ -21,6 +21,7 @@ FROM --platform=linux/amd64 ${BASE_IMAGE} AS solana
 # another toolchain into this image. tests/test_cvlr_image.py fails the routine gate if they drift.
 ARG RUST_VERSION=1.90.0
 ARG CARGO_CERTORA_SBF_VERSION=0.3.5
+ARG RUSTFILT_VERSION=0.2.1
 # Must agree with PLATFORM_TOOLS_VERSION in composer/spec/cvlr/conf.py, which is the version every
 # build uses. tests/test_cvlr_image.py fails the routine gate if the two drift.
 ARG SOLANA_TOOLS_VERSION=v1.53
@@ -47,7 +48,7 @@ ENV RUSTUP_HOME=/opt/autoprove/rustup \
     CERTORA_PLATFORM_TOOLS_ROOT=/opt/autoprove/solana \
     PATH=/opt/autoprove/cargo/bin:${PATH}
 
-# Three pieces, in the order a CVLR run reaches them:
+# Four pieces, in the order a CVLR run reaches them:
 #
 #   * A host Rust toolchain. rustup, not a bare cargo: a target project's own rust-toolchain.toml
 #     pins the channel its build uses, and rustup resolves that during the *unconfined* warm step —
@@ -59,6 +60,9 @@ ENV RUSTUP_HOME=/opt/autoprove/rustup \
 #     read-only tools cache — so a version this image lacks cannot be fetched at run time, it is a
 #     rebuild. A project whose base conf pins a different `cargo_tools_version` is that case, and
 #     composer.cargo.sbf.PlatformToolsMissing names it.
+#   * `rustfilt`, the demangler the Solana Prover names functions with. verify_rules matches each
+#     summary directive against the built program's symbols as rustfilt spells them
+#     (composer/cargo/symbols.py); without it that check is skipped.
 #
 # The shared cargo registry is deleted at the end: every confined build fetches into a private,
 # per-run CARGO_HOME under its own workdir (composer.sandbox.recipes.sandbox_cargo_home), and only
@@ -72,6 +76,7 @@ RUN set -eux; \
         --platform-tools-root "$CERTORA_PLATFORM_TOOLS_ROOT" \
         --tools-version "$SOLANA_TOOLS_VERSION"; \
     test -d "$CERTORA_PLATFORM_TOOLS_ROOT/$SOLANA_TOOLS_VERSION"; \
+    cargo install --locked rustfilt --version "$RUSTFILT_VERSION"; \
     rm -rf "$CARGO_HOME/registry" "$CARGO_HOME/git"
 
 # The `cvlr_api_kb` manifest, generated here from rustdoc over the CVLR crates
