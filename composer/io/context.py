@@ -59,6 +59,19 @@ Set by ``run_graph()``; when non-None at the start of a new
 ``run_graph()`` call, the new call is nested and wraps the parent's
 sink with ``Nested(...)``."""
 
+_spawning_tool_calls: ContextVar[tuple[str, ...]] = ContextVar("_spawning_tool_calls", default=())
+
+
+def get_spawning_tool_calls() -> tuple[str, ...]:
+    """The ``tool_call_id`` of each tool that started a sub-agent enclosing the current code,
+    outermost first; empty outside any sub-agent run with ``within_tool``.
+
+    Unlike a thread id, this names a sub-agent by something its parent's model chose, so a replay
+    that serves the parent's recorded turns reproduces it exactly — which is what lets the tape
+    harness give concurrent sub-agents lanes of their own.
+    """
+    return _spawning_tool_calls.get()
+
 
 def _unwrap(event: GraphEvents) -> tuple[list[str], InnerEvent]:
     """Peel off Nested layers, collecting parent_ids into a path prefix."""
@@ -219,6 +232,10 @@ async def run_graph[S: StateLike, C: StateLike | None, I: StateLike](
             merged["checkpoint_id"] = last_checkpoint
         conf["configurable"] = merged
         tok = _current_sink.set((tracking_sink, tid_))
+        spawned = (
+            _spawning_tool_calls.set((*_spawning_tool_calls.get(), within_tool))
+            if within_tool is not None else None
+        )
         try:
             return await _run_graph(
                 event_sink=tracking_sink,
@@ -231,6 +248,8 @@ async def run_graph[S: StateLike, C: StateLike | None, I: StateLike](
                 within_tool=within_tool,
             )
         finally:
+            if spawned is not None:
+                _spawning_tool_calls.reset(spawned)
             _current_sink.reset(tok)
 
     async def _with_floor(inp: I, tid_: str, desc_base: str) -> S:

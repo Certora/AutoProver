@@ -11,8 +11,11 @@ description: Generate a fake-LLM replay tape (composer/testing/ui_harness_<name>
 `dict[task_id -> list[AIMessage]]` (each task_id's list is a **lane**) that
 `HarnessFakeLLM` (`composer/testing/harness_tape.py`) replays one entry per
 `llm.ainvoke`, routed by the active `run_task` task_id (`get_current_task_id()`).
-Within a lane, entries are served in order; subagents inherit their parent
-phase's task_id, so their calls land in the parent's lane. It lets the
+Within a lane, entries are served in order. A subagent started from a tool gets
+a lane of its own, `<task_id>/<tool_call_id>` (nested subagents extend it), so
+concurrent subagents can't steal each other's turns; a tape without that lane
+serves the subagent from its caller's lane instead, which is how the hand-authored
+tapes interleave a feedback judge (`tape_lane_path()` in `harness_tape.py`). It lets the
 *entire* AutoProve pipeline run end-to-end with **zero real LLM calls** — every
 other tool (solc, the Certora prover, PreAudit, Postgres, RAG) runs for real.
 `COMPOSER_TEST_TAPE=<name>` (handled in `composer/bind.py`) installs it.
@@ -40,10 +43,10 @@ work for:
   checkpointed to any thread. Recording captures it in the right lane and position;
   reconstruction has to recover it separately (e.g. by logging the side-channel
   messages, or scraping the `verify_spec` tool output).
-- **Subagent interleaving** (code_explorer / feedback / cvl_research) — these
-  inherit the parent phase's task_id, so recording
-  lands them in the parent lane in exact call order; reconstruction has to stitch
-  the separate threads back together (e.g. by matching tool calls).
+- **Subagent lanes** (code_explorer / feedback / cvl_research) — recording files
+  each subagent's calls under the tool call that started it, as they happen;
+  reconstruction has to stitch the separate threads back to their spawning tool
+  calls (the run's events log names them).
 
 Both are recoverable from logs — recording just avoids that plumbing, and is
 faithful by construction. It costs one real (paid) LLM run, which you need anyway
@@ -162,8 +165,9 @@ recording. In order of impact:
 - **Flailing / redundant turns** — on trivial scenarios the agent loops (re-reads
   files, re-drafts). Delete those message objects, trimming each lane to its canonical
   path. For a CVL lane that is `put_cvl_raw → feedback_tool → verify_spec → result`,
-  where `feedback_tool` spawns the **feedback-judge subagent** whose turns are served
-  from the *same* lane, interleaved right after the `feedback_tool` call
+  where `feedback_tool` spawns the **feedback-judge subagent** — in a recorded tape its
+  turns are in their own `<lane>/<tool_call_id>` lane; in the hand-authored Counter tape
+  they are served from the *same* lane, interleaved right after the `feedback_tool` call
   (`get_cvl` + `write_rough_draft` → `read_rough_draft` → `result(good=True)`) before
   the author's `verify_spec`. (`ui_harness_autoprove_Counter.py`'s `_CVL_TAPE` is that
   exact author+judge+prover flow — hand-authored Python, but the call structure is the

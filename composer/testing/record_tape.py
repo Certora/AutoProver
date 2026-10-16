@@ -2,10 +2,10 @@
 Record a real AutoProve run into a replayable fake-LLM tape.
 
 This is the exact inverse of :class:`composer.testing.harness_tape.HarnessFakeLLM`.
-``HarnessFakeLLM`` *serves* scripted ``AIMessage`` responses routed by the
-active ``run_task`` task_id (``get_current_task_id()``); this module *captures*
-every real LLM response keyed by the same task_id, in call order, and
-serializes them to a ``composer/testing/ui_harness_<name>.py`` module that
+``HarnessFakeLLM`` *serves* scripted ``AIMessage`` responses routed by lane
+(:func:`~composer.testing.harness_tape.tape_lane_path`); this module *captures*
+every real LLM response keyed by the same lane, in call order, and serializes
+them to a ``composer/testing/ui_harness_<name>.py`` module that
 ``HarnessFakeLLM`` can replay with no real LLM calls.
 
 Why record instead of reconstruct from logs
@@ -19,11 +19,10 @@ those entries cannot be recovered from the persisted LangGraph checkpoints:
   its ``AIMessage`` is never checkpointed to any thread. It is invisible to
   post-hoc reconstruction, but it flows through the *same* llm object, so
   recording captures it for free — in the correct lane and position.
-* **Subagent interleaving** — code_explorer / feedback / cvl_research
-  subagents run inside the parent phase's task scope, so
-  ``get_current_task_id()`` returns the parent task_id for their calls. Recording
-  therefore lands them in the parent lane in exact call order, with no
-  thread-stitching heuristics.
+* **Subagent lanes** — a code_explorer / feedback / cvl_research subagent started
+  from a tool gets the lane ``<task_id>/<tool_call_id>`` (nested sub-agents extend
+  it further). Recording keys each call by that path as it happens, so concurrent
+  subagents land in lanes of their own, with no thread-stitching heuristics.
 
 How it works
 ------------
@@ -35,7 +34,7 @@ wraps ``get_provider_for`` so each provider's ``builder_for`` appends a
 ``on_llm_end`` fires for every generation — agent-loop turns through
 ``bind_tools`` / ``model_copy`` / ``copy`` derivatives (``create_resume_commentary``,
 the prover summarizer) AND the out-of-graph ``analyze_cex_raw`` side-call —
-capturing each response into the lane for the active ``get_current_task_id()``.
+capturing each response into the lane for the active ``tape_lane_path()``.
 This is the same stable callback surface
 ``composer.diagnostics.usage_callback.UsageCallback`` already uses to observe
 every call, so the recorder is its mirror image rather than a bespoke
@@ -70,7 +69,7 @@ from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 
-from composer.diagnostics.timing import get_current_task_id
+from composer.testing.harness_tape import LANE_SEP, tape_lane_path
 from composer.llm.types import CacheLevel
 
 # task_id used for LLM calls that fire outside any run_task scope. HarnessFakeLLM
@@ -104,8 +103,9 @@ class TapeRecorder:
             # Replaying it would trigger a spurious "every AI turn must end with a
             # tool call" retry and exhaust the lane, so drop it.
             return
-        task_id = get_current_task_id() or NO_TASK_LANE
-        self.lanes.setdefault(task_id, []).append(message)
+        path = tape_lane_path()
+        lane = LANE_SEP.join(path) if path is not None else NO_TASK_LANE
+        self.lanes.setdefault(lane, []).append(message)
 
     def dump(self) -> None:
         total = sum(len(v) for v in self.lanes.values())
@@ -148,8 +148,8 @@ class RecordingCallback(BaseCallbackHandler):
     for every generation — agent-loop turns AND the out-of-graph
     ``analyze_cex_raw`` side-call — so all are captured with no special-casing.
     ``run_inline = True`` keeps the handler on the event-loop thread so the
-    ``get_current_task_id()`` ContextVar that ``run_task`` set is visible (the
-    same reason ``UsageCallback`` sets it). The extraction mirrors
+    ContextVars ``tape_lane_path()`` reads are visible (the same reason
+    ``UsageCallback`` sets it). The extraction mirrors
     ``UsageCallback.on_llm_end``.
     """
 

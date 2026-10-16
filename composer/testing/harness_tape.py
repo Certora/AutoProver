@@ -14,6 +14,28 @@ from langchain_core.runnables import RunnableConfig
 from composer.diagnostics.timing import get_current_task_id
 
 
+LANE_SEP = "/"
+
+
+def tape_lane_path() -> tuple[str, ...] | None:
+    """Where a model call made here belongs on a tape, or ``None`` outside any ``run_task`` scope.
+
+    The ``run_task`` task_id, then the ``tool_call_id`` of each tool that started an enclosing
+    sub-agent, outermost first. A lane is served strictly in order, so two sub-agents running at
+    once must not share one: which of them asks first differs between a recording and its replay.
+    Calls made directly inside a tool, with no sub-agent graph around them (``analyze_cex_raw``),
+    stay in the caller's lane.
+    """
+    # Imported here rather than at module scope: composer.bind installs this module before the
+    # pipeline's imports, and composer.io.context would pull them in early.
+    from composer.io.context import get_spawning_tool_calls
+
+    task_id = get_current_task_id()
+    if task_id is None:
+        return None
+    return (task_id, *get_spawning_tool_calls())
+
+
 def _prompt_preview(model_input: Any) -> str:
     """A short, safe description of the incoming prompt, to make a missing or
     mis-lane'd tape entry easy to locate when authoring."""
@@ -49,12 +71,14 @@ class HarnessFakeLLM(FakeMessagesListChatModel):
       beta branch off, so the main codegen agent's tool list matches
       what the tape expects.
 
-    Lane routing: each call is served from the per-lane cursor for the active
-    ``run_task`` ``task_id`` (``composer.diagnostics.timing.get_current_task_id``).
-    The task_id is read in the async ``ainvoke`` body, where the ContextVar that
-    ``run_task`` set is visible (reading it inside the synchronous ``_generate``,
-    which the base runs in an executor thread, would not see it). This keeps the
-    tape deterministic even though the pipeline runs phases concurrently.
+    Lane routing: each call is served from the per-lane cursor for its
+    :func:`tape_lane_path` — the active ``run_task`` ``task_id``, extended by the
+    tool calls that started any enclosing sub-agent — or for the longest prefix of
+    that path the tape has a lane for. The path is read in the async ``ainvoke``
+    body, where the ContextVars are visible (reading them inside the synchronous
+    ``_generate``, which the base runs in an executor thread, would not see them).
+    This keeps the tape deterministic even though the pipeline runs phases, and a
+    phase's sub-agents, concurrently.
     """
 
     thinking: Any = None
@@ -79,6 +103,15 @@ class HarnessFakeLLM(FakeMessagesListChatModel):
     ):
         return self
 
+    def _resolve_lane(self, path: tuple[str, ...]) -> str | None:
+        """The lane of the longest prefix of ``path`` the tape has. A tape without per-sub-agent
+        lanes (the hand-authored ones) thereby serves a sub-agent from its caller's lane."""
+        for n in range(len(path), 0, -1):
+            key = LANE_SEP.join(path[:n])
+            if key in self.lanes:
+                return key
+        return None
+
     @override
     async def ainvoke(
         self,
@@ -92,28 +125,29 @@ class HarnessFakeLLM(FakeMessagesListChatModel):
         if self.with_human_delay:
             await asyncio.sleep(random.random() * 1.5 + 1.0)
 
-        task_id = get_current_task_id()
-        if task_id is None:
+        path = tape_lane_path()
+        if path is None:
             raise RuntimeError(
                 "HarnessFakeLLM: LLM call outside any run_task scope, so it "
                 "cannot be routed to a tape lane. "
                 f"Prompt -> {_prompt_preview(input)}"
             )
-        lane = self.lanes.get(task_id)
-        if lane is None:
+        key = self._resolve_lane(path)
+        if key is None:
             raise RuntimeError(
-                f"HarnessFakeLLM: no tape lane for task_id {task_id!r}. "
+                f"HarnessFakeLLM: no tape lane for {LANE_SEP.join(path)!r}. "
                 f"Known lanes: {sorted(self.lanes)}. "
                 f"Prompt -> {_prompt_preview(input)}"
             )
-        i = self.lane_cursors.get(task_id, 0)
+        lane = self.lanes[key]
+        i = self.lane_cursors.get(key, 0)
         if i >= len(lane):
             raise RuntimeError(
-                f"HarnessFakeLLM: tape lane {task_id!r} exhausted after "
+                f"HarnessFakeLLM: tape lane {key!r} exhausted after "
                 f"{len(lane)} response(s) — the pipeline issued an extra call in "
                 f"this phase. Prompt -> {_prompt_preview(input)}"
             )
-        self.lane_cursors[task_id] = i + 1
+        self.lane_cursors[key] = i + 1
         return cast(AIMessage, lane[i])
 
 
