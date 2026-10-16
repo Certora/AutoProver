@@ -6,106 +6,85 @@ inlining directive or points-to summary is a regex over strings like
 directive that names a symbol the build does not define matches nothing, with
 no diagnostic.
 
-``llvm-readelf --demangle`` is not enough: it leaves ``$LT$``-style escapes and
-the trailing hash, so the output does not match the tuning files. platform-tools
-emits rustc's legacy mangling (``_ZN``…``E``); a v0 name (``_R``…) is returned
-unchanged.
+The prover demangles by piping names through ``rustfilt`` (without ``-h``, so
+hashes are stripped), and so does this module: any other demangler is a second
+opinion on a spelling only ``rustfilt`` gets to decide. ``llvm-readelf
+--demangle``, ``llvm-cxxfilt`` and the LLVM-based demanglers do not understand
+rustc's legacy ``$LT$``-style escapes; GNU ``c++filt`` does, but keeps the hash.
 """
 
 import re
+import shutil
 import subprocess
+from collections import Counter
+from collections.abc import Iterable
 from pathlib import Path
 
-from composer.cargo.sbf import PlatformToolsMissing
-from composer.sandbox.recipes import PLATFORM_TOOLS_ROOT
-
-#: ``llvm-nm`` is not in platform-tools, and the system one mis-reads SBF names
-#: (every symbol comes back empty). ``llvm-readelf`` is shipped and works.
-_READELF = Path("platform-tools") / "llvm" / "bin" / "llvm-readelf"
-
-_LEGACY = re.compile(r"^_ZN(?P<body>.*)E$")
-_HASH_SEGMENT = re.compile(r"^h[0-9a-f]{16}$")
-_UNICODE_ESCAPE = re.compile(r"\$u([0-9a-f]{2,6})\$")
-
-#: rustc's legacy mangling. ``$u..$`` covers everything else.
-_ESCAPES = {
-    "$SP$": "@",
-    "$BP$": "*",
-    "$RF$": "&",
-    "$LT$": "<",
-    "$GT$": ">",
-    "$LP$": "(",
-    "$RP$": ")",
-    "$C$": ",",
-}
+from elftools.elf.elffile import ELFFile
+from elftools.elf.sections import SymbolTableSection
 
 
-def _decode(segment: str) -> str:
-    """One path segment, with escapes undone.
+class SymbolsUnavailable(RuntimeError):
+    """The build's function names cannot be read. Distinct from an empty set,
+    which would look like "your directive matched nothing"."""
 
-    A leading underscore is rustc's, not part of the name: it marks a segment
-    that would otherwise start with ``$``.
+
+class RustfiltMissing(SymbolsUnavailable):
+    def __init__(self):
+        super().__init__("rustfilt is not on PATH; install it with `cargo install rustfilt`.")
+
+
+class NoSymbolTable(SymbolsUnavailable):
+    def __init__(self, shared_object: Path):
+        super().__init__(f"{shared_object} has no symbol table; was it stripped?")
+
+
+def defined_functions(shared_object: Path) -> tuple[str, ...]:
+    """Every function the program defines, named as the prover names it, sorted.
+
+    Functions only: a summary or inlining directive addresses code.
     """
-    if segment.startswith("_$"):
-        segment = segment[1:]
-    for escaped, plain in _ESCAPES.items():
-        segment = segment.replace(escaped, plain)
-    segment = _UNICODE_ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), segment)
-    return segment.replace("..", "::")
+    demangled = demangle(_mangled_functions(shared_object))
+    return tuple(sorted(as_the_prover_names(demangled)))
 
 
-def demangle(symbol: str) -> str:
-    """A raw symbol as the prover's tuning files spell it, or unchanged if it is not mangled.
+def as_the_prover_names(demangled: Iterable[str]) -> set[str]:
+    """Demangled names, disambiguated the way the prover disambiguates them.
 
-    Parses length prefixes: a segment can contain digits and an escaped ``$``, so
-    the lengths are the only reliable delimiter. Anything that does not parse is
-    returned unchanged.
+    Dropping the hash is not injective: every instantiation of a generic, and
+    every duplicate copy of a crate, demangles to the same string. The prover
+    then renames all ``n`` holders of a shared name to ``name_0`` … ``name_{n-1}``,
+    so a directive anchored with ``$`` matches none of them.
     """
-    found = _LEGACY.match(symbol)
-    if found is None:
-        return symbol
-    body, segments, index = found.group("body"), [], 0
-    while index < len(body):
-        digits = index
-        while digits < len(body) and body[digits].isdigit():
-            digits += 1
-        if digits == index:
-            return symbol
-        length = int(body[index:digits])
-        segment = body[digits : digits + length]
-        if len(segment) != length:
-            return symbol
-        segments.append(segment)
-        index = digits + length
-    if segments and _HASH_SEGMENT.match(segments[-1]):
-        segments.pop()
-    return "::".join(_decode(s) for s in segments) if segments else symbol
+    counts = Counter(demangled)
+    return {
+        renamed
+        for name, count in counts.items()
+        for renamed in ([name] if count == 1 else (f"{name}_{i}" for i in range(count)))
+    }
 
 
-def defined_functions(shared_object: Path, *, tools_version: str) -> tuple[str, ...]:
-    """Every function the program defines, demangled, unique, and sorted.
+def _mangled_functions(shared_object: Path) -> list[str]:
+    with shared_object.open("rb") as stream:
+        symtab = ELFFile(stream).get_section_by_name(".symtab")
+        if not isinstance(symtab, SymbolTableSection):
+            raise NoSymbolTable(shared_object)
+        return sorted({
+            symbol.name
+            for symbol in symtab.iter_symbols()
+            if symbol["st_info"]["type"] == "STT_FUNC" and symbol["st_shndx"] != "SHN_UNDEF"
+        })
 
-    Functions only: a summary or inlining directive addresses code. Raises
-    :class:`PlatformToolsMissing` when the toolchain is absent — an empty set
-    would look like "your directive matched nothing".
-    """
-    reader = PLATFORM_TOOLS_ROOT / tools_version / _READELF
-    if not reader.is_file():
-        raise PlatformToolsMissing(tools_version)
+
+def demangle(names: list[str]) -> list[str]:
+    """``names`` as ``rustfilt`` spells them, in order; one that is not mangled comes back as it went in."""
+    rustfilt = shutil.which("rustfilt")
+    if rustfilt is None:
+        raise RustfiltMissing()
     run = subprocess.run(
-        [str(reader), "--syms", str(shared_object)],
-        capture_output=True,
-        text=True,
-        check=False,
+        [rustfilt], input="".join(f"{n}\n" for n in names), capture_output=True, text=True, check=True
     )
-    names: set[str] = set()
-    for line in run.stdout.splitlines():
-        fields = line.split()
-        # `Num: Value Size Type Bind Vis Ndx Name`
-        if len(fields) < 8 or fields[3] != "FUNC" or fields[6] == "UND":
-            continue
-        names.add(demangle(fields[-1]))
-    return tuple(sorted(names))
+    return run.stdout.splitlines()
 
 
 def unmatched(patterns: tuple[str, ...], symbols: tuple[str, ...]) -> tuple[str, ...]:

@@ -47,6 +47,8 @@ You need everything from the [AIComposer infrastructure setup](AICOMPOSER_INFRA.
 - PostgreSQL databases running (see below)
 - RAG database populated
 - Solidity compiler(s) on `$PATH` (naming convention `solcX.Y`, e.g. `solc8.29`)
+- For CVLR (Solana) runs, `rustfilt` on `$PATH` (`cargo install rustfilt`) — the demangler the Solana Prover uses to
+  name functions; without it the check that summary directives match a symbol in the build is skipped
 
 ### Rust toolchain
 

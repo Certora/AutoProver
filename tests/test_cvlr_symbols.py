@@ -15,14 +15,16 @@ been inlined out of existence, so no spelling would have matched, and the symbol
 Anchor's ``ErrorCode::Display``, which does survive. The point of reporting a miss is to say that.
 
 The mangled forms below are verbatim from ``llvm-readelf --syms`` on a real SBF build of
-``test_scenarios/solana_vault_idl``, and the expected demanglings are what ``rustfilt`` produced for
-the same input. No toolchain is needed to run these — :func:`defined_functions`, which shells out to
-``llvm-readelf``, is exercised by the expensive gate.
+``test_scenarios/solana_vault_idl``. Demangling is ``rustfilt``'s, as it is the prover's; the tests
+that run it skip when it is not installed. :func:`defined_functions` is exercised by the expensive
+gate.
 """
+
+import shutil
 
 import pytest
 
-from composer.cargo.symbols import demangle, nearest, unmatched
+from composer.cargo.symbols import as_the_prover_names, demangle, nearest, unmatched
 
 # (mangled, what rustfilt makes of it)
 _REAL = [
@@ -48,30 +50,36 @@ _REAL = [
 ]
 
 
-@pytest.mark.parametrize("mangled,expected", _REAL, ids=[e for _, e in _REAL])
-def test_a_real_symbol_demangles_the_way_rustfilt_does(mangled, expected):
-    """The names have to match the tuning files exactly or every directive is a near miss.
+needs_rustfilt = pytest.mark.skipif(shutil.which("rustfilt") is None, reason="requires rustfilt")
 
-    ``llvm-readelf --demangle`` is not a substitute and that is why this exists: it strips the
-    ``_ZN``/length framing but leaves ``$LT$``-style escapes and the trailing hash, so its output
-    matches nothing the prover reads."""
+
+@needs_rustfilt
+def test_real_symbols_demangle_to_the_spelling_the_tuning_files_use():
+    """The prover runs ``rustfilt`` without ``-h``, so the hash goes and the escapes are undone.
+    An unmangled name is a ``#[rule]``'s ``#[no_mangle]`` symbol and must come back verbatim, in
+    its place: the result is matched to the input by position."""
+    mangled = [m for m, _ in _REAL] + ["rule_authority_matches_signer"]
+    expected = [e for _, e in _REAL] + ["rule_authority_matches_signer"]
     assert demangle(mangled) == expected
 
 
-def test_an_unmangled_symbol_is_left_alone():
-    """``#[rule]`` adds ``#[no_mangle]``, so a rule's symbol is its function name verbatim."""
-    assert demangle("rule_authority_matches_signer") == "rule_authority_matches_signer"
+def test_a_name_held_by_one_symbol_is_kept_as_is():
+    assert as_the_prover_names(["vault::vault_program::initialize"]) == {"vault::vault_program::initialize"}
 
 
-def test_a_v0_symbol_is_returned_untouched_rather_than_guessed_at():
-    """platform-tools emits legacy mangling today. A decoder that does not understand v0 must hand
-    the name back rather than invent one, because a wrong name is a directive nobody can match."""
-    assert demangle("_RNvCs1234_5vault10initialize") == "_RNvCs1234_5vault10initialize"
+def test_a_name_held_by_several_symbols_is_numbered_like_the_prover_numbers_it():
+    """Each instantiation of a generic demangles to the same string once its hash is dropped, and
+    the prover renames every holder. The bare name no longer exists for a directive to match."""
+    shared = "<anchor_lang::accounts::account::Account<T> as anchor_lang::Accounts<B>>::try_accounts"
+    assert as_the_prover_names([shared, shared, shared]) == {f"{shared}_0", f"{shared}_1", f"{shared}_2"}
 
 
-@pytest.mark.parametrize("junk", ["_ZNE", "_ZN99tooshortE", "_ZNxE", ""])
-def test_a_name_that_does_not_parse_comes_back_as_it_went_in(junk):
-    assert demangle(junk) == junk
+def test_an_anchored_directive_on_a_renamed_symbol_is_reported_as_inert():
+    """``$`` after the bare name is the natural way to write it, and it misses every renamed copy."""
+    shared = "<T as core::convert::Into<U>>::into"
+    symbols = tuple(sorted(as_the_prover_names([shared, shared])))
+    assert unmatched((r"^<T as core::convert::Into<U>>::into$",), symbols) != ()
+    assert unmatched((r"^<T as core::convert::Into<U>>::into(_\d+)?$",), symbols) == ()
 
 
 # ---------------------------------------------------------------------------------------------

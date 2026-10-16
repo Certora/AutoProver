@@ -21,6 +21,7 @@ until the bug disappeared. The marking is what makes that an explicit, recorded 
 import asyncio
 import dataclasses
 import logging
+import subprocess
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -35,6 +36,7 @@ from typing import (
     override,
 )
 
+from elftools.common.exceptions import ELFError
 from langchain_core.tools import BaseTool
 from prover_output_utility import ProverOutputAPI
 from pydantic import BaseModel, Discriminator, Field
@@ -52,9 +54,9 @@ from graphcore.tools.schemas import (
 from composer.authoring.state import ValidationStamper, make_validation_stamper
 from composer.diagnostics.timing import get_run_summary
 from composer.cargo.features import CargoFeature
-from composer.cargo.sbf import Built, PlatformToolsMissing, SbfRun
+from composer.cargo.sbf import Built, SbfRun
 from composer.cargo.session import CargoSession, CompileFailed, Compiled
-from composer.cargo.symbols import defined_functions, nearest, unmatched
+from composer.cargo.symbols import SymbolsUnavailable, defined_functions, nearest, unmatched
 from composer.prover.cloud import results_api
 from composer.prover.core import (
     CexHandler,
@@ -74,7 +76,6 @@ from composer.prover.ptypes import (
 from composer.prover.conf import SelectRules, dump_conf
 from composer.spec.cvlr.conf import (
     DEFAULT_FEATURE,
-    PLATFORM_TOOLS_VERSION,
     CollectUnsatCore,
     OptimisticLoop,
     tunable_conf,
@@ -722,10 +723,8 @@ class VerifyRules(
         if not directives or not isinstance(build.verdict, Built):
             return None
         try:
-            symbols = defined_functions(
-                build.verdict.manifest.artifact, tools_version=PLATFORM_TOOLS_VERSION
-            )
-        except (PlatformToolsMissing, OSError):
+            symbols = defined_functions(build.verdict.manifest.artifact)
+        except (SymbolsUnavailable, ELFError, OSError, subprocess.CalledProcessError):
             _log.warning("could not read symbols to check summary directives", exc_info=True)
             return None
         missed = unmatched(directives, symbols)
