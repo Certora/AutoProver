@@ -24,7 +24,11 @@ property** — anything that asserts a handler *succeeds* — and it is the unco
 the mechanism it points at is the fork P1 says we depend on. **P10 makes true rules vacuous**
 whenever the compiler happens to emit a loop after the rule's last assertion, which every harness
 invites by dropping its nondet account array; worked around in the author prompt, and possibly the
-real cause of P9.
+real cause of P9. **P12 is the price of P11's fix**: the sound-math mode asserts that a value it
+takes for a pointer stays below `2^64`, and a balance near `u64::MAX` fails that check. It costs
+coverage, never soundness, and it is worked around by bounding inputs, not by the optimistic flag
+that would hide overflows. **P13 is why a stand-in CPI cannot move lamports**, measured against a
+control group.
 
 **Group U — `prover_output_utility`.** The library the report stack reads verdicts through. One
 entry, and unlike the others it was corrupting our own output rather than merely obstructing us;
@@ -61,6 +65,8 @@ the write-up gives the line number rather than the name.
 | [P9](#p9) | Binding a handler's `Result` makes the rule vacuous, so an *acceptance* property is unstatable | **major** |
 | [P10](#p10) | The vacuity check's `satisfy` sits after the rule's drop glue, so a loop there makes a verified rule `SANITY_FAILED` | **major**, worked around |
 | [P11](#p11) | Without `-solanaTACSoundSignedMath`, a `u64` compared against a constant with the top bit set (`u64::MAX`, `1 << 63`) is modelled as comparing against a negative number | **critical** — unsound by default; `-solanaTACSoundSignedMath` fixes it, and AutoProver runs it on Prover master during development |
+| [P12](#p12) | Under `-solanaTACSoundSignedMath`, a value read from account data near `u64::MAX` fails a "Cannot overflow" check the Prover generated, so the rule never reaches its property | **major**, worked around in the prompt |
+| [P13](#p13) | An `AccountInfo` selected from a slice by key loses its provenance, so a stand-in `invoke` cannot move lamports | **major**, worked around in the prompt |
 | [U1](#u1) | `extract_job_id_from_url` cannot parse a Solana Prover job link | **major**, worked around |
 | [T1](#t1) | Tuning files are spelled for pre-2.2 `solana-program` paths | major |
 | [T2](#t2) | A canonical tuning file names one specific on-chain program | hygiene |
@@ -887,6 +893,117 @@ throughout. The pin is a ship blocker ([cvlr-todo.md](./cvlr-todo.md) U25).
 **What would resolve it**: sign-correct handling of 64-bit immediates without the cost of the
 full sound-signed-math mode, or CERT-10061, which would make the sound mode affordable. Failing
 either, a warning when a comparison against a top-bit constant is encoded under the unsound mode.
+
+---
+
+## P12
+
+### Under `-solanaTACSoundSignedMath`, a value read from account data near `u64::MAX` fails a "Cannot overflow" check the Prover generated
+
+**Effect: a rule stops on an assertion it did not write, `Cannot overflow: inferred pointer` or
+`Cannot overflow: computing TAC map index`, and never reaches its property.** The trigger is a
+number read from an account (a balance, an amount) that the rule leaves free, so the solver may put
+it within a few hundred of `u64::MAX`. Nothing is unsound: the extra assertion can only add
+failures. AutoProver classifies it as an incomplete check, so it never becomes a finding
+(`composer/prover/ptypes.py`, `_GENERATED_ASSERTIONS`). But it costs coverage. On the 2026-10-15
+`solana_vault_idl` recording, two of the four units hit it. Deposits deleted a lamport-conservation
+rule over it, and Withdrawals moved its property-7 rules off the handler and onto
+`vault_accounting::apply_withdrawal`. Neither author was told what the assertion meant.
+
+**The mechanism** (EVMVerifier at 54c5c4bad0). Under the flag, `EagerMaskSbfTACBuilder` masks every
+64-bit result with `mod 2^64`, and the expressions believed never to exceed 64 bits are annotated
+`CANNOT_OVERFLOW_64_REASON` instead. There are five kinds:
+- pointer addition (`SbfCFGToTAC.kt`);
+- byte-map indexes, "computing TAC map index" (`TACMaps.kt` `computeTACMapIndex`);
+- "inferred pointer", where `findMorePointers` (`TACModSimplifier.kt`) annotates `b` in
+  `a := b.mod(2^64)` whenever the pointer analysis counts `a` as a pointer;
+- two in the floating-point summaries.
+
+`removeNoOverflow` then drops the `mod` and inserts `assert(b <= 2^64 - 1)`. That is an assume only
+under `-solanaTACOptimisticOverflowOptimization`, which is the flag's only use. The source's own
+comment reads "We assume pointer addition never overflows", and for a genuine pointer that is
+true: every plausible address is below `SBF_IMPLAUSIBLE_MEM_ADDRESS` (`0x5_0000_0000`). The check
+fails when the annotated expression carries a value that is no pointer at all.
+
+**The measurement.** Probe rules in a copy of the recorded vault project, built and submitted
+exactly as the pipeline does: the shipped conf, Prover `master`, 2026-10-16. The Withdrawals rule
+that hit it was resubmitted verbatim:
+
+| rule | conf | verdict |
+|---|---|---|
+| `withdraw` reachable, nothing bounded | shipped | `VIOLATED`: `Cannot overflow: inferred pointer` |
+| same | `+ -solanaTACOptimisticOverflowOptimization true` | `VIOLATED`: the rule's own `assertion failed` |
+| same, balance and lamports `<= 2^40` | shipped | `VIOLATED`: the rule's own `assertion failed` |
+| same, balance and lamports `< 2^63` | shipped | `VIOLATED`: the rule's own `assertion failed` |
+
+In the first row's counterexample the vault's deserialized `balance` and `amount` are both
+`0xfffffffffffffe81`. That is `u64::MAX - 382`, a number from the account's bytes. Bounding it
+removes the generated assertion, and only the top half of the range has to go. The rule that is
+left fails its own `r.is_ok()` at `balance = 4, amount = 2`. That is [P9](#p9)'s territory, not this
+entry's. The recording's other message, "computing TAC map index", came from a stand-in `invoke` that
+moved lamports through infos it was handed. The probe of that shape stops earlier, on
+[P13](#p13)'s `[3003]`.
+
+**Why not simply turn on the optimistic flag.** For a genuine pointer, the assumption it makes is
+harmless. For an "inferred pointer" that is really arithmetic on data, it assumes the arithmetic did
+not wrap. That prunes exactly the overflow paths a property about a balance or an amount exists to
+find. A bound on the input is narrower, and it is visible, because it is an assumption in the
+harness that the report carries.
+
+**What AutoProver does about it.** The author's system prompt
+(`cvlr_property_generation_system_prompt.j2`) tells it to bound values read from account data below
+`2^63` when a property does not need the top of the range, and to record the bound as an
+assumption. When a rule does stop on this assertion, the gate says what it means and what to do
+(`composer/spec/cvlr/verify.py`). A property that is about the top of the range is skipped, with the
+reason.
+
+**What would resolve it**: making `findMorePointers` annotate only expressions with pointer
+provenance, so a data value is never asserted on as an address (CERT-10098 narrowed pointer addition
+the same way). Alternatively, assuming the bound for genuine pointers, since every address is below
+`SBF_IMPLAUSIBLE_MEM_ADDRESS`, and asserting it only for annotated arithmetic. Not yet filed.
+
+---
+
+## P13
+
+### An `AccountInfo` selected from a slice by key loses its provenance, so moving lamports through it does not analyze
+
+**Effect: a stand-in `invoke` cannot model the System Program's transfer.** The stand-in has to find
+the source and destination among the infos it was handed, and then write their lamports. Written
+the obvious way, a hand-unrolled lookup by key followed by
+`cvlr_solana_stake::processor::relocate_lamports`, the rule ends in an encoding error:
+
+```
+[3003] dereference of a register (pointer) with unknown provenance
+source: cvlr-solana-stake/src/processor.rs:639   (try_borrow_mut_lamports on the selected info)
+```
+
+**The control group.** Same project, same conf, Prover `master`, 2026-10-16:
+
+| rule | verdict |
+|---|---|
+| read two accounts' lamports | `VERIFIED` |
+| move lamports through `.clone()`s of the infos, as a handler does through `to_account_info()` | `VERIFIED` |
+| `relocate_lamports` on those clones | `VERIFIED` |
+| `relocate_lamports` on infos looked up by key in a slice of those clones | `ERROR` [3003] |
+
+So the write is not the problem, and neither is `relocate_lamports`. Selecting the info from a slice
+by comparing keys is.
+
+**On the recording** (2026-10-15, the Deposits unit) the same design produced two other symptoms.
+In one draft it was the [P12](#p12) assertion, "computing TAC map index", on all four rules that drove
+the handler. In the next, the stand-in's own assertions held and the write was simply invisible: the
+deposit was 3711, and both accounts' lamports were unchanged. The author deleted the
+conservation rule, correctly, since nothing in that counterexample was a defect in the program.
+
+**What AutoProver does about it.** Already in the author prompt: "Move nothing". A stand-in records
+the transfer it was asked for, and the rule adds the effect in arithmetically
+(`cvlr_property_generation_system_prompt.j2`, "Writing the stand-in"). The Deposits author added
+the transfer anyway, to prove a stronger property, and spent two prover rounds learning why the
+prompt says this.
+
+**What would resolve it**: pointer analysis that keeps provenance through a choice among slice
+elements, which here are all clones of infos with known regions. Not yet filed.
 
 ---
 
