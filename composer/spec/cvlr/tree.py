@@ -302,8 +302,20 @@ class SharedTree:
         return PersistentMaterializer(
             DirBackend(self.pristine),
             [self._derived],
-            global_exclude=_NOT_MATERIALIZED,
+            global_exclude=self._not_materialized,
         )
+
+    def _not_materialized(self, path: PurePath) -> bool:
+        """:func:`_NOT_MATERIALIZED`, plus a symlink whose target does not exist.
+
+        Such a link has no contents to copy, and the copy would fail on it and end the run. A
+        project ships them: the stake program tracks a link into ``target/deploy`` that only its
+        own test build fills.
+        """
+        if _NOT_MATERIALIZED(path):
+            return True
+        source = self.pristine / path
+        return source.is_symlink() and not source.exists()
 
     async def materialize(self) -> None:
         """Start the run's tree: a fresh copy of the project, replacing anything already at the root.
