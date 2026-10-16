@@ -204,8 +204,8 @@ it is not.
 | **P2** A hand-written rule in, verdicts out — [#258](https://github.com/Certora/AutoProver/pull/258), **merged** `b999c306` | +639 | +624 | Build a CVLR harness for SBF and submit it, and read the verdicts back. The deterministic submission path, end to end, with no agent in it. |
 | **P3a1** The working copy — [#260](https://github.com/Certora/AutoProver/pull/260), **merged** `68f60985` | +388 | +535 | Materialize a fresh working tree over the project for each run, holding every unit's harness draft and the staging unit's edits to the program, and refuse an edit outside the project's own crates. |
 | ~~**P3a2** Module redirects~~ — **dropped** | — | — | Nothing to land: the munge records are gone, and a module redirect is now a text edit the editor gates on the unit's feature (P5). |
-| **P3b1** The harness the author writes, and what it is checked under | +1,388 | +571 | Write a generated harness module into the crate behind its unit's feature, read the rules it declares, and keep the author's summaries, prover settings and expected failures, each of which decides when the prover stamp goes stale. |
-| **P3b2** Verifying the harness | +1,036 | +365 | Compile the harness, build and submit it, and decide what the run proved: which rules have no verdict, which failed when they were expected to pass, which summaries matched nothing, and which functions the Prover treated as external. |
+| **P3b1** The harness the author writes, and what it is checked under — [#267](https://github.com/Certora/AutoProver/pull/267), draft | +1,388 | +571 | Write a generated harness module into the crate behind its unit's feature, read the rules it declares, and keep the author's summaries, prover settings and expected failures, each of which decides when the prover stamp goes stale. |
+| **P3b2** Verifying the harness — [#268](https://github.com/Certora/AutoProver/pull/268), draft, stacked on #267 | +1,036 | +365 | Compile the harness, build and submit it, and decide what the run proved: which rules have no verdict, which failed when they were expected to pass, which summaries matched nothing, and which functions the Prover treated as external. |
 | **P3b3** Why a rule passed vacuously | ≈ +630 | +299 | Rerun a rule reported vacuous with its unsat core collected, decide whether that proof needed the rule's own assertion, and have an analyst read the core against the harness and the program. |
 | **K1** A knowledge bundle, its second instance, and the CVLR recipes | +1,220 | +170 | Hold two corpora behind one context mechanism instead of a fork of it, carry the run-invariant CVLR fact the author's prompt would otherwise restate, and index the recipes an author retrieves when stuck. |
 | **P4** The Anchor surface and the worked example | +831 | +720 | Read an Anchor program's account and handler surface, and render the worked example an author is shown against that program rather than against a generic one. |
@@ -425,7 +425,7 @@ public as `unaccounted` and `stamp_under`.
 
 #### P3b1 — The harness the author writes, and what it is checked under
 
-+1,388 code, +571 tests. Branch `eric/cvlr-generated-harness`.
++1,388 code, +571 tests. Branch `eric/cvlr-generated-harness`, [#267](https://github.com/Certora/AutoProver/pull/267).
 
 `composer/spec/cvlr/{harness,rules,state,author_tools}.py` and the summary half of `tuning.py`:
 where the harness module lives in the crate, behind the unit's feature; which rules it declares;
@@ -450,7 +450,7 @@ Three dependencies the appendix used to give to later slices are P3b1's, because
 
 #### P3b2 — Verifying the harness
 
-+1,036 code, +365 tests. Branch `eric/cvlr-harness-gate`, stacked on P3b1.
++1,036 code, +365 tests. Branch `eric/cvlr-harness-gate`, [#268](https://github.com/Certora/AutoProver/pull/268), stacked on P3b1.
 
 `composer/spec/cvlr/verify.py`, now only the gate, and `composer/cargo/symbols.py`. `cargo_check`
 compiles the harness on the host; `verify_rules` builds it for the chain under the build permit,
