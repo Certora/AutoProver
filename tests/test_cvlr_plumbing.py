@@ -436,7 +436,7 @@ def test_every_conf_checks_vacuity():
     verified. No setting turns it off."""
     for tunable in (
         cvlr_conf.TunableConf(),
-        cvlr_conf.TunableConf(loop_iter=5, optimistic_loop=True),
+        cvlr_conf.TunableConf(loop_iter=5, optimistic_loop=cvlr_conf.OptimisticLoop(why="w")),
     ):
         assert cvlr_conf.tunable_conf(tunable)["rule_sanity"] == "basic"
 
@@ -450,7 +450,8 @@ def test_a_conf_change_invalidates_a_stamp_earned_before_it():
     another."""
     default = cvlr_conf.conf_history(cvlr_conf.TunableConf())
     assert default != cvlr_conf.conf_history(cvlr_conf.TunableConf(loop_iter=3))
-    assert default != cvlr_conf.conf_history(cvlr_conf.TunableConf(optimistic_loop=True))
+    optimistic = cvlr_conf.TunableConf(optimistic_loop=cvlr_conf.OptimisticLoop(why="w"))
+    assert default != cvlr_conf.conf_history(optimistic)
     assert default == cvlr_conf.conf_history(cvlr_conf.TunableConf())
 
 
