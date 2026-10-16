@@ -107,3 +107,28 @@ def test_the_suggestion_points_at_what_the_build_does_define():
 def test_a_pattern_with_nothing_to_probe_suggests_nothing():
     """Rather than dumping the whole symbol table at the author."""
     assert nearest(r"^.*$", _SYMBOLS) == ()
+
+
+@pytest.mark.parametrize("flavour", ["platform-tools-certora", "platform-tools"])
+def test_the_symbol_reader_is_found_in_either_platform_tools_flavour(tmp_path, flavour):
+    """v1.53 unpacks only ``platform-tools-certora``; older releases ship ``platform-tools``."""
+    import stat
+
+    from composer.cargo.symbols import defined_functions
+
+    reader = tmp_path / "v1.53" / flavour / "llvm" / "bin" / "llvm-readelf"
+    reader.parent.mkdir(parents=True)
+    symbol = "_ZN5vault7deposit17h0123456789abcdefE"
+    reader.write_text(f"#!/bin/sh\necho '1: 0 0 FUNC GLOBAL DEFAULT 1 {symbol}'\n")
+    reader.chmod(reader.stat().st_mode | stat.S_IEXEC)
+    assert defined_functions(tmp_path / "p.so", tools_version="v1.53", root=tmp_path) == (
+        "vault::deposit",
+    )
+
+
+def test_a_missing_symbol_reader_names_the_version(tmp_path):
+    from composer.cargo.sbf import PlatformToolsMissing
+    from composer.cargo.symbols import defined_functions
+
+    with pytest.raises(PlatformToolsMissing, match="v1.53"):
+        defined_functions(tmp_path / "p.so", tools_version="v1.53", root=tmp_path)

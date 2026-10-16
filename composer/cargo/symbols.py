@@ -16,12 +16,12 @@ import re
 import subprocess
 from pathlib import Path
 
-from composer.cargo.sbf import PlatformToolsMissing
+from composer.cargo.sbf import PLATFORM_TOOLS_FLAVOURS, PlatformToolsMissing
 from composer.sandbox.recipes import PLATFORM_TOOLS_ROOT
 
 #: ``llvm-nm`` is not in platform-tools, and the system one mis-reads SBF names
 #: (every symbol comes back empty). ``llvm-readelf`` is shipped and works.
-_READELF = Path("platform-tools") / "llvm" / "bin" / "llvm-readelf"
+_READELF = Path("llvm") / "bin" / "llvm-readelf"
 
 _LEGACY = re.compile(r"^_ZN(?P<body>.*)E$")
 _HASH_SEGMENT = re.compile(r"^h[0-9a-f]{16}$")
@@ -82,15 +82,24 @@ def demangle(symbol: str) -> str:
     return "::".join(_decode(s) for s in segments) if segments else symbol
 
 
-def defined_functions(shared_object: Path, *, tools_version: str) -> tuple[str, ...]:
+def defined_functions(
+    shared_object: Path, *, tools_version: str, root: Path = PLATFORM_TOOLS_ROOT
+) -> tuple[str, ...]:
     """Every function the program defines, demangled, unique, and sorted.
 
     Functions only: a summary or inlining directive addresses code. Raises
     :class:`PlatformToolsMissing` when the toolchain is absent — an empty set
     would look like "your directive matched nothing".
     """
-    reader = PLATFORM_TOOLS_ROOT / tools_version / _READELF
-    if not reader.is_file():
+    reader = next(
+        (
+            path
+            for flavour in PLATFORM_TOOLS_FLAVOURS
+            if (path := root / tools_version / flavour / _READELF).is_file()
+        ),
+        None,
+    )
+    if reader is None:
         raise PlatformToolsMissing(tools_version)
     run = subprocess.run(
         [str(reader), "--syms", str(shared_object)],

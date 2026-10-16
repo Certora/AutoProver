@@ -213,6 +213,10 @@ def platform_tools_installed(version: str, *, root: Path = PLATFORM_TOOLS_ROOT) 
     return (root / version).is_dir()
 
 
+#: The directories one platform-tools version unpacks into. v1.53 ships only the first.
+PLATFORM_TOOLS_FLAVOURS = ("platform-tools-certora", "platform-tools")
+
+
 def platform_tools_cargos(version: str, *, root: Path = PLATFORM_TOOLS_ROOT) -> tuple[Path, ...]:
     """``cargo`` binaries shipped with a platform-tools version.
 
@@ -227,7 +231,7 @@ def platform_tools_cargos(version: str, *, root: Path = PLATFORM_TOOLS_ROOT) -> 
     """
     return tuple(
         cargo
-        for flavour in ("platform-tools-certora", "platform-tools")
+        for flavour in PLATFORM_TOOLS_FLAVOURS
         if (cargo := root / version / flavour / "rust" / "bin" / "cargo").is_file()
     )
 
