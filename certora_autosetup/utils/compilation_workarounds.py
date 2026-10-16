@@ -31,7 +31,7 @@ from certora_autosetup.utils.library_harness import (
     pragma_for_solc,
 )
 from certora_autosetup.utils.logger import logger
-from certora_autosetup.utils.paths import user_harness_path, user_harnesses_dir
+from certora_autosetup.utils.paths import relativize_packages, user_harness_path, user_harnesses_dir
 from certora_autosetup.utils.remappings import build_packages_from_remapping_sources
 from certora_autosetup.utils.solc_version_resolver import (
     extract_pragma_spec,
@@ -2140,8 +2140,10 @@ class CompilationWorkaroundManager:
         """
         # Read from the directory that owns the build config (the run root unless the
         # contract lives in a monorepo sub-project); the helper resolves every relative
-        # target absolute against it, so the emitted paths are valid from the run CWD, and
-        # re-expresses remapping contexts against the run root, where solc matches them.
-        return build_packages_from_remapping_sources(
+        # target absolute against it and re-expresses remapping contexts against the run
+        # root, where solc matches them. The targets inside the run root are then made
+        # relative to it.
+        packages = build_packages_from_remapping_sources(
             base_dir=self.build_config_dir, log_fn=self.log, run_root=self.project_root
         )
+        return relativize_packages(packages, self.project_root, self.log)
