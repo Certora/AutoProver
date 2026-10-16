@@ -35,7 +35,9 @@ the working tree, as [#260](https://github.com/Certora/AutoProver/pull/260) (`68
 [#244](https://github.com/Certora/AutoProver/pull/244). **P3a2 is dropped.** The branch replaced the
 munge records with text edits ([who-edits-the-program.md](./who-edits-the-program.md) §18), so there is no
 munge vocabulary left to land; see [P3a](#p3a--the-working-copy-and-what-may-be-changed-in-it).
-`feature/solana` took master after #260 by merge (`899981fd`). The next PR is **P3b**.
+`feature/solana` took master after #260 by merge (`899981fd`). The next PR is **P3b1**: P3b had
+grown to about +3,250 code and +1,530 tests, and on 2026-10-16 it was split into P3b1, the harness
+through to its verdicts, and P3b2, the vacuity diagnostic. See [P3b](#p3b--a-generated-harness-and-what-its-verdict-means).
 
 The branch was rebased onto master after #258 (`709293a9`): 291 commits, 195 files, about 100,000
 inserted lines. P1 changed a lot in review, and the branch carries 727 lines of later work on files
@@ -125,7 +127,7 @@ Three corollaries, because the rule is easy to over-apply:
   one template that only a future prompt includes waits for that prompt — see **P6**.
 * *It has a floor.* A fifteen-line defensive parse called from the function above it does not get
   held back for the caller that will exercise its new branch. `job_input` was planned as that case
-  in **S4**. Since #232 it has no caller on master at all (wave 1, below), so it waits for P3b.
+  in **S4**. Since #232 it has no caller on master at all (wave 1, below), so it waits for P3b2.
 
 ## Wave 1 — shared code, no CVLR dependency
 
@@ -141,7 +143,7 @@ motivation. Sizes are insertions/deletions against master.
 **Where the wave stands.** S1 and S3 merged on 2026-09-17, in that order, half an hour apart. S3
 answered a changes-requested review by absorbing the `ProverOptions` rework rather than by argument,
 which is most of why it nearly doubled between opening and merging. S2 is dropped (below). S4 was closed
-unreviewed on 2026-10-01, and its parts went to P3b and P7 (below). S5 is gone: its mount is
+unreviewed on 2026-10-01, and its parts went to P3b2 and P7 (below). S5 is gone: its mount is
 dropped (below), its one live function folds into P6, and its docstring fix goes to master on its
 own. Wave 1 is therefore finished.
 
@@ -160,7 +162,7 @@ calling POU. That left each of S4's three parts somewhere else:
 * *`job_input`* is no longer needed on the verdict path. POU's `extract_job_id` rejects the raw
   Solana link but parses the `/output/` form #232 produces; this was checked against the installed
   POU. Its remaining caller is the unsat-core fetch behind `explain_vacuity`, which takes the link
-  as given. That is **P3b**.
+  as given. That is **P3b2**.
 * *Retyping `make_prover_fetcher`* is no longer possible. The CVL fetcher now reads a field only
   `GeneratedCVL` has. The rebased branch keeps it and adds `make_run_link_fetcher`. Its only caller
   is `CvlrFormalizer`, so it lands in **P7**.
@@ -202,7 +204,8 @@ it is not.
 | **P2** A hand-written rule in, verdicts out — [#258](https://github.com/Certora/AutoProver/pull/258), **merged** `b999c306` | +639 | +624 | Build a CVLR harness for SBF and submit it, and read the verdicts back. The deterministic submission path, end to end, with no agent in it. |
 | **P3a1** The working copy — [#260](https://github.com/Certora/AutoProver/pull/260), **merged** `68f60985` | +388 | +535 | Materialize a fresh working tree over the project for each run, holding every unit's harness draft and the staging unit's edits to the program, and refuse an edit outside the project's own crates. |
 | ~~**P3a2** Module redirects~~ — **dropped** | — | — | Nothing to land: the munge records are gone, and a module redirect is now a text edit the editor gates on the unit's feature (P5). |
-| **P3b** A generated harness, and what its verdict means | +1,919 | +1,180 | Take a generated harness module through tuning, build and submission, and decide what the run proved — including when a rule passed for a reason that says nothing about the program. |
+| **P3b1** A generated harness, through to its verdicts | ≈ +2,600 | ≈ +1,230 | Take a generated harness module through tuning, build and submission, and decide what the run proved: which rules have no verdict, which failed when they were expected to pass, and which functions the Prover treated as external. |
+| **P3b2** Why a rule passed vacuously | ≈ +630 | +299 | Rerun a rule reported vacuous with its unsat core collected, decide whether that proof needed the rule's own assertion, and have an analyst read the core against the harness and the program. |
 | **K1** A knowledge bundle, its second instance, and the CVLR recipes | +1,220 | +170 | Hold two corpora behind one context mechanism instead of a fork of it, carry the run-invariant CVLR fact the author's prompt would otherwise restate, and index the recipes an author retrieves when stuck. |
 | **P4** The Anchor surface and the worked example | +831 | +720 | Read an Anchor program's account and handler surface, and render the worked example an author is shown against that program rather than against a generic one. |
 | **C7b** The CVLR API corpus | +1,580 | +700, and 19,751 of fixtures | Generate the CVLR API reference from the pinned crates' rustdoc, ingest it as `cvlr_api_kb`, and search it with three tools that say they outrank the manual. |
@@ -235,7 +238,7 @@ As planned, P1 carried these files:
 `composer/cargo/{metadata,session}.py`, `composer/spec/cvlr_reference.py`, and
 `composer/spec/cvlr/{conf,crates,env_paths,forks,scaffold,preflight}.py` with the starting inlining
 and summary layers under `envs/`. It also carries the env half of `tuning.py` — the layer families
-and `compose_env`, which the scaffold writes composites with — and **P3b** appends the summaries the
+and `compose_env`, which the scaffold writes composites with — and **P3b1** appends the summaries the
 authoring loop adds.
 
 And `composer/prover/conf.py`: writing a prover conf and scoping it to a rule selection, shared with
@@ -259,7 +262,7 @@ wait for P7. #248 as opened carries neither the script nor the `entry.py` hunks,
 to add, or to move to P7.
 
 The test splits are done. `tests/test_cvlr_scaffold.py` and the P1 half of
-`tests/test_cvlr_plumbing.py` are on master. The plumbing file's P2 and P3b cases remain on the
+`tests/test_cvlr_plumbing.py` are on master. The plumbing file's P2 and P3b1 cases remain on the
 branch, appended to master's half.
 
 #### What the branch carries on top of P1's files
@@ -273,11 +276,12 @@ rides the first PR that uses it:
 |---|---|---|
 | Name the package to build by its manifest (`2c852922`) | `preflight.py` | **master now** (below) |
 | `CvlrSources.roots()` removed, along with the CVLR source mount | `crates.py` | **master now**, with the fix above. Nothing on master calls it either |
-| `OptimisticLoop` (the author's reason for switching it on), and the `CollectUnsatCore` purpose | `conf.py` | **P3b**: `state` and `verify` read them |
-| `SummaryDirective`, `TuningFiles`, and the rest of the tuning layer | `tuning.py` | **P3b**, as planned |
+| `OptimisticLoop` (the author's reason for switching it on) | `conf.py` | **P3b1**: `state` and `verify` read it |
+| The submission purpose: `CheckVerdicts \| CollectUnsatCore`, and `RunOverlay.purpose` | `conf.py` | **P3b2**: only the unsat-core run sets it |
+| `SummaryDirective`, `TuningFiles`, and the rest of the tuning layer | `tuning.py` | **P3b1**, as planned |
 | Starting-directive additions: Anchor account validation, `system_program::transfer`, `try_borrow_lamports`, and `realloc` moved from summarized to inlined | `envs/*.txt`, `tests/test_cvlr_env_paths.py` | **Held** on the branch, and submitted together later (see *Deferred: the starting tuning directives*) |
 | `ProgramModel`, `models` / `companions` replacing `specializations`, and `withholding` (`67f2215e`, `eb18bc80`) | `reference.py`, `tests/test_cvlr_reference.py` | **P7**: `entry.py`'s `--withhold-crate` is the caller |
-| The build, conf and submission cases | `tests/test_cvlr_plumbing.py` | **P2** / **P3b**, as planned |
+| The build, conf and submission cases | `tests/test_cvlr_plumbing.py` | **P2** / **P3b1**, as planned |
 
 **The manifest-path fix is now one hunk for master.** `2c852922` stops the compile checks naming
 their package with a bare `--package <name>`. Cargo refuses that whenever the name is ambiguous. It
@@ -286,10 +290,28 @@ dev-dependencies pulls back in: the local and published copies then share a name
 `--manifest-path` names exactly one package. Passing it alongside `--package` does not help; that
 was measured. #248 landed the `manifest_dir` parameter on `CargoSession.check`, but master's
 `preflight.py` still calls `check(package=...)`. The rebased branch's one-line hunk is the fix. The
-`verify.py` and `editor.py` halves ride **P3b** and **P5**. Nothing on master exercises the fix,
+`verify.py` and `editor.py` halves ride **P3b1** and **P5**. Nothing on master exercises the fix,
 because no corpus project is a published crate. It was found by pointing preflight at the Solana
 stake program (`docs/stake-benchmark.md`). A regression test needs a fixture whose package name
 collides with its own graph, and that test is still to write.
+
+#### Later work on merged files: the toolchains, and the Prover's signed math
+
+Three commits from 2026-10-12 and 2026-10-13 change `conf.py` and other files that P1, P2 and S1
+own. They came from pointing the backend at SDK 3 targets and running it in the Solana image.
+
+| Change | Files | Rides |
+|---|---|---|
+| Build with platform-tools v1.53 (`f5179ae0`). v1.43's cargo 1.79 cannot parse the edition-2024 manifests an SDK 3 lockfile is full of | `conf.py` *(`PLATFORM_TOOLS_VERSION`)*, `tests/data/vault_sbf_symbols.txt` *(regenerated)*, `tests/test_cvlr_env_paths.py` *(the coverage counts)* | **master now**, as *Toolchains* (below) |
+| Run every cargo command with one host Rust, `HOST_RUST_TOOLCHAIN`, rather than the target's `rust-toolchain.toml` pin (`2f2c8ecc`). The image's rustup home is read-only to the runtime user, so a pinned toolchain the image lacks cannot be installed | `conf.py` *(`HOST_RUST_TOOLCHAIN`)*, `composer/cargo/{metadata,sbf,sbf_build_script,session}.py`, `composer/sandbox/{config,recipes}.py`, `preflight.py`, and hunks in `tests/test_cvlr_{plumbing,scaffold}.py` and `tests/test_sandbox_config.py` | **master now**, as *Toolchains*. The `pipeline.py` and `tests/test_cvlr_entry.py` hunks ride **P7**; `Dockerfile.solana` and `tests/test_cvlr_image.py` ride **R3** |
+| `-solanaTACSoundSignedMath`, and `prover_version: master` until the Prover releases what the flag needs (`91f4261d`) | `conf.py` *(`BASE_CONF`)*, `tests/test_cvlr_plumbing.py` *(hunk)* | **Held** (see *Deferred: sound signed math*) |
+
+**Toolchains is one follow-up PR to master, about +200 lines.** Both commits are about the build a
+real target gets: which platform-tools release compiles the program, and which host Rust runs
+cargo around it. Their tests run without a toolchain or the image. One overlap to cut by hand:
+the held starting directives also change counts in `tests/test_cvlr_env_paths.py`, so its v1.53
+lines have to be separated from theirs. The loop-bound test's v1.53 disassembly stays on the
+branch with that test, which #258's review took out.
 
 ### P2 — A hand-written rule in, verdicts out
 
@@ -300,7 +322,7 @@ directory the caller supplies (`write_build_script` refuses one the confined bui
 Prover runs that script unconfined, and the script reads its confinement from the command file, so a
 `build.rs` that could rewrite either one could make the Prover's rebuild run unconfined. The
 branch's reconcile (`fc61b4b6`) supplies `.cvlr_work/submissions`, a sibling of the shared tree. It
-rides **P3b** (`VerifyDeps.submissions`) and **P7** (`SUBMISSIONS_DIR`, created in
+rides **P3b1** (`VerifyDeps.submissions`) and **P7** (`SUBMISSIONS_DIR`, created in
 `CvlrStagedFormalizer.begin`). `tests/test_cvlr_end_to_end.py` passed on the rebased branch.
 
 `composer/cargo/sbf.py`, `composer/spec/cvlr/{prover,rules}.py`, and
@@ -318,12 +340,13 @@ and `cvlr.prover`, which is to say: exactly P1 and P2 and nothing else.
 `test_cvlr_loop_bound.py` needed it. That test built a probe, submitted it, and measured what a
 loop bound actually does. Review on #258 removed both. The test's scenario is not in this tree,
 and what it checks belongs to the authoring loop. Without it, `rules.py` has no caller in P2, so
-it moves to **P3b**, where `state` and `verify` read it.
+it moves to **P3b1**, where `state` and `verify` read it.
 
 Review also took `UnanalyzedCexHandler` out. `run_submission` now requires its caller to choose a
 counterexample handler instead of defaulting to one that skips analysis. The end-to-end test,
-which reads only verdicts, passes a local stub. The handler's first production caller is P3b's
-unsat-core diagnostic run, so it lands there. P2 no longer changes `composer/prover/`.
+which reads only verdicts, passes a local stub. The handler's first production caller is P3b1's
+`verify_rules`, which uses it when the unit has no counterexample analysis, so it lands there. P3b2's
+unsat-core diagnostic run is the second. P2 no longer changes `composer/prover/`.
 
 The tuning-directive additions came out as well. Nothing in P2 reads the starting tuning files: they
 reach a build only through the scaffold, and nothing in P2 scaffolds. They are held instead (see
@@ -360,13 +383,13 @@ What review changed: an overlay is keyed by the project-relative path it writes,
 editable at both ends. A tree that overlaps the project is refused when it is constructed. A staged
 draft is a `_UnitDraft` rather than a tuple.
 
-Nothing in production calls the tree until P3b.
+Nothing in production calls the tree until P3b1.
 
 #### What the branch carries on top of #260's files
 
 | Change | Files | Rides |
 |---|---|---|
-| The harness cases: unit-feature gating and the build permit | `tests/test_cvlr_tree.py` | **P3b**, appended to master's file. They import `harness` and `verify` |
+| The harness cases: unit-feature gating and the build permit | `tests/test_cvlr_tree.py` | **P3b1**, appended to master's file. They import `harness` and `verify` |
 | `.cvlr_work` out of `NOT_PROJECT_SOURCE`, and `materialize`'s docstring (`f1dd37fc`) | `tree.py` | **master now**. #260 already refuses a tree inside the project, so nothing on master puts a tree there |
 | The editor's write filter and submit gate, on `check_edit` | `editor.py` | **P5** |
 
@@ -378,7 +401,16 @@ the shapes the editor's charter describes and writes as text (P5), and
 
 ### P3b — A generated harness, and what its verdict means
 
-`composer/spec/cvlr/{tuning,state,harness,verify}.py` and `composer/cargo/symbols.py`.
+**Split 2026-10-16 into P3b1 and P3b2.** Measured against master, P3b had become about +3,250 code
+and +1,530 tests, not the +1,919 and +1,180 planned; `verify.py` alone is 1,251 lines. The vacuity
+diagnostic is the one part that comes away by moving files rather than cutting them, and it is
+the second half of the slice's own sentence: a rule that passed for a reason that says nothing about
+the program.
+
+#### P3b1 — A generated harness, through to its verdicts
+
+`composer/spec/cvlr/{tuning,state,harness,verify,rules}.py` and `composer/cargo/symbols.py`,
+`verify.py` less the vacuity tool.
 
 `verify` is the reason `symbols` exists — it matches the functions a built program defines against
 the names the prover's tuning files use — and in the old partition they were in **C5b** and **R1**,
@@ -389,7 +421,21 @@ them; this does not.
 The largest test set in the wave, for the reason the old plan already gave: this is the layer the
 earlier slices' tests were waiting on.
 
-**What P3b carries from #258's review.** The branch now implements this, in `_stage_and_submit` (`cvlr/verify.py`), tested by `tests/test_cvlr_build_permit.py`. Two submissions of one crate share
+The tuning layer stays here, and cannot be the second cut. `SummaryDirective` and `TunableConf`
+are reducer fields in `state`, a field of `harness`, and the input to `verify_rules`' matching of
+summary patterns against the built program's symbols. Taking only the tools that set them
+(`summarize_for_prover`, `adjust_prover_config`, about 265 lines) would land state that nothing
+writes.
+
+Three dependencies the appendix used to give to later slices are P3b1's, because `state` and
+`harness` import them:
+
+* `AppliedEdit`, moved from `cvl_generation.py` to `munge/edit_store.py`. Both hunks were under
+  **P5**.
+* The `CvlrGeneration` and `CvlrJudge` cache markers in `composer/spec/context.py`. They were
+  under **P7**.
+
+**What P3b1 carries from #258's review.** The branch now implements this, in `_stage_and_submit` (`cvlr/verify.py`), tested by `tests/test_cvlr_build_permit.py`. Two submissions of one crate share
 its target directory, so they also share the `.so`, and the Prover's local phase rebuilds and
 uploads it. On the branch, `_stage_and_prepare` (`cvlr/verify.py`) holds the build permit only
 for staging and the gate build. `run_submission` runs outside it, on the reasoning that a sibling's
@@ -400,11 +446,38 @@ not hold for the artifact. A sibling's build with other features can replace the
 job uploads it.
 
 #258 settled on one shared target directory. One directory per submission was tried and backed
-out: it costs a cold dependency build per unit, and about 1 GB of disk for each. So P3b must hold
+out: it costs a cold dependency build per unit, and about 1 GB of disk for each. So P3b1 must hold
 the permit from staging until `on_prover_link` fires, or until `run_submission` returns, if the
 CLI fails before uploading. `prepare_submission`'s docstring states this contract. That serializes
 each submission's local phase, a warm program-crate rebuild plus the upload, but not the cloud
-wait. The unsat-core diagnostic run takes the same permit.
+wait. P3b2's unsat-core run goes through the same `_stage_and_submit`, so it takes the same permit.
+
+#### P3b2 — Why a rule passed vacuously
+
+`composer/spec/cvlr/vacuity.py` and its two prompts, and `explain_vacuity`, the tool in `verify.py`
+that uses it: `_DiagnosticAccounting`, `VacuityDeps`, `ExplainVacuity`, and its entry in
+`gate_tools`.
+
+On Solana the Prover writes no unsat core for the vacuity check itself. So the tool reruns the one
+rule with the check off and cores on, under which a vacuous rule verifies, and reads the core of that
+proof. Whether the core contains the rule's own assertion is decided without an agent, and it decides
+what the author should do next; an analyst then reads the core against the harness and the program.
+
+Everything it needs on the way is its alone:
+
+* The submission purpose in `conf.py`, `CheckVerdicts | CollectUnsatCore`, with
+  `RunOverlay.purpose`, `Submission.purpose` in `prover.py`, and the case in `solana_conf` that turns
+  `rule_sanity` off and `coverage_info` on. None of it is on master, so P3b1 has no single-variant
+  union waiting for its second variant.
+* `fetch_unsat_cores` and `job_input` in `report_prover.py`. `explain_vacuity` is `job_input`'s only
+  caller (see S4 in wave 1).
+* `results_api`, the public name for `cloud.py`'s `_results_api`. `verify` is the first reader
+  outside `cloud.py`.
+* The two unsat-core template fragments, split out of `sanity_tool_prompt.j2` so CVL's sanity
+  analysis and this one share them.
+
+Nothing in P3b1 imports `vacuity`; its other importer is `author.py` (P6). `tests/test_cvlr_vacuity.py`
+stubs the submission, the results API and the analyst, so it needs no toolchain, network or model.
 
 ### K1 — A knowledge bundle, its second instance, and the CVLR recipes
 
@@ -542,8 +615,8 @@ files is C7b's.
 ### P7 — The backend, the pipeline and the CLI
 
 `composer/spec/cvlr/{pipeline,entry}.py` (the executor half), `composer/cli/console_solana.py`,
-`composer/cli/tui_solana.py`, the `CvlrJudge` / `CvlrGeneration` cache markers, and the plumbing
-tests.
+`composer/cli/tui_solana.py`, and the plumbing tests. The `CvlrJudge` / `CvlrGeneration` cache
+markers were planned here; `state` imports them, so they ride P3b1.
 
 Still the PR that makes the backend a product, and still last in the wave — but it is now the PR
 that *composes* seven working things rather than the PR that makes twelve dead ones reachable. Lands
@@ -563,7 +636,9 @@ description has to say so rather than leave a reviewer to find it.
 
 ### Order, and what is forced
 
-**~~P1~~ → ~~P2~~ → ~~P3a1~~ → P3b → K1 → P4 → C7b → P5 → P6 → P7**
+**~~P1~~ → ~~P2~~ → ~~P3a1~~ → P3b1 → P3b2 → K1 → P4 → C7b → P5 → P6 → P7**
+
+P3b2 has slack too: it needs only P3b1, and only P6 needs it, so it can land anywhere between them.
 
 K1, P4 and C7b are the three with slack. K1 needs nothing in `composer/spec/cvlr/` at all, and C7b
 needs only what P1 merged, so either could go first today. P4 carries `rust_source` itself and needs K1,
@@ -574,7 +649,7 @@ Checked rather than assumed: the only modules outside `composer/spec/cvlr/` that
 the two Solana CLI entry points, the tape driver and the env refresher — all of them CVLR-specific
 themselves. No shared module reaches into the backend.
 
-**What the re-partition costs.** Four of these — P1, P3a (before it was split), P3b and P6 — are larger than any PR the
+**What the re-partition costs.** Four of these — P1, P3a and P3b (before they were split), and P6 — are larger than any PR the
 old wave 3 had except C6, and P1 and P6 are larger than C6, which was that wave's biggest. That is
 the trade, and it should be made with the number in view: the old wave 3 was 12 PRs averaging 1,900
 lines, not one of which a reviewer could run; this is 9 averaging 2,800, each with an exit criterion
@@ -648,9 +723,10 @@ master wants that is its owners' call.
 
 Changes that look shared but are not on this list, because a CVLR slice is their first reader:
 `prover/results.py`'s `external_functions` and the alert-report fetch in `cloud.py` (read by
-`verify` and carried in the judge's briefing by `state`, **P3b**); `UnanalyzedCexHandler` (the unsat-core diagnostic run, **P3b**); the shared
-unsat-core template fragments split out of `sanity_tool_prompt.j2` (the vacuity analysis,
-**P3b**); and `make_run_link_fetcher` and the give-up reason (**P7**).
+`verify` and carried in the judge's briefing by `state`, **P3b1**); `UnanalyzedCexHandler`
+(`verify_rules` without a counterexample analysis, **P3b1**); the shared unsat-core template
+fragments split out of `sanity_tool_prompt.j2` (the vacuity analysis, **P3b2**); and
+`make_run_link_fetcher` and the give-up reason (**P7**).
 
 ---
 
@@ -673,13 +749,38 @@ That measurement exists for two of the four so far. `tests/test_cvlr_dropped_wri
 `tests/data/dropped_writes_probe.rs`, scaffolds a probe program, so it reads the starting files.
 It submits canary rules that verify only if the model drops a write the real program makes. That
 covers `realloc` and `system_program::transfer`. It is the PR's usage, and it travels with it,
-together with `rules.py` if P3b has not landed it by then, since the test reads `rule_names`. The
+together with `rules.py` if P3b1 has not landed it by then, since the test reads `rule_names`. The
 other two directives have no test on the branch, only their commit messages (`efd870b5`,
 `e070d019`). Each wants a canary before it is submitted, or the PR description has to argue for it
 instead.
 
 While they are held, `tests/test_cvlr_env_paths.py`'s directive counts on the branch differ from
 master's. They travel with the directives.
+
+## Deferred: sound signed math
+
+Without `-solanaTACSoundSignedMath`, the Prover models a `u64` compared against a constant at or
+above `2^63` as a comparison against a negative number. So `x == u64::MAX` is unsatisfiable: a rule
+that assumes the sentinel is vacuous, and a program branch on it is never taken
+(`docs/upstream-defects.md` P11). The flag fixes that, but the Prover fixes that let it coexist with
+`-solanaTACMathInt` are on its master branch and not all released. So the branch's `BASE_CONF`
+turns the flag on *and* pins `prover_version: master` (`91f4261d`).
+
+**Both are held on the branch until the Prover releases those fixes.** Then the flag and its
+plumbing test go to master as a one-line follow-up, with no pin.
+
+* **Not the pin to master.** It would run master's Solana end-to-end gate against an unreleased
+  Prover. And the guard that keeps the pin visible cannot go with it.
+  `test_the_master_prover_pin_is_still_tracked_as_a_ship_blocker` asserts the pin and its
+  `cvlr-todo.md` item (U25) together, so whoever removes the pin also closes the item, and
+  `cvlr-todo.md` is on the branch only. The guard is deleted with the pin, so it never goes to master.
+* **Not the flag alone.** Without the unreleased fixes it does not coexist with
+  `-solanaTACMathInt`, which every Solana conf turns on.
+* **Nothing on master is a product yet.** Master's submission path reads `BASE_CONF`, but nothing
+  ships it until P7. The defect costs master nothing in the meantime.
+
+**P7 must not merge with the pin.** If the release has not happened by then, P7 waits for it, or
+lands without the flag and the branch keeps it.
 
 ## Deferred: pinned runs
 
@@ -971,7 +1072,9 @@ as P3a/P3b because it is the better default, but it is the one place in the wave
 is a judgement rather than a consequence of the DAG, and a reviewer who would rather read 6,000
 lines of one story than two halves of it should say so before the split work is done.
 *What happened:* P3a2 was dropped on 2026-10-14 with the munge records, and P3a1 merged as #260 with
-the tree alone. The split of `tests/test_cvlr_tree.py` stands: its harness cases ride P3b.
+the tree alone. The split of `tests/test_cvlr_tree.py` stands: its harness cases ride P3b1.
+*And then:* P3b was split on 2026-10-16 into P3b1 and P3b2, along the vacuity diagnostic, which is
+the one part of it that moves out by whole files and one tool's entry in `gate_tools`.
 
 **8. ~~Does the "no tag registry" drop survive a second corpus?~~ Settled 2026-10-13: yes, and the
 branch is reworked to match.** The API-docs work had registered `cvlr_kb` and `cvlr_api_kb` in both
@@ -997,28 +1100,31 @@ Rows marked *(split)* are files whose contents straddle a slice boundary and hav
 than moved. That is the bill rule 5 runs up, and it is paid almost entirely in tests, because the
 code was already cut this way — the exception is `tuning.py`, whose layer families and
 `compose_env` the scaffold needs in P1 and whose summary directives and `TuningFiles` the authoring
-loop needs in P3b. It is a small bill: five files, and in three of them the straddling imports are
+loop needs in P3b1. It is a small bill: five files, and in three of them the straddling imports are
 already local to the functions that need them.
 
 | PR | Paths |
 |----|-------|
 | S1 *(merged)* | `composer/layout.py` `composer/spec/gen_types.py` `composer/sandbox/recipes.py` `composer/pipeline/ecosystem.py` `composer/foundry/entry.py` `composer/spec/source/autoprove_common.py` `tests/test_fs_forbidden_read.py` `tests/test_sandbox_config.py` `scripts/docker-compose.sandbox.yml` `composer/pipeline/cli.py` *(hunks)* |
 | S3 *(merged)* | `composer/certora_env.py` `composer/prover/{certoraRunWrapper,core,ptypes,results}.py` `analyzer/analysis.py` `composer/tools/{prover,thinking}.py` `composer/authoring/buffer.py` `composer/core/context.py` `composer/cvl/tools.py` `composer/workflow/executor.py` `composer/spec/source/{autoprove_common,harness}.py` `composer/spec/source/munge/compile_check.py` `tests/conftest.py` `tests/test_prover_app.py` `tests/test_prover_options.py` `tests/test_wrapped_prover_runner.py` `tests/test_solana_cex_trace.py` `tests/data/solana_cex/` `tests/test_tree_parsing.py` `tests/test_cex_analysis_failure_isolation.py` `tests/test_autoprove_report.py` *(hunks)* |
-| S4 *(closed)* | nothing: the give-up reason goes to P7, `job_input` to P3b, the fetcher to P7 |
+| S4 *(closed)* | nothing: the give-up reason goes to P7, `job_input` to P3b2, the fetcher to P7 |
 | P1 *(merged)* | `composer/cargo/{__init__,features,manifest,metadata,session}.py` `composer/spec/cvlr/{__init__,conf,crates,env_paths,forks,preflight,reference,scaffold,tuning}.py` `composer/spec/cvlr/envs/` `composer/spec/cvlr/harness_files/` `composer/prover/conf.py` `composer/spec/source/{prover,author,artifacts}.py` *(hunks)* `composer/spec/natspec/task_description.py` *(hunks)* `tests/test_cvlr_{env_paths,forks,plumbing,preflight,reference,scaffold}.py` `tests/test_prover_conf.py` `tests/test_rules_striping.py` *(hunks)* `tests/test_stuck_rule_warnings.py` *(hunks)* `tests/data/vault_sbf_symbols.txt` `pyproject.toml` `uv.lock` |
 | P1 follow-up, to master now | `composer/spec/cvlr/preflight.py` *(hunk: `check(manifest_dir=…)`)* `composer/spec/cvlr/crates.py` *(hunk: drop `roots()`)* — plus the regression test, still to write |
 | P2 *(merged)* | `composer/cargo/sbf.py` `composer/spec/cvlr/prover.py` `tests/test_cvlr_end_to_end.py` `tests/test_cvlr_plumbing.py` *(split: `sbf_argv`, the build script, `write_submission`)* |
+| Toolchains, to master now | `composer/spec/cvlr/conf.py` *(hunks: `PLATFORM_TOOLS_VERSION`, `HOST_RUST_TOOLCHAIN`)* `composer/cargo/{metadata,sbf,sbf_build_script,session}.py` *(hunks: the host toolchain)* `composer/sandbox/{config,recipes}.py` *(hunks: the host toolchain)* `composer/spec/cvlr/preflight.py` *(hunk: the host toolchain)* `tests/data/vault_sbf_symbols.txt` `tests/test_cvlr_env_paths.py` *(hunk: the v1.53 coverage counts, not the directive counts)* `tests/test_cvlr_plumbing.py` `tests/test_cvlr_scaffold.py` `tests/test_sandbox_config.py` *(hunks: the host toolchain)* |
+| Sound signed math *(held)* | `composer/spec/cvlr/conf.py` *(hunk: `-solanaTACSoundSignedMath`; not `prover_version`)* `tests/test_cvlr_plumbing.py` *(hunk: `test_the_base_models_top_bit_constants_soundly`)* |
 | Tuning directives *(held)* | `composer/spec/cvlr/envs/` *(hunks)* `tests/test_cvlr_env_paths.py` *(hunk: the directive counts)* `tests/test_cvlr_dropped_writes.py` `tests/data/dropped_writes_probe.rs` |
 | P3a1 *(merged)* | `composer/spec/cvlr/tree.py` `composer/spec/cvlr/preflight.py` *(hunk: `source`)* `composer/layout.py` `composer/pipeline/ecosystem.py` *(hunks: `RUST_BUILD_DIRS`)* `graphcore` `pyproject.toml` *(hunk: the pin)* `tests/test_cvlr_tree.py` *(split: the cases with no harness)* `tests/test_fs_forbidden_read.py` *(hunk)* |
 | P3a1 follow-up, to master now | `composer/spec/cvlr/tree.py` *(hunks: drop `.cvlr_work`, the `materialize` docstring)* |
 | P3a2 *(dropped)* | nothing: `munge.py` and the module-redirect tests are deleted on the branch |
-| P3b | `composer/spec/cvlr/{state,harness,verify,rules}.py` `tests/test_cvlr_rules.py` `tests/test_cvlr_build_permit.py` `composer/prover/core.py` *(hunk: `UnanalyzedCexHandler`)* `composer/spec/cvlr/tuning.py` *(split: `SummaryDirective`, `TuningFiles`, appended to what P1 landed)* `composer/spec/cvlr/conf.py` *(hunks: `OptimisticLoop`, `CollectUnsatCore`)* `composer/spec/source/report_prover.py` *(hunks: `job_input`, `fetch_unsat_cores`)* `composer/cargo/symbols.py` `tests/test_cvlr_symbols.py` `tests/test_cvlr_tuning.py` `tests/test_cvlr_tree.py` *(split: the harness cases)* `tests/test_cvlr_plumbing.py` *(split: `_CaptureCallbacks`, `_RunAccounting`)* `tests/test_cvlr_anchor_reach.py` `tests/data/anchor_reach_probe.rs` |
+| P3b1 | `composer/spec/cvlr/{state,harness,rules}.py` `composer/spec/cvlr/verify.py` *(less `_DiagnosticAccounting`, `VacuityDeps`, `ExplainVacuity` and the `explain_vacuity` entry in `gate_tools`)* `tests/test_cvlr_rules.py` `tests/test_cvlr_build_permit.py` `composer/prover/core.py` *(hunks: `UnanalyzedCexHandler`, `ProverReport.external_functions`)* `composer/prover/results.py` *(hunk: `external_functions`)* `composer/prover/cloud.py` *(hunk: `_fetch_alert_report`)* `composer/spec/cvlr/tuning.py` *(split: `SummaryDirective`, `TuningFiles`, appended to what P1 landed)* `composer/spec/cvlr/conf.py` *(hunk: `OptimisticLoop`)* `composer/spec/source/munge/edit_store.py` *(hunk: `AppliedEdit`)* `composer/spec/cvl_generation.py` *(hunk: `AppliedEdit` moved out)* `composer/spec/context.py` *(hunks: `CvlrGeneration`, `CvlrJudge`)* `composer/cargo/symbols.py` `tests/test_cvlr_symbols.py` `tests/test_cvlr_tuning.py` `tests/test_cvlr_tree.py` *(split: the harness cases)* `tests/test_cvlr_plumbing.py` *(split: `_CaptureCallbacks`, `_RunAccounting`)* `tests/test_cvlr_anchor_reach.py` `tests/data/anchor_reach_probe.rs` |
+| P3b2 | `composer/spec/cvlr/vacuity.py` `composer/templates/cvlr_vacuity_{prompt,system_prompt}.j2` `composer/templates/unsat_core_{format,reading_steps}.j2` `composer/templates/sanity_tool_prompt.j2` `composer/spec/cvlr/verify.py` *(the rest: `_DiagnosticAccounting`, `VacuityDeps`, `ExplainVacuity`, the `explain_vacuity` entry in `gate_tools`)* `composer/spec/cvlr/conf.py` *(hunks: `CheckVerdicts`, `CollectUnsatCore`, `RunOverlay.purpose`, the `solana_conf` case)* `composer/spec/cvlr/prover.py` *(hunk: `Submission.purpose`)* `composer/spec/source/report_prover.py` *(hunks: `job_input`, `fetch_unsat_cores`)* `composer/prover/cloud.py` *(hunk: `_results_api` → `results_api`)* `tests/test_cvlr_vacuity.py` |
 | P4 | `composer/spec/cvlr/{anchor_surface,example,guidance,rust_source}.py` `tests/test_cvlr_anchor_surface.py` `tests/test_cvlr_worked_example.py` |
 | C7b | `composer/scripts/cvlr_api_docs.py` `composer/cargo/doctest.py` `composer/tools/cvlr_api_rag.py` `composer/tools/cvlr_rag.py` *(hunks: the docstrings)* `composer/scripts/init-db.sql` *(hunks: `cvlr_api_rag`)* `composer/rag/db.py` *(hunks: `CVLR_API_DEFAULT_CONNECTION`, the `cvlr_api_kb` entry and its comment — not `cvlr_kb`'s; decision 8)* `scripts/populate_cvlr_rag.sh` `scripts/gen_docs.sh` `.gitignore` `docs/rag-import-format.md` *(hunks, after the fix above)* `tests/test_cvlr_api_docs.py` `tests/data/cvlr_rustdoc/` `tests/test_cvlr_research.py` *(split: the tool cases, through `test_the_surface_heading_is_shared_by_the_producer_and_the_tool`)* `tests/test_cargo_doctest.py` `tests/test_cvlr_recipe_examples.py` |
 | K1 | `composer/kb/kb_context.py` `composer/kb/knowledge_base.py` `composer/kb/resources/cvlr_baseline_facts.md` `composer/templates/kb_index.j2` `composer/templates/cvl_kb_index.j2` *(deleted: `git rm` it; `kb_index.j2` replaces it)* `tests/test_kb_bundle.py` `tests/test_cvlr_bundle.py` `composer/kb/resources/cvlr_recipes_index.yaml` `composer/kb/resources/recipes/cvlr-*.md` |
-| P5 | `composer/spec/cvlr/editor.py` `composer/cargo/depinfo.py` `composer/templates/cvlr_munge_editor_system.j2` `composer/templates/cvlr_munge_review_system.j2` `composer/spec/source/munge/{edit_tools,edit_store,munge_agent,vfs_diff}.py` `composer/spec/source/{author,live_explorer}.py` *(hunks: onto the lifted core)* `composer/spec/cvl_generation.py` *(hunk)* `composer/spec/source/report/{schema,collect,build,render}.py` *(hunks: `SourceEditRecord`)* `tests/test_cvlr_editor.py` `tests/test_cvlr_source_edits.py` |
+| P5 | `composer/spec/cvlr/editor.py` `composer/cargo/depinfo.py` `composer/templates/cvlr_munge_editor_system.j2` `composer/templates/cvlr_munge_review_system.j2` `composer/spec/source/munge/{edit_tools,munge_agent,vfs_diff}.py` `composer/spec/source/munge/edit_store.py` *(less `AppliedEdit`, which P3b1 takes)* `composer/spec/source/{author,live_explorer}.py` *(hunks: onto the lifted core)* `composer/spec/source/report/{schema,collect,build,render}.py` *(hunks: `SourceEditRecord`)* `tests/test_cvlr_editor.py` `tests/test_cvlr_source_edits.py` |
 | P6 | `composer/spec/cvlr/author.py` `composer/spec/cvlr_research.py` `composer/templates/cvlr_{feedback_prompt,property_generation_prompt,property_generation_system_prompt,property_judge_system_prompt,research,research_system_prompt}.j2` `composer/templates/cvlr_rag_tools.j2` *(new work: delete)* `composer/ui/tool_display.py` *(hunks: `cvlr_research` and the `cvlr_api_*` / manual entries)* `composer/spec/source/source_env.py` `template_manifest.json` `tests/test_cvlr_judge_input.py` `tests/test_cvlr_knowledge.py` `tests/test_cvlr_research.py` *(split: the corpora, researcher and prompt cases)* `tests/test_cvlr_rag.py` *(new work: drop the template case)* `tests/data/cvlr_judge/` |
-| P7 | `composer/spec/source/report/{schema,collect,build}.py` *(hunks: `Abandoned`, `reason`, 3.2)* `composer/pipeline/core.py` *(hunks: `_abandonment`)* `tests/test_autoprove_report.py` *(hunks: the give-up cases)* `composer/spec/cvlr/pipeline.py` `composer/spec/cvlr/entry.py` *(the whole file, now including the parser P1 did not take)* the `cvlr-preflight` console script *(new work, still to write)* `composer/spec/cvlr/reference.py` *(hunks: `ProgramModel`, `withholding`)* `tests/test_cvlr_reference.py` *(hunks)* `composer/spec/source/report_prover.py` *(hunk: `make_run_link_fetcher`)* `composer/cli/console_solana.py` `composer/cli/tui_solana.py` `composer/spec/context.py` `composer/spec/services.py` `composer/ui/tool_display.py` *(the remainder)* `tests/test_cvlr_entry.py` `tests/test_cvlr_findings.py` `tests/test_cvlr_author.py` `tests/test_cvlr_judge_round_cost.py` `tests/test_cvlr_plumbing.py` *(the remainder)* `tests/test_autoprove_integration.py` `.github/workflows/integration-tests.yml` |
+| P7 | `composer/spec/source/report/{schema,collect,build}.py` *(hunks: `Abandoned`, `reason`, 3.2)* `composer/pipeline/core.py` *(hunks: `_abandonment`)* `tests/test_autoprove_report.py` *(hunks: the give-up cases)* `composer/spec/cvlr/pipeline.py` `composer/spec/cvlr/entry.py` *(the whole file, now including the parser P1 did not take)* the `cvlr-preflight` console script *(new work, still to write)* `composer/spec/cvlr/reference.py` *(hunks: `ProgramModel`, `withholding`)* `tests/test_cvlr_reference.py` *(hunks)* `composer/spec/source/report_prover.py` *(hunk: `make_run_link_fetcher`)* `composer/cli/console_solana.py` `composer/cli/tui_solana.py` `composer/spec/context.py` *(the remainder)* `composer/spec/services.py` `composer/ui/tool_display.py` *(the remainder)* `tests/test_cvlr_entry.py` `tests/test_cvlr_findings.py` `tests/test_cvlr_author.py` `tests/test_cvlr_judge_round_cost.py` `tests/test_cvlr_plumbing.py` *(the remainder)* `tests/test_autoprove_integration.py` `.github/workflows/integration-tests.yml` |
 | P8 | `tests/test_cvlr_gate.py` `test_scenarios/solana_vault_idl/` |
 | P9 | `composer/testing/` `scripts/record_cvlr_tape.sh` `tests/test_cvlr_tape.py` `tests/test_tape_setup.py` |
 | R3 | `scripts/Dockerfile` `scripts/Dockerfile.solana` `scripts/docker-compose.yml` `scripts/docker-compose.common.yml` `scripts/docker-compose.solana.yml` `scripts/autoprove-entrypoint.sh` `tests/test_cvlr_image.py` |
@@ -1034,14 +1140,14 @@ The first draft's names appear in commit messages, in two open PR bodies and in
 | Old | Where it went | Why |
 |-----|---------------|-----|
 | **S6** | K1 | A one-instance refactor; merges with the instance that justifies it. |
-| **R1** | P1 *(metadata, session)*, P2 *(sbf)*, P3b *(symbols)*, P5 *(depinfo)* | One directory, four unrelated consumers. The PR the feedback was about. |
+| **R1** | P1 *(metadata, session)*, P2 *(sbf)*, P3b1 *(symbols)*, P5 *(depinfo)* | One directory, four unrelated consumers. The PR the feedback was about. |
 | **C1a** | P1 | The conf vocabulary lands with the preflight that writes it. |
 | **C1c** | P1 | Scaffold and preflight were already one thing; C1a was their only missing input. |
 | **C3a** | nothing: the munge vocabulary was deleted (2026-10-14); its fork half, now `forks.py`, went to P1 | The dependency-fork half landed with the `scaffold` that calls it. The vocabulary was planned for P3a1 and P3a2, beside the `tree` that applied it, until text edits replaced it. |
 | **C2** | P3a1 *(tree, the graphcore pin)*; its crate mount, `crate_mount` and `source_tools`, is deleted (`5b2afeff`) | The working copy and the agents' view of the crates are two subjects, not one. The second is now the research sub-agent in P6. |
-| **C5a** | P2 *(prover)*, P3b *(tuning, less the layer families, which go to P1)*, P4 *(anchor_surface)* | Three modules with three different first callers. |
-| **C4a1** | P2 *(rules)*, P3b *(state, harness)* | `rules` belongs with submission; `state` and `harness` belong with the `verify` that reads them. |
-| **C5b** | P3b | `verify` lands with its three inputs and with the `symbols` it exists to match against. |
+| **C5a** | P2 *(prover)*, P3b1 *(tuning, less the layer families, which go to P1)*, P4 *(anchor_surface)* | Three modules with three different first callers. |
+| **C4a1** | P2 *(rules)*, P3b1 *(state, harness)* | `rules` belongs with submission; `state` and `harness` belong with the `verify` that reads them. |
+| **C5b** | P3b1, P3b2 *(`explain_vacuity`)* | `verify` lands with its three inputs and with the `symbols` it exists to match against. |
 | **C4b** | P4 | The worked example lands with the surface analysis it renders. |
 | **C3b** | P5 | Unchanged in content; gains `depinfo`, its only caller. |
 | **C4a2** | P6 | Gains the research sub-agent its prompts name, which replaced the crate mount. |
