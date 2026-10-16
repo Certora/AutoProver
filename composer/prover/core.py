@@ -40,7 +40,7 @@ from langchain_core.messages import AnyMessage, HumanMessage
 from langchain_core.language_models import BaseChatModel
 from langgraph.graph import MessagesState
 
-from graphcore.graph import LLM
+from graphcore.graph import LLM, CacheManager
 from graphcore.utils import ainvoke
 
 from prover_output_utility import cloud_server_for_env
@@ -287,10 +287,70 @@ class CexHandler(ABC):
         ...
 
 
+#: Anthropic rejects a request carrying more than four cache breakpoints.
+_MAX_CACHE_BREAKPOINTS = 4
+
+
+def _cache_breakpoints(messages: list[AnyMessage]) -> int:
+    return sum(
+        1
+        for m in messages
+        if isinstance(m.content, list)
+        for b in m.content
+        if isinstance(b, dict) and "cache_control" in b
+    )
+
+
+def mark_history_end(
+    messages: list[AnyMessage], cache_marker: CacheManager
+) -> list[AnyMessage] | None:
+    """A copy of ``messages`` with a cache breakpoint on the last non-empty text block,
+    or ``None`` when there is none or the breakpoint limit would be exceeded.
+
+    Only text blocks are marked: the Anthropic serializer rebuilds tool-use blocks
+    without their ``cache_control``, and thinking blocks may not carry one.
+    When ``cache_marker`` leaves the block unchanged (a provider or cache level
+    without breakpoints), ``messages`` itself is returned. ``messages`` is never modified."""
+    # One slot for this breakpoint and, conservatively, one for the request-level
+    # ``cache_control`` the model may be built with.
+    if _cache_breakpoints(messages) + 2 > _MAX_CACHE_BREAKPOINTS:
+        return None
+    for m_idx in range(len(messages) - 1, -1, -1):
+        msg = messages[m_idx]
+        blocks: list[str | dict] = (
+            [msg.content] if isinstance(msg.content, str) else list(msg.content)
+        )
+        for b_idx in range(len(blocks) - 1, -1, -1):
+            block = blocks[b_idx]
+            if isinstance(block, str):
+                block = {"type": "text", "text": block}
+            # The serializer drops whitespace-only text blocks, marker and all.
+            if block.get("type") != "text" or not block.get("text", "").strip():
+                continue
+            marked = cache_marker(block)
+            if marked == block:
+                return messages
+            blocks[b_idx] = marked
+            return [
+                *messages[:m_idx],
+                msg.model_copy(update={"content": blocks}),
+                *messages[m_idx + 1:],
+            ]
+    return None
+
+
 class TrivialFanoutCexHandler(CexHandler):
     """Per-CEX single-shot analyzer. Each violated instance gets its own
     analysis; no cross-CEX clustering. The default for callers that
     don't want a smarter handler.
+
+    Every analysis sends the author's full history plus one counterexample.
+    The request-level cache breakpoint sits after that counterexample, so the
+    shared history is never stored as an entry of its own and each analysis
+    writes it again. With a ``cache_marker``, the history gets its own
+    breakpoint and the first analysis runs alone, storing it in the prompt
+    cache; the rest then run concurrently and read it. Without one, all
+    analyses run concurrently.
 
     Owns its own report-volume summarization: when failed-rule count
     exceeds ``summarization_threshold`` the rendered report is
@@ -303,11 +363,13 @@ class TrivialFanoutCexHandler(CexHandler):
         llm: LLM,
         state: MessagesState,
         summarization_threshold: int = 10,
+        cache_marker: CacheManager | None = None,
     ) -> None:
         super().__init__()
         self.state = state
         self.llm = llm
         self.summarization_threshold = summarization_threshold
+        self.cache_marker = cache_marker
 
     @override
     async def analyze(
@@ -317,10 +379,22 @@ class TrivialFanoutCexHandler(CexHandler):
         callbacks: CexProgressCallbacks,
         report_dir: Path,
     ) -> str:
+        history: list[AnyMessage] = self.state["messages"]
+        marked = None
+        if self.cache_marker is not None:
+            marked = mark_history_end(history, self.cache_marker)
+            if marked is None:
+                _logger.info(
+                    "CEX analysis: no cache breakpoint could be placed on the history; "
+                    "analyses will each write it to the cache"
+                )
+            else:
+                history = marked
+
         async def _one(instance: RuleResult) -> tuple[RuleResult, str | None]:
             await callbacks.on_analysis_start(instance)
             analysis = await analyze_cex_raw(
-                self.llm, self.state["messages"], instance, tool_call_id
+                self.llm, history, instance, tool_call_id
             )
             if analysis is not None:
                 await callbacks.on_analysis_complete(instance, analysis)
@@ -330,9 +404,14 @@ class TrivialFanoutCexHandler(CexHandler):
         # One counterexample's analysis failing is not a reason to lose the
         # prover run that produced it: the rule keeps its status and only its
         # explanation goes missing, so the report renders without it.
-        settled = await asyncio.gather(
-            *(_one(r) for r in violated), return_exceptions=True
-        )
+        if marked is not None:
+            # The first analysis runs alone to store the marked history in the
+            # cache; a failed first analysis only costs the rest a warm cache.
+            first = await asyncio.gather(*(_one(r) for r in violated[:1]), return_exceptions=True)
+            rest = await asyncio.gather(*(_one(r) for r in violated[1:]), return_exceptions=True)
+            settled = [*first, *rest]
+        else:
+            settled = await asyncio.gather(*(_one(r) for r in violated), return_exceptions=True)
         results: list[tuple[RuleResult, str | None]] = []
         for rule, outcome in zip(violated, settled):
             if isinstance(outcome, asyncio.CancelledError):

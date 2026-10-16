@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field, Discriminator
 from langgraph.config import get_stream_writer
 from langgraph.types import Command
 from composer.prover.ptypes import RuleResult, RulePath
-from graphcore.graph import LLM
+from graphcore.graph import LLM, CacheManager
 from graphcore.tools.schemas import WithInjectedId, WithInjectedState
 
 from composer.prover.core import (
@@ -839,6 +839,7 @@ def get_prover_tool(
     project_directory: ProjectDirectory,
     prover_opts: ProverOptions,
     analysis_store: CexAnalysisStore | None = None,
+    cex_cache_marker: CacheManager | None = None,
 ) -> ProverToolset:
     sem = _prover_sem(prover_opts.cloud)
     stamper = make_validation_stamper(VALIDATION_KEY)
@@ -902,7 +903,10 @@ def get_prover_tool(
                             res = await run_prover(
                                 Path(run_root), [cpath], tool_call_id, prover_opts,
                                 _SpecCallbacks(writer, tool_call_id, summary, cfg, analysis_store=analysis_store),
-                                DefaultCexHandler(llm, cex_state, summarization_threshold=10),
+                                DefaultCexHandler(
+                                    llm, cex_state, summarization_threshold=10,
+                                    cache_marker=cex_cache_marker,
+                                ),
                             )
                 await done_queue.put(_BufDone(name, digest, res, all_rules, selection))
             except asyncio.CancelledError:
