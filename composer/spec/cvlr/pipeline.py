@@ -68,6 +68,7 @@ from composer.spec.cvlr.conf import DEFAULT_FEATURE, HOST_RUST_TOOLCHAIN
 from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness, HarnessModule
 from composer.spec.cvlr.preflight import CvlrPreflight, gate_workspace, prepare_workspace
+from composer.spec.cvlr.patch import snapshot, write_patch
 from composer.spec.cvlr.prover import Submission
 from composer.spec.cvlr.scaffold import ENVS_DIR, SPECS_DIR, declare_unit_features
 from composer.spec.cvlr.tree import SharedTree
@@ -190,6 +191,8 @@ class SharedBuild:
 class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
     deps: CvlrDeps
     build: SharedBuild
+    #: What :meth:`finalize` wrote, for the report to name.
+    patch: Path | None = dataclasses.field(default=None, init=False)
 
     @override
     async def formalize(
@@ -318,6 +321,17 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
                 )
             )
         return records
+
+    @override
+    async def finalize(
+        self, outcomes: list[ComponentOutcome[GeneratedHarness, SolanaComponentInstance]],
+        run: PipelineRun,
+    ) -> None:
+        self.patch = await asyncio.to_thread(write_patch, Path(run.source.project_root))
+
+    @override
+    def deliverable_patch(self) -> str | None:
+        return self.patch.as_posix() if self.patch is not None else None
 
     @override
     def build_environment(self) -> BuildEnvironment:
@@ -483,6 +497,7 @@ class CvlrBackend:
         stops the run having spent at most one partial analysis agent instead of surfacing as
         unfixable compiler errors after the whole extraction phase. The gate is a build, so it goes
         on the run's CPU budget rather than its agent budget."""
+        await asyncio.to_thread(snapshot, Path(run.source.project_root))
         pre = await prepare_workspace(
             Path(run.source.project_root),
             package=self.package,

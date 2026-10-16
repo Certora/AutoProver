@@ -56,7 +56,7 @@ You need the EVM pipeline's prerequisites from [README.md](README.md#prerequisit
 
 ## Output
 
-The harness is a Rust module inside the verified crate, under `<pkg>/src/certora/`, with the rules in `specs/`. It is wired into the crate's `Cargo.toml` (a `certora` feature) and `lib.rs`. Everything else goes under `certora/cvlr/` in the project root: the report, the property-to-rule mapping and the per-rule reports. Edits the pipeline made to the program itself (munges) are listed in the report.
+The harness is a Rust module inside the verified crate, under `<pkg>/src/certora/`, with the rules in `specs/`. It is wired into the crate's `Cargo.toml` (a `certora` feature) and `lib.rs`. Everything else goes under `certora/cvlr/` in the project root: the report, the property-to-rule mapping and the per-rule reports. That includes `certora/cvlr/harness.patch`, which carries the harness and its wiring to anyone who receives only `certora/`: `git apply certora/cvlr/harness.patch` on the project as it was before the run, and the report's `deliverable_patch` names it. Edits the pipeline made to the program itself (munges) are not in the patch; they are listed in the report.
 
 The run builds in a copy of the project in a temporary directory, which is deleted when the run ends. The pipeline adds the Prover's output directories to the project's `.gitignore`.
 

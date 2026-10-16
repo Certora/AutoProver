@@ -76,6 +76,7 @@ class _Formalizer:
     async def finalize(self, _outcomes, _run): return None
     async def source_edits(self, _outcomes, _run): return []
     def build_environment(self): return None
+    def deliverable_patch(self): return None
 
 
 class _Staged(core.StagedFormalizer):

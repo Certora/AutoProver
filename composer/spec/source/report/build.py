@@ -56,6 +56,7 @@ async def build_report[R: ReportableResult](
     hoisted: list[HoistedClaim] | None = None,
     active_plugins: list[str] | None = None,
     build_environment: BuildEnvironment | None = None,
+    deliverable_patch: str | None = None,
 ) -> AutoProverReport:
     """Build and return the in-memory `AutoProverReport`. Persistence is the caller's job.
 
@@ -154,6 +155,7 @@ async def build_report[R: ReportableResult](
         curtailed_components=curtailed,
         source_edits=source_edits or [],
         build_environment=build_environment,
+        deliverable_patch=deliverable_patch,
         verification_artifacts=verification_artifacts or [],
         coverage=coverage,
         findings=findings,

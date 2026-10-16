@@ -389,7 +389,7 @@ class HoistedClaim(BaseModel):
 
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
-    schema_version: Literal["3.0", "3.1", "3.2", "3.3", "3.4"] = "3.4"
+    schema_version: Literal["3.0", "3.1", "3.2", "3.3", "3.4", "3.5"] = "3.5"
     backend: ReportBackend = "prover"
     #: How much of the inferred property set the run pursued ("comprehensive" or
     #: "prioritized"). Absent on reports written before the mode existed, which are all
@@ -425,6 +425,11 @@ class AutoProverReport(BaseModel):
     #: nothing of the project, and on any report written before schema 3.3 — which is why the
     #: absent case must not be read as "confined".
     build_environment: BuildEnvironment | None = Field(default=None, discriminator="kind")
+    #: A unified diff, relative to the project root, that applies the run's verification
+    #: scaffolding (the harness and the manifest wiring it needs) to the project as shipped, for a
+    #: backend whose harness lives inside the program rather than beside it. ``None`` for every
+    #: other backend, when the run changed nothing, and on reports written before schema 3.5.
+    deliverable_patch: str | None = None
     #: Verification-supporting artifacts registered by plugin tools during
     #: formalization (Lean proofs et al.), written to disk by the artifact store.
     verification_artifacts: list[VerificationArtifactRecord] = Field(default_factory=list)

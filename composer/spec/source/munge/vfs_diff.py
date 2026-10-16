@@ -14,6 +14,11 @@ from typing import Callable
 from graphcore.tools.vfs import VFSState, VFSAccessor
 
 
+#: What ``diff`` and ``git`` print after a line that ends its file without a newline. ``difflib``
+#: prints nothing, which leaves that line run into the next and ``git apply`` rejects the patch.
+_NO_NEWLINE = "\\ No newline at end of file\n"
+
+
 def file_diff(path: str, old: str | None, new: str) -> str:
     """Unified diff for a single file. ``old`` is ``None`` when the path isn't in
     the baseline view (an addition); identical content yields the empty string."""
@@ -23,7 +28,10 @@ def file_diff(path: str, old: str | None, new: str) -> str:
     new_lines = new.splitlines(keepends=True)
     from_label = f"a/{path}" if old is not None else "/dev/null"
     return "".join(
-        difflib.unified_diff(old_lines, new_lines, fromfile=from_label, tofile=f"b/{path}")
+        line if line.endswith("\n") else f"{line}\n{_NO_NEWLINE}"
+        for line in difflib.unified_diff(
+            old_lines, new_lines, fromfile=from_label, tofile=f"b/{path}"
+        )
     )
 
 

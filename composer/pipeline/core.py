@@ -227,6 +227,12 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
         3 — and stderr on a machine nobody kept is not a record."""
         return None
 
+    def deliverable_patch(self) -> str | None:
+        """The patch, relative to the project root, that :meth:`finalize` wrote to carry the run's
+        harness into the project as shipped. Default None: a backend whose harness is a file beside
+        the program delivers it as that file."""
+        return None
+
     async def finalize(self, outcomes: list[ComponentOutcome[FormT, U]], run: PipelineRun) -> None:
         """Emit any backend-specific run-level artifacts from the full outcome set (prover:
         components_to_prover_runs.json). Default: none."""
@@ -881,6 +887,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 hoisted=hoisted,
                 active_plugins=plugin_manager.plugin_manifest,
                 build_environment=formalizer.build_environment(),
+                deliverable_patch=formalizer.deliverable_patch(),
             )
         report = await run.runner(
             job=_report,
