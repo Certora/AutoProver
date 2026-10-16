@@ -119,6 +119,13 @@ def test_a_nested_target_directory_is_not_readable_either():
     assert not _rust_can_read("target/debug/deps/x.rs")
 
 
+def test_a_nested_node_modules_is_not_readable_either():
+    """An Anchor workspace can keep its TypeScript tests' tooling beside any member."""
+    assert not _rust_can_read("node_modules/pkg/index.js")
+    assert not _rust_can_read("app/node_modules/pkg/index.js")
+    assert not _rust_can_read("app/node_modules")
+
+
 def test_a_withheld_directory_matches_as_an_entry_so_a_walk_can_prune_it():
     """graphcore prunes a subtree by testing the bare directory entry (``DirBackend.dump_to``
     hands ``copytree``'s ``ignore`` the entry names). Matching only the contents still yields the
