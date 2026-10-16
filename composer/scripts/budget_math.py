@@ -304,7 +304,7 @@ def build_matrix(
         f"~{theta * cap_fraction:.0%} of the way through). Expected: `Curtailed(partial)` — "
         "wrap-up alert in the author transcript, no prover/judge calls after it, "
         "`autospec_*.spec.unverified` on disk with no runnable sibling/conf, component in the "
-        f"report appendix, exit code reflects `all_failed` for single-component scenarios. "
+        f"report appendix, exit 0 with `RUN CURTAILED` (a partial is output, so not `all_failed`). "
         f"{headroom_note(t2_cap)}.",
     ]
     lines += [
@@ -312,7 +312,8 @@ def build_matrix(
         f"### T4 — pool pressure (`t4_pool_pressure.json`: total ${t4_total}, caps ample)",
         f"The shared pool warns at ≥ ${theta * t4_total:.2f} cumulative (observed full run "
         f"${run_total:.2f}), so every agent from that point starts life in the wrap-up window. "
-        "Expected: one or more curtailed components, `all_failed` exit, extraction quietly "
+        "Expected: one or more curtailed components; `all_failed` only if none published a "
+        "partial; extraction quietly "
         "running fewer bug rounds under pressure (by design — observe, don't fail on it).",
         "",
         "### T5 — caching interplay (two runs, reuses `t2_formalization_curtail.json`)",

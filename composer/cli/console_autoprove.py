@@ -22,6 +22,8 @@ async def _main() -> int:
         print(f"\n  Run mode:    {result.run_mode.value}")
         print(f"  Components:  {result.n_components}")
         print(f"  Properties:  {result.n_properties}")
+        if result.n_partial:
+            print(f"  Partial:     {result.n_partial} (budget-curtailed)")
         if result.n_deprioritized:
             # Say it on stdout, not only in report.json: the number that matters about a
             # prioritized run is the one it did NOT look at.
@@ -34,6 +36,11 @@ async def _main() -> int:
         if result.all_failed:
             print("  RUN FAILED: every component failed to generate or gave up.")
             return 1
+        if result.n_delivered == 0:
+            print(
+                f"  RUN CURTAILED: the budget stopped every component; {result.n_partial} "
+                "published a partial result, unverified."
+            )
         return 0
 
 

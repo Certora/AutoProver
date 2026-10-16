@@ -200,12 +200,23 @@ class CorePipelineResult[FormT: BackendResult]:
         return sum(1 for o in self.outcomes if isinstance(o.result, Delivered))
 
     @property
+    def n_partial(self) -> int:
+        """Components the budget cut short after they had published something. Not deliveries:
+        the partial was written with the gates lifted. But it is on disk and in the report's
+        appendix, so a run whose only output is partials has output."""
+        return sum(
+            1 for o in self.outcomes
+            if isinstance(o.result, Curtailed) and o.result.partial is not None
+        )
+
+    @property
     def all_failed(self) -> bool:
-        """Every attempted component ended without a reliable deliverable (gave up, crashed, or
-        was budget-curtailed) — the run is a total failure. Guarded on a non-empty outcome set so
-        "all of nothing" is never reported as failure (the driver raises before returning in the
+        """Every attempted component ended with nothing to show: it gave up, crashed, or was
+        budget-curtailed before publishing anything. A curtailed component's partial counts as
+        something, since a consumer receives it. Guarded on a non-empty outcome set so "all of
+        nothing" is never reported as failure (the driver raises before returning in the
         no-outcomes case anyway)."""
-        return bool(self.outcomes) and self.n_delivered == 0
+        return bool(self.outcomes) and self.n_delivered == 0 and self.n_partial == 0
 
 class PhaseBudget(TypedDict):
     """Per-phase spending *caps* (USD). Ceilings, not allotments: they bound

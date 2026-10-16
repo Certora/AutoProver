@@ -2,9 +2,9 @@
 
 ``CorePipelineResult.all_failed`` is the signal the autoprove/foundry entry points
 translate into a non-zero exit code: a run in which *every* attempted component failed
-to generate a deliverable — it gave up (``GaveUp``), crashed (``BaseException``), or was
-cut short by the budget (``Curtailed``, whose partial is not a reliable deliverable) —
-is a total failure. As long as one component delivered, the run succeeds regardless of
+to produce anything — it gave up (``GaveUp``), crashed (``BaseException``), or was cut short
+by the budget (``Curtailed``) before publishing a partial — is a total failure. A partial is
+not a delivery, but it is output. As long as one component delivered, the run succeeds regardless of
 how many others gave up.
 """
 from pathlib import Path
@@ -70,11 +70,19 @@ def test_giveup_and_crash_mix_with_no_delivery_is_a_failure():
     assert r.all_failed is True
 
 
-def test_curtailed_partial_is_not_a_delivery():
-    # A budget-curtailed component published something, but under lifted gates —
-    # it must not count as delivered, so an all-curtailed run is a total failure.
+def test_curtailed_partial_is_not_a_delivery_but_is_not_a_failure():
+    # A budget-curtailed component published something, but under lifted gates, so it is not a
+    # delivery. It is still output a consumer receives, so a run whose only output is partials is
+    # not a total failure: the exit code would tell the cloud the run produced nothing (U21).
     r = _result(_curtailed_with_partial(), Curtailed(None))
     assert r.n_delivered == 0
+    assert r.n_partial == 1
+    assert r.all_failed is False
+
+
+def test_curtailed_before_publishing_anything_is_a_failure():
+    r = _result(Curtailed(None), Curtailed(None, detail="stopped"), GaveUp(reason="a"))
+    assert r.n_partial == 0
     assert r.all_failed is True
 
 

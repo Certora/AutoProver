@@ -25,6 +25,8 @@ async def _main() -> int:
             d.result.deliverable for d in result.outcomes if isinstance(d.result, Delivered)
         ]
         print(f"  Tests written: {len(written_paths)}")
+        if result.n_partial:
+            print(f"  Partial:       {result.n_partial} (budget-curtailed)")
         for p in written_paths:
             print(f"    - {p}")
         if result.failures:
@@ -35,6 +37,11 @@ async def _main() -> int:
         if result.all_failed:
             print("  RUN FAILED: every component failed to generate or gave up.")
             return 1
+        if result.n_delivered == 0:
+            print(
+                f"  RUN CURTAILED: the budget stopped every component; {result.n_partial} "
+                "published a partial result, unverified."
+            )
         return 0
 
 
