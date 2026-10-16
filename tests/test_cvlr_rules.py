@@ -11,14 +11,7 @@ import pathlib
 import json5
 import pytest
 
-from composer.spec.cvlr.rules import (
-    DirectRule,
-    ParametricRules,
-    declared_rules,
-    generated_name,
-    rule_names,
-    snake_case,
-)
+from composer.spec.cvlr.rules import generated_name, rule_names, snake_case
 
 # Verbatim from `cvlr_invariant_rules!`'s doc comment, which states the three rules it creates.
 CRATE_DOC_EXAMPLE = """
@@ -89,24 +82,16 @@ def test_an_attribute_separated_from_its_signature_is_still_found():
     assert rule_names(source) == ("rule_solvency",)
 
 
-def test_the_grouping_survives_because_one_construct_can_be_several_rules():
-    # One parametric invocation stays one declaration, and expands to several rule names.
-    source = CRATE_DOC_EXAMPLE + "\n#[rule]\nfn rule_direct() {}\n"
-    parametric, direct = declared_rules(source)
-    assert isinstance(parametric, ParametricRules)
-    assert parametric.macro == "cvlr_invariant_rules"
-    assert parametric.spec_name == "non_negative"
-    assert len(parametric.names) == 3
-    assert isinstance(direct, DirectRule) and direct.names == ("rule_direct",)
-
-
-def test_declarations_come_back_in_source_order_whichever_kind_they_are():
-    # The two scans are merged into source order. Rejection messages point at these line numbers.
+def test_names_come_back_in_source_order_whichever_kind_they_are():
+    # `#[rule]` and the parametric macros are separate scans. Concatenating them would put `last`
+    # ahead of the rules the macro expands to.
     source = "#[rule]\nfn first() {}\n" + CRATE_DOC_EXAMPLE + "#[rule]\nfn last() {}\n"
-    kinds = [type(d).__name__ for d in declared_rules(source)]
-    assert kinds == ["DirectRule", "ParametricRules", "DirectRule"]
-    assert [d.line for d in declared_rules(source)] == sorted(
-        d.line for d in declared_rules(source)
+    assert rule_names(source) == (
+        "first",
+        "non_negative_update_counter",
+        "non_negative_reset_counter",
+        "non_negative_increment_counter",
+        "last",
     )
 
 

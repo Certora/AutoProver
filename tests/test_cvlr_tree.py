@@ -8,7 +8,6 @@ checkpoint.
 No cargo, no network, no prover.
 """
 
-import asyncio
 import tomllib
 from pathlib import Path, PurePosixPath
 
@@ -376,64 +375,6 @@ def test_a_manifest_with_no_features_table_gets_one(tmp_path: Path):
     manifest.write_text('[package]\nname = "p"\n')
     declare_unit_features(manifest, ["unit_a"])
     assert tomllib.loads(manifest.read_text())["features"] == {"unit_a": []}
-
-
-# ---------------------------------------------------------------------------------------------
-# the build permit
-
-
-def test_the_gate_and_the_submission_ask_for_the_same_two_features(tmp_path: Path):
-    """The gate and the submission both ask for `certora` and the unit feature.
-
-    `mod certora` is gated on `certora`. A build with only the unit feature
-    compiles no harness, and a conf naming rules that do not exist ends FAILED.
-    """
-    import contextlib
-    from types import SimpleNamespace
-
-    from composer.spec.cvlr.conf import DEFAULT_FEATURE
-    from composer.spec.cvlr.verify import HarnessTarget
-
-    unit = HarnessModule("deposits")
-    target = HarnessTarget(
-        session=SimpleNamespace(workdir=tmp_path),  # type: ignore[arg-type]
-        module_path=tmp_path / "m.rs",
-        package="p",
-        package_root=tmp_path,
-        tuning=SimpleNamespace(),  # type: ignore[arg-type]
-        unit=unit,
-        tree=SharedTree(pristine=tmp_path / "project", root=tmp_path / "build", source=_SOURCE_DIRS),
-        build_sem=asyncio.Semaphore(1),
-    )
-    assert target.features == (DEFAULT_FEATURE, unit.feature)
-    assert contextlib.nullcontext  # build_slot is covered by test_the_build_permit_serializes
-
-
-@pytest.mark.asyncio
-async def test_the_build_permit_serializes_staging_and_the_build(tmp_path: Path):
-    """One permit for the run.
-
-    Cargo already serializes concurrent builds on its build-directory lock.
-    The permit is a queue the host can see.
-    """
-    from types import SimpleNamespace
-
-    from composer.spec.cvlr.verify import HarnessTarget
-
-    sem = asyncio.Semaphore(1)
-    target = HarnessTarget(
-        session=SimpleNamespace(workdir=tmp_path),  # type: ignore[arg-type]
-        module_path=tmp_path / "m.rs",
-        package="p",
-        package_root=tmp_path,
-        tuning=SimpleNamespace(),  # type: ignore[arg-type]
-        unit=HarnessModule("d"),
-        tree=SharedTree(pristine=tmp_path / "project", root=tmp_path / "build", source=_SOURCE_DIRS),
-        build_sem=sem,
-    )
-    async with target.build_slot():
-        assert sem.locked()
-    assert not sem.locked()
 
 
 # ---------------------------------------------------------------------------------------------

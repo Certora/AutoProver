@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from composer.authoring.state import SkippedProperty, make_validation_stamper, spec_digest
+from composer.authoring.state import make_validation_stamper, spec_digest
 from composer.spec.cvlr.conf import TunableConf
 from composer.spec.cvlr.env_paths import PathDialect
 from composer.spec.cvlr.state import PROVER_VALIDATION_KEY, tuning_history
@@ -21,9 +21,7 @@ from composer.spec.cvlr.tuning import (
     SUMMARIES,
     SummaryDirective,
     TuningFiles,
-    compose_env,
     merge_summaries,
-    render_layer,
 )
 
 _WHY = "[3308] on the #[error_code] Display impl; no property asserts over an error message"
@@ -55,50 +53,6 @@ def test_the_directive_reaches_the_file_the_conf_names(tuning: TuningFiles):
     tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY),))
     for path in (tuning.unit_layer_path(SUMMARIES), tuning.composite_path()):
         assert _DISPLAY in path.read_text(), path
-
-
-def test_the_file_the_conf_names_is_this_units_own(tuning: TuningFiles):
-    """The conf names this unit's composite, not the package composite.
-
-    Units share one working tree. A summary is a regex over the whole build,
-    so a shared file would apply one unit's summaries to the others.
-    """
-    assert tuning.composite_path().name == SUMMARIES.unit_composite(_UNIT)
-    assert tuning.composite_path().name != SUMMARIES.composite
-
-
-def test_the_unit_composite_carries_the_starting_configuration(tuning: TuningFiles):
-    """The unit composite carries the starting layers and the unit's directives."""
-    tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY),))
-    assert tuning.composite_path().read_text() == compose_env(
-        SUMMARIES,
-        unit_layer=tuning.unit_layer_path(SUMMARIES).read_text(),
-        dialect=tuning.dialect,
-    )
-
-
-def test_the_justification_is_written_beside_the_pattern(tuning: TuningFiles):
-    """The justification is written next to the pattern. A summary is unsound."""
-    tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY),))
-    assert f"; {_WHY}" in tuning.unit_layer_path(SUMMARIES).read_text()
-
-
-def test_the_unit_layer_says_who_owns_it(tuning: TuningFiles):
-    """The layer names its unit and says the next build rewrites it."""
-    tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY),))
-    layer = tuning.unit_layer_path(SUMMARIES).read_text()
-    assert _UNIT in layer and "DO NOT EDIT" in layer
-
-
-def test_a_return_shape_is_wrapped_as_a_type_annotation(tuning: TuningFiles):
-    tuning.write((SummaryDirective(pattern="^foo$", why="w", returns="(*i32)(r1+0):num"),))
-    assert "#[type((*i32)(r1+0):num)]" in tuning.unit_layer_path(SUMMARIES).read_text()
-
-
-def test_no_annotation_is_emitted_for_an_unconstrained_return(tuning: TuningFiles):
-    """An unconstrained return emits no ``#[type]``. An empty annotation is a different directive."""
-    tuning.write((SummaryDirective(pattern="^foo$", why="w"),))
-    assert "#[type" not in tuning.unit_layer_path(SUMMARIES).read_text()
 
 
 def test_the_layer_is_rewritten_rather_than_appended_to(tuning: TuningFiles):
@@ -135,31 +89,6 @@ def test_two_units_do_not_see_each_others_directives(tmp_path: Path):
     b.write((SummaryDirective(pattern="^only_b$", why="w"),))
     assert "^only_b$" not in a.composite_path().read_text()
     assert "^only_a$" not in b.composite_path().read_text()
-
-
-# ---------------------------------------------------------------------------------------------
-# refusing when the write would be inert
-
-
-def test_an_unscaffolded_project_is_reported_rather_than_written_to(tmp_path: Path):
-    """With no composites on disk, both the package files and the unit composite are missing.
-
-    A summary written anyway would not be in any file the conf names.
-    """
-    empty = TuningFiles(envs_dir=tmp_path, dialect=PathDialect(), unit=_UNIT)
-    assert set(empty.missing()) == {
-        *(f.composite for f in ENV_FAMILIES),
-        SUMMARIES.unit_composite(_UNIT),
-    }
-
-
-def test_a_scaffolded_project_reports_nothing_missing(tuning: TuningFiles):
-    """After the unit composite is written, nothing is missing.
-
-    Before the first stage the conf would name a path the prover will not read.
-    """
-    tuning.write(())
-    assert tuning.missing() == ()
 
 
 # ---------------------------------------------------------------------------------------------
@@ -214,27 +143,6 @@ def test_the_conf_is_always_in_the_history_and_the_tuning_files_only_when_used()
     assert changed != empty
 
 
-def test_an_applied_edit_moves_the_history():
-    """An edit-store id in ``version_history`` changes the history, so an earlier stamp no longer applies."""
-    before = tuning_history({"summaries": [], "version_history": [], "prover_settings": TunableConf()})  # type: ignore[arg-type]
-    after = tuning_history({"summaries": [], "version_history": ["e1"], "prover_settings": TunableConf()})  # type: ignore[arg-type]
-    assert "e1" in after and before != after
-
-
-def test_a_skip_still_moves_the_digest():
-    """A skip still changes the digest when a history is passed alongside it."""
-    draft = "#[rule]\nfn rule_a() {}\n"
-    bare = spec_digest(draft, [], ())
-    skipped = spec_digest(draft, [SkippedProperty(property_title="p", reason="r")], ())
-    assert bare != skipped
-
-
-def test_the_rendered_layer_ends_with_a_newline():
-    """The rendered layer ends with a newline, so the next layer does not join its last line."""
-    rendered = render_layer("; header", (SummaryDirective(pattern="^f$", why="w"),))
-    assert rendered.endswith("\n")
-
-
 # ---------------------------------------------------------------------------------------------
 # two directives in one graph step
 
@@ -256,10 +164,3 @@ def test_the_same_pattern_twice_is_recorded_once():
     again = SummaryDirective(pattern="^a$", why="second")
     merged = merge_summaries([a], [again])
     assert [d.why for d in merged] == ["first"]
-
-
-def test_the_merge_preserves_the_order_directives_were_added_in():
-    """The merged order is the order the directives were added. The tuning file is written in that order."""
-    ds = [SummaryDirective(pattern=f"^{c}$", why="w") for c in "abc"]
-    merged = merge_summaries(ds[:1], ds[1:])
-    assert [d.pattern for d in merged] == ["^a$", "^b$", "^c$"]

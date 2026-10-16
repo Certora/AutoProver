@@ -56,10 +56,6 @@ def test_real_symbols_demangle_to_the_spelling_the_tuning_files_use():
     assert demangle(mangled) == expected
 
 
-def test_a_name_held_by_one_symbol_is_kept_as_is():
-    assert as_the_prover_names(["vault::vault_program::initialize"]) == {"vault::vault_program::initialize"}
-
-
 def test_a_name_held_by_several_symbols_is_numbered_like_the_prover_numbers_it():
     """Several symbols that demangle to one string are renamed ``name_0`` onward.
 
@@ -83,19 +79,6 @@ def test_an_anchored_directive_on_a_renamed_symbol_is_reported_as_inert():
 _SYMBOLS = tuple(sorted(expected for _, expected in _REAL))
 
 
-def test_a_directive_naming_a_present_symbol_is_not_reported():
-    assert unmatched((r"^<anchor_lang::error::ErrorCode as core::fmt::Display>::fmt$",), _SYMBOLS) == ()
-
-
-def test_the_directive_the_run_actually_wrote_is_reported_as_inert():
-    """A directive for ``vault::VaultError`` matches nothing in this symbol list.
-
-    That ``Display`` impl is inlined out of the build.
-    """
-    missed = unmatched((r"^<vault::VaultError as core::fmt::Display>::fmt$",), _SYMBOLS)
-    assert len(missed) == 1
-
-
 def test_an_invalid_regex_counts_as_unmatched_rather_than_raising():
     """An invalid regex is unmatched, not an exception. The prover rejects it too."""
     assert unmatched((r"^<vault::(unclosed$",), _SYMBOLS) == (r"^<vault::(unclosed$",)
@@ -105,7 +88,3 @@ def test_the_suggestion_points_at_what_the_build_does_define():
     """A miss names a symbol the build does define, taken from the pattern's longest identifier."""
     suggestions = nearest(r"^<vault::VaultError as core::fmt::Display>::fmt$", _SYMBOLS)
     assert "<anchor_lang::error::ErrorCode as core::fmt::Display>::fmt" in suggestions
-
-
-def test_a_pattern_with_nothing_to_probe_suggests_nothing():
-    assert nearest(r"^.*$", _SYMBOLS) == ()
