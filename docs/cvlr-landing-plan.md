@@ -28,14 +28,19 @@ PRs unreachable until the last. Wave 2 is re-cut below so that each feature arri
 that uses it. Rule 5 states the criterion; the [old-name map](#appendix-the-old-partition-and-where-it-went)
 is the last appendix. The rules, the deferrals and the drops are otherwise unchanged.
 
-**Where it stands, 2026-10-02.** Wave 1 is finished: S4 was closed and folded into P7. Of wave 2,
-**P1 and P2 have merged**: P1 as [#248](https://github.com/Certora/AutoProver/pull/248) (`2eb4a391`)
-and P2 as [#258](https://github.com/Certora/AutoProver/pull/258) (`b999c306`). The corpus half of P6
-merged ahead of both as [#244](https://github.com/Certora/AutoProver/pull/244). The branch has been
-rebased onto master after #258 (`709293a9`): 291 commits, 195 files, about 100,000 inserted lines.
-P1 changed a lot in review, and the branch carries 727 lines of later work on files P1 now owns. The
-[list below](#what-the-branch-carries-on-top-of-p1s-files) assigns each of those to the PR it rides.
-The next PR is **P3a1**. P3a is two PRs; see [P3a](#p3a--the-working-copy-and-what-may-be-changed-in-it).
+**Where it stands, 2026-10-16.** Wave 1 is finished: S4 was closed and folded into P7. Of wave 2,
+**P1, P2 and P3a1 have merged**: P1 as [#248](https://github.com/Certora/AutoProver/pull/248)
+(`2eb4a391`), P2 as [#258](https://github.com/Certora/AutoProver/pull/258) (`b999c306`), and P3a1,
+the working tree, as [#260](https://github.com/Certora/AutoProver/pull/260) (`68f60985`). The corpus half of P6 merged ahead of all three as
+[#244](https://github.com/Certora/AutoProver/pull/244). **P3a2 is dropped.** The branch replaced the
+munge records with text edits ([cvlr-munges-as-text.md](./cvlr-munges-as-text.md)), so there is no
+munge vocabulary left to land; see [P3a](#p3a--the-working-copy-and-what-may-be-changed-in-it).
+`feature/solana` took master after #260 by merge (`899981fd`). The next PR is **P3b**.
+
+The branch was rebased onto master after #258 (`709293a9`): 291 commits, 195 files, about 100,000
+inserted lines. P1 changed a lot in review, and the branch carries 727 lines of later work on files
+P1 now owns. The [list below](#what-the-branch-carries-on-top-of-p1s-files) assigns each of those to
+the PR it rides.
 
 **Revised 2026-10-12 for the API-documentation work.** Between 2026-09-24 and 2026-09-30 the branch
 carried out [cvlr-api-docs-plan.md](./cvlr-api-docs-plan.md). This plan had not been revised for it,
@@ -195,13 +200,13 @@ it is not.
 |----|------|-------|------------------------------|
 | **P1** Resolve the project — [#248](https://github.com/Certora/AutoProver/pull/248), **merged** `2eb4a391` | +3,697 | +2,391 | Point it at a Cargo workspace: it names the package under verification, resolves which `cvlr` / `cvlr-solana` the build gets, writes the prover conf, and scaffolds a CVLR workspace into a project that has none. |
 | **P2** A hand-written rule in, verdicts out — [#258](https://github.com/Certora/AutoProver/pull/258), **merged** `b999c306` | +639 | +624 | Build a CVLR harness for SBF and submit it, and read the verdicts back. The deterministic submission path, end to end, with no agent in it. |
-| **P3a1** The working copy, and edits to the program | +1,789 | +1,435 | Materialize a fresh working tree over the project for each run; record an edit to the program — an attribute on a function, an extraction, a derive swap or an import swap — replay it onto the tree, and diff it for the report. |
-| **P3a2** Module redirects | +275 | +382 | Redirect a module to a substitute file, gated on a unit's feature or, for a dependency's module, on the shared one. |
+| **P3a1** The working copy — [#260](https://github.com/Certora/AutoProver/pull/260), **merged** `68f60985` | +388 | +535 | Materialize a fresh working tree over the project for each run, holding every unit's harness draft and the staging unit's edits to the program, and refuse an edit outside the project's own crates. |
+| ~~**P3a2** Module redirects~~ — **dropped** | — | — | Nothing to land: the munge records are gone, and a module redirect is now a text edit the editor gates on the unit's feature (P5). |
 | **P3b** A generated harness, and what its verdict means | +1,919 | +1,180 | Take a generated harness module through tuning, build and submission, and decide what the run proved — including when a rule passed for a reason that says nothing about the program. |
 | **K1** A knowledge bundle, its second instance, and the CVLR recipes | +1,220 | +170 | Hold two corpora behind one context mechanism instead of a fork of it, carry the run-invariant CVLR fact the author's prompt would otherwise restate, and index the recipes an author retrieves when stuck. |
-| **P4** The Anchor surface and the worked example | +715 | +720 | Read an Anchor program's account and handler surface, and render the worked example an author is shown against that program rather than against a generic one. |
+| **P4** The Anchor surface and the worked example | +831 | +720 | Read an Anchor program's account and handler surface, and render the worked example an author is shown against that program rather than against a generic one. |
 | **C7b** The CVLR API corpus | +1,580 | +700, and 19,751 of fixtures | Generate the CVLR API reference from the pinned crates' rustdoc, ingest it as `cvlr_api_kb`, and search it with three tools that say they outrank the manual. |
-| **P5** The munge editor | +2,030 | +920 | Ask an agent to make a source modification, and have a second one accept or reject it. |
+| **P5** The munge editor | ≈ +1,460 | ≈ +470 | Ask an agent to edit the program as text in the unit's own overlay, gated on the unit's feature, and have a second one accept or reject it; the judge sees the edits and the report gives one patch per unit. |
 | **P6** The authoring loop | ≈ +2,150 | ≈ +2,250 | Give the author a program and get CVLR rules, judged, with a research sub-agent over both CVLR corpora behind the author and the judge. |
 | **P7** The backend, the pipeline and the CLI | +1,300 | +1,600 | `console-solana` / `tui-solana` on a real target. |
 
@@ -329,89 +334,47 @@ passes on a machine without one.
 
 ### P3a — The working copy and what may be changed in it
 
-Two PRs. Split three ways on 2026-10-02, and rejoined on 2026-10-12, when the working copy's first
-review showed it could not be judged without munges: most of `tree.py`'s design is the means of
-undoing a munge, and without one the overlay and the materializer had nothing to justify them. Order:
-**P3a1 → P3a2**, both ahead of P3b, because P3b's `state` and `verify` carry the full `Munge` union.
+Planned as two PRs: **P3a1**, the working tree with the munge kinds it replays, and **P3a2**, module
+redirects. On 2026-10-14 the branch replaced the munge records with text edits
+([cvlr-munges-as-text.md](./cvlr-munges-as-text.md)): the editor writes whole files into the unit's
+own overlay and writes the `cfg` gate on the unit's feature itself, as EVM does. `munge.py`, the
+record-reading half of `rust_source.py`, the record replay in `tree.py` and their tests were
+deleted. P3a1 shrank to the tree, and P3a2 was dropped.
 
-`rust_source` is the Rust parsing primitive and `munge` is the vocabulary expressed over it; `tree`
-is the working copy that *applies* a munge. Applying is the usage, so each munge PR carries its own
-half of the applier: the old **C3a** landed the vocabulary with no applier, two PRs before the test
-that exercised it.
+#### P3a1 — The working copy
 
-**`munge.py` is new on master.** It used to be two subjects under one name: pointing a target at the
-verification fork of a dependency, and the vocabulary of edits to the program's own source. The
-fork half is now its own module, [forks.py](../composer/spec/cvlr/forks.py) (`plan_overrides`,
-`already_patched`, `manifest_additions`), which **P1** carried because `scaffold.py` calls it. The
-tests divide the same way: `tests/test_cvlr_forks.py` with P1, `tests/test_cvlr_munge.py` here.
+**Merged 2026-10-16 as [#260](https://github.com/Certora/AutoProver/pull/260), `68f60985`:** 8 files, +923 −9.
 
-#### P3a1 — The working copy, and edits to the program
+- `composer/spec/cvlr/tree.py`: `SharedTree`, the run's one working copy, derived from state as
+  the project, every unit's draft, and the staging unit's edits. `ProjectSource`, the allowlist an
+  edit may write: the source directories and manifests of the project's own path crates, as
+  `cargo metadata` resolves them. `check_edit` returns the key an edit writes, or why it may not.
+- `composer/layout.py` (`RUST_BUILD_DIRS`) and `composer/pipeline/ecosystem.py`: one list of the Rust
+  build directories, for the agent's source tools and the tree.
+- `composer/spec/cvlr/preflight.py` *(hunk)*: `CvlrPreflight.source`.
+- The graphcore pin, `85be3db` → `9f4e9fc` (graphcore #39, `PersistentMaterializer`).
+- `tests/test_cvlr_tree.py`, less its harness cases, and a `tests/test_fs_forbidden_read.py` hunk.
 
-On `eric/cvlr-working-copy`: +1,789 code and +1,435 tests. Grew in review from the function kinds
-alone to four of the five munge kinds, because the derive swap and the import swap needed nothing
-the function kinds did not already bring, and the review that settled the tree's shape was easier
-to judge against every kind it has to replay.
-
-- `composer/spec/cvlr/rust_source.py`: all of the munges' Rust reading — signatures and whole
-  definitions (`find_signature`, `function_item`, and the refusals `FunctionNotFound`,
-  `FunctionAmbiguous`, `NoFunctionBody`), the brace scanner, derive lists (`DERIVE_LIST`,
-  `derive_lists`), the attributes above an item, and `use` declarations. Its docstring says why a
-  munge has to read source at all: it is a feature-gated record replayed onto a shared tree, not a
-  text edit, so every replay starts from a name.
-- `composer/spec/cvlr/munge.py`, less `ModuleRedirect`: the five attribute kinds,
-  `FunctionExtraction`, `DeriveSwap`, `ImportSwap`, their refusals and appliers, and the state
-  helpers (`munge_history`, `amended`, `latest`, `merge_munges`). Every kind names its `subject`,
-  and its justification is `why_sound`, the report's name for it.
-- `composer/spec/cvlr/tree.py`, less `ModuleRedirect`'s rank and `run_global_munges`, with the
-  graphcore pin bump `85be3db` → `9f4e9fc` (graphcore #39).
-- `composer/layout.py` (`RUST_BUILD_DIRS`) and `composer/pipeline/ecosystem.py`: one list of the
-  Rust build directories for the agent's source tools and the tree. Shared code: it also withholds
-  `node_modules` from the Rust source tools at any depth rather than at the root only.
-- `composer/spec/cvlr/preflight.py` *(hunk)*: `CvlrPreflight.source`, the munge boundary, read from
-  the scaffolded graph.
-- Tests: `tests/test_cvlr_munge.py` less the two `CvlrFormalizer` cases (P7),
-  `tests/test_cvlr_derive_swap.py` less its `editor` case (P5), `tests/test_cvlr_import_swap.py`,
-  `tests/test_cvlr_tree.py` less its harness cases (P3b), and a `test_fs_forbidden_read.py` hunk.
-
-**The tree.** Each run starts it fresh: `materialize` deletes any tree a previous run left and
-graphcore's `PersistentMaterializer` copies the project in, with every unit's draft and every
-munged file as one overlay above it. Never reused, because the tree holds the run's private
-`CARGO_HOME`, whose unpacked sources a dependency's build script can rewrite. The cost is a
-dependency fetch and build at the start of every run, resumed runs included. The PR body should
-state the invariants: the tree is derived from state and disposable, a munge dropped from state
-leaves the file, the union of every unit's munges is replayed, and writes are content-compared
-because cargo fingerprints on mtime. A munged CRLF file is written with LF line endings, so that it
-compares equal from the first write.
-
-**The munge boundary is an allowlist** (`ProjectSource`): the source directories of the project's
-own library crates, as `cargo metadata` resolves them from a path. A fetched crate is never project
-source wherever it is unpacked, so the boundary no longer depends on the sandbox putting
-`CARGO_HOME` under `.certora_internal`. `project_file` is the one path check, and `replay_files`
-the one replay, for both the tree and the report's `munge_diff`.
-
-**Before it opens.** The branch's history is the review, not the PR: `vfs_diff` moved out and back,
-replay read bytes and then text again, and one commit pins graphcore at a commit of a closed PR
-(graphcore #40, `cc3d7cf`) that the next one reverts. Re-cut it into commits a reviewer can read in
-order — `rust_source`, `munge` with its tests, the build-directory list, then `tree` with
-`preflight` and the pin — before opening it.
+What review changed: an overlay is keyed by the project-relative path it writes, so a path with `..`
+(`NotProjectRelative`) or a second spelling of one file is refused, and a symlinked path must be
+editable at both ends. A tree that overlaps the project is refused when it is constructed. A staged
+draft is a `_UnitDraft` rather than a tuple.
 
 Nothing in production calls the tree until P3b.
 
-#### P3a2 — Module redirects
+#### What the branch carries on top of #260's files
 
-Named **P3a3** in the three-way split, when it held all three structural kinds; the derive swap and
-the import swap moved to P3a1 in review. What is left is `ModuleRedirect`, with
-`ModuleNotFound`, `ModuleOutsideCrateSource`, `apply_module_redirect`, `mirror_path`,
-`forwards_feature` and `module_declarations` in `rust_source.py`. In `tree.py`, its rank in
-`replay`, its substitute file in `replay_files` (so the report's diff shows the stand-in that was
-verified), and `run_global_munges`. A module redirect of a local dependency is the only munge gated
-on the shared `certora` feature, so it is the only reason that method exists.
+| Change | Files | Rides |
+|---|---|---|
+| The harness cases: unit-feature gating and the build permit | `tests/test_cvlr_tree.py` | **P3b**, appended to master's file. They import `harness` and `verify` |
+| `.cvlr_work` out of `NOT_PROJECT_SOURCE`, and `materialize`'s docstring (`f1dd37fc`) | `tree.py` | **master now**. #260 already refuses a tree inside the project, so nothing on master puts a tree there |
+| The editor's write filter and submit gate, on `check_edit` | `editor.py` | **P5** |
 
-Tests: `tests/test_cvlr_module_redirect.py`, which imports only `munge` and `tree` at module scope.
+#### ~~P3a2 — Module redirects~~
 
-**The P3a/P3b line still cuts `tests/test_cvlr_tree.py`.** It imports `harness.CvlrArtifactStore`
-at module scope, so its harness cases (unit features, the build permit) stay with P3b, and the file
-is assembled across two PRs: P3a1 and P3b.
+Dropped 2026-10-14. There is no munge vocabulary to land on its own. A module redirect is now one of
+the shapes the editor's charter describes and writes as text (P5), and
+`tests/test_cvlr_module_redirect.py` is deleted.
 
 ### P3b — A generated harness, and what its verdict means
 
@@ -431,7 +394,8 @@ its target directory, so they also share the `.so`, and the Prover's local phase
 uploads it. On the branch, `_stage_and_prepare` (`cvlr/verify.py`) holds the build permit only
 for staging and the gate build. `run_submission` runs outside it, on the reasoning that a sibling's
 edits are inert for this build. That holds for everything a sibling writes into the tree: harness
-modules and munges are behind per-unit features, and each unit has its own summaries file. It does
+modules are behind per-unit features, only the staging unit's edits are in the tree, and each unit
+has its own summaries file. It does
 not hold for the artifact. A sibling's build with other features can replace the `.so` before this
 job uploads it.
 
@@ -472,7 +436,11 @@ what their eight agents' context mechanism is being generalized *for*.
 
 ### P4 — The Anchor surface and the worked example
 
-`composer/spec/cvlr/{anchor_surface,example,guidance}.py`.
+`composer/spec/cvlr/{anchor_surface,example,guidance,rust_source}.py`.
+
+`rust_source` was planned for P3a1, as the Rust reading the munges were expressed over. With the
+munges gone it is only the scanner primitives (`DERIVE_LIST`, `body_span`, `code_positions`), and
+`anchor_surface` is its one caller, so it lands here.
 
 `anchor_surface` reads the program; `example` renders the worked example against what it read;
 `guidance` is the static prose that ships beside it. The old **C5a** put `anchor_surface` with the
@@ -521,7 +489,15 @@ is what the deferral in *Dropped: naming the CVLR corpus by tag* was waiting for
 
 ### P5 — The munge editor
 
-`composer/spec/cvlr/editor.py`, `composer/cargo/depinfo.py`, and the two prompt templates.
+`composer/spec/cvlr/editor.py`, `composer/cargo/depinfo.py`, the two prompt templates, and the
+editing core lifted out of the EVM editor (`8105adc4`): `composer/spec/source/munge/{edit_tools,
+edit_store,munge_agent,vfs_diff}.py`, with `composer/spec/source/{author,live_explorer}.py` and
+`composer/spec/cvl_generation.py` moved onto it. Also the report's `SourceEditRecord`, one patch per
+unit (`composer/spec/source/report/` hunks), tested by `tests/test_cvlr_source_edits.py`. None of
+these is testable without the editor ([cvlr-munges-as-text.md](./cvlr-munges-as-text.md) §6).
+
+The lift changes the EVM editor, which keeps passing unchanged. It could go to master ahead of P5 on
+its own, but it is then a refactor whose second caller is not in the diff.
 
 `depinfo` — which sources a build actually compiled, from rustc's `.d` files — has exactly one
 caller anywhere, and it is the editor: an edit to a file the `certora` feature gates out does not
@@ -587,10 +563,10 @@ description has to say so rather than leave a reviewer to find it.
 
 ### Order, and what is forced
 
-**~~P1~~ → ~~P2~~ → P3a1 → P3a2 → P3b → K1 → P4 → C7b → P5 → P6 → P7**
+**~~P1~~ → ~~P2~~ → ~~P3a1~~ → P3b → K1 → P4 → C7b → P5 → P6 → P7**
 
 K1, P4 and C7b are the three with slack. K1 needs nothing in `composer/spec/cvlr/` at all, and C7b
-needs only what P1 merged, so either could go first today. P4 needs `rust_source` (P3a1) and K1,
+needs only what P1 merged, so either could go first today. P4 carries `rust_source` itself and needs K1,
 whose bundle its worked-example test renders. C7b has to be ahead of P6, which reads it.
 Everything else is the DAG.
 
@@ -942,7 +918,7 @@ function gives `fs_tools_layered` a `materializer` factory that defaults to toda
 existing caller moves. Nothing outside `cvlr/tree.py` uses what it adds. A two-file pin bump with no
 user is not a review, so it lands with the code that needs it. P3a1's review tried a second bump,
 to a `sync_base` for reusing a tree across runs (graphcore #40); the fresh tree per run made it
-unnecessary, #40 was closed, and the pin stayed at `9f4e9fc`.
+unnecessary, #40 was closed, and the pin stayed at `9f4e9fc`. It landed with #260.
 
 **4. Three open PRs touch the same files as S4.**
 [#185](https://github.com/Certora/AutoProver/pull/185) and
@@ -994,6 +970,8 @@ roughly half that at the cost of splitting `tests/test_cvlr_tree.py` and
 as P3a/P3b because it is the better default, but it is the one place in the wave where the partition
 is a judgement rather than a consequence of the DAG, and a reviewer who would rather read 6,000
 lines of one story than two halves of it should say so before the split work is done.
+*What happened:* P3a2 was dropped on 2026-10-14 with the munge records, and P3a1 merged as #260 with
+the tree alone. The split of `tests/test_cvlr_tree.py` stands: its harness cases ride P3b.
 
 **8. ~~Does the "no tag registry" drop survive a second corpus?~~ Settled 2026-10-13: yes, and the
 branch is reworked to match.** The API-docs work had registered `cvlr_kb` and `cvlr_api_kb` in both
@@ -1031,15 +1009,16 @@ already local to the functions that need them.
 | P1 follow-up, to master now | `composer/spec/cvlr/preflight.py` *(hunk: `check(manifest_dir=…)`)* `composer/spec/cvlr/crates.py` *(hunk: drop `roots()`)* — plus the regression test, still to write |
 | P2 *(merged)* | `composer/cargo/sbf.py` `composer/spec/cvlr/prover.py` `tests/test_cvlr_end_to_end.py` `tests/test_cvlr_plumbing.py` *(split: `sbf_argv`, the build script, `write_submission`)* |
 | Tuning directives *(held)* | `composer/spec/cvlr/envs/` *(hunks)* `tests/test_cvlr_env_paths.py` *(hunk: the directive counts)* `tests/test_cvlr_dropped_writes.py` `tests/data/dropped_writes_probe.rs` |
-| P3a1 | `composer/spec/cvlr/{rust_source,munge}.py` *(split: no module redirect)* `composer/spec/cvlr/tree.py` *(split: no module-redirect rank, no `run_global_munges`)* `composer/spec/cvlr/preflight.py` *(hunk: `source`)* `composer/layout.py` `composer/pipeline/ecosystem.py` *(hunks: `RUST_BUILD_DIRS`)* `graphcore` `pyproject.toml` *(hunk: the pin)* `tests/test_cvlr_munge.py` *(split: less the two `CvlrFormalizer` cases)* `tests/test_cvlr_derive_swap.py` *(split: less the `editor` case)* `tests/test_cvlr_import_swap.py` `tests/test_cvlr_tree.py` *(split: the cases with no harness)* `tests/test_fs_forbidden_read.py` *(hunk)* |
-| P3a2 | `composer/spec/cvlr/munge.py` *(hunks: `ModuleRedirect`)* `composer/spec/cvlr/rust_source.py` *(hunk: `module_declarations`)* `composer/spec/cvlr/tree.py` *(hunks: its rank, its substitute in `replay_files`, `run_global_munges`)* `tests/test_cvlr_module_redirect.py` |
+| P3a1 *(merged)* | `composer/spec/cvlr/tree.py` `composer/spec/cvlr/preflight.py` *(hunk: `source`)* `composer/layout.py` `composer/pipeline/ecosystem.py` *(hunks: `RUST_BUILD_DIRS`)* `graphcore` `pyproject.toml` *(hunk: the pin)* `tests/test_cvlr_tree.py` *(split: the cases with no harness)* `tests/test_fs_forbidden_read.py` *(hunk)* |
+| P3a1 follow-up, to master now | `composer/spec/cvlr/tree.py` *(hunks: drop `.cvlr_work`, the `materialize` docstring)* |
+| P3a2 *(dropped)* | nothing: `munge.py` and the module-redirect tests are deleted on the branch |
 | P3b | `composer/spec/cvlr/{state,harness,verify,rules}.py` `tests/test_cvlr_rules.py` `tests/test_cvlr_build_permit.py` `composer/prover/core.py` *(hunk: `UnanalyzedCexHandler`)* `composer/spec/cvlr/tuning.py` *(split: `SummaryDirective`, `TuningFiles`, appended to what P1 landed)* `composer/spec/cvlr/conf.py` *(hunks: `OptimisticLoop`, `CollectUnsatCore`)* `composer/spec/source/report_prover.py` *(hunks: `job_input`, `fetch_unsat_cores`)* `composer/cargo/symbols.py` `tests/test_cvlr_symbols.py` `tests/test_cvlr_tuning.py` `tests/test_cvlr_tree.py` *(split: the harness cases)* `tests/test_cvlr_plumbing.py` *(split: `_CaptureCallbacks`, `_RunAccounting`)* `tests/test_cvlr_anchor_reach.py` `tests/data/anchor_reach_probe.rs` |
-| P4 | `composer/spec/cvlr/{anchor_surface,example,guidance}.py` `tests/test_cvlr_anchor_surface.py` `tests/test_cvlr_worked_example.py` |
+| P4 | `composer/spec/cvlr/{anchor_surface,example,guidance,rust_source}.py` `tests/test_cvlr_anchor_surface.py` `tests/test_cvlr_worked_example.py` |
 | C7b | `composer/scripts/cvlr_api_docs.py` `composer/cargo/doctest.py` `composer/tools/cvlr_api_rag.py` `composer/tools/cvlr_rag.py` *(hunks: the docstrings)* `composer/scripts/init-db.sql` *(hunks: `cvlr_api_rag`)* `composer/rag/db.py` *(hunks: `CVLR_API_DEFAULT_CONNECTION`, the `cvlr_api_kb` entry and its comment — not `cvlr_kb`'s; decision 8)* `scripts/populate_cvlr_rag.sh` `scripts/gen_docs.sh` `.gitignore` `docs/rag-import-format.md` *(hunks, after the fix above)* `tests/test_cvlr_api_docs.py` `tests/data/cvlr_rustdoc/` `tests/test_cvlr_research.py` *(split: the tool cases, through `test_the_surface_heading_is_shared_by_the_producer_and_the_tool`)* `tests/test_cargo_doctest.py` `tests/test_cvlr_recipe_examples.py` |
 | K1 | `composer/kb/kb_context.py` `composer/kb/knowledge_base.py` `composer/kb/resources/cvlr_baseline_facts.md` `composer/templates/kb_index.j2` `composer/templates/cvl_kb_index.j2` *(deleted: `git rm` it; `kb_index.j2` replaces it)* `tests/test_kb_bundle.py` `tests/test_cvlr_bundle.py` `composer/kb/resources/cvlr_recipes_index.yaml` `composer/kb/resources/recipes/cvlr-*.md` |
-| P5 | `composer/spec/cvlr/editor.py` `composer/cargo/depinfo.py` `composer/templates/cvlr_munge_editor_system.j2` `composer/templates/cvlr_munge_review_system.j2` `tests/test_cvlr_editor.py` `tests/test_cvlr_derive_swap.py` *(split: the `editor` case)* |
+| P5 | `composer/spec/cvlr/editor.py` `composer/cargo/depinfo.py` `composer/templates/cvlr_munge_editor_system.j2` `composer/templates/cvlr_munge_review_system.j2` `composer/spec/source/munge/{edit_tools,edit_store,munge_agent,vfs_diff}.py` `composer/spec/source/{author,live_explorer}.py` *(hunks: onto the lifted core)* `composer/spec/cvl_generation.py` *(hunk)* `composer/spec/source/report/{schema,collect,build,render}.py` *(hunks: `SourceEditRecord`)* `tests/test_cvlr_editor.py` `tests/test_cvlr_source_edits.py` |
 | P6 | `composer/spec/cvlr/author.py` `composer/spec/cvlr_research.py` `composer/templates/cvlr_{feedback_prompt,property_generation_prompt,property_generation_system_prompt,property_judge_system_prompt,research,research_system_prompt}.j2` `composer/templates/cvlr_rag_tools.j2` *(new work: delete)* `composer/ui/tool_display.py` *(hunks: `cvlr_research` and the `cvlr_api_*` / manual entries)* `composer/spec/source/source_env.py` `template_manifest.json` `tests/test_cvlr_judge_input.py` `tests/test_cvlr_knowledge.py` `tests/test_cvlr_research.py` *(split: the corpora, researcher and prompt cases)* `tests/test_cvlr_rag.py` *(new work: drop the template case)* `tests/data/cvlr_judge/` |
-| P7 | `composer/spec/source/report/{schema,collect,build}.py` *(hunks: `Abandoned`, `reason`, 3.2)* `composer/pipeline/core.py` *(hunks: `_abandonment`)* `tests/test_autoprove_report.py` *(hunks: the give-up cases)* `composer/spec/cvlr/pipeline.py` `composer/spec/cvlr/entry.py` *(the whole file, now including the parser P1 did not take)* the `cvlr-preflight` console script *(new work, still to write)* `composer/spec/cvlr/reference.py` *(hunks: `ProgramModel`, `withholding`)* `tests/test_cvlr_reference.py` *(hunks)* `composer/spec/source/report_prover.py` *(hunk: `make_run_link_fetcher`)* `composer/cli/console_solana.py` `composer/cli/tui_solana.py` `composer/spec/context.py` `composer/spec/services.py` `composer/ui/tool_display.py` *(the remainder)* `tests/test_cvlr_entry.py` `tests/test_cvlr_findings.py` `tests/test_cvlr_author.py` `tests/test_cvlr_munge.py` *(split: the three `CvlrFormalizer` cases)* `tests/test_cvlr_judge_round_cost.py` `tests/test_cvlr_plumbing.py` *(the remainder)* `tests/test_autoprove_integration.py` `.github/workflows/integration-tests.yml` |
+| P7 | `composer/spec/source/report/{schema,collect,build}.py` *(hunks: `Abandoned`, `reason`, 3.2)* `composer/pipeline/core.py` *(hunks: `_abandonment`)* `tests/test_autoprove_report.py` *(hunks: the give-up cases)* `composer/spec/cvlr/pipeline.py` `composer/spec/cvlr/entry.py` *(the whole file, now including the parser P1 did not take)* the `cvlr-preflight` console script *(new work, still to write)* `composer/spec/cvlr/reference.py` *(hunks: `ProgramModel`, `withholding`)* `tests/test_cvlr_reference.py` *(hunks)* `composer/spec/source/report_prover.py` *(hunk: `make_run_link_fetcher`)* `composer/cli/console_solana.py` `composer/cli/tui_solana.py` `composer/spec/context.py` `composer/spec/services.py` `composer/ui/tool_display.py` *(the remainder)* `tests/test_cvlr_entry.py` `tests/test_cvlr_findings.py` `tests/test_cvlr_author.py` `tests/test_cvlr_judge_round_cost.py` `tests/test_cvlr_plumbing.py` *(the remainder)* `tests/test_autoprove_integration.py` `.github/workflows/integration-tests.yml` |
 | P8 | `tests/test_cvlr_gate.py` `test_scenarios/solana_vault_idl/` |
 | P9 | `composer/testing/` `scripts/record_cvlr_tape.sh` `tests/test_cvlr_tape.py` `tests/test_tape_setup.py` |
 | R3 | `scripts/Dockerfile` `scripts/Dockerfile.solana` `scripts/docker-compose.yml` `scripts/docker-compose.common.yml` `scripts/docker-compose.solana.yml` `scripts/autoprove-entrypoint.sh` `tests/test_cvlr_image.py` |
@@ -1058,7 +1037,7 @@ The first draft's names appear in commit messages, in two open PR bodies and in
 | **R1** | P1 *(metadata, session)*, P2 *(sbf)*, P3b *(symbols)*, P5 *(depinfo)* | One directory, four unrelated consumers. The PR the feedback was about. |
 | **C1a** | P1 | The conf vocabulary lands with the preflight that writes it. |
 | **C1c** | P1 | Scaffold and preflight were already one thing; C1a was their only missing input. |
-| **C3a** | P3a1 and P3a2, less the fork half to P1 | The munge vocabulary lands with `tree`, which applies it; the dependency-fork half, now `forks.py`, lands with the `scaffold` that calls it. |
+| **C3a** | nothing: the munge vocabulary was deleted (2026-10-14); its fork half, now `forks.py`, went to P1 | The dependency-fork half landed with the `scaffold` that calls it. The vocabulary was planned for P3a1 and P3a2, beside the `tree` that applied it, until text edits replaced it. |
 | **C2** | P3a1 *(tree, the graphcore pin)*; its crate mount, `crate_mount` and `source_tools`, is deleted (`5b2afeff`) | The working copy and the agents' view of the crates are two subjects, not one. The second is now the research sub-agent in P6. |
 | **C5a** | P2 *(prover)*, P3b *(tuning, less the layer families, which go to P1)*, P4 *(anchor_surface)* | Three modules with three different first callers. |
 | **C4a1** | P2 *(rules)*, P3b *(state, harness)* | `rules` belongs with submission; `state` and `harness` belong with the `verify` that reads them. |
