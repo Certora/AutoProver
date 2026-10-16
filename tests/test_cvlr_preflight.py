@@ -53,6 +53,8 @@ pub fn deposit(amount: u64) -> u64 {
 }
 """
 
+_UNCONFINED = SandboxConfig(provider="none")
+
 
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
@@ -81,14 +83,16 @@ async def test_a_bare_cargo_workspace_becomes_one_that_compiles_with_a_harness_i
     assert selected.name == "vault"
     assert selected.package_dir == Path("programs/vault")
 
-    pre = await prepare_workspace(selected.workspace_root, reference=SOLANA_V2, package=selected.name)
+    pre = await prepare_workspace(
+        selected.workspace_root, reference=SOLANA_V2, sandbox=_UNCONFINED, package=selected.name
+    )
     assert pre.scaffold.blocked == (), pre.scaffold.blocked
     assert pre.artifact_stem == "vault"
     # Resolved from the scaffolded graph: before it, this project had no CVLR dependency at all.
     assert {crate.name for crate in pre.sources.crates} >= {"cvlr", "cvlr-solana"}
     assert (main_source.parent / "certora" / "specs" / "mod.rs").is_file()
 
-    await gate_workspace(pre, sandbox=SandboxConfig(provider="none"))
+    await gate_workspace(pre, sandbox=_UNCONFINED)
 
 
 async def test_pointing_it_at_a_project_it_already_scaffolded_replaces_only_the_edited_harness(
@@ -102,7 +106,7 @@ async def test_pointing_it_at_a_project_it_already_scaffolded_replaces_only_the_
     )
 
     first = await prepare_workspace(
-        selected.workspace_root, reference=SOLANA_V2, package=selected.name
+        selected.workspace_root, reference=SOLANA_V2, sandbox=_UNCONFINED, package=selected.name
     )
     assert first.applied != ()
     specs = main_source.parent / "certora" / "specs" / "mod.rs"
@@ -110,7 +114,7 @@ async def test_pointing_it_at_a_project_it_already_scaffolded_replaces_only_the_
     specs.write_text(f"{scaffolded}\n// an author's work\n")
 
     again = await prepare_workspace(
-        selected.workspace_root, reference=SOLANA_V2, package=selected.name
+        selected.workspace_root, reference=SOLANA_V2, sandbox=_UNCONFINED, package=selected.name
     )
 
     assert again.applied == (specs.relative_to(selected.workspace_root),)

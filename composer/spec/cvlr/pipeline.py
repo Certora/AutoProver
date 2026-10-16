@@ -484,7 +484,10 @@ class CvlrBackend:
         unfixable compiler errors after the whole extraction phase. The gate is a build, so it goes
         on the run's CPU budget rather than its agent budget."""
         pre = await prepare_workspace(
-            Path(run.source.project_root), package=self.package, reference=self.reference
+            Path(run.source.project_root),
+            package=self.package,
+            reference=self.reference,
+            sandbox=self.sandbox,
         )
 
         async def gate() -> None:

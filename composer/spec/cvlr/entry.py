@@ -29,6 +29,7 @@ import logging
 import os
 import pathlib
 import re
+import tempfile
 import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Awaitable, Callable, Protocol, cast
@@ -328,12 +329,17 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
     # each of them is cheaper here by one analysis agent than inside preflight.
     # The ecosystem's name is the chain key, so the reference sets are looked up rather than
     # imported: this module's ``SOLANA`` is the ecosystem, not a reference set.
-    selected = await select_package(
-        project_root,
-        args.package,
-        candidates=generations(SOLANA.name),
-        main_source=(project_root / main_source).resolve(),
-    )
+    sandbox = build_confinement()
+    # Fetched into a throwaway home, not the run's: the run has no copy of the project yet, and a
+    # confined install's shared CARGO_HOME is not the runtime user's to write.
+    with tempfile.TemporaryDirectory(prefix="cvlr-select-") as select_home:
+        selected = await select_package(
+            project_root,
+            args.package,
+            candidates=generations(SOLANA.name),
+            main_source=(project_root / main_source).resolve(),
+            cargo_home=pathlib.Path(select_home) if sandbox.enabled else None,
+        )
     if identifier != (crate := selected.name.replace("-", "_")):
         # Legal, so not a refusal — the identifier only has to be a name the analysis can carry and
         # ``locate_main`` can match. But naming the program something other than its crate is
@@ -354,7 +360,6 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
     # the build subcommand is the one prerequisite nothing else touches until the first submission.
     _log.info("cvlr: building with %s", await sbf_subcommand_version())
 
-    sandbox = build_confinement()
     announce_confinement(sandbox)
 
     async def runner(fact: HandlerFactory[CvlrPhase, None]) -> CvlrPipelineResult:

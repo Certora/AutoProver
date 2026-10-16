@@ -1019,9 +1019,27 @@ def test_reading_a_workspace_runs_cargo_with_the_toolchain_asked_for(tmp_path, m
     monkeypatch.setattr(metadata.subprocess, "run", fake_run)
     for toolchain in ("1.90.0", None):
         metadata._cargo_metadata(
-            tmp_path, offline=True, features=(), toolchain=toolchain, timeout_s=5
+            tmp_path, offline=True, features=(), toolchain=toolchain, cargo_home=None, timeout_s=5
         )
     with_toolchain, without = seen
     assert with_toolchain is not None and with_toolchain["RUSTUP_TOOLCHAIN"] == "1.90.0"
     assert without is None
+
+
+def test_reading_a_workspace_fetches_into_the_cargo_home_asked_for(tmp_path, monkeypatch):
+    seen: list[dict[str, str] | None] = []
+
+    def fake_run(args, **kwargs):
+        seen.append(kwargs.get("env"))
+        return subprocess.CompletedProcess(args, 1, "", "no manifest")
+
+    monkeypatch.setattr(metadata.shutil, "which", lambda _: "/usr/bin/cargo")
+    monkeypatch.setattr(metadata.subprocess, "run", fake_run)
+    home = tmp_path / "private" / "cargo"
+    metadata._cargo_metadata(
+        tmp_path, offline=True, features=(), toolchain=None, cargo_home=home, timeout_s=5
+    )
+    (env,) = seen
+    assert env is not None and env["CARGO_HOME"] == str(home)
+    assert home.is_dir()
 

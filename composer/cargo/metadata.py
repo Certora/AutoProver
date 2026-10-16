@@ -287,6 +287,7 @@ class Workspace:
         offline: bool = False,
         features: tuple[CargoFeature, ...] = (),
         toolchain: str | None = None,
+        cargo_home: Path | None = None,
         timeout_s: int = METADATA_TIMEOUT_S,
     ) -> "Workspace | MetadataFailure":
         """The workspace containing ``project_root``, or why there is none.
@@ -308,6 +309,10 @@ class Workspace:
 
         ``toolchain`` is the rustup toolchain to run cargo with, in place of the project's pin, as
         :attr:`~composer.cargo.session.CargoSession.toolchain` is for a session.
+
+        ``cargo_home`` is where cargo fetches the graph's crates to, in place of the process's
+        ``CARGO_HOME``, which a confined install may not let the runtime user write
+        (:attr:`~composer.cargo.session.CargoSession.cargo_home`).
         """
         payload = await asyncio.to_thread(
             _cargo_metadata,
@@ -315,6 +320,7 @@ class Workspace:
             offline=offline,
             features=features,
             toolchain=toolchain,
+            cargo_home=cargo_home,
             timeout_s=timeout_s,
         )
         return parse_metadata(payload) if isinstance(payload, CargoMetadataJson) else payload
@@ -417,6 +423,7 @@ def _cargo_metadata(
     offline: bool,
     features: tuple[CargoFeature, ...],
     toolchain: str | None,
+    cargo_home: Path | None,
     timeout_s: int,
 ) -> CargoMetadataJson | MetadataFailure:
     if shutil.which("cargo") is None:
@@ -428,6 +435,12 @@ def _cargo_metadata(
         args.append("--offline")
     if features:
         args += ["--features", ",".join(features)]
+    overrides = {
+        **({"RUSTUP_TOOLCHAIN": toolchain} if toolchain is not None else {}),
+        **({"CARGO_HOME": str(cargo_home)} if cargo_home is not None else {}),
+    }
+    if cargo_home is not None:
+        cargo_home.mkdir(parents=True, exist_ok=True)
     try:
         completed = subprocess.run(
             args,
@@ -435,7 +448,7 @@ def _cargo_metadata(
             capture_output=True,
             text=True,
             timeout=timeout_s,
-            env={**os.environ, "RUSTUP_TOOLCHAIN": toolchain} if toolchain is not None else None,
+            env={**os.environ, **overrides} if overrides else None,
         )
     except subprocess.TimeoutExpired:
         return CargoTimedOut(timeout_s)

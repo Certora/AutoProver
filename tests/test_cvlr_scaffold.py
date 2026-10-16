@@ -39,12 +39,15 @@ from composer.spec.cvlr.scaffold import (
 )
 from composer.spec.cvlr.tuning import ENV_FAMILIES, INLINING, SUMMARIES
 from composer.spec.cvlr.reference import SOLANA_V2, SOLANA_V3, SOROBAN, generations
+from composer.sandbox.config import SandboxConfig
 
 PROGRAM = """\
 use solana_program::account_info::AccountInfo;
 
 pub fn process(_accounts: &[AccountInfo]) {}
 """
+
+_UNCONFINED = SandboxConfig(provider="none")
 
 
 def _project(
@@ -786,10 +789,14 @@ class _FakeCargo:
         self.workspace = workspace
         self.calls: list[tuple[Path, tuple[str, ...]]] = []
         self.toolchains: list[str | None] = []
+        self.cargo_homes: list[Path | None] = []
 
-    async def __call__(self, root, *, offline=False, features=(), toolchain=None, timeout_s=0):
+    async def __call__(
+        self, root, *, offline=False, features=(), toolchain=None, cargo_home=None, timeout_s=0
+    ):
         self.calls.append((Path(root), tuple(features)))
         self.toolchains.append(toolchain)
+        self.cargo_homes.append(cargo_home)
         return self.workspace
 
 
@@ -815,7 +822,9 @@ async def test_preflight_resolves_the_verification_graph_from_the_packages_own_d
     )
     fake = fake_cargo(workspace)
 
-    result = await preflight.prepare_workspace(tmp_path, reference=SOLANA_V2, package="prog")
+    result = await preflight.prepare_workspace(
+        tmp_path, reference=SOLANA_V2, sandbox=_UNCONFINED, package="prog"
+    )
 
     assert fake.calls[0] == (tmp_path, ())
     assert fake.calls[-1] == (package.root, ("certora",))
@@ -834,8 +843,28 @@ async def test_preflight_reads_the_project_with_the_host_toolchain_not_its_pin(
         tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE, package_dir="programs/prog"
     )
     fake = fake_cargo(workspace)
-    await preflight.prepare_workspace(tmp_path, reference=SOLANA_V2, package="prog")
+    await preflight.prepare_workspace(
+        tmp_path, reference=SOLANA_V2, sandbox=_UNCONFINED, package="prog"
+    )
     assert fake.toolchains and set(fake.toolchains) == {HOST_RUST_TOOLCHAIN}
+
+
+@pytest.mark.asyncio
+async def test_a_confined_preflight_fetches_into_the_cargo_home_the_gate_warms(
+    tmp_path, fake_cargo
+):
+    """A confined install's shared CARGO_HOME is not the runtime user's to write, so the reads
+    fetch where the gate's warm step will look."""
+    from composer.sandbox.recipes import sandbox_cargo_home
+
+    workspace, _ = _project(
+        tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE, package_dir="programs/prog"
+    )
+    fake = fake_cargo(workspace)
+    await preflight.prepare_workspace(
+        tmp_path, reference=SOLANA_V2, sandbox=SandboxConfig(provider="launcher"), package="prog"
+    )
+    assert fake.cargo_homes and set(fake.cargo_homes) == {sandbox_cargo_home(tmp_path)}
 
 
 @pytest.mark.asyncio
@@ -844,7 +873,7 @@ async def test_preflight_reports_what_cargo_said_when_the_project_cannot_be_read
 ):
     fake_cargo(CargoFailed("error: failed to parse manifest at `Cargo.toml`\n"))
     with pytest.raises(preflight.PreflightFailed, match="failed to parse manifest") as caught:
-        await preflight.prepare_workspace(tmp_path, reference=SOLANA_V2)
+        await preflight.prepare_workspace(tmp_path, reference=SOLANA_V2, sandbox=_UNCONFINED)
     assert str(caught.value).startswith(f"Could not read the Cargo project at {tmp_path}:")
 
 
@@ -856,7 +885,7 @@ async def test_preflight_refuses_to_choose_between_verifiable_packages(tmp_path,
     fake_cargo(replace(workspace, members=(package, second)))
 
     with pytest.raises(preflight.PreflightFailed, match="name the one to verify"):
-        await preflight.prepare_workspace(tmp_path, reference=SOLANA_V2)
+        await preflight.prepare_workspace(tmp_path, reference=SOLANA_V2, sandbox=_UNCONFINED)
 
 
 @pytest.mark.asyncio
@@ -867,7 +896,9 @@ async def test_preflight_names_the_members_when_asked_for_one_that_is_not_there(
     fake_cargo(workspace)
 
     with pytest.raises(preflight.PreflightFailed, match="members: prog"):
-        await preflight.prepare_workspace(tmp_path, reference=SOLANA_V2, package="nope")
+        await preflight.prepare_workspace(
+            tmp_path, reference=SOLANA_V2, sandbox=_UNCONFINED, package="nope"
+        )
 
 
 @pytest.mark.asyncio
@@ -882,7 +913,9 @@ async def test_a_blocked_plan_stops_preflight_with_the_resolution_in_the_message
     fake_cargo(workspace)
 
     with pytest.raises(preflight.PreflightFailed, match="crate-type"):
-        await preflight.prepare_workspace(tmp_path, reference=SOLANA_V2, package="prog")
+        await preflight.prepare_workspace(
+            tmp_path, reference=SOLANA_V2, sandbox=_UNCONFINED, package="prog"
+        )
     assert not (tmp_path / "src" / "certora").exists()
 
 
