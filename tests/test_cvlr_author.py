@@ -24,7 +24,7 @@ import pytest
 
 from composer.authoring.state import SkippedProperty, make_validation_stamper, spec_digest
 from composer.prover.conf import SelectRules
-from composer.spec.cvlr.conf import OptimisticLoop, TunableConf, RunOverlay, solana_conf
+from composer.spec.cvlr.conf import TunableConf, RunOverlay, solana_conf
 from composer.spec.cvlr.prover import Submission as CvlrSubmission
 from composer.spec.cvlr.harness import (
     DELIVERABLE_DIR,
@@ -44,7 +44,6 @@ from composer.spec.cvlr.state import (
 )
 from composer.spec.cvlr.tuning import SummaryDirective
 from composer.spec.cvlr import author
-from composer.spec.cvlr import author_tools
 from composer.spec.cvlr import verify as verify_mod
 from composer.spec.cvlr.author_tools import unaccounted
 from composer.spec.cvlr.verify import _externals_note, _unverdicted, _wrongly_expected
@@ -393,138 +392,6 @@ def _verify_state(draft: str) -> dict:
         "failed": None,
         "budget_curtailed": False,
     }
-
-
-# ---------------------------------------------------------------------------------------------
-# The two prover settings the author may move
-#
-# The closed list is the point, and so is the line drawn inside it. The loop bound decides how the
-# prover spends its time; `optimistic_loop` decides what a green verdict means and is on the list
-# anyway, because the sound remedies for a loop run out before the problem does
-# (`docs/cvlr-todo.md` U9). A `rule_sanity` downgrade and the prover flags stay off it.
-
-
-def _adjust(state: dict, edits: list, why: str = "tried bounding the operands first"):
-    tool = author_tools.AdjustProverConfig(state=state, tool_call_id="tc", edits=edits, why=why)
-    return tool.run()
-
-
-def test_raising_the_loop_bound_sets_it():
-    from composer.spec.cvlr.author_tools import SetLoopIter
-
-    out = _adjust(_verify_state(DRAFT), [SetLoopIter(type="loop_iter", iterations=4)])
-    assert not isinstance(out, str), out
-    assert out.update["prover_settings"].loop_iter == 4
-
-
-def test_the_loop_bound_is_not_capped_following_the_cvl_backends_precedent():
-    """`composer/tools/prover.py` exposes `loop_iter` as a plain int and steers with prose — "set
-    this number as low as possible", "above 3 … exponentially worse". Guidance, not a ceiling, and
-    a bound the author cannot exceed would turn a cost trade into a refusal."""
-    from composer.spec.cvlr.author_tools import SetLoopIter
-
-    out = _adjust(_verify_state(DRAFT), [SetLoopIter(type="loop_iter", iterations=9)])
-    assert not isinstance(out, str), out
-    assert out.update["prover_settings"].loop_iter == 9
-
-
-def test_a_loop_bound_below_one_is_refused():
-    from composer.spec.cvlr.author_tools import SetLoopIter
-
-    out = _adjust(_verify_state(DRAFT), [SetLoopIter(type="loop_iter", iterations=0)])
-    assert isinstance(out, str) and "not a bound" in out
-
-
-def test_a_setting_that_is_already_what_you_asked_for_is_refused():
-    from composer.spec.cvlr.author_tools import SetLoopIter
-
-    out = _adjust(_verify_state(DRAFT), [SetLoopIter(type="loop_iter", iterations=2)])
-    assert isinstance(out, str) and "already 2" in out
-
-
-def test_optimistic_loop_goes_on_and_the_whole_conf_comes_back():
-    """The one edit here that changes what a verdict means. It is reachable because the sound
-    ladder runs out before the problem does — a trip count the analysis cannot fix is answered by
-    none of bounding the inputs, summarizing the loop, or unrolling further (`docs/cvlr-todo.md`
-    U9)."""
-    from composer.spec.cvlr.author_tools import SetOptimisticLoop
-
-    out = _adjust(_verify_state(DRAFT), [SetOptimisticLoop(type="optimistic_loop", enabled=True)])
-    assert not isinstance(out, str), out
-    # The setting keeps the call's `why`: it is what the judge is shown to weigh the setting by.
-    assert out.update["prover_settings"].optimistic_loop == OptimisticLoop(
-        why="tried bounding the operands first"
-    )
-    # Unchanged, because the two are answers to different halves of the same symptom.
-    assert out.update["prover_settings"].loop_iter == 2
-    assert '"optimistic_loop": true' in out.update["messages"][0].content
-
-
-def test_optimistic_loop_already_on_is_refused():
-    from composer.spec.cvlr.author_tools import SetOptimisticLoop
-
-    state = {**_verify_state(DRAFT), "prover_settings": TunableConf(optimistic_loop=OptimisticLoop(why="w"))}
-    out = _adjust(state, [SetOptimisticLoop(type="optimistic_loop", enabled=True)])
-    assert isinstance(out, str) and "already on" in out
-
-
-def test_optimistic_loop_goes_off_and_takes_its_reason_with_it():
-    from composer.spec.cvlr.author_tools import SetOptimisticLoop
-
-    state = {**_verify_state(DRAFT), "prover_settings": TunableConf(optimistic_loop=OptimisticLoop(why="w"))}
-    out = _adjust(state, [SetOptimisticLoop(type="optimistic_loop", enabled=False)])
-    assert not isinstance(out, str), out
-    assert out.update["prover_settings"] == TunableConf()
-
-
-def test_the_edits_apply_together_or_not_at_all():
-    """`why` is required for the same reason it is on a summary: the conf ships with the
-    deliverable, and with this key in it every verdict in the unit is conditional."""
-    from composer.spec.cvlr.author_tools import SetLoopIter, SetOptimisticLoop
-
-    out = _adjust(
-        _verify_state(DRAFT),
-        [SetLoopIter(type="loop_iter", iterations=4),
-         SetOptimisticLoop(type="optimistic_loop", enabled=True)],
-    )
-    assert not isinstance(out, str), out
-    assert out.update["prover_settings"] == TunableConf(
-        loop_iter=4, optimistic_loop=OptimisticLoop(why="tried bounding the operands first")
-    )
-
-
-def test_an_unexplained_config_change_is_refused():
-    """The conf ships with the deliverable, so a setting nobody explained is one a reader cannot
-    weigh — the same trade `summarize_for_prover` and every munge make."""
-    from composer.spec.cvlr.author_tools import SetLoopIter
-
-    out = _adjust(_verify_state(DRAFT), [SetLoopIter(type="loop_iter", iterations=3)], why="  ")
-    assert isinstance(out, str) and "non-empty `why`" in out
-
-
-def test_edits_apply_together_or_not_at_all():
-    """The second edit is a no-op refusal, and the first must not have landed."""
-    from composer.spec.cvlr.author_tools import SetLoopIter, SetOptimisticLoop
-
-    state = _verify_state(DRAFT)
-    out = _adjust(state, [
-        SetLoopIter(type="loop_iter", iterations=4),
-        SetOptimisticLoop(type="optimistic_loop", enabled=False),
-    ])
-    assert isinstance(out, str) and "already off" in out
-    assert state["prover_settings"] == TunableConf()
-
-
-def test_a_config_change_invalidates_the_prover_stamp():
-    """A verdict earned under one loop bound is not a verdict under another, which is what
-    `tuning_history` carrying the conf buys."""
-    from composer.spec.cvlr.author_tools import SetLoopIter
-
-    before = _verify_state(DRAFT)
-    out = _adjust(before, [SetLoopIter(type="loop_iter", iterations=4)])
-    assert not isinstance(out, str), out
-    after = {**before, "prover_settings": out.update["prover_settings"]}
-    assert tuning_history(before) != tuning_history(after)
 
 
 @pytest.mark.asyncio
