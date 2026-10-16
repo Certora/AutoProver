@@ -105,7 +105,25 @@ def test_the_entrypoint_ingests_the_api_manifest_the_solana_image_bakes():
     assert output is not None, "the cvlr_api_docs step writes no manifest under $AUTOPROVE_HOME"
     entrypoint = _ENTRYPOINT.read_text()
     assert f'cvlr_api_manifest="{output[1]}"' in entrypoint
-    assert 'composer.scripts.rag_import "$cvlr_api_manifest"' in entrypoint
+    assert 'composer.scripts.rag_import --replace "$cvlr_api_manifest"' in entrypoint
+
+
+def test_setup_db_empties_each_corpus_before_ingesting_it():
+    """Ingest only inserts. Without --replace a second setup-db dies on the CVL manual's unique index
+    after inserting part of it, and never reaches the CVLR corpora."""
+    entrypoint = _ENTRYPOINT.read_text()
+    ingests = re.findall(r"python -m composer\.scripts\.(?:ragbuild|rag_import)[^\n]*", entrypoint)
+    assert len(ingests) == 3, ingests
+    assert all("--replace" in line for line in ingests), ingests
+
+
+def test_setup_db_can_leave_the_cvl_manual_alone():
+    """A shared database's CVL manual belongs to the EVM deployment; seeding CVLR must not rebuild it."""
+    entrypoint = _ENTRYPOINT.read_text()
+    assert "--cvlr-only) cvlr_only=true" in entrypoint
+    cvl = entrypoint.index('"$AUTOPROVE_HOME/prover-docs/cvl.html"')
+    guard = entrypoint.rfind('if [[ "$cvlr_only" == true ]]', 0, cvl)
+    assert guard != -1 and "fi" not in entrypoint[guard:cvl].split()
 
 
 def test_the_api_manifest_step_discards_its_toolchain_and_registry():

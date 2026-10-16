@@ -5,8 +5,10 @@
 #   1. Patch /etc/passwd for the host UID compose is running us as, so
 #      libraries that call pwd.getpwuid() (torch via getpass.getuser(), etc.)
 #      don't crash.
-#   2. One-time `setup-db` subcommand — populates the RAG corpora against the
-#      compose-managed postgres.
+#   2. `setup-db` subcommand — populates the RAG corpora against the compose-managed
+#      postgres. Safe to re-run: each corpus is emptied before it is ingested.
+#      `setup-db --cvlr-only` leaves the CVL manual alone, for a database whose CVL
+#      corpus belongs to another deployment.
 #   3. For console-autoprove / tui-autoprove, transparently inject --rag-db
 #      pointing at the in-network postgres service.
 #   4. For console-solana / tui-solana, refuse to start when this container was
@@ -35,6 +37,12 @@ RAG_CONN="postgresql://rag_user:rag_password@${PGHOST}:${PGPORT}/rag_db"
 
 if [[ "${1:-}" == "setup-db" ]]; then
   shift
+  cvlr_only=false
+  case "${1:-}" in
+    "") ;;
+    --cvlr-only) cvlr_only=true; shift ;;
+    *) echo "[autoprove] setup-db: unknown argument '$1' (expected --cvlr-only or nothing)" >&2; exit 2 ;;
+  esac
   export PGPASSWORD=postgres_admin_password
   # Always apply init-db.sql, even against an already-initialized cluster. Every statement in it
   # is guarded (IF NOT EXISTS / \gexec), so re-running is a no-op for what is already there and
@@ -50,23 +58,31 @@ if [[ "${1:-}" == "setup-db" ]]; then
   echo "[autoprove] applying schema from ${init_sql} ..."
   psql -h "$PGHOST" -p "$PGPORT" -U postgres -d postgres \
       -v ON_ERROR_STOP=1 -f "$init_sql"
-  echo "[autoprove] populating rag_db at ${RAG_CONN} ..."
-  python -m composer.scripts.ragbuild \
-      --output "$RAG_CONN" \
-      "$AUTOPROVE_HOME/prover-docs/cvl.html"
+  # --replace on every ingest below: ingest only inserts, so without it a second setup-db adds a
+  # copy of every section, or dies on the CVL manual's unique index part-way through and never
+  # reaches the corpora after it. The corpus is empty while it is rebuilt, so a run searching it
+  # meanwhile finds nothing; seed when nothing is running.
+  if [[ "$cvlr_only" == true ]]; then
+    echo "[autoprove] --cvlr-only: leaving the CVL manual in rag_db as it is"
+  else
+    echo "[autoprove] populating rag_db at ${RAG_CONN} ..."
+    python -m composer.scripts.ragbuild --replace \
+        --output "$RAG_CONN" \
+        "$AUTOPROVE_HOME/prover-docs/cvl.html"
+  fi
 
   # The two CVLR corpora. `cvlr_kb` is the Solana manual, built into every image beside the CVL one
   # so that a setup-db from any container populates it. `cvlr_api_kb` is generated from the pinned
   # CVLR crates when the Solana image is built (scripts/Dockerfile.solana), because it needs a nightly
   # toolchain the base image does not carry; a setup-db run from the base image skips it.
   echo "[autoprove] populating cvlr_kb from the Solana manual ..."
-  python -m composer.scripts.ragbuild --corpus cvlr \
+  python -m composer.scripts.ragbuild --replace --corpus cvlr \
       "$AUTOPROVE_HOME/prover-docs/solana.html"
 
   cvlr_api_manifest="$AUTOPROVE_HOME/rag/cvlr_api_kb.rag.json"
   if [[ -f "$cvlr_api_manifest" ]]; then
     echo "[autoprove] populating cvlr_api_kb from ${cvlr_api_manifest} ..."
-    python -m composer.scripts.rag_import "$cvlr_api_manifest"
+    python -m composer.scripts.rag_import --replace "$cvlr_api_manifest"
   else
     echo "[autoprove] this image carries no CVLR API manifest; skipping cvlr_api_kb (run setup-db from autoprove-solana to populate it)"
   fi
