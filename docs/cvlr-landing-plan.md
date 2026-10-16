@@ -33,7 +33,7 @@ is the last appendix. The rules, the deferrals and the drops are otherwise uncha
 (`2eb4a391`), P2 as [#258](https://github.com/Certora/AutoProver/pull/258) (`b999c306`), and P3a1,
 the working tree, as [#260](https://github.com/Certora/AutoProver/pull/260) (`68f60985`). The corpus half of P6 merged ahead of all three as
 [#244](https://github.com/Certora/AutoProver/pull/244). **P3a2 is dropped.** The branch replaced the
-munge records with text edits ([cvlr-munges-as-text.md](./cvlr-munges-as-text.md)), so there is no
+munge records with text edits ([who-edits-the-program.md](./who-edits-the-program.md) §18), so there is no
 munge vocabulary left to land; see [P3a](#p3a--the-working-copy-and-what-may-be-changed-in-it).
 `feature/solana` took master after #260 by merge (`899981fd`). The next PR is **P3b**.
 
@@ -336,7 +336,7 @@ passes on a machine without one.
 
 Planned as two PRs: **P3a1**, the working tree with the munge kinds it replays, and **P3a2**, module
 redirects. On 2026-10-14 the branch replaced the munge records with text edits
-([cvlr-munges-as-text.md](./cvlr-munges-as-text.md)): the editor writes whole files into the unit's
+([who-edits-the-program.md](./who-edits-the-program.md) §18): the editor writes whole files into the unit's
 own overlay and writes the `cfg` gate on the unit's feature itself, as EVM does. `munge.py`, the
 record-reading half of `rust_source.py`, the record replay in `tree.py` and their tests were
 deleted. P3a1 shrank to the tree, and P3a2 was dropped.
@@ -494,7 +494,7 @@ editing core lifted out of the EVM editor (`8105adc4`): `composer/spec/source/mu
 edit_store,munge_agent,vfs_diff}.py`, with `composer/spec/source/{author,live_explorer}.py` and
 `composer/spec/cvl_generation.py` moved onto it. Also the report's `SourceEditRecord`, one patch per
 unit (`composer/spec/source/report/` hunks), tested by `tests/test_cvlr_source_edits.py`. None of
-these is testable without the editor ([cvlr-munges-as-text.md](./cvlr-munges-as-text.md) §6).
+these is testable without the editor.
 
 The lift changes the EVM editor, which keeps passing unchanged. It could go to master ahead of P5 on
 its own, but it is then a refactor whose second caller is not in the diff.

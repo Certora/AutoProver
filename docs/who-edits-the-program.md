@@ -1,6 +1,6 @@
 # Who edits the program
 
-> **Partly superseded.** §8.2-8.6, §9.3, §10-13, §14.3, §15, the first half of §14.4 and §16's run-wide munge layer are superseded by [cvlr-munges-as-text.md](cvlr-munges-as-text.md): edits are text in a per-unit overlay, not records. §1-7 stand.
+> **Partly superseded.** §8.2-8.6, §9.3, §10-13, §14.3, §15, the first half of §14.4 and §16's run-wide munge layer are superseded by §18: edits are text in a per-unit overlay, not records. §1-7 stand.
 
 > Whether the CVLR backend can move *every* modification of the program under verification behind a
 > munge agent — including the property-relative kinds the author applies today — and let the author
@@ -1254,14 +1254,103 @@ How each backend gives an agent a modifiable copy:
 
 | | EVM | CVLR |
 |---|---|---|
-| the edits | file text, in a `dict[str, str]` overlay in graph state (`VFSState`) | records (`Munge`), in graph state; the text is derived |
-| what a build sees | a `TemporaryDirectory` written from the overlay and the project, per compile check | `.cvlr_work/build/`, a fresh copy per run, reconciled in place |
-| reverting an edit | pick an older snapshot from the edit store | drop the record from state; the tree is re-derived |
-| who edits | a munge editor, reviewed behaviourally; it never sees the properties | a munge editor with its own reviewer, and the property judge rules on what the munges did to each rule |
-| what may change | Exposure, Refactor, Standardize; behaviour-preserving | a closed set of kinds ([munge.py](../composer/spec/cvlr/munge.py)); property-relative |
+| the edits | file text, in a `dict[str, str]` overlay in graph state (`VFSState`) | the same, one overlay per unit (§18) |
+| what a build sees | a `TemporaryDirectory` written from the overlay and the project, per compile check | one tree per run in a run-scoped temporary directory: the project, every unit's draft, and the staging unit's overlay, reconciled in place |
+| reverting an edit | pick an older snapshot from the edit store | the same (`revert_to_edit`) |
+| who edits | a munge editor, reviewed behaviourally; it never sees the properties | a munge editor with its own reviewer, and the property judge rules on what the edits did to each rule |
+| what may change | Exposure, Refactor, Standardize; behaviour-preserving | the kinds the editor's charter names, each gated on the unit's feature; property-relative |
 
-What CVLR reuses from the EVM munge machinery: the report's `SourceEditRecord` and
-`AppliedEditRecord` (a munge reaches `report.json`'s `source_edits`), the `Formalizer.source_edits()`
-hook, and `munge/vfs_diff.py`'s diff. What it does not reuse is everything that follows from EVM's
-agent topology and solc: `munge_agent.py`, `compile_check.py` (solc-specific), `edit_store.py`,
-`edit_oracle.py`, `erc7201.py`, and the three munge templates.
+What CVLR reuses from the EVM munge machinery: the editing core in `munge/munge_agent.py` (review
+request, give-up, the reviewer, the digest gate), `munge/edit_tools.py` (`commit_edit`,
+`edit_history_log`, `revert_to_edit`), `edit_store.py`, `vfs_diff.py`, the report's
+`SourceEditRecord` and `AppliedEditRecord`, and the `Formalizer.source_edits()` hook. What it does
+not reuse follows from solc: `compile_check.py`, `edit_oracle.py`, `erc7201.py`, and the EVM munge
+templates. Each backend keeps its own submit gate.
+
+---
+
+## 18. Edits as text
+
+On 2026-10-14 the CVLR backend dropped the munge records of §8.2–§13 for EVM's representation: the
+editor edits whole files in the unit's own VFS overlay and writes the `cfg` gate itself. This
+reverses §8.2's choice of a typed write surface over records. It supersedes §14.3, §15's replay of a
+union of records, the first half of §14.4, and §16's run-wide munge layer.
+
+### 18.1 The decision
+
+An edit stays **gated on the unit that asked for it**, so that the user can apply it to their own
+tree safely: with the unit's feature off, their build is the build they shipped. What changed is
+who writes the gate and how the edit is stored.
+
+* **The editor writes the gate.** Its charter (`cvlr_munge_editor_system.j2`) gives the gated shape
+  of each kind, and the reviewer checks it. AutoProver no longer renders `cfg` lines. The rule all
+  the shapes share: with the unit's feature off, the file compiles to exactly what the developer
+  wrote. Code the edit keeps is wrapped, never retyped.
+* **An edit is text.** There are no records, no replay onto the pristine project, and no union of
+  units' edits in one file.
+* **The report hands the user one patch per unit**, as EVM's `source_edits` does
+  (`SourceEditRecord.cumulative_diff`). Merging two units' patches to one file is the user's job.
+
+That removed every piece of Rust reading the records needed — locating a function's signature and
+body, parsing `use` trees, recognizing a sibling's gate — along with the record vocabulary, its
+appliers, its typed refusals and the replay ordering: about 1,300 lines of `munge.py` and most of
+2,500 lines of tests.
+
+An edit inside a local dependency crate has to declare the unit's feature in that crate's manifest
+and forward it from the program's. Since no edit is ever in force for another unit's build, the
+shared `certora` gate for dependency redirects went too.
+
+### 18.2 Why §8.2's objection no longer held
+
+§8.2 rejected a VFS because a free-form edit has no `cfg_attr`: two units editing one file in the
+shared tree collide, and isolating them would mean one materialization per unit. Two things changed
+underneath it.
+
+1. **The tree no longer has to be right for every unit at once.** §14.4's first half required every
+   write to be inert for every unit, because a sibling could rewrite the tree during a build. Its
+   second half then extended the build permit from staging through the Prover's upload. Staging
+   runs under that permit, so every check, build and upload has the tree to itself, and the tree can
+   hold *the building unit's* copy of each edited file.
+2. **The single tree removed per-unit build directories, not per-unit file contents.** Its saving
+   is that the dependencies, all but 4 of ~515 artifacts on the three-unit scenario (§14.5), compile
+   once per run. Swapping a few files of the program's own crate at stage time keeps that.
+
+So the tree holds every unit's harness draft, each behind its own feature, and only the staging
+unit's edited files. A path the overlay stops serving is restored from the project by the
+materializer, which is how a sibling's edit reverts.
+
+### 18.3 What it costs
+
+* **A program-crate rebuild when consecutive builds come from different units and either has edited
+  a file.** Measured on klend (2026-10-14), two units each gating one attribute in
+  `state/reserve.rs`, staged alternately, three rounds each way (37k lines of program source, 287
+  crates in the host graph):
+
+  | build | cold | restage, no change | swap |
+  |---|---|---|---|
+  | host `cargo check` (rustc 1.74.1) | 25.6s | 0.1s | 1.2s |
+  | `cargo-build-sbf` (solana 1.17.34) | 67.2s | 0.4s | 19.5s |
+
+  Every swap rebuilt exactly one crate. A unit pays the same rebuild whenever its own draft changed,
+  which is the usual reason to build, so the marginal cost is about 20s only on a build whose draft
+  did not. Not measured: the `certora` and unit features, and the Prover's own rebuild. The host
+  check ran on klend's pinned 1.74.1, because `HOST_RUST_TOOLCHAIN` (1.90.0) cannot compile klend's
+  `farms` dependency.
+* **No drift detection on resume.** A stored whole-file overlay silently overwrites a newer copy of
+  the file in the project. EVM has the same gap. Within one run the project copy does not move.
+* **The kinds are guidance, not typed tools.** The boundary is as strong as the reviewer.
+* **No ready-merged deliverable.** Two units' patches to one file often conflict textually where
+  their gated changes are compatible.
+
+### 18.4 Still open
+
+* **A mechanical check that the gate is right.** Neither backend has one. Compare rustc's
+  macro-expanded output of the edited crate with the unit's feature off against the pristine
+  crate's (`RUSTC_BOOTSTRAP=1 cargo rustc --lib -- -Zunpretty=expanded`). `cfg` stripping happens
+  before expansion and the output is pretty-printed, so only a real change to the feature-off
+  program differs. Untried: whether the bootstrap variable survives the sandbox, whether Anchor's
+  proc macros expand deterministically, and whether absolute paths leak into the output.
+* **Drift detection.** Record each overlay file's base hash and refuse to stage onto a project file
+  that has changed since.
+* **One merged deliverable**, combining every unit's patch into one gated patch per file, if users
+  find merging by hand a burden. A note in the rendered report may be enough.
