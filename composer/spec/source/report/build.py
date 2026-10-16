@@ -153,6 +153,7 @@ async def build_report[R: ReportableResult](
         properties=properties,
         rules=rules,
         groups=groups,
+        grouping_fallback_reason=fallback_reason,
         skipped=skipped,
         gave_up_components=gave_up,
         curtailed_components=curtailed,

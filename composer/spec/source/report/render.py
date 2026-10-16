@@ -219,6 +219,7 @@ class ReportTemplateParams(TypedDict):
     group_counts: list[ChipView]
     findings: list[FindingView]
     findings_unwritten: list[RuleName]
+    grouping_fallback_reason: str | None
     groups: list[GroupView]
     hoisted: list[HoistedClaim]
     skipped: list[SkippedClaim]
@@ -429,6 +430,7 @@ def _build_context(report: AutoProverReport) -> ReportTemplateParams:
         "group_counts": _group_counts([g.status for g in report.groups], group_labels),
         "findings": [_finding_view(f) for f in report.findings],
         "findings_unwritten": report.findings_unwritten,
+        "grouping_fallback_reason": report.grouping_fallback_reason,
         "groups": [
             _group_view(g, props_by_key, rules_by_ref, unit_labels, group_labels, edited_components)
             for g in report.groups

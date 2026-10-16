@@ -953,6 +953,8 @@ async def test_build_empty_grouping_falls_back(tmp_path):
     assert set(g.members) == {("C", "p1"), ("C", "p2")}
     assert g.status == GroupStatus.BAD  # r2 violated
     assert any("FALLBACK GROUPING APPLIED" in w for w in report.coverage.warnings)
+    assert report.grouping_fallback_reason is not None
+    assert "no high-level properties" in report.grouping_fallback_reason
 
 
 @pytest.mark.asyncio
@@ -1100,6 +1102,7 @@ async def test_build_report_synthesizes_one_finding_per_violation():
     )
 
     assert len(report.findings) == 1
+    assert report.grouping_fallback_reason is None
     f = report.findings[0]
     assert f.severity == "high"                            # computed: impact high × likelihood medium
     prov = f.provenance
@@ -1368,3 +1371,8 @@ def test_the_run_link_fetcher_serves_any_reportable_result():
 def test_render_html_names_violated_rules_with_no_finding():
     h = render_html(_mini_report().model_copy(update={"findings_unwritten": ["r_bad"]}))
     assert "No finding could be written for 1 violated rule: r_bad" in h
+
+
+def test_render_html_says_why_the_properties_share_one_group():
+    h = render_html(_mini_report().model_copy(update={"grouping_fallback_reason": "grouping failed: 529"}))
+    assert "because grouping them failed (grouping failed: 529)" in h

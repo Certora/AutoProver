@@ -412,6 +412,11 @@ class AutoProverReport(BaseModel):
     properties: list[FormalizedProperty]
     rules: list[RuleVerdict]
     groups: list[PropertyGroup]
+    #: Why the properties were put in one ``general`` group instead of being grouped: the
+    #: grouping call failed, its result failed validation, or it grouped nothing. ``None`` when
+    #: grouping worked or there was nothing to group, and on reports written before schema 3.5.
+    #: Without it a fallback report looks like one whose single group was an editorial choice.
+    grouping_fallback_reason: str | None = None
     #: Formalization gaps — properties that exist but no rule formalizes (see the two gap types).
     skipped: list[SkippedClaim] = Field(default_factory=list)
     gave_up_components: list[GaveUpComponent] = Field(default_factory=list)
