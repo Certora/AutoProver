@@ -24,14 +24,11 @@ Run with::
 
 Re-record with ``scripts/record_cvlr_tape.sh`` when the pipeline's shape changes on purpose.
 
-**The checked-in tape predates the corpus.** It was recorded under ``--rag-corpus none``, before the
-scenario moved to the shipping corpus (``docs/cvlr-api-docs-plan.md`` §8 step 7), so no agent in the
-recording had ``cvlr_research`` bound. Seven recorded turns call it anyway (six in ``formalize-2``,
-one in ``formalize-0``); each got an unknown-tool result, and the model carried on without it. The
-tape holds none of the researcher's own turns: it has no lane of its own and no corpus-search calls.
-Under the corpus configuration those seven calls reach a bound researcher, which runs inside the
-caller's ``run_task`` and so draws its model turns from the caller's lane. Whether this tape still
-replays there has not been checked; the next re-recording carries the researcher's turns.
+**Sub-agents replay from lanes of their own.** The author routinely starts two ``cvlr_research``
+calls in one turn, and both researchers run at once. Each is served from the lane named by the tool
+call that started it (:func:`composer.testing.harness_tape.tape_lane_path`); sharing the author's
+lane, they took each other's turns in whichever order they asked, and a researcher handed a
+``result`` before its draft was rejected, shifting the lane under the author.
 
 Both corpora are a prerequisite here as they are for the recording: a replayed search against an
 absent or empty corpus is a tool result the recording never saw.
