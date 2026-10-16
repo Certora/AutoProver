@@ -399,6 +399,11 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
 </section>
 {%- endfor %}
 {%- endif %}
+{%- if findings_unwritten %}
+<section class="findings-head">
+  <div class="subtitle muted">No finding could be written for {{ findings_unwritten | length }} violated {{ terms.unit_plural if findings_unwritten | length > 1 else terms.unit_singular }}: {{ findings_unwritten | join(", ") }}. Each is still listed as violated below.</div>
+</section>
+{%- endif %}
 
 {%- for g in groups %}
 <section class="prop" id="{{ g.slug }}">

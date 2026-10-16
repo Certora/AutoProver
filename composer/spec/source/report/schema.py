@@ -438,3 +438,7 @@ class AutoProverReport(BaseModel):
     #: when nothing is violated, when synthesis was unavailable, or for a non-prover backend). Prose
     #: is synthesized at report time — see ``report/findings.py``.
     findings: list[Finding] = Field(default_factory=list)
+    #: Violated rules whose finding could not be written, after retries. Each is still a ``BAD``
+    #: entry in ``rules``; this list is what keeps a missing write-up from reading as "nothing
+    #: was violated". Empty on reports written before schema 3.5.
+    findings_unwritten: list[RuleName] = Field(default_factory=list)

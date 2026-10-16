@@ -1135,11 +1135,11 @@ async def test_build_findings_degrades_without_analysis():
     rules = [_rv("c.spec", "r_bad", Outcome.BAD)]
     props = [_fp("C", "p_bad", [("c.spec", "r_bad")], desc="balances stay solvent")]
     groups = [_pg("g", [("C", "p_bad")], status=GroupStatus.BAD)]
-    findings = await build_findings(
+    findings = (await build_findings(
         contract_name="Vault", rules=rules, properties=props, groups=groups,
         fetch_evidence=_evidence({}),  # fetcher present, but no evidence recorded for r_bad
         llm=_StructuredStubModel(output=_draft(impact_level="medium", likelihood_level="medium")),
-    )
+    )).findings
     assert len(findings) == 1
     assert findings[0].severity == "medium"               # medium × medium
     assert findings[0].content.proof_of_concept is None
@@ -1156,7 +1156,56 @@ async def test_build_findings_empty_without_evidence_fetcher():
         contract_name="V", rules=rules, properties=[], groups=[],
         fetch_evidence=None, llm=_StructuredStubModel(output=_draft()),
     )
-    assert findings == []
+    assert findings.findings == [] and findings.unwritten == []
+
+
+class _SlippingDraftModel(BaseChatModel):
+    """Structured output that raises on its first ``bad_answers`` calls, then returns ``output``.
+    ``asked`` records each call."""
+    output: Any
+    bad_answers: int
+    asked: list[int] = []
+
+    def with_structured_output(self, schema, **kwargs) -> Runnable:  # type: ignore[override]
+        def answer(_messages):
+            self.asked.append(len(self.asked))
+            if len(self.asked) <= self.bad_answers:
+                raise ValueError("FindingDraft: field required: title")
+            return self.output
+        return RunnableLambda(answer)
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
+        raise NotImplementedError("stub is structured-output only")
+
+    @property
+    def _llm_type(self) -> str:
+        return "slipping-draft-stub"
+
+
+def _one_bad_rule() -> dict[str, Any]:
+    return dict(
+        contract_name="Vault",
+        rules=[_rv("c.spec", "r_bad", Outcome.BAD)],
+        properties=[_fp("C", "p_bad", [("c.spec", "r_bad")], desc="balances stay solvent")],
+        groups=[_pg("g", [("C", "p_bad")], status=GroupStatus.BAD)],
+        fetch_evidence=_evidence({}),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_finding_draft_is_asked_for_again():
+    llm = _SlippingDraftModel(output=_draft(), bad_answers=1, asked=[])
+    out = await build_findings(**_one_bad_rule(), llm=llm)
+    assert len(out.findings) == 1 and out.unwritten == []
+    assert len(llm.asked) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_finding_that_never_drafts_is_named_not_dropped():
+    llm = _SlippingDraftModel(output=_draft(), bad_answers=99, asked=[])
+    out = await build_findings(**_one_bad_rule(), llm=llm)
+    assert out.findings == [] and out.unwritten == ["r_bad"]
+    assert len(llm.asked) == 3
 
 
 def test_findings_prompt_lists_all_properties_a_rule_formalizes():
@@ -1314,3 +1363,8 @@ def test_the_run_link_fetcher_serves_any_reportable_result():
     """It reads nothing but ``run_link``, so nothing about it is backend-specific."""
     fetcher = make_run_link_fetcher(_FakeAPI({}))
     assert callable(fetcher)
+
+
+def test_render_html_names_violated_rules_with_no_finding():
+    h = render_html(_mini_report().model_copy(update={"findings_unwritten": ["r_bad"]}))
+    assert "No finding could be written for 1 violated rule: r_bad" in h

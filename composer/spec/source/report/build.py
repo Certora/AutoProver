@@ -17,12 +17,12 @@ from composer.spec.source.report.collect import (
     Abandoned, EvidenceFetcher, ReportableResult, ReportComponentInput, VerdictFetcher, collect,
 )
 from composer.spec.source.report.coverage import ValidationError, validate
-from composer.spec.source.report.findings import build_findings
+from composer.spec.source.report.findings import SynthesizedFindings, build_findings
 from composer.spec.source.report.grouping import (
     build_fallback_grouping, build_groups, call_grouping_llm, PropertyGroup
 )
 from composer.spec.source.report.schema import (
-    AutoProverReport, BuildEnvironment, DeprioritizedProperty, Finding, HoistedClaim, Outcome,
+    AutoProverReport, BuildEnvironment, DeprioritizedProperty, HoistedClaim, Outcome,
     PropertyKey,
     ReportBackend, RuleRef, SourceEditRecord,
     VerificationArtifactRecord,
@@ -126,10 +126,10 @@ async def build_report[R: ReportableResult](
     # Violated rules -> findings. Its own guard: findings synthesis must never fail the report
     # (the whole phase is also best-effort in the caller, but this keeps a working report even when
     # only findings break).
-    findings: list[Finding] = []
+    synthesized = SynthesizedFindings()
     if findings_llm is not None:
         try:
-            findings = await build_findings(
+            synthesized = await build_findings(
                 contract_name=contract_name, rules=rules, properties=properties, groups=groups,
                 fetch_evidence=fetch_evidence, llm=findings_llm,
             )
@@ -137,6 +137,9 @@ async def build_report[R: ReportableResult](
             if RERAISE_REPORT_FAILURES:
                 raise
             _log.warning("report: findings synthesis failed (%s); continuing without findings", e)
+            synthesized = SynthesizedFindings(
+                unwritten=[r.name for r in rules if r.outcome == Outcome.BAD]
+            )
 
     report = AutoProverReport(
         backend=backend,
@@ -158,6 +161,7 @@ async def build_report[R: ReportableResult](
         deliverable_patch=deliverable_patch,
         verification_artifacts=verification_artifacts or [],
         coverage=coverage,
-        findings=findings,
+        findings=synthesized.findings,
+        findings_unwritten=synthesized.unwritten,
     )
     return report

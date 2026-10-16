@@ -9,6 +9,7 @@ finding is best-effort, so a synthesis failure drops that one finding rather tha
 """
 import asyncio
 import logging
+from dataclasses import dataclass, field
 from typing import TypedDict
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -20,7 +21,7 @@ from composer.templates.loader import load_jinja_template
 from composer.spec.source.report.collect import EvidenceFetcher, RuleEvidence
 from composer.spec.source.report.schema import (
     AuthoredContent, Finding, FindingProvenance, FormalizedProperty, ImpactLevel, IssueContent,
-    LikelihoodLevel, Outcome, PropertyGroup, PropertyKey, RuleRef, RuleVerdict, SeverityTier,
+    LikelihoodLevel, Outcome, PropertyGroup, PropertyKey, RuleName, RuleRef, RuleVerdict, SeverityTier,
 )
 
 _log = logging.getLogger(__name__)
@@ -29,6 +30,18 @@ _log = logging.getLogger(__name__)
 #: doesn't burst dozens of heavy-model requests at once (which rate limits would turn into dropped
 #: findings).
 _MAX_CONCURRENT_FINDING_CALLS = 8
+
+#: How many times one rule's draft is asked for. A structured-output slip (a required field left
+#: out) is the commonest failure and usually does not repeat, so dropping the finding on the first
+#: one throws away a write-up that a second ask would have produced.
+_DRAFT_ATTEMPTS = 3
+
+
+@dataclass(frozen=True)
+class SynthesizedFindings:
+    findings: list[Finding] = field(default_factory=list)
+    #: Violated rules whose finding could not be written.
+    unwritten: list[RuleName] = field(default_factory=list)
 
 # Impact × Likelihood -> severity. ``none`` impact (no real-world exploit path) is informational,
 # handled in `severity_for` rather than the table. Low impact caps at ``low`` regardless of likelihood:
@@ -97,14 +110,15 @@ async def build_findings(
     groups: list[PropertyGroup],
     fetch_evidence: EvidenceFetcher | None,
     llm: BaseChatModel,
-) -> list[Finding]:
-    """One `Finding` per violated rule (concurrent, best-effort). Findings are produced only when the
-    backend supplies an evidence fetcher; returns ``[]`` otherwise or when nothing is violated."""
+) -> SynthesizedFindings:
+    """One `Finding` per violated rule (concurrent, best-effort), and the violated rules that got
+    none. Findings are produced only when the backend supplies an evidence fetcher; both lists are
+    empty otherwise or when nothing is violated."""
     if fetch_evidence is None:
-        return []
+        return SynthesizedFindings()
     bad = [r for r in rules if r.outcome == Outcome.BAD]
     if not bad:
-        return []
+        return SynthesizedFindings()
 
     # A violated rule -> every property it formalizes (a rule may jointly formalize several) -> the
     # audit groups those properties sit in. Properties partition into groups (coverage-validated), so
@@ -134,12 +148,23 @@ async def build_findings(
                 "groups": rule_groups,
                 "instances": instances,
             }).render_to(load_jinja_template)
-            draft = await bound.ainvoke([SystemMessage(system), HumanMessage(user)])
-            assert isinstance(draft, FindingDraft)
-            return _compose(rule, draft, instances, rule_groups)
         except Exception:  # noqa: BLE001 — one finding failing must never fail the report
-            _log.warning("report: finding synthesis failed for rule %r; skipping", rule.name, exc_info=True)
+            _log.warning(
+                "report: could not prepare the finding for rule %r", rule.name, exc_info=True
+            )
             return None
+        for attempt in range(1, _DRAFT_ATTEMPTS + 1):
+            try:
+                draft = await bound.ainvoke([SystemMessage(system), HumanMessage(user)])
+                if not isinstance(draft, FindingDraft):
+                    raise TypeError(f"expected a FindingDraft, got {type(draft).__name__}")
+                return _compose(rule, draft, instances, rule_groups)
+            except Exception:  # noqa: BLE001 — one finding failing must never fail the report
+                _log.warning(
+                    "report: finding draft for rule %r failed (attempt %d of %d)",
+                    rule.name, attempt, _DRAFT_ATTEMPTS, exc_info=True,
+                )
+        return None
 
     sem = asyncio.Semaphore(_MAX_CONCURRENT_FINDING_CALLS)
 
@@ -148,7 +173,10 @@ async def build_findings(
             return await _one(rule)
 
     findings = await asyncio.gather(*[_bounded(r) for r in bad])
-    return [f for f in findings if f is not None]
+    return SynthesizedFindings(
+        findings=[f for f in findings if f is not None],
+        unwritten=[r.name for r, f in zip(bad, findings) if f is None],
+    )
 
 
 def _proof_of_concept(instances: list[RuleEvidence]) -> str | None:
