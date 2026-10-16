@@ -25,9 +25,10 @@ the mechanism it points at is the fork P1 says we depend on. **P10 makes true ru
 whenever the compiler happens to emit a loop after the rule's last assertion, which every harness
 invites by dropping its nondet account array; worked around in the author prompt, and possibly the
 real cause of P9. **P12 is the price of P11's fix**: the sound-math mode asserts that a value it
-takes for a pointer stays below `2^64`, and a balance near `u64::MAX` fails that check. It costs
-coverage, never soundness, and it is worked around by bounding inputs, not by the optimistic flag
-that would hide overflows. **P13 is why a stand-in CPI cannot move lamports**, measured against a
+takes for a pointer stays below `2^64`, and an expression it wrongly takes for a pointer can fail
+that check. Which expressions it takes depends on how the rule is laid out, so bounding the inputs
+clears it only sometimes. It costs coverage, never soundness; the author bounds once, then restates
+the property below the handler or skips it. **P13 is why a stand-in CPI cannot move lamports**, measured against a
 control group.
 
 **Group U — `prover_output_utility`.** The library the report stack reads verdicts through. One
@@ -65,7 +66,7 @@ the write-up gives the line number rather than the name.
 | [P9](#p9) | Binding a handler's `Result` makes the rule vacuous, so an *acceptance* property is unstatable | **major** |
 | [P10](#p10) | The vacuity check's `satisfy` sits after the rule's drop glue, so a loop there makes a verified rule `SANITY_FAILED` | **major**, worked around |
 | [P11](#p11) | Without `-solanaTACSoundSignedMath`, a `u64` compared against a constant with the top bit set (`u64::MAX`, `1 << 63`) is modelled as comparing against a negative number | **critical** — unsound by default; `-solanaTACSoundSignedMath` fixes it, and AutoProver runs it on Prover master during development |
-| [P12](#p12) | Under `-solanaTACSoundSignedMath`, a value read from account data near `u64::MAX` fails a "Cannot overflow" check the Prover generated, so the rule never reaches its property | **major**, worked around in the prompt |
+| [P12](#p12) | Under `-solanaTACSoundSignedMath`, an expression the Prover wrongly takes for a pointer fails a "Cannot overflow" check it generated, depending on the rule's layout, so the rule never reaches its property | **major**, partly worked around in the prompt |
 | [P13](#p13) | An `AccountInfo` selected from a slice by key loses its provenance, so a stand-in `invoke` cannot move lamports | **major**, worked around in the prompt |
 | [U1](#u1) | `extract_job_id_from_url` cannot parse a Solana Prover job link | **major**, worked around |
 | [T1](#t1) | Tuning files are spelled for pre-2.2 `solana-program` paths | major |
@@ -898,12 +899,14 @@ either, a warning when a comparison against a top-bit constant is encoded under 
 
 ## P12
 
-### Under `-solanaTACSoundSignedMath`, a value read from account data near `u64::MAX` fails a "Cannot overflow" check the Prover generated
+### Under `-solanaTACSoundSignedMath`, an expression the Prover wrongly takes for a pointer fails a "Cannot overflow" check it generated
 
 **Effect: a rule stops on an assertion it did not write, `Cannot overflow: inferred pointer` or
-`Cannot overflow: computing TAC map index`, and never reaches its property.** The trigger is a
-number read from an account (a balance, an amount) that the rule leaves free, so the solver may put
-it within a few hundred of `u64::MAX`. Nothing is unsound: the extra assertion can only add
+`Cannot overflow: computing TAC map index`, and never reaches its property.** The expression
+involved carries a number read from an account, not an address. Leaving that number free is one
+trigger: the solver puts it within a few hundred of `u64::MAX`. But bounding it is not always enough,
+because whether the Prover takes the expression for a pointer at all depends on how the rule's code
+is laid out (*The measurement*, below). Nothing is unsound: the extra assertion can only add
 failures. AutoProver classifies it as an incomplete check, so it never becomes a finding
 (`composer/prover/ptypes.py`, `_GENERATED_ASSERTIONS`). But it costs coverage. On the 2026-10-15
 `solana_vault_idl` recording, two of the four units hit it. Deposits deleted a lamport-conservation
@@ -926,8 +929,8 @@ true: every plausible address is below `SBF_IMPLAUSIBLE_MEM_ADDRESS` (`0x5_0000_
 fails when the annotated expression carries a value that is no pointer at all.
 
 **The measurement.** Probe rules in a copy of the recorded vault project, built and submitted
-exactly as the pipeline does: the shipped conf, Prover `master`, 2026-10-16. The Withdrawals rule
-that hit it was resubmitted verbatim:
+exactly as the pipeline does: the shipped conf, Prover `master`, 2026-10-16. First, the Withdrawals
+rule that hit it, resubmitted verbatim:
 
 | rule | conf | verdict |
 |---|---|---|
@@ -937,10 +940,32 @@ that hit it was resubmitted verbatim:
 | same, balance and lamports `< 2^63` | shipped | `VIOLATED`: the rule's own `assertion failed` |
 
 In the first row's counterexample the vault's deserialized `balance` and `amount` are both
-`0xfffffffffffffe81`. That is `u64::MAX - 382`, a number from the account's bytes. Bounding it
-removes the generated assertion, and only the top half of the range has to go. The rule that is
-left fails its own `r.is_ok()` at `balance = 4, amount = 2`. That is [P9](#p9)'s territory, not this
-entry's. The recording's other message, "computing TAC map index", came from a stand-in `invoke` that
+`0xfffffffffffffe81`. That is `u64::MAX - 382`, a number from the account's bytes. The bounded rows'
+remaining failure is their own `r.is_ok()` at `balance = 4, amount = 2`, which is [P9](#p9)'s
+territory. **Those rows do not show the bound removes the generated assertion.** The Prover reports
+one violated assertion per rule, so they show only that the solver picked another one.
+
+The same rules with their own assertion replaced by `cvlr_assert!(true)`, so that only generated
+assertions can fail, settle it, and show the bound is not reliable:
+
+| rule, own assertion removed | verdict |
+|---|---|
+| nothing bounded | `VIOLATED`: `Cannot overflow: computing TAC map index` |
+| balance and lamports `< 2^63` (probe I) | `VERIFIED` |
+| balance and lamports `<= 2^40` | `VERIFIED` |
+| the `< 2^63` rule as the 2026-10-16 container run's author wrote it (probe S) | `VIOLATED`: `Cannot overflow: computing TAC map index` |
+| eight more variants of the author's shape, each dropping one assumption or `clog!` | all `VIOLATED`: `Cannot overflow: inferred pointer` or `computing TAC map index` |
+
+Probes I and S mean the same thing. They differ only in statement order (whether `amount` is chosen
+and bounded before or after `vault.authority == authority.key()` is assumed) and in whether the
+account infos are bound to locals first. In the run, the author's counterexample had every value
+near `2^48`. Which `mod 2^64` results `findMorePointers` counts as pointers evidently follows the
+compiled code's register use, not the values, so no rewording of a rule is a dependable way past
+it. In that run the Withdrawals author bounded as told, stopped on the assertion twice more with the
+bound in place, and moved its acceptance rules to `apply_withdrawal` on its own.
+
+The probes (`probe.rs`, H to T) and their jobs are in the 2026-10-16 session scratchpad; I and S are
+the pair to send with the ticket. The recording's other message, "computing TAC map index", came from a stand-in `invoke` that
 moved lamports through infos it was handed. The probe of that shape stops earlier, on
 [P13](#p13)'s `[3003]`.
 
@@ -950,12 +975,14 @@ not wrap. That prunes exactly the overflow paths a property about a balance or a
 find. A bound on the input is narrower, and it is visible, because it is an assumption in the
 harness that the report carries.
 
-**What AutoProver does about it.** The author's system prompt
-(`cvlr_property_generation_system_prompt.j2`) tells it to bound values read from account data below
-`2^63` when a property does not need the top of the range, and to record the bound as an
-assumption. When a rule does stop on this assertion, the gate says what it means and what to do
-(`composer/spec/cvlr/verify.py`). A property that is about the top of the range is skipped, with the
-reason.
+**What AutoProver does about it** (decided 2026-10-16: keep sound math, and spend at most one
+attempt per rule). The author's system prompt (`cvlr_property_generation_system_prompt.j2`) and the
+gate's message when a rule stops on this assertion (`composer/spec/cvlr/verify.py`) say the same
+thing. Bound the account-data values on the rule's path once, below `2^63`, and record the bound as
+an assumption. If the stop comes back with the bound in place, state the property against the
+program's logic below the handler, in a function that takes no `AccountInfo`, or skip it with the
+stop as the reason. A property about the top of the range cannot take the bound and is skipped. The
+cost is coverage that varies from rule to rule, and the report shows it as skips and assumptions.
 
 **What would resolve it**: making `findMorePointers` annotate only expressions with pointer
 provenance, so a data value is never asserted on as an address (CERT-10098 narrowed pointer addition

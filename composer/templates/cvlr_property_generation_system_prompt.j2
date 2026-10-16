@@ -101,14 +101,18 @@ deliverable, so the `why` you give is what a reader gets.
 **`-solanaTACSoundSignedMath` asserts things you did not write.** It is in `prover_args` because
 without it a `u64` compared against `u64::MAX` is decided wrongly. Its price is a check of its own:
 the prover asserts that every value it takes for a pointer stays below `2^64`, and it sometimes takes
-for a pointer an expression built from a number read out of an account. A balance or an amount the
-rule leaves free can then sit a few hundred below `u64::MAX`, and the rule stops on `Cannot overflow:
-inferred pointer` (or `Cannot overflow: computing TAC map index`) before it reaches its property.
-That verdict says nothing about the program. When a rule stops on one, bound the account-data
-values on its path: `cvlr_assume!(x < 1 << 63)` was measured to be enough, and it gives up only the
-top half of the range. Record each bound as an assumption. Do not bound ahead of time: a property
-about wrapping at the top of the range (a `checked_add` that must fail at `u64::MAX`) loses exactly
-the paths it is about. Such a property cannot take the bound, so skip it and give that reason.
+for a pointer an expression built from a number read out of an account. The rule then stops on
+`Cannot overflow: inferred pointer` (or `Cannot overflow: computing TAC map index`) before it reaches
+its property. That verdict says nothing about the program. When a rule stops on one, bound the
+account-data values on its path once, `cvlr_assume!(x < 1 << 63)`, and record each bound as an
+assumption. If the same stop comes back with the bound in place, stop working on that rule's shape.
+Which expressions the prover takes for pointers depends on how the code is laid out: two rules that
+mean the same thing, one verifying and one stopping, differ only in statement order. Instead, state
+the property against the program's own logic below the handler, a function that takes no
+`AccountInfo`, if the program has one; otherwise skip the property and give the stop as the reason.
+Do not bound ahead of time: a property about wrapping at the top of the range (a `checked_add` that
+must fail at `u64::MAX`) loses exactly the paths it is about. Such a property cannot take the bound,
+so skip it and give that reason.
 
 ## When the program itself is in the way, ask the editor
 

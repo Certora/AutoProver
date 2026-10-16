@@ -423,11 +423,15 @@ def _incomplete_advice(stopped: IncompleteCheck) -> str:
         case OverflowUnproven():
             return (
                 "`Cannot overflow` is the sound-math pass failing to show that an expression it "
-                "takes for a pointer stays below 2^64, almost always because a value the rule reads "
-                "from an account (a balance, an amount) is free to sit just below u64::MAX. Bound "
-                "the account-data values on that rule's path — `cvlr_assume!(x < 1 << 63)` is "
-                "enough — and record each bound as an assumption. A property about the top of the "
-                "range cannot take the bound: skip it and say so."
+                "takes for a pointer stays below 2^64. Bound the account-data values on that rule's "
+                "path once — `cvlr_assume!(x < 1 << 63)` — and record each bound as an assumption. "
+                "If the rule stops on it again with the bound in place, the bound is not what it "
+                "needs, and no rewording of the rule reliably gets past it: which expressions the "
+                "prover takes for pointers depends on how the code is laid out, not on what it "
+                "means. Then state the property against the program's own logic below the handler, "
+                "a function that takes no AccountInfo, if the program has one; otherwise skip the "
+                "property and give the stop as the reason. A property about the top of the range "
+                "cannot take the bound at all: skip it and say so."
             )
         case _:
             return "The prover's own message says what it needed."
