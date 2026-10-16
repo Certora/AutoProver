@@ -1,16 +1,14 @@
 """Marking a rule re-decides the prover stamp against the last run, without another run.
 
-A marking almost always follows the run that showed the violation, so a gate that stamped only at
-run time made every unit that ended on a new finding run its unchanged draft through the prover a
-second time: on the vault benchmark, Fee Collection marked three failures after its last run, was
-accepted by the judge, and was then refused at publish for a stale stamp.
+A marking usually follows the run that showed the violation. If only a run could stamp, a unit that
+ended on a new finding would have to submit its unchanged draft again before it could publish.
 """
 
 import pytest
 
 from composer.spec.cvlr.conf import TunableConf
 from composer.spec.cvlr.state import PROVER_VALIDATION_KEY, LastVerdicts, tuning_history
-from composer.spec.cvlr.verify import ExpectRuleFailure, ExpectRulePassage, prover_stamper
+from composer.spec.cvlr.author_tools import ExpectRuleFailure, ExpectRulePassage, prover_stamper
 
 DRAFT = "#[rule] pub fn rule_a() {}\n#[rule] pub fn rule_b() {}\n"
 

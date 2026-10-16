@@ -73,12 +73,8 @@ from composer.spec.cvlr.scaffold import ENVS_DIR, SPECS_DIR, declare_unit_featur
 from composer.spec.cvlr.tree import SharedTree
 from composer.spec.cvlr.tuning import SUMMARIES, TuningFiles
 from composer.spec.cvlr.state import PROVER_VALIDATION_KEY
-from composer.spec.cvlr.verify import (
-    CexAnalysis,
-    HarnessTarget,
-    VerifyDeps,
-    prover_stamper,
-)
+from composer.spec.cvlr.author_tools import prover_stamper
+from composer.spec.cvlr.verify import CexAnalysis, HarnessTarget, VerifyDeps
 from composer.spec.cvlr.reference import ChainReference
 from composer.spec.solana.model import (
     SolanaApplication,

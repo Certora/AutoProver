@@ -25,7 +25,8 @@ from composer.prover.results import SOLANA_TRACE, counterexample
 from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.pipeline import CvlrFormalizer
 from composer.spec.source.report.schema import ConfinedBuilds, UnconfinedBuilds
-from composer.spec.cvlr.verify import _CaptureCallbacks, _incomplete_note, _unaccounted
+from composer.spec.cvlr.author_tools import unaccounted
+from composer.spec.cvlr.verify import _CaptureCallbacks, _incomplete_note
 from composer.spec.source.cex_capture import CexAnalysisStore
 
 FIXTURES = Path(__file__).parent / "data" / "solana_cex"
@@ -190,8 +191,8 @@ def test_an_incomplete_check_cannot_be_declared_an_expected_failure():
     status = {"loop": False, "real": False}
     expected = {"loop": "I think this is a bug", "real": "the fee collector aliases the vault"}
 
-    assert _unaccounted(status, expected) == []
-    assert _unaccounted(status, expected, incomplete={"loop": "Unwinding condition in a loop"}) == [
+    assert unaccounted(status, expected) == []
+    assert unaccounted(status, expected, incomplete={"loop": "Unwinding condition in a loop"}) == [
         "loop"
     ]
 
@@ -201,7 +202,7 @@ def test_a_genuine_expected_failure_still_satisfies_the_gate():
     a real violation in it."""
     status = {"real": False}
     expected = {"real": "the fee collector aliases the vault"}
-    assert _unaccounted(status, expected, incomplete={}) == []
+    assert unaccounted(status, expected, incomplete={}) == []
 
 
 def test_the_gate_tells_an_overflow_stop_how_to_get_past_it_and_not_a_loop_remedy():

@@ -90,13 +90,8 @@ from composer.spec.cvlr.state import (
     validate_rule_subjects,
 )
 from composer.spec.cvlr.vacuity import vacuity_analyzer
-from composer.spec.cvlr.verify import (
-    ExpectRuleFailure,
-    ExpectRulePassage,
-    HarnessTarget,
-    VerifyDeps,
-    gate_tools,
-)
+from composer.spec.cvlr.author_tools import ExpectRuleFailure, ExpectRulePassage
+from composer.spec.cvlr.verify import HarnessTarget, VerifyDeps, gate_tools
 from composer.kb.kb_context import with_cvlr_context
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import run_to_completion
