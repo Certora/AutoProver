@@ -35,13 +35,18 @@ from composer.rustapp.frontend import GenericRustConsoleHandler
 from composer.testing.cvlr_tape import SCENARIO_NAME, run_scenario, stage_scenario
 
 
-async def _main(cache_ns: str | None) -> int:
-    # A fresh directory per recording, and printed rather than cleaned up: the run's deliverables
-    # — the harness, the conf, report.json — are what a reader checks a recording against, and the
-    # tape's curation pass needs them. Removing it would delete the evidence.
-    workdir = Path(tempfile.mkdtemp(prefix="cvlr-tape-record-"))
-    project = stage_scenario(workdir)
-    print(f"[record] staged {SCENARIO_NAME} at {project}", file=sys.stderr)
+async def _main(cache_ns: str | None, workdir: Path | None) -> int:
+    # Printed rather than cleaned up: the run's deliverables — the harness, the conf, report.json —
+    # are what a reader checks a recording against, and the tape's curation pass needs them.
+    # Removing it would delete the evidence.
+    if workdir is None:
+        workdir = Path(tempfile.mkdtemp(prefix="cvlr-tape-record-"))
+    project = workdir / SCENARIO_NAME
+    if project.exists():
+        print(f"[record] resuming in {project}", file=sys.stderr)
+    else:
+        project = stage_scenario(workdir)
+        print(f"[record] staged {SCENARIO_NAME} at {project}", file=sys.stderr)
 
     summary = RunSummary()
     result = await run_scenario(
@@ -88,7 +93,16 @@ def main() -> int:
         help="Cache namespace for the recording. Must be one no run has written to: a cache hit "
              "skips an LLM call the replay will make.",
     )
-    return asyncio.run(_main(parser.parse_args().cache_ns))
+    parser.add_argument(
+        "--workdir", type=Path, default=None,
+        help="Stage the scenario here instead of in a fresh temporary directory, or reuse the copy "
+             "already there. With --cache-ns, a second invocation over the same workdir resumes "
+             "the first: the cache is keyed by the project's path. A resumed invocation records "
+             "only the calls it makes and writes them over the tape, so point COMPOSER_RECORD_OUT "
+             "elsewhere for it.",
+    )
+    args = parser.parse_args()
+    return asyncio.run(_main(args.cache_ns, args.workdir))
 
 
 if __name__ == "__main__":
