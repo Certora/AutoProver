@@ -94,11 +94,11 @@ class PropertyViolation:
 
 @dataclass(frozen=True)
 class IncompleteCheck:
-    """The prover reported an assertion *it* generated, not the rule's.
+    """An assertion the prover generated for itself.
 
-    The check did not finish, so nothing about the program follows from it. Still worth showing an
-    author, who can usually get past it; not worth writing up as a finding. ``assertion`` is the
-    prover's own message. Which generated assertion it was is the subclass.
+    The check did not finish, so nothing about the program follows from it. Show
+    it to the author. Do not record it as a finding. ``assertion`` is the
+    prover's message. The subclass names which kind it was.
     """
 
     assertion: str
@@ -112,26 +112,23 @@ class LoopUnwound(IncompleteCheck):
 
 @dataclass(frozen=True)
 class OverflowUnproven(IncompleteCheck):
-    """The Solana Prover's sound-signed-math pass could not show that an expression it takes for a
-    pointer stays below ``2^64``.
+    """The sound-signed-math pass could not show that an expression it treats as a pointer stays below ``2^64``.
 
-    Under ``-solanaTACSoundSignedMath`` it annotates pointer arithmetic, byte-map indexes and
-    "inferred pointers" as unable to exceed 64 bits, then asserts that belief
-    (``sbf/tac/TACModSimplifier.kt``, ``removeNoOverflow``). The assertion fails when an annotated
-    expression carries a value read from account data that the rule left free to sit near
-    ``u64::MAX`` (``docs/upstream-defects.md`` P12). Bounding that input gets past it.
+    With ``-solanaTACSoundSignedMath``, the prover treats pointer arithmetic,
+    byte-map indexes, and inferred pointers as unable to exceed 64 bits, then
+    asserts that. The assertion fails when the expression uses a value read
+    from account data that the rule left free near ``u64::MAX``. Bounding that
+    input gets past it.
     """
 
 
 type ViolationKind = PropertyViolation | IncompleteCheck
 
-#: Assertions the prover generates for itself, matched by prefix — the tail carries advice that
-#: changes between versions.
+#: Assertions the prover generates for itself, matched by prefix. The tail
+#: carries advice that changes between versions.
 #:
-#: The list fails safe: an assertion it does not recognize is treated as the rule's own, so a stale
-#: entry costs a spuriously reported finding and can never suppress a real one. A findings
-#: synthesizer handed one of these would write the prover's limitation up as a defect in the program
-#: under verification.
+#: An unrecognized assertion is treated as the rule's own. A stale entry can
+#: report a finding that is not one, and cannot hide a real one.
 _GENERATED_ASSERTIONS: tuple[tuple[str, type[IncompleteCheck]], ...] = (
     ("Unwinding condition in a loop", LoopUnwound),
     ("Cannot overflow", OverflowUnproven),

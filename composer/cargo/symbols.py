@@ -1,16 +1,12 @@
 """Function symbols from a built SBF program, named as the prover names them.
 
-The Solana Prover's tuning files address code by demangled symbol name. An
-inlining directive or points-to summary is a regex over strings like
-``<vault::VaultState as anchor_lang::AccountDeserialize>::try_deserialize``. A
-directive that names a symbol the build does not define matches nothing, with
-no diagnostic.
+Tuning files address code by demangled symbol. A directive that names a symbol
+the build does not define matches nothing, and the prover does not say so.
 
-The prover demangles by piping names through ``rustfilt`` (without ``-h``, so
-hashes are stripped), and so does this module: any other demangler is a second
-opinion on a spelling only ``rustfilt`` gets to decide. ``llvm-readelf
---demangle``, ``llvm-cxxfilt`` and the LLVM-based demanglers do not understand
-rustc's legacy ``$LT$``-style escapes; GNU ``c++filt`` does, but keeps the hash.
+The prover demangles with ``rustfilt`` and no ``-h``, which strips hashes.
+This module does the same. ``llvm-readelf --demangle``, ``llvm-cxxfilt``, and
+the other LLVM demanglers do not understand rustc's ``$LT$`` escapes. GNU
+``c++filt`` understands them and keeps the hash.
 """
 
 import re
@@ -25,8 +21,11 @@ from elftools.elf.sections import SymbolTableSection
 
 
 class SymbolsUnavailable(RuntimeError):
-    """The build's function names cannot be read. Distinct from an empty set,
-    which would look like "your directive matched nothing"."""
+    """The build's function names cannot be read.
+
+    This is not an empty symbol list. An empty list would make every directive
+    look unmatched.
+    """
 
 
 class RustfiltMissing(SymbolsUnavailable):
@@ -40,21 +39,18 @@ class NoSymbolTable(SymbolsUnavailable):
 
 
 def defined_functions(shared_object: Path) -> tuple[str, ...]:
-    """Every function the program defines, named as the prover names it, sorted.
-
-    Functions only: a summary or inlining directive addresses code.
-    """
+    """Every function the program defines, named as the prover names it, sorted."""
     demangled = demangle(_mangled_functions(shared_object))
     return tuple(sorted(as_the_prover_names(demangled)))
 
 
 def as_the_prover_names(demangled: Iterable[str]) -> set[str]:
-    """Demangled names, disambiguated the way the prover disambiguates them.
+    """Demangled names, renamed the way the prover renames them.
 
-    Dropping the hash is not injective: every instantiation of a generic, and
-    every duplicate copy of a crate, demangles to the same string. The prover
-    then renames all ``n`` holders of a shared name to ``name_0`` … ``name_{n-1}``,
-    so a directive anchored with ``$`` matches none of them.
+    Dropping the hash collides. Every instantiation of a generic, and every
+    duplicate copy of a crate, demangles to the same string. The prover renames
+    all ``n`` holders of a shared name to ``name_0`` … ``name_{n-1}``. A
+    directive anchored with ``$`` then matches none of them.
     """
     counts = Counter(demangled)
     return {
@@ -77,7 +73,10 @@ def _mangled_functions(shared_object: Path) -> list[str]:
 
 
 def demangle(names: list[str]) -> list[str]:
-    """``names`` as ``rustfilt`` spells them, in order; one that is not mangled comes back as it went in."""
+    """``names`` as ``rustfilt`` spells them, in the same order.
+
+    A name that is not mangled comes back unchanged. Callers match by position.
+    """
     rustfilt = shutil.which("rustfilt")
     if rustfilt is None:
         raise RustfiltMissing()
@@ -90,8 +89,8 @@ def demangle(names: list[str]) -> list[str]:
 def unmatched(patterns: tuple[str, ...], symbols: tuple[str, ...]) -> tuple[str, ...]:
     """Which of ``patterns`` match no symbol, in the given order.
 
-    A pattern the regex engine rejects counts as unmatched: the prover would
-    reject it too.
+    A pattern the regex engine rejects counts as unmatched. The prover rejects
+    it too.
     """
     def matches(pattern: str) -> bool:
         try:

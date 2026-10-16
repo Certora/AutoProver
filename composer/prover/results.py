@@ -277,12 +277,12 @@ _EXTERNALS_ALERT = "The following functions are neither inlined nor summarized"
 def external_functions(results_root: Path) -> tuple[str, ...]:
     """The functions the Prover treated as external for this job, sorted and deduplicated.
 
-    Read from the alert report's ``Summarization`` alerts, one per rule translated. The alerts do not
-    name their rule, so this is the job's union. An external call writes nothing but its return
-    value, so the list is where the model can be unsound without saying so in any verdict.
+    Read from the alert report's ``Summarization`` alerts. The alerts do not name
+    their rule, so this is the job's union. An external call writes nothing but
+    its return value, and no verdict says so.
 
-    Empty when the report is absent or unreadable. That is not a claim that nothing was external,
-    which is why callers present a non-empty list and say nothing otherwise.
+    Empty when the report is absent or unreadable. Callers show a non-empty list
+    and say nothing otherwise.
     """
     try:
         alerts = json.loads((results_root / ALERT_REPORT).read_text())
@@ -295,8 +295,8 @@ def external_functions(results_root: Path) -> tuple[str, ...]:
         message = alert.get("message") if isinstance(alert, dict) else None
         if not isinstance(message, str) or (prefix := message.find(_EXTERNALS_ALERT)) == -1:
             continue
-        # The first bracket after the prefix, not the last in the message: a name can carry its own,
-        # as in ``core::ptr::drop_in_place<[solana_account_info::AccountInfo; 3]>``.
+        # The first `[` after the prefix. A name can contain brackets, as in
+        # ``core::ptr::drop_in_place<[solana_account_info::AccountInfo; 3]>``.
         start, end = message.find("[", prefix), message.rfind("]")
         if start == -1 or end < start:
             continue

@@ -1,15 +1,8 @@
-"""Which rules a CVLR harness declares — the ground truth the publish gate needs.
+"""Which rules a CVLR harness declares. The publish gate reads this before any submission.
 
-``composer.authoring.state.validate_check_mapping`` checks the property→check mapping against the
-set of checks that actually exist when a backend can supply one, and its docstring is explicit that
-this is what stops the agent mapping a property to a check it never wrote. The prover names every
-rule it ran, but only after submission; the gate answers before one. So the buffer is the ground
-truth, and this is what reads it.
-
-Exactness matters in both directions here. A name this misses is a publish the author cannot
-complete; a name it invents is a mapping the prover will not recognize. Both are pinned below, and
-the parametric cases are checked against the names the crate's *own documentation* says its macros
-generate — the only ground truth that is not a restatement of this implementation.
+A name this misses is a rule the author cannot map. A name it invents is a
+rule the prover will not recognize. The parametric cases are checked against
+the names the crate's documentation says its macros generate.
 """
 
 import io
@@ -43,9 +36,8 @@ cvlr_invariant_rules! {
 
 
 def test_the_parametric_names_match_what_the_crate_documents():
-    # The crate's doc comment lists these three by name. If the naming rule ever changes upstream,
-    # this is the test that notices — and a name we spell differently is a verdict the report
-    # cannot match back to a rule.
+    # The crate's doc comment lists these three names. A different spelling
+    # would not match the rule the prover reports.
     assert rule_names(CRATE_DOC_EXAMPLE) == (
         "non_negative_update_counter",
         "non_negative_reset_counter",
@@ -64,21 +56,18 @@ def test_the_parametric_names_match_what_the_crate_documents():
     ],
 )
 def test_the_spec_name_is_snake_cased_the_way_the_crate_does(written, expected):
-    # A port of the crate's own to_snake_case: lowercase, non-alphanumerics to underscore, runs
-    # collapsed. Approximating it would produce a symbol the prover never reports.
+    # The crate's to_snake_case: lowercase, non-alphanumerics to underscore, runs collapsed.
     assert snake_case(written) == expected
 
 
 def test_a_base_prefix_is_stripped_from_the_base_function():
-    # cvlr_rule_for_spec! strips a leading `base_`, so both spellings of a base name produce the
-    # same rule — and a project that does not use the prefix is not penalized.
+    # cvlr_rule_for_spec! strips a leading `base_`. Both spellings produce the same rule.
     assert generated_name("solvency", "base_deposit") == "solvency_deposit"
     assert generated_name("solvency", "deposit") == "solvency_deposit"
 
 
 def test_a_spec_expression_with_its_own_brackets_does_not_swallow_the_bases():
-    # The failure a non-greedy regex makes: `bases: [...]` matched inside the spec expression.
-    # Real specs carry arrays, calls and nested macros between `name:` and `bases:`.
+    # Brackets inside the spec expression must not be read as the `bases` list.
     source = """
     cvlr_rules! {
         name: "Vault Solvency",
@@ -90,8 +79,7 @@ def test_a_spec_expression_with_its_own_brackets_does_not_swallow_the_bases():
 
 
 def test_an_attribute_separated_from_its_signature_is_still_found():
-    # `#[rule]` above a doc comment above another attribute above the signature is ordinary Rust,
-    # and a same-line scan is what misses it. A missed rule costs the author a publish.
+    # `#[rule]` may sit above a doc comment and another attribute. A same-line scan misses that.
     source = """
     #[rule]
     /// What this rule shows.
@@ -102,9 +90,7 @@ def test_an_attribute_separated_from_its_signature_is_still_found():
 
 
 def test_the_grouping_survives_because_one_construct_can_be_several_rules():
-    # Rule granularity is open question 5: a parametric invocation changes prover cost and
-    # counterexample attribution, so a caller reporting on what the author *wrote* needs to know
-    # that several verdicts came from one invocation.
+    # One parametric invocation stays one declaration, and expands to several rule names.
     source = CRATE_DOC_EXAMPLE + "\n#[rule]\nfn rule_direct() {}\n"
     parametric, direct = declared_rules(source)
     assert isinstance(parametric, ParametricRules)
@@ -115,8 +101,7 @@ def test_the_grouping_survives_because_one_construct_can_be_several_rules():
 
 
 def test_declarations_come_back_in_source_order_whichever_kind_they_are():
-    # Two scans are merged, so order is a real decision rather than an accident of which regex ran
-    # first — and the line numbers are what a rejection message points at.
+    # The two scans are merged into source order. Rejection messages point at these line numbers.
     source = "#[rule]\nfn first() {}\n" + CRATE_DOC_EXAMPLE + "#[rule]\nfn last() {}\n"
     kinds = [type(d).__name__ for d in declared_rules(source)]
     assert kinds == ["DirectRule", "ParametricRules", "DirectRule"]
@@ -126,15 +111,13 @@ def test_declarations_come_back_in_source_order_whichever_kind_they_are():
 
 
 def test_an_invocation_with_no_bases_declares_nothing():
-    # A macro call the author has not finished writing is not a rule, and reporting a phantom name
-    # would make the mapping gate demand one.
+    # An unfinished macro call declares no rule. A phantom name would make the mapping gate demand one.
     assert rule_names('cvlr_rules! { name: "x", spec: s, bases: [] }') == ()
     assert rule_names('cvlr_rules! { name: "x", spec: s }') == ()
 
 
 def test_a_repeated_name_is_reported_once_and_left_to_the_compiler():
-    # Two rules with one name is a duplicate-symbol error, which is the compiler's complaint to
-    # make. What this must not do is report a name twice and confuse a set comparison.
+    # A duplicated name is a compiler error. Report it once, so a set comparison stays honest.
     assert rule_names("#[rule]\nfn dup() {}\n#[rule]\nfn dup() {}\n") == ("dup",)
 
 
@@ -149,12 +132,12 @@ EXAMPLES = pathlib.Path("~/src/SolanaExamples/cvlr_by_example").expanduser()
     ],
 )
 def test_the_extracted_names_are_exactly_what_the_examples_authors_declared(spec_file, conf_file):
-    """The strongest available check: a hand-written conf's ``rule`` list, which nobody derived
-    from this code.
+    """The names match a hand-written conf's ``rule`` list.
 
-    Skipped rather than vendored when the examples repo is absent — a copy here would be a second
-    thing to keep in step with upstream, and the test's whole value is that its ground truth was
-    written by someone else."""
+    Skipped when the examples repo is absent. A vendored copy would be a second
+    list to keep in step, and this check is only useful if someone else wrote
+    the names.
+    """
     spec, conf = EXAMPLES / spec_file, EXAMPLES / conf_file
     if not spec.is_file() or not conf.is_file():
         pytest.skip(f"the public examples repo is not checked out at {EXAMPLES}")

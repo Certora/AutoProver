@@ -333,8 +333,11 @@ async def test_an_edited_crlf_file_is_written_once(tmp_path: Path):
 
 
 def test_every_unit_module_is_gated_on_its_own_feature(tmp_path: Path):
-    """The whole basis of the shared tree: a module behind a disabled `cfg` is never compiled, never
-    enters rustc's dep-info, and so cannot break or dirty another unit's build."""
+    """Each unit's module is declared behind its own cargo feature.
+
+    A module behind a disabled `cfg` is never compiled and never enters
+    rustc's dep-info, so it cannot break or dirty another unit's build.
+    """
     store = CvlrArtifactStore(tmp_path, Path("programs/p"))
     modules = [HarnessModule("deposits"), HarnessModule("admin-config")]
     mod_rs, *_ = store.declare_modules(modules)
@@ -380,9 +383,11 @@ def test_a_manifest_with_no_features_table_gets_one(tmp_path: Path):
 
 
 def test_the_gate_and_the_submission_ask_for_the_same_two_features(tmp_path: Path):
-    """A build with only the unit feature compiles no harness at all — `mod certora` is gated on
-    `certora` — and a conf naming rules that do not exist ends in FAILED with nothing on disk. One
-    property pairs them so no call site can get it half right."""
+    """The gate and the submission both ask for `certora` and the unit feature.
+
+    `mod certora` is gated on `certora`. A build with only the unit feature
+    compiles no harness, and a conf naming rules that do not exist ends FAILED.
+    """
     import contextlib
     from types import SimpleNamespace
 
@@ -401,13 +406,16 @@ def test_the_gate_and_the_submission_ask_for_the_same_two_features(tmp_path: Pat
         build_sem=asyncio.Semaphore(1),
     )
     assert target.features == (DEFAULT_FEATURE, unit.feature)
-    assert contextlib.nullcontext  # the slot is exercised in test_the_build_permit_serializes
+    assert contextlib.nullcontext  # build_slot is covered by test_the_build_permit_serializes
 
 
 @pytest.mark.asyncio
 async def test_the_build_permit_serializes_staging_and_the_build(tmp_path: Path):
-    """One permit for the run. Cargo would serialize concurrent builds on its own build-directory
-    lock anyway; what the permit adds is a queue the host can see rather than a silent stall."""
+    """One permit for the run.
+
+    Cargo already serializes concurrent builds on its build-directory lock.
+    The permit is a queue the host can see.
+    """
     from types import SimpleNamespace
 
     from composer.spec.cvlr.verify import HarnessTarget

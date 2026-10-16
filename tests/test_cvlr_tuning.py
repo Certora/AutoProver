@@ -1,14 +1,7 @@
-"""Adding a points-to summary from the authoring loop, and what it invalidates.
+"""Points-to summaries the authoring loop adds, and what adding one invalidates.
 
-``docs/cvlr-backend-plan.md`` §7.6. The Solana Prover's remedy for a path its pointer analysis
-refuses is a summary, and until now the authoring loop had no way to add one: the tuning files were
-written once by the scaffold and `put_harness` writes the harness module and nothing else. An
-end-to-end run worked that out for itself — *"the only writing tool available is put_harness (writes
-this module only)"* — derived the exact directive it needed, and then gave up on two of three units.
-
-The tool that closes that gap hands the author an unsound instrument, so most of what is worth
-pinning here is about *not* losing track of it: the justification survives into the file and the
-report, and adding one costs the prover stamp.
+A summary is unsound. The justification is written into the tuning file, and
+adding one drops the prover stamp.
 
 No cargo, no network, no prover.
 """
@@ -42,7 +35,7 @@ _UNIT = "deposits"
 
 @pytest.fixture
 def tuning(tmp_path: Path) -> TuningFiles:
-    """A scaffolded envs directory: every family's composite present."""
+    """An envs directory with every family's package composite present."""
     envs = tmp_path / "envs"
     envs.mkdir()
     for family in ENV_FAMILIES:
@@ -55,25 +48,27 @@ def tuning(tmp_path: Path) -> TuningFiles:
 
 
 def test_the_directive_reaches_the_file_the_conf_names(tuning: TuningFiles):
-    """Both files, not just the layer. The conf names the *composite*, so a directive written only
-    to the layer would change nothing about the next submission — the tool would report success and
-    the author would get an identical [3308]."""
+    """The directive is in the layer and in the composite the conf names.
+
+    A directive only in the layer would not reach the next submission.
+    """
     tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY),))
     for path in (tuning.unit_layer_path(SUMMARIES), tuning.composite_path()):
         assert _DISPLAY in path.read_text(), path
 
 
 def test_the_file_the_conf_names_is_this_units_own(tuning: TuningFiles):
-    """The leak a cargo feature cannot close. Every unit shares one working tree, and a summary is a
-    regex the prover applies to the whole build — so one shared file would apply one unit's
-    summaries to every other unit's submission, silently narrowing what their green rules checked."""
+    """The conf names this unit's composite, not the package composite.
+
+    Units share one working tree. A summary is a regex over the whole build,
+    so a shared file would apply one unit's summaries to the others.
+    """
     assert tuning.composite_path().name == SUMMARIES.unit_composite(_UNIT)
     assert tuning.composite_path().name != SUMMARIES.composite
 
 
 def test_the_unit_composite_carries_the_starting_configuration(tuning: TuningFiles):
-    """The conf names the unit composite in place of the package's, so it has to carry the starting
-    layers as well as the unit's own directives."""
+    """The unit composite carries the starting layers and the unit's directives."""
     tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY),))
     assert tuning.composite_path().read_text() == compose_env(
         SUMMARIES,
@@ -83,14 +78,13 @@ def test_the_unit_composite_carries_the_starting_configuration(tuning: TuningFil
 
 
 def test_the_justification_is_written_beside_the_pattern(tuning: TuningFiles):
-    """A summary is unsound, so the file has to say why this one was acceptable. Somebody reading
-    this project's tuning file six months from now is the audience."""
+    """The justification is written next to the pattern. A summary is unsound."""
     tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY),))
     assert f"; {_WHY}" in tuning.unit_layer_path(SUMMARIES).read_text()
 
 
 def test_the_unit_layer_says_who_owns_it(tuning: TuningFiles):
-    """It is rewritten from state on every build, so a reader who edits it loses the edit."""
+    """The layer names its unit and says the next build rewrites it."""
     tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY),))
     layer = tuning.unit_layer_path(SUMMARIES).read_text()
     assert _UNIT in layer and "DO NOT EDIT" in layer
@@ -102,15 +96,13 @@ def test_a_return_shape_is_wrapped_as_a_type_annotation(tuning: TuningFiles):
 
 
 def test_no_annotation_is_emitted_for_an_unconstrained_return(tuning: TuningFiles):
-    """The common case — a formatting function nobody asserts over — and an empty `#[type()]` is
-    not the same directive as no `#[type]` at all."""
+    """An unconstrained return emits no ``#[type]``. An empty annotation is a different directive."""
     tuning.write((SummaryDirective(pattern="^foo$", why="w"),))
     assert "#[type" not in tuning.unit_layer_path(SUMMARIES).read_text()
 
 
 def test_the_layer_is_rewritten_rather_than_appended_to(tuning: TuningFiles):
-    """The state is the source of truth and the file is derived from it. Appending would let the two
-    drift, and a re-run replaying its recorded directives would double them."""
+    """Each write replaces the layer. Appending would keep directives the state no longer has."""
     tuning.write((SummaryDirective(pattern="^a$", why="w"),))
     tuning.write((SummaryDirective(pattern="^b$", why="w"),))
     layer = tuning.unit_layer_path(SUMMARIES).read_text()
@@ -118,7 +110,7 @@ def test_the_layer_is_rewritten_rather_than_appended_to(tuning: TuningFiles):
 
 
 def test_the_inlining_family_is_left_alone(tuning: TuningFiles):
-    """Summaries and inlining directives are different instruments and only one is on offer here."""
+    """Writing summaries does not create or change an inlining file."""
     before = (tuning.envs_dir / INLINING.composite).read_text()
     tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY),))
     assert (tuning.envs_dir / INLINING.composite).read_text() == before
@@ -126,15 +118,13 @@ def test_the_inlining_family_is_left_alone(tuning: TuningFiles):
 
 
 def test_dropping_every_directive_removes_it_from_the_file(tuning: TuningFiles):
-    """What makes the tuning file *derived* in the sense a resumed run needs: state is the only
-    source of truth, so rewinding past a directive takes it off disk too."""
+    """Writing an empty list removes a directive that an earlier write put on disk."""
     tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY),))
     tuning.write(())
     assert _DISPLAY not in tuning.composite_path().read_text()
 
 
 def test_two_units_do_not_see_each_others_directives(tmp_path: Path):
-    """The whole point of the split, stated directly."""
     envs = tmp_path / "envs"
     envs.mkdir()
     for family in ENV_FAMILIES:
@@ -152,9 +142,10 @@ def test_two_units_do_not_see_each_others_directives(tmp_path: Path):
 
 
 def test_an_unscaffolded_project_is_reported_rather_than_written_to(tmp_path: Path):
-    """The failure that is otherwise mute. With no composite there is no tuning file in the conf, so
-    a summary has no effect — and the author would read a successful tool result, re-run, and get
-    the same error with no way to tell that the remedy never applied."""
+    """With no composites on disk, both the package files and the unit composite are missing.
+
+    A summary written anyway would not be in any file the conf names.
+    """
     empty = TuningFiles(envs_dir=tmp_path, dialect=PathDialect(), unit=_UNIT)
     assert set(empty.missing()) == {
         *(f.composite for f in ENV_FAMILIES),
@@ -163,8 +154,10 @@ def test_an_unscaffolded_project_is_reported_rather_than_written_to(tmp_path: Pa
 
 
 def test_a_scaffolded_project_reports_nothing_missing(tuning: TuningFiles):
-    """Once the unit's composite exists. Before the first stage it does not, and the conf would name
-    a path the prover refuses to read — which is why the formalizer composes an empty one up front."""
+    """After the unit composite is written, nothing is missing.
+
+    Before the first stage the conf would name a path the prover will not read.
+    """
     tuning.write(())
     assert tuning.missing() == ()
 
@@ -174,10 +167,11 @@ def test_a_scaffolded_project_reports_nothing_missing(tuning: TuningFiles):
 
 
 def test_a_summary_invalidates_a_stamp_earned_before_it():
-    """The soundness-relevant half. A summary changes what the prover analyzed without changing a
-    character of the draft, so the generic digest — which hashes the buffer and the skips — would
-    carry a green stamp straight across it. `version_history` exists for exactly this ("a stamp
-    earned before a source edit goes stale with it"), so the directives feed it."""
+    """A summary changes the digest without changing the draft.
+
+    The generic digest hashes the buffer and the skips. The summary has to be
+    in the history or a stamp from before it would still apply.
+    """
     draft = "#[rule]\nfn rule_a() {}\n"
     state = {
         "curr_spec": draft,
@@ -196,9 +190,7 @@ def test_a_summary_invalidates_a_stamp_earned_before_it():
 
 
 def test_rewording_a_justification_does_not_cost_a_submission():
-    """The other direction, and the reason the token is keyed on the pattern rather than the whole
-    directive: correcting the wording of a `why` changes nothing the prover does, and charging a
-    six-minute run for it would teach the author to leave justifications alone."""
+    """Rewording ``why`` does not change the history token. The prover does not read it."""
     one = (SummaryDirective(pattern=_DISPLAY, why="first wording"),)
     two = (dataclasses.replace(one[0], why="a clearer second wording"),)
     assert tuning_history({"summaries": list(one), "version_history": [], "prover_settings": TunableConf()}) == tuning_history({"summaries": list(two), "version_history": [], "prover_settings": TunableConf()})  # type: ignore[arg-type]
@@ -211,9 +203,10 @@ def test_changing_the_return_shape_does_cost_one():
 
 
 def test_the_conf_is_always_in_the_history_and_the_tuning_files_only_when_used():
-    """A run that never touches a tuning file contributes nothing from one — but it always
-    contributes its conf, because there is no such thing as submitting without one and a verdict
-    earned under a different loop bound or a different `rule_sanity` is not this run's verdict."""
+    """The history always includes the conf. Summaries appear only when there are some.
+
+    A verdict under one loop bound or ``rule_sanity`` does not apply to another.
+    """
     empty = tuning_history({"summaries": [], "version_history": [], "prover_settings": TunableConf()})  # type: ignore[arg-type]
     assert len(empty) == 1 and empty[0].startswith("conf:")
 
@@ -222,16 +215,14 @@ def test_the_conf_is_always_in_the_history_and_the_tuning_files_only_when_used()
 
 
 def test_an_applied_edit_moves_the_history():
-    """`commit_edit` and `revert_to_edit` write `version_history`, so a stamp earned before an edit
-    to the program goes stale with it, as it does on EVM."""
+    """An edit-store id in ``version_history`` changes the history, so an earlier stamp no longer applies."""
     before = tuning_history({"summaries": [], "version_history": [], "prover_settings": TunableConf()})  # type: ignore[arg-type]
     after = tuning_history({"summaries": [], "version_history": ["e1"], "prover_settings": TunableConf()})  # type: ignore[arg-type]
     assert "e1" in after and before != after
 
 
 def test_a_skip_still_moves_the_digest():
-    """Guarding the composition rather than the addition: threading a history through every stamp
-    site must not displace what the digest already covered."""
+    """A skip still changes the digest when a history is passed alongside it."""
     draft = "#[rule]\nfn rule_a() {}\n"
     bare = spec_digest(draft, [], ())
     skipped = spec_digest(draft, [SkippedProperty(property_title="p", reason="r")], ())
@@ -239,8 +230,7 @@ def test_a_skip_still_moves_the_digest():
 
 
 def test_the_rendered_layer_ends_with_a_newline():
-    """Directives are line-oriented and the composite concatenates layers; a missing terminator
-    would join the last directive to whatever follows it."""
+    """The rendered layer ends with a newline, so the next layer does not join its last line."""
     rendered = render_layer("; header", (SummaryDirective(pattern="^f$", why="w"),))
     assert rendered.endswith("\n")
 
@@ -250,12 +240,11 @@ def test_the_rendered_layer_ends_with_a_newline():
 
 
 def test_two_directives_recorded_in_one_step_both_survive():
-    """The bug that took two units down. `summaries` was a plain state key, so LangGraph refused the
-    second write in a step with `InvalidUpdateError: Can receive only one value per step` — and the
-    author was making several calls per turn while hunting for a pattern that matched.
+    """Two directives from one graph step both survive.
 
-    The reducer is what makes concurrent calls correct rather than merely legal: each tool
-    contributes only its own directive, so neither has to have seen the other's."""
+    LangGraph allows one write per step on a field with no reducer. Each call
+    contributes only its own directive.
+    """
     a = SummaryDirective(pattern="^a$", why="w")
     b = SummaryDirective(pattern="^b$", why="w")
     assert [d.pattern for d in merge_summaries([], [a])] == ["^a$"]
@@ -270,8 +259,7 @@ def test_the_same_pattern_twice_is_recorded_once():
 
 
 def test_the_merge_preserves_the_order_directives_were_added_in():
-    """Directives are line-oriented and the prover applies them in file order, so the order the
-    reducer settles on is the order the tuning file gets."""
+    """The merged order is the order the directives were added. The tuning file is written in that order."""
     ds = [SummaryDirective(pattern=f"^{c}$", why="w") for c in "abc"]
     merged = merge_summaries(ds[:1], ds[1:])
     assert [d.pattern for d in merged] == ["^a$", "^b$", "^c$"]

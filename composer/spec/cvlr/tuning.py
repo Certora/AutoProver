@@ -56,18 +56,19 @@ When to change which layer:
   a composite is not in any layer, and the next composition drops it.
 
 Summaries the authoring loop adds (:class:`SummaryDirective`, written by :class:`TuningFiles`)
-    The Solana Prover's pointer analysis refuses some code outright, most commonly [3308] on an
-    Anchor program's ``#[error_code]`` enum formatting its ``#[msg("...")]`` string, which every
-    ``require!`` and every ``?`` in a handler can reach. A rule that reaches such a path gets no
-    verdict. The remedy is a summary in the unit layer.
+    The pointer analysis refuses some code, most often [3308] on an Anchor
+    ``#[error_code]`` enum formatting its ``#[msg("...")]`` string. Any
+    ``require!`` or ``?`` in a handler can reach it, and a rule on that path
+    gets no verdict. The remedy is a summary in the unit layer.
 
-    A summary is unsound. It replaces a function with one that returns an unconstrained value and
-    writes only the locations the summary names, dropping every other write, so summarizing the
-    wrong thing does not fail. It produces a green rule that checked less than it
-    appears to. So every directive carries a ``why``, which the judge and the report both get, and
-    adding one invalidates the prover stamp (:func:`summary_history`). Nothing here checks that a
-    summary does not cover the code under test, because a regex cannot be matched against symbols
-    before a build. That check is the judge's, with the declared ``why`` as the evidence.
+    A summary is unsound. It replaces a function with one that returns an
+    unconstrained value and writes only the locations the summary names.
+    Summarizing the wrong function produces a green rule that checked less
+    than it appears to. Every directive carries a ``why``, which the judge and
+    the report both get, and adding one invalidates the prover stamp
+    (:func:`summary_history`). This module does not check that a summary avoids
+    the code under test: a regex cannot be matched against symbols before a
+    build. The judge does that, using ``why``.
 """
 
 from dataclasses import dataclass
@@ -187,13 +188,12 @@ def compose_env(
     return "\n".join(p.rstrip("\n") for p in parts) + "\n"
 
 
-#: What the prover accepts as a summary body: a ``#[type(...)]`` annotation is optional, and its
-#: absence means "return anything", which is the common case for a formatting path nobody asserts
-#: over.
+#: A summary body. A ``#[type(...)]`` annotation is optional. Omitting it means
+#: the return is unconstrained, which is the usual case for a formatting path
+#: nothing asserts over.
 _TYPE_ANNOTATION = "#[type({body})]"
 
-#: Header of the per-unit layer, so a reader of the file knows who owns it and that editing it is
-#: pointless — the next build rewrites it from the run's state.
+#: Header of the per-unit layer. The next build rewrites the file from state.
 _UNIT_LAYER_HEADER = (
     ";;; Summaries added by the CVLR authoring loop for unit `{unit}`.\n"
     ";;; DO NOT EDIT: rewritten from the run's state on every build."
@@ -204,13 +204,15 @@ _UNIT_LAYER_HEADER = (
 class SummaryDirective:
     """One symbol pattern the prover should summarize rather than analyze."""
 
-    #: A regex over demangled symbols, the way the canonical files spell them — anchored with
-    #: ``^``/``$`` by convention, e.g. ``^<vault::VaultError as core::fmt::Display>::fmt$``.
+    #: A regex over demangled symbols, spelled as the canonical files spell them.
+    #: Anchored with ``^`` and ``$`` by convention, for example
+    #: ``^<vault::VaultError as core::fmt::Display>::fmt$``.
     pattern: str
-    #: Why analyzing it fails and why summarizing it is sound for the properties in this batch. Ends
-    #: up in the unit's tuning file and in the report; it is the only account anybody gets.
+    #: Why analyzing it fails, and why summarizing it is sound for this batch.
+    #: Written into the unit's tuning file and the report.
     why: str
-    #: The ``#[type(...)]`` body, without the wrapper — ``None`` for an unconstrained return.
+    #: The ``#[type(...)]`` body, without the wrapper. ``None`` leaves the return
+    #: unconstrained.
     returns: str | None = None
 
     def render(self) -> str:
@@ -222,36 +224,32 @@ class SummaryDirective:
 
 
 def render_layer(header: str, directives: tuple[SummaryDirective, ...]) -> str:
-    """A unit's summaries layer: its header, then one block per directive."""
     return "\n\n".join([header.rstrip("\n"), *(d.render() for d in directives)]) + "\n"
 
 
 @dataclass(frozen=True)
 class TuningFiles:
-    """Where one unit's tuning files are, and how paths in them must be spelled.
+    """Where one unit's tuning files are, and how paths in them are spelled.
 
-    Held rather than derived from the harness module's path: the envs directory and the specs
-    directory are siblings by convention, and reconstructing one from the other would encode that
-    convention in a second place.
+    Held on its own, not derived from the harness path. The envs directory and
+    the specs directory are siblings by convention, and reconstructing one from
+    the other would encode that convention twice.
 
-    ``unit`` names the file this unit's directives land in. Every unit now shares one working tree
-    (``docs/who-edits-the-program.md`` §14), and a summary is the one thing a cargo feature cannot scope:
-    it is a regex over symbols that the prover applies to the whole build, so a shared file would
-    apply one unit's summaries to another unit's submission. Since
-    :mod:`composer.spec.cvlr.tuning`'s own warning is that a wrong summary produces "a green rule
-    that checked less than it appears to", that leak is exactly the failure that must not be
-    possible. The unit's conf names the unit's composite; the project's own declaration in
-    ``[package.metadata.certora]`` is left alone and still answers for anything this run does not
-    submit.
+    ``unit`` names the file this unit's directives land in. Every unit shares
+    one working tree. A summary is a regex over symbols that the prover applies
+    to the whole build, and a cargo feature cannot scope it. A shared file
+    would apply one unit's summaries to another unit's submission. The unit's
+    conf names the unit's composite. The project's own declaration in
+    ``[package.metadata.certora]`` is left alone.
     """
 
     envs_dir: Path
     dialect: PathDialect
-    #: The harness module name, which is what makes these files this unit's.
+    #: The harness module name. It is what makes these files this unit's.
     unit: str
 
     def unit_layer_path(self, family: EnvFamily = SUMMARIES) -> Path:
-        """This unit's own layer — machine-owned, rewritten from state on every build."""
+        """This unit's own layer. Rewritten from state on every build."""
         return self.envs_dir / family.unit_layer(self.unit)
 
     def composite_path(self, family: EnvFamily = SUMMARIES) -> Path:
@@ -261,17 +259,15 @@ class TuningFiles:
     def write(self, directives: tuple[SummaryDirective, ...]) -> None:
         """Rewrite this unit's summaries layer and recompose the file its conf names.
 
-        Rewritten wholesale from ``directives`` rather than appended to, so the state the run
-        recorded and the file on disk cannot drift — and a run that ends up with no directives
-        leaves a layer with nothing in it but the header, which composes to the starting
-        configuration alone. That is what makes this a *derived* file in the sense
-        ``docs/who-edits-the-program.md`` §15 needs: dropping a directive from state removes it from
-        disk, where an appending writer would have kept it forever.
+        Rewritten from ``directives``, not appended. The recorded state and the
+        file then cannot drift. A run with no directives leaves a layer that is
+        only the header, which composes to the starting configuration. Dropping
+        a directive from state removes it from disk.
 
-        Called from the build path rather than from the tool that records a directive. One writer,
-        reading state the reducer has already merged: a tool writing its own view of the list would
-        race a concurrent sibling and drop one of the two, which is the same bug as the unreduced
-        state key and would not have raised.
+        Called from the build path. The tool that records a directive does not
+        write the file. One writer reads state the reducer has already merged.
+        A tool writing its own view of the list would race another call and
+        drop one of the two.
         """
         header = _UNIT_LAYER_HEADER.format(unit=self.unit)
         layer = render_layer(header, directives)
@@ -284,14 +280,14 @@ class TuningFiles:
     def missing(self) -> tuple[str, ...]:
         """Tuning files that should be on disk and are not.
 
-        Checked because the failure is otherwise mute: a summary written to a file the build does not
-        read changes nothing, and the author would read a successful tool result and a second
-        identical [3308].
+        A summary written to a file the build does not read changes nothing.
+        The tool would report success and the next run would hit the same
+        [3308].
 
-        Both kinds are checked. The package composites are the scaffold's and are what the build
-        manifest declares — inlining still reaches the prover that way, since nothing in the loop
-        writes an inlining directive. The unit summaries composite is this run's and is what the
-        unit's conf names; :meth:`write` creates it, so its absence means no build has staged yet.
+        The package composites are the scaffold's. The build manifest declares
+        them, and inlining still reaches the prover that way. The unit
+        summaries composite is what this unit's conf names. :meth:`write`
+        creates it, so its absence means no build has staged yet.
         """
         package = tuple(
             family.composite
@@ -305,16 +301,12 @@ class TuningFiles:
 def merge_summaries(
     left: list[SummaryDirective], right: list[SummaryDirective]
 ) -> list[SummaryDirective]:
-    """State reducer for the summary list: append, in order, deduplicating by pattern.
+    """Append summary directives, in order, dropping a repeated pattern.
 
-    A reducer rather than a plain field because two ``summarize_for_prover`` calls can land in one
-    graph step — the model routinely emits several tool calls per turn — and LangGraph refuses two
-    writes to an unreduced key. That is not a hypothetical: an end-to-end run made five calls while
-    hunting for a pattern that matched, two of them concurrent, and the step raised
-    ``InvalidUpdateError`` and took the whole unit down with it.
-
-    Deduplicating rather than replacing is what makes concurrent calls correct: each tool contributes
-    only its own directive, so neither has to have seen the other's.
+    Two ``summarize_for_prover`` calls can land in one graph step. LangGraph
+    refuses two writes to a field with no reducer. Each call contributes only
+    its own directive, so neither has to have seen the other's. A repeated
+    pattern keeps the earlier directive.
     """
     merged = list(left)
     seen = {d.pattern for d in merged}
@@ -327,9 +319,10 @@ def merge_summaries(
 
 
 def summary_history(directives: tuple[SummaryDirective, ...]) -> tuple[str, ...]:
-    """The directives as ``version_history`` tokens, so a stamp predating one goes stale.
+    """The directives as ``version_history`` tokens, so an earlier stamp goes stale.
 
-    Keyed on the pattern and the return type — what the prover actually does differently — and not
-    on ``why``, so correcting the wording of a justification does not cost a submission.
+    Keyed on the pattern and the return type, which is what the prover does
+    differently. ``why`` is left out, so rewording a justification does not
+    require a new submission.
     """
     return tuple(f"summary:{d.pattern}:{d.returns or ''}" for d in directives)

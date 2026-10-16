@@ -1,21 +1,20 @@
-"""The authored artifact: a CVLR harness module, and where it is persisted.
+"""A CVLR harness module, and where it is written.
 
-A CVL spec is a standalone file the prover is pointed at. A CVLR harness is **a Rust module inside
-the crate under verification** — it only compiles from there, and the prover reaches it through the
-build rather than through a path. So the deliverable and the source file are the same file, and the
-artifact store writes into the package's ``src/certora/specs/`` that the preflight scaffold created
+A CVLR harness is a Rust module inside the crate under verification. It
+compiles only from there, and the prover reaches it through the build. The
+artifact store writes it into the package's ``src/certora/specs/``
 (:mod:`composer.spec.cvlr.scaffold`).
 
-Two consequences that are not obvious from the CVL side:
+``specs/mod.rs`` needs a ``pub mod <name>;`` line per unit, and every declared
+module must exist as a file or no unit compiles. The modules are ``pub``
+because a ``cvlr::mock_fn`` stand-in is named by path from the program's own
+file, outside ``certora``
+(:data:`composer.spec.cvlr.scaffold._HARNESS_FILES`).
+:class:`composer.pipeline.core.StagedFormalizer` declares every module before
+any unit writes.
 
-* **The module has to be declared.** ``specs/mod.rs`` needs a ``pub mod <name>;`` line per unit, and
-  every declared module must exist as a file or *no* unit compiles. ``pub`` because a
-  ``cvlr::mock_fn`` stand-in is named by path from the program's own file, which is outside
-  ``certora`` — see :data:`composer.spec.cvlr.scaffold._HARNESS_FILES`. Declaring them all up front is
-  what :class:`composer.pipeline.core.StagedFormalizer` is for, and §5.6 predicted this exact shape:
-  one shared harness module, many rules.
-* **The module name is an identifier, not a slug.** A component slug may carry characters Rust will
-  not accept in a path, so the name is derived once, here, rather than at each call site.
+A component slug may contain characters Rust will not accept in a module path.
+:func:`module_name` derives the identifier once.
 """
 
 import dataclasses
@@ -37,8 +36,7 @@ from composer.spec.source.munge.edit_store import AppliedEdit
 from composer.spec.types import CheckName, PropertyTitle, RuleName
 from composer.spec.util import ensure_dir
 
-#: Where the report and diagnostics go. The harness itself does *not* live here — see the module
-#: docstring — but the property maps, commentary and reports are ordinary deliverables.
+#: Reports and diagnostics. The harness source is written into the crate.
 DELIVERABLE_DIR = Path("certora") / "cvlr"
 INTERNAL_DIR = Path(".certora_internal") / "cvlr"
 
@@ -46,16 +44,11 @@ INTERNAL_DIR = Path(".certora_internal") / "cvlr"
 def module_name(slug: str) -> str:
     """A Rust module identifier for a component slug.
 
-    Rust accepts ``[A-Za-z_][A-Za-z0-9_]*``; a slug may carry ``-`` and, in principle, a leading
-    digit. Both are fixed here rather than assumed away, because the failure is a module path the
-    compiler rejects long after the name was chosen.
-
-    The result is also lowercased, and runs of separators collapse. Validity is not the only bar for
-    a name this code writes into somebody else's repository: a component slug like
-    ``Vault_Initialization`` is a legal module path, but ``mod Vault_Initialization;`` earns a
-    ``non_snake_case`` warning and reads as though nobody looked. A crate that denies that lint — or
-    a CI that passes ``-D warnings`` — turns the same name into a compile error the *author* cannot
-    do anything about, since the module name is chosen here and not in the draft.
+    Rust accepts ``[A-Za-z_][A-Za-z0-9_]*``. A slug may contain ``-`` or start
+    with a digit. The result is lowercased and runs of separators collapse, so
+    the name satisfies ``non_snake_case``. A crate that denies that lint, or a
+    CI build with ``-D warnings``, would fail on a name chosen here. The author
+    cannot change it in the draft.
     """
     cleaned = "".join(c if c.isalnum() or c == "_" else "_" for c in slug).lower()
     collapsed = re.sub(r"_+", "_", cleaned).strip("_")
@@ -66,8 +59,6 @@ def module_name(slug: str) -> str:
 
 @dataclasses.dataclass(frozen=True)
 class HarnessModule:
-    """One component's harness module."""
-
     slug: str
 
     @property
@@ -80,15 +71,15 @@ class HarnessModule:
 
     @property
     def feature(self) -> CargoFeature:
-        """The cargo feature that compiles this unit — and only this unit — into the crate.
+        """The cargo feature that compiles this unit, and only this unit.
 
-        The whole of ``docs/who-edits-the-program.md`` §14 rests on this name. Every unit's module is
-        declared behind ``#[cfg(feature = "<this>")]``, so a module that is not selected is never
-        read by rustc, never appears in its dep-info, and therefore cannot break or dirty another
-        unit's build. That is the property the per-unit workdir used to buy.
+        Every unit's module is declared behind ``#[cfg(feature = "<this>")]``.
+        A module that is not selected is never read by rustc and never appears
+        in its dep-info, so it cannot break or dirty another unit's build.
 
-        Prefixed rather than bare because it shares a namespace with the project's own features, and
-        a component slug like ``serde`` or ``staging`` would otherwise silently mean something else.
+        The name is prefixed with ``unit_``. It shares a namespace with the
+        project's own features. A slug such as ``serde`` would otherwise select
+        the project's feature.
         """
         return CargoFeature(f"unit_{self.module}")
 
@@ -98,7 +89,7 @@ class HarnessModule:
 
     @property
     def run_key(self) -> str:
-        """Key under which this unit's prover run is recorded in the run-link map."""
+        """Key for this unit's prover run in the run-link map. The component slug."""
         return self.slug
 
 
@@ -109,25 +100,22 @@ class GeneratedHarness(BaseModel):
     harness: str
     skipped: list[SkippedProperty] = Field(default_factory=list)
     property_rules: list[PropertyRuleMapping] = Field(default_factory=list)
-    #: Rule name → why the author asserts it should fail. On this backend an expected failure is
-    #: usually a finding, so it is carried into the report rather than smoothed over.
+    #: Rule name to why the author says it should fail. On this backend that is
+    #: usually a finding, so the report includes it.
     expected_failures: dict[CheckName, str] = Field(default_factory=dict)
-    #: What each rule drives — a program function, or harness-local code standing in for one. Same
-    #: reasoning as ``expected_failures``: a verdict earned against a stand-in is worth something
-    #: different from one earned against the program, and the report is where that has to be said.
+    #: What each rule drives: a program function, or harness code standing in for
+    #: one. A verdict on a stand-in is not a verdict on the program.
     rule_subjects: list[RuleSubject] = Field(default_factory=list)
-    #: Points-to summaries the author added to make a path analyzable. Reported, because each one
-    #: replaced a function with an unconstrained stand-in: the verdicts are conditional on them
-    #: being sound for these properties, and the ``why`` is the only argument that they were.
+    #: Points-to summaries the author added. Each replaces a function with a
+    #: stand-in, so the verdicts depend on the summary being sound here.
     summaries: list[SummaryDirective] = Field(default_factory=list)
-    #: The editor's account of each edit applied to the program's own source. Reported for a
-    #: stronger version of the same reason: the verdicts are about the edited program, and the
-    #: report's ``source_edits`` is where that is said in the shared vocabulary every backend uses.
+    #: The editor's account of each edit to the program's source. The verdicts
+    #: are about the edited program. The report reads these as ``source_edits``.
     applied_edits: list[AppliedEdit] = Field(default_factory=list)
-    #: The edited files themselves, whole, by project-relative path: what the report diffs against
-    #: the project to give the user a patch.
+    #: The edited files, whole, by project-relative path. The report diffs these
+    #: against the project.
     vfs: dict[str, str] = Field(default_factory=dict)
-    #: Every rule the draft declares, as read from the draft rather than transcribed by the model.
+    #: Every rule the draft declares, read from the draft.
     declared_rules: list[RuleName] = Field(default_factory=list)
     final_link: str | None = None
 
@@ -144,10 +132,11 @@ class GeneratedHarness(BaseModel):
 
 
 class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
-    """Persists CVLR harnesses into the crate, and everything else under ``certora/cvlr/``.
+    """Writes CVLR harnesses into the crate, and everything else under ``certora/cvlr/``.
 
-    ``package_dir`` is the verified package's directory relative to the project root — the harness
-    has to land inside *that* crate, and in a workspace it is not the root.
+    ``package_dir`` is the verified package's directory relative to the project
+    root. The harness has to land in that crate. In a workspace that is not
+    the project root.
     """
 
     def __init__(self, project_root: str | Path, package_dir: Path) -> None:
@@ -166,13 +155,12 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
 
     @override
     def write_artifact(self, i: HarnessModule, artifact: GeneratedHarness) -> Path:
-        """The harness, plus the sidecar of things its verdicts are conditional on.
+        """The harness, and a sidecar of what its verdicts depend on.
 
-        The base store writes the module, the commentary and the property→rule map. Neither of the
-        two claims this backend needs a reader to see survives that: which rules drive the program's
-        own code rather than a stand-in, and which functions the prover was told to stop analyzing.
-        Both were reaching the checkpoint and dying there — an end-to-end run published seven rules
-        with their subjects correctly declared and nothing on disk said so.
+        The base store writes the module, the commentary, and the property-to-rule
+        map. It does not write which rules drive the program's own code, which
+        functions the prover was told to stop analyzing, or the edits applied to
+        the program. Those go in ``<stem>.assumptions.json``.
         """
         written = super().write_artifact(i, artifact)
         self._write_assumptions(i.stem, artifact)
@@ -194,47 +182,40 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
     def _job_info_payload(
         self, summary: RunSummary, *, user_id: str, run_mode: str
     ) -> dict[str, object]:
-        """Extends the shared manifest with the prover-reported runtime, as the autoprove store
-        does, so a run records what its cloud jobs cost and not only what its models did.
+        """Adds the prover-reported runtime to the shared manifest.
 
-        Not because the prover dominates — the one run anyone has measured end to end says the
-        opposite. On the vault scenario (``docs/cvlr-backend-plan.md`` §7.8.5) the split was about
-        82% model latency, 16% prover and 2% cargo, with a 76-second mean per submission. The
-        reason to record it is that the ratio is a *property of the target*, not of the backend:
-        a program whose properties are nonlinear puts the same loop in front of split-heavy jobs
-        and timeouts, and a manifest that reports only tokens cannot tell those two runs apart."""
+        Same field the autoprove store records. A manifest of model tokens alone
+        cannot separate a run that spent its time in the prover from one that
+        spent it in the model.
+        """
         return {
             **super()._job_info_payload(summary, user_id=user_id, run_mode=run_mode),
             "prover_usage": summary.prover_usage_summary(),
         }
 
     def declare_modules(self, modules: list[HarnessModule]) -> tuple[Path, ...]:
-        """Write ``specs/mod.rs`` declaring every unit's module behind its own cargo feature.
+        """Write ``specs/mod.rs``, declaring every unit's module behind its cargo feature.
 
-        Returns every path it is responsible for, ``mod.rs`` first.
+        Returns every path it writes, ``mod.rs`` first.
 
-        Called once, before any unit authors, because the file has to name every unit and no single
-        unit knows them all. Each declaration is gated on :attr:`HarnessModule.feature`, which is
-        what lets the units share one working tree: a module behind a disabled ``cfg`` is never
-        compiled, never enters rustc's dep-info, and so cannot break — or force a rebuild of —
-        another unit's build (``docs/who-edits-the-program.md`` §14.1–14.2).
+        Called once, before any unit authors. The file has to name every unit,
+        and no unit knows the others. Each declaration is gated on
+        :attr:`HarnessModule.feature`. A module behind a disabled ``cfg`` is
+        never compiled and never enters rustc's dep-info, so it cannot break or
+        rebuild another unit's build.
 
-        Files are still created up front. Under the gate a missing file is only an error for the
-        unit that selects it, but an empty module is a better starting state than a compile error
-        the *author* cannot act on, and creating them here keeps one writer for this directory. The
-        placeholder is a doc comment: an empty module compiles and declares no rules.
+        An empty file is written for each module that does not exist yet. A
+        missing file is a compile error only for the unit that selects it, and
+        the author cannot fix a name chosen here. The placeholder is a doc
+        comment: the module compiles and declares no rules.
 
-        A second consequence worth naming: two units are now never compiled together, so two units
-        that each write ``impl Nondet for Foo`` in their own module no longer collide (``E0119``).
-        That hazard was previously hidden by each unit having its own workspace, and would have
-        surfaced the moment the trees were shared.
+        Two units are never compiled together, so two ``impl Nondet for Foo``
+        in different modules do not collide (``E0119``).
 
-        Two units whose slugs reduce to one module name are refused here rather than tolerated.
-        This is the only place that sees every name at once, and the alternative is silent: they
-        would share a file, so one unit's harness would overwrite the other's, both compile gates
-        would pass, and the report would claim two delivered units on one body of work — a false
-        verification claim rather than a crash. A duplicate ``mod`` line would not compile anyway;
-        failing here is the same outcome with a message that names the cause.
+        Two slugs that reduce to one module name are refused. This is the only
+        place that sees every name at once. They would share a file, so one
+        harness would overwrite the other, both compile gates would pass, and
+        the report would claim two units for one body of work.
         """
         by_module: dict[str, list[str]] = {}
         for module in modules:
@@ -262,16 +243,14 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
         )
         mod_rs = target / "mod.rs"
         mod_rs.write_text(
-            "//! The rules. One module per unit, declared here by the CVLR backend.\n"
+            "//! The rules. One module per unit.\n"
             "//!\n"
             "//! Each module is gated on its own cargo feature, so a build selects exactly one\n"
-            "//! unit's rules. That is what lets every unit share one working tree: a module\n"
-            "//! behind a disabled `cfg` is never compiled and never enters rustc's dep-info, so\n"
-            "//! one unit's draft cannot break or dirty another's build.\n"
-            "//!\n"
-            "//! Written once for the whole run rather than appended to per unit.\n"
+            "//! unit's rules. A module behind a disabled `cfg` is never compiled and never\n"
+            "//! enters rustc's dep-info, so one unit's draft cannot break or dirty another's\n"
+            "//! build.\n"
             "\n" + declarations
         )
-        # `mod.rs` first: it is the one a caller logs, and the rest are what a shared working tree
-        # has to be re-synced with when a resumed run's component set has changed.
+        # `mod.rs` first: callers log that path. The module files are what a
+        # resumed run re-syncs when the component set has changed.
         return (mod_rs, *written)

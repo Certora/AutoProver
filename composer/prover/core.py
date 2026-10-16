@@ -140,8 +140,8 @@ class ProverReport:
     link: str
     certora_run_stdout: str
     #: Functions the Prover treated as external, from the job's alert report
-    #: (:func:`composer.prover.results.external_functions`). Empty when there were none or the
-    #: report was not available; the verdicts never say which.
+    #: (:func:`composer.prover.results.external_functions`). Empty when there were
+    #: none or the report was missing. The verdicts do not name them.
     external_functions: tuple[str, ...] = ()
 
     @property
@@ -460,16 +460,15 @@ class TrivialFanoutCexHandler(CexHandler):
 
 
 class UnanalyzedCexHandler(CexHandler):
-    """Renders the result set as-is. No LLM, no analysis, no summarization.
+    """Renders each rule's status and counterexample dump as text.
 
-    For runs whose consumer is a *program* rather than an agent: a deterministic gate that asserts
-    verdicts against a checked-in expected file, a plumbing test, a CLI mode that only wants the
-    outcomes. ``run_prover``'s handler hook is otherwise the one place an LLM is unavoidable, and
-    those callers have nothing for it to do.
+    For a caller that is not an agent: a gate that checks verdicts against a
+    file, a plumbing test, a CLI that only wants the outcomes. ``run_prover``
+    otherwise runs an LLM through the handler.
 
-    It renders the counterexample dump verbatim rather than reusing ``flat_rule_feedback.j2``: that
-    template says "analyzing the counterexample yielded no results" when handed no explanation,
-    which is a false account of a run that never asked.
+    The dump is included as text. ``flat_rule_feedback.j2`` says the analysis
+    found nothing when it is given no explanation, which would misdescribe a
+    run that did not ask for one.
     """
 
     @override

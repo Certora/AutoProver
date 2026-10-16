@@ -224,17 +224,18 @@ async def _fetch_results(job_id: str, dest: Path, link: str) -> None:
 
 
 async def _fetch_alert_report(job_id: str, dest: Path) -> None:
-    """Save the job's alert report where a local run would have it, ``Reports/alertReport.json``.
+    """Save the job's alert report at ``Reports/alertReport.json``, where a local run puts it.
 
-    Best-effort. It carries warnings the verdicts do not, such as the functions the Prover treated
-    as external (:func:`composer.prover.results.external_functions`), but a job's results stand
-    without it, so failing to fetch it must not fail the run.
+    Best-effort. The report has warnings the verdicts do not, including the
+    functions the Prover treated as external
+    (:func:`composer.prover.results.external_functions`). A missing report does
+    not fail the run.
     """
     try:
         text = await asyncio.to_thread(
             results_api().fetch_output_file, job_id, ALERT_REPORT.name
         )
-    except Exception as exc:  # noqa: BLE001 — optional artifact; the verdicts are what matter
+    except Exception as exc:  # noqa: BLE001 — a missing report does not fail the run
         logger.warning("Cloud job %s: no alert report (%s)", job_id[:8], exc)
         return
     target = dest / ALERT_REPORT

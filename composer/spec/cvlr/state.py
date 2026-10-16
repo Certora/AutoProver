@@ -1,35 +1,32 @@
 """State types and the publish gate for the CVLR harness author.
 
-The generic authoring state (:mod:`composer.authoring.state`) supplies the buffer, the skip list,
-the validation stamps and the digest gate. What is CVLR's own:
+The generic authoring state (:mod:`composer.authoring.state`) supplies the
+buffer, the skip list, the validation stamps, and the digest gate. CVLR adds:
 
-* ``expected_failures`` — rule-name → reason for a rule the author asserts *should* fail. On this
-  backend that is usually a finding rather than a defect in the rule, so the prover gate excludes
-  them from its all-green check instead of treating the run as unfinished.
-* ``prover_link`` — the job link from the stamping run, which is what the report links to and what
-  ``fetch_verdicts`` re-reads verdicts from.
+* ``expected_failures`` — rule name to why the author says it should fail.
+  The prover gate treats these as accounted for.
+* ``prover_link`` — the job link from the latest run that produced results.
+  The report links to it, and ``fetch_verdicts`` re-reads verdicts from it.
 * ``property_rules`` — the mapping the publish gate validates.
-* ``rule_subjects`` — per rule, what it actually drives: a function of the program, or harness-local
-  code standing in for one. Carried into the report for the same reason ``expected_failures`` is.
-* ``summaries`` — the points-to summaries the author added (:mod:`composer.spec.cvlr.tuning`). These
-  feed the digest through ``version_history``, because a summary changes what the prover checked:
-  a stamp earned before one was added is about a different build.
-* ``vfs`` and ``version_history`` — the unit's edits to the *program's* own source, as whole files
-  over the project, and the edit-store ids that produced them.
-  The history is the same digest channel as ``summaries`` and for the same reason, and the edits
-  are carried into the report through the shared ``source_edits`` hook: a property proved against
-  edited source is a property of the edited program.
+* ``rule_subjects`` — per rule, a program function or harness code standing
+  in for one. Carried into the report.
+* ``summaries`` — points-to summaries (:mod:`composer.spec.cvlr.tuning`).
+  They enter the digest through ``version_history``. A summary changes what
+  the prover checked.
+* ``vfs`` and ``version_history`` — edits to the program's source, as whole
+  files over the project, and the edit-store ids that produced them. The
+  history uses the same digest channel. The edits reach the report through
+  ``source_edits``.
 
-The summaries, the edits, and an ``optimistic_loop`` in ``prover_settings``, are also what the
-feedback judge is shown beyond the draft (:class:`HarnessAssumptions`), since none of them leaves a
-mark in the harness source it reads.
+Summaries, edits, and an ``optimistic_loop`` in ``prover_settings`` are also
+what the feedback judge sees beyond the draft (:class:`HarnessAssumptions`).
+None of them appears in the harness source.
 
-**The ground truth is the buffer, not the run.** ``validate_check_mapping``'s docstring notes that
-forge names every test it ran and a backend whose checker does not is passed ``None``; the prover
-does name every rule, but only after a submission, which costs minutes and money. So the CVLR
-backend supplies :mod:`composer.spec.cvlr.rules`' reading of the draft instead — exact, because both
-declaration forms name their rules deterministically — and gets the both-direction check for free,
-including in the budget wrap-up window where no run is available at all.
+The mapping gate's ground truth is the draft, read by
+:mod:`composer.spec.cvlr.rules`. The prover names every rule only after a
+submission. Both declaration forms name their rules deterministically, so the
+check runs in both directions before any run, including when the budget
+wrap-up leaves no time for one.
 """
 
 import dataclasses
@@ -57,10 +54,10 @@ from composer.spec.source.live_explorer import VersionedHistory
 from composer.spec.source.munge.edit_store import AppliedEdit
 from composer.spec.types import CheckName, PropertyTitle, RuleName
 
-#: Stamped by the prover gate when a run comes back with every rule accounted for. There is
-#: deliberately no separate stamp for the fast ``cargo check``: a prover run builds first and reports
-#: the compiler's own message without submitting when that fails
-#: (:class:`composer.spec.cvlr.prover.BuildRejected`), so requiring both would gate one fact twice.
+#: Stamped by the prover gate when every rule is accounted for. There is no
+#: separate stamp for ``cargo check``. A prover run builds first and reports
+#: the compiler's message without submitting when that fails
+#: (:class:`composer.spec.cvlr.prover.BuildRejected`).
 PROVER_VALIDATION_KEY = "prover"
 
 FEEDBACK = "feedback"
@@ -98,9 +95,9 @@ class DrivesProgramFunction(BaseModel):
 class DrivesHarnessMirror(BaseModel):
     """The rule drives harness-local code that stands in for a program function.
 
-    A property checked this way is a property of the stand-in. Whether it is also a property of the
-    program depends on a transcription no tool checked, which is precisely why the claim has to be
-    declared rather than left in a doc comment.
+    A property checked this way is a property of the stand-in. It is a property
+    of the program only if the transcription is faithful, and no tool checks
+    that transcription.
     """
 
     subject: Literal["harness_mirror"] = "harness_mirror"
@@ -115,18 +112,17 @@ class DrivesHarnessMirror(BaseModel):
     )
 
 
-#: What a rule actually drives. Declared per rule at publish time and carried into the report: a
-#: reader deciding how much a verdict is worth needs to know whether it came from the program's own
-#: code, and nothing else in the deliverable answers that.
+#: What a rule drives. One entry per rule at publish time, carried into the
+#: report so a reader can tell a verdict on the program from a verdict on a
+#: stand-in.
 type RuleSubject = Annotated[
     DrivesProgramFunction | DrivesHarnessMirror, Field(discriminator="subject")
 ]
 
 
-#: The prefix a path into the program under verification must carry. The harness is a module *inside*
-#: that crate (``src/certora/specs/<unit>.rs``), so every one of the program's own items is reachable
-#: as ``crate::…`` — which makes this a spelling requirement rather than a guess about which crates
-#: are "the program". A path rooted anywhere else names a dependency.
+#: A path into the program under verification starts with this. The harness is
+#: a module inside that crate (``src/certora/specs/<unit>.rs``), so the
+#: program's items are ``crate::…``. Any other root names a dependency.
 _PROGRAM_ROOT = "crate::"
 
 
@@ -135,15 +131,12 @@ def _outside_the_program(path: str) -> bool:
 
 
 def validate_rule_subjects(subjects: list[RuleSubject], draft: str) -> str | None:
-    """None if every declared rule has exactly one subject naming code inside the program.
+    """None when every declared rule has exactly one subject naming code in the program.
 
-    The second half is what a green harness can otherwise hide. A rule may drive a *dependency* —
-    asserting that ``anchor_lang``'s ``Signer::try_from`` rejects a non-signer, say — verify cleanly,
-    and map onto a property of the program, while establishing nothing about the program at all. That
-    happened: an end-to-end run shipped exactly that rule against a property named
-    "depositor must sign", and it was the most convincing-looking rule in its unit. The declaration is
-    honest in that case — the author named the dependency — so the check costs the author nothing and
-    catches what neither the mapping gate nor the verdict can see.
+    A rule may call a dependency, such as ``anchor_lang``'s ``Signer::try_from``,
+    verify, and be mapped to a property of the program while establishing
+    nothing about the program. The subject names that path, so this check can
+    reject it. The mapping gate and the verdict cannot.
     """
     declared = set(rule_names(draft))
     seen: set[RuleName] = set()
@@ -182,13 +175,11 @@ def _latest_settings(_current: TunableConf, update: TunableConf) -> TunableConf:
 
 
 class LastVerdicts(BaseModel):
-    """The last prover run that produced verdicts, as the expected-failure markings are judged
-    against it.
+    """The last prover run that produced verdicts.
 
-    Whether a run stamps the draft depends on the markings, and a marking usually follows the run
-    that showed the violation. So the run's verdicts are kept with the stamp it earns, and a change
-    of marking re-decides the stamp without another run. ``stamp`` is the digest of the draft as it
-    stood at that run, so a draft edited since gets nothing from it.
+    Markings are judged against it. A change of marking re-decides the stamp
+    without another run. ``stamp`` is the digest of the draft at that run, so a
+    draft edited since gets nothing from it.
     """
 
     status: dict[str, bool]
@@ -203,20 +194,20 @@ class CvlrGenerationExtra(AuthoringExtra, VersionedHistory):
     property_rules: list[PropertyRuleMapping]
     #: One entry per declared rule, naming what it drives. See :data:`RuleSubject`.
     rule_subjects: list[RuleSubject]
-    #: Points-to summaries the author added, in the order added, deduplicated by pattern. Reduced
-    #: rather than replaced: several ``summarize_for_prover`` calls can land in one graph step.
+    #: Points-to summaries the author added, in the order added, deduplicated by
+    #: pattern. Several ``summarize_for_prover`` calls can land in one graph step,
+    #: so the reducer appends.
     summaries: Annotated[list[SummaryDirective], merge_summaries]
-    #: The unit's edits to the program's own source: whole files by project-relative path, over
-    #: the project. Replaced wholesale, never merged — ``commit_edit`` and ``revert_to_edit`` each
-    #: write a complete snapshot from the edit store, which is what ``version_history`` names.
+    #: The unit's edits to the program's source: whole files by project-relative
+    #: path, laid over the project. Replaced wholesale. ``commit_edit`` and
+    #: ``revert_to_edit`` each write a complete snapshot from the edit store,
+    #: which is what ``version_history`` names.
     vfs: dict[str, str]
-    #: The prover settings this unit submits under. Every unit starts from the defaults. Per-unit
-    #: rather than per-run because the author can change them, and a change one unit makes to answer
-    #: its own timeout has no business reaching a sibling's verdicts.
+    #: The prover settings this unit submits under. Every unit starts from the
+    #: defaults. Per unit: one unit's change must not reach a sibling.
     #:
-    #: Reduced last-wins rather than plain: ``adjust_prover_config`` applies every edit in one call
-    #: and writes the whole settings, so two writes in one graph step are two complete settings and
-    #: the later is the live one. Without a reducer that step dies with ``InvalidUpdateError``.
+    #: Last write wins. ``adjust_prover_config`` writes the whole settings, and
+    #: two writes in one graph step raise ``InvalidUpdateError`` on a plain field.
     prover_settings: Annotated[TunableConf, _latest_settings]
     #: The functions the last prover run treated as external: neither analyzed nor summarized, so
     #: their writes were dropped. Absent until a run has reported.
@@ -224,13 +215,12 @@ class CvlrGenerationExtra(AuthoringExtra, VersionedHistory):
     expected_failures: Annotated[dict[CheckName, str], merge_expected_failures]
     #: Absent until a prover run has produced verdicts.
     last_verdicts: NotRequired[LastVerdicts]
-    #: The job link from the most recent prover run that produced results, whether or not it was
-    #: all green — a link to a failing run is still the most useful thing a report can offer.
+    #: The job link from the most recent prover run that produced results,
+    #: including a run that did not verify.
     prover_link: NotRequired[str | None]
     failed: bool | None
-    #: Stamped True by the budget monitor's state transformer when the wrap-up alert fires (the same
-    #: update that lifts the validation gates), so the published result is known to be a
-    #: budget-curtailed partial rather than a validated delivery.
+    #: Set when the budget monitor's wrap-up alert fires, in the same update that
+    #: lifts the validation gates. The published result is a partial.
     budget_curtailed: bool
 
 
@@ -243,16 +233,13 @@ class CvlrGenerationState(CvlrGenerationExtra, MessagesState):
 
 
 def tuning_history(state: CvlrGenerationExtra) -> tuple[str, ...]:
-    """The publish surface's non-harness half, as ``version_history`` tokens.
+    """The publish surface outside the harness, as ``version_history`` tokens.
 
-    The generic digest already takes a history so that "a stamp earned before a source edit goes
-    stale with it". A summary is such an edit, and the sharpest kind — it changes what the prover
-    analyzed without changing a character of the draft. An applied edit is the literal kind: it
-    changes the program, and its edit-store id is already a ``version_history`` token. The conf is
-    the third: it decides the loop bound, the solver flags and whether vacuity
-    is checked, so a verdict earned under one conf is not a verdict under another. Every stamp site
-    passes this, so changing any of the three after a green run costs the run rather than silently
-    keeping its verdicts.
+    A summary changes what the prover analyzed without changing the draft. An
+    applied edit changes the program; its edit-store id is already a
+    ``version_history`` token. The conf decides the loop bound, the solver
+    flags, and whether vacuity is checked. Every stamp site passes this, so a
+    change to any of the three after a green run drops that run's stamp.
     """
     return (
         summary_history(tuple(state["summaries"]))
@@ -263,39 +250,36 @@ def tuning_history(state: CvlrGenerationExtra) -> tuple[str, ...]:
 
 @dataclasses.dataclass(frozen=True)
 class HarnessAssumptions:
-    """The author's three unsound instruments, as a reviewer has to be shown them.
+    """What a reviewer has to see besides the harness source.
 
-    Each changes what a green rule means and none leaves a mark in the harness source, so a judge
-    handed only the draft is reviewing the wrong artifact. The empty case is carried too: the
-    judge's system prompt instructs it to weigh the summaries, and silence answers that instruction
-    with "go and look", which points it at tuning files holding the scaffold's directives and every
-    sibling unit's.
+    Summaries, source edits, and ``optimistic_loop`` each change what a green
+    rule means, and none of them appears in the harness. The empty case is
+    included. The judge's prompt tells it to weigh the summaries, and with no
+    briefing it looks at the scaffold's tuning files and every sibling's
+    directives.
 
-    Carried beside them, for the same reason: the rules the author has marked expected to fail.
+    Expected-failure markings are included too. They are state, not source.
     """
 
     summaries: tuple[SummaryDirective, ...]
     #: The editor's account of each edit applied to the program, in the order applied.
     edits: tuple[AppliedEdit, ...] = ()
-    #: A unified diff from the project's own source to the unit's edited copy. Empty when there are
-    #: no edits. The judge gets the change itself rather than a description of it — a description
-    #: is the editor's account, and reviewing an account is how a change nobody described slips
-    #: through.
+    #: A unified diff from the project's source to the unit's edited copy. Empty
+    #: when there are no edits. The judge reads this along with the editor's
+    #: summary.
     diff: str = ""
-    #: The whole settings rather than only ``optimistic_loop``: what the assumption covers is "every
-    #: loop finishes within ``loop_iter``", and the bound is half of that sentence.
+    #: The unit's prover settings. ``optimistic_loop`` assumes every loop finishes
+    #: within ``loop_iter``, so the bound is part of the assumption.
     settings: TunableConf = TunableConf()
-    #: What the last prover run treated as external. Not an instrument the author chose, but the
-    #: same kind of fact: a verdict over one of these is conditional on writes the model dropped.
+    #: Functions the last prover run treated as external. A verdict that depends
+    #: on one of them depends on writes the model dropped.
     external_functions: tuple[str, ...] = ()
-    #: Rule name → the author's reason it is meant to fail. Not an assumption, but the same blind
-    #: spot: the marking is state, not source, and the judge is asked to weigh each one as a claim
-    #: that the program is defective.
+    #: Rule name to the author's reason it should fail. The marking is state, not
+    #: source. The judge weighs each one as a claim that the program is defective.
     expected_failures: tuple[tuple[CheckName, str], ...] = ()
 
     def briefing(self) -> list[str]:
-        """Input parts stating what a verdict on this harness would be conditional on, and which
-        of its rules the author has recorded as meant to fail."""
+        """What a verdict on this harness depends on, and which rules are marked as meant to fail."""
         return self._conditions() + self._expected_failure_parts()
 
     def _expected_failure_parts(self) -> list[str]:
@@ -382,11 +366,11 @@ def harness_assumptions(
     edits: tuple[AppliedEdit, ...] = (),
     diff: str = "",
 ) -> HarnessAssumptions:
-    """The judge-facing read of what :func:`tuning_history` reads for the digest.
+    """The judge-facing view of what :func:`tuning_history` feeds the digest.
 
-    ``edits`` and ``diff`` are the applied edits' accounts and the unit's cumulative diff. Passed in
-    rather than read from ``state``, which holds only the edit ids and the files: the accounts live
-    in the edit store and the diff needs the project.
+    ``edits`` and ``diff`` are passed in. ``state`` holds edit ids and file
+    contents. The accounts live in the edit store, and the diff needs the
+    project.
     """
     return HarnessAssumptions(
         summaries=tuple(state["summaries"]),
@@ -399,15 +383,14 @@ def harness_assumptions(
 
 
 def check_cvlr_completion(state: CvlrGenerationExtra) -> str | None:
-    """None if the publish gate is satisfied, otherwise the reason."""
     return check_completion(
         state, tuning_history(state), nothing_written="no harness written yet."
     )
 
 
-#: How this backend words its publish-time mapping. ``ran_source`` names the *draft* rather than a
-#: run, because that is where the ground truth comes from — and a rejection that pointed at a prover
-#: run the author had not made would be unactionable.
+#: Wording for this backend's publish-time mapping. ``ran_source`` names the
+#: draft, which is where the ground truth is read. A rejection that pointed at
+#: a prover run the author had not made would not say what to fix.
 _CVLR_MAPPING = MappingVocab(
     check_noun="rule",
     field_name="property_rules",
@@ -421,11 +404,10 @@ def validate_property_rules(
     titles: list[PropertyTitle],
     draft: str,
 ) -> str | None:
-    """Validate the property→rules mapping against the rules the draft actually declares.
+    """Check the property-to-rule mapping against the rules the draft declares.
 
-    Both directions: no property may claim a rule the draft does not declare, and no declared rule
-    may go untied to a property. The second half is what stops a harness accumulating rules nobody
-    asked for, which on this backend also means prover time nobody is paying for on purpose.
+    No property may claim a rule the draft does not declare, and no declared
+    rule may go untied to a property.
     """
     return validate_check_mapping(
         [(m.property_title, m.rules) for m in property_rules],

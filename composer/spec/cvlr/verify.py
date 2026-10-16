@@ -1,21 +1,14 @@
-"""The author's gate tools: a cheap compile, and the prover run that stamps the draft.
+"""The author's gate tools: a host compile, and the prover run that stamps the draft.
 
-Two tiers, exactly as ``docs/cvlr-backend-plan.md`` §5.1 designed them, and the difference in cost is
-the reason both exist rather than one:
+* ``cargo_check`` compiles on the host target, confined, in seconds. It is not
+  a required stamp. A prover run builds first and reports a compiler error
+  without submitting (:class:`~composer.spec.cvlr.prover.BuildRejected`).
+* ``verify_rules`` builds for the chain, submits, and stamps the draft's
+  digest when every rule is accounted for.
 
-* ``cargo_check`` — the fast tier. Host target, confined, seconds. Not a required stamp: it is the
-  tool the author should reach for after every edit, and gating on it as well as on the prover run
-  would gate one fact twice.
-* ``verify_rules`` — the slow tier and the gate. Builds for the chain, submits, and stamps the
-  draft's digest when the run comes back with every rule accounted for. A build failure never
-  reaches the prover (:class:`~composer.spec.cvlr.prover.BuildRejected`), so a compiler error arrives
-  as a compiler error with a span in it rather than as a ``CertoraUserInputError`` from inside a
-  submission that has already been paid for.
-
-**Accounted for, not all green.** A rule the author has marked an expected failure is excluded from
-the check, because on this backend a failing rule is usually a *finding* — the property is real and
-the program violates it — and a gate that demanded green would push the author to weaken the rule
-until the bug disappeared. The marking is what makes that an explicit, recorded claim instead.
+A rule marked as an expected failure is left out of the all-green check. On
+this backend a failing rule is often a finding: the property holds as written
+and the program violates it. The marking records that claim.
 """
 
 import asyncio
@@ -111,11 +104,11 @@ _log = logging.getLogger(__name__)
 
 
 class BuildPermit:
-    """The run's build permit, held by one unit, which can give it up before its slot ends.
+    """The run's build permit, held by one unit.
 
-    A submission holds it past its own build: the Prover's local phase rebuilds the crate and uploads
-    the ``.so``, and every build of the crate writes the same one. It is released as soon as that
-    upload is done, rather than when the cloud job finishes.
+    A submission holds it through the Prover's local rebuild and upload. Every
+    build of the crate writes the same ``.so``. The permit is released when
+    that upload finishes, before the cloud job finishes.
     """
 
     def __init__(self, sem: asyncio.Semaphore) -> None:
@@ -127,7 +120,7 @@ class BuildPermit:
         self._held = True
 
     def release(self) -> None:
-        """Give the permit up. Releasing one already given up does nothing."""
+        """Release the permit. Releasing one that is already released does nothing."""
         if self._held:
             self._held = False
             self._sem.release()
@@ -135,45 +128,43 @@ class BuildPermit:
 
 @dataclasses.dataclass(frozen=True)
 class HarnessTarget:
-    """Where a draft is staged so the crate compiles with it in.
+    """Where a draft is staged so the crate compiles with it.
 
-    The harness is a module *inside* the crate, so "staging" is writing one file the scaffold already
-    declared — not copying a spec next to a conf. ``module_path`` is absolute; the declaration in
-    ``specs/mod.rs`` was written once for the whole run
+    The harness is a module inside the crate. Staging writes the file the
+    scaffold already declared. ``module_path`` is absolute. ``specs/mod.rs``
+    was written once for the run
     (:meth:`composer.spec.cvlr.harness.CvlrArtifactStore.declare_modules`).
 
-    Every unit shares ``tree`` and ``build_sem`` and has its own everything else
-    (``docs/who-edits-the-program.md`` §14). The unit's cargo feature is what keeps that safe: a build
-    selects ``certora`` plus :attr:`~composer.spec.cvlr.harness.HarnessModule.feature`, so no other
-    unit's module is compiled and no other unit's draft can break this gate.
+    Every unit shares ``tree`` and ``build_sem``. A build selects ``certora``
+    plus :attr:`~composer.spec.cvlr.harness.HarnessModule.feature`, so no other
+    unit's module is compiled.
     """
 
     session: CargoSession
     module_path: Path
     package: str
-    #: The package's directory inside the tree.
     package_root: Path
-    #: The package's tuning files, which ``summarize_for_prover`` rewrites.
     tuning: TuningFiles
-    #: This unit's identity — the module name the tree keys edits by, and the cargo feature that
-    #: selects it.
+    #: The module name the tree keys edits by, and the cargo feature that selects
+    #: this unit.
     unit: HarnessModule
-    #: The run's one working copy, shared with every sibling unit.
+    #: The run's one working copy, shared by every unit.
     tree: SharedTree
-    #: One permit for the whole run, held across staging, the local cargo invocation and, for a
-    #: submission, the Prover's own rebuild and upload. Not across the cloud job: that waits for
-    #: minutes, and the files a sibling rewrites meanwhile are behind its own feature.
+    #: Held across staging, the local cargo invocation, and, for a submission,
+    #: the Prover's rebuild and upload. Released before the cloud job. A
+    #: sibling's files are behind its own feature.
     build_sem: asyncio.Semaphore
 
     @property
     def features(self) -> tuple[CargoFeature, ...]:
-        """The feature set every build of this unit uses — the harness, plus this unit's module."""
+        """Features for every build of this unit: the harness, and this unit's module."""
         return (DEFAULT_FEATURE, self.unit.feature)
 
     @property
     def package_dir(self) -> Path:
-        """The package's directory relative to the session's workdir, which is how a build is told
-        which package to compile.
+        """The package directory relative to the session workdir.
+
+        That relative path is how a build is told which package to compile.
         """
         return self.package_root.relative_to(self.session.workdir)
 
@@ -181,17 +172,15 @@ class HarnessTarget:
     async def build_slot(self) -> AsyncIterator[BuildPermit]:
         """Serialize staging and the cargo invocation that follows it.
 
-        For a cargo check, concurrent runs against one ``target/`` would serialize on cargo's own
-        build-directory lock anyway, and the per-unit feature is what keeps the shared tree correct
-        (``docs/who-edits-the-program.md`` §14.4). What the permit buys there is a queue the host can
-        see instead of a silent stall inside cargo, and not having several sandboxed builds parked
-        holding grants.
+        Cargo already serializes concurrent builds on its build-directory lock.
+        The permit is a queue the host can see, and it keeps several sandboxed
+        builds from sitting on grants.
 
-        For a submission the permit is load-bearing. Every SBF build of the crate writes the same
-        ``.so``, and the Prover's local phase rebuilds it and uploads it, so a sibling's build in
-        between would replace it with one built for the sibling's feature. See
-        :func:`_stage_and_submit`, which releases the permit through the yielded
-        :class:`BuildPermit` once the upload is done.
+        A submission needs the permit for another reason. Every SBF build
+        writes the same ``.so``. The Prover's local phase rebuilds it and
+        uploads it. A sibling build in between would replace that file with one
+        built for the sibling's feature. :func:`_stage_and_submit` releases the
+        permit through the yielded :class:`BuildPermit` once the upload is done.
         """
         permit = BuildPermit(self.build_sem)
         await permit.acquire()
@@ -206,22 +195,20 @@ class HarnessTarget:
         summaries: Sequence[SummaryDirective] = (),
         overlay: Mapping[str, str] = {},
     ) -> None:
-        """Make the tree agree with this unit's state.
+        """Make the tree match this unit's state.
 
-        All three inputs from one place, because all three are inputs to the build: the prover reads
-        the tuning file through the conf, and an edited file changes the program it compiles. Each
-        comes from already-merged state rather than from the tool that recorded one, so two
-        concurrent calls cannot each write their own view and lose the other's.
+        The draft, the summaries, and the source overlay are all inputs to the
+        build. Each is taken from already-merged state, so two concurrent calls
+        cannot each write their own view.
 
-        Everything here is written **from state**, not edited in place. The summaries file is
-        rewritten wholesale even when there are none — the composite the conf names has to exist, and
-        a directive dropped from state has to disappear. The overlay replaces whichever unit's edited
-        files the tree held (:meth:`composer.spec.cvlr.tree.SharedTree.reconcile`), which is what
-        makes the tree derivable after a crash, a rewind, or a cache replay with no tree at all.
+        The summaries file is rewritten from ``summaries`` even when that is
+        empty. The composite the conf names has to exist, and a directive
+        dropped from state has to leave the file. The overlay replaces this
+        unit's edited files
+        (:meth:`composer.spec.cvlr.tree.SharedTree.reconcile`).
 
-        Call it while holding :meth:`build_slot`. It is the tree's only writer, and the permit is
-        what keeps two units out of it at once — and, now that the tree holds only the staging
-        unit's edits, what keeps a sibling's edits out of this unit's build.
+        Call it while holding :meth:`build_slot`. That permit keeps two units
+        out of the tree at once, and keeps a sibling's edits out of this build.
         """
         self.tuning.write(tuple(summaries))
         await self.tree.reconcile(
@@ -231,16 +218,15 @@ class HarnessTarget:
 
 
 class _RunAccounting(ProverCallbacks):
-    """The run's prover bookkeeping: the link, the prover's own runtime, and the wall clock.
+    """Records the prover link, the prover's runtime, and the wall clock.
 
-    ``ProverCallbacks``' defaults are no-ops, so a backend that overrides only the events it cares
-    about silently opts out of all three — which is how every CVLR run so far reported zero prover
-    time while spending most of its wall clock in the cloud. These are the ``_SpecCallbacks`` (EVM)
-    set, and they are what ``summary.format()``, the per-task link and ``job_info.json``'s
-    ``prover_usage`` are computed from.
+    ``ProverCallbacks`` defaults do nothing. A backend that overrides only some
+    events records none of these. ``summary.format()``, the per-task link, and
+    ``job_info.json``'s ``prover_usage`` read them. The same events are what
+    the EVM ``_SpecCallbacks`` record.
 
-    A base of its own rather than three more methods on :class:`_CaptureCallbacks`, because the two
-    are needed independently: a submission with no analysis store still costs prover time.
+    Separate from :class:`_CaptureCallbacks` because a submission with no
+    analysis store still spends prover time.
     """
 
     def __init__(self) -> None:
@@ -249,8 +235,11 @@ class _RunAccounting(ProverCallbacks):
         self._upload_permit: BuildPermit | None = None
 
     def release_on_upload(self, permit: BuildPermit) -> None:
-        """Give ``permit`` up when the Prover reports the job's link, which is after its local
-        rebuild and upload. Until then a sibling's build could replace the ``.so`` it uploads."""
+        """Release ``permit`` when the Prover reports the job's link.
+
+        The link arrives after the local rebuild and upload. Until then a
+        sibling's build could replace the ``.so`` this job uploads.
+        """
         self._upload_permit = permit
 
     @override
@@ -268,9 +257,11 @@ class _RunAccounting(ProverCallbacks):
 
     @override
     async def on_prover_runtime(self, ms: int) -> None:
-        """The prover's own queue-free start-to-end time, which is the number a cost question is
-        actually about — distinct from the wall clock in :meth:`on_prover_result`, which includes
-        however long the job sat in the queue."""
+        """The prover's start-to-end time, without queue wait.
+
+        The wall clock in :meth:`on_prover_result` includes time spent waiting
+        in the queue.
+        """
         get_run_summary().record_prover_runtime(ms)
 
     @override
@@ -281,16 +272,12 @@ class _RunAccounting(ProverCallbacks):
 
 
 class _CaptureCallbacks(_RunAccounting):
-    """Keeps each violated rule's analysis where the report phase can find it.
+    """Stores analyses of violated rules for the report.
 
-    Two responsibilities, and the split between them is the point:
-
-    * The *handler* explains every violated rule to the author. An unwound loop bound is worth
-      explaining — the author can raise ``loop_iter`` or constrain the loop — so nothing is filtered
-      out of that path.
-    * This callback decides what becomes **evidence**. An :class:`IncompleteCheck` is not evidence
-      about the program, so recording one would hand the findings synthesizer a counterexample and
-      let it write up the prover's own limits as a bug in the code under verification.
+    The handler explains every violated rule to the author, including an
+    unwound loop bound. This callback records evidence. An
+    :class:`IncompleteCheck` is not evidence about the program. Recording one
+    would let a later pass treat the prover's limit as a bug in the program.
     """
 
     def __init__(self, store: CexAnalysisStore) -> None:
@@ -300,21 +287,21 @@ class _CaptureCallbacks(_RunAccounting):
 
     @property
     def incomplete(self) -> Mapping[str, IncompleteCheck]:
-        """The last run's rules that stopped on an assertion the prover generated, and which one.
+        """Rules from the last run that stopped on an assertion the prover generated.
 
-        Read by the gate, which has to say something different about these than about a rule whose
-        own assertion failed. Derived here rather than in ``_report`` because the counterexample it
-        is derived from does not survive into :class:`~composer.prover.core.ProverReport`, which
-        carries statuses only.
+        The gate reports these separately from a rule whose own assertion
+        failed. The counterexample does not survive into
+        :class:`~composer.prover.core.ProverReport`, which carries statuses
+        only, so the classification is kept here.
         """
         return self._incomplete
 
     @override
     async def on_prover_result(self, results: dict[str, RuleResult]) -> None:
-        # This run supersedes what was captured for the rules it covers. Dropping their old records
-        # before the handler writes fresh ones is what stops a rule that failed in an earlier
-        # iteration and passes now from surviving into the report as a current failure. Fires before
-        # the handler by contract, so what is recorded below is always this run's.
+        # This run replaces analyses for the rules it covers. Clearing them
+        # before the handler writes new ones keeps a rule that failed earlier
+        # and passes now out of the report. This callback runs before the
+        # handler, so the records below are this run's.
         await super().on_prover_result(results)
         self._incomplete = {}
         for result in results.values():
@@ -342,8 +329,7 @@ class _CaptureCallbacks(_RunAccounting):
                     assertion.split(".")[0],
                 )
             case PropertyViolation():
-                # Never let a capture failure disturb the run: the verdict is already in hand and
-                # the report can render without the explanation.
+                # A capture failure must not fail the run. The verdict is already in hand.
                 try:
                     await self._store.record(rule.path, explanation, rule.cex_dump)
                 except Exception:
@@ -351,13 +337,14 @@ class _CaptureCallbacks(_RunAccounting):
 
 
 class AuthorModel:
-    """The author's model as the author's graph binds it, tools included.
+    """The author's model, including the tools the author's graph binds.
 
-    A counterexample analysis continues the author's conversation, so it must be sent with the
-    author's exact tools, system prompt and settings: those come first in the request, and any
-    difference there makes the provider's prompt cache miss the whole conversation behind them. The
-    graph binds the model only when it is built, which is after the tools that need it, so the author
-    binds it here once the graph exists.
+    A counterexample analysis continues the author's conversation. It has to
+    use the author's tools, system prompt, and settings. Those come first in
+    the request, and a difference misses the provider's prompt cache.
+
+    The graph binds the model when it is built, after the tools that need it
+    exist. The author calls :meth:`bind` once the graph exists.
     """
 
     def __init__(self) -> None:
@@ -375,12 +362,10 @@ class AuthorModel:
 
 @dataclasses.dataclass(frozen=True)
 class CexAnalysis:
-    """What turns a violated rule into a finding: something to explain it, somewhere to keep it.
+    """Explains a violated rule and stores that explanation.
 
-    Built per unit rather than per submission, but the handler itself has to be built per *call* —
-    it reads the author's live conversation as context for the explanation, which is exactly what
-    makes its account of a counterexample worth more than the trace alone. It explains on the
-    author's own model, for the cache, and so on the author's tier.
+    Built per unit. The handler is built per call: it reads the author's
+    current conversation, and it uses the author's model.
     """
 
     store: CexAnalysisStore
@@ -399,17 +384,18 @@ class VerifyDeps:
 
     target: HarnessTarget
     submission: Submission
-    #: The directory :func:`composer.spec.cvlr.prover.prepare_submission` writes into. Outside the
-    #: tree, which the confined build can write.
+    #: The directory :func:`composer.spec.cvlr.prover.prepare_submission` writes into.
+    #: Outside the tree. The confined build can write the tree, so the conf and
+    #: the build script must not live there.
     submissions: Path
     prover_opts: ProverOptions
     stamper: ValidationStamper
-    #: ``None`` runs the prover with no analysis at all — the plumbing tests and any caller with no
-    #: LLM. A run that means to produce findings has to supply this.
+    #: ``None`` runs the prover with no analysis. Plumbing tests and any caller
+    #: with no LLM use that. A run that produces findings supplies this.
     analysis: CexAnalysis | None = None
-    #: One submission at a time per unit. A second concurrent run would build into the same workdir
-    #: and race the staged module; the tool refuses rather than serializing silently, because a
-    #: caller that made two calls wanted two answers.
+    #: One submission at a time per unit. A second concurrent run would build
+    #: into the same workdir and race the staged module. The tool refuses it.
+    #: A caller that made two calls wanted two answers.
     lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
 
 
@@ -435,8 +421,6 @@ def _incomplete_advice(stopped: IncompleteCheck) -> str:
 
 
 def _incomplete_note(incomplete: Mapping[str, IncompleteCheck]) -> str:
-    """What the gate says about rules that stopped on an assertion the prover generated: which
-    ones, and what gets each kind past it."""
     named = "\n".join(
         f"  {name}: {stopped.assertion}" for name, stopped in sorted(incomplete.items())
     )
@@ -455,14 +439,11 @@ def _unaccounted(
     expected_failures: dict[CheckName, str],
     incomplete: Container[str] = (),
 ) -> list[str]:
-    """Rules that failed and were not declared as expected failures.
+    """Rules that failed and are not excused by an expected-failure marking.
 
-    An incomplete check cannot be declared away, which is why the marking does not excuse one:
-    ``expect_rule_failure`` claims the failure exposes a real defect, and a rule that stopped on the
-    prover's own generated assertion never reached its property, so it has shown no defect at all.
-    Letting the marking through would publish a finding-shaped claim with nothing behind it — and
-    nothing behind it in a literal sense, since such a rule contributes no evidence either
-    (:class:`_CaptureCallbacks`).
+    An incomplete check is not excused. ``expect_rule_failure`` claims a real
+    defect, and a rule that stopped on the prover's assertion never reached
+    its property. :class:`_CaptureCallbacks` records no evidence for it.
     """
     return sorted(
         name
@@ -480,16 +461,16 @@ def _stamp_under(last: LastVerdicts, expected: dict[CheckName, str]) -> dict[str
 
 
 def _externals_note(externals: Sequence[str]) -> str | None:
-    """What the author is told about the functions this run treated as external, if there were any.
+    """Text for the author about functions this run treated as external, or None.
 
-    Not a gate: an external call is how the starting configuration keeps most of a platform's code
-    out of the analysis, and nothing in the author's action space inlines one. What the author can
-    do is know where its verdicts stop meaning what they say, and, where the program's own code
-    makes the call, bound the value with a stand-in.
+    Not a gate. The starting configuration leaves most platform code external,
+    and the author cannot add inlining directives. Where the program's own
+    code makes the call, the message tells the author how to bound the value
+    with a stand-in.
 
-    A bound is often the better remedy even where inlining is possible: platform code such as stake
-    activation loops once per epoch over a sysvar read by syscall, in ``f64``, and analyzed it
-    leaves a rule vacuous on the unwinding assertion.
+    Inlining that platform code is often worse. Stake activation loops once
+    per epoch over a sysvar, in ``f64``, and the rule comes back vacuous on
+    the unwinding assertion.
     """
     if not externals:
         return None
@@ -516,18 +497,18 @@ def _externals_note(externals: Sequence[str]) -> str | None:
 def _unverdicted(declared: Sequence[str], status: Mapping[str, bool]) -> list[str]:
     """Declared rules the report gave no verdict for.
 
-    Counted against the draft, not ignored: the verdict roll-up only sees rules the report names,
-    so a rule missing from it would otherwise leave "every rule is accounted for" true.
+    The verdict roll-up only sees rules the report names. A missing rule would
+    otherwise leave "every rule is accounted for" true.
     """
     return sorted(set(declared) - status.keys())
 
 
 def _wrongly_expected(status: dict[str, bool], expected_failures: dict[CheckName, str]) -> list[str]:
-    """Rules marked as expected failures that in fact verified.
+    """Rules marked as expected failures that verified.
 
-    Reported because it is the more interesting direction: a rule the author believed exposed a bug
-    and which passes means either the bug is not there or the rule does not test for it, and both
-    want the author's attention before the run is called finished."""
+    A rule the author said exposed a bug, and which passes, means the bug is
+    gone or the rule does not test for it.
+    """
     return sorted(name for name in expected_failures if status.get(name) is True)
 
 
@@ -539,9 +520,11 @@ class CargoCheck(
 ):
     """Compile the current draft against the program, on the host target.
 
-    Fast (seconds) and free — call it after every edit. It catches an unknown macro, a wrong
-    signature or a misused derive, which is the class of mistake worth catching before paying for a
-    prover run. It does *not* catch what only the chain build can, so it is not a substitute for
+    Takes seconds and does not submit a job. Call it after every edit. It
+    catches an unknown macro, a wrong signature, or a misused derive before a
+    prover run.
+
+    It does not catch errors only the chain build reports. It does not replace
     ``verify_rules``.
     """
 
@@ -574,11 +557,11 @@ class CargoCheck(
 def _submission_for(
     deps: VerifyDeps, state: CvlrGenerationState, rules: Sequence[str]
 ) -> Submission:
-    """The unit's submission, checking ``rules`` under the author's current prover settings.
+    """The unit's submission, checking ``rules`` under the current prover settings.
 
-    The settings come from state, not from ``deps``: the conf is the author's to change, and a
-    submission built from the run's starting copy would send the old settings while
-    ``version_history`` recorded the new ones.
+    The settings come from state. A submission built from the run's starting
+    copy would send the old settings while ``version_history`` recorded the
+    new ones.
     """
     return dataclasses.replace(
         deps.submission, rules=SelectRules(tuple(rules)), settings=state["prover_settings"]
@@ -597,13 +580,15 @@ async def _stage_and_submit(
 ) -> CvlrOutcome:
     """Stage ``draft`` with the unit's summaries and edits, build it, and submit it.
 
-    One build permit covers all of it until the Prover has uploaded. ``run_submission`` rebuilds the
-    crate into the target directory every build shares and uploads that ``.so``, so a sibling must
-    not build between this unit's gate build and that upload
-    (:func:`composer.spec.cvlr.prover.prepare_submission`). The permit is released when the job's
-    link arrives, which is after the upload, or when ``run_submission`` returns without one. The
-    cloud job's minutes are not covered: the files a sibling stages meanwhile are behind its own
-    feature (``docs/who-edits-the-program.md`` §14.4).
+    One build permit is held until the Prover has uploaded. ``run_submission``
+    rebuilds the crate into the shared target directory and uploads that
+    ``.so``. A sibling must not build between this unit's gate build and that
+    upload (:func:`composer.spec.cvlr.prover.prepare_submission`). The permit
+    is released when the job's link arrives, which is after the upload, or
+    when ``run_submission`` returns without a link.
+
+    The cloud job itself is not covered. Files a sibling stages during it are
+    behind that sibling's feature.
     """
     async with deps.target.build_slot() as permit:
         await deps.target.stage(draft, state["summaries"], state["vfs"])
@@ -630,14 +615,14 @@ class VerifyRules(
     WithInjectedId,
     WithAsyncDependencies[Command | str, VerifyDeps],
 ):
-    """Build the program with your harness and check its rules with the Certora Solana Prover.
+    """Build the program with the harness and check its rules with the Certora Solana Prover.
 
-    Minutes, and it costs real prover time — get ``cargo_check`` green first. On success this stamps
-    your current draft, which is one of the two things ``result`` requires.
+    This takes minutes and spends prover time. Get ``cargo_check`` green first.
+    On success it stamps the current draft, which ``result`` requires.
 
-    A rule that fails is not automatically a problem with your rule: if you believe it exposes a real
-    defect, mark it with ``expect_rule_failure`` and say why. Rules so marked are excluded from this
-    gate, so the run can be complete with a genuine violation still in it.
+    A failing rule is not always a bad rule. If it exposes a real defect, mark
+    it with ``expect_rule_failure`` and say why. Marked rules are excluded from
+    this gate, so a run can finish with a real violation still in it.
     """
 
     @override
@@ -657,11 +642,10 @@ class VerifyRules(
             async with deps.lock:
                 analysis = deps.analysis
                 capture = analysis.callbacks() if analysis else None
-                # Name exactly the rules this draft declares. Not a refinement: a conf with no
-                # `rule` entry makes the cloud job end in FAILED, with no report and nothing on disk
-                # to read, so *every* submission this backend made failed until this line named
-                # them. Not every rule either — a build compiles this unit's module and the artifact
-                # declares every unit's rules, so this unit would be graded on its siblings' drafts.
+                # Name the rules this draft declares. A conf with no `rule` entry
+                # makes the cloud job end in FAILED, with no report. Naming every
+                # rule in the artifact would also be wrong: the build compiles
+                # this unit's module, and the artifact declares every unit's rules.
                 outcome = await _stage_and_submit(
                     deps,
                     self.state,
@@ -679,17 +663,13 @@ class VerifyRules(
             )
 
     def _nothing_to_submit(self) -> Command | str:
-        """A draft with no rules: either unfinished, or a unit whose every property is blocked.
+        """A draft with no rules.
 
-        The second case has to be able to finish. A unit that skips everything — the honest outcome
-        when the prover cannot analyze the handler its properties are about — declares no rules, so
-        it could never earn this stamp, so ``result`` refused it and ``give_up`` was the only way
-        out. That reported a considered "nothing here is formalizable, and here is why" as a
-        failure, which is both wrong and the shape the skip guidance had just started encouraging.
-
-        Stamping is safe because it is not the only gate: ``result`` still requires every property to
-        be either skipped or mapped to a declared rule, and the judge still has to accept the skips.
-        A draft with no rules and no skips is the unfinished case and gets nothing.
+        If nothing is skipped, the draft is unfinished and is not stamped. If
+        every property is skipped, the prover gate is satisfied: there is
+        nothing to submit. ``result`` still requires every property to be
+        skipped or mapped to a declared rule, and the judge still has to accept
+        the skips.
         """
         if not self.state["skipped"]:
             return (
@@ -707,17 +687,15 @@ class VerifyRules(
             )
 
     def _inert_summaries(self, build: SbfRun) -> str | None:
-        """A note naming the summary directives this build's symbols do not match.
+        """A note naming summary directives this build's symbols do not match, or None.
 
-        The failure it reports is total silence. A summary is a regex over demangled symbol names, so
-        one that names a symbol the build does not define changes nothing and produces no
-        diagnostic — the run reports the error it reported before. An end-to-end run wrote five
-        variants of one directive hunting for a spelling that took, and *all five* missed: the
-        program's own ``VaultError::Display`` had been inlined out of existence, so no spelling would
-        have worked, and the symbol it needed was Anchor's ``ErrorCode::Display``, which survives.
+        A summary is a regex over demangled names. One that matches nothing
+        changes nothing, and the prover reports no diagnostic. A symbol the
+        compiler inlined away is absent from the build, so no spelling of it
+        matches.
 
-        Best-effort, and silent when the symbols cannot be read: an unreadable artifact must not
-        become "your directives matched nothing", which is a different problem with a different fix.
+        Returns None when the symbols cannot be read. An unreadable artifact is
+        a different failure from a directive that matched nothing.
         """
         directives = tuple(d.pattern for d in self.state["summaries"])
         if not directives or not isinstance(build.verdict, Built):
@@ -753,16 +731,13 @@ class VerifyRules(
         *,
         declared: Sequence[str],
     ) -> Command | str:
-        """What the gate says."""
         stamper = deps.stamper
         expected = self.state["expected_failures"]
         match outcome:
             case BuildRejected(build=build):
-                # Never a submission, so nothing was spent. The compiler's own text is the most
-                # actionable thing the author can be handed — and it is on the verdict rather than
-                # the run, because only a failed build has any.
-                # The slow tier reports a failure as the same `CompileFailed` the fast tier
-                # does, so the author reads one shape of compiler output whichever tier caught it.
+                # Nothing was submitted. The message is the compiler's text from
+                # the verdict. Only a failed build has any. Both tiers report a
+                # failure as `CompileFailed`.
                 said = (
                     build.verdict.diagnostics
                     if isinstance(build.verdict, CompileFailed)
@@ -962,13 +937,11 @@ class ExplainVacuity(
 def gate_tools(
     target: HarnessTarget, deps: VerifyDeps, analyzer: VacuityAnalyzer
 ) -> list[BaseTool]:
-    """The gate tools and the one tool that changes what they check, named as the prompt refers to
-    them.
+    """The gate tools, and the tool that changes what they check.
 
-    No tool here edits the program under verification. That belongs to one entity and it is not the
-    author (:mod:`composer.spec.cvlr.editor`, ``docs/who-edits-the-program.md`` §4); what the author
-    gets instead is ``code_editor`` and the edit-history tools, bound where the rest of its tools
-    are."""
+    No tool here edits the program. The author gets ``code_editor`` and the
+    edit-history tools, bound with the rest of its tools.
+    """
     return [
         CargoCheck.bind(target).as_tool("cargo_check"),
         VerifyRules.bind(deps).as_tool("verify_rules"),
@@ -988,24 +961,24 @@ class SummarizeForProver(
     WithInjectedId,
     WithAsyncDependencies[Command | str, TuningFiles],
 ):
-    """Tell the prover to replace a function with an unconstrained stand-in instead of analyzing it.
+    """Tell the prover to replace a function with an unconstrained stand-in.
 
-    This is the remedy for a rule that comes back with **no verdict** because the pointer analysis
-    refused something on one of its paths — [3308] on an Anchor program's ``#[error_code]`` enum
-    formatting its ``#[msg]`` string is the common case, and it is reached by any ``require!`` or
-    ``?`` in a handler you call. Summarizing that formatting code makes the rest of the handler
-    analyzable.
+    Use this when a rule gets no verdict because the pointer analysis refused
+    something on its path. The usual case is [3308] on an Anchor
+    ``#[error_code]`` enum formatting its ``#[msg]`` string, which any
+    ``require!`` or ``?`` in a called handler can reach. Summarizing that
+    formatting code makes the rest of the handler analyzable.
 
-    **A summary is unsound, and it does not fail loudly.** The prover stops reasoning about the
-    function: the call returns an unconstrained value and writes nothing beyond the locations
-    ``returns`` names, so every other store the real function makes is dropped. Summarizing the code your property is actually about can produce a
-    rule that passes having checked nothing — state the function should have changed keeps its old
-    value — with no trace in the harness. Summarize only what your properties do not depend on.
-    Never summarize a handler, a function that writes state you assert over, or one that computes a
-    value you assert over.
+    A summary is unsound, and the prover does not report that. The call returns
+    an unconstrained value and writes only the locations ``returns`` names.
+    Every other store the real function makes is dropped. Summarizing code a
+    property is about can make the rule pass having checked nothing, with no
+    trace in the harness. Summarize only code the properties do not depend on.
+    Do not summarize a handler, a function that writes state you assert over,
+    or one that computes a value you assert over.
 
-    Adding one invalidates the prover stamp, because the previous run's verdicts were about a
-    different build: re-run ``verify_rules`` afterwards.
+    Adding one invalidates the prover stamp. The previous run's verdicts were
+    about a different build. Re-run ``verify_rules``.
     """
 
     symbol_pattern: str = Field(
@@ -1036,9 +1009,8 @@ class SummarizeForProver(
         with self.tool_deps() as tuning:
             absent = tuning.missing()
         if absent:
-            # The scaffold owns these files, so this is a scaffold failure surfacing late. Refused
-            # rather than recorded, because a summary in a file the conf does not name changes
-            # nothing and the author would read success and get an identical [3308].
+            # Refused, not recorded. A summary in a file the conf does not name
+            # changes nothing, and the tool would report success.
             return (
                 f"This project has no {', '.join(absent)}, so the prover is not reading any tuning "
                 "file and a summary would have no effect. Report this rather than working around it."
@@ -1048,8 +1020,8 @@ class SummarizeForProver(
         )
         if any(d.pattern == directive.pattern for d in self.state["summaries"]):
             return f"{directive.pattern} is already summarized."
-        # Only this directive: the state reducer merges, and the build path is what writes the
-        # tuning file. A tool that wrote the file itself would be racing its own siblings.
+        # Record only this directive. The state reducer merges, and the build
+        # path writes the tuning file. Writing the file here would race another call.
         return tool_state_update(
             self.tool_call_id,
             f"Recorded a summary for {directive.pattern}. It takes effect on the next build, and it "
@@ -1063,14 +1035,13 @@ class SetLoopIter(BaseModel):
 
     type: Literal["loop_iter"]
     iterations: int = Field(
-        description="The new bound. The Prover unrolls an unbounded loop this many times and then "
-        "*asserts* the loop has finished — while `optimistic_loop` is off, which is the default, a "
-        "rule that verifies at this bound is verified, and one that cannot comes back VIOLATED on "
-        "\"Unwinding condition in a loop\" rather than passing quietly. Set it as low as the "
-        "property allows: cost grows "
-        "exponentially, and above 3 or 4 it grows faster than the answer is usually worth. Raising "
-        "it is the last of the three remedies, after bounding whatever determines the trip count "
-        "and after asking whether the loop is in your property's way at all."
+        description="The new bound. While `optimistic_loop` is off, the Prover unrolls an unbounded "
+        "loop this many times and then asserts that the loop has finished. A rule that verifies "
+        "at this bound is verified. A rule that cannot comes back VIOLATED on \"Unwinding "
+        "condition in a loop\". Set it as low as the property allows. Cost grows exponentially, "
+        "and above 3 or 4 it grows faster than the answer is usually worth. Raise it after "
+        "bounding whatever determines the trip count, and after deciding whether the loop is in "
+        "the property's way."
     )
 
 
@@ -1079,21 +1050,17 @@ class SetOptimisticLoop(BaseModel):
 
     type: Literal["optimistic_loop"]
     enabled: bool = Field(
-        description="True to assume loops finish, false to go back to asserting it. **This is the "
-        "one setting here that changes what a verdict means.** With it on, the Prover stops "
-        "checking that the unroll bound was enough, so a violation reachable only on a later "
-        "iteration is never found and the rule reports VERIFIED anyway. Every rule in the "
-        "submission is affected, not the one you were fighting. "
-        "It is for exactly one situation: a loop whose trip count the analysis cannot fix, where "
-        "raising the bound provably does not terminate — the bound goes up and the reported "
-        "iteration goes up with it — and where the loop is somewhere no summary directive can name, "
-        "so it cannot be constrained or munged either. Establish that first, by moving the bound and "
-        "reading what comes back; a loop that discharges at 3 is not this case. The honest "
-        "alternative when it is this case is `record_skip` naming the loop, and that is the better "
-        "answer when the property is about the loop itself. What this buys is the properties that "
-        "are not: with it on, the rest of the handler is reachable again. Say in `why` which "
-        "bounds you tried and what they reported — a reader has to weigh every verdict in the unit "
-        "against it."
+        description="True to assume loops finish within the bound, false to assert it again. "
+        "This is the setting that changes what a verdict means. With it on, the Prover does not "
+        "check that the unroll bound was enough, so a violation on a later iteration is never "
+        "found and the rule reports VERIFIED. Every rule in the submission is affected. Use it "
+        "only for a loop whose trip count the analysis cannot fix: raising the bound does not "
+        "terminate, because the reported iteration goes up with the bound, and no summary "
+        "directive can name the loop. Check that first by moving the bound and reading what "
+        "comes back. A loop that discharges at 3 is not this case. If the property is about the "
+        "loop, use `record_skip` and name the loop. With the setting on, the rest of the handler "
+        "is reachable again. Say in `why` which bounds you tried and what they reported. A reader "
+        "weighs every verdict in the unit against that account."
     )
 
 
@@ -1108,26 +1075,29 @@ class AdjustProverConfig(
 ):
     """Change a prover setting for this unit's submissions.
 
-    The conf is in your system prompt; this changes it. The list is short and closed. The loop bound
-    is **sound**: it decides how the prover spends its time, never what a green verdict means.
+    The conf is in the system prompt. This changes it. The list of settings is
+    closed. ``loop_iter`` decides how far the prover unrolls a loop. It does
+    not change what a green verdict means.
 
-    `optimistic_loop` is the exception, and it is here because the sound ladder has a gap rather
-    than because the rule was relaxed: a trip count the analysis cannot fix is answered by none of
-    bounding the inputs, munging the loop, or raising the bound. Turning it on makes every verdict
-    in this unit conditional on an assumption nothing checked, so it is the last thing to reach for
-    and the first thing a reader of the deliverable will want explained. What stays out of your
-    hands entirely is a `rule_sanity` downgrade, which stops vacuity being reported, and the
-    memory-model flags, which are unsound by name and measurably fix nothing.
+    ``optimistic_loop`` does. With it on, the prover does not check that the
+    unroll bound was enough, so a violation on a later iteration is not
+    reported and the rule can come back verified. It applies to every rule in
+    the unit. Use it only when the trip count cannot be fixed by bounding
+    inputs, editing the loop, or raising the bound: the bound goes up and the
+    reported iteration goes up with it, and no summary directive can name the
+    loop. A loop that discharges at a small bound is not this case. When the
+    property is about the loop itself, ``record_skip`` naming the loop is the
+    better answer. Say in ``why`` which bounds were tried and what they
+    reported.
 
-    **Reach for this after your own remedies, not before them.** A timeout is usually telling you
-    something about the rule: an unbounded operand, an algebraic step that belongs in a lemma, a
-    loop whose trip count nothing constrains. A setting that makes the symptom go away without
-    answering that leaves a proof nobody understands as well, which is a worse thing to ship than a
-    slow one.
+    ``rule_sanity`` and the memory-model flags are not settings here.
 
-    Edits apply together or not at all, and the result is the full conf. Changing it invalidates the
-    prover stamp, because the previous run's verdicts were obtained under different settings: re-run
-    `verify_rules` afterwards.
+    Try the rule's own remedies before a setting change. A timeout often means
+    an unbounded operand, a step that belongs in a lemma, or a loop whose trip
+    count nothing constrains.
+
+    Edits apply together or not at all, and the result is the full conf. A
+    change invalidates the prover stamp. Re-run ``verify_rules``.
     """
 
     edits: list[CvlrConfigEdit] = Field(description="The changes to apply, as one atomic batch.")
@@ -1200,13 +1170,13 @@ def _remarked(
 class ExpectRuleFailure(
     WithInjectedState[CvlrGenerationState], WithAsyncImplementation[Command], WithInjectedId
 ):
-    """Declare that a rule is *meant* to fail because the program violates the property.
+    """Record that a rule is meant to fail because the program violates the property.
 
-    This is how a real finding is recorded rather than argued away. The rule stays in the harness,
-    the prover keeps reporting the violation, and ``verify_rules`` stops treating it as unfinished
-    work. Use it only when you have read the counterexample and believe the defect is real. When
-    the marking accounts for the last failure of the last run, the draft is stamped as that run
-    would have stamped it, with no need to run again.
+    The rule stays in the harness and the prover keeps reporting the violation.
+    ``verify_rules`` stops treating it as unfinished. Use it only after reading
+    the counterexample and concluding the defect is real. When the marking
+    accounts for every failure of the last run, the draft is stamped from that
+    run, with no new submission.
     """
 
     rule_name: str = Field(description="The name of the rule expected to fail")
@@ -1216,8 +1186,8 @@ class ExpectRuleFailure(
 
     @override
     async def run(self) -> Command:
-        # The merge reads an empty reason as "remove the marking", so an empty one must not get
-        # through — an unexplained expected failure is indistinguishable from a broken rule.
+        # An empty reason removes the marking. Do not record one. An unexplained
+        # expected failure looks like a broken rule.
         if not self.reason.strip():
             return tool_state_update(
                 self.tool_call_id,

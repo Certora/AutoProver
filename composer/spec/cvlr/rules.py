@@ -1,32 +1,22 @@
 """Which rules a CVLR harness declares, read from the source.
 
-The authoring framework's publish gate validates the property→check mapping against ground truth
-when the backend can supply it: ``composer.authoring.state.validate_check_mapping`` takes a ``ran``
-set and then checks *both* directions — no claimed rule that does not exist, and no rule that exists
-without being tied back to a property. Its docstring notes that "forge names every test it ran; a
-backend whose checker does not is passed ``None``". The Solana prover does name every rule it ran,
-but only *after* submission, and the gate has to answer before one. So the ground truth here is the
-buffer itself.
+The publish gate checks the property-to-rule mapping before any submission.
+The names come from the draft. Both declaration forms name their rules
+deterministically:
 
-That is exact rather than approximate, because both ways of declaring a rule name it deterministically:
+* ``#[rule]`` adds ``#[no_mangle]`` (``cvlr-macros``), so the symbol is the
+  function name.
+* ``cvlr_rules!`` and ``cvlr_invariant_rules!`` expand to one
+  ``cvlr_rule_for_spec!`` per base. That macro builds the name as
+  ``snake_case(name) + "_" + base``, with a ``base_`` prefix stripped from
+  the base. :func:`snake_case` matches the crate's own function. The tests
+  check it against the examples in the crate's documentation.
 
-* ``#[rule]`` adds nothing but ``#[no_mangle]`` (``cvlr-macros``), so the symbol *is* the function
-  name, verbatim.
-* ``cvlr_rules!`` and ``cvlr_invariant_rules!`` expand to one ``cvlr_rule_for_spec!`` per base, and
-  that macro builds the name as ``snake_case(name) + "_" + base``, with a ``base_`` prefix stripped
-  from the base. :func:`snake_case` is a port of the crate's own function, and the examples in the
-  crate's documentation are what the tests check it against.
-
-**The grouping is kept, not flattened.** A parametric invocation is one authored construct that
-becomes several rules, which is open question 5 of the backend plan — rule granularity changes both
-prover cost and counterexample attribution. A caller that just wants the names calls
-:func:`rule_names`; a caller reporting on what the author wrote wants to know that six verdicts came
-from one three-line invocation.
-
-**A shape this does not recognize costs the author a publish.** That is the opposite risk from the
-crate inventory's, where a miss is a gate nobody can satisfy; here a miss is a rejection nobody can
-act on. So the known shapes are pinned by test, and the mapping gate's rejection names what was
-found — a false rejection should be self-diagnosing rather than mysterious.
+:func:`declared_rules` keeps each parametric invocation as one declaration
+that expands to several rules. :func:`rule_names` returns the names.
+A shape this parser does not recognize is a rule the mapping gate will not
+see, so the known shapes are covered by tests and a rejection lists what
+was found.
 """
 
 import dataclasses
@@ -34,14 +24,13 @@ import re
 
 from composer.spec.types import RuleName
 
-#: ``#[rule]`` — possibly with other attributes, doc comments or ``pub``/``unsafe`` between it and
-#: the name. Deliberately not anchored to the same line: an attribute above a doc comment above a
-#: signature is ordinary Rust, and a line scan is what misses it.
+#: ``#[rule]``, with other attributes, doc comments, or ``pub`` / ``unsafe``
+#: allowed between it and the function name. Not limited to one line.
 _RULE_ATTR = re.compile(r"#\[\s*rule\s*\]")
 _FN_NAME = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
 
-#: The two parametric forms. Both take ``name:`` and ``bases:``; they differ only in how the spec is
-#: given, which does not affect the names.
+#: The two parametric forms. Both take ``name:`` and ``bases:``. How the spec
+#: is given does not affect the names.
 _PARAMETRIC = re.compile(r"\b(cvlr_rules|cvlr_invariant_rules)\s*!")
 
 _NAME_FIELD = re.compile(r"\bname\s*:\s*\"([^\"]*)\"")
@@ -51,12 +40,12 @@ _OPENERS = {"{": "}", "(": ")", "[": "]"}
 
 
 def snake_case(name: str) -> str:
-    """The crate's own ``to_snake_case``, ported.
+    """The crate's ``to_snake_case``.
 
-    Lowercase, every non-alphanumeric character to ``_``, then collapse runs and trim — so
-    ``"Vault Solvency"`` and ``"vault-solvency"`` both become ``vault_solvency``. Ported rather than
-    approximated because the generated symbol is what the prover reports, and a name we spell
-    differently is a rule the report cannot match up.
+    Lowercase, every non-alphanumeric character to ``_``, then collapse runs
+    and trim. ``"Vault Solvency"`` and ``"vault-solvency"`` both become
+    ``vault_solvency``. The generated symbol is what the prover reports, so a
+    different spelling would not match the report.
     """
     mapped = "".join(c if c.isalnum() or c == "_" else "_" for c in name.lower())
     return "_".join(part for part in mapped.split("_") if part)
@@ -85,8 +74,9 @@ class DirectRule:
 class ParametricRules:
     """One ``cvlr_rules!`` / ``cvlr_invariant_rules!`` invocation, and what it expands to.
 
-    ``spec_name`` is the literal the author wrote, before snake-casing, because that is the string a
-    reader will search the source for."""
+    ``spec_name`` is the literal the author wrote, before snake-casing. That is
+    the string a reader searches the source for.
+    """
 
     macro: str
     spec_name: str
@@ -102,11 +92,12 @@ type Declaration = DirectRule | ParametricRules
 
 
 def _matching(text: str, opener_at: int) -> int:
-    """The index just past the delimiter matching the one at ``opener_at``.
+    """Index just past the delimiter matching the one at ``opener_at``.
 
-    Depth-counted rather than regex-matched because the spec expression between ``name:`` and
-    ``bases:`` routinely contains its own brackets — ``cvlr_and(a, b)``, an array, a closure — and a
-    non-greedy match for ``bases: [...]`` would happily find one of those instead."""
+    The spec expression between ``name:`` and ``bases:`` can contain its own
+    brackets (``cvlr_and(a, b)``, an array, a closure). A regex for
+    ``bases: [...]`` would match one of those.
+    """
     opener = text[opener_at]
     closer = _OPENERS[opener]
     depth = 0
@@ -154,12 +145,11 @@ def _parametric_at(text: str, macro: str, bang_end: int) -> ParametricRules | No
 
 
 def declared_rules(source: str) -> tuple[Declaration, ...]:
-    """Every rule declaration in ``source``, in the order it appears.
+    """Every rule declaration in ``source``, in source order.
 
-    Comments are not stripped. A ``#[rule]`` inside a block comment would be counted, which is the
-    kind of thing a Rust parser would get right — but the input here is a buffer an agent wrote to
-    be compiled, and paying for a parser to handle commented-out rules would be paying for the wrong
-    problem. The gate that follows this one is a compiler.
+    Comments are not stripped. A ``#[rule]`` inside a block comment is counted.
+    The input is a buffer the agent wrote to compile, and the next gate is the
+    compiler.
     """
     found: list[tuple[int, Declaration]] = []
 
@@ -185,10 +175,9 @@ def declared_rules(source: str) -> tuple[Declaration, ...]:
 
 
 def rule_names(source: str) -> tuple[RuleName, ...]:
-    """Every rule name ``source`` declares, deduplicated, in declaration order.
+    """Every rule name ``source`` declares, in declaration order, without duplicates.
 
-    Deduplicated because two declarations can legitimately collide only by mistake — and a
-    duplicated name is the compiler's complaint to make, not this function's.
+    A duplicated name is a compiler error. This function reports it once.
     """
     seen: dict[RuleName, None] = {}
     for declaration in declared_rules(source):

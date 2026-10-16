@@ -1,33 +1,21 @@
 """Can a rule reach an Anchor program's own code under the Solana Prover?
 
-``docs/cvlr-backend-plan.md`` §7.5.6. The authoring loop's first real run published nineteen rules
-and none of them invoked the program: two of three units reported prover error **[3006] "illegal
-store of a stack pointer"** and worked around it by verifying a reimplementation of the handler
-instead. Every gate passed that, because every verdict in it was honest.
+Three rules, graded by how much of Anchor they go through:
 
-This is the instrument for the question the loop cannot answer about itself. It is hand-written on
-purpose: an error the author cannot act on consumes its whole budget — three recorded instances in
-one phase — so a loop run measures the loop rather than the hypothesis. Here the harness is fixed and
-the only variable is the platform's configuration.
+* ``rule_vault_state_deserializes`` — the control. ``Account::try_from`` and
+  arithmetic, no dispatch and no CPI. If this fails, the problem is not Anchor's.
+* ``rule_deposit_credits_exactly_the_amount`` — the handler, with the accounts
+  struct built by hand so ``try_accounts`` is skipped. It asserts the
+  post-state and goes through the account-creating CPI.
+* ``rule_dispatch_is_reachable`` — ``crate::entry``, the dispatch path. Not
+  gated. It fails with [3308], and it calls ``entry``, which a real spec does
+  not. It is a tripwire for that error being fixed.
 
-Three rules, graded by how much of Anchor they go through, so a failure localizes instead of merely
-happening:
+The scaffold points the target at the Anchor fork
+(:mod:`composer.spec.cvlr.forks`), as a production run does.
 
-* ``rule_vault_state_deserializes`` — the control. ``Account::try_from`` and arithmetic, no dispatch
-  and no CPI. If this fails, the problem is not Anchor's.
-* ``rule_deposit_credits_exactly_the_amount`` — the handler, with the accounts struct built by hand
-  so ``try_accounts`` is skipped, asserting the post-state property the loop reported as out of
-  reach. This one goes through the account-creating CPI.
-* ``rule_dispatch_is_reachable`` — ``crate::entry``, the whole dispatch path. What [3006] was
-  attributed to. **Not gated**: it fails with [3308] and it probes something no real spec does, so it
-  is carried as a tripwire for that error being fixed rather than as a requirement.
-
-The configuration is no longer a variable: the scaffold points the target at the Anchor fork
-(:mod:`composer.spec.cvlr.forks`), which is what production does, so this test exercises the same
-dependency graph a real project verifies against.
-
-Marked ``expensive``: it submits a real cloud job, and it needs a Rust and Solana platform toolchain.
-It skips — naming the missing piece — rather than failing when one is absent.
+Marked ``expensive``. It submits a real cloud job and needs a Rust and Solana
+platform toolchain. It skips, naming the missing piece, when one is absent.
 """
 
 import json
@@ -63,38 +51,40 @@ SCENARIO = Path(__file__).parent.parent / "test_scenarios" / "solana_vault_idl"
 PROBE = Path(__file__).parent / "data" / "anchor_reach_probe.rs"
 PACKAGE = "vault"
 
-#: Weakest first, so the report reads as a boundary rather than a list.
+#: Weakest first, so the first failure is where the boundary is.
 TIERS = (
     "rule_vault_state_deserializes",
     "rule_deposit_credits_exactly_the_amount",
     "rule_dispatch_is_reachable",
 )
 
-#: The tiers this test gates on — the ones that correspond to how CVLR specs are actually written.
+#: The tiers this test requires. They match how CVLR specs are written.
 REQUIRED = TIERS[:2]
 
-#: ``rule_dispatch_is_reachable`` is recorded and not gated. It calls Anchor's ``entry``, and the
-#: reference project's harness does that zero times against four uses of ``Context::new``, so it
-#: probes something no real spec does. It currently fails with [3308] out of the program's own
-#: ``#[error_code]`` (``docs/upstream-defects.md`` P4). Kept because it is free to run alongside the
-#: others and it is how we will learn that [3308] is fixed — see the tripwire at the end.
+#: Recorded and not required. It calls Anchor's ``entry``. The reference
+#: harness does not: it uses ``Context::new``. The rule currently fails with
+#: [3308] from the program's ``#[error_code]``. The assertion at the end fails
+#: if it starts to verify.
 UNGATED = "rule_dispatch_is_reachable"
 
 
 
 def _shipped_cli_only() -> None:
-    """``$CERTORA`` points the CLI at a Prover source checkout, which reports itself as "no package
-    installed" and is refused before upload — naming neither the variable nor itself."""
+    """Skip when ``$CERTORA`` is set.
+
+    It points the CLI at a Prover source checkout. That checkout reports
+    itself as "no package installed" and is refused before upload, and the
+    refusal names neither the variable nor the checkout.
+    """
     if os.environ.get("CERTORA"):
         pytest.skip("$CERTORA is set; rerun with `env -u CERTORA`")
 
 
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
-    """The scenario, scaffolded, with the probe harness in place of the empty ``specs/mod.rs``.
+    """A copy of the scenario, scaffolded, with the probe in place of ``specs/mod.rs``.
 
-    A copy: scaffolding writes to the tree, and a test that dirties a checked-in scenario is a test
-    people learn not to run.
+    Scaffolding writes into the tree. The checked-in scenario stays untouched.
     """
     _shipped_cli_only()
     if shutil.which("cargo") is None:
@@ -125,8 +115,7 @@ async def test_a_rule_that_reaches_an_anchor_program_can_be_analyzed(project, ca
     session = CargoSession(workdir=project, sandbox=SandboxConfig.from_env())
     assert isinstance(await session.warm(manifest_dirs=(Path("programs") / PACKAGE,)), Warmed)
 
-    # The fast tier first: a probe that does not compile must not cost a submission, and the harness
-    # is hand-written rather than agent-written so there is no revision loop to catch it later.
+    # Compile on the host first. A probe that does not compile must not be submitted.
     fast = await session.check(package=PACKAGE, features=("certora",))
     assert fast.ok, fast.verdict
 
@@ -145,10 +134,10 @@ async def test_a_rule_that_reaches_an_anchor_program_can_be_analyzed(project, ca
     if isinstance(prepared, BuildRejected):
         outcome = prepared
     else:
-        # Sanity off. It doubles the work per rule and answers a different question: this run asks
-        # whether the prover can analyze an Anchor call graph at all, and the weakest tier asserts a
-        # tautology on purpose so that a [3006] on it would be unambiguous. No setting turns it
-        # off, so the probe edits the file it is about to submit.
+        # Sanity off. It doubles the work per rule, and this run asks whether the
+        # prover can analyze an Anchor call graph. The weakest tier asserts a
+        # tautology, so a [3006] on it is unambiguous. No conf setting turns
+        # sanity off, so the probe edits the file it submits.
         conf = {**json.loads(prepared.conf_path.read_text()), "rule_sanity": "none"}
         prepared.conf_path.write_text(dump_conf(conf))
         outcome = await run_submission(
@@ -166,38 +155,36 @@ async def test_a_rule_that_reaches_an_anchor_program_can_be_analyzed(project, ca
         case Checked(build=build, report=report):
             assert isinstance(build.verdict, Built)
 
-    # Written to a file as well as printed. The prover's per-rule message is the only place the
-    # reason for a non-VERIFIED verdict appears, it is not among the artifacts the job's output URL
-    # exposes, and it is gone once the process ends — a run invoked through a `tail` has already
-    # cost one submission's worth of that message.
+    # Save the per-rule message. It is the only place a non-VERIFIED reason
+    # appears, the job's output URL does not include it, and it is gone when
+    # this process ends.
     saved = project / "anchor_reach_report.txt"
     saved.write_text(f"{report.link}\n\n{report.result_str}\n")
     with capsys.disabled():
         print(f"\nprover run: {report.link}\nfull report saved to {saved}\n{report.result_str}")
 
-    # The property, weakest tier first. A rule the prover cannot analyze is not VERIFIED, so this is
-    # the same assertion for a [3006] as for any other failure to produce a verdict — which is the
-    # point: a green run here means an Anchor program's own code is reachable from a rule, and that
-    # a post-state property about it can be proved.
+    # Weakest required tier first. A rule the prover cannot analyze is not
+    # VERIFIED, whether the cause is [3006] or anything else. A green run means
+    # the program's own code is reachable from a rule and a post-state property
+    # about it can be proved.
     status = report.rule_status
     unreached = [name for name in REQUIRED if status.get(name) is not True]
     assert unreached == [], (
         f"rules that could not be verified against the program itself: {unreached}. Weakest tier "
         f"first, so the first entry is where the boundary is. Report: {report.link}\n"
-        f"If the handler tier is the one failing, check *how* it observes post-state before "
-        f"reaching for a prover setting: Anchor's `Account<T>` is a deserialized copy whose "
-        f"mutations reach the account bytes only in `exit`, and nothing calls `exit` when a rule "
-        f"invokes a handler directly. Re-deserializing after the call reads pre-state and the "
-        f"property fails against a correct program. Read through the handle the context borrowed "
-        f"(§7.6.2).\n"
+        f"If the handler tier is the one failing, check how it observes post-state before "
+        f"changing a prover setting. Anchor's `Account<T>` is a deserialized copy. A handler's "
+        f"mutation of it reaches the account bytes only in `exit`, and a rule that calls the "
+        f"handler directly never calls `exit`. Re-deserializing after the call reads pre-state, "
+        f"and the property fails on a correct program. Read through the handle the context "
+        f"borrowed.\n"
         f"The full report is saved next to the project; `Reports/treeView/` is fetchable from "
         f"https://prover.certora.com/v1/domain/jobs/<jobId>/f/outputs (a gzipped tar) if it is lost."
     )
 
-    # A tripwire rather than an assertion about the current state: the dispatch tier is expected to
-    # fail, so the case worth catching is it *starting to pass*. That means [3308] was fixed
-    # upstream, and this fixture should stop describing it as a bound.
+    # The dispatch tier is expected to fail. If it verifies, [3308] was fixed
+    # and this fixture should stop treating that failure as expected.
     assert status.get(UNGATED) is not True, (
-        f"{UNGATED} now verifies. [3308] appears to be fixed, so move it into REQUIRED and drop the "
-        f"P4 entry from docs/upstream-defects.md. Report: {report.link}"
+        f"{UNGATED} now verifies. [3308] appears to be fixed, so move it into REQUIRED. "
+        f"Report: {report.link}"
     )

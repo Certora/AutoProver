@@ -54,11 +54,10 @@ BASE_CONF: Conf = {
 
 @dataclass(frozen=True)
 class OptimisticLoop:
-    """``optimistic_loop`` switched on, with the author's account of why.
+    """``optimistic_loop`` on, with the author's account of why.
 
-    The account travels with the setting because the setting is unsound: every verdict in the unit
-    is conditional on it, and a reviewer can weigh it only against the argument for it. The account
-    is not part of the conf, so rewording it does not invalidate a stamp.
+    The setting is unsound: every verdict in the unit depends on it. The account
+    is not part of the conf, so rewording it does not change the stamp.
     """
 
     why: str

@@ -494,8 +494,10 @@ def test_a_units_summary_file_is_named_when_the_run_passes_one():
 
 
 def test_rewording_the_reason_for_optimistic_loop_keeps_the_stamp():
-    """The justification is for the reviewer and is not in the conf, so a verdict earned under
-    the setting stays a verdict under it whatever the account of it says."""
+    """Rewording the ``optimistic_loop`` account does not change the conf history.
+
+    The account is not part of the conf.
+    """
     first = cvlr_conf.TunableConf(optimistic_loop=cvlr_conf.OptimisticLoop(why="first reason"))
     second = cvlr_conf.TunableConf(optimistic_loop=cvlr_conf.OptimisticLoop(why="second"))
     assert cvlr_conf.conf_history(first) == cvlr_conf.conf_history(second)
@@ -914,16 +916,16 @@ def test_a_failed_compile_carries_the_compilers_own_words():
 
 @pytest.mark.asyncio
 async def test_a_prover_run_is_accounted_for():
-    """``ProverCallbacks``' defaults are no-ops, so a backend that overrides only the events it
-    cares about opts out of the run's prover accounting without saying so — which is what CVLR did
-    until this class existed. The consequence was not cosmetic: a run whose wall clock is mostly
-    cloud time reported none of it, in ``summary.format()`` and in ``job_info.json`` alike."""
+    """Link, runtime, and wall clock are recorded from the prover callbacks.
+
+    ``ProverCallbacks`` defaults do nothing, so a subclass that overrides only
+    some events records none of these.
+    """
     summary = RunSummary()
     install_run_summary(summary)
     callbacks = _RunAccounting()
 
-    # A task has to be active for the per-task attribution to land anywhere: the link and the
-    # runtime are folded into that task's phase record when the phase closes.
+    # The link and the runtime land on the active task's phase record.
     with set_current_task_id("verify-deposits"):
         await callbacks.on_prover_run(["certoraSolanaProver", "run.conf"])
         await callbacks.on_prover_link("https://prover.certora.com/output/1/2")
@@ -942,8 +944,11 @@ async def test_a_prover_run_is_accounted_for():
 
 @pytest.mark.asyncio
 async def test_capturing_evidence_does_not_replace_the_accounting():
-    """The capture callbacks override ``on_prover_result`` for their own reasons; the wall-clock
-    tally lives in the same event, so the override has to chain."""
+    """Capturing counterexamples still records the prover call.
+
+    ``_CaptureCallbacks`` overrides ``on_prover_result``, which is also where
+    the wall-clock tally is taken.
+    """
     summary = RunSummary()
     install_run_summary(summary)
     callbacks = _CaptureCallbacks(CexAnalysisStore(store=InMemoryStore(), namespace=("t",)))
@@ -955,9 +960,10 @@ async def test_capturing_evidence_does_not_replace_the_accounting():
 
 
 def test_counterexamples_are_explained_on_the_authors_bound_model():
-    """The analysis forks the author's conversation, and a model without the author's tools makes
-    every fork miss the cache on the whole of it: on the vault benchmark, two thirds of the first
-    44 minutes' spend. So there is no default model to fall back on, only the author's."""
+    """Counterexample analysis uses the model the author's graph bound.
+
+    There is no default. The handler is unavailable until that model is bound.
+    """
     from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
     analysis = CexAnalysis(store=CexAnalysisStore(store=InMemoryStore(), namespace=("t",)))
