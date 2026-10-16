@@ -63,9 +63,9 @@ from composer.kb.knowledge_base import kb_tools
 from composer.spec.agent_index import AgentIndex, AgentIndexConfig, agent_index_config_from_env
 from composer.spec.source.munge.edit_store import EditStore
 from composer.spec.cvlr_research import (
-    DEFAULT_CVLR_AGENT_INDEX_NS,
     corpus_tools,
     cvlr_research_tools,
+    research_cache_ns,
 )
 
 _log = logging.getLogger(__name__)
@@ -414,7 +414,7 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
                 staged.conns.indexed_store,
                 recursion_limit=args.recursion_limit,
                 index_config=agent_index_config_from_env(
-                    user_ns(*DEFAULT_CVLR_AGENT_INDEX_NS, staged.root_key)
+                    (*research_cache_ns(selected.reference.crates()), staged.root_key)
                 ),
             ) if searches else ()
             rag_tools = tuple(kb_tools(CVLR_BUNDLE)) + researcher

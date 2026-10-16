@@ -333,3 +333,26 @@ async def test_a_crate_the_run_does_not_pin_is_shown_at_the_version_the_corpus_h
     tools = _scoped(two_generations, {"cvlr-solana": "0.5.1"})
     out = await tools["cvlr_api_lookup"].ainvoke({"name": "cvlr_assert_le"})
     assert "cvlr-asserts > 0.6.1" in out
+
+
+def test_the_answer_cache_is_kept_apart_per_platform_generation():
+    from composer.spec.cvlr.reference import generations
+
+    keys = {cvlr_research.research_cache_ns(g.crates()) for g in generations("solana")}
+    assert len(keys) == len(generations("solana"))
+    for ns in keys:
+        assert ns[: len(cvlr_research.DEFAULT_CVLR_AGENT_INDEX_NS)] == cvlr_research.DEFAULT_CVLR_AGENT_INDEX_NS
+        assert "user_data" not in ns
+
+
+def test_an_unpublished_release_is_keyed_by_its_commit():
+    from composer.spec.cvlr.reference import CrateRelease, GitCommit
+
+    def at(rev: str) -> tuple[str, ...]:
+        return cvlr_research.research_cache_ns(
+            [CrateRelease("cvlr-solana", "0.5.1", unpublished=GitCommit("https://x", rev))]
+        )
+
+    assert at("aaa") != at("bbb")
+    assert at("aaa") == at("aaa")
+    assert at("aaa") != cvlr_research.research_cache_ns([CrateRelease("cvlr-solana", "0.5.1")])

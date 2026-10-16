@@ -23,6 +23,7 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, override
 
 from dataclasses import dataclass
+import hashlib
 import logging
 
 from langchain_core.tools import BaseTool
@@ -47,6 +48,7 @@ from composer.spec.agent_index import (
     IndexedTool,
     RetrieveDocumentTool,
 )
+from composer.spec.cvlr.reference import CrateRelease
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.service_host import ModelProvider
@@ -104,6 +106,20 @@ def corpus_tools(
 #: Where cached answers live. Shared across runs on purpose: the pin and §2.3 together mean an
 #: answer about CVLR is a fact about the pinned release, not about the run that asked.
 DEFAULT_CVLR_AGENT_INDEX_NS: tuple[str, ...] = ("cvlr_research", "cached")
+
+
+def research_cache_ns(crates: Iterable[CrateRelease]) -> tuple[str, ...]:
+    """The cache namespace for answers about these releases.
+
+    A build supports more than one platform generation, and an answer about one generation's
+    releases is not a fact about the other's, so the releases are part of the key. A commit is part
+    of a release's identity while it is unpublished: the release it stands in for has not been cut.
+    """
+    pins = sorted(
+        f"{c.name}={c.version}" + (f"@{c.unpublished.rev}" if c.unpublished else "")
+        for c in crates
+    )
+    return (*DEFAULT_CVLR_AGENT_INDEX_NS, hashlib.sha256("|".join(pins).encode()).hexdigest())
 
 CVLR_RESEARCH_BASE_DOC = (
     "Delegate a question about CVLR — the Rust specification language the Certora Solana Prover "
