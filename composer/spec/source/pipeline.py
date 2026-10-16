@@ -24,6 +24,7 @@ from typing import override, Sequence
 from langchain_core.tools import BaseTool
 
 from composer.io.multi_job import TaskInfo
+from composer.llm.provider import CacheLevel
 from composer.spec.context import WorkflowContext, CVLGeneration
 from composer.spec.types import PropertyFormulation
 from composer.spec.gen_types import CVLResource, SPECS_DIR, certora_relative_to_project
@@ -256,12 +257,16 @@ class ProverBackend:
             lambda: run_harness_creation(run.ctx, run.source, run.env, analyzed),
         )
         harnessed = lift_harnessed(analyzed, sys_desc)
+        cache_level = CacheLevel.SHORT
+        heavy_provider = run.env.models.heavy_model.provider
         # The materializing strategy covers every phase with one tool: an empty
         # VFS (invariants, or an author that never edited) runs in-situ; a
         # non-empty one runs in a temp materialization of the working copy.
         prover_tool = get_prover_tool(
-            run.env.llm_heavy(), run.source.contract_name, materializing_project(self.editing.live.mat),
+            run.env.llm_heavy(cache_level=cache_level), run.source.contract_name,
+            materializing_project(self.editing.live.mat),
             prover_opts=self._prover_opts, analysis_store=self.analysis_store,
+            cex_cache_marker=lambda block: heavy_provider.cache_marker(block, cache_level),
         )
         return ProverPrepared(
             main=main_instance(harnessed, run.source),

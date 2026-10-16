@@ -52,8 +52,9 @@ class RankedProperty(BaseModel):
     )
     score: int = Field(
         ge=0, le=100,
-        description="How badly the protocol is hurt if this property does not hold. Score the "
-        "consequence of a violation, not how hard the property looks to verify.",
+        description="How badly the protocol is hurt if this property does not hold, lowered "
+        "when a simple unit test of the property's statement usually provides strong coverage. "
+        "Do not lower it because the property looks hard to verify.",
     )
     critical_match: bool = Field(
         description="True if this property corresponds to a concern the reader of the design "

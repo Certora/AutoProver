@@ -23,7 +23,9 @@ from composer.spec.cvlr.harness import CvlrArtifactStore, HarnessModule
 from composer.spec.cvlr.scaffold import declare_unit_features
 from composer.spec.cvlr.tree import (
     NOT_PROJECT_SOURCE,
+    Editable,
     NotInProject,
+    NotProjectRelative,
     NotProjectSource,
     ProjectSource,
     SharedTree,
@@ -82,7 +84,6 @@ def _edits(
 
 def _mtimes(tree: SharedTree, *paths: str) -> dict[str, int]:
     return {p: (tree.root / p).stat().st_mtime_ns for p in paths}
-
 
 
 # ---------------------------------------------------------------------------------------------
@@ -278,6 +279,38 @@ async def test_an_overlay_writing_a_harness_module_is_refused(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_an_overlay_path_with_dotdot_is_refused(tmp_path: Path):
+    """The overlay is keyed by the path that is written. ``foo/../a.rs`` is a different string, and
+    removing that key unlinks ``a.rs``."""
+    tree = await _tree(tmp_path)
+    await tree.reconcile("a", _edits(tree, "a", "// a\n"))
+    with pytest.raises(ValueError, match="not a project-relative path"):
+        await tree.reconcile(
+            "b",
+            _edits(tree, "b", "// b\n", {f"{_SPECS}/foo/../a.rs": "// pwned\n"}),
+        )
+    await tree.reconcile("b", _edits(tree, "b", "// b2\n"))
+    assert (tree.root / _SPECS / "a.rs").read_text() == "// a\n"
+    assert not (tree.root / _SPECS / "foo").exists()
+
+
+@pytest.mark.asyncio
+async def test_two_spellings_of_one_file_are_refused(tmp_path: Path):
+    tree = await _tree(tmp_path)
+    with pytest.raises(ValueError, match="twice"):
+        await tree.reconcile(
+            "a",
+            _edits(
+                tree,
+                "a",
+                "//\n",
+                {_RESERVE: "A\n", "programs/p/src/./reserve.rs": "B\n"},
+            ),
+        )
+    assert (tree.root / _RESERVE).read_text() == _SOURCE
+
+
+@pytest.mark.asyncio
 async def test_an_edited_crlf_file_is_written_once(tmp_path: Path):
     """An overlay holds the file's text as the editor read it. What matters is that it compares equal
     from then on: a file that never did would be rewritten, and the crate rebuilt, on every gate."""
@@ -444,9 +477,10 @@ async def test_two_units_naming_one_module_are_refused(tmp_path: Path):
 def test_a_path_outside_the_project_is_refused(tmp_path: Path):
     project = _project(tmp_path)
     tree = SharedTree(pristine=project, root=tmp_path / "work" / "build", source=_SOURCE_DIRS)
-    assert tree.refuse_edit(_RESERVE) is None
-    assert isinstance(tree.refuse_edit("../outside.rs"), NotInProject)
-    assert isinstance(tree.refuse_edit("/etc/passwd"), NotInProject)
+    assert tree.check_edit(_RESERVE) == Editable(_RESERVE)
+    assert isinstance(tree.check_edit("../outside.rs"), NotInProject)
+    assert isinstance(tree.check_edit("/etc/passwd"), NotInProject)
+    assert isinstance(tree.check_edit("programs/p/src/foo/../reserve.rs"), NotProjectRelative)
 
 
 def test_a_dependency_inside_the_tree_is_not_project_source(tmp_path: Path):
@@ -459,7 +493,7 @@ def test_a_dependency_inside_the_tree_is_not_project_source(tmp_path: Path):
     )
 
     anchor = str(SANDBOX_CARGO_DIR / "registry/src/index.crates.io-6f17d22/anchor-lang-0.31.1/src/error.rs")
-    assert isinstance(tree.refuse_edit(anchor), NotProjectSource)
+    assert isinstance(tree.check_edit(anchor), NotProjectSource)
 
     for built in (
         "target/debug/build/x/out/gen.rs",
@@ -467,7 +501,7 @@ def test_a_dependency_inside_the_tree_is_not_project_source(tmp_path: Path):
         "node_modules/pkg/index.rs",
         "certora_out/y.rs",
     ):
-        assert isinstance(tree.refuse_edit(built), NotProjectSource), built
+        assert isinstance(tree.check_edit(built), NotProjectSource), built
 
 
 def test_a_local_crates_manifest_may_be_edited(tmp_path: Path):
@@ -512,6 +546,8 @@ def test_only_the_project_crates_sources_are_project_source():
         "programs/p/tests/t.rs",
         "programs/q/src/lib.rs",
         "cargo-home/registry/src/x/anchor/src/lib.rs",
+        "programs/p/src/../../programs/q/src/lib.rs",
+        "programs/p/src/foo/../lib.rs",
         "",
     ):
         assert not _SOURCE_DIRS.contains(elsewhere), elsewhere

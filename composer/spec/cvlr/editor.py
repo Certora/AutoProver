@@ -46,7 +46,7 @@ from composer.spec.agent_index import AgentIndex
 from composer.spec.context import CacheKey, CvlrGeneration, EditorAgent, SourceCode, WorkflowContext
 from composer.spec.cvlr.scaffold import ENVS_DIR, SPECS_DIR
 from composer.spec.cvlr.state import CvlrGenerationState
-from composer.spec.cvlr.tree import ProjectSource, refuse_edit
+from composer.spec.cvlr.tree import Editable, ProjectSource, check_edit
 from composer.spec.cvlr.tuning import SummaryDirective
 from composer.spec.cvlr.verify import HarnessTarget
 from composer.spec.graph_builder import run_to_completion
@@ -87,7 +87,7 @@ def editable_paths(
     """The editor's write filter, in graphcore's exclusion polarity: True for a path it may not
     write.
 
-    It may write the project's own crates' sources and manifests (:func:`refuse_edit`), except the
+    It may write the project's own crates' sources and manifests (:func:`check_edit`), except the
     verified package's ``specs`` and ``envs`` directories: the first holds every unit's harness
     module, which is the author's and which the tree overlays from state, and the second holds the
     tuning files the prover's conf names, which ``summarize_for_prover`` writes.
@@ -100,7 +100,7 @@ def editable_paths(
         relative = PurePosixPath(path.as_posix())
         return (
             any(relative.is_relative_to(r) for r in reserved)
-            or refuse_edit(project, source, str(relative)) is not None
+            or not isinstance(check_edit(project, source, str(relative)), Editable)
         )
 
     return excluded
@@ -339,9 +339,9 @@ class SubmitEdits(
         with self.tool_deps() as deps:
             target = deps.target
             refused = [
-                refusal.describe()
+                check.describe()
                 for path in self.state["vfs"]
-                if (refusal := target.tree.refuse_edit(path)) is not None
+                if not isinstance(check := target.tree.check_edit(path), Editable)
             ]
             if refused:
                 return (
