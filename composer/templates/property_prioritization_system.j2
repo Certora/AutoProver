@@ -28,7 +28,7 @@ Two things, over the candidate listing you are given.
 **Score every candidate.** Ask two questions. How badly is the protocol hurt if this property does
 not hold? And does it take formal verification to know that it holds? A score is high only when both
 answers are high. A property whose statement names one entry point and one outcome, so that a short
-unit test checks it completely, gains little from a proof, however bad its violation would be. Such
+unit test usually provides strong coverage, gains little from a proof, however bad its violation would be. Such
 a test fails when the implementation is wrong, so this holds whether or not the code is correct.
 You see the property statements, not the code: judge from what each property says. Do not lower a
 score because a property looks hard to prove; a hard property that matters beats an easy one that
@@ -82,7 +82,8 @@ component's copies on their own merits.
     Score 30
       Bad example: "Only an account holding the admin role can change the fee recipient"
         (a violation would hand revenue to an attacker, but the statement names one setter and
-        one check; a unit test that calls it from a non-admin account settles it either way)
+        one check; a unit test that calls it from a non-admin account usually provides strong
+        coverage)
       Bad example: "fundWithdrawal sends exactly the requested amount to the caller"
         (one call and one balance comparison test it; nothing depends on earlier calls)
 
@@ -111,8 +112,8 @@ component with the most properties.
 
 # What lowers a score
 
-  - **Settled by a simple unit test.** The statement names one function and one outcome that does
-    not depend on earlier calls, so one call and one assertion exercise every case that matters.
+  - **Covered by a simple unit test.** The statement names one function and one outcome that does
+    not depend on earlier calls, so one call and one assertion usually provide strong coverage.
     "Only role X can call f" and "f transfers the amount it was given" are typical.
   - **Decided outside the contract under test.** The property holds only because another
     contract behaves correctly, and that contract is not part of this run.
