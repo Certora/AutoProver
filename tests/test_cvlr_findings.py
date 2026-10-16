@@ -20,12 +20,12 @@ from types import SimpleNamespace
 import pytest
 from langgraph.store.memory import InMemoryStore
 
-from composer.prover.ptypes import RulePath, RuleResult
+from composer.prover.ptypes import LoopUnwound, OverflowUnproven, RulePath, RuleResult
 from composer.prover.results import SOLANA_TRACE, counterexample
 from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.pipeline import CvlrFormalizer
 from composer.spec.source.report.schema import ConfinedBuilds, UnconfinedBuilds
-from composer.spec.cvlr.verify import _CaptureCallbacks, _unaccounted
+from composer.spec.cvlr.verify import _CaptureCallbacks, _incomplete_note, _unaccounted
 from composer.spec.source.cex_capture import CexAnalysisStore
 
 FIXTURES = Path(__file__).parent / "data" / "solana_cex"
@@ -173,7 +173,7 @@ async def test_the_gate_learns_which_rules_never_reached_their_property():
     await callbacks.on_prover_result(results)
 
     assert set(callbacks.incomplete) == {"loop"}
-    assert callbacks.incomplete["loop"].startswith("Unwinding condition in a loop")
+    assert callbacks.incomplete["loop"].assertion.startswith("Unwinding condition in a loop")
 
 
 @pytest.mark.asyncio
@@ -202,3 +202,21 @@ def test_a_genuine_expected_failure_still_satisfies_the_gate():
     status = {"real": False}
     expected = {"real": "the fee collector aliases the vault"}
     assert _unaccounted(status, expected, incomplete={}) == []
+
+
+def test_the_gate_tells_an_overflow_stop_how_to_get_past_it_and_not_a_loop_remedy():
+    note = _incomplete_note({"r": OverflowUnproven("Cannot overflow: inferred pointer")})
+    assert "Cannot overflow: inferred pointer" in note
+    assert "cvlr_assume!(x < 1 << 63)" in note
+    assert "trip count" not in note
+
+
+def test_the_gate_gives_each_kind_its_remedy_once():
+    note = _incomplete_note({
+        "a": LoopUnwound("Unwinding condition in a loop"),
+        "b": OverflowUnproven("Cannot overflow: computing TAC map index"),
+        "c": OverflowUnproven("Cannot overflow: inferred pointer"),
+    })
+    assert note.count("trip count") == 1
+    assert note.count("1 << 63") == 1
+    assert "expect_rule_failure" in note

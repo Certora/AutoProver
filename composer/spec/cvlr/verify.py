@@ -65,6 +65,8 @@ from composer.prover.core import (
 )
 from composer.prover.ptypes import (
     IncompleteCheck,
+    LoopUnwound,
+    OverflowUnproven,
     PropertyViolation,
     RuleResult,
     classify_violation,
@@ -293,10 +295,10 @@ class _CaptureCallbacks(_RunAccounting):
     def __init__(self, store: CexAnalysisStore) -> None:
         super().__init__()
         self._store = store
-        self._incomplete: dict[str, str] = {}
+        self._incomplete: dict[str, IncompleteCheck] = {}
 
     @property
-    def incomplete(self) -> Mapping[str, str]:
+    def incomplete(self) -> Mapping[str, IncompleteCheck]:
         """The last run's rules that stopped on an assertion the prover generated, and which one.
 
         Read by the gate, which has to say something different about these than about a rule whose
@@ -318,8 +320,8 @@ class _CaptureCallbacks(_RunAccounting):
             if result.status != "VIOLATED":
                 continue
             match classify_violation(result.counterexample):
-                case IncompleteCheck(assertion=assertion):
-                    self._incomplete[result.path.rule] = assertion
+                case IncompleteCheck() as stopped:
+                    self._incomplete[result.path.rule] = stopped
                 case PropertyViolation():
                     pass
         for rule_name in {r.path.rule for r in results.values()}:
@@ -408,6 +410,43 @@ class VerifyDeps:
     #: and race the staged module; the tool refuses rather than serializing silently, because a
     #: caller that made two calls wanted two answers.
     lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
+
+
+def _incomplete_advice(stopped: IncompleteCheck) -> str:
+    match stopped:
+        case LoopUnwound():
+            return (
+                "A loop needed more iterations than the bound unrolls. Constrain what determines "
+                "the trip count, summarize the loop if it is not what your property is about, or "
+                "skip the property and say what bound it needed."
+            )
+        case OverflowUnproven():
+            return (
+                "`Cannot overflow` is the sound-math pass failing to show that an expression it "
+                "takes for a pointer stays below 2^64, almost always because a value the rule reads "
+                "from an account (a balance, an amount) is free to sit just below u64::MAX. Bound "
+                "the account-data values on that rule's path — `cvlr_assume!(x < 1 << 63)` is "
+                "enough — and record each bound as an assumption. A property about the top of the "
+                "range cannot take the bound: skip it and say so."
+            )
+        case _:
+            return "The prover's own message says what it needed."
+
+
+def _incomplete_note(incomplete: Mapping[str, IncompleteCheck]) -> str:
+    """What the gate says about rules that stopped on an assertion the prover generated: which
+    ones, and what gets each kind past it."""
+    named = "\n".join(
+        f"  {name}: {stopped.assertion}" for name, stopped in sorted(incomplete.items())
+    )
+    advice = "\n".join(dict.fromkeys(_incomplete_advice(s) for _, s in sorted(incomplete.items())))
+    return (
+        "These rules stopped on an assertion the prover generated rather than one of yours, so "
+        f"they never reached their property:\n{named}\n"
+        f"Nothing here is a statement about the program. {advice}\n"
+        "Do not mark one of these with expect_rule_failure: that claims a real defect, and none "
+        "has been shown."
+    )
 
 
 def _unaccounted(
@@ -711,7 +750,7 @@ class VerifyRules(
         self,
         outcome: CvlrOutcome,
         deps: VerifyDeps,
-        incomplete: Mapping[str, str],
+        incomplete: Mapping[str, IncompleteCheck],
         *,
         declared: Sequence[str],
     ) -> Command | str:
@@ -754,18 +793,7 @@ class VerifyRules(
                         "not test for it — resolve that before publishing."
                     )
                 if incomplete:
-                    named = "\n".join(
-                        f"  {name}: {assertion}" for name, assertion in sorted(incomplete.items())
-                    )
-                    lines.append(
-                        "These rules stopped on an assertion the prover generated rather than one "
-                        f"of yours, so they never reached their property:\n{named}\n"
-                        "Nothing here is a statement about the program. Constrain what determines "
-                        "the trip count, summarize the loop if it is not what your property is "
-                        "about, or skip the property and say what bound it needed. Do not mark one "
-                        "of these with expect_rule_failure: that claims a real defect, and none "
-                        "has been shown."
-                    )
+                    lines.append(_incomplete_note(incomplete))
                 if unverdicted:
                     lines.append(
                         f"No verdict came back for: {', '.join(unverdicted)}. The prover's report "
