@@ -309,7 +309,8 @@ def mark_history_end(
 
     Only text blocks are marked: the Anthropic serializer rebuilds tool-use blocks
     without their ``cache_control``, and thinking blocks may not carry one.
-    ``messages`` itself is left untouched."""
+    When ``cache_marker`` leaves the block unchanged (a provider or cache level
+    without breakpoints), ``messages`` itself is returned. ``messages`` is never modified."""
     # One slot for this breakpoint and, conservatively, one for the request-level
     # ``cache_control`` the model may be built with.
     if _cache_breakpoints(messages) + 2 > _MAX_CACHE_BREAKPOINTS:
@@ -326,7 +327,10 @@ def mark_history_end(
             # The serializer drops whitespace-only text blocks, marker and all.
             if block.get("type") != "text" or not block.get("text", "").strip():
                 continue
-            blocks[b_idx] = cache_marker(block)
+            marked = cache_marker(block)
+            if marked == block:
+                return messages
+            blocks[b_idx] = marked
             return [
                 *messages[:m_idx],
                 msg.model_copy(update={"content": blocks}),

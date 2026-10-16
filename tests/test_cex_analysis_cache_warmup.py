@@ -166,6 +166,48 @@ async def test_without_a_marker_all_analyses_run_concurrently_on_the_raw_history
     assert all(h is history for h in seen)
 
 
+def _openai_cache_marker(monkeypatch):
+    # The real OpenAI provider; building it makes no request.
+    from dataclasses import dataclass
+    from composer.llm.openai import OpenAIModelProvider
+    from composer.llm.provider import CacheLevel
+
+    @dataclass(frozen=True)
+    class _Options:
+        tokens: int = 1000
+        thinking_tokens: int | None = None
+        memory_tool: bool = False
+        interleaved_thinking: bool = False
+
+    monkeypatch.setenv("OPENAI_API_KEY", "not-used")
+    provider = OpenAIModelProvider.create("gpt-5.5", _Options())
+    return lambda block: provider.provider.cache_marker(block, CacheLevel.SHORT)
+
+
+def test_a_provider_without_breakpoints_gets_the_history_unchanged(monkeypatch) -> None:
+    # OpenAI caches without explicit breakpoints; its requests must stay as they were.
+    history = _history()
+
+    assert mark_history_end(history, _openai_cache_marker(monkeypatch)) is history
+
+
+@pytest.mark.asyncio
+async def test_a_provider_without_breakpoints_still_runs_the_first_analysis_alone(monkeypatch, tmp_path) -> None:
+    # Its automatic prefix caching can serve the rest from what the first analysis wrote.
+    events: list[str] = []
+    seen: list = []
+    monkeypatch.setattr(core, "analyze_cex_raw", _recording_analyzer(events, seen))
+    history = _history()
+    handler = TrivialFanoutCexHandler(
+        llm=None, state={"messages": history}, cache_marker=_openai_cache_marker(monkeypatch),  # type: ignore[arg-type]
+    )
+
+    await handler.analyze([_violated("a"), _violated("b"), _violated("c")], "t", _Callbacks(), tmp_path)  # type: ignore[arg-type]
+
+    assert events[:2] == ["start a", "end a"]
+    assert all(h is history for h in seen)
+
+
 @pytest.mark.asyncio
 async def test_a_failed_first_analysis_does_not_sink_the_rest(monkeypatch, tmp_path) -> None:
     async def fake(llm, messages, rule: RuleResult, tool_call_id: str) -> str:
