@@ -5,8 +5,8 @@
 #   1. Patch /etc/passwd for the host UID compose is running us as, so
 #      libraries that call pwd.getpwuid() (torch via getpass.getuser(), etc.)
 #      don't crash.
-#   2. One-time `setup-db` subcommand — populates rag_db and the LangGraph
-#      knowledge base against the compose-managed postgres.
+#   2. One-time `setup-db` subcommand — populates the RAG corpora against the
+#      compose-managed postgres.
 #   3. For console-autoprove / tui-autoprove, transparently inject --rag-db
 #      pointing at the in-network postgres service.
 
@@ -53,8 +53,6 @@ if [[ "${1:-}" == "setup-db" ]]; then
   python -m composer.scripts.ragbuild \
       --output "$RAG_CONN" \
       "$AUTOPROVE_HOME/prover-docs/cvl.html"
-  echo "[autoprove] populating LangGraph knowledge base ..."
-  python -m composer.scripts.kb_populate
   echo "[autoprove] setup-db done."
   exit 0
 fi
