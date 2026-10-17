@@ -70,3 +70,26 @@ def test_permanent_error_is_not_retried(tmp_path, monkeypatch):
     with pytest.raises(JobNotFoundError):
         asyncio.run(cloud._fetch_results("deadbeefcafebabe", tmp_path))
     assert fake.calls == 1  # surfaced at once — no backoff spent re-failing identically
+
+
+# Synthetic, non-sensitive placeholders — not a real job id or anonymous key.
+_USER = "12345"
+_JOB = "deadbeefcafebabedeadbeefcafebabe"
+_KEY = "0000000000000000000000000000000000000000"
+
+
+@pytest.mark.parametrize("index", ["output", "jobStatus"])
+def test_parse_cloud_link_accepts_both_indices(index):
+    job = cloud.parse_cloud_link(
+        f"https://prover.certora.com/{index}/{_USER}/{_JOB}?anonymousKey={_KEY}"
+    )
+    assert job.base_url == "https://prover.certora.com"
+    assert job.user_id == _USER
+    assert job.job_id == _JOB
+    assert job.anonymous_key == _KEY
+    assert job.job_data_url == f"https://prover.certora.com/v1/domain/jobs/{_JOB}?anonymousKey={_KEY}"
+
+
+def test_parse_cloud_link_rejects_unknown_index():
+    with pytest.raises(ValueError, match="Unexpected cloud link format"):
+        cloud.parse_cloud_link(f"https://prover.certora.com/weird/{_USER}/{_JOB}?anonymousKey={_KEY}")
