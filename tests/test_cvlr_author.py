@@ -188,7 +188,7 @@ def test_a_draft_with_no_rules_and_no_skips_is_still_unfinished():
     draft with nothing declared and nothing skipped has said nothing at all."""
     tool = verify_mod.VerifyRules(state=_verify_state(_DRAFT_NO_RULES), tool_call_id="tc")
     answer = tool._nothing_to_submit()
-    assert isinstance(answer, str) and "nothing to check" in answer
+    assert isinstance(answer, str) and "nothing to submit" in answer
 
 
 def test_a_mirror_declaration_reaches_the_published_artifact():

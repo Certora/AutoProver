@@ -1,7 +1,8 @@
 """Which rules a CVLR harness declares, read from the source.
 
-The publish gate checks the property-to-rule mapping before any submission.
-The names come from the draft. Both declaration forms name their rules
+A submission names these rules. A conf with no ``rule`` entry makes the cloud
+job end without a report. The publish gate checks the property-to-rule mapping
+against them before any submission. Both declaration forms name their rules
 deterministically:
 
 * ``#[rule]`` adds ``#[no_mangle]`` (``cvlr-macros``), so the symbol is the
@@ -13,8 +14,8 @@ deterministically:
   check it against the examples in the crate's documentation.
 
 :func:`rule_names` returns the names. A shape this parser does not recognize
-is a rule the mapping gate will not see, so the known shapes are covered by
-tests and a rejection lists what was found.
+is a rule the submission will not name and the mapping gate will not see, so
+the known shapes are covered by tests, and a rejection lists what was found.
 """
 
 import re

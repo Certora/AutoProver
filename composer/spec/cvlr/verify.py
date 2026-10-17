@@ -640,7 +640,7 @@ class VerifyRules(
         if not self.state["skipped"]:
             return (
                 "Your draft declares no rules and no property is skipped, so there is nothing to "
-                "check. A rule is a `#[rule]` function or a `cvlr_rules!` invocation."
+                "submit. A rule is a `#[rule]` function or a `cvlr_rules!` invocation."
             )
         with self.tool_deps() as deps:
             return tool_state_update(

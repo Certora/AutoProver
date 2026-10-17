@@ -1,8 +1,8 @@
-"""Which rules a CVLR harness declares. The publish gate reads this before any submission.
+"""Which rules a CVLR harness declares. A submission names these.
 
-A name this misses is a rule the author cannot map. A name it invents is a
-rule the prover will not recognize. The parametric cases are checked against
-the names the crate's documentation says its macros generate.
+A name this misses is a rule the submission will not check. A name it invents
+is a rule the prover will not recognize. The parametric cases are checked
+against the names the crate's documentation says its macros generate.
 """
 
 import io
@@ -96,7 +96,7 @@ def test_names_come_back_in_source_order_whichever_kind_they_are():
 
 
 def test_an_invocation_with_no_bases_declares_nothing():
-    # An unfinished macro call declares no rule. A phantom name would make the mapping gate demand one.
+    # An unfinished macro call declares no rule. A name invented here would be submitted.
     assert rule_names('cvlr_rules! { name: "x", spec: s, bases: [] }') == ()
     assert rule_names('cvlr_rules! { name: "x", spec: s }') == ()
 

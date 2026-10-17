@@ -8,9 +8,9 @@ artifact store writes it into the package's ``src/certora/specs/``
 ``specs/mod.rs`` declares one ``pub mod <name>;`` per unit, each behind that
 unit's cargo feature. A module behind a disabled ``cfg`` is never read by
 rustc, so a unit that has not written its file yet does not stop another unit
-from compiling. The modules are ``pub`` because a ``cvlr::mock_fn`` stand-in
-is named by path from the program's own file, outside ``certora``
-(:data:`composer.spec.cvlr.scaffold._HARNESS_FILES`).
+from compiling. The modules are ``pub`` because a path into ``specs`` has to
+be visible from the program's own file
+(:func:`composer.spec.cvlr.scaffold._harness_files`).
 :class:`composer.pipeline.core.StagedFormalizer` declares every module before
 any unit writes.
 
@@ -47,8 +47,8 @@ def module_name(slug: str) -> str:
     Rust accepts ``[A-Za-z_][A-Za-z0-9_]*``. A slug may contain ``-`` or start
     with a digit. The result is lowercased and runs of separators collapse, so
     the name satisfies ``non_snake_case``. A crate that denies that lint, or a
-    CI build with ``-D warnings``, would fail on a name chosen here. The author
-    cannot change it in the draft.
+    CI build with ``-D warnings``, would fail on a name chosen here. The
+    identifier is fixed from the slug. A draft cannot rename the module.
     """
     cleaned = "".join(c if c.isalnum() or c == "_" else "_" for c in slug).lower()
     collapsed = re.sub(r"_+", "_", cleaned).strip("_")
@@ -163,12 +163,11 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
 
         Returns the path it writes.
 
-        Called once, before any unit authors. The file has to name every unit,
-        and no unit knows the others. Each declaration is gated on
-        :attr:`HarnessModule.feature`. A module behind a disabled ``cfg`` is
-        never compiled and never enters rustc's dep-info, so it cannot break or
-        rebuild another unit's build. The module file itself is written later,
-        by the unit that authors it.
+        Called once, before any unit stages a draft. The file has to name every
+        unit. Each declaration is gated on :attr:`HarnessModule.feature`. A
+        module behind a disabled ``cfg`` is never compiled and never enters
+        rustc's dep-info, so it cannot break or rebuild another unit's build.
+        The module file itself is written when that unit's draft is staged.
 
         Two units are never compiled together, so two ``impl Nondet for Foo``
         in different modules do not collide (``E0119``).
