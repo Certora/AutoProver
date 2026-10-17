@@ -39,9 +39,10 @@ The module is held in a buffer reached through `get_harness` / `put_harness`. A 
   with an unconstrained stand-in rather than analyze it. The remedy for a rule that comes back with
   no verdict because the pointer analysis refused something on one of its paths. Unsound by
   construction, so it is for code your properties do not depend on; it invalidates the prover stamp.
-* `adjust_prover_config(edits, why)` — change the loop bound, or assume loops finish. The two
-  prover settings you can move; the first is sound and the second is not. Each sits at the end of
-  the loop ladder below, and either invalidates the prover stamp.
+* `adjust_prover_config(loop_iter=None, optimistic_loop=None, why)` — change the loop bound, or
+  assume loops finish. The two prover settings you can move; the first is sound and the second is
+  not. Omit a field to leave it. Each sits at the end of the loop ladder below, and either
+  invalidates the prover stamp.
 * `code_editor(request)` — ask a dedicated editor to change the *program's* own source. You do not
   edit the program yourself. Describe the problem you hit, not the edit you want; what comes back has
   compiled and been reviewed, with its diff and a key, but is **not** applied yet.

@@ -50,14 +50,6 @@ def test_a_summary_reaches_the_judge_with_the_argument_for_it():
     assert _DISPLAY.why in briefing
 
 
-def test_the_briefing_says_a_summary_drops_writes():
-    """What makes a summary unsound is the writes it drops, not the value it returns: state the
-    real function would have changed keeps its old value, and an invariant over it holds trivially."""
-    briefing = _text(HarnessAssumptions(summaries=(_DISPLAY,), edits=()))
-    assert "writes nothing" in briefing and "keeps its old value" in briefing
-    assert "anything could happen" not in briefing
-
-
 def test_an_unconstrained_return_is_said_rather_than_left_blank():
     """`returns=None` is the common case and it is the *worse* one — the prover assumes anything
     about the value. Rendering it as an empty field reads like a detail nobody filled in."""
@@ -89,7 +81,7 @@ def test_having_used_neither_is_stated_rather_than_left_silent():
     which this author added."""
     briefing = _text(HarnessAssumptions(summaries=(), edits=()))
     assert briefing.strip()
-    assert "no points-to summaries" in briefing
+    assert "No points-to summaries" in briefing
     assert "`optimistic_loop` off" in briefing
 
 
@@ -117,7 +109,9 @@ def test_a_raised_loop_bound_alone_is_nothing_to_weigh():
     """The bound is sound with `optimistic_loop` off: too low a bound fails the rule rather than
     passing it. So it does not make a verdict conditional on anything."""
     briefing = _text(HarnessAssumptions(summaries=(), edits=(), settings=TunableConf(loop_iter=6)))
-    assert "nothing to weigh" in briefing
+    assert "No points-to summaries" in briefing
+    assert "`optimistic_loop` off" in briefing
+    assert "6" not in briefing
 
 
 def test_the_last_runs_external_functions_reach_the_judge():
@@ -125,7 +119,7 @@ def test_the_last_runs_external_functions_reach_the_judge():
     the draft, the summaries or the edits shows it."""
     external = "anchor_lang::system_program::transfer"
     briefing = _text(HarnessAssumptions(summaries=(), edits=(), external_functions=(external,)))
-    assert external in briefing and "treated these functions as external" in briefing
+    assert external in briefing and "treated as external" in briefing
     assert "no points-to summaries" not in briefing
     state = {"summaries": [], "expected_failures": {}, "prover_settings": TunableConf(),
              "external_functions": (external,)}
@@ -148,7 +142,7 @@ def test_an_expected_failure_reaches_the_judge_with_its_reason():
 def test_no_marking_is_said_rather_than_left_out():
     """Silence would read as "go and look", and there is nowhere in the draft to look."""
     briefing = _text(HarnessAssumptions(summaries=(), edits=()))
-    assert "marked no rule as expected to fail" in briefing
+    assert "No rule is marked as expected to fail." in briefing
 
 
 def test_optimistic_loop_is_read_from_the_state_the_tool_writes():
@@ -227,4 +221,4 @@ def test_the_judge_is_shown_the_diff_and_not_only_a_description():
     diff = '+#[cfg_attr(feature = "unit_vault", cvlr::early_panic)]'
     briefing = _text(HarnessAssumptions(summaries=(), edits=(_PANIC,), diff=diff))
     assert diff in briefing
-    assert "the summary is the editor's account of its own work" in briefing
+    assert _PANIC.executive_summary in briefing

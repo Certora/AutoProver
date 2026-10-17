@@ -245,8 +245,8 @@ So the two cases separate cleanly, and the answer differs by case:
 Which is an argument for the escape hatch and against the default, on both halves. No spl-stake-pool
 run is needed to close this; the artifact answers it.
 
-**What shipped: the third shape, the one that needed code.** `adjust_prover_config` takes a
-`SetOptimisticLoop` edit, so the author has the rung and the ladder in the bundle has a fourth step
+**What shipped: the third shape, the one that needed code.** `adjust_prover_config` sets
+`optimistic_loop`, so the author has the rung and the ladder in the bundle has a fourth step
 saying when it is the honest one. The tool's charter no longer claims every setting on it is sound;
 it says two are and one is not, and why the unsound one is there. **The default stays off**: a conf
 carries `optimistic_loop` only when the author set it, with its reason (`OptimisticLoop` in

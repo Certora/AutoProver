@@ -462,9 +462,9 @@ class PublishResultTool(
         description="The property→rules mapping, for every property you did not skip."
     )
     rule_subjects: list[RuleSubject] = Field(
-        description="One entry per rule your draft declares, saying what that rule drives: the "
-        "program function it calls, or — if it drives a stand-in you wrote in the harness — which "
-        "program function that stands in for and why you could not call the real one."
+        description="One entry per rule your draft declares. `function` is the program function "
+        "the rule calls, or the program function a stand-in replaces. Set `reason` only for a "
+        "stand-in: why the program function itself could not be called."
     )
 
     @override
@@ -848,8 +848,6 @@ async def batch_cvlr_generation(
         summaries=res_state["summaries"],
         applied_edits=await applied_edits(editing.store, res_state["version_history"]),
         vfs=res_state["vfs"],
-        expected_failures=res_state["expected_failures"],
-        declared_rules=list(rule_names(draft)),
         final_link=res_state.get("prover_link"),
     )
     if res_state["budget_curtailed"]:

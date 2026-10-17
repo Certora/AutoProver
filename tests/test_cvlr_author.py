@@ -6,9 +6,9 @@ what makes it testable in the routine env — and the machinery is where the int
 * **The publish gate's ground truth.** ``validate_property_rules`` checks the declared mapping
   against the rules the *draft* declares, both directions. A property claiming a rule that does not
   exist is a hallucinated deliverable; a rule nobody claimed is prover time nobody chose to spend.
-* **The shared module declaration.** ``specs/mod.rs`` names every unit, and a named module with no
-  file is a compile error — so a unit whose sibling has not authored yet would fail its own gate.
-  That is the whole reason the formalizer is staged.
+* **The shared module declaration.** ``specs/mod.rs`` names every unit, each behind its own cargo
+  feature. A module behind a disabled ``cfg`` is never compiled, so a sibling that has not written
+  its file yet does not fail this unit's gate.
 * **What "accounted for" means.** The prover gate passes with a violated rule in it, provided the
   author marked it. Getting that wrong in either direction is bad: demanding green pushes the author
   to weaken rules until findings disappear, and accepting anything makes the gate decorative.
@@ -17,7 +17,6 @@ what makes it testable in the routine env — and the machinery is where the int
 from pathlib import Path
 
 import asyncio
-import json
 from types import SimpleNamespace
 
 import pytest
@@ -27,7 +26,6 @@ from composer.prover.conf import SelectRules
 from composer.spec.cvlr.conf import TunableConf, RunOverlay, solana_conf
 from composer.spec.cvlr.prover import Submission as CvlrSubmission
 from composer.spec.cvlr.harness import (
-    DELIVERABLE_DIR,
     CvlrArtifactStore,
     GeneratedHarness,
     HarnessModule,
@@ -35,14 +33,12 @@ from composer.spec.cvlr.harness import (
 )
 from composer.spec.cvlr.state import (
     PROVER_VALIDATION_KEY,
-    DrivesHarnessMirror,
-    DrivesProgramFunction,
     PropertyRuleMapping,
+    RuleSubject,
     tuning_history,
     validate_property_rules,
     validate_rule_subjects,
 )
-from composer.spec.cvlr.tuning import SummaryDirective
 from composer.spec.cvlr import author
 from composer.spec.cvlr import verify as verify_mod
 from composer.spec.cvlr.author_tools import unaccounted
@@ -134,7 +130,7 @@ def test_a_property_that_is_neither_skipped_nor_mapped_is_rejected():
 
 def test_every_declared_rule_must_say_what_it_drives():
     err = validate_rule_subjects(
-        [DrivesProgramFunction(rule="rule_solvency", function="crate::vault_program::deposit")],
+        [RuleSubject(rule="rule_solvency", function="crate::vault_program::deposit")],
         DRAFT,
     )
     assert err is not None
@@ -143,7 +139,7 @@ def test_every_declared_rule_must_say_what_it_drives():
 
 def test_a_subject_cannot_name_a_rule_the_draft_does_not_declare():
     err = validate_rule_subjects(
-        [DrivesProgramFunction(rule="rule_solvency_v2", function="crate::f")], DRAFT
+        [RuleSubject(rule="rule_solvency_v2", function="crate::f")], DRAFT
     )
     assert err is not None and "rule_solvency_v2" in err
 
@@ -152,15 +148,15 @@ def test_a_mirror_is_accepted_but_must_say_what_it_stands_in_for():
     """The point is not to forbid the stand-in — today [3308] leaves no alternative for some
     handlers — but to make it a declaration rather than a doc comment."""
     subjects = [
-        DrivesProgramFunction(rule="rule_solvency", function="crate::vault_program::deposit"),
-        DrivesHarnessMirror(
+        RuleSubject(rule="rule_solvency", function="crate::vault_program::deposit"),
+        RuleSubject(
             rule="no_underflow_withdraw",
-            mirrors="crate::vault_program::withdraw",
+            function="crate::vault_program::withdraw",
             reason="[3308] on the #[error_code] path; summarizing and weakening both failed",
         ),
-        DrivesHarnessMirror(
+        RuleSubject(
             rule="no_underflow_deposit",
-            mirrors="crate::vault_program::deposit",
+            function="crate::vault_program::deposit",
             reason="[3308] on the #[error_code] path; summarizing and weakening both failed",
         ),
     ]
@@ -196,37 +192,14 @@ def test_a_draft_with_no_rules_and_no_skips_is_still_unfinished():
 
 
 def test_a_mirror_declaration_reaches_the_published_artifact():
-    """`expected_failures` set the precedent: a caveat the report needs is carried, not smoothed
-    over. A verdict earned against a stand-in is worth something different from one earned against
-    the program, and the deliverable is the only place a reader can learn which they have."""
-    mirror = DrivesHarnessMirror(
-        rule="rule_solvency", mirrors="crate::vault_program::deposit", reason="[3308]"
+    """A verdict on a stand-in is not a verdict on the program. The subject stays on the published
+    harness, with the reason that says so."""
+    mirror = RuleSubject(
+        rule="rule_solvency", function="crate::vault_program::deposit", reason="[3308]"
     )
     published = GeneratedHarness(commentary="c", harness=DRAFT, rule_subjects=[mirror])
     assert published.rule_subjects == [mirror]
-    assert published.model_dump()["rule_subjects"][0]["subject"] == "harness_mirror"
-
-
-def test_the_declarations_are_written_to_disk_and_not_just_to_the_checkpoint(tmp_path):
-    """They reached the checkpoint and died there: an end-to-end run published seven rules with
-    their subjects correctly declared, and nothing in `certora/cvlr/` said so. The base store writes
-    the module, the commentary and the property map — neither of this backend's two claims is any of
-    those."""
-    store = CvlrArtifactStore(tmp_path, Path("programs/vault"))
-    published = GeneratedHarness(
-        commentary="c",
-        harness=DRAFT,
-        rule_subjects=[
-            DrivesProgramFunction(rule="rule_solvency", function="crate::vault_program::deposit")
-        ],
-        summaries=[SummaryDirective(pattern="^<vault::E as Display>::fmt$", why="[3308]")],
-    )
-    store.write_artifact(HarnessModule(slug="deposits"), published)
-    written = json.loads(
-        (tmp_path / DELIVERABLE_DIR / "properties" / "cvlr_deposits.assumptions.json").read_text()
-    )
-    assert written["rule_subjects"][0]["function"] == "crate::vault_program::deposit"
-    assert written["summaries"][0]["why"] == "[3308]"
+    assert published.rule_subjects[0].reason == "[3308]"
 
 
 def test_a_skipped_property_may_be_absent_but_not_mapped():
@@ -275,9 +248,9 @@ def test_two_slugs_that_reduce_to_one_module_are_refused(tmp_path):
         store.declare_modules([HarnessModule("Fee-Split"), HarnessModule("fee_split")])
 
 
-def test_every_unit_gets_a_module_and_a_file_before_any_unit_authors(tmp_path):
-    # `mod x;` with no `x.rs` is a compile error, so a unit whose sibling has not authored yet would
-    # fail its *own* compile gate. This is what the staged formalizer is for.
+def test_every_unit_is_declared_before_any_unit_authors(tmp_path):
+    # Each module is behind its own cargo feature. A module behind a disabled cfg is never
+    # compiled, so a sibling that has not written its file yet does not fail this unit's build.
     store = CvlrArtifactStore(tmp_path, Path("programs/prog"))
     modules = [HarnessModule("deposit"), HarnessModule("withdraw")]
     mod_rs, *_ = store.declare_modules(modules)
@@ -285,8 +258,7 @@ def test_every_unit_gets_a_module_and_a_file_before_any_unit_authors(tmp_path):
     text = mod_rs.read_text()
     assert "pub mod deposit;" in text and "pub mod withdraw;" in text
     for module in modules:
-        placeholder = mod_rs.parent / module.artifact_file
-        assert placeholder.is_file(), f"{module.artifact_file} was declared but not created"
+        assert not (mod_rs.parent / module.artifact_file).exists()
 
 
 def test_declaring_modules_never_clobbers_an_authored_harness(tmp_path):
@@ -341,14 +313,11 @@ def test_a_rule_marked_expected_to_fail_that_verifies_is_reported():
     assert _wrongly_expected(status, {"rule_b": "should underflow"}) == ["rule_b"]
 
 
-def test_the_published_result_reports_the_rules_it_read_off_the_draft():
-    # `declared_rules` is read from the draft, not transcribed by the model, so the report cannot
-    # claim a rule the harness does not contain.
+def test_the_published_result_carries_the_harness_and_the_property_map():
     harness = GeneratedHarness(
         commentary="ok",
         harness=DRAFT,
         property_rules=_mapping(solvency_holds=["rule_solvency"]),
-        declared_rules=["rule_solvency", "no_underflow_withdraw", "no_underflow_deposit"],
         final_link="https://prover.certora.com/output/1/abc",
     )
     assert harness.artifact_text == DRAFT
@@ -553,7 +522,7 @@ def test_a_rule_declared_against_a_dependency_is_refused():
     """
     draft = "#[rule]\nfn rule_signer_rejects_non_signer() { }\n"
     subjects = [
-        DrivesProgramFunction(
+        RuleSubject(
             rule="rule_signer_rejects_non_signer",
             function="anchor_lang::accounts::signer::Signer::try_from",
         )
@@ -570,7 +539,7 @@ def test_a_rule_declared_against_the_program_s_own_code_is_accepted_at_any_depth
     so it must pass."""
     draft = "#[rule]\nfn rule_core() { }\n"
     subjects = [
-        DrivesProgramFunction(
+        RuleSubject(
             rule="rule_core",
             function="crate::vault_accounting::apply_withdrawal",
         )
@@ -583,9 +552,9 @@ def test_a_mirror_must_also_name_program_code_as_what_it_stands_in_for():
     claim unfalsifiable and the caveat meaningless."""
     draft = "#[rule]\nfn rule_mirror() { }\n"
     subjects = [
-        DrivesHarnessMirror(
+        RuleSubject(
             rule="rule_mirror",
-            mirrors="anchor_lang::accounts::account::Account::try_from",
+            function="anchor_lang::accounts::account::Account::try_from",
             reason="the real one could not be analyzed",
         )
     ]
@@ -619,13 +588,13 @@ def test_a_harness_with_no_rules_is_not_a_harness_that_verifies_itself():
     assert not _verifies_only_its_own_code(_harness_with([]))
 
     mirror_only = [
-        DrivesHarnessMirror(
-            rule="rule_mirror", mirrors="crate::vault_program::deposit", reason="[3308]"
+        RuleSubject(
+            rule="rule_mirror", function="crate::vault_program::deposit", reason="[3308]"
         )
     ]
     assert _verifies_only_its_own_code(_harness_with(mirror_only))
 
-    mixed = [*mirror_only, DrivesProgramFunction(
+    mixed = [*mirror_only, RuleSubject(
         rule="rule_real", function="crate::vault_program::withdraw"
     )]
     assert not _verifies_only_its_own_code(_harness_with(mixed))

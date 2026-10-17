@@ -163,14 +163,14 @@ def _verifies_only_its_own_code(harness: GeneratedHarness) -> bool:
     contradicts, and the publish gate refuses a subject rooted outside the program's own crate.
     """
     subjects = harness.rule_subjects
-    return bool(subjects) and not any(s.subject == "program_function" for s in subjects)
+    return bool(subjects) and all(s.reason is not None for s in subjects)
 
 
 def _mirrored_rules(harness: GeneratedHarness) -> list[str]:
     """Rules the author declared as driving a stand-in. Reported, not asserted on: a declared mirror
     can be legitimate — [3308] leaves no alternative for some handlers — and the judge is what
     weighs its reason. A reader of this test's output should still see which ones they are."""
-    return [s.rule for s in harness.rule_subjects if s.subject != "program_function"]
+    return [s.rule for s in harness.rule_subjects if s.reason is not None]
 
 
 def _undeclared_functions(harness: GeneratedHarness) -> list[str]:
@@ -179,16 +179,17 @@ def _undeclared_functions(harness: GeneratedHarness) -> list[str]:
     The declaration is the author's claim, so this is the part of it that can be checked cheaply: a
     rule cannot be driving ``crate::vault_program::deposit`` if the shipped module never writes
     ``deposit``. Matched on the final path segment, since the path may be reached through a ``use``.
+    A stand-in (``reason`` set) is skipped: the harness replaces the function, so the real name
+    need not appear.
     """
     code = "\n".join(
         line for line in harness.harness.splitlines()
         if not line.lstrip().startswith(("//", "/*", "*"))
     )
     return [
-        fn
+        s.function
         for s in harness.rule_subjects
-        if (fn := getattr(s, "function", None)) is not None
-        and fn.rsplit("::", 1)[-1] not in code
+        if s.reason is None and s.function.rsplit("::", 1)[-1] not in code
     ]
 
 

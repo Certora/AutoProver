@@ -177,10 +177,10 @@ Call `result(commentary, property_rules, rule_subjects)`. The gate requires:
 * every non-skipped property is claimed by at least one rule, every claimed rule is one your draft
   actually declares, and every rule you declared is claimed by some property. Skipped properties
   must not appear.
-* every rule you declared has an entry in `rule_subjects` naming what it drives — the program
-  function it calls, or, if it drives a stand-in you wrote, which program function that stands in
-  for and why the real one could not be called. That declaration is carried into the report, so a
-  reader can tell which verdicts are about the program.
+* every rule you declared has an entry in `rule_subjects`. `function` is the program function the
+  rule calls, or the program function a stand-in replaces. Set `reason` when harness code stands in
+  for that function, and say why the real one could not be called. The commentary is what a reader
+  of the report sees beside the verdicts.
 
 Note the last part: a rule you wrote and never tied to a property will be rejected. Either map it or
 remove it — an unattributed rule costs prover time nobody chose to spend.
