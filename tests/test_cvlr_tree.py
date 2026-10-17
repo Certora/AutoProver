@@ -18,6 +18,7 @@ from composer.cargo.metadata import CratePackage, LibTarget, RegistrySource, Wor
 from composer.layout import INTERNAL_DIR
 from composer.sandbox.recipes import SANDBOX_CARGO_DIR
 
+from composer.spec.cvlr.harness import CvlrArtifactStore, HarnessModule
 from composer.spec.cvlr.scaffold import declare_unit_features
 from composer.spec.cvlr.tree import (
     NOT_PROJECT_SOURCE,
@@ -328,6 +329,21 @@ async def test_an_edited_crlf_file_is_written_once(tmp_path: Path):
 
 # ---------------------------------------------------------------------------------------------
 # what the run declares up front
+
+
+def test_every_unit_module_is_gated_on_its_own_feature(tmp_path: Path):
+    """Each unit's module is declared behind its own cargo feature.
+
+    A module behind a disabled `cfg` is never compiled and never enters
+    rustc's dep-info, so it cannot break or dirty another unit's build.
+    """
+    store = CvlrArtifactStore(tmp_path, Path("programs/p"))
+    modules = [HarnessModule("deposits"), HarnessModule("admin-config")]
+    mod_rs, *_ = store.declare_modules(modules)
+
+    text = mod_rs.read_text()
+    for module in modules:
+        assert f'#[cfg(feature = "{module.feature}")]\npub mod {module.module};' in text
 
 
 def test_a_units_feature_is_declared_and_empty(tmp_path: Path):
