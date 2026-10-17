@@ -323,7 +323,7 @@ class SharedTree:
     async def reconcile(self, unit: str, edits: UnitEdits) -> None:
         """Make the tree hold every known unit's draft and ``unit``'s edits to the program.
 
-        A unit is known once it has reconciled. Until then its module is the project's placeholder,
+        A unit is known once it has reconciled. Until then its module is not in the tree,
         which is safe because it is ``cfg``'d out of every other unit's build. Another unit's edits
         are never in the tree once this returns: a file only it edited is a path the overlay stops
         serving, which the materializer restores from the project.

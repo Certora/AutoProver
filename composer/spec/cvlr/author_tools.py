@@ -11,9 +11,9 @@ builds with that state and earns the stamp.
 """
 
 import dataclasses
-from typing import Annotated, Container, Literal, override
+from typing import Container, override
 
-from pydantic import BaseModel, Discriminator, Field
+from pydantic import Field
 
 from graphcore.graph import tool_state_update
 from graphcore.tools.schemas import (
@@ -148,81 +148,60 @@ class SummarizeForProver(
         )
 
 
-class SetLoopIter(BaseModel):
-    """Raise or lower how many times the prover unrolls a statically unbounded loop."""
-
-    type: Literal["loop_iter"]
-    iterations: int = Field(
-        description="The new bound. While `optimistic_loop` is off, the Prover unrolls an unbounded "
-        "loop this many times and then asserts that the loop has finished. A rule that verifies "
-        "at this bound is verified. A rule that cannot comes back VIOLATED on \"Unwinding "
-        "condition in a loop\". Set it as low as the property allows. Cost grows exponentially, "
-        "and above 3 or 4 it grows faster than the answer is usually worth. Raise it after "
-        "bounding whatever determines the trip count, and after deciding whether the loop is in "
-        "the property's way."
-    )
+def _config_change(args: dict) -> str:
+    parts: list[str] = []
+    if args.get("loop_iter") is not None:
+        parts.append(f"loop_iter={args['loop_iter']}")
+    flag = args.get("optimistic_loop")
+    if flag is not None:
+        parts.append("optimistic_loop " + ("on" if flag else "off"))
+    shown = ", ".join(parts) if parts else "no change"
+    return f"Adjusting the prover config ({shown})"
 
 
-class SetOptimisticLoop(BaseModel):
-    """Assume every loop finishes within the bound, instead of asserting that it does."""
-
-    type: Literal["optimistic_loop"]
-    enabled: bool = Field(
-        description="True to assume loops finish within the bound, false to assert it again. "
-        "This is the setting that changes what a verdict means. With it on, the Prover does not "
-        "check that the unroll bound was enough, so a violation on a later iteration is never "
-        "found and the rule reports VERIFIED. Every rule in the submission is affected. Use it "
-        "only for a loop whose trip count the analysis cannot fix: raising the bound does not "
-        "terminate, because the reported iteration goes up with the bound, and no summary "
-        "directive can name the loop. Check that first by moving the bound and reading what "
-        "comes back. A loop that discharges at 3 is not this case. If the property is about the "
-        "loop, use `record_skip` and name the loop. With the setting on, the rest of the handler "
-        "is reachable again. Say in `why` which bounds you tried and what they reported. A reader "
-        "weighs every verdict in the unit against that account."
-    )
-
-
-type CvlrConfigEdit = Annotated[
-    SetLoopIter | SetOptimisticLoop, Discriminator("type")
-]
-
-
-@tool_display(lambda p: f"Adjusting the prover config ({len(p['edits'])} edit(s))", "Config")
+@tool_display(_config_change, "Config")
 class AdjustProverConfig(
     WithInjectedState[CvlrGenerationState], WithInjectedId, WithImplementation[Command | str]
 ):
-    """Change a prover setting for this unit's submissions.
+    """Change this unit's prover settings.
 
-    The conf is in the system prompt. This changes it. The list of settings is
-    closed. ``loop_iter`` decides how far the prover unrolls a loop. It does
-    not change what a green verdict means.
+    The list is closed. ``loop_iter`` decides how far the prover unrolls a loop
+    and does not change what a green verdict means. ``optimistic_loop`` does,
+    and it applies to every rule in the unit. ``rule_sanity`` and the
+    memory-model flags are not settings here.
 
-    ``optimistic_loop`` does. With it on, the prover does not check that the
-    unroll bound was enough, so a violation on a later iteration is not
-    reported and the rule can come back verified. It applies to every rule in
-    the unit. Use it only when the trip count cannot be fixed by bounding
-    inputs, editing the loop, or raising the bound: the bound goes up and the
-    reported iteration goes up with it, and no summary directive can name the
-    loop. A loop that discharges at a small bound is not this case. When the
-    property is about the loop itself, ``record_skip`` naming the loop is the
-    better answer. Say in ``why`` which bounds were tried and what they
-    reported.
-
-    ``rule_sanity`` and the memory-model flags are not settings here.
-
-    Try the rule's own remedies before a setting change. A timeout often means
-    an unbounded operand, a step that belongs in a lemma, or a loop whose trip
-    count nothing constrains.
-
-    Edits apply together or not at all, and the result is the full conf. A
-    change invalidates the prover stamp. Re-run ``verify_rules``.
+    Omit a field to leave it. A call that sets neither is refused. A change
+    invalidates the prover stamp. Re-run ``verify_rules``.
     """
 
-    edits: list[CvlrConfigEdit] = Field(description="The changes to apply, as one atomic batch.")
+    loop_iter: int | None = Field(
+        default=None,
+        description="The new loop bound, or omit to leave it. While `optimistic_loop` is off, the "
+        "Prover unrolls an unbounded loop this many times and then asserts that the loop has "
+        "finished. A rule that verifies at this bound is verified. A rule that cannot comes back "
+        "VIOLATED on \"Unwinding condition in a loop\". Set it as low as the property allows. Cost "
+        "grows exponentially, and above 3 or 4 it grows faster than the answer is usually worth. "
+        "Raise it after bounding whatever determines the trip count, and after deciding whether "
+        "the loop is in the property's way.",
+    )
+    optimistic_loop: bool | None = Field(
+        default=None,
+        description="True to assume loops finish within the bound, false to assert it again, or "
+        "omit to leave the setting. This is the setting that changes what a verdict means. With it "
+        "on, the Prover does not check that the unroll bound was enough, so a violation on a later "
+        "iteration is never found and the rule reports VERIFIED. Every rule in the submission is "
+        "affected. Use it only for a loop whose trip count the analysis cannot fix: raising the "
+        "bound does not terminate, because the reported iteration goes up with the bound, and no "
+        "summary directive can name the loop. Check that first by moving the bound and reading "
+        "what comes back. A loop that discharges at 3 is not this case. If the property is about "
+        "the loop, use `record_skip` and name the loop. With the setting on, the rest of the "
+        "handler is reachable again. Say in `why` which bounds you tried and what they reported. "
+        "A reader weighs every verdict in the unit against that account.",
+    )
     why: str = Field(
         description="What you tried first and why this setting is the remedy. The conf is written "
         "into the deliverable, so this is the account a reader gets of why it differs from the "
-        "starting one."
+        "starting one. When `optimistic_loop` is turned on, this is the reason stored with it."
     )
 
     @override
@@ -232,27 +211,27 @@ class AdjustProverConfig(
                 "A non-empty `why` is required. The conf ships with the deliverable, and a setting "
                 "nobody explained is one a reader cannot weigh."
             )
-        if not self.edits:
+        if self.loop_iter is None and self.optimistic_loop is None:
             return "No edits given."
         settings = self.state["prover_settings"]
-        for edit in self.edits:
-            match edit:
-                case SetLoopIter(iterations=n):
-                    if n < 1:
-                        return f"A loop bound of {n} is not a bound; it has to be at least 1."
-                    if settings.loop_iter == n:
-                        return f"`loop_iter` is already {n}."
-                    settings = dataclasses.replace(settings, loop_iter=n)
-                case SetOptimisticLoop(enabled=on):
-                    if (settings.optimistic_loop is not None) == on:
-                        return (
-                            "`optimistic_loop` is already "
-                            + ("on" if on else "off")
-                            + " in this conf."
-                        )
-                    settings = dataclasses.replace(
-                        settings, optimistic_loop=OptimisticLoop(why=self.why) if on else None
-                    )
+        if self.loop_iter is not None:
+            if self.loop_iter < 1:
+                return f"A loop bound of {self.loop_iter} is not a bound; it has to be at least 1."
+            if settings.loop_iter == self.loop_iter:
+                return f"`loop_iter` is already {self.loop_iter}."
+        if self.optimistic_loop is not None:
+            on = self.optimistic_loop
+            if (settings.optimistic_loop is not None) == on:
+                return "`optimistic_loop` is already " + ("on" if on else "off") + " in this conf."
+        if self.loop_iter is not None:
+            settings = dataclasses.replace(settings, loop_iter=self.loop_iter)
+        if self.optimistic_loop is not None:
+            settings = dataclasses.replace(
+                settings,
+                optimistic_loop=(
+                    OptimisticLoop(why=self.why) if self.optimistic_loop else None
+                ),
+            )
         return tool_state_update(
             self.tool_call_id,
             "Prover config updated; the prover stamp is invalidated, so re-run `verify_rules`.\n\n"

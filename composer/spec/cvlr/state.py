@@ -8,8 +8,9 @@ buffer, the skip list, the validation stamps, and the digest gate. CVLR adds:
 * ``prover_link`` — the job link from the latest run that produced results.
   The report links to it, and ``fetch_verdicts`` re-reads verdicts from it.
 * ``property_rules`` — the mapping the publish gate validates.
-* ``rule_subjects`` — per rule, a program function or harness code standing
-  in for one. Carried into the report.
+* ``rule_subjects`` — per rule, the program function it calls, or the program
+  function harness code stands in for. ``reason`` is set only for a stand-in.
+  Checked before publish.
 * ``summaries`` — points-to summaries (:mod:`composer.spec.cvlr.tuning`).
   They enter the digest through ``version_history``. A summary changes what
   the prover checked.
@@ -31,7 +32,7 @@ wrap-up leaves no time for one.
 
 import dataclasses
 from pathlib import Path
-from typing import Annotated, Literal, NotRequired
+from typing import Annotated, NotRequired
 
 from langgraph.graph import MessagesState
 from pydantic import BaseModel, Field
@@ -81,43 +82,25 @@ class PropertyRuleMapping(BaseModel):
     )
 
 
-class DrivesProgramFunction(BaseModel):
-    """The rule calls a function the program under verification defines."""
+class RuleSubject(BaseModel):
+    """The program function one rule drives, or the one harness code stands in for.
 
-    subject: Literal["program_function"] = "program_function"
-    rule: RuleName = Field(description="The rule this describes")
-    function: str = Field(
-        description="The path of the program function the rule calls, spelled as the harness "
-        "writes it — e.g. `crate::vault_program::deposit`."
-    )
-
-
-class DrivesHarnessMirror(BaseModel):
-    """The rule drives harness-local code that stands in for a program function.
-
-    A property checked this way is a property of the stand-in. It is a property
-    of the program only if the transcription is faithful, and no tool checks
-    that transcription.
+    ``reason`` is set only for a stand-in. Nothing checks that the stand-in
+    matches the function it names.
     """
 
-    subject: Literal["harness_mirror"] = "harness_mirror"
     rule: RuleName = Field(description="The rule this describes")
-    mirrors: str = Field(
-        description="The program function the harness code stands in for, e.g. "
+    function: str = Field(
+        description="The path of the program function the rule calls, or the program function "
+        "harness code stands in for, spelled as the harness writes it — e.g. "
         "`crate::vault_program::deposit`."
     )
-    reason: str = Field(
-        description="Why the program function itself could not be called — the prover error it "
-        "produced, and what you tried before reimplementing it."
+    reason: str | None = Field(
+        default=None,
+        description="Set only when the rule drives harness code standing in for `function`: why "
+        "the program function itself could not be called — the prover error it produced, and what "
+        "you tried before reimplementing it. Omit when the rule calls the program function.",
     )
-
-
-#: What a rule drives. One entry per rule at publish time, carried into the
-#: report so a reader can tell a verdict on the program from a verdict on a
-#: stand-in.
-type RuleSubject = Annotated[
-    DrivesProgramFunction | DrivesHarnessMirror, Field(discriminator="subject")
-]
 
 
 #: A path into the program under verification starts with this. The harness is
@@ -149,9 +132,7 @@ def validate_rule_subjects(subjects: list[RuleSubject], draft: str) -> str | Non
         elif subject.rule in seen:
             errors.append(f"Rule {subject.rule!r} appears more than once in `rule_subjects`.")
         seen.add(subject.rule)
-        named = (
-            subject.function if subject.subject == "program_function" else subject.mirrors
-        )
+        named = subject.function
         if _outside_the_program(named):
             errors.append(
                 f"Rule {subject.rule!r} names {named!r}, which is not in the program under "
@@ -164,7 +145,7 @@ def validate_rule_subjects(subjects: list[RuleSubject], draft: str) -> str | Non
     for name in sorted(declared - seen):
         errors.append(
             f"Rule {name!r} has no entry in `rule_subjects`: say which program function it drives, "
-            "or declare it as a harness mirror and say why."
+            "or set `reason` when harness code stands in for one."
         )
     return "\n".join(errors) if errors else None
 
@@ -192,7 +173,8 @@ class LastVerdicts(BaseModel):
 
 class CvlrGenerationExtra(AuthoringExtra, VersionedHistory):
     property_rules: list[PropertyRuleMapping]
-    #: One entry per declared rule, naming what it drives. See :data:`RuleSubject`.
+    #: One entry per declared rule: the program function it calls, or the one a
+    #: stand-in replaces. See :class:`RuleSubject`.
     rule_subjects: list[RuleSubject]
     #: Points-to summaries the author added, in the order added, deduplicated by
     #: pattern. Several ``summarize_for_prover`` calls can land in one graph step,
@@ -284,15 +266,10 @@ class HarnessAssumptions:
 
     def _expected_failure_parts(self) -> list[str]:
         if not self.expected_failures:
-            return [
-                "The author has marked no rule as expected to fail: every rule in this harness "
-                "is claimed to verify."
-            ]
+            return ["No rule is marked as expected to fail."]
         return [
-            "The author has recorded these rules as expected to fail, each a claim that the "
-            "program is defective. The marking is held outside the harness source, so you will "
-            "not find it there:",
-            *(f"  {rule}\n    Author's reason: {reason}" for rule, reason in self.expected_failures),
+            "Rules marked as expected to fail:",
+            *(f"  {rule}\n    {reason}" for rule, reason in self.expected_failures),
         ]
 
     def _conditions(self) -> list[str]:
@@ -304,59 +281,31 @@ class HarnessAssumptions:
             and not self.external_functions
         ):
             return [
-                "The author has added no points-to summaries, has not edited the program's "
-                "source, and has left `optimistic_loop` off. The verdicts this "
-                "harness earns are conditional on nothing beyond the harness itself, so there is "
-                "nothing to weigh on that axis."
+                "No points-to summaries, no edits to the program's source, and `optimistic_loop` off."
             ]
         parts: list[str] = []
         if optimistic is not None:
             parts.append(
-                "The author has turned on `optimistic_loop`, with a loop bound of "
-                f"{self.settings.loop_iter}. Every rule in this harness was verified assuming each "
-                "loop finishes within that bound, so a violation reachable only on a later "
-                "iteration is never reported and the rule comes back verified anyway. This is set "
-                "in the conf, not in the harness source you are reading.\n"
-                f"    Author's justification: {optimistic.why}"
+                f"`optimistic_loop` is on, loop bound of {self.settings.loop_iter}.\n"
+                f"  {optimistic.why}"
             )
         if self.summaries:
-            parts.append(
-                "The author has told the prover to stop analyzing these symbols. A summarized "
-                "call returns an arbitrary value and writes nothing beyond the locations its "
-                "summary names: every other store the real function makes is dropped. A rule "
-                "asserting over state one of these functions writes is green having checked "
-                "nothing, because that state keeps its old value. None of this appears in the "
-                "harness source you are reading:"
-            )
+            parts.append("Points-to summaries:")
             parts += [
                 f"  {d.pattern}\n"
                 f"    Returns: {d.returns if d.returns is not None else 'unconstrained'}\n"
-                f"    Author's justification: {d.why}"
+                f"    {d.why}"
                 for d in self.summaries
             ]
         if self.edits:
-            parts.append(
-                "The author has also edited the program's own source. What the prover analyzed is "
-                "the modified program, not the one in the repository, and these edits are "
-                "likewise absent from the harness:"
-            )
+            parts.append("Edits to the program:")
             parts += [
-                f"  {e.executive_summary}\n    Justification: {e.why_sound}" for e in self.edits
+                f"  {e.executive_summary}\n    {e.why_sound}" for e in self.edits
             ]
             if self.diff:
-                parts.append(
-                    "This is what those edits do to the program. Read it rather than the summary "
-                    "above: the summary is the editor's account of its own work."
-                )
                 parts.append(self.diff)
         if self.external_functions:
-            parts.append(
-                "The last prover run treated these functions as external, neither analyzed nor "
-                "summarized. Each returns an arbitrary value and writes nothing else, so state it "
-                "would change keeps its old value, and one that returns through memory may never "
-                "succeed, which makes the code after it unreachable. A rule whose property depends "
-                "on one of these can be green having checked nothing:"
-            )
+            parts.append("Functions the last prover run treated as external:")
             parts += [f"  {name}" for name in self.external_functions]
         return parts
 

@@ -5,10 +5,11 @@ compiles only from there, and the prover reaches it through the build. The
 artifact store writes it into the package's ``src/certora/specs/``
 (:mod:`composer.spec.cvlr.scaffold`).
 
-``specs/mod.rs`` needs a ``pub mod <name>;`` line per unit, and every declared
-module must exist as a file or no unit compiles. The modules are ``pub``
-because a ``cvlr::mock_fn`` stand-in is named by path from the program's own
-file, outside ``certora``
+``specs/mod.rs`` declares one ``pub mod <name>;`` per unit, each behind that
+unit's cargo feature. A module behind a disabled ``cfg`` is never read by
+rustc, so a unit that has not written its file yet does not stop another unit
+from compiling. The modules are ``pub`` because a ``cvlr::mock_fn`` stand-in
+is named by path from the program's own file, outside ``certora``
 (:data:`composer.spec.cvlr.scaffold._HARNESS_FILES`).
 :class:`composer.pipeline.core.StagedFormalizer` declares every module before
 any unit writes.
@@ -18,7 +19,6 @@ A component slug may contain characters Rust will not accept in a module path.
 """
 
 import dataclasses
-import json
 import re
 from pathlib import Path
 from typing import override
@@ -33,7 +33,7 @@ from composer.spec.cvlr.scaffold import SPECS_DIR
 from composer.spec.cvlr.state import PropertyRuleMapping, RuleSubject
 from composer.spec.cvlr.tuning import SummaryDirective
 from composer.spec.source.munge.edit_store import AppliedEdit
-from composer.spec.types import CheckName, PropertyTitle, RuleName
+from composer.spec.types import CheckName, PropertyTitle
 from composer.spec.util import ensure_dir
 
 #: Reports and diagnostics. The harness source is written into the crate.
@@ -87,11 +87,6 @@ class HarnessModule:
     def artifact_file(self) -> str:
         return f"{self.module}.rs"
 
-    @property
-    def run_key(self) -> str:
-        """Key for this unit's prover run in the run-link map. The component slug."""
-        return self.slug
-
 
 class GeneratedHarness(BaseModel):
     """A published harness: the module source, what it claims, and where it ran."""
@@ -100,9 +95,6 @@ class GeneratedHarness(BaseModel):
     harness: str
     skipped: list[SkippedProperty] = Field(default_factory=list)
     property_rules: list[PropertyRuleMapping] = Field(default_factory=list)
-    #: Rule name to why the author says it should fail. On this backend that is
-    #: usually a finding, so the report includes it.
-    expected_failures: dict[CheckName, str] = Field(default_factory=dict)
     #: What each rule drives: a program function, or harness code standing in for
     #: one. A verdict on a stand-in is not a verdict on the program.
     rule_subjects: list[RuleSubject] = Field(default_factory=list)
@@ -115,8 +107,6 @@ class GeneratedHarness(BaseModel):
     #: The edited files, whole, by project-relative path. The report diffs these
     #: against the project.
     vfs: dict[str, str] = Field(default_factory=dict)
-    #: Every rule the draft declares, read from the draft.
-    declared_rules: list[RuleName] = Field(default_factory=list)
     final_link: str | None = None
 
     def property_checks(self) -> list[tuple[PropertyTitle, list[CheckName]]]:
@@ -154,31 +144,6 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
         return ensure_dir(Path(self._project_root) / self._package_dir / SPECS_DIR)
 
     @override
-    def write_artifact(self, i: HarnessModule, artifact: GeneratedHarness) -> Path:
-        """The harness, and a sidecar of what its verdicts depend on.
-
-        The base store writes the module, the commentary, and the property-to-rule
-        map. It does not write which rules drive the program's own code, which
-        functions the prover was told to stop analyzing, or the edits applied to
-        the program. Those go in ``<stem>.assumptions.json``.
-        """
-        written = super().write_artifact(i, artifact)
-        self._write_assumptions(i.stem, artifact)
-        return written
-
-    def _write_assumptions(self, stem: str, artifact: GeneratedHarness) -> None:
-        (self._properties_dir() / f"{stem}.assumptions.json").write_text(
-            json.dumps(
-                {
-                    "rule_subjects": [s.model_dump() for s in artifact.rule_subjects],
-                    "summaries": [dataclasses.asdict(s) for s in artifact.summaries],
-                    "applied_edits": [e.model_dump() for e in artifact.applied_edits],
-                },
-                indent=2,
-            )
-        )
-
-    @override
     def _job_info_payload(
         self, summary: RunSummary, *, user_id: str, run_mode: str
     ) -> dict[str, object]:
@@ -196,18 +161,14 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
     def declare_modules(self, modules: list[HarnessModule]) -> tuple[Path, ...]:
         """Write ``specs/mod.rs``, declaring every unit's module behind its cargo feature.
 
-        Returns every path it writes, ``mod.rs`` first.
+        Returns the path it writes.
 
         Called once, before any unit authors. The file has to name every unit,
         and no unit knows the others. Each declaration is gated on
         :attr:`HarnessModule.feature`. A module behind a disabled ``cfg`` is
         never compiled and never enters rustc's dep-info, so it cannot break or
-        rebuild another unit's build.
-
-        An empty file is written for each module that does not exist yet. A
-        missing file is a compile error only for the unit that selects it, and
-        the author cannot fix a name chosen here. The placeholder is a doc
-        comment: the module compiles and declares no rules.
+        rebuild another unit's build. The module file itself is written later,
+        by the unit that authors it.
 
         Two units are never compiled together, so two ``impl Nondet for Foo``
         in different modules do not collide (``E0119``).
@@ -229,14 +190,6 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
                 f"punctuation collide; rename the components so they differ in more than that."
             )
         target = self._artifact_dir()
-        written: list[Path] = []
-        for module in modules:
-            path = target / module.artifact_file
-            written.append(path)
-            if not path.exists():
-                path.write_text(
-                    f"//! Harness for {module.slug}. Written by the CVLR author.\n"
-                )
         declarations = "".join(
             f'#[cfg(feature = "{m.feature}")]\npub mod {m.module};\n'
             for m in sorted(modules, key=lambda m: m.module)
@@ -251,6 +204,5 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
             "//! build.\n"
             "\n" + declarations
         )
-        # `mod.rs` first: callers log that path. The module files are what a
-        # resumed run re-syncs when the component set has changed.
-        return (mod_rs, *written)
+        # Callers log this path.
+        return (mod_rs,)
