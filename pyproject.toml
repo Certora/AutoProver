@@ -61,6 +61,8 @@ dependencies = [
     "fsspec>=2023.1.0",
     "ijson>=3.2.0",
     "tomlkit>=0.15.1",
+    # composer.cargo.symbols reads an SBF build's symbol table.
+    "pyelftools>=0.31",
 ]
 
 [project.optional-dependencies]

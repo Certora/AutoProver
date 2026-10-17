@@ -12,8 +12,9 @@ from composer.authoring.state import make_validation_stamper, spec_digest
 from composer.cargo.session import CompileFailed
 from composer.prover.core import ProverReport
 from composer.prover.ptypes import RulePath
+from composer.spec.cvlr.conf import TunableConf
 from composer.spec.cvlr.prover import BuildRejected, Checked, SubmissionFailed
-from composer.spec.cvlr.state import PROVER_VALIDATION_KEY
+from composer.spec.cvlr.state import PROVER_VALIDATION_KEY, tuning_history
 from composer.spec.cvlr.verify import VerifyRules
 
 _DRAFT = "#[rule]\nfn rule_a() {}\n#[rule]\nfn rule_b() {}\n"
@@ -25,6 +26,11 @@ def _state(draft: str | None = _DRAFT) -> dict:
         "messages": [],
         "curr_spec": draft,
         "skipped": [],
+        "expected_failures": {},
+        "summaries": [],
+        "vfs": {},
+        "version_history": [],
+        "prover_settings": TunableConf(),
         "validations": {},
         "required_validations": [PROVER_VALIDATION_KEY],
     }
@@ -48,13 +54,16 @@ def _report(*pairs: tuple[str, str]) -> ProverReport:
 
 
 def test_every_declared_rule_verified_stamps_the_draft():
-    out = _tool()._report(
+    tool = _tool()
+    out = tool._report(
         Checked(build=None, report=_report(("rule_a", "VERIFIED"), ("rule_b", "VERIFIED"))),  # type: ignore[arg-type]
         _deps(),  # type: ignore[arg-type]
+        {},
         declared=("rule_a", "rule_b"),
     )
 
-    assert out.update["validations"] == {PROVER_VALIDATION_KEY: spec_digest(_DRAFT, [])}
+    history = tuning_history(tool.state)  # type: ignore[arg-type]
+    assert out.update["validations"] == {PROVER_VALIDATION_KEY: spec_digest(_DRAFT, [], history)}
     assert out.update["prover_link"] == _LINK
     assert "stamped" in out.update["messages"][0].content
 
@@ -63,6 +72,7 @@ def test_a_failing_rule_does_not_stamp():
     out = _tool()._report(
         Checked(build=None, report=_report(("rule_a", "VERIFIED"), ("rule_b", "VIOLATED"))),  # type: ignore[arg-type]
         _deps(),  # type: ignore[arg-type]
+        {},
         declared=("rule_a", "rule_b"),
     )
 
@@ -75,6 +85,7 @@ def test_a_missing_verdict_does_not_stamp():
     out = _tool()._report(
         Checked(build=None, report=_report(("rule_a", "VERIFIED"))),  # type: ignore[arg-type]
         _deps(),  # type: ignore[arg-type]
+        {},
         declared=("rule_a", "rule_b"),
     )
 
@@ -87,7 +98,7 @@ def test_a_rejected_build_reports_the_compiler_and_does_not_stamp():
         build=SimpleNamespace(verdict=CompileFailed(diagnostics="error[E0425]: cannot find", exit_code=1))  # type: ignore[arg-type]
     )
 
-    out = _tool()._report(rejected, _deps(), declared=("rule_a",))  # type: ignore[arg-type]
+    out = _tool()._report(rejected, _deps(), {}, declared=("rule_a",))  # type: ignore[arg-type]
 
     assert "E0425" in out.update["messages"][0].content
     assert "validations" not in out.update
@@ -97,6 +108,7 @@ def test_a_submission_without_results_does_not_stamp():
     out = _tool()._report(
         SubmissionFailed(build=None, reason="the cloud job failed"),  # type: ignore[arg-type]
         _deps(),  # type: ignore[arg-type]
+        {},
         declared=("rule_a",),
     )
 

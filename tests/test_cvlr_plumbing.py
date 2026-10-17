@@ -401,7 +401,7 @@ def test_every_conf_checks_vacuity():
     verified. No setting turns it off."""
     for tunable in (
         cvlr_conf.TunableConf(),
-        cvlr_conf.TunableConf(loop_iter=5, optimistic_loop=True),
+        cvlr_conf.TunableConf(loop_iter=5, optimistic_loop=cvlr_conf.OptimisticLoop(why="w")),
     ):
         assert cvlr_conf.tunable_conf(tunable)["rule_sanity"] == "basic"
 
@@ -415,7 +415,8 @@ def test_a_conf_change_invalidates_a_stamp_earned_before_it():
     another."""
     default = cvlr_conf.conf_history(cvlr_conf.TunableConf())
     assert default != cvlr_conf.conf_history(cvlr_conf.TunableConf(loop_iter=3))
-    assert default != cvlr_conf.conf_history(cvlr_conf.TunableConf(optimistic_loop=True))
+    optimistic = cvlr_conf.TunableConf(optimistic_loop=cvlr_conf.OptimisticLoop(why="w"))
+    assert default != cvlr_conf.conf_history(optimistic)
     assert default == cvlr_conf.conf_history(cvlr_conf.TunableConf())
 
 
@@ -456,6 +457,16 @@ def test_the_env_files_are_left_for_the_build_manifest_to_supply():
 def test_a_units_summary_file_is_named_when_the_run_passes_one():
     conf = _submission(summaries=(Path("envs/cvlr_summaries_vault.txt"),))
     assert conf["solana_summaries"] == ["envs/cvlr_summaries_vault.txt"]
+
+
+def test_rewording_the_reason_for_optimistic_loop_keeps_the_stamp():
+    """Rewording the ``optimistic_loop`` account does not change the conf history.
+
+    The account is not part of the conf.
+    """
+    first = cvlr_conf.TunableConf(optimistic_loop=cvlr_conf.OptimisticLoop(why="first reason"))
+    second = cvlr_conf.TunableConf(optimistic_loop=cvlr_conf.OptimisticLoop(why="second"))
+    assert cvlr_conf.conf_history(first) == cvlr_conf.conf_history(second)
 
 
 def test_the_build_warms_with_the_cargo_it_will_actually_run(tmp_path):
@@ -690,7 +701,7 @@ def test_a_directory_beside_the_workdir_is_out_of_the_confined_builds_reach(tmp_
 @pytest.mark.asyncio
 async def test_a_tuned_conf_reaches_the_file_the_prover_is_handed(tmp_path):
     """Author settings are written into the conf the prover is given."""
-    edited = cvlr_conf.TunableConf(loop_iter=4, optimistic_loop=True)
+    edited = cvlr_conf.TunableConf(loop_iter=4, optimistic_loop=cvlr_conf.OptimisticLoop(why="w"))
     conf_path = await write_submission(
         _unconfined(tmp_path),
         Submission(

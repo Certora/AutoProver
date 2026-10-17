@@ -259,6 +259,62 @@ def flatten_tree_view(
         r.children, lambda c: flatten_tree_view(context, c, effective_path, shape, r.nodeType)
     )
 
+#: Where a job's alert report lives, relative to its results directory.
+ALERT_REPORT = Path("Reports") / "alertReport.json"
+
+_EXTERNALS_ALERT = "The following functions are neither inlined nor summarized"
+
+
+def external_functions(results_root: Path) -> tuple[str, ...]:
+    """The functions the Prover treated as external for this job, sorted and deduplicated.
+
+    Read from the alert report's ``Summarization`` alerts. The alerts do not name
+    their rule, so this is the job's union. An external call writes nothing but
+    its return value, and no verdict says so.
+
+    Empty when the report is absent or unreadable. Callers show a non-empty list
+    and say nothing otherwise.
+    """
+    try:
+        alerts = json.loads((results_root / ALERT_REPORT).read_text())
+    except (OSError, ValueError):
+        return ()
+    if not isinstance(alerts, list):
+        return ()
+    found: set[str] = set()
+    for alert in alerts:
+        message = alert.get("message") if isinstance(alert, dict) else None
+        if not isinstance(message, str) or (prefix := message.find(_EXTERNALS_ALERT)) == -1:
+            continue
+        # The first `[` after the prefix. A name can contain brackets, as in
+        # ``core::ptr::drop_in_place<[solana_account_info::AccountInfo; 3]>``.
+        start, end = message.find("[", prefix), message.rfind("]")
+        if start == -1 or end < start:
+            continue
+        found.update(_split_top_level(message[start + 1 : end]))
+    return tuple(sorted(found))
+
+
+def _split_top_level(names: str) -> list[str]:
+    """Split a comma-separated list of demangled names on the commas outside ``<>`` and ``()``.
+
+    Generic arguments carry their own commas, as in
+    ``core::ptr::drop_in_place<core::result::Result<(),anchor_lang::error::Error>>``.
+    """
+    parts: list[str] = []
+    depth, start = 0, 0
+    for i, c in enumerate(names):
+        if c in "<([":
+            depth += 1
+        elif c in ">)]":
+            depth -= 1
+        elif c == "," and depth == 0:
+            parts.append(names[start:i])
+            start = i + 1
+    parts.append(names[start:])
+    return [p.strip() for p in parts if p.strip()]
+
+
 class NoTreeViewResultError(RuntimeError):
     def __init__(self, where: Path):
         super().__init__(f"No tree views found in {where}")

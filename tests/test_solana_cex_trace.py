@@ -15,7 +15,7 @@ import json
 import re
 from pathlib import Path
 
-from composer.prover.ptypes import IncompleteCheck, PropertyViolation, classify_violation
+from composer.prover.ptypes import LoopUnwound, OverflowUnproven, PropertyViolation, classify_violation
 from composer.prover.results import (
     EVM_TRACE,
     GENERIC_TRACE,
@@ -147,7 +147,7 @@ def test_a_loop_bound_the_prover_could_not_discharge_is_not_a_property_violation
     program: the other is the prover reporting that it stopped."""
     loop = counterexample(_loop_unwinding_dump(), SOLANA_TRACE)
     match classify_violation(loop):
-        case IncompleteCheck(assertion=assertion):
+        case LoopUnwound(assertion=assertion):
             assert assertion.startswith("Unwinding condition in a loop")
         case other:
             raise AssertionError(f"loop bound classified as {other}")
@@ -168,7 +168,7 @@ def test_the_sound_math_pass_reporting_its_own_limit_is_not_a_property_violation
         SOLANA_TRACE,
     )
     match classify_violation(cex):
-        case IncompleteCheck(assertion=assertion):
+        case OverflowUnproven(assertion=assertion):
             assert assertion.startswith("Cannot overflow")
         case other:
             raise AssertionError(f"sound-math assertion classified as {other}")
