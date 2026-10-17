@@ -455,6 +455,36 @@ class TrivialFanoutCexHandler(CexHandler):
         return report
 
 
+class UnanalyzedCexHandler(CexHandler):
+    """Renders each rule's status and counterexample dump as text.
+
+    For a caller that is not an agent: a gate that checks verdicts against a
+    file, a plumbing test, a CLI that only wants the outcomes. ``run_prover``
+    otherwise runs an LLM through the handler.
+
+    The dump is included as text. ``flat_rule_feedback.j2`` says the analysis
+    found nothing when it is given no explanation, which would misdescribe a
+    run that did not ask for one.
+    """
+
+    @override
+    async def analyze(
+        self,
+        all_results: list[RuleResult],
+        tool_call_id: str,
+        callbacks: CexProgressCallbacks,
+        report_dir: Path,
+    ) -> str:
+        lines: list[str] = []
+        for r in all_results:
+            lines.append(f"{r.name}: {r.status}")
+            for message in r.error_messages or ():
+                lines.append(f"  {message}")
+            if r.cex_dump:
+                lines.append(f"  {r.cex_dump}")
+        return "\n".join(lines)
+
+
 # Compatibility alias for the legacy name. New code should reach for
 # TrivialFanoutCexHandler directly; the agentic codegen handler lives
 # elsewhere.
