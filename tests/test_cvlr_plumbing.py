@@ -14,6 +14,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from langgraph.store.memory import InMemoryStore
 
 from composer.cargo.manifest import Dependency, MalformedManifest, parse_manifest
 from composer.cargo import metadata
@@ -48,8 +49,15 @@ from composer.cargo.sbf import (
     write_build_script,
 )
 from composer.cargo.session import CargoSession, CompileFailed
+from composer.diagnostics.timing import (
+    RunSummary,
+    install_run_summary,
+    set_current_task_id,
+)
 from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.prover import Submission, write_submission
+from composer.spec.cvlr.verify import CexAnalysis, _CaptureCallbacks, _RunAccounting
+from composer.spec.source.cex_capture import CexAnalysisStore
 
 
 # --------------------------------------------------------------------------------------------
@@ -848,3 +856,65 @@ def test_a_failed_compile_carries_the_compilers_own_words():
     failed = CompileFailed(diagnostics="error[E0599]: no method named `cvlr_assert`", exit_code=101)
     assert not isinstance(failed, Built)
     assert "E0599" in failed.diagnostics
+
+
+@pytest.mark.asyncio
+async def test_a_prover_run_is_accounted_for():
+    """Link, runtime, and wall clock are recorded from the prover callbacks.
+
+    ``ProverCallbacks`` defaults do nothing, so a subclass that overrides only
+    some events records none of these.
+    """
+    summary = RunSummary()
+    install_run_summary(summary)
+    callbacks = _RunAccounting()
+
+    # The link and the runtime land on the active task's phase record.
+    with set_current_task_id("verify-deposits"):
+        await callbacks.on_prover_run(["certoraSolanaProver", "run.conf"])
+        await callbacks.on_prover_link("https://prover.certora.com/output/1/2")
+        await callbacks.on_prover_runtime(4200)
+        await callbacks.on_prover_result({})
+    summary.record_phase(
+        task_id="verify-deposits", label="deposits", phase="formalization",
+        wall_s=90.0, queue_wait_s=0.0,
+    )
+
+    assert summary.prover_usage_summary()["total_ms"] == 4200
+    assert summary.prover_total_calls == 1
+    assert summary.phases[0].final_link == "https://prover.certora.com/output/1/2"
+    assert summary.phases[0].prover_reported_ms == 4200
+
+
+@pytest.mark.asyncio
+async def test_capturing_evidence_does_not_replace_the_accounting():
+    """Capturing counterexamples still records the prover call.
+
+    ``_CaptureCallbacks`` overrides ``on_prover_result``, which is also where
+    the wall-clock tally is taken.
+    """
+    summary = RunSummary()
+    install_run_summary(summary)
+    callbacks = _CaptureCallbacks(CexAnalysisStore(store=InMemoryStore(), namespace=("t",)))
+
+    await callbacks.on_prover_run([])
+    await callbacks.on_prover_result({})
+
+    assert summary.prover_total_calls == 1
+
+
+def test_counterexamples_are_explained_on_the_authors_bound_model():
+    """Counterexample analysis uses the model the author's graph bound.
+
+    There is no default. The handler is unavailable until that model is bound.
+    """
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+    analysis = CexAnalysis(store=CexAnalysisStore(store=InMemoryStore(), namespace=("t",)))
+    state = {"messages": []}
+    with pytest.raises(RuntimeError, match="before the author's graph was built"):
+        analysis.handler(state)  # type: ignore[arg-type]
+
+    bound = FakeListChatModel(responses=["x"])
+    analysis.model.bind(bound)
+    assert analysis.handler(state).llm is bound  # type: ignore[arg-type, attr-defined]
