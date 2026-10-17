@@ -33,7 +33,8 @@ from graphcore.tools.schemas import WithAsyncImplementation
 from composer.input.files import Document, FileUploader
 from composer.io.context import emit_custom_event
 from composer.io.multi_job import HandlerFactory, HasName, TaskInfo, run_task
-from composer.spec.context import CacheKey, WorkflowContext, SourceFields
+from composer.spec.context import CacheKey, DesignDocProvenance, WorkflowContext, SourceFields
+from composer.spec.types import DesignDocOrigin
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.service_host import ModelProvider
@@ -292,12 +293,13 @@ async def resolve_design_doc[P: HasName](
     uploader: FileUploader,
     models: ModelProvider,
     disc_ctx: WorkflowContext[None],
-) -> pathlib.Path | None:
-    """Resolve the design document to a path, or ``None`` for a source-only run.
+) -> DesignDocProvenance | None:
+    """Resolve the design document, or ``None`` for a source-only run.
 
     Run the finder under a ``run_task`` discovery phase. If it finds a document,
-    return its path (which feeds the byte-hash root cache key, so a discovered doc
-    and a supplied doc produce an identical key). If it finds nothing, return
+    return its path together with the finder's reason for the choice. The path feeds
+    the byte-hash root cache key, so a discovered doc and a supplied doc produce an
+    identical key. If it finds nothing, return
     ``None`` instead of failing: the pipeline degrades to source-only, deriving the
     component breakdown from the source code alone. ``_discover`` has already
     surfaced the source-only downgrade to the user via ``_emit_choice``.
@@ -311,5 +313,8 @@ async def resolve_design_doc[P: HasName](
     )
     if choice.selected_path is None:  # None *is* "no doc found" → source-only
         return None
-    path = pathlib.Path(source.project_root) / choice.selected_path
-    return path
+    return DesignDocProvenance(
+        path=pathlib.Path(source.project_root) / choice.selected_path,
+        origin=DesignDocOrigin.DISCOVERED,
+        reason=choice.reason,
+    )
