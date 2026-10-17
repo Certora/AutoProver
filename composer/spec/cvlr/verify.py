@@ -1,20 +1,26 @@
-"""The gate tools: a host compile, and the prover run that stamps the draft.
+"""The author's gate tools: a host compile, and the prover run that stamps the draft.
 
 * ``cargo_check`` compiles on the host target, confined, in seconds. It is not
   a required stamp. A prover run builds first and reports a compiler error
   without submitting (:class:`~composer.spec.cvlr.prover.BuildRejected`).
-* ``verify_rules`` builds for the chain, submits, and stamps the draft when
-  every rule it declares verified.
+* ``verify_rules`` builds for the chain, submits, and stamps the draft's
+  digest when every rule is accounted for.
+
+A rule marked as an expected failure is left out of the all-green check. On
+this backend a failing rule is often a finding: the property holds as written
+and the program violates it. The marking records that claim.
 """
 
 import asyncio
 import dataclasses
 import logging
+import subprocess
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator, Mapping, override
+from typing import AsyncIterator, Mapping, Sequence, override
 
+from elftools.common.exceptions import ELFError
 from langchain_core.tools import BaseTool
 
 from graphcore.graph import LLM, tool_return, tool_state_update
@@ -28,7 +34,9 @@ from graphcore.tools.schemas import (
 from composer.authoring.state import ValidationStamper
 from composer.diagnostics.timing import get_run_summary
 from composer.cargo.features import CargoFeature
+from composer.cargo.sbf import Built, SbfRun
 from composer.cargo.session import CargoSession, CompileFailed, Compiled
+from composer.cargo.symbols import SymbolsUnavailable, defined_functions, nearest, unmatched
 from composer.prover.core import (
     CexHandler,
     ProverCallbacks,
@@ -38,6 +46,8 @@ from composer.prover.core import (
 )
 from composer.prover.ptypes import (
     IncompleteCheck,
+    LoopUnwound,
+    OverflowUnproven,
     PropertyViolation,
     RuleResult,
     classify_violation,
@@ -55,9 +65,16 @@ from composer.spec.cvlr.prover import (
 )
 from composer.spec.cvlr.harness import HarnessModule
 from composer.spec.cvlr.rules import rule_names
-from composer.spec.cvlr.state import CvlrGenerationState
+from composer.spec.cvlr.author_tools import AdjustProverConfig, SummarizeForProver, unaccounted
+from composer.spec.cvlr.state import (
+    CvlrGenerationState,
+    LastVerdicts,
+    tuning_history,
+)
 from composer.spec.cvlr.tree import SharedTree, UnitEdits
+from composer.spec.cvlr.tuning import SummaryDirective, TuningFiles
 from composer.spec.source.cex_capture import CexAnalysisStore
+from composer.spec.types import CheckName
 from composer.ui.tool_display import tool_display
 
 _log = logging.getLogger(__name__)
@@ -104,6 +121,7 @@ class HarnessTarget:
     module_path: Path
     package: str
     package_root: Path
+    tuning: TuningFiles
     #: The module name the tree keys edits by, and the cargo feature that selects
     #: this unit.
     unit: HarnessModule
@@ -148,15 +166,31 @@ class HarnessTarget:
         finally:
             permit.release()
 
-    async def stage(self, draft: str) -> None:
-        """Write ``draft`` into this unit's module.
+    async def stage(
+        self,
+        draft: str,
+        summaries: Sequence[SummaryDirective] = (),
+        overlay: Mapping[str, str] = {},
+    ) -> None:
+        """Make the tree match this unit's state.
+
+        The draft, the summaries, and the source overlay are all inputs to the
+        build. Each is taken from already-merged state, so two concurrent calls
+        cannot each write their own view.
+
+        The summaries file is rewritten from ``summaries`` even when that is
+        empty. The composite the conf names has to exist, and a directive
+        dropped from state has to leave the file. The overlay replaces this
+        unit's edited files
+        (:meth:`composer.spec.cvlr.tree.SharedTree.reconcile`).
 
         Call it while holding :meth:`build_slot`. That permit keeps two units
-        out of the tree at once.
+        out of the tree at once, and keeps a sibling's edits out of this build.
         """
+        self.tuning.write(tuple(summaries))
         await self.tree.reconcile(
             self.unit.module,
-            UnitEdits(module_path=self.module_path, draft=draft),
+            UnitEdits(module_path=self.module_path, draft=draft, overlay=overlay),
         )
 
 
@@ -214,10 +248,10 @@ class _RunAccounting(ProverCallbacks):
 class _CaptureCallbacks(_RunAccounting):
     """Stores analyses of violated rules for the report.
 
-    The handler explains every violated rule. This callback records evidence.
-    An :class:`~composer.prover.ptypes.IncompleteCheck` is not evidence about
-    the program. Recording one would let a later pass treat the prover's limit
-    as a bug in the program.
+    The handler explains every violated rule to the author, including an
+    unwound loop bound. This callback records evidence. An
+    :class:`IncompleteCheck` is not evidence about the program. Recording one
+    would let a later pass treat the prover's limit as a bug in the program.
     """
 
     def __init__(self, store: CexAnalysisStore) -> None:
@@ -229,7 +263,8 @@ class _CaptureCallbacks(_RunAccounting):
     def incomplete(self) -> Mapping[str, IncompleteCheck]:
         """Rules from the last run that stopped on an assertion the prover generated.
 
-        The counterexample does not survive into
+        The gate reports these separately from a rule whose own assertion
+        failed. The counterexample does not survive into
         :class:`~composer.prover.core.ProverReport`, which carries statuses
         only, so the classification is kept here.
         """
@@ -276,10 +311,14 @@ class _CaptureCallbacks(_RunAccounting):
 
 
 class AuthorModel:
-    """The model a counterexample analysis continues a conversation on.
+    """The author's model, including the tools the author's graph binds.
 
-    The graph that owns the conversation binds it once that graph exists.
-    Analysis before then has no model to call.
+    A counterexample analysis continues the author's conversation. It has to
+    use the author's tools, system prompt, and settings. Those come first in
+    the request, and a difference misses the provider's prompt cache.
+
+    The graph binds the model when it is built, after the tools that need it
+    exist. The author calls :meth:`bind` once the graph exists.
     """
 
     def __init__(self) -> None:
@@ -299,8 +338,8 @@ class AuthorModel:
 class CexAnalysis:
     """Explains a violated rule and stores that explanation.
 
-    Built per unit. The handler is built per call: it reads the current
-    conversation and uses the bound model.
+    Built per unit. The handler is built per call: it reads the author's
+    current conversation, and it uses the author's model.
     """
 
     store: CexAnalysisStore
@@ -334,6 +373,93 @@ class VerifyDeps:
     lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
 
 
+def _incomplete_advice(stopped: IncompleteCheck) -> str:
+    match stopped:
+        case LoopUnwound():
+            return (
+                "A loop needed more iterations than the bound unrolls. Constrain what determines "
+                "the trip count, summarize the loop if it is not what your property is about, or "
+                "skip the property and say what bound it needed."
+            )
+        case OverflowUnproven():
+            return (
+                "`Cannot overflow` is the sound-math pass failing to show that an expression it "
+                "takes for a pointer stays below 2^64, almost always because a value the rule reads "
+                "from an account (a balance, an amount) is free to sit just below u64::MAX. Bound "
+                "the account-data values on that rule's path — `cvlr_assume!(x < 1 << 63)` is "
+                "enough — and record each bound as an assumption. A property about the top of the "
+                "range cannot take the bound: skip it and say so."
+            )
+        case _:
+            return "The prover's own message says what it needed."
+
+
+def _incomplete_note(incomplete: Mapping[str, IncompleteCheck]) -> str:
+    named = "\n".join(
+        f"  {name}: {stopped.assertion}" for name, stopped in sorted(incomplete.items())
+    )
+    advice = "\n".join(dict.fromkeys(_incomplete_advice(s) for _, s in sorted(incomplete.items())))
+    return (
+        "These rules stopped on an assertion the prover generated rather than one of yours, so "
+        f"they never reached their property:\n{named}\n"
+        f"Nothing here is a statement about the program. {advice}\n"
+        "Do not mark one of these with expect_rule_failure: that claims a real defect, and none "
+        "has been shown."
+    )
+
+
+def _externals_note(externals: Sequence[str]) -> str | None:
+    """Text for the author about functions this run treated as external, or None.
+
+    Not a gate. The starting configuration leaves most platform code external,
+    and the author cannot add inlining directives. Where the program's own
+    code makes the call, the message tells the author how to bound the value
+    with a stand-in.
+
+    Inlining that platform code is often worse. Stake activation loops once
+    per epoch over a sysvar, in ``f64``, and the rule comes back vacuous on
+    the unwinding assertion.
+    """
+    if not externals:
+        return None
+    _log.info("prover treated %d function(s) as external: %s", len(externals), ", ".join(externals))
+    listed = "\n".join(f"  {name}" for name in externals)
+    return (
+        "The prover treated these functions as external, neither analyzed nor summarized:\n"
+        f"{listed}\n"
+        "An external call returns an arbitrary value and writes nothing else, so any state it "
+        "would change keeps its old value, and one that returns its result through memory may "
+        "never succeed, which leaves the code after it unreachable. None of this shows in a "
+        "verdict. You cannot add inlining directives.\n"
+        "If a rule's property depends on the value one of these computes, and the program's own "
+        "code makes the call, you can bound the value instead of losing it. Ask `code_editor` to "
+        "extract the call into a function of its own (an extraction), then to replace that "
+        "function with a stand-in you write (`mock_fn`) that returns `nondet()` values constrained "
+        "by what the real function guarantees, such as a result no larger than its input. Use "
+        "only bounds the real function provably keeps: a tighter one can pass a rule the program "
+        "fails. Name the stand-in in `rule_subjects`. Otherwise say so in the rule's commentary, "
+        "drive the program's own code below the call, or skip the property."
+    )
+
+
+def _unverdicted(declared: Sequence[str], status: Mapping[str, bool]) -> list[str]:
+    """Declared rules the report gave no verdict for.
+
+    The verdict roll-up only sees rules the report names. A missing rule would
+    otherwise leave "every rule is accounted for" true.
+    """
+    return sorted(set(declared) - status.keys())
+
+
+def _wrongly_expected(status: dict[str, bool], expected_failures: dict[CheckName, str]) -> list[str]:
+    """Rules marked as expected failures that verified.
+
+    A rule the author said exposed a bug, and which passes, means the bug is
+    gone or the rule does not test for it.
+    """
+    return sorted(name for name in expected_failures if status.get(name) is True)
+
+
 @tool_display("Compiling the harness", "Compile")
 class CargoCheck(
     WithInjectedState[CvlrGenerationState],
@@ -357,7 +483,7 @@ class CargoCheck(
             return "No harness written yet — put a draft first."
         with self.tool_deps() as target:
             async with target.build_slot():
-                await target.stage(draft)
+                await target.stage(draft, self.state["summaries"], self.state["vfs"])
                 run = await target.session.check(
                     manifest_dir=target.package_dir, features=target.features
                 )
@@ -376,13 +502,18 @@ class CargoCheck(
                 )
 
 
-def _submission_for(deps: VerifyDeps, rules: tuple[str, ...] | list[str]) -> Submission:
-    """The unit's submission, checking ``rules`` under the submission's conf.
+def _submission_for(
+    deps: VerifyDeps, state: CvlrGenerationState, rules: Sequence[str]
+) -> Submission:
+    """The unit's submission, checking ``rules`` under the current prover settings.
 
-    A conf with no ``rule`` entry makes the cloud job end in FAILED, with no
-    report.
+    The settings come from state. A submission built from the run's starting
+    copy would send the old settings while ``version_history`` recorded the
+    new ones.
     """
-    return dataclasses.replace(deps.submission, rules=SelectRules(tuple(rules)))
+    return dataclasses.replace(
+        deps.submission, rules=SelectRules(tuple(rules)), settings=state["prover_settings"]
+    )
 
 
 async def _stage_and_submit(
@@ -395,9 +526,7 @@ async def _stage_and_submit(
     cex: CexHandler,
     tool_call_id: str,
 ) -> CvlrOutcome:
-    """Stage ``draft``, build it, and submit it.
-
-    ``state`` is the unit's graph state. The draft is the only input staged.
+    """Stage ``draft`` with the unit's summaries and edits, build it, and submit it.
 
     One build permit is held until the Prover has uploaded. ``run_submission``
     rebuilds the crate into the shared target directory and uploads that
@@ -410,7 +539,7 @@ async def _stage_and_submit(
     behind that sibling's feature.
     """
     async with deps.target.build_slot() as permit:
-        await deps.target.stage(draft)
+        await deps.target.stage(draft, state["summaries"], state["vfs"])
         prepared = await prepare_submission(
             deps.target.session, submission, into=deps.submissions
         )
@@ -437,7 +566,11 @@ class VerifyRules(
     """Build the program with the harness and check its rules with the Certora Solana Prover.
 
     This takes minutes and spends prover time. Get ``cargo_check`` green first.
-    When every rule the draft declares verified, it stamps that draft.
+    On success it stamps the current draft, which ``result`` requires.
+
+    A failing rule is not always a bad rule. If it exposes a real defect, mark
+    it with ``expect_rule_failure`` and say why. Marked rules are excluded from
+    this gate, so a run can finish with a real violation still in it.
     """
 
     @override
@@ -468,20 +601,65 @@ class VerifyRules(
                     deps,
                     self.state,
                     draft,
-                    _submission_for(deps, declared),
+                    _submission_for(deps, self.state, declared),
                     callbacks=capture if capture is not None else _RunAccounting(),
                     cex=analysis.handler(self.state) if analysis else UnanalyzedCexHandler(),
                     tool_call_id=self.tool_call_id,
                 )
-            return self._report(outcome, deps, declared=declared)
+            return self._report(
+                outcome,
+                deps,
+                capture.incomplete if capture is not None else {},
+                declared=declared,
+            )
+
+    def _inert_summaries(self, build: SbfRun) -> str | None:
+        """A note naming summary directives this build's symbols do not match, or None.
+
+        A summary is a regex over demangled names. One that matches nothing
+        changes nothing, and the prover reports no diagnostic. A symbol the
+        compiler inlined away is absent from the build, so no spelling of it
+        matches.
+
+        Returns None when the symbols cannot be read. An unreadable artifact is
+        a different failure from a directive that matched nothing.
+        """
+        directives = tuple(d.pattern for d in self.state["summaries"])
+        if not directives or not isinstance(build.verdict, Built):
+            return None
+        try:
+            symbols = defined_functions(build.verdict.manifest.artifact)
+        except (SymbolsUnavailable, ELFError, OSError, subprocess.CalledProcessError):
+            _log.warning("could not read symbols to check summary directives", exc_info=True)
+            return None
+        missed = unmatched(directives, symbols)
+        if not missed:
+            return None
+        lines = [
+            f"{len(missed)} of your {len(directives)} summary directive(s) match no symbol in this "
+            "build, so they had no effect:"
+        ]
+        for pattern in missed:
+            lines.append(f"  {pattern}")
+            for suggestion in nearest(pattern, symbols):
+                lines.append(f"      this build does define: {suggestion}")
+        lines.append(
+            "A symbol absent from the build is usually one the compiler inlined away, and no "
+            "spelling of it will match. Summarize a symbol that is there — the callee one level "
+            "out is the usual answer."
+        )
+        return "\n".join(lines)
 
     def _report(
         self,
         outcome: CvlrOutcome,
         deps: VerifyDeps,
+        incomplete: Mapping[str, IncompleteCheck],
         *,
-        declared: tuple[str, ...] | list[str],
+        declared: Sequence[str],
     ) -> Command | str:
+        stamper = deps.stamper
+        expected = self.state["expected_failures"]
         match outcome:
             case BuildRejected(build=build):
                 # Nothing was submitted. The message is the compiler's text from
@@ -496,34 +674,74 @@ class VerifyRules(
                     self.tool_call_id,
                     f"The chain build failed, so nothing was submitted:\n{said}",
                 )
-            case SubmissionFailed(reason=reason):
-                return tool_return(
-                    self.tool_call_id,
-                    f"The prover run did not produce results: {reason}",
-                )
-            case Checked(report=report):
+            case SubmissionFailed(build=build, reason=reason):
+                said = [f"The prover run did not produce results: {reason}"]
+                if (inert := self._inert_summaries(build)) is not None:
+                    said.append(inert)
+                return tool_return(self.tool_call_id, "\n\n".join(said))
+            case Checked(build=build, report=report):
                 status = report.rule_status
-                not_verified = [name for name in declared if status.get(name) is not True]
-                if not_verified:
+                unexcused = unaccounted(status, expected, incomplete)
+                unverdicted = _unverdicted(declared, status)
+                surprising = _wrongly_expected(status, expected)
+                lines = [report.result_str]
+                if (inert := self._inert_summaries(build)) is not None:
+                    lines.append(inert)
+                if surprising:
+                    lines.append(
+                        "These rules are marked as expected failures but VERIFIED: "
+                        f"{', '.join(surprising)}. Either the defect is not there, or the rule does "
+                        "not test for it — resolve that before publishing."
+                    )
+                if incomplete:
+                    lines.append(_incomplete_note(incomplete))
+                if unverdicted:
+                    lines.append(
+                        f"No verdict came back for: {', '.join(unverdicted)}. The prover's report "
+                        "does not name them, so they have not been checked, and this draft cannot "
+                        "be stamped until they are. Run verify_rules again; if they are still "
+                        "missing, the run's link is where to look."
+                    )
+                if unexcused:
+                    lines.append(
+                        f"Not accounted for: {', '.join(unexcused)}. Fix the rule, or mark it "
+                        "with expect_rule_failure and say why the failure is real."
+                    )
+                if (externals := _externals_note(report.external_functions)) is not None:
+                    lines.append(externals)
+                last = LastVerdicts(
+                    status=status,
+                    incomplete=sorted(incomplete),
+                    unverdicted=unverdicted,
+                    stamp=stamper(self.state, tuning_history(self.state)),
+                )
+                if unexcused or unverdicted:
                     return tool_state_update(
                         self.tool_call_id,
-                        f"{report.result_str}\n\nNot verified: {', '.join(not_verified)}.",
+                        "\n\n".join(lines),
                         prover_link=report.link,
+                        external_functions=report.external_functions,
+                        last_verdicts=last,
                     )
                 return tool_state_update(
                     self.tool_call_id,
-                    f"{report.result_str}\n\nEvery declared rule verified. This draft is stamped.",
+                    "\n\n".join([*lines, "Every rule is accounted for. This draft is stamped."]),
                     prover_link=report.link,
-                    validations=deps.stamper(self.state),
+                    external_functions=report.external_functions,
+                    last_verdicts=last,
+                    validations=last.stamp,
                 )
 
 
 def gate_tools(target: HarnessTarget, deps: VerifyDeps) -> list[BaseTool]:
-    """The tools that compile a draft and submit it.
+    """The gate tools, and the tool that changes what they check.
 
-    Neither tool edits the program.
+    No tool here edits the program. The author gets ``code_editor`` and the
+    edit-history tools, bound with the rest of its tools.
     """
     return [
         CargoCheck.bind(target).as_tool("cargo_check"),
         VerifyRules.bind(deps).as_tool("verify_rules"),
+        SummarizeForProver.bind(target.tuning).as_tool("summarize_for_prover"),
+        AdjustProverConfig.as_tool("adjust_prover_config"),
     ]
