@@ -10,12 +10,10 @@ The fastest way from a clean clone to a working run. Everything — Python deps,
 git clone --recurse-submodules git@github.com:Certora/AutoProver.git
 cd AutoProver
 
-# Cloud Certora Prover credentials + Claude key (see the table below).
-export ANTHROPIC_API_KEY=sk-... CERTORAKEY=...
-
-# Results come back on an organization API key, or on a one-time login
+# Claude key, plus one Certora organization API key under both names.
+export ANTHROPIC_API_KEY=sk-...
 export CERTORA_API_KEY=...
-# ...or: uv tool install certora-cloud && certora-cloud login
+export CERTORAKEY=$CERTORA_API_KEY
 
 # A ready-to-run example project (public).
 git clone https://github.com/Certora/AutoProverExamples.git
@@ -64,11 +62,7 @@ of failing, and the CI pyright job runs this way.
 
 ### Certora Prover
 
-**Cloud mode (the default):** Two credentials are needed. `CERTORAKEY` (set in your environment) authenticates `certoraRun` when it submits prover jobs. The job *results* are fetched either with an organization API key or with the credentials produced by a login.
-
-An organization API key is the simpler of the two and the only one that works unattended: export `CERTORA_API_KEY` (or `CERTORA_API_KEY_PROD`/`_STG`/`_DEV` to scope it to one environment) and nothing else is needed. Create the key on the organization's **API** page with **Use Certora Prover** ticked, or results come back `403 insufficient_scope`.
-
-Otherwise, log in: install the public CLI (`uv tool install certora-cloud`) and run it once (`certora-cloud login`); it writes `~/.certora/credentials.json`, which is read automatically. Exporting `CERTORA_USER`/`CERTORA_TOKEN`/`CERTORA_REFRESH_TOKEN` instead is an optional override.
+**Cloud mode (the default):** One organization API key does both halves. Create it on the organization's **API** page with **Use Certora Prover** ticked, then export it as `CERTORA_API_KEY`, which fetches job results, and as `CERTORAKEY`, which is the variable `certoraRun` reads when it submits jobs.
 
 **Local mode:** You need a full local Prover build from https://github.com/Certora/CertoraProver. From the Prover repo root, run `./gradlew copy-assets` and set `CERTORA` to point to `CertoraProver/target`. (N.B. Local mode is not yet wired through the `scripts/autoprove` Docker wrapper.)
 
