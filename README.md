@@ -10,10 +10,8 @@ The fastest way from a clean clone to a working run. Everything — Python deps,
 git clone --recurse-submodules git@github.com:Certora/AutoProver.git
 cd AutoProver
 
-# Claude key, plus one Certora organization API key under both names.
-export ANTHROPIC_API_KEY=sk-...
-export CERTORA_API_KEY=...
-export CERTORAKEY=$CERTORA_API_KEY
+# Claude key, plus your Certora organization API key.
+export ANTHROPIC_API_KEY=sk-... CERTORAKEY=...
 
 # A ready-to-run example project (public).
 git clone https://github.com/Certora/AutoProverExamples.git
@@ -62,7 +60,7 @@ of failing, and the CI pyright job runs this way.
 
 ### Certora Prover
 
-**Cloud mode (the default):** One organization API key does both halves. Create it on the organization's **API** page with **Use Certora Prover** ticked, then export it as `CERTORA_API_KEY`, which fetches job results, and as `CERTORAKEY`, which is the variable `certoraRun` reads when it submits jobs.
+**Cloud mode (the default):** One organization API key in `CERTORAKEY` submits the jobs and fetches their results. Create it on the organization's **API** page with **Use Certora Prover** ticked.
 
 **Local mode:** You need a full local Prover build from https://github.com/Certora/CertoraProver. From the Prover repo root, run `./gradlew copy-assets` and set `CERTORA` to point to `CertoraProver/target`. (N.B. Local mode is not yet wired through the `scripts/autoprove` Docker wrapper.)
 
