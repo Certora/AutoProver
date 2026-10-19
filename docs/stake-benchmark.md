@@ -552,9 +552,119 @@ used. It has the same 18 instructions as the snapshot.
 **What it costs.** `main` is a new project root, so no cache from the snapshot carries over.
 Discovery, analysis and extraction are paid again, under the cache namespace `stake-main`.
 
-**The run, set up and not launched.** The worktree is `~/src/stake-benchmark/run-main`, on branch
-`eric/autoprover-main` of the local stake checkout, clean at `bed72d0`; AutoProver scaffolds it
-itself. `~/src/stake-benchmark/run-main.sh <budget>` launches it. It withholds `cvlr-solana-stake`,
-as every run here has, and writes the extraction pin beside the log. The budget is a required
-argument. The third run spent its $600, and this one formalizes a shared protocol unit as well.
+**The run.** The worktree is `~/src/stake-benchmark/run-main`, on branch `eric/autoprover-main` of
+the local stake checkout, clean at `bed72d0`; AutoProver scaffolds it itself. It withholds
+`cvlr-solana-stake`, as every run here has. `run-main.sh <budget>` launches it on the host. The run
+below went through the Solana container instead, on a copy of the worktree, so that it would double
+as the alpha's container check.
+
+## The fourth run, on `main`, 2026-10-16
+
+`feature/solana` at `ed4ad526`, in the Solana container as the host UID, with a **$600** budget,
+cache namespace `stake-main` and `--withhold-crate cvlr-solana-stake`. It ran for **20 hours 58
+minutes** and exited 0. Priced from its token totals it cost **$454–525** (6.55M output tokens,
+362M cache reads), and the run's own accounting reached the cap. The log, the extraction pin
+(`pin-main-2026-10-16.json`), the deliverables and the failed jobs' archives are in
+`~/src/stake-benchmark/run-main-2026-10-16-output/` and `run-main-2026-10-16.out`.
+
+| unit | properties | rules | formalization |
+|---|---|---|---|
+| Protocol invariants (shared) | 16 of 19 | 117 | 8h 02m |
+| Account Initialization | 5 of 5 | 10 | 2h 58m |
+| Authority Management | 7 of 7 | 29 | 3h 54m |
+| Lockup Management | 7 of 7 | 21 | 11h 08m |
+| Delegation & Deactivation | 12 of 13 | 18 | 13h 50m |
+| Split & Merge | 8 of 10 | 9 | 6h 38m |
+| Stake & Lamport Movement | 9 of 9 | 16 | 10h 37m |
+| Protocol Parameters / Queries | 5 of 5 | 11 | 15h 33m |
+| Withdrawals | curtailed by budget | partial | 20h 30m |
+
+Rules count once per property they cover; the report holds **145 distinct rules, all verified**,
+no findings, 6 properties skipped with reasons and 8 program edits. The hoist folded 66 component
+properties into the 19 protocol-wide ones before formalization. Formalization times include waiting
+for a slot, since units ran four at a time, and Prover jobs were most of the rest.
+
+**Graded against the criteria at the top:**
+
+1. **Machinery survival: yes, on SDK 3.** Preflight read the workspace and passed the confined
+   compile gate in 4 seconds. The scaffold forwarded `certora` into `solana-stake-interface`, and 4
+   of the 8 units' program edits reach into the interface crate.
+2. **Non-vacuity: not established.** Every rule passed its sanity check, but see *What to check
+   before trusting the conservation rules* below.
+3. **The rubric:** each item has a verified property. Lamport conservation is
+   `lamports_conserved_by_every_handler` (18 rules); `delegation.stake + rent_exempt_reserve <=
+   lamports` is `live_stake_accounts_rent_exempt_and_delegation_lamport_backed` (17 rules);
+   staker-versus-withdrawer separation is Authority Management's
+   `staker_reassignment_requires_staker_or_withdrawer_signature` and
+   `withdrawer_reassignment_requires_withdrawer_signature`; lockup on `Withdraw` is
+   `in_force_lockup_blocks_withdrawal_and_withdrawer_change`.
+4. **Seeded mutants: not run.**
+
+**On the expert review's points.** Point 1 did not arise, as predicted: no unit rewrote around
+`Clock` or `Rent`. Point 2's bounds are there as integer properties:
+`warmup_cooldown_schedule_never_overstates_effective_stake`, `deactivation_epoch_set_at_most_once`
+and `delegate_never_grants_instant_effective_stake`. Point 3 is not graded here. The third run's main
+finding does not recur: `main` rejects a source equal to the destination in every two-account
+handler (`processor.rs:240`, `:502`, `:758`, `:934`), and the hoisted
+`source_equal_to_destination_rejected_by_all_two_account_handlers` verifies.
+
+**The six skips.** Each names what blocked it, not merely that it was hard. The Prover treats the
+`sol_get_epoch_rewards_sysvar` syscall as external, so the rewards gate cannot be stated. Two
+acceptance properties need authorization by signer-set membership, which the model leaves
+unconstrained. Redelegate's "permanently dead" needs the dispatcher. Two Split & Merge properties
+are about handler-level validation or side effects, with no function below the handler to restate
+them on, which is the overflow advice's fallback working as intended.
+
+### What the Prover did to the run
+
+Of 93 Prover calls, **11 ended FAILED and 18 HALTED** at the 25-minute global timeout. At least two
+halts were the authors' own probe jobs of four and five rules.
+
+- **Four FAILED jobs were a Prover crash on `Clock::get()`**, "TAC Clock::get expected to extract 5
+  TAC variables from call sol_get_clock_sysvar" (upstream-defects P15): Lockup Management, twice
+  Delegation & Deactivation, and Protocol Parameters / Queries. The last harness never calls
+  `Clock::get()` itself, so the program's own calls trigger it too.
+- **At least three were pointer-analysis failures in Lockup Management's rules**, `[3308] illegal
+  dereference of an absolute address` and `[3003] dereference of a register with unknown provenance`,
+  on `rule_custodian_cannot_delegate`, `rule_lockup_does_not_block_delegate` and
+  `rule_custodian_cannot_withdraw`. These reasons are only in the archive's `Results.txt`, not its
+  `alertReport.json`.
+- **The authors saw neither.** A FAILED job reaches the author as its status and a link, so Lockup
+  resubmitted rules of the same kind three times. Passing the archive's errors to the author is the
+  fix, and it has to read both files.
+- **9 "Cannot overflow: inferred pointer" stops** (P12), 5 of them in Withdrawals. The authors bound
+  once and moved on, as the prompt now says. `rule_probe_withdraw_bounded` is the bound failing,
+  which matches the probes in P12.
+- 11 rules stopped on the loop-unwinding check, 5 of them Account Initialization's first submission.
+
+### What to check before trusting the conservation rules
+
+The curtailed Withdrawals unit wrote, in a skip reason, that **writes a handler makes through
+`AccountInfo` are not observed by reads through the same handles afterwards**. It built three
+positive controls, and all failed:
+
+- a full-balance withdraw whose `resize(0)` left `data_len()` at 200;
+- a partial withdraw that returned `Ok` with both balances unchanged;
+- a `Deactivate` that never reached its assertion, stopping on `set_stake_state`'s loop bound.
+
+If that were true in general, every post-equals-pre rule in this report would verify whatever the
+handler did, and conservation is exactly that shape.
+
+It is probably not general. The same unit had mocked `relocate_lamports` onto a recorder that
+moves nothing, and `get_stake_state` onto a stand-in that reads no bytes, both to get past
+timeouts and an overflow stop. That explains its lamport control, and possibly the others. But the
+claim has not been checked, and the conservation rules in the other units have not been shown to
+observe a write. **Before this run's conservation results are cited, one positive control per unit
+is owed:** a rule that asserts a balance *does* change, which must be violated.
+
+### What it left for AutoProver
+
+- **The patch does not build on its own when the run edited the program.** `certora/cvlr/harness.patch`
+  applies to a clean `bed72d0`, but the harnesses call functions that only the program edits expose
+  (`process_authorize*` made public, a new `certora_entry`), and edits are per unit. The harness
+  patch plus one unit's `cumulative_diff` from the report's `source_edits` builds: checked for
+  Authority Management with `cargo certora-sbf --features "certora unit_authority_management"`.
+  Each unit's edits should be written as a patch beside the harness patch.
+- **FAILED jobs' reasons**, above.
+- U19's dangling fixture symlink does not exist on `main`, so this run did not exercise that fix.
 
