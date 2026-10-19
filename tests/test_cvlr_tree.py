@@ -18,7 +18,7 @@ from composer.cargo.metadata import CratePackage, LibTarget, RegistrySource, Wor
 from composer.layout import INTERNAL_DIR
 from composer.sandbox.recipes import SANDBOX_CARGO_DIR
 
-from composer.spec.cvlr.harness import CvlrArtifactStore, HarnessModule
+from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness, HarnessModule, module_name
 from composer.spec.cvlr.scaffold import declare_unit_features
 from composer.spec.cvlr.tree import (
     NOT_PROJECT_SOURCE,
@@ -344,6 +344,68 @@ def test_every_unit_module_is_gated_on_its_own_feature(tmp_path: Path):
     text = mod_rs.read_text()
     for module in modules:
         assert f'#[cfg(feature = "{module.feature}")]\npub mod {module.module};' in text
+
+
+@pytest.mark.parametrize(
+    ("slug", "expected"),
+    [
+        ("deposit", "deposit"),
+        ("token-transfer", "token_transfer"),
+        ("2fa_check", "spec_2fa_check"),
+        ("_internal", "internal"),
+        # These three came from a real program and drew `non_snake_case` warnings before lowercasing.
+        ("Deposits", "deposits"),
+        ("Vault_Initialization", "vault_initialization"),
+        ("Withdrawals_Fee_Distribution", "withdrawals_fee_distribution"),
+        ("Withdrawals & Fees", "withdrawals_fees"),
+        ("type", "spec_type"),
+        ("Type", "spec_type"),
+        ("match", "spec_match"),
+        ("move", "spec_move"),
+        ("Self", "spec_self"),
+        ("gen", "spec_gen"),
+        # A weak keyword is a legal module name.
+        ("union", "union"),
+    ],
+)
+def test_a_slug_becomes_an_idiomatic_rust_identifier(slug: str, expected: str):
+    """The name is written into someone else's crate, so it has to be snake_case and a legal `pub mod`."""
+    assert module_name(slug) == expected
+
+
+@pytest.mark.parametrize("slug", ["", "---", "___", "!!!"])
+def test_a_slug_with_nothing_left_is_refused(slug: str):
+    with pytest.raises(ValueError, match="no Rust module name"):
+        module_name(slug)
+
+
+@pytest.mark.parametrize(
+    "slugs",
+    [
+        ("Fee-Split", "fee_split"),
+        ("type", "spec_type"),
+        ("2fa_check", "spec_2fa_check"),
+    ],
+)
+def test_two_slugs_that_reduce_to_one_module_are_refused(tmp_path: Path, slugs: tuple[str, str]):
+    """They would share a file, so one harness would overwrite the other and both gates would pass."""
+    store = CvlrArtifactStore(tmp_path, Path("programs/p"))
+    with pytest.raises(ValueError, match="share a harness module name"):
+        store.declare_modules([HarnessModule(slug) for slug in slugs])
+
+
+@pytest.mark.parametrize(
+    ("link", "expected"),
+    [
+        ("https://prover.certora.com/jobStatus/1/abc", "https://prover.certora.com/output/1/abc"),
+        ("https://prover.certora.com/output/1/abc", "https://prover.certora.com/output/1/abc"),
+        ("/tmp/prover-results", "/tmp/prover-results"),
+        (None, None),
+    ],
+)
+def test_the_reported_link_is_the_output_view(link: str | None, expected: str | None):
+    harness = GeneratedHarness(commentary="", harness="", final_link=link)
+    assert harness.output_link == expected
 
 
 def test_a_units_feature_is_declared_and_empty(tmp_path: Path):

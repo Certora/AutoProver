@@ -27,6 +27,7 @@ from composer.authoring.state import SkippedProperty
 from composer.cargo.features import CargoFeature
 from composer.diagnostics.timing import RunSummary
 from composer.spec.artifacts import ArtifactStore
+from composer.spec.cvl_generation import _output_link
 from composer.spec.cvlr.scaffold import SPECS_DIR
 from composer.spec.types import CheckName, PropertyTitle
 from composer.spec.util import ensure_dir
@@ -35,21 +36,87 @@ from composer.spec.util import ensure_dir
 DELIVERABLE_DIR = Path("certora") / "cvlr"
 INTERNAL_DIR = Path(".certora_internal") / "cvlr"
 
+#: Identifiers ``pub mod`` rejects through edition 2024: the strict keywords,
+#: ``try`` (reserved since 2018), and ``gen`` (reserved in 2024). Prefixing
+#: ``gen`` is still a legal name on an earlier edition. The check runs after
+#: lowercasing, so ``Self`` is covered by ``self``. Weak keywords (``union``,
+#: ``safe``, ``raw``) are legal module names and are absent here.
+_RUST_MODULE_KEYWORDS = frozenset(
+    {
+        "abstract",
+        "as",
+        "async",
+        "await",
+        "become",
+        "box",
+        "break",
+        "const",
+        "continue",
+        "crate",
+        "do",
+        "dyn",
+        "else",
+        "enum",
+        "extern",
+        "false",
+        "final",
+        "fn",
+        "for",
+        "gen",
+        "if",
+        "impl",
+        "in",
+        "let",
+        "loop",
+        "macro",
+        "match",
+        "mod",
+        "move",
+        "mut",
+        "override",
+        "priv",
+        "pub",
+        "ref",
+        "return",
+        "self",
+        "static",
+        "struct",
+        "super",
+        "trait",
+        "true",
+        "try",
+        "type",
+        "typeof",
+        "unsafe",
+        "unsized",
+        "use",
+        "virtual",
+        "where",
+        "while",
+        "yield",
+    }
+)
+
 
 def module_name(slug: str) -> str:
     """A Rust module identifier for a component slug.
 
-    Rust accepts ``[A-Za-z_][A-Za-z0-9_]*``. A slug may contain ``-`` or start
-    with a digit. The result is lowercased and runs of separators collapse, so
-    the name satisfies ``non_snake_case``. A crate that denies that lint, or a
-    CI build with ``-D warnings``, would fail on a name chosen here. The
-    identifier is fixed from the slug. A draft cannot rename the module.
+    Rust accepts ``[A-Za-z_][A-Za-z0-9_]*`` and rejects keywords. A slug may
+    contain ``-``, start with a digit, or be a keyword itself. The result is
+    lowercased and runs of separators collapse, so the name is ``snake_case``.
+    A crate that denies ``non_snake_case`` accepts it. A leading digit or a
+    keyword is prefixed with ``spec_``. A slug that leaves nothing is refused.
+    The identifier is fixed from the slug. A draft cannot rename the module.
     """
     cleaned = "".join(c if c.isalnum() or c == "_" else "_" for c in slug).lower()
     collapsed = re.sub(r"_+", "_", cleaned).strip("_")
     if not collapsed:
-        return "spec"
-    return collapsed if collapsed[:1].isalpha() else f"spec_{collapsed}"
+        raise ValueError(
+            f"component slug {slug!r} leaves no Rust module name once separators are removed"
+        )
+    if collapsed[:1].isalpha() and collapsed not in _RUST_MODULE_KEYWORDS:
+        return collapsed
+    return f"spec_{collapsed}"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -101,7 +168,12 @@ class GeneratedHarness(BaseModel):
 
     @property
     def output_link(self) -> str | None:
-        return self.final_link
+        """The prover run's ``/output/`` link, rewritten from a ``/jobStatus/`` URL.
+
+        Drives the report's ``run_link``. ``None`` and a local result directory
+        pass through.
+        """
+        return _output_link(self.final_link)
 
 
 class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
@@ -168,8 +240,9 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
             detail = "; ".join(f"{sorted(s)} all become {name!r}" for name, s in clashes.items())
             raise ValueError(
                 f"two or more components share a harness module name ({detail}). Module names are "
-                f"lowercased and separator-collapsed, so slugs differing only in case or "
-                f"punctuation collide; rename the components so they differ in more than that."
+                f"lowercased and separator-collapsed, and a leading digit or a keyword is prefixed "
+                f"with 'spec_', so slugs that differ only in case, punctuation, or that prefix "
+                f"collide. Rename the components so they differ in more than that."
             )
         target = self._artifact_dir()
         declarations = "".join(

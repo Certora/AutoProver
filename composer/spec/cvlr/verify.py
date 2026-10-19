@@ -265,7 +265,7 @@ class _CaptureCallbacks(_RunAccounting):
                     "cvlr: %s came back violated on an assertion the prover generated (%s), so it "
                     "is not recorded as evidence about the program",
                     rule.name,
-                    assertion.split(".")[0],
+                    assertion,
                 )
             case PropertyViolation():
                 # A capture failure must not fail the run. The verdict is already in hand.

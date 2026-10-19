@@ -33,6 +33,7 @@ from composer.cargo.metadata import (
     parse_metadata,
 )
 from composer.prover import conf as prover_conf
+from composer.prover.ptypes import Counterexample, RulePath, RuleResult
 from composer.spec.cvlr import conf as cvlr_conf
 from composer.spec.cvlr.crates import Absent, CvlrSources
 from composer.spec.cvlr.reference import SOLANA
@@ -901,6 +902,25 @@ async def test_capturing_evidence_does_not_replace_the_accounting():
     await callbacks.on_prover_result({})
 
     assert summary.prover_total_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_an_incomplete_check_logs_the_provers_own_recommendation(caplog: pytest.LogCaptureFixture):
+    """The text after the first period is the prover's advice about the bound it hit."""
+    assertion = "Unwinding condition in a loop. Try increasing the unwinding bound."
+    rule = RuleResult(
+        path=RulePath("rule_bounded"),
+        counterexample=Counterexample(trace="trace", assertion=assertion),
+        status="VIOLATED",
+    )
+    store = CexAnalysisStore(store=InMemoryStore(), namespace=("t",))
+    callbacks = _CaptureCallbacks(store)
+
+    with caplog.at_level("INFO", logger="composer.spec.cvlr.verify"):
+        await callbacks.on_analysis_complete(rule, "the loop was too short")
+
+    assert assertion in caplog.text
+    assert await store.for_rule("rule_bounded") == []
 
 
 def test_counterexamples_are_explained_on_the_authors_bound_model():
