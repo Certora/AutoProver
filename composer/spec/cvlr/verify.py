@@ -1130,6 +1130,11 @@ class AdjustProverConfig(
     answering that leaves a proof nobody understands as well, which is a worse thing to ship than a
     slow one.
 
+    A job that halted with no per-rule verdicts is not a reason to change this conf. Drop the rule
+    you added last, or submit it alone, and read which one it was. Raising `loop_iter` across four
+    such jobs left the halt where it was. Raise it when a rule's own unwinding assertion names a
+    trip count that rule chose, such as the length of the account list it passes.
+
     Edits apply together or not at all, and the result is the full conf. Changing it invalidates the
     prover stamp, because the previous run's verdicts were obtained under different settings: re-run
     `verify_rules` afterwards.

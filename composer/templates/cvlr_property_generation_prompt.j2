@@ -42,6 +42,15 @@ Write the complete module and put it on the buffer with `put_harness`. For each 
 * Choose the rule form. One `#[rule]` per property when the property is about one handler; a
   `cvlr_rules!` invocation when the same specification applies across several handlers — that is
   cheaper to write and gives you a separate verdict per handler.
+* A few shapes halt a submission before any assertion runs, and they are visible in the code. One
+  rule per account-list length, and per pre-state variant: a single rule ranging over several of
+  either timed out, and one rule per case verified. Bound both factors of a `u64` multiplied into a
+  `u128` on the first submission; below `2^32` is the domain that verified, and the comment on the
+  rule says that bound is the domain of the proof, not a fact about the program. A handler that
+  begins in a `HashSet` insert, a bincode walk of a `[u8; 32]`, or a `Vec` filled by an allocator
+  the prover leaves external will not finish when `loop_iter` goes up — the iteration count moves
+  with the bound. Ask the editor for a loop-free replacement or a value stand-in, or call the
+  program's own function below that handler, before the first `verify_rules` of such a rule.
 * Create the inputs with `nondet()` and constrain them with `cvlr_assume!` — as little as you can.
 * `clog!` every value the assertion depends on, *before* asserting. A counterexample shows you only
   what you logged.
@@ -107,8 +116,44 @@ Read the outcome:
     postcondition, the vacuity comes from code after the assertion, not from the program.
   - Still vacuous → add the rule's assumptions back into the copy one at a time; the one that makes
     it vacuous is the contradiction.
-* **A timeout** → the rule is too hard as stated. Bound a loop, split the rule, or summarize a call
-  the property does not depend on. Re-running an unchanged timing-out rule will time out again.
+* **A timeout.** The job ran out of time. A halted job returns no per-rule verdicts, so one rule
+  hides every other rule in the submission. The next submission is the same draft without the rule
+  you added last, or that rule alone. Leave `loop_iter` where it is, and add no summary, until that
+  submission says which rule it was. Measured: four submissions of handler-level rules, at
+  `loop_iter` 2, 3 and 4 and after two rounds of summaries, each halted with no verdicts; the same
+  draft with those rules removed verified the rest in minutes. One extra rule in a draft that
+  otherwise verified did the same. Resubmitting the halted set unchanged will halt again.
+
+  When the rule by itself still halts, look at what the handler does first.
+  - A `HashSet` insert goes through SipHash or `hashbrown`'s rehash. The iteration count tracks
+    `loop_iter`, and `hash_one` is external, so `contains` can disagree with `insert`. Ask the
+    editor to replace that set with a loop-free signer set.
+  - A bincode walk of a `[u8; 32]`, a `Pubkey` field of the account struct the handler serializes,
+    did the same: iteration 2 at bound 2, iteration 4 at bound 4. Ask the editor to mock the state
+    accessor with a value stand-in.
+  - A `Vec` whose bytes come from an allocator the prover treats as external, such as a vote
+    account's credit history, is the same kind of loop.
+
+  Drive the program's own function below that handler, the accounting it wraps, and name that
+  function as the rule's subject. A copy of the handler written in the harness is a verdict about
+  your code. If the property is about the handler's own checks and there is no function below
+  them, `record_skip` and name the halted job. A summary of a function the compiler has inlined
+  into the handler matches no symbol, and the halt stays.
+
+  A rule that came back with a verdict, and stopped short of its own assertion, is a different
+  case. The other rules in the job already have results.
+  - A product of two `u64`s into a `u128` timed out twice with the factors unbounded, and verified
+    below `2^32`. Bound both factors, and say in the commentary that the bound is the domain of
+    the proof. A property about behaviour at the top of the `u64` range cannot take that bound.
+  - One rule ranging over several account-list lengths, or both pre-state variants, timed out.
+    One rule per length or variant verified. Split it that way.
+  - `collect_signers` walking the account list the rule passed stops on the unwinding assertion
+    until `loop_iter` equals that length. Raise the bound to the length the rule passed.
+  - A walk of one iteration per epoch, with nothing in the program bounding how far activation is
+    from now, does not finish at a higher bound. Assume a small distance and record it as the
+    domain.
+
+  Re-running an unchanged timing-out rule will time out again.
 * **A rule the prover could not analyze** → an *error* rather than a verdict, so it comes back as
   neither VERIFIED nor VIOLATED. On this backend it is usually the pointer analysis refusing
   something on a path your rule reaches: `[3308]` illegal dereference of an absolute address (a
