@@ -621,17 +621,21 @@ Of 93 Prover calls, **11 ended FAILED and 18 HALTED** at the 25-minute global ti
 halts were the authors' own probe jobs of four and five rules.
 
 - **Four FAILED jobs were a Prover crash on `Clock::get()`**, "TAC Clock::get expected to extract 5
-  TAC variables from call sol_get_clock_sysvar" (upstream-defects P15): Lockup Management, twice
-  Delegation & Deactivation, and Protocol Parameters / Queries. The last harness never calls
-  `Clock::get()` itself, so the program's own calls trigger it too.
+  TAC variables from call sol_get_clock_sysvar" (upstream-defects P15): three Delegation &
+  Deactivation jobs, one of them a resubmit, and Protocol Parameters / Queries. The Queries harness
+  never calls `Clock::get()` itself, so the program's own calls trigger it too.
 - **At least three were pointer-analysis failures in Lockup Management's rules**, `[3308] illegal
   dereference of an absolute address` and `[3003] dereference of a register with unknown provenance`,
   on `rule_custodian_cannot_delegate`, `rule_lockup_does_not_block_delegate` and
   `rule_custodian_cannot_withdraw`. These reasons are only in the archive's `Results.txt`, not its
   `alertReport.json`.
-- **The authors saw neither.** A FAILED job reaches the author as its status and a link, so Lockup
-  resubmitted rules of the same kind three times. Passing the archive's errors to the author is the
-  fix, and it has to read both files.
+- **The authors saw neither.** A FAILED job reached the author as its status and a link, so Lockup
+  resubmitted rules of the same kind three times. A `FAILED` or `HALTED` job now includes the
+  `ERROR` entries from `Reports/alertReport.json` in that text (`hint` when it is non-empty,
+  otherwise `message`). For the Clock crash the text says resubmitting the same draft will fail the
+  same way. For a global-timeout halt, an `Out of Resources` error, it says to rerun the unfinished
+  rules separately. The halt still does not include verdicts for rules that finished before it, and
+  `[3308]` / `[3003]` are still only in `Results.txt`.
 - **9 "Cannot overflow: inferred pointer" stops** (P12), 5 of them in Withdrawals. The authors bound
   once and moved on, as the prompt now says. `rule_probe_withdraw_bounded` is the bound failing,
   which matches the probes in P12.
@@ -665,6 +669,6 @@ is owed:** a rule that asserts a balance *does* change, which must be violated.
   patch plus one unit's `cumulative_diff` from the report's `source_edits` builds: checked for
   Authority Management with `cargo certora-sbf --features "certora unit_authority_management"`.
   Each unit's edits should be written as a patch beside the harness patch.
-- **FAILED jobs' reasons**, above.
+- **Pointer-analysis failures on FAILED jobs**, above. Their text is only in `Results.txt`.
 - U19's dangling fixture symlink does not exist on `main`, so this run did not exercise that fix.
 

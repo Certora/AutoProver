@@ -273,6 +273,55 @@ ALERT_REPORT = Path("Reports") / "alertReport.json"
 
 _EXTERNALS_ALERT = "The following functions are neither inlined nor summarized"
 
+#: ``type`` of the alert the prover writes when it hits the global timeout.
+OUT_OF_RESOURCES = "Out of Resources"
+
+
+@dataclass(frozen=True)
+class ErrorAlert:
+    """One ``ERROR`` entry from an alert report.
+
+    ``text`` is ``hint`` when that is a non-empty string, otherwise ``message``.
+    ``type`` is the report's ``type``, or ``""`` when the field is absent.
+    """
+
+    type: str
+    text: str
+
+
+def _nonempty_str(value: object) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
+
+
+def error_alerts(text: str) -> tuple[ErrorAlert, ...]:
+    """The ``ERROR`` entries of an alert-report body, in file order.
+
+    ``hint`` when it is a non-empty string, otherwise ``message``. On an internal
+    prover error ``message`` is a generic support sentence and ``hint`` is the
+    only field that names the crash. An entry with neither is dropped.
+
+    Empty when ``text`` is not the JSON array the report is. That is not a claim
+    that the job produced verdicts.
+    """
+    try:
+        report = json.loads(text)
+    except ValueError:
+        return ()
+    if not isinstance(report, list):
+        return ()
+    found: list[ErrorAlert] = []
+    for alert in report:
+        if not isinstance(alert, dict) or alert.get("severity") != "ERROR":
+            continue
+        chosen = _nonempty_str(alert.get("hint")) or _nonempty_str(alert.get("message"))
+        if chosen is None:
+            continue
+        raw_type = alert.get("type")
+        found.append(ErrorAlert(raw_type if isinstance(raw_type, str) else "", chosen))
+    return tuple(found)
+
 
 def external_functions(results_root: Path) -> tuple[str, ...]:
     """The functions the Prover treated as external for this job, sorted and deduplicated.

@@ -24,7 +24,7 @@ from prover_output_utility.exceptions import (
 )
 from prover_output_utility.models import JobStatus, convert_job_status
 
-from composer.prover.results import ALERT_REPORT
+from composer.prover.results import ALERT_REPORT, ErrorAlert, error_alerts
 
 logger = logging.getLogger("composer.spec")
 
@@ -32,14 +32,16 @@ logger = logging.getLogger("composer.spec")
 class CloudJobError(RuntimeError):
     """Raised when a cloud prover job reaches a terminal status other than
     SUCCEEDED, does not reach a terminal status within the poll timeout, or
-    finishes without an output archive. Carries the ``status`` and prover
-    ``link``.
+    finishes without an output archive. Carries the ``status``, the prover
+    ``link``, and ``alerts``: the ``ERROR`` entries from ``Reports/alertReport.json``
+    when a ``FAILED`` or ``HALTED`` job wrote them.
     """
 
-    def __init__(self, status: JobStatus, link: str) -> None:
+    def __init__(self, status: JobStatus, link: str, alerts: tuple[ErrorAlert, ...] = ()) -> None:
         super().__init__(f"Cloud job ended with status {status.value}")
         self.status = status
         self.link = link
+        self.alerts = alerts
 
 
 class CloudResultsUnavailable(RuntimeError):
@@ -65,6 +67,10 @@ _TERMINAL_STATUSES = frozenset({
     JobStatus.SERVICE_UNAVAILABLE,
     JobStatus.UPLOAD_FAILED,
 })
+
+#: Statuses on which the prover ran and may have written an alert report
+#: without producing verdicts. The other terminal failures are rejected earlier.
+_ALERT_STATUSES = frozenset({JobStatus.FAILED, JobStatus.HALTED})
 
 # Avoid requesting Brotli — aiohttp's brotli support is often broken/missing.
 _NO_BROTLI_HEADERS = {"Accept-Encoding": "gzip, deflate"}
@@ -223,19 +229,26 @@ async def _fetch_results(job_id: str, dest: Path, link: str) -> None:
             await asyncio.sleep(backoff)
 
 
-async def _fetch_alert_report(job_id: str, dest: Path) -> None:
-    """Save the job's alert report where a local run would have it, ``Reports/alertReport.json``.
+async def _read_alert_report(job_id: str) -> str | None:
+    """The body of ``Reports/alertReport.json``, or None when the job has none.
 
-    Best-effort. It carries warnings the verdicts do not, such as the functions the Prover treated
-    as external (:func:`composer.prover.results.external_functions`), but a job's results stand
-    without it, so failing to fetch it must not fail the run.
+    Best-effort. A missing report must not fail the run: a succeeded job's verdicts
+    stand without it, and a ``FAILED`` or ``HALTED`` job with no report still has its
+    status and link.
     """
     try:
-        text = await asyncio.to_thread(
+        return await asyncio.to_thread(
             results_api().fetch_output_file, job_id, ALERT_REPORT.name
         )
-    except Exception as exc:  # noqa: BLE001 — optional artifact; the verdicts are what matter
+    except Exception as exc:  # noqa: BLE001 — a missing report must not fail the run
         logger.warning("Cloud job %s: no alert report (%s)", job_id[:8], exc)
+        return None
+
+
+async def _fetch_alert_report(job_id: str, dest: Path) -> None:
+    """Save the job's alert report where a local run would have it, ``Reports/alertReport.json``."""
+    text = await _read_alert_report(job_id)
+    if text is None:
         return
     target = dest / ALERT_REPORT
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -273,7 +286,12 @@ async def cloud_results(
 
     status = convert_job_status(job_data.get("job_status", "UNKNOWN"))
     if status is not JobStatus.SUCCEEDED:
-        raise CloudJobError(status, run_result_link)
+        alerts: tuple[ErrorAlert, ...] = ()
+        if status in _ALERT_STATUSES:
+            text = await _read_alert_report(cloud_job.job_id)
+            if text is not None:
+                alerts = error_alerts(text)
+        raise CloudJobError(status, run_result_link, alerts)
 
     runtime_ms = _job_runtime_ms(job_data)
 
