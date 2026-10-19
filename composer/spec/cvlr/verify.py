@@ -54,7 +54,8 @@ from composer.spec.cvlr.prover import (
     run_submission,
 )
 from composer.spec.cvlr.harness import HarnessModule
-from composer.spec.cvlr.rules import rule_names
+from composer.spec.cvlr.rules import UnreadableRules, rule_names
+from composer.spec.cvlr.scaffold import SPECS_DIR
 from composer.spec.cvlr.state import CvlrGenerationState
 from composer.spec.cvlr.tree import SharedTree, UnitEdits
 from composer.spec.source.cex_capture import CexAnalysisStore
@@ -91,8 +92,8 @@ class HarnessTarget:
     """Where a draft is staged so the crate compiles with it.
 
     The harness is a module inside the crate. Staging writes the file the
-    scaffold already declared. ``module_path`` is absolute. ``specs/mod.rs``
-    was written once for the run
+    scaffold already declared for :attr:`unit`. ``specs/mod.rs`` was written
+    once for the run
     (:meth:`composer.spec.cvlr.harness.CvlrArtifactStore.declare_modules`).
 
     Every unit shares ``tree`` and ``build_sem``. A build selects ``certora``
@@ -101,7 +102,6 @@ class HarnessTarget:
     """
 
     session: CargoSession
-    module_path: Path
     package: str
     package_root: Path
     #: The module name the tree keys edits by, and the cargo feature that selects
@@ -126,6 +126,15 @@ class HarnessTarget:
         That relative path is how a build is told which package to compile.
         """
         return self.package_root.relative_to(self.session.workdir)
+
+    @property
+    def module_path(self) -> Path:
+        """Absolute path of this unit's harness file.
+
+        The file :meth:`~composer.spec.cvlr.harness.CvlrArtifactStore.declare_modules`
+        declares as ``pub mod <unit>``. Staging writes the draft there.
+        """
+        return self.package_root / SPECS_DIR / self.unit.artifact_file
 
     @asynccontextmanager
     async def build_slot(self) -> AsyncIterator[BuildPermit]:
@@ -363,7 +372,10 @@ class CargoCheck(
                 )
         match run.verdict:
             case Compiled():
-                declared = rule_names(draft)
+                try:
+                    declared = rule_names(draft)
+                except UnreadableRules as err:
+                    return tool_return(self.tool_call_id, str(err))
                 names = ", ".join(declared) if declared else "none"
                 return tool_return(
                     self.tool_call_id,
@@ -377,12 +389,21 @@ class CargoCheck(
 
 
 def _submission_for(deps: VerifyDeps, rules: tuple[str, ...] | list[str]) -> Submission:
-    """The unit's submission, checking ``rules`` under the submission's conf.
+    """The unit's submission, checking ``rules`` and compiling this unit's module.
+
+    :attr:`HarnessTarget.features` is ``certora`` plus this unit's feature, the
+    same set ``cargo_check`` builds with. The submission's own default is only
+    ``certora``, and ``specs/mod.rs`` gates this unit's module on its feature,
+    so a build that kept the default would compile the staged file out.
 
     A conf with no ``rule`` entry makes the cloud job end in FAILED, with no
     report.
     """
-    return dataclasses.replace(deps.submission, rules=SelectRules(tuple(rules)))
+    return dataclasses.replace(
+        deps.submission,
+        rules=SelectRules(tuple(rules)),
+        features=deps.target.features,
+    )
 
 
 async def _stage_and_submit(
@@ -445,7 +466,10 @@ class VerifyRules(
         draft = self.state["curr_spec"]
         if draft is None:
             return "No harness written yet — put a draft first."
-        declared = rule_names(draft)
+        try:
+            declared = rule_names(draft)
+        except UnreadableRules as err:
+            return f"{err} Nothing was submitted."
         if not declared:
             return (
                 "Your draft declares no rules, so there is nothing to submit. A rule is a "
@@ -518,12 +542,13 @@ class VerifyRules(
                 )
 
 
-def gate_tools(target: HarnessTarget, deps: VerifyDeps) -> list[BaseTool]:
+def gate_tools(deps: VerifyDeps) -> list[BaseTool]:
     """The tools that compile a draft and submit it.
 
-    Neither tool edits the program.
+    ``cargo_check`` is bound to ``deps.target``, the target ``verify_rules``
+    submits. Neither tool edits the program.
     """
     return [
-        CargoCheck.bind(target).as_tool("cargo_check"),
+        CargoCheck.bind(deps.target).as_tool("cargo_check"),
         VerifyRules.bind(deps).as_tool("verify_rules"),
     ]

@@ -26,10 +26,28 @@ pytestmark = pytest.mark.asyncio
 _LINK = "https://prover.certora.com/jobStatus/1/abc"
 
 
+async def test_the_staged_file_is_the_module_declared_for_the_unit(tmp_path: Path):
+    target = HarnessTarget(
+        session=SimpleNamespace(workdir=tmp_path),  # type: ignore[arg-type]
+        package="p",
+        package_root=tmp_path / "programs" / "p",
+        unit=HarnessModule("deposits"),
+        tree=SharedTree(
+            pristine=tmp_path / "project",
+            root=tmp_path / "build",
+            source=ProjectSource(roots=()),
+        ),
+        build_sem=asyncio.Semaphore(1),
+    )
+
+    assert target.module_path == (
+        tmp_path / "programs" / "p" / "src" / "certora" / "specs" / "deposits.rs"
+    )
+
+
 def _deps(tmp_path: Path, sem: asyncio.Semaphore) -> SimpleNamespace:
     target = HarnessTarget(
         session=SimpleNamespace(workdir=tmp_path),  # type: ignore[arg-type]
-        module_path=tmp_path / "m.rs",
         package="p",
         package_root=tmp_path,
         unit=HarnessModule("a"),

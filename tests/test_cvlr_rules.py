@@ -11,7 +11,7 @@ import pathlib
 import json5
 import pytest
 
-from composer.spec.cvlr.rules import generated_name, rule_names, snake_case
+from composer.spec.cvlr.rules import UnreadableRules, generated_name, rule_names, snake_case
 
 # Verbatim from `cvlr_invariant_rules!`'s doc comment, which states the three rules it creates.
 CRATE_DOC_EXAMPLE = """
@@ -99,6 +99,111 @@ def test_an_invocation_with_no_bases_declares_nothing():
     # An unfinished macro call declares no rule. A name invented here would be submitted.
     assert rule_names('cvlr_rules! { name: "x", spec: s, bases: [] }') == ()
     assert rule_names('cvlr_rules! { name: "x", spec: s }') == ()
+
+
+def test_a_doc_comment_does_not_steal_the_functions_name():
+    # The next `fn` token after `#[rule]` may sit in the doc comment. The attribute decorates
+    # `rule_first`. Reporting only `rule_other` would let that one verified rule stamp the draft.
+    source = """
+    #[rule]
+    /// Same shape as fn rule_other.
+    fn rule_first() {}
+
+    #[rule]
+    fn rule_other() {}
+    """
+    assert rule_names(source) == ("rule_first", "rule_other")
+
+
+def test_a_comment_in_the_bases_list_is_not_part_of_a_name():
+    source = """
+    cvlr_rules! {
+        name: "solvency",
+        spec: spec,
+        bases: [
+            base_deposit, // the deposit path
+            base_withdraw,
+        ]
+    }
+    """
+    assert rule_names(source) == ("solvency_deposit", "solvency_withdraw")
+
+
+def test_the_attributes_other_spellings_name_the_function():
+    # `#[rule]` ignores its tokens. `cvlr::rule` and `cvlr_rule` are the same attribute.
+    source = """
+    #[cvlr::rule]
+    fn rule_through_the_crate() {}
+    #[cvlr_rule]
+    pub fn rule_renamed() {}
+    #[rule(never_panic)]
+    fn rule_with_tokens() {}
+    """
+    assert rule_names(source) == (
+        "rule_through_the_crate",
+        "rule_renamed",
+        "rule_with_tokens",
+    )
+
+
+def test_a_direct_cvlr_rule_for_spec_names_its_base():
+    source = """
+    cvlr_rule_for_spec! {
+        name: "solvency",
+        spec: MySpec,
+        base: base_deposit,
+    }
+    """
+    assert rule_names(source) == ("solvency_deposit",)
+
+
+def test_a_function_mentioned_in_a_string_or_a_comment_is_not_a_rule():
+    source = """
+    #[rule]
+    fn rule_real() {}
+    const NOTE: &str = "#[rule]\\nfn rule_hidden() {}";
+    /* #[rule] fn rule_in_a_comment() {} */
+    // #[rule]
+    // fn rule_on_a_commented_line() {}
+    """
+    assert rule_names(source) == ("rule_real",)
+
+
+def test_a_macro_template_declares_no_rule_until_an_invocation_pastes_one():
+    source = """
+    macro_rules! cvlr_impl_rule {
+        ($rule_name:ident, $spec:expr, $base:ident) => {
+            #[cvlr::rule]
+            pub fn $rule_name() {}
+        };
+    }
+    cvlr_rules! {
+        name: "solvency",
+        spec: spec,
+        bases: [base_deposit],
+    }
+    """
+    assert rule_names(source) == ("solvency_deposit",)
+
+
+def test_a_rule_attribute_that_does_not_decorate_a_function_is_refused():
+    source = "#[rule]\nstruct NotARule {}\n#[rule]\nfn rule_real() {}\n"
+    with pytest.raises(UnreadableRules, match="withheld"):
+        rule_names(source)
+
+
+def test_a_base_that_is_not_an_identifier_is_refused():
+    source = """
+    cvlr_rules! {
+        name: "solvency",
+        spec: spec,
+        bases: [base_deposit, 1],
+    }
+    #[rule]
+    fn rule_real() {}
+    """
+    with pytest.raises(UnreadableRules, match="not an identifier"):
+        rule_names(source)
 
 
 def test_a_repeated_name_is_reported_once_and_left_to_the_compiler():
