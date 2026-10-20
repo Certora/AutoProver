@@ -44,11 +44,9 @@ import pytest
 
 from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, platform_tools_installed
 from composer.diagnostics.timing import RunSummary
-from composer.pipeline.ptypes import Curtailed, Delivered
 from composer.rustapp.frontend import GenericRustConsoleHandler
 from composer.spec.cvlr.conf import PLATFORM_TOOLS_VERSION
 from composer.spec.cvlr.harness import DELIVERABLE_DIR
-from composer.spec.cvlr.rules import rule_names
 from composer.testing.cvlr_tape import (
     TAPE_NAME, missing_corpora, run_scenario, stage_scenario, tape_args,
 )
@@ -119,22 +117,6 @@ async def test_the_taped_vault_run_reaches_a_published_harness(
 
     assert result.n_properties > 0, "the tape's extraction lane produced no properties"
     assert result.n_delivered > 0, f"no unit published a harness: {result.failures}"
-
-    # Every rule a delivered harness claims must exist in the module it shipped. The publish gate
-    # enforces this, so a violation here means the gate did not run — which is exactly the kind of
-    # shape change a plumbing gate exists to catch, and the kind a taped run can still see.
-    for outcome in result.outcomes:
-        published = outcome.result
-        if isinstance(published, Curtailed):
-            published = published.partial
-        if not isinstance(published, Delivered):
-            continue
-        harness = published.result
-        claimed = {rule for _, rules in harness.property_checks() for rule in rules}
-        assert claimed <= set(rule_names(harness.harness)), (
-            f"{outcome.feat.display_name}: {claimed - set(rule_names(harness.harness))} claimed but "
-            f"not declared"
-        )
 
 
 async def test_the_taped_run_writes_a_report_that_marks_its_builds(

@@ -41,7 +41,7 @@ from composer.spec.cvlr.prover import (
     prepare_submission,
     run_submission,
 )
-from composer.spec.cvlr.rules import rule_names
+from composer.spec.cvlr.manifest import rule_names_in_elf
 from composer.spec.cvlr.scaffold import SPECS_DIR, apply, plan_scaffold
 from composer.spec.cvlr.reference import SOLANA_V2
 
@@ -105,9 +105,6 @@ async def test_a_rule_that_reaches_an_anchor_program_can_be_analyzed(project, ca
     apply(plan, project)
     (package.root / SPECS_DIR / "mod.rs").write_text(PROBE.read_text())
 
-    declared = rule_names(PROBE.read_text())
-    assert set(declared) == set(TIERS), declared
-
     wanted = PLATFORM_TOOLS_VERSION
     if not platform_tools_installed(wanted):
         pytest.skip(f"Solana platform tools {wanted} are not installed under {PLATFORM_TOOLS_ROOT}")
@@ -154,6 +151,7 @@ async def test_a_rule_that_reaches_an_anchor_program_can_be_analyzed(project, ca
             pytest.fail(f"no results: {reason}")
         case Checked(build=build, report=report):
             assert isinstance(build.verdict, Built)
+            assert rule_names_in_elf(build.verdict.manifest.artifact) == set(TIERS)
 
     # Save the per-rule message. It is the only place a non-VERIFIED reason
     # appears, the job's output URL does not include it, and it is gone when

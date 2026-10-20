@@ -4,8 +4,10 @@ Everything here is a property of the machinery around the agent rather than of t
 what makes it testable in the routine env — and the machinery is where the interesting failures are:
 
 * **The publish gate's ground truth.** ``validate_property_rules`` checks the declared mapping
-  against the rules the *draft* declares, both directions. A property claiming a rule that does not
-  exist is a hallucinated deliverable; a rule nobody claimed is prover time nobody chose to spend.
+  against the rules a build listed, both directions. A property claiming a rule that was not
+  listed is a hallucinated deliverable; a listed rule nobody claimed is prover time nobody chose
+  to spend. The draft text below is an example of what an author writes. These tests pass the
+  list in.
 * **The shared module declaration.** ``specs/mod.rs`` names every unit, each behind its own cargo
   feature. A module behind a disabled ``cfg`` is never compiled, so a sibling that has not written
   its file yet does not fail this unit's gate.
@@ -33,6 +35,7 @@ from composer.spec.cvlr.harness import (
 )
 from composer.spec.cvlr.state import (
     PROVER_VALIDATION_KEY,
+    LastVerdicts,
     PropertyRuleMapping,
     RuleSubject,
     tuning_history,
@@ -64,6 +67,9 @@ cvlr_rules! {
 }
 """
 
+#: The names a build's ``.cvlr_rules`` section listed for ``DRAFT``. Not parsed from it.
+DECLARED = ("rule_solvency", "no_underflow_withdraw", "no_underflow_deposit")
+
 
 def _mapping(**pairs: list[str]) -> list[PropertyRuleMapping]:
     return [
@@ -81,7 +87,7 @@ def test_a_mapping_that_matches_the_draft_is_accepted():
         ),
         [],
         ["solvency_holds", "withdraw_never_underflows"],
-        DRAFT,
+        DECLARED,
     )
     assert err is None
 
@@ -89,7 +95,7 @@ def test_a_mapping_that_matches_the_draft_is_accepted():
 def test_a_property_cannot_claim_a_rule_the_draft_does_not_declare():
     # The hallucination this gate exists for: a mapping that reads plausibly and names nothing real.
     err = validate_property_rules(
-        _mapping(solvency_holds=["rule_solvency_v2"]), [], ["solvency_holds"], DRAFT
+        _mapping(solvency_holds=["rule_solvency_v2"]), [], ["solvency_holds"], DECLARED
     )
     assert err is not None
     assert "rule_solvency_v2" in err
@@ -99,7 +105,7 @@ def test_a_declared_rule_must_be_tied_back_to_a_property():
     # The other direction. A rule nobody claimed still costs a prover run every iteration, and it is
     # how a harness accumulates work nobody asked for.
     err = validate_property_rules(
-        _mapping(solvency_holds=["rule_solvency"]), [], ["solvency_holds"], DRAFT
+        _mapping(solvency_holds=["rule_solvency"]), [], ["solvency_holds"], DECLARED
     )
     assert err is not None
     assert "no_underflow_withdraw" in err
@@ -113,7 +119,7 @@ def test_a_property_that_is_neither_skipped_nor_mapped_is_rejected():
         ),
         [],
         ["solvency_holds", "withdraw_never_underflows", "forgotten_one"],
-        DRAFT,
+        DECLARED,
     )
     assert err is not None and "forgotten_one" in err
 
@@ -131,7 +137,7 @@ def test_a_property_that_is_neither_skipped_nor_mapped_is_rejected():
 def test_every_declared_rule_must_say_what_it_drives():
     err = validate_rule_subjects(
         [RuleSubject(rule="rule_solvency", function="crate::vault_program::deposit")],
-        DRAFT,
+        DECLARED,
     )
     assert err is not None
     assert "no_underflow_deposit" in err and "no_underflow_withdraw" in err
@@ -139,9 +145,9 @@ def test_every_declared_rule_must_say_what_it_drives():
 
 def test_a_subject_cannot_name_a_rule_the_draft_does_not_declare():
     err = validate_rule_subjects(
-        [RuleSubject(rule="rule_solvency_v2", function="crate::f")], DRAFT
+        [RuleSubject(rule="rule_solvency_v2", function="crate::f")], DECLARED
     )
-    assert err is not None and "rule_solvency_v2" in err
+    assert err is not None and "rule_solvency_v2" in err and "did not list" in err
 
 
 def test_a_mirror_is_accepted_but_must_say_what_it_stands_in_for():
@@ -160,7 +166,7 @@ def test_a_mirror_is_accepted_but_must_say_what_it_stands_in_for():
             reason="[3308] on the #[error_code] path; summarizing and weakening both failed",
         ),
     ]
-    assert validate_rule_subjects(subjects, DRAFT) is None
+    assert validate_rule_subjects(subjects, DECLARED) is None
 
 
 def test_an_all_skipped_unit_can_satisfy_the_prover_gate():
@@ -181,6 +187,7 @@ def test_an_all_skipped_unit_can_satisfy_the_prover_gate():
     assert stamped.update["validations"][PROVER_VALIDATION_KEY] == spec_digest(
         _DRAFT_NO_RULES, state["skipped"], tuning_history(state)
     )
+    assert stamped.update["last_verdicts"].rules == ()
 
 
 def test_a_draft_with_no_rules_and_no_skips_is_still_unfinished():
@@ -209,10 +216,10 @@ def test_a_skipped_property_may_be_absent_but_not_mapped():
         solvency_holds=["rule_solvency"],
         withdraw_never_underflows=["no_underflow_withdraw", "no_underflow_deposit"],
     )
-    assert validate_property_rules(full, skipped, titles, DRAFT) is None
+    assert validate_property_rules(full, skipped, titles, DECLARED) is None
     # Claiming a rule for a property you also declared unformalizable is a contradiction.
     both = full + _mapping(forgotten_one=["rule_solvency"])
-    assert validate_property_rules(both, skipped, titles, DRAFT) is not None
+    assert validate_property_rules(both, skipped, titles, DECLARED) is not None
 
 
 @pytest.mark.parametrize(
@@ -326,22 +333,15 @@ def test_the_published_result_carries_the_harness_and_the_property_map():
 
 
 # ---------------------------------------------------------------------------
-# The prover submission names the draft's rules
+# The prover submission names the rules the build listed
 # ---------------------------------------------------------------------------
 
 class _StopProbe(Exception):
     """Cuts the tool off once the submission is captured; no prover is involved."""
 
 
-_DRAFT_TWO_RULES = """
-use cvlr::prelude::*;
-
-#[rule]
-fn rule_balance_conserved() { cvlr_assert!(true); }
-
-#[rule]
-fn rule_only_authority_withdraws() { cvlr_assert!(true); }
-"""
+async def _stubbed_stage(draft, summaries=(), overlay={}) -> None:
+    return None
 
 
 def _verify_state(draft: str) -> dict:
@@ -363,35 +363,58 @@ def _verify_state(draft: str) -> dict:
     }
 
 
+def _built_so(path: Path, payload: bytes):
+    """A stand-in chain build whose artifact is ``path``."""
+    from composer.cargo.sbf import Built, SbfRun
+
+    path.write_bytes(payload)
+
+    async def build(_session, _submission):
+        return SbfRun(
+            duration_ms=1,
+            verdict=Built(manifest=SimpleNamespace(artifact=path)),  # type: ignore[arg-type]
+            confined=True,
+        )
+
+    return build
+
+
 @pytest.mark.asyncio
-async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeypatch):
-    """The conf must carry a ``rule`` entry, and it must be this draft's rules.
+async def test_the_submission_names_the_rules_the_build_listed(tmp_path, monkeypatch):
+    """The conf's ``rule`` entry is the names in the ``.so``, not names parsed from the draft.
 
     A regression guard on a real outage, not a hypothetical. This line was once
     ``rules=deps.submission.rules`` — a self-assignment — so every submission inherited from a base
     conf that names no rules. A cloud job with no rule selection ends in FAILED with no report and
     nothing on disk, so the authoring loop saw only "status FAILED" and simplified its harness
-    until it was a tautology, which failed identically. Nothing else in the suite would notice: the
-    conf machinery is correct, the build is correct, and the bug lives entirely in what is handed
-    across.
+    until it was a tautology, which failed identically.
 
-    Also pins *which* selection. Every rule would look right and be wrong — the artifact declares
-    every unit's rules, so it would grade this unit on its siblings' drafts.
+    The draft below declares a name the ELF does not. A reader that scanned the source would submit
+    that name. The section lists the two rules the conf must name.
     """
     import contextlib
 
-    from composer.spec.cvlr import verify as verify_mod
-    async def _stubbed_stage(draft, summaries=(), overlay={}) -> None:
-        return None
+    from tests.test_cvlr_manifest import elf_with_cvlr_rules, record
 
+    so = tmp_path / "prog.so"
+    payload = (
+        record(0, b"CV1")
+        + record(1, b"rule_only_authority_withdraws")
+        + record(1, b"rule_balance_conserved")
+    )
     captured: dict = {}
 
-    async def fake_prepare(session, submission, **kwargs):
+    async def write(_session, submission, *, into):
         captured["rules"] = submission.rules
         captured["settings"] = submission.settings
         raise _StopProbe
 
-    monkeypatch.setattr(verify_mod, "prepare_submission", fake_prepare)
+    async def run(*_args, **_kwargs):
+        pytest.fail("write_submission is where this test stops")
+
+    monkeypatch.setattr(verify_mod, "build_for_submission", _built_so(so, elf_with_cvlr_rules(payload)))
+    monkeypatch.setattr(verify_mod, "write_submission", write)
+    monkeypatch.setattr(verify_mod, "run_submission", run)
 
     deps = SimpleNamespace(
         lock=asyncio.Lock(),
@@ -410,7 +433,11 @@ async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeyp
     )
     token = verify_mod.VerifyRules._dep_ctx.set(deps)
     try:
-        state = {**_verify_state(_DRAFT_TWO_RULES), "prover_settings": TunableConf(loop_iter=5)}
+        # A decoy. The ELF does not list it, so a source scan would name the wrong rule.
+        state = {
+            **_verify_state("#[rule]\nfn rule_decoy_not_in_the_elf() {}\n"),
+            "prover_settings": TunableConf(loop_iter=5),
+        }
         tool = verify_mod.VerifyRules(state=state, tool_call_id="tc")
         with pytest.raises(_StopProbe):
             await tool.run()
@@ -429,6 +456,179 @@ async def test_the_submission_names_exactly_the_rules_the_draft_declares(monkeyp
         TunableConf(), RunOverlay(build_script=Path("/w/b.py"), rules=captured["rules"])
     )
     assert conf["rule"] == ["rule_balance_conserved", "rule_only_authority_withdraws"]
+
+
+@pytest.mark.asyncio
+async def test_a_missing_rule_section_writes_no_conf(tmp_path, monkeypatch):
+    import contextlib
+
+    from tests.test_cvlr_manifest import elf_without_cvlr_rules
+
+    so = tmp_path / "prog.so"
+
+    async def write(*_args, **_kwargs):
+        pytest.fail("a missing section must not write a conf")
+
+    monkeypatch.setattr(verify_mod, "build_for_submission", _built_so(so, elf_without_cvlr_rules()))
+    monkeypatch.setattr(verify_mod, "write_submission", write)
+
+    deps = SimpleNamespace(
+        lock=asyncio.Lock(),
+        target=SimpleNamespace(session=None, stage=_stubbed_stage, build_slot=contextlib.nullcontext),
+        submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
+        submissions=Path("/w/submissions"),
+        prover_opts=None,
+        analysis=None,
+        stamper=None,
+    )
+    token = verify_mod.VerifyRules._dep_ctx.set(deps)
+    try:
+        answer = await verify_mod.VerifyRules(
+            state=_verify_state("#[rule]\nfn rule_decoy() {}\n"), tool_call_id="tc"
+        ).run()
+    finally:
+        verify_mod.VerifyRules._dep_ctx.reset(token)
+    assert isinstance(answer, str)
+    assert ".cvlr_rules" in answer and "Nothing was submitted" in answer
+
+
+@pytest.mark.asyncio
+async def test_a_corrupt_rule_section_writes_no_conf(tmp_path, monkeypatch, caplog):
+    import contextlib
+    import logging
+
+    from tests.test_cvlr_manifest import elf_with_cvlr_rules, record
+
+    so = tmp_path / "prog.so"
+
+    async def write(*_args, **_kwargs):
+        pytest.fail("a corrupt section must not write a conf")
+
+    monkeypatch.setattr(
+        verify_mod,
+        "build_for_submission",
+        _built_so(so, elf_with_cvlr_rules(record(2, b"SECRET_SECTION_BYTES"))),
+    )
+    monkeypatch.setattr(verify_mod, "write_submission", write)
+
+    deps = SimpleNamespace(
+        lock=asyncio.Lock(),
+        target=SimpleNamespace(session=None, stage=_stubbed_stage, build_slot=contextlib.nullcontext),
+        submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
+        submissions=Path("/w/submissions"),
+        prover_opts=None,
+        analysis=None,
+        stamper=None,
+    )
+    token = verify_mod.VerifyRules._dep_ctx.set(deps)
+    try:
+        with caplog.at_level(logging.WARNING):
+            answer = await verify_mod.VerifyRules(
+                state=_verify_state("fn helper() {}"), tool_call_id="tc"
+            ).run()
+    finally:
+        verify_mod.VerifyRules._dep_ctx.reset(token)
+    assert isinstance(answer, str) and "offset 0" in answer
+    assert str(so) in caplog.text and "offset 0" in caplog.text
+    assert "SECRET_SECTION_BYTES" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_an_empty_rule_section_submits_nothing(tmp_path, monkeypatch):
+    import contextlib
+
+    from tests.test_cvlr_manifest import elf_with_cvlr_rules
+
+    so = tmp_path / "prog.so"
+
+    async def write(*_args, **_kwargs):
+        pytest.fail("an empty listing must not write a conf")
+
+    monkeypatch.setattr(verify_mod, "build_for_submission", _built_so(so, elf_with_cvlr_rules(b"")))
+    monkeypatch.setattr(verify_mod, "write_submission", write)
+
+    deps = SimpleNamespace(
+        lock=asyncio.Lock(),
+        target=SimpleNamespace(session=None, stage=_stubbed_stage, build_slot=contextlib.nullcontext),
+        submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
+        submissions=Path("/w/submissions"),
+        prover_opts=None,
+        analysis=None,
+        stamper=None,
+    )
+    token = verify_mod.VerifyRules._dep_ctx.set(deps)
+    try:
+        answer = await verify_mod.VerifyRules(
+            state=_verify_state("fn helper() {}"), tool_call_id="tc"
+        ).run()
+    finally:
+        verify_mod.VerifyRules._dep_ctx.reset(token)
+    assert isinstance(answer, str) and "nothing to submit" in answer
+
+
+def _stamped(draft: str, *, rules: tuple[str, ...] | None, store: bool) -> dict:
+    """A draft whose prover stamp matches, with or without a stored rule list."""
+    state = _verify_state(draft)
+    state["required_validations"] = [PROVER_VALIDATION_KEY]
+    stamp = make_validation_stamper(PROVER_VALIDATION_KEY)(state, tuning_history(state))
+    state["validations"] = stamp
+    if store:
+        state["last_verdicts"] = LastVerdicts(
+            status={}, incomplete=[], unverdicted=[], stamp=stamp, rules=rules
+        )
+    return state
+
+
+async def _publish(state: dict, rules: list[str], subjects: list[RuleSubject]):
+    tool = author.PublishResultTool(
+        state=state,  # type: ignore[arg-type]
+        tool_call_id="tc",
+        commentary="the account",
+        property_rules=_mapping(solvency_holds=rules),
+        rule_subjects=subjects,
+    )
+    token = author.PublishResultTool._dep_ctx.set(["solvency_holds"])
+    try:
+        return await tool.run()
+    finally:
+        author.PublishResultTool._dep_ctx.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_publish_checks_the_stored_listing_and_not_the_draft():
+    """The draft's `#[rule]` name is a decoy. The stored list is what the mapping is checked against."""
+    state = _stamped(
+        "#[rule]\nfn rule_decoy_not_in_the_elf() {}\n",
+        rules=("rule_solvency",),
+        store=True,
+    )
+    out = await _publish(
+        state,
+        ["rule_solvency"],
+        [RuleSubject(rule="rule_solvency", function="crate::vault::deposit")],
+    )
+    assert not isinstance(out, str)
+    assert out.update["result"] == "the account"
+
+    refused = await _publish(
+        state,
+        ["rule_decoy_not_in_the_elf"],
+        [RuleSubject(rule="rule_decoy_not_in_the_elf", function="crate::vault::deposit")],
+    )
+    assert isinstance(refused, str) and "rule_decoy_not_in_the_elf" in refused
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("store", [False, True])
+async def test_publish_refuses_a_draft_whose_rules_were_not_listed(store):
+    """No ``last_verdicts``, and a verdict record whose ``rules`` is still ``None``, both fail closed."""
+    state = _stamped("#[rule]\nfn rule_solvency() {}\n", rules=None, store=store)
+    answer = await _publish(
+        state,
+        ["rule_solvency"],
+        [RuleSubject(rule="rule_solvency", function="crate::vault::deposit")],
+    )
+    assert isinstance(answer, str) and "have not been listed" in answer
 
 
 @pytest.mark.asyncio
@@ -520,14 +720,13 @@ def test_a_rule_declared_against_a_dependency_is_refused():
     reachable as ``crate::…``. That makes this a spelling rule rather than a guess about which crates
     count as "the program".
     """
-    draft = "#[rule]\nfn rule_signer_rejects_non_signer() { }\n"
     subjects = [
         RuleSubject(
             rule="rule_signer_rejects_non_signer",
             function="anchor_lang::accounts::signer::Signer::try_from",
         )
     ]
-    err = validate_rule_subjects(subjects, draft)
+    err = validate_rule_subjects(subjects, ["rule_signer_rejects_non_signer"])
     assert err is not None
     assert "not in the program under verification" in err
     assert "anchor_lang" in err
@@ -537,20 +736,18 @@ def test_a_rule_declared_against_the_program_s_own_code_is_accepted_at_any_depth
     """The check is about authorship, not depth: descending to the accounting core a handler wraps is
     the sanctioned move when a CPI blocks a handler-level property (``docs/upstream-defects.md`` P6),
     so it must pass."""
-    draft = "#[rule]\nfn rule_core() { }\n"
     subjects = [
         RuleSubject(
             rule="rule_core",
             function="crate::vault_accounting::apply_withdrawal",
         )
     ]
-    assert validate_rule_subjects(subjects, draft) is None
+    assert validate_rule_subjects(subjects, ["rule_core"]) is None
 
 
 def test_a_mirror_must_also_name_program_code_as_what_it_stands_in_for():
     """A stand-in's whole claim is "this reproduces *that*". Pointing it at a dependency makes the
     claim unfalsifiable and the caveat meaningless."""
-    draft = "#[rule]\nfn rule_mirror() { }\n"
     subjects = [
         RuleSubject(
             rule="rule_mirror",
@@ -558,7 +755,7 @@ def test_a_mirror_must_also_name_program_code_as_what_it_stands_in_for():
             reason="the real one could not be analyzed",
         )
     ]
-    err = validate_rule_subjects(subjects, draft)
+    err = validate_rule_subjects(subjects, ["rule_mirror"])
     assert err is not None
     assert "not in the program under verification" in err
 

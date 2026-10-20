@@ -13,10 +13,11 @@ Four things are CVLR's own:
 * **Two checker tiers** (:mod:`composer.spec.cvlr.verify`). ``cargo_check`` is free and ungated;
   ``verify_rules`` is minutes and money and is the stamp. A prover run builds first and returns the
   compiler's message without submitting when the build fails, so there is one gate for the two facts.
-* **The mapping's ground truth is the draft.** Both CVLR declaration forms name their rules
-  deterministically (:mod:`composer.spec.cvlr.rules`), so the publish gate gets the both-direction
-  check forge gets — no property claiming a rule that does not exist, no rule left untied to a
-  property — without waiting for a submission.
+* **The mapping's ground truth is the build's rule list.** ``#[rule]`` writes each name into
+  the ``.cvlr_rules`` section, and ``verify_rules`` stores that list with the verdicts. Publish
+  checks the mapping against it: no property claiming a rule the build did not list, no listed
+  rule left untied to a property. A draft that has not been listed is refused. Under budget
+  pressure the author's mapping is stored as given.
 * **A failing rule may be the finding.** ``expect_rule_failure`` records that claim; the gate then
   stops treating the violation as unfinished work. Without it the incentive is to weaken the rule
   until the bug disappears.
@@ -73,7 +74,6 @@ from composer.spec.cvlr.conf import tunable_conf
 from composer.spec.cvlr.editor import EditingJudgeHost, ProgramEditing, editor_tools
 from composer.spec.cvlr.example import WorkedExample, worked_example
 from composer.spec.cvlr.harness import GeneratedHarness
-from composer.spec.cvlr.rules import rule_names
 from composer.spec.cvlr.state import (
     CVLR_JUDGE_KEY,
     FEEDBACK,
@@ -217,6 +217,8 @@ class JudgeContext:
     assumptions: HarnessAssumptions
     vfs: dict[str, str]
     version_history: list[str]
+    #: Rules the verifying build listed, sorted. ``None`` until a build has listed them.
+    listed_rules: tuple[str, ...] | None = None
 
 
 @dataclasses.dataclass
@@ -269,8 +271,15 @@ class FeedbackTool(
                 edits=tuple(await applied_edits(deps.editing.store, history)),
                 diff=await asyncio.to_thread(diff_against_baseline, vfs, deps.project),
             )
+            last = self.state.get("last_verdicts")
+            listed_rules = None if last is None else last.rules
             verdict = await deps.thunk(
-                JudgeContext(assumptions=assumptions, vfs=vfs, version_history=list(history)),
+                JudgeContext(
+                    assumptions=assumptions,
+                    vfs=vfs,
+                    version_history=list(history),
+                    listed_rules=listed_rules,
+                ),
                 draft,
                 skipped,
                 self.rebuttals,
@@ -335,15 +344,32 @@ _PropertyGenSysTemplate = TypedTemplate[CvlrAuthorSystemParams](
 )
 
 
+def _rules_sentence(listed: tuple[str, ...] | None) -> str:
+    """The rule list a build stored, or the fact that none has."""
+    if listed is None:
+        return "The rules in this draft have not been listed by a build."
+    if not listed:
+        return "It declares these rules: none"
+    return "It declares these rules: " + ", ".join(sorted(listed))
+
+
 def with_assumptions(base: JudgeInput, ctx: JudgeContext) -> VfsJudgeInput:
     """The judge's ``input_lift``: append what the draft cannot show to what ``input_parts`` built,
     and seed the unit's edited program for the judge's source tools.
 
     Appended rather than prepended because the order is a claim about what the review opens on —
-    the artifact first, then the caveats attached to it.
+    the artifact first, then the caveats attached to it. The rule list is one of those caveats:
+    ``input_parts`` does not see it, because the names come from the build rather than the draft.
     """
     return VfsJudgeInput(
-        **{**base, "input": [*base["input"], *ctx.assumptions.briefing()]},
+        **{
+            **base,
+            "input": [
+                *base["input"],
+                *ctx.assumptions.briefing(),
+                _rules_sentence(ctx.listed_rules),
+            ],
+        },
         vfs=ctx.vfs,
         version_history=ctx.version_history,
     )
@@ -390,14 +416,10 @@ def build_feedback_thunk(
     def input_parts(
         draft: str, skipped: Sequence[SkippedProperty], rebuttals: Sequence[Rebuttal]
     ) -> list[str | dict]:
-        """Everything the review needs that the draft yields. What it does not — the author's
-        summaries and edits — arrives through :func:`with_assumptions`, which is the only
-        callback that sees the invocation's context."""
+        """Everything the review needs that the draft yields. What it does not — the rule list,
+        the author's summaries, and the edits — arrives through :func:`with_assumptions`, which
+        is the only callback that sees the invocation's context."""
         parts: list[str | dict] = ["The proposed CVLR harness module is", draft]
-        declared = rule_names(draft)
-        parts.append(
-            "It declares these rules: " + (", ".join(declared) if declared else "none")
-        )
         if skipped:
             parts.append("The author explicitly skipped these properties:")
             parts += [f"  Property {s.property_title}: {s.reason}" for s in skipped]
@@ -449,9 +471,9 @@ class PublishResultTool(
     Gated on both required validations: ``verify_rules`` must have accepted the draft *as it now
     stands*, and so must the feedback judge. Any put or skip since either stamp invalidates it.
 
-    ``property_rules`` is checked against the rules your draft actually declares — every non-skipped
-    property must be demonstrated by at least one, and every rule you wrote must be tied back to a
-    property.
+    ``property_rules`` is checked against the rules the verifying build listed — every non-skipped
+    property must be demonstrated by at least one, and every listed rule must be tied back to a
+    property. A draft whose rules have not been listed is refused.
     """
 
     commentary: str = Field(
@@ -462,7 +484,7 @@ class PublishResultTool(
         description="The property→rules mapping, for every property you did not skip."
     )
     rule_subjects: list[RuleSubject] = Field(
-        description="One entry per rule your draft declares. `function` is the program function "
+        description="One entry per rule the verifying build listed. `function` is the program function "
         "the rule calls, or the program function a stand-in replaces. Set `reason` only for a "
         "stand-in: why the program function itself could not be called."
     )
@@ -475,13 +497,20 @@ class PublishResultTool(
         assert draft is not None, "check_cvlr_completion rejects an unwritten draft"
         if not budget_pressure():
             # In the wrap-up window the gates are lifted and the declared mapping is accepted as
-            # given; outside it, the draft is the ground truth.
+            # given. Outside it, the list stored with the verifying run is the ground truth.
+            last = self.state.get("last_verdicts")
+            declared = None if last is None else last.rules
+            if declared is None:
+                return (
+                    "The rules in this draft have not been listed by a build. "
+                    "Run verify_rules before publishing."
+                )
             with self.tool_deps() as titles:
                 err = validate_property_rules(
-                    self.property_rules, self.state["skipped"], titles, draft
+                    self.property_rules, self.state["skipped"], titles, declared
                 )
             if err is None:
-                err = validate_rule_subjects(self.rule_subjects, draft)
+                err = validate_rule_subjects(self.rule_subjects, declared)
             if err is not None:
                 return err
         return tool_state_update(

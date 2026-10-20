@@ -62,7 +62,7 @@ from composer.spec.cvlr.prover import (
     run_submission,
     write_submission,
 )
-from composer.spec.cvlr.rules import rule_names
+from composer.spec.cvlr.manifest import rule_names_in_elf
 from composer.spec.cvlr.scaffold import SPECS_DIR, apply, plan_scaffold
 from composer.spec.cvlr.reference import SOLANA_V2
 
@@ -191,9 +191,6 @@ async def test_raising_the_loop_bound_is_what_turns_the_rule_green(project, tmp_
     apply(plan, project)
     (package.root / SPECS_DIR / "mod.rs").write_text(PROBE.read_text())
 
-    declared = rule_names(PROBE.read_text())
-    assert set(declared) == set(RULES), declared
-
     default = TunableConf()
     assert default.loop_iter < 5, (
         f"the probe's measured loop takes five iterations to outrun the default bound, which is "
@@ -224,6 +221,7 @@ async def test_raising_the_loop_bound_is_what_turns_the_rule_green(project, tmp_
     # One build, two confs. Both arms verify the identical artifact.
     build = await build_for_submission(session, _submission(default, "loop_bound_default"))
     assert isinstance(build.verdict, Built), getattr(build.verdict, "diagnostics", build)
+    assert rule_names_in_elf(build.verdict.manifest.artifact) == set(RULES)
 
     # The probe's premise, checked against the artifact rather than against the source, and before
     # anything is submitted: a loop the compiler deleted costs two cloud jobs to discover and looks

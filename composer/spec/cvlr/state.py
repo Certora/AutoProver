@@ -23,14 +23,16 @@ Summaries, edits, and an ``optimistic_loop`` in ``prover_settings`` are also
 what the feedback judge sees beyond the draft (:class:`HarnessAssumptions`).
 None of them appears in the harness source.
 
-The mapping gate's ground truth is the draft, read by
-:mod:`composer.spec.cvlr.rules`. The prover names every rule only after a
-submission. Both declaration forms name their rules deterministically, so the
-check runs in both directions before any run, including when the budget
-wrap-up leaves no time for one.
+The mapping gate's ground truth is the rule list stored with the verifying
+run, read from that build's ``.cvlr_rules`` section. ``#[rule]`` and
+``cvlr_rules!`` are how an author writes a rule. A checkpoint with no stored
+list has not had its rules listed, and publish refuses it. Outside the budget
+wrap-up the mapping is checked against the list. The wrap-up stores the
+mapping as given.
 """
 
 import dataclasses
+from collections.abc import Collection
 from pathlib import Path
 from typing import Annotated, NotRequired
 
@@ -49,7 +51,6 @@ from composer.authoring.state import (
 )
 from composer.spec.context import CacheKey, CvlrGeneration, CvlrJudge
 from composer.spec.cvlr.conf import TunableConf, conf_history
-from composer.spec.cvlr.rules import rule_names
 from composer.spec.cvlr.tuning import SummaryDirective, merge_summaries, summary_history
 from composer.spec.source.live_explorer import VersionedHistory
 from composer.spec.source.munge.edit_store import AppliedEdit
@@ -113,21 +114,24 @@ def _outside_the_program(path: str) -> bool:
     return not path.startswith(_PROGRAM_ROOT)
 
 
-def validate_rule_subjects(subjects: list[RuleSubject], draft: str) -> str | None:
-    """None when every declared rule has exactly one subject naming code in the program.
+def validate_rule_subjects(subjects: list[RuleSubject], declared: Collection[str]) -> str | None:
+    """None when every listed rule has exactly one subject naming code in the program.
 
     A rule may call a dependency, such as ``anchor_lang``'s ``Signer::try_from``,
     verify, and be mapped to a property of the program while establishing
     nothing about the program. The subject names that path, so this check can
     reject it. The mapping gate and the verdict cannot.
+
+    ``declared`` is the rule list the verifying build stored. It is not read
+    from the draft.
     """
-    declared = set(rule_names(draft))
+    listed = set(declared)
     seen: set[RuleName] = set()
     errors: list[str] = []
     for subject in subjects:
-        if subject.rule not in declared:
+        if subject.rule not in listed:
             errors.append(
-                f"`rule_subjects` names {subject.rule!r}, which your draft does not declare."
+                f"`rule_subjects` names {subject.rule!r}, which the build did not list."
             )
         elif subject.rule in seen:
             errors.append(f"Rule {subject.rule!r} appears more than once in `rule_subjects`.")
@@ -142,7 +146,7 @@ def validate_rule_subjects(subjects: list[RuleSubject], draft: str) -> str | Non
                 f"the property's words. Drive the program's own code, or skip the property and say "
                 f"this is why."
             )
-    for name in sorted(declared - seen):
+    for name in sorted(listed - seen):
         errors.append(
             f"Rule {name!r} has no entry in `rule_subjects`: say which program function it drives, "
             "or set `reason` when harness code stands in for one."
@@ -169,6 +173,10 @@ class LastVerdicts(BaseModel):
     #: Declared rules the report gave no verdict for; while any is missing, nothing stamps.
     unverdicted: list[str]
     stamp: dict[str, str]
+    #: The names the build listed, sorted. ``None`` means no build has listed
+    #: them, which is also what a checkpoint from before this field loads as.
+    #: An empty tuple means the section was present and named no rules.
+    rules: tuple[str, ...] | None = None
 
 
 class CvlrGenerationExtra(AuthoringExtra, VersionedHistory):
@@ -338,12 +346,12 @@ def check_cvlr_completion(state: CvlrGenerationExtra) -> str | None:
 
 
 #: Wording for this backend's publish-time mapping. ``ran_source`` names the
-#: draft, which is where the ground truth is read. A rejection that pointed at
-#: a prover run the author had not made would not say what to fix.
+#: list the verifying build stored. The shared sentence is "no rule by that
+#: name ran in {ran_source}".
 _CVLR_MAPPING = MappingVocab(
     check_noun="rule",
     field_name="property_rules",
-    ran_source="your current draft (the `#[rule]` functions and `cvlr_rules!` invocations in it)",
+    ran_source="the `.cvlr_rules` section of the build that verified this draft",
 )
 
 
@@ -351,17 +359,18 @@ def validate_property_rules(
     property_rules: list[PropertyRuleMapping],
     skipped: list[SkippedProperty],
     titles: list[PropertyTitle],
-    draft: str,
+    declared: Collection[str],
 ) -> str | None:
-    """Check the property-to-rule mapping against the rules the draft declares.
+    """Check the property-to-rule mapping against the rules the build listed.
 
-    No property may claim a rule the draft does not declare, and no declared
-    rule may go untied to a property.
+    No property may claim a rule the build did not list, and no listed rule
+    may go untied to a property. ``declared`` is that list. It is not read
+    from the draft.
     """
     return validate_check_mapping(
         [(m.property_title, m.rules) for m in property_rules],
         skipped,
         titles,
         _CVLR_MAPPING,
-        ran=list(rule_names(draft)),
+        ran=[RuleName(name) for name in declared],
     )

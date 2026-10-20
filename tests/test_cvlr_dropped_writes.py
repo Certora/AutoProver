@@ -43,7 +43,7 @@ from composer.spec.cvlr.prover import (
     prepare_submission,
     run_submission,
 )
-from composer.spec.cvlr.rules import rule_names
+from composer.spec.cvlr.manifest import rule_names_in_elf
 from composer.spec.cvlr.scaffold import SPECS_DIR, apply, plan_scaffold
 from composer.spec.cvlr.reference import SOLANA_V2
 
@@ -99,7 +99,6 @@ async def test_which_writes_the_model_drops(project, capsys):
     assert plan.blocked == (), plan.blocked
     apply(plan, project)
     (package.root / SPECS_DIR / "mod.rs").write_text(PROBE.read_text())
-    assert set(rule_names(PROBE.read_text())) == set(RULES)
 
     wanted = PLATFORM_TOOLS_VERSION
     if not platform_tools_installed(wanted):
@@ -144,6 +143,7 @@ async def test_which_writes_the_model_drops(project, capsys):
             pytest.fail(f"no results: {reason}")
         case Checked(build=build, report=report):
             assert isinstance(build.verdict, Built)
+            assert rule_names_in_elf(build.verdict.manifest.artifact) == set(RULES)
 
     saved = project / "dropped_writes_report.txt"
     saved.write_text(f"{report.link}\n\n{report.result_str}\n")

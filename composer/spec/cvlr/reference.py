@@ -303,14 +303,16 @@ class ChainReference:
         return commit_patches(self.crates())
 
 
-#: ``cvlr`` 0.6.1 with the public API documented, which crates.io's 0.6.1 is not. The commit is on
-#: the repository's main branch and keeps the version, so the pin stays ``=0.6.1``.
+#: ``cvlr`` 0.6.1, pinned to the ``.cvlr_rules`` head of Certora/cvlr#53
+#: (``eric/rule-manifest``). That commit is not on main. Its workspace version is still 0.6.1,
+#: and cargo applies the patch only when the commit's version meets ``=0.6.1``, so the
+#: requirement stays.
 #:
 #: TODO(cvlr-todo U28): pin the crates.io release once a documented one is published, and drop the
 #: commit.
 _CVLR_0_6_1_DOCUMENTED = GitCommit(
     repo="https://github.com/Certora/cvlr.git",
-    rev="465a0229b3a6c9708eeb2f6dd1c167e2eca81e4e",
+    rev="d2a765844a3656c2163b9cd50dbf23d5f8683a61",
 )
 
 #: The core line, shared by every chain. ``cvlr-spec`` (``cvlr_spec!``, ``cvlr_rules!``,

@@ -3,9 +3,10 @@
 ``docs/cvlr-backend-plan.md`` §7.6. The judge's system prompt has always told it to weigh the
 author's summaries — *"unlike a mirror it leaves no trace in the harness source, only a
 justification you have to weigh"* — and the judge was never given one. ``input_parts`` builds its
-input from the draft, the declared rules, the skips and the rebuttals, and a summary appears in none
-of those. Edits to the program made the same gap worse in kind rather than in degree: the judge
-reviews a harness while the program underneath it has been edited, and nothing said so.
+input from the draft, the skips and the rebuttals, and a summary appears in none of those. The rule
+list is not in the draft either: a build stores it, and the lift appends it. Edits to the program
+made the same gap worse in kind rather than in degree: the judge reviews a harness while the
+program underneath it has been edited, and nothing said so.
 
 The instruments are per-invocation state, so the fix is the judge's ``input_lift`` — the one
 callback that sees the caller's context. These tests pin the two halves separately: what
@@ -214,6 +215,36 @@ def test_the_briefing_lands_after_what_input_parts_built():
     lifted = with_assumptions(base, _ctx(HarnessAssumptions(summaries=(_DISPLAY,), edits=())))
     assert lifted["input"][: len(base["input"])] == base["input"]
     assert _DISPLAY.pattern in "\n".join(map(str, lifted["input"][len(base["input"]) :]))
+
+
+def test_an_unlisted_draft_tells_the_judge_the_rules_have_not_been_listed():
+    lifted = with_assumptions(_base(), _ctx(HarnessAssumptions((), ())))
+    assert lifted["input"][-1] == "The rules in this draft have not been listed by a build."
+
+
+def test_a_stored_rule_list_is_appended_after_the_draft():
+    ctx = _ctx(HarnessAssumptions((), ()))
+    ctx = JudgeContext(
+        assumptions=ctx.assumptions,
+        vfs=ctx.vfs,
+        version_history=ctx.version_history,
+        listed_rules=("rule_b", "rule_a"),
+    )
+    base = _base()
+    lifted = with_assumptions(base, ctx)
+    assert lifted["input"][: len(base["input"])] == base["input"]
+    assert lifted["input"][-1] == "It declares these rules: rule_a, rule_b"
+
+
+def test_an_empty_stored_list_says_none():
+    ctx = JudgeContext(
+        assumptions=HarnessAssumptions((), ()),
+        vfs={},
+        version_history=[],
+        listed_rules=(),
+    )
+    lifted = with_assumptions(_base(), ctx)
+    assert lifted["input"][-1] == "It declares these rules: none"
 
 
 def test_the_judge_is_shown_the_diff_and_not_only_a_description():

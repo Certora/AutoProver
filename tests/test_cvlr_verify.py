@@ -70,6 +70,7 @@ def test_every_declared_rule_verified_stamps_the_draft():
     assert out.update["validations"] == {PROVER_VALIDATION_KEY: spec_digest(_DRAFT, [], history)}
     assert out.update["prover_link"] == _LINK
     assert "stamped" in out.update["messages"][0].content
+    assert out.update["last_verdicts"].rules == ("rule_a", "rule_b")
 
 
 def test_a_failing_rule_does_not_stamp():
@@ -118,14 +119,6 @@ def test_a_submission_without_results_does_not_stamp():
 
     assert "cloud job failed" in out.update["messages"][0].content
     assert "validations" not in out.update
-
-
-@pytest.mark.asyncio
-async def test_a_draft_with_no_rules_is_not_submitted():
-    out = await _tool("fn helper() {}").run()
-
-    assert isinstance(out, str)
-    assert "nothing to submit" in out
 
 
 @pytest.mark.asyncio

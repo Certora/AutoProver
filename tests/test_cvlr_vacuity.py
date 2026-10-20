@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from composer.cargo.sbf import Built, SbfRun
 from composer.prover.conf import SelectRules
 from composer.prover.core import ProverReport
 from composer.prover.ptypes import RulePath
@@ -22,8 +23,9 @@ from composer.spec.cvlr.conf import (
     RunOverlay,
     solana_conf,
 )
-from composer.spec.cvlr.prover import Checked, Prepared
+from composer.spec.cvlr.prover import Checked
 from composer.spec.cvlr.prover import Submission as CvlrSubmission
+from tests.test_cvlr_manifest import elf_with_cvlr_rules, record
 from composer.spec.cvlr.vacuity import (
     AssertionInCore,
     AssertionNotInCore,
@@ -168,6 +170,29 @@ async def _stubbed_stage(draft, summaries=(), overlay={}) -> None:
     return None
 
 
+def _patch_listed(monkeypatch, tmp_path: Path, names: set[str]) -> list[CvlrSubmission]:
+    """A chain build whose ``.cvlr_rules`` section lists ``names``. Returns what was written."""
+    payload = record(0, b"CV1") + b"".join(record(1, name.encode()) for name in sorted(names))
+    so = tmp_path / "prog.so"
+    so.write_bytes(elf_with_cvlr_rules(payload))
+    written: list[CvlrSubmission] = []
+
+    async def build(_session, _submission):
+        return SbfRun(
+            duration_ms=1,
+            verdict=Built(manifest=SimpleNamespace(artifact=so)),  # type: ignore[arg-type]
+            confined=True,
+        )
+
+    async def write(_session, submission, *, into):
+        written.append(submission)
+        return Path("/w/c.conf")
+
+    monkeypatch.setattr(verify_mod, "build_for_submission", build)
+    monkeypatch.setattr(verify_mod, "write_submission", write)
+    return written
+
+
 class _FakeAnalyzer:
     def __init__(self) -> None:
         self.calls: list[dict] = []
@@ -214,30 +239,35 @@ def _checked(statuses: dict[str, str]) -> Checked:
 
 
 @pytest.mark.asyncio
-async def test_a_rule_the_draft_does_not_declare_is_refused_before_anything_runs():
-    answer = await _run(_deps(_FakeAnalyzer(), _FakeResults({}, {})), _state(), "rule_missing")
-    assert "declares no rule `rule_missing`" in answer and "rule_backed" in answer
+async def test_a_rule_the_build_did_not_list_is_refused_before_a_conf_is_written(tmp_path, monkeypatch):
+    """The draft names `rule_missing`. The `.so` does not, so nothing is written."""
+    written = _patch_listed(monkeypatch, tmp_path, {"rule_backed"})
+
+    async def run(*_args, **_kwargs):
+        pytest.fail("a rule the build did not list must not be submitted")
+
+    monkeypatch.setattr(verify_mod, "run_submission", run)
+    state = _state("#[rule]\nfn rule_missing() {}\n")
+    answer = await _run(_deps(_FakeAnalyzer(), _FakeResults({}, {})), state, "rule_missing")
+    assert "`rule_missing`" in answer and "rule_backed" in answer
+    assert written == []
 
 
 @pytest.mark.asyncio
-async def test_the_probe_checks_one_rule_in_a_conf_of_its_own(monkeypatch):
+async def test_the_probe_checks_one_rule_in_a_conf_of_its_own(tmp_path, monkeypatch):
     """One rule, not the draft's: the others are not what is being explained. Its own conf stem: the
     unit's conf ships with the deliverable, and a diagnostic run must not overwrite it."""
-    captured: dict = {}
-
-    async def fake_prepare(session, submission, **kwargs):
-        captured["submission"] = submission
-        return Prepared(build=None, conf_path=Path("/w/c.conf"))  # type: ignore[arg-type]
+    written = _patch_listed(monkeypatch, tmp_path, {"rule_backed"})
 
     async def fake_run(session, prepared, **kwargs):
         return _checked({"rule_backed": "VERIFIED"})
 
-    monkeypatch.setattr(verify_mod, "prepare_submission", fake_prepare)
     monkeypatch.setattr(verify_mod, "run_submission", fake_run)
     results = _FakeResults({"rule_backed-Assertions": ["c.txt"]}, {"c.txt": _CORE})
-    await _run(_deps(_FakeAnalyzer(), results), _state(), "rule_backed")
+    # The source names a different rule. The conf follows the section.
+    await _run(_deps(_FakeAnalyzer(), results), _state("#[rule]\nfn rule_decoy() {}\n"), "rule_backed")
 
-    sub: CvlrSubmission = captured["submission"]
+    (sub,) = written
     assert sub.purpose == CollectUnsatCore()
     assert sub.stem == "unit_x_unsat_core"
     assert sub.rules == SelectRules(("rule_backed",))
@@ -245,14 +275,12 @@ async def test_the_probe_checks_one_rule_in_a_conf_of_its_own(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_the_answer_leads_with_whether_the_assertion_is_in_the_core(monkeypatch):
-    async def fake_prepare(session, submission, **kwargs):
-        return Prepared(build=None, conf_path=Path("/w/c.conf"))  # type: ignore[arg-type]
+async def test_the_answer_leads_with_whether_the_assertion_is_in_the_core(tmp_path, monkeypatch):
+    _patch_listed(monkeypatch, tmp_path, {"rule_backed"})
 
     async def fake_run(session, prepared, **kwargs):
         return _checked({"rule_backed": "VERIFIED"})
 
-    monkeypatch.setattr(verify_mod, "prepare_submission", fake_prepare)
     monkeypatch.setattr(verify_mod, "run_submission", fake_run)
     analyzer = _FakeAnalyzer()
     results = _FakeResults({"rule_backed-Assertions": ["c.txt"]}, {"c.txt": _CORE})
@@ -269,16 +297,14 @@ async def test_the_answer_leads_with_whether_the_assertion_is_in_the_core(monkey
 
 
 @pytest.mark.asyncio
-async def test_a_rule_that_does_not_verify_without_the_check_has_no_core_to_read(monkeypatch):
+async def test_a_rule_that_does_not_verify_without_the_check_has_no_core_to_read(tmp_path, monkeypatch):
     """No proof, no core — and no analyst call spent on nothing."""
 
-    async def fake_prepare(session, submission, **kwargs):
-        return Prepared(build=None, conf_path=Path("/w/c.conf"))  # type: ignore[arg-type]
+    _patch_listed(monkeypatch, tmp_path, {"rule_backed"})
 
     async def fake_run(session, prepared, **kwargs):
         return _checked({"rule_backed": "VIOLATED"})
 
-    monkeypatch.setattr(verify_mod, "prepare_submission", fake_prepare)
     monkeypatch.setattr(verify_mod, "run_submission", fake_run)
     analyzer = _FakeAnalyzer()
     answer = await _run(_deps(analyzer, _FakeResults({}, {})), _state(), "rule_backed")

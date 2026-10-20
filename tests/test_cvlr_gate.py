@@ -58,7 +58,6 @@ from composer.spec.cvlr.editor import EditingServices
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness
 from composer.spec.cvlr.pipeline import CvlrBackend
 from composer.pipeline.ptypes import Curtailed, Delivered
-from composer.spec.cvlr.rules import rule_names
 from composer.spec.service_host import ModelProvider, PureServiceHost
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.munge.edit_store import EditStore
@@ -324,17 +323,6 @@ async def test_the_backend_authors_cvlr_rules_for_the_vault(
 
     assert result.n_properties > 0, "no properties extracted"
     assert result.n_delivered > 0, f"no unit delivered a harness: {result.failures}"
-
-    # The one thing that *is* mechanically checkable about rule quality: every rule a delivered
-    # harness claims must actually be declared in the source it shipped. The publish gate enforces
-    # this, so a violation here means the gate did not run, not that the model misbehaved.
-    for outcome in result.outcomes:
-        harness = _harness(outcome.result)
-        if harness is None:
-            continue
-        declared = set(rule_names(harness.harness))
-        claimed = {rule for _, rules in harness.property_checks() for rule in rules}
-        assert claimed <= declared, f"{outcome.feat.display_name}: {claimed - declared} not declared"
 
     # The claim this test's name makes. Everything above checks that the harness is internally
     # consistent and that the prover agreed with it — and all of it passes for a harness that
