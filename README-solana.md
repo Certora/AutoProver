@@ -45,6 +45,8 @@ $COMPOSE run --rm autoprove-solana console-solana /work/<proj> programs/<pkg>/sr
 
 A cold build of both images takes about 35 minutes.
 
+After a build, `scripts/verify-solana-image.sh` checks the images without an LLM: the toolchain in the Solana image, the two entrypoint guards, and one Prover job from `tests/test_cvlr_end_to_end.py` run inside the container against a SolanaExamples checkout (`--examples DIR`, or `$SOLANA_EXAMPLES_REPO`). It needs `CERTORAKEY` or a `certora-cloud login`, and takes about two minutes. `--no-prover` skips the job.
+
 ## Host
 
 You need the EVM pipeline's prerequisites from [README.md](README.md#prerequisites): Python, `uv`, `rustup`, the cloud credentials, and PostgreSQL. Solidity compilers are not needed. You also need:
