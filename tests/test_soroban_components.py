@@ -182,7 +182,7 @@ def test_duplicate_component_names_rejected():
 
 @pytest.mark.parametrize("name", ["Deposits!", "deposits", "DEPOSITS"])
 def test_component_slug_collision_rejected(name: str):
-    """Each differs from "Deposits" only in case or punctuation, so both would name one harness module."""
+    """The name and "Deposits" differ in case or punctuation, and would be one harness module."""
 
     def collide(raw):
         _components(raw)[1]["name"] = name

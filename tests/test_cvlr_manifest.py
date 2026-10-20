@@ -1,8 +1,8 @@
 """The ``.cvlr_rules`` reader, against ELF files built in the test.
 
 The records are the contract with ``#[rule]``: a tag, a little-endian length,
-and the payload. These files are not produced by rustc. A real ``.so`` is what
-the expensive probes read, after they have built one.
+and the payload. These files are not produced by rustc, so the tests need no
+toolchain.
 """
 
 import struct

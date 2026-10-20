@@ -2,7 +2,7 @@
 
 ``#[rule]`` writes one record per rule into that section of the SBF ``.so``.
 The Solana prover does not read the section, so a submission still names its
-rules in the conf. The names come from the ``.so`` the gate just built.
+rules in the conf.
 
 A record is a tag byte, a little-endian ``u32`` length, and that many payload
 bytes. Tag 0 is the anchor and its payload is ``CV1``. Tag 1 is one rule

@@ -28,7 +28,6 @@ from composer.spec.util import slugify_rust_module
     ],
 )
 def test_a_name_becomes_an_idiomatic_rust_identifier(name: str, expected: str):
-    """The name is written into someone else's crate, so it has to be snake_case and a legal `pub mod`."""
     assert slugify_rust_module(name) == expected
 
 

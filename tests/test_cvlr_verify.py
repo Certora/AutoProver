@@ -1,12 +1,9 @@
-"""``verify_rules``: what it submits, when it stamps, and how long it holds the build permit.
+"""``verify_rules``, driven through :func:`gate_tools`.
 
-Driven through :func:`gate_tools`, as the author's graph calls it. No cargo and no Prover: the
-build, the section read, the conf write and the submission are stand-ins. The stamp is the digest
-of the draft.
-
-Every SBF build of the crate writes the same ``.so``, and the Prover's local phase rebuilds and
-uploads it. So a submission holds the build permit until the job's link arrives, and not through
-the cloud job.
+No cargo and no Prover: the build, the section read, the conf write, and the
+submission are stand-ins. The stamp is the digest of the draft. A submission
+holds the build permit until the job's link arrives, and not through the cloud
+job.
 """
 
 import asyncio
@@ -240,8 +237,7 @@ async def test_the_permit_is_held_until_the_upload_and_not_through_the_cloud_job
 
 
 async def test_releasing_a_permit_twice_releases_it_once():
-    """The link releases it, and so does the end of the slot. A second release must not hand a
-    second unit the permit while a third already holds it."""
+    """Releasing twice must not leave an extra permit for another unit to take."""
     sem = asyncio.Semaphore(1)
     permit = BuildPermit(sem)
     await permit.acquire()

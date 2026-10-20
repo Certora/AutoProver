@@ -1,10 +1,9 @@
-"""A CVLR harness module, and where it is written.
+"""A CVLR harness module, written into the crate under verification.
 
-A CVLR harness is a Rust module inside the crate under verification. It
-compiles only from there, and the prover reaches it through the build. The
-artifact store writes it into the package's ``src/certora/specs/``
-(:mod:`composer.spec.cvlr.scaffold`). The modules are ``pub`` because a path
-into ``specs`` has to be visible from the program's own file
+The prover sees it only as part of that crate's build. The artifact store
+writes it under the package's ``src/certora/specs/``
+(:mod:`composer.spec.cvlr.scaffold`). The modules are ``pub`` because the
+program's own file reaches into ``specs``
 (:func:`composer.spec.cvlr.scaffold._harness_files`).
 """
 
@@ -20,15 +19,13 @@ from composer.spec.cvlr.scaffold import SPECS_DIR
 from composer.spec.types import CheckName, PropertyTitle
 from composer.spec.util import ensure_dir
 
-#: Reports and diagnostics. The harness source is written into the crate.
 DELIVERABLE_DIR = Path("certora") / "cvlr"
 INTERNAL_DIR = Path(".certora_internal") / "cvlr"
 
 @dataclasses.dataclass(frozen=True)
 class HarnessModule:
-    #: The unit's slug. The Rust ecosystems produce it with
-    #: :func:`~composer.spec.util.slugify_rust_module`, so it is already a
-    #: ``snake_case`` module identifier, unique within the program.
+    #: A ``snake_case`` module name, from
+    #: :func:`~composer.spec.util.slugify_rust_module`. Unique within the program.
     module: str
 
     @property
@@ -51,8 +48,6 @@ class HarnessModule:
 
 
 class GeneratedHarness(BaseModel):
-    """A published harness: the module source, and what the author said about it."""
-
     commentary: str
     harness: str
 
@@ -66,11 +61,10 @@ class GeneratedHarness(BaseModel):
 
 
 class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
-    """Writes CVLR harnesses into the crate, and everything else under ``certora/cvlr/``.
+    """Writes CVLR harnesses into the verified package, and everything else under ``certora/cvlr/``.
 
-    ``package_dir`` is the verified package's directory relative to the project
-    root. The harness has to land in that crate. In a workspace that is not
-    the project root.
+    ``package_dir`` is that package relative to the project root. In a workspace
+    it is not the project root, and the harness still has to be written into the package.
     """
 
     def __init__(self, project_root: str | Path, package_dir: Path) -> None:
@@ -88,20 +82,17 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
         return ensure_dir(Path(self._project_root) / self._package_dir / SPECS_DIR)
 
     def declare_modules(self, modules: list[HarnessModule]) -> tuple[Path, ...]:
-        """Write ``specs/mod.rs``, declaring every unit's module behind its cargo feature.
+        """Write ``specs/mod.rs``, with every unit's module behind its cargo feature.
 
-        Returns the path it writes.
+        Called once, before any unit stages a draft, so the file names every unit.
+        rustc does not read a module whose ``cfg`` is disabled, and that module
+        does not enter dep-info: a missing file does not fail another unit's
+        build, and one unit's draft does not rebuild another's. The units are
+        never compiled together, so two ``impl Nondet for Foo`` do not collide
+        (``E0119``).
 
-        Called once, before any unit stages a draft, so the file has to name
-        every unit. A module behind a disabled ``cfg`` is never read by rustc and
-        never enters its dep-info. So a unit that has not written its file yet
-        does not stop another unit from compiling, and one unit's draft cannot
-        break or rebuild another unit's build. Two units are never compiled
-        together, so two ``impl Nondet for Foo`` in different modules do not
-        collide (``E0119``).
-
-        Module names are unique because slugs are: component analysis rejects
-        sibling components whose slugs collide.
+        Names are unique. Component analysis rejects sibling components whose
+        slugs collide.
         """
         target = self._artifact_dir()
         declarations = "".join(
@@ -114,5 +105,4 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
             "//! build selects exactly one unit's rules.\n"
             "\n" + declarations
         )
-        # Callers log this path.
         return (mod_rs,)

@@ -30,11 +30,12 @@ def slugify_filename(name: str) -> str:
     return slug or "unnamed"
 
 
-#: Identifiers ``pub mod`` rejects through edition 2024: the strict keywords,
-#: ``try`` (reserved since 2018), and ``gen`` (reserved in 2024). Prefixing
-#: ``gen`` is still a legal name on an earlier edition. The check runs after
-#: lowercasing, so ``Self`` is covered by ``self``. Weak keywords (``union``,
-#: ``safe``, ``raw``) are legal module names and are absent here.
+#: ``pub mod`` rejects these through edition 2024: the strict keywords,
+#: ``try`` (reserved since 2018), and ``gen`` (reserved in 2024). ``gen`` is
+#: prefixed even on an earlier edition, where it is still a legal name. The
+#: check runs after lowercasing, so ``Self`` is covered by ``self``. Weak
+#: keywords (``union``, ``safe``, ``raw``) are legal module names and are not
+#: listed.
 _RUST_MODULE_KEYWORDS = frozenset(
     {
         "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "crate", "do", "dyn", "else",
@@ -46,12 +47,12 @@ _RUST_MODULE_KEYWORDS = frozenset(
 
 
 def slugify_rust_module(name: str) -> str:
-    """A slug that is also a ``snake_case`` Rust module identifier.
+    """A ``snake_case`` Rust module identifier.
 
-    For the Rust ecosystems, whose CVLR harness is a module named after the
-    slug. Any run of characters outside ``[A-Za-z0-9]`` becomes one ``_``, and
-    the result is lowercased, so a crate that denies ``non_snake_case`` accepts
-    it. A leading digit or a keyword is prefixed with ``spec_``.
+    Solana and Soroban name the CVLR harness module with this slug. Characters
+    outside ``[A-Za-z0-9]`` become one ``_``, and the result is lowercased, so
+    a crate that denies ``non_snake_case`` accepts it. A leading digit or a
+    keyword is prefixed with ``spec_``.
     """
     slug = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_").lower() or "unnamed"
     if slug[0].isalpha() and slug not in _RUST_MODULE_KEYWORDS:
