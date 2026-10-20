@@ -650,6 +650,13 @@ beside `solana.html`: its diagnostics and timeout chapters are on-topic and its 
 not. And vector search missed *Parametric Rules & Macros* for "one rule covering every instruction",
 which keyword search found. Neither has been looked at since the corpus became the manual alone.
 
+**U32. A halted job's finished rules are not returned. Deferred: parity with CVL.**
+`cloud_results` raises on `HALTED` before it downloads the tree view, so the author hears that the
+job ran out of resources and not which rules already had a verdict. The EVM author path uses the
+same function. PreAudit does read them: it treats `HALTED` as complete and calls
+`parse_rule_results_from_job`. Seen as 18 jobs on the 2026-10-16 stake run
+([stake-benchmark.md](./stake-benchmark.md)). Not a Solana gap to fix on its own.
+
 ---
 
 ## Leads from the certora-cvlr-kb ledger
@@ -805,9 +812,13 @@ P9.
 **3. Most of the upstream defects are filed nowhere.**
 [upstream-defects.md](./upstream-defects.md) is a well-evidenced document that few upstream teams
 have been asked to read. P7 is CERT-10103, P8 is CERT-10061 (named in the Prover's own source), and
-L1 filed CERT-10183 and CERT-10184. The template defects (group T), the manual's examples (group M)
-and the rest of group P are not routed, and each is rediscovered by the next engagement until they
-are.
+L1 filed CERT-10183 and CERT-10184. P15's fix is in flight at
+[EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762). Encoding failures that today
+appear only in `Results.txt`, including the stake run's `[3308]` and `[3003]`, are reported as
+`Solana Encoding` alerts in
+[EVMVerifier#8765](https://github.com/Certora/EVMVerifier/pull/8765), open. The template defects (group T),
+the manual's examples (group M) and the rest of group P are not routed, and each is rediscovered by
+the next engagement until they are.
 
 **~~4. `mock_fn` cannot reach an inherent method.~~** — **worked around.** A `use` inside an
 `impl` block is not a method, so `mock_fn` reaches free functions only. The corpus's own answer is

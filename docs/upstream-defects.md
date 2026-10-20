@@ -17,7 +17,7 @@ our own author prompt rather than the prover — see its correction. **P6 was do
 direct probe on 2026-09-29 did not reproduce it, and the handler form it was observed in is
 unmeasured. **P7
 also blocks**, for any function that multiplies in `i128` — narrower, and already filed as CERT-10103
-with a fix in flight, which makes it the only entry in this group with a known landing. **P8 blocks
+with a fix in flight. **P8 blocks
 nothing today and blocks a change we wanted**: two shipped flags that defeat each other, measured
 rather than argued, and named by a TODO in the prover's own source. **P9 blocks a whole shape of
 property** — anything that asserts a handler *succeeds* — and it is the uncomfortable one, because
@@ -30,7 +30,8 @@ that check. Which expressions it takes depends on how the rule is laid out, so b
 clears it only sometimes. It costs coverage, never soundness; the author bounds once, then restates
 the property below the handler or skips it. **P13 is why a stand-in CPI cannot move lamports**, measured against a
 control group. **P15 crashes the Prover** on an SDK 3 `Clock::get()`; a crash fails the whole
-job, so every rule in it comes back with no verdict.
+job, so every rule in it comes back with no verdict. A fix is in flight at
+[EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762).
 
 **Group U — `prover_output_utility`.** The library the report stack reads verdicts through. One
 entry, and unlike the others it was corrupting our own output rather than merely obstructing us;
@@ -69,7 +70,7 @@ the write-up gives the line number rather than the name.
 | [P11](#p11) | Without `-solanaTACSoundSignedMath`, a `u64` compared against a constant with the top bit set (`u64::MAX`, `1 << 63`) is modelled as comparing against a negative number | **critical** — unsound by default; `-solanaTACSoundSignedMath` fixes it, and AutoProver runs it on Prover master during development |
 | [P12](#p12) | Under `-solanaTACSoundSignedMath`, an expression the Prover wrongly takes for a pointer fails a "Cannot overflow" check it generated, depending on the rule's layout, so the rule never reaches its property | **major**, partly worked around in the prompt |
 | [P13](#p13) | An `AccountInfo` selected from a slice by key loses its provenance, so a stand-in `invoke` cannot move lamports | **major**, worked around in the prompt |
-| [P15](#p15) | An SDK 3 `Clock::get()` can crash the Prover: "TAC Clock::get expected to extract 5 TAC variables from call sol_get_clock_sysvar" | **major** — the job FAILS with no verdicts; not worked around |
+| [P15](#p15) | An SDK 3 `Clock::get()` can crash the Prover: "TAC Clock::get expected to extract 5 TAC variables from call sol_get_clock_sysvar" | **major** — the job FAILS with no verdicts; fix in flight ([EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762)) |
 | [U1](#u1) | `extract_job_id_from_url` cannot parse a Solana Prover job link | **major**, worked around |
 | [T1](#t1) | Tuning files are spelled for pre-2.2 `solana-program` paths | major |
 | [T2](#t2) | A canonical tuning file names one specific on-chain program | hygiene |
@@ -1040,6 +1041,14 @@ elements, which here are all clones of infos with known regions. Not yet filed.
 
 ### An SDK 3 `Clock::get()` can crash the Prover
 
+**A fix is in flight — [Certora/EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762).**
+A points-to-dead `sol_get_clock_sysvar` has no memory-splitter entry, so `getTACVariables` returns
+nothing and the arity check throws `IllegalStateException`. `solanaSbfToTAC` catches only
+`SolanaError`, and one such call fails every rule in the job. The PR encodes a missing entry as
+unreachable TAC, as a dead load already is, and does the same for `Clock::set` and `Rent::get`. A
+recorded summary whose field count is wrong throws `SolanaError` with the actual count. The
+five-field clock summary is unchanged: it already matches the lowered call.
+
 **Effect: the whole cloud job ends `FAILED`**, so every rule it carried comes back with no verdict.
 `Reports/alertReport.json` holds one `ERROR`, "An internal Prover error occurred", with the hint:
 
@@ -1052,7 +1061,7 @@ Prover `master` at `d530cfdc69`:
 
 | job | unit | the harness's own `Clock::get()` calls |
 |---|---|---|
-| `d347b5af8522405f84207968ab2a41b1` | Lockup Management | 12 |
+| `d347b5af8522405f84207968ab2a41b1` | Delegation & Deactivation | 12 |
 | `e7760d2d…` | Delegation & Deactivation | 1 |
 | `9fc4c8ae6e1944dca697e568d679772f` | Delegation & Deactivation, resubmitted | 1 |
 | `8f604d46bcde47a3aac5c9d2a75c864d` | Protocol Parameters / Queries | 0 |
@@ -1061,16 +1070,14 @@ The first three harnesses call `solana_clock::Clock::get().unwrap()` themselves,
 harness-side call as the trigger. The fourth calls it nowhere, and crashed the same way, so the
 program's own `Clock::get()` calls in `processor.rs` can trigger it too. Account Initialization and
 Authority Management drive handlers that read the clock and ran without the crash, so it depends on
-which call, or on what else the job analyzes. Narrowing it down is the next step: a probe rule per
-handler, each calling one handler and asserting nothing.
+which call, or on what else the job analyzes. The crashing call is one the points-to analysis
+skipped and TAC encoding still walked.
 
-**What AutoProver does about it**: nothing yet. Worse, the author is not told: a `FAILED` job
-reaches it as a status and a link it cannot open (`composer/prover/core.py`), so it may take the
-crash for a fault in its draft. Surfacing `alertReport.json`'s errors is the AutoProver half of the
-fix.
+**What AutoProver does about it.** A `FAILED` job includes the alert's `hint`, which names the
+syscall and the call address, and the text says resubmitting the same draft will fail the same way.
+The job still fails until the Prover fix lands.
 
-**What would resolve it**: the `Clock::get` summary matching however the SDK 3 `sol_get_clock_sysvar`
-call is lowered at this call site. Not yet filed.
+**What would resolve it**: [EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762), open.
 
 ---
 
