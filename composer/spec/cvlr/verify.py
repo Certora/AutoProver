@@ -31,11 +31,7 @@ from composer.diagnostics.timing import get_run_summary
 from composer.cargo.features import CargoFeature
 from composer.cargo.sbf import Built
 from composer.cargo.session import CargoSession, CompileFailed, Compiled
-from composer.prover.core import (
-    CexHandler,
-    ProverCallbacks,
-    ProverOptions,
-)
+from composer.prover.core import ProverCallbacks, ProverOptions
 from composer.prover.ptypes import RuleResult
 from composer.prover.conf import SelectRules
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
@@ -271,7 +267,6 @@ async def _stage_and_submit(
     draft: str,
     *,
     callbacks: _RunAccounting,
-    cex: CexHandler | None,
     tool_call_id: str,
     choose: Callable[[set[str]], Submission | str],
 ) -> CvlrOutcome | str:
@@ -280,6 +275,9 @@ async def _stage_and_submit(
     ``choose`` sees the rule names in the ``.so`` and returns the submission to
     write, or a message. A message, or a missing or unreadable section, writes
     no conf.
+
+    The submission carries no counterexample handler. A violated rule is
+    rendered as its status and its dump.
 
     Every SBF build of the crate writes the same ``.so``. ``run_submission``
     rebuilds it into the shared target directory and uploads it. A sibling's
@@ -319,7 +317,7 @@ async def _stage_and_submit(
             prepared,
             prover_opts=deps.prover_opts,
             callbacks=callbacks,
-            cex=cex,
+            cex=None,
             tool_call_id=tool_call_id,
         )
 
@@ -366,7 +364,6 @@ class VerifyRules(
                     deps,
                     draft,
                     callbacks=_RunAccounting(),
-                    cex=None,
                     tool_call_id=self.tool_call_id,
                     choose=choose,
                 )
