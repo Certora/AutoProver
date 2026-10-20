@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from composer.spec.system_model import BaseApplication
 from composer.spec.types import ComponentName, ContractName, RustIdentifier
-from composer.spec.util import slugify_filename
+from composer.spec.util import slugify_rust_module
 
 StorageDurability = Literal["instance", "persistent", "temporary"]
 
@@ -237,7 +237,7 @@ class SorobanComponentInstance:
 
     @property
     def slug(self) -> str:
-        return slugify_filename(self.component.name)
+        return slugify_rust_module(self.component.name)
 
     @property
     def unit_index(self) -> int:

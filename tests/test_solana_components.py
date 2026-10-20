@@ -132,13 +132,15 @@ def test_duplicate_component_names_rejected():
     assert problem is not None and "Duplicate component names in Vault: Deposits" in problem
 
 
-def test_component_slug_collision_rejected():
-    # "Deposits!" and "Deposits" are distinct names that slugify to the same artifact id.
+@pytest.mark.parametrize("name", ["Deposits!", "deposits", "DEPOSITS"])
+def test_component_slug_collision_rejected(name: str):
+    """Each differs from "Deposits" only in case or punctuation, so both would name one harness module."""
+
     def collide(raw):
-        _components(raw)[1]["name"] = "Deposits!"
+        _components(raw)[1]["name"] = name
 
     problem = _solana_validate(_app(collide), VAULT_ID, None, None)
-    assert problem is not None and "filename slug" in problem
+    assert problem is not None and "Rust harness module" in problem
 
 
 def test_unknown_instruction_reference_rejected():

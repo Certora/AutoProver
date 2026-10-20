@@ -11,13 +11,9 @@ rustc, so a unit that has not written its file yet does not stop another unit
 from compiling. The modules are ``pub`` because a path into ``specs`` has to
 be visible from the program's own file
 (:func:`composer.spec.cvlr.scaffold._harness_files`).
-
-A component slug may contain characters Rust will not accept in a module path.
-:func:`module_name` derives the identifier once.
 """
 
 import dataclasses
-import re
 from pathlib import Path
 from typing import override
 
@@ -36,96 +32,12 @@ from composer.spec.util import ensure_dir
 DELIVERABLE_DIR = Path("certora") / "cvlr"
 INTERNAL_DIR = Path(".certora_internal") / "cvlr"
 
-#: Identifiers ``pub mod`` rejects through edition 2024: the strict keywords,
-#: ``try`` (reserved since 2018), and ``gen`` (reserved in 2024). Prefixing
-#: ``gen`` is still a legal name on an earlier edition. The check runs after
-#: lowercasing, so ``Self`` is covered by ``self``. Weak keywords (``union``,
-#: ``safe``, ``raw``) are legal module names and are absent here.
-_RUST_MODULE_KEYWORDS = frozenset(
-    {
-        "abstract",
-        "as",
-        "async",
-        "await",
-        "become",
-        "box",
-        "break",
-        "const",
-        "continue",
-        "crate",
-        "do",
-        "dyn",
-        "else",
-        "enum",
-        "extern",
-        "false",
-        "final",
-        "fn",
-        "for",
-        "gen",
-        "if",
-        "impl",
-        "in",
-        "let",
-        "loop",
-        "macro",
-        "match",
-        "mod",
-        "move",
-        "mut",
-        "override",
-        "priv",
-        "pub",
-        "ref",
-        "return",
-        "self",
-        "static",
-        "struct",
-        "super",
-        "trait",
-        "true",
-        "try",
-        "type",
-        "typeof",
-        "unsafe",
-        "unsized",
-        "use",
-        "virtual",
-        "where",
-        "while",
-        "yield",
-    }
-)
-
-
-def module_name(slug: str) -> str:
-    """A Rust module identifier for a component slug.
-
-    Rust accepts ``[A-Za-z_][A-Za-z0-9_]*`` and rejects keywords. A slug may
-    contain ``-``, start with a digit, or be a keyword itself. The result is
-    lowercased and runs of separators collapse, so the name is ``snake_case``.
-    A crate that denies ``non_snake_case`` accepts it. A leading digit or a
-    keyword is prefixed with ``spec_``. A slug that leaves nothing is refused.
-    The identifier is fixed from the slug. A draft cannot rename the module.
-    """
-    cleaned = "".join(c if c.isalnum() or c == "_" else "_" for c in slug).lower()
-    collapsed = re.sub(r"_+", "_", cleaned).strip("_")
-    if not collapsed:
-        raise ValueError(
-            f"component slug {slug!r} leaves no Rust module name once separators are removed"
-        )
-    if collapsed[:1].isalpha() and collapsed not in _RUST_MODULE_KEYWORDS:
-        return collapsed
-    return f"spec_{collapsed}"
-
-
 @dataclasses.dataclass(frozen=True)
 class HarnessModule:
-    slug: str
-
-    @property
-    def module(self) -> str:
-        return module_name(self.slug)
+    #: The unit's slug. The Rust ecosystems produce it with
+    #: :func:`~composer.spec.util.slugify_rust_module`, so it is already a
+    #: ``snake_case`` module identifier, unique within the program.
+    module: str
 
     @property
     def stem(self) -> str:
@@ -140,7 +52,7 @@ class HarnessModule:
         in its dep-info, so it cannot break or dirty another unit's build.
 
         The name is prefixed with ``unit_``. It shares a namespace with the
-        project's own features. A slug such as ``serde`` would otherwise select
+        project's own features. A module such as ``serde`` would otherwise select
         the project's feature.
         """
         return CargoFeature(f"unit_{self.module}")
@@ -227,23 +139,9 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
         Two units are never compiled together, so two ``impl Nondet for Foo``
         in different modules do not collide (``E0119``).
 
-        Two slugs that reduce to one module name are refused. This is the only
-        place that sees every name at once. They would share a file, so one
-        harness would overwrite the other, both compile gates would pass, and
-        the report would claim two units for one body of work.
+        Module names are unique because slugs are: component analysis rejects
+        sibling components whose slugs collide.
         """
-        by_module: dict[str, list[str]] = {}
-        for module in modules:
-            by_module.setdefault(module.module, []).append(module.slug)
-        clashes = {name: slugs for name, slugs in by_module.items() if len(slugs) > 1}
-        if clashes:
-            detail = "; ".join(f"{sorted(s)} all become {name!r}" for name, s in clashes.items())
-            raise ValueError(
-                f"two or more components share a harness module name ({detail}). Module names are "
-                f"lowercased and separator-collapsed, and a leading digit or a keyword is prefixed "
-                f"with 'spec_', so slugs that differ only in case, punctuation, or that prefix "
-                f"collide. Rename the components so they differ in more than that."
-            )
         target = self._artifact_dir()
         declarations = "".join(
             f'#[cfg(feature = "{m.feature}")]\npub mod {m.module};\n'
