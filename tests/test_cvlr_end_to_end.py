@@ -37,6 +37,7 @@ from composer.spec.cvlr.prover import (
     prepare_submission,
     run_submission,
 )
+from composer.spec.cvlr.verify import RuleStatusReport
 
 pytestmark = [pytest.mark.expensive, pytest.mark.asyncio]
 
@@ -158,6 +159,7 @@ async def test_the_examples_project_verifies_exactly_as_its_authors_expect(
         session,
         prepared,
         prover_opts=make_prover_options(cloud=True, app="solana"),
+        cex=RuleStatusReport(),
     )
     assert isinstance(outcome, Checked), outcome
     assert isinstance(outcome.build.verdict, Built)

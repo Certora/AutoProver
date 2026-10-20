@@ -31,7 +31,12 @@ from composer.diagnostics.timing import get_run_summary
 from composer.cargo.features import CargoFeature
 from composer.cargo.sbf import Built
 from composer.cargo.session import CargoSession, CompileFailed, Compiled
-from composer.prover.core import ProverCallbacks, ProverOptions
+from composer.prover.core import (
+    CexHandler,
+    CexProgressCallbacks,
+    ProverCallbacks,
+    ProverOptions,
+)
 from composer.prover.ptypes import RuleResult
 from composer.prover.conf import SelectRules
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
@@ -262,6 +267,31 @@ def _unread(err: ManifestMissing | ManifestCorrupt) -> str:
     )
 
 
+class RuleStatusReport(CexHandler):
+    """Each rule's status, the prover's messages, and its counterexample dump.
+
+    ``flat_rule_feedback.j2`` says the analysis found nothing when a violated
+    rule has no explanation. That sentence would describe an analysis that ran.
+    """
+
+    @override
+    async def analyze(
+        self,
+        all_results: list[RuleResult],
+        tool_call_id: str,
+        callbacks: CexProgressCallbacks,
+        report_dir: Path,
+    ) -> str:
+        lines: list[str] = []
+        for rule in all_results:
+            lines.append(f"{rule.name}: {rule.status}")
+            for message in rule.error_messages or ():
+                lines.append(f"  {message}")
+            if rule.cex_dump:
+                lines.append(f"  {rule.cex_dump}")
+        return "\n".join(lines)
+
+
 async def _stage_and_submit(
     deps: VerifyDeps,
     draft: str,
@@ -313,6 +343,7 @@ async def _stage_and_submit(
             deps.target.session,
             prepared,
             prover_opts=deps.prover_opts,
+            cex=RuleStatusReport(),
             callbacks=callbacks,
             tool_call_id=tool_call_id,
         )
