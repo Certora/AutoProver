@@ -17,6 +17,7 @@ from graphcore.tools.vfs import MATERIALIZED_MANIFEST
 from composer.cargo.metadata import CratePackage, LibTarget, RegistrySource, Workspace
 from composer.layout import INTERNAL_DIR
 from composer.sandbox.recipes import SANDBOX_CARGO_DIR
+from composer.spec.gen_types import CVLR_DELIVERABLE_DIR
 
 from composer.spec.cvlr.harness import CvlrArtifactStore, HarnessModule
 from composer.spec.cvlr.scaffold import declare_unit_features
@@ -388,6 +389,28 @@ async def test_build_output_and_tooling_are_not_copied_at_any_depth(tmp_path: Pa
 
     assert sorted(p.name for p in tree.root.iterdir()) == [MATERIALIZED_MANIFEST, "programs"]
     assert not (tree.root / "programs/p/target").exists()
+
+
+@pytest.mark.asyncio
+async def test_the_deliverables_are_not_copied_and_the_harness_is(tmp_path: Path):
+    """``certora`` at the project root holds deliverables, and in a package's ``src`` the harness."""
+    project = _project(tmp_path)
+    for file in (
+        CVLR_DELIVERABLE_DIR / "reports/report.json",
+        CVLR_DELIVERABLE_DIR / "reports/x.rs",
+        Path(_SPECS) / "mod.rs",
+    ):
+        (project / file).parent.mkdir(parents=True, exist_ok=True)
+        (project / file).write_text("x")
+
+    tree = SharedTree(pristine=project, root=tmp_path / "work" / "build", source=_SOURCE_DIRS)
+    await tree.materialize()
+
+    assert not (tree.root / CVLR_DELIVERABLE_DIR).exists()
+    assert (tree.root / _SPECS / "mod.rs").exists()
+    at_root = ProjectSource(roots=(PurePosixPath("."),))
+    assert not at_root.contains(str(CVLR_DELIVERABLE_DIR / "reports/x.rs"))
+    assert at_root.contains("src/certora/specs/mod.rs")
 
 
 # ---------------------------------------------------------------------------------------------

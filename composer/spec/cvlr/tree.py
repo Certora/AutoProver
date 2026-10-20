@@ -45,6 +45,7 @@ from graphcore.tools.vfs import DictBackend, DirBackend, PersistentMaterializer
 
 from composer.cargo.metadata import Workspace
 from composer.layout import RUST_BUILD_DIRS
+from composer.spec.gen_types import CVLR_DELIVERABLE_DIR
 
 #: Directories the working tree is never filled from, wherever they sit in the project.
 #:
@@ -55,10 +56,17 @@ from composer.layout import RUST_BUILD_DIRS
 #: skipping a source directory named like one of these.
 NOT_PROJECT_SOURCE = (*RUST_BUILD_DIRS, ".git", "certora_out", ".cvlr_work")
 
+#: Project-relative directories the working tree is never filled from: this backend's
+#: deliverables. Matched only at the project root, since ``certora`` also names the harness
+#: directory the scaffold puts in the package's ``src``.
+NOT_PROJECT_SOURCE_AT_ROOT = (CVLR_DELIVERABLE_DIR,)
 
-def _excluded_directory(directories: tuple[str, ...]) -> str | None:
-    """The first of ``directories`` that is in :data:`NOT_PROJECT_SOURCE`, if any."""
-    return next((d for d in directories if d in NOT_PROJECT_SOURCE), None)
+
+def _not_project_source(directory: PurePath) -> bool:
+    """Whether a project-relative directory is, or is under, one the tree is never filled from."""
+    return any(d in NOT_PROJECT_SOURCE for d in directory.parts) or any(
+        directory.is_relative_to(d) for d in NOT_PROJECT_SOURCE_AT_ROOT
+    )
 
 
 def _relative_key(relative: str) -> str | None:
@@ -90,7 +98,8 @@ class ProjectSource:
     from the program's manifest.
 
     A crate whose root sits at its package root makes the whole package its source directory, build
-    output included, so :data:`NOT_PROJECT_SOURCE` is refused inside a source directory as well.
+    output included, so :data:`NOT_PROJECT_SOURCE` and :data:`NOT_PROJECT_SOURCE_AT_ROOT` are refused
+    inside a source directory as well.
     """
 
     #: Project-relative.
@@ -126,8 +135,8 @@ class ProjectSource:
         if key is None:
             return False
         path = PurePosixPath(key)
-        return any(path.is_relative_to(root) for root in self.roots) and (
-            _excluded_directory(path.parts[:-1]) is None
+        return any(path.is_relative_to(root) for root in self.roots) and not _not_project_source(
+            path.parent
         )
 
     def may_edit(self, relative: PurePosixPath | str) -> bool:
@@ -181,7 +190,7 @@ def _NOT_MATERIALIZED(path: PurePath) -> bool:
 
     Asked of directories as well as files, which is what lets the copy skip a directory whole.
     """
-    return _excluded_directory(path.parts) is not None
+    return _not_project_source(path)
 
 
 @dataclass(frozen=True)

@@ -16,11 +16,9 @@ from pydantic import BaseModel
 from composer.cargo.features import CargoFeature
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.cvlr.scaffold import SPECS_DIR
+from composer.spec.gen_types import CVLR_DELIVERABLE_DIR, CVLR_INTERNAL_DIR
 from composer.spec.types import CheckName, PropertyTitle
 from composer.spec.util import ensure_dir
-
-DELIVERABLE_DIR = Path("certora") / "cvlr"
-INTERNAL_DIR = Path(".certora_internal") / "cvlr"
 
 @dataclass(frozen=True)
 class HarnessModule:
@@ -71,9 +69,9 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
         super().__init__(
             project_root,
             "property_rules",
-            deliverable_dir=DELIVERABLE_DIR,
-            internal_dir=INTERNAL_DIR,
-            report_dir=DELIVERABLE_DIR / "reports",
+            deliverable_dir=CVLR_DELIVERABLE_DIR,
+            internal_dir=CVLR_INTERNAL_DIR,
+            report_dir=CVLR_DELIVERABLE_DIR / "reports",
         )
         self._package_dir = package_dir
 
