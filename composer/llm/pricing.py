@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Callable
+import re
 
 @dataclass(frozen=True)
 class PriceTier:
@@ -51,11 +52,6 @@ class ModelPricing:
 # Sol, Luna, ...) plus any model the code names as a default. A model
 # not listed prices at $0, and a budgeted run on it is refused.
 #
-# Each entry matches its own name and dated or variant revisions of it
-# (``claude-haiku-4-5-20251001``); see ``_matches``. The table is
-# searched in order, so a more specific name (``claude-opus-5-5``,
-# ``gpt-5.5-pro``) must come before the one it extends
-# (``claude-opus-5``, ``gpt-5.5``).
 _PRICING: list[tuple[str, ModelPricing]] = [
     # ---- Anthropic ----
     # Fable 5.1 reads its cache at 0.025× input; Opus 5.5 and Sonnet 5.5
@@ -130,11 +126,18 @@ _PRICING: list[tuple[str, ModelPricing]] = [
 ]
 
 
+# A dated snapshot suffix: ``-20251001`` (Anthropic) or ``-2026-04-01`` (OpenAI).
+_DATE_SUFFIX = re.compile(r"-(\d{8}|\d{4}-\d{2}-\d{2})")
+
+
 def _matches(model: str, name: str) -> bool:
-    """Whether ``model`` is ``name`` or a dated/variant revision of it
-    (``name`` followed by ``-``). A bare prefix match is not enough: it
-    would price ``gpt-5.3`` as ``gpt-5``."""
-    return model == name or model.startswith(name + "-")
+    """Whether ``model`` is the entry ``name`` itself or a dated snapshot of
+    it (``claude-haiku-4-5-20251001``). Any other suffix is a different model
+    and does not match: ``claude-opus-5-5`` is not ``claude-opus-5``."""
+    if not model.startswith(name):
+        return False
+    rest = model[len(name):]
+    return rest == "" or _DATE_SUFFIX.fullmatch(rest) is not None
 
 
 def price_per_mtok(model: str | None, input_tokens: int) -> PriceTier | None:
@@ -142,9 +145,9 @@ def price_per_mtok(model: str | None, input_tokens: int) -> PriceTier | None:
     ``None`` for models with no table entry (cost contribution becomes
     zero — better than guessing).
 
-    Matched on the lowercased model name so dated revisions
+    Matched on the lowercased model name so dated snapshots
     (``claude-haiku-4-5-20251001``, ``gpt-5.5-2026-...``) collapse into
-    the same family entry. For models with a long tier,
+    their model's entry. For models with a long tier,
     ``input_tokens`` chooses short vs. long."""
     if model is None:
         return None
