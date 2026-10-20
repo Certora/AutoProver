@@ -51,7 +51,6 @@ from composer.prover.core import (
     ProverCallbacks,
     ProverOptions,
     TrivialFanoutCexHandler,
-    UnanalyzedCexHandler,
 )
 from composer.prover.ptypes import (
     IncompleteCheck,
@@ -556,7 +555,7 @@ async def _stage_and_submit(
     submission: Submission,
     *,
     callbacks: _RunAccounting,
-    cex: CexHandler,
+    cex: CexHandler | None,
     tool_call_id: str,
     choose: Callable[[set[str]], Submission | Command | str] | None = None,
 ) -> CvlrOutcome | Command | str:
@@ -676,7 +675,7 @@ class VerifyRules(
                     draft,
                     deps.submission,
                     callbacks=capture if capture is not None else _RunAccounting(),
-                    cex=analysis.handler(self.state) if analysis else UnanalyzedCexHandler(),
+                    cex=analysis.handler(self.state) if analysis else None,
                     tool_call_id=self.tool_call_id,
                     choose=choose,
                 )
@@ -924,7 +923,7 @@ class ExplainVacuity(
                     draft,
                     submission,
                     callbacks=_DiagnosticAccounting(),
-                    cex=UnanalyzedCexHandler(),
+                    cex=None,
                     tool_call_id=self.tool_call_id,
                     choose=choose,
                 )

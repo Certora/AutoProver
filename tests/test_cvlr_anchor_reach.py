@@ -28,7 +28,7 @@ import pytest
 from composer.cargo.metadata import Workspace
 from composer.cargo.sbf import Built, platform_tools_installed
 from composer.cargo.session import CargoSession, Warmed
-from composer.prover.core import UnanalyzedCexHandler, make_prover_options
+from composer.prover.core import make_prover_options
 from composer.sandbox.config import SandboxConfig
 from composer.sandbox.recipes import PLATFORM_TOOLS_ROOT
 from composer.prover.conf import SelectRules, dump_conf
@@ -141,7 +141,7 @@ async def test_a_rule_that_reaches_an_anchor_program_can_be_analyzed(project, ca
             session,
             prepared,
             prover_opts=make_prover_options(cloud=True, app="solana"),
-            cex=UnanalyzedCexHandler(),
+            cex=None,
         )
 
     match outcome:

@@ -184,7 +184,7 @@ async def run_submission(
     prepared: Prepared,
     *,
     prover_opts: ProverOptions,
-    cex: CexHandler,
+    cex: CexHandler | None,
     callbacks: ProverCallbacks | None = None,
     tool_call_id: str = "cvlr-submit",
 ) -> CvlrOutcome:
@@ -212,7 +212,7 @@ async def submit(
     *,
     into: Path,
     prover_opts: ProverOptions,
-    cex: CexHandler,
+    cex: CexHandler | None,
     callbacks: ProverCallbacks | None = None,
     tool_call_id: str = "cvlr-submit",
 ) -> CvlrOutcome:

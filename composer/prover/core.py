@@ -119,9 +119,10 @@ class ProverReport:
     error path).
 
     ``rule_status`` maps rule name to verified-or-not. ``result_str`` is
-    the fully-rendered text the calling tool hands back to the LLM —
-    constructed by the ``CexHandler``, including any summarization,
-    diagnosis indexing, or shape choices the handler made internally.
+    the text the calling tool hands back. When a rule is violated and a
+    handler was passed, the handler builds it. When a rule is violated and
+    no handler was passed, it is each rule's status, the prover's messages,
+    and its counterexample dump. Otherwise it is ``rule_feedback.j2``.
     No structured analysis fields on this type: handlers that produce
     keyed records (e.g. report_keys for ``cex_remediation`` to look up)
     persist them via their own injected stores rather than bubbling
@@ -459,34 +460,21 @@ class TrivialFanoutCexHandler(CexHandler):
         return report
 
 
-class UnanalyzedCexHandler(CexHandler):
-    """Renders each rule's status and counterexample dump as text.
+def _report_without_analysis(results: list[RuleResult]) -> str:
+    """Each rule's status, the prover's messages, and its counterexample dump.
 
-    For a caller that is not an agent: a gate that checks verdicts against a
-    file, a plumbing test, a CLI that only wants the outcomes. ``run_prover``
-    otherwise runs an LLM through the handler.
-
-    The dump is included as text. ``flat_rule_feedback.j2`` says the analysis
-    found nothing when it is given no explanation, which would misdescribe a
-    run that did not ask for one.
+    ``flat_rule_feedback.j2`` prints "Analyzing the counterexample yielded no
+    results" for a violated rule that has no explanation. That sentence would
+    describe an analysis that ran.
     """
-
-    @override
-    async def analyze(
-        self,
-        all_results: list[RuleResult],
-        tool_call_id: str,
-        callbacks: CexProgressCallbacks,
-        report_dir: Path,
-    ) -> str:
-        lines: list[str] = []
-        for r in all_results:
-            lines.append(f"{r.name}: {r.status}")
-            for message in r.error_messages or ():
-                lines.append(f"  {message}")
-            if r.cex_dump:
-                lines.append(f"  {r.cex_dump}")
-        return "\n".join(lines)
+    lines: list[str] = []
+    for r in results:
+        lines.append(f"{r.name}: {r.status}")
+        for message in r.error_messages or ():
+            lines.append(f"  {message}")
+        if r.cex_dump:
+            lines.append(f"  {r.cex_dump}")
+    return "\n".join(lines)
 
 
 # Compatibility alias for the legacy name. New code should reach for
@@ -730,12 +718,12 @@ async def run_prover(
     tool_call_id: str,
     prover_opts: ProverOptions,
     callbacks: ProverCallbacks,
-    cex: CexHandler
+    cex: CexHandler | None,
 ) -> ProverReport | str:
     """Execute the Certora prover and return structured results.
 
     Returns:
-        ProverReport — rule outcomes + handler-rendered result text
+        ProverReport — rule outcomes and the rendered report text
         str — error message
     """
 
@@ -829,16 +817,17 @@ async def run_prover(
 
             all_results = list(parsed.values())
 
-            # 10. Hand off to the handler when anything failed. It owns the
-            # analysis approach, per-rule UI events, rendering, summarization
-            # (if any), and storage of any keyed records (e.g. report_keys
-            # for ``cex_remediation`` lookup). We get back the final report
-            # string. ``emv_path`` is the prover's report directory;
-            # implementations that read source narrow further to
+            # 10. Render a violated run while the report directory is alive. A
+            # handler reads source from it and owns the per-rule events and
+            # any records it stores. With no handler the status and the dump
+            # are already on the results. ``emv_path`` is that directory;
+            # a handler that reads source narrows to
             # ``emv_path / "inputs" / ".certora_sources"``.
             if any(r.status == "VIOLATED" for r in all_results):
-                result_str = await cex.analyze(
-                    all_results, tool_call_id, callbacks, emv_path
+                result_str = (
+                    _report_without_analysis(all_results)
+                    if cex is None
+                    else await cex.analyze(all_results, tool_call_id, callbacks, emv_path)
                 )
             else:
                 result_str = load_jinja_template(

@@ -44,8 +44,9 @@ from composer.cargo.metadata import Workspace
 from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, Built, platform_tools_installed
 from composer.cargo.session import CargoSession, Warmed
 from composer.prover.core import (
+    CexHandler,
     CexProgressCallbacks,
-    UnanalyzedCexHandler,
+    _report_without_analysis,
     make_prover_options,
 )
 from composer.prover.ptypes import IncompleteCheck, RuleResult, classify_violation
@@ -132,12 +133,11 @@ def _has_a_loop(artifact: Path, objdump: Path) -> bool:
     return re.search(r"(?:\bgoto|^\s*[0-9a-f]+:\s+j[a-z0-9]*\b.*,)\s+-0x", disassembly, re.M) is not None
 
 
-class _Recorded(UnanalyzedCexHandler):
-    """The no-LLM handler, keeping what it was handed.
+class _Recorded(CexHandler):
+    """Keeps the rule results ``run_prover`` hands its handler.
 
     ``ProverReport`` carries verdicts but no counterexamples, and the counterexample's assertion is
-    what decides :class:`IncompleteCheck` — the distinction this test exists to check against a real
-    prover rather than a recorded fixture.
+    what decides :class:`IncompleteCheck`.
     """
 
     def __init__(self) -> None:
@@ -152,7 +152,7 @@ class _Recorded(UnanalyzedCexHandler):
         report_dir: Path,
     ) -> str:
         self.results = list(all_results)
-        return await super().analyze(all_results, tool_call_id, callbacks, report_dir)
+        return _report_without_analysis(all_results)
 
 
 def _shipped_cli_only() -> None:

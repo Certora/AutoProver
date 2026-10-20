@@ -24,8 +24,7 @@ import pytest_asyncio
 
 from composer.cargo.sbf import Built, platform_tools_installed
 from composer.cargo.session import CargoSession, Warmed
-from composer.prover.core import CexHandler, CexProgressCallbacks, make_prover_options
-from composer.prover.ptypes import RuleResult
+from composer.prover.core import make_prover_options
 from composer.prover.conf import dump_conf
 from composer.sandbox.recipes import PLATFORM_TOOLS_ROOT
 from composer.sandbox.config import SandboxConfig
@@ -40,23 +39,6 @@ from composer.spec.cvlr.prover import (
 )
 
 pytestmark = [pytest.mark.expensive, pytest.mark.asyncio]
-
-
-class _NoAnalysis(CexHandler):
-    """Returns no explanation.
-
-    A rule in the examples is meant to fail, so this handler runs. The test
-    has no LLM.
-    """
-
-    async def analyze(
-        self,
-        all_results: list[RuleResult],
-        tool_call_id: str,
-        callbacks: CexProgressCallbacks,
-        report_dir: Path,
-    ) -> str:
-        return ""
 
 #: Checkout of the public examples repo. Not vendored: a copy in this tree
 #: would stop tracking upstream.
@@ -179,7 +161,7 @@ async def test_the_examples_project_verifies_exactly_as_its_authors_expect(
         session,
         prepared,
         prover_opts=make_prover_options(cloud=True, app="solana"),
-        cex=_NoAnalysis(),
+        cex=None,
     )
     assert isinstance(outcome, Checked), outcome
     assert isinstance(outcome.build.verdict, Built)
