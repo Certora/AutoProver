@@ -182,13 +182,12 @@ def test_duplicate_component_names_rejected():
 
 @pytest.mark.parametrize("name", ["Deposits!", "deposits", "DEPOSITS"])
 def test_component_slug_collision_rejected(name: str):
-    """The name and "Deposits" differ in case or punctuation, and would be one harness module."""
-
     def collide(raw):
         _components(raw)[1]["name"] = name
 
     problem = _soroban_validate(_app(collide), VAULT_ID, None, None)
-    assert problem is not None and "Rust harness module" in problem
+    assert problem is not None
+    assert repr(name) in problem and repr("Deposits") in problem and repr("deposits") in problem
 
 
 def test_unknown_function_reference_rejected():
