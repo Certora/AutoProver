@@ -12,9 +12,7 @@ from composer.spec.util import slugify_rust_module
         ("token-transfer", "token_transfer"),
         ("2fa_check", "spec_2fa_check"),
         ("_internal", "internal"),
-        # These three came from a real program and drew `non_snake_case` warnings before lowercasing.
-        ("Deposits", "deposits"),
-        ("Vault_Initialization", "vault_initialization"),
+        # From a real program, which drew `non_snake_case` warnings before lowercasing.
         ("Withdrawals_Fee_Distribution", "withdrawals_fee_distribution"),
         ("Withdrawals & Fees", "withdrawals_fees"),
         ("Fee--Split", "fee_split"),

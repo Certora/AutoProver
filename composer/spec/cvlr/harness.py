@@ -3,13 +3,8 @@
 A CVLR harness is a Rust module inside the crate under verification. It
 compiles only from there, and the prover reaches it through the build. The
 artifact store writes it into the package's ``src/certora/specs/``
-(:mod:`composer.spec.cvlr.scaffold`).
-
-``specs/mod.rs`` declares one ``pub mod <name>;`` per unit, each behind that
-unit's cargo feature. A module behind a disabled ``cfg`` is never read by
-rustc, so a unit that has not written its file yet does not stop another unit
-from compiling. The modules are ``pub`` because a path into ``specs`` has to
-be visible from the program's own file
+(:mod:`composer.spec.cvlr.scaffold`). The modules are ``pub`` because a path
+into ``specs`` has to be visible from the program's own file
 (:func:`composer.spec.cvlr.scaffold._harness_files`).
 """
 
@@ -17,13 +12,10 @@ import dataclasses
 from pathlib import Path
 from typing import override
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from composer.authoring.state import SkippedProperty
 from composer.cargo.features import CargoFeature
-from composer.diagnostics.timing import RunSummary
 from composer.spec.artifacts import ArtifactStore
-from composer.spec.cvl_generation import _output_link
 from composer.spec.cvlr.scaffold import SPECS_DIR
 from composer.spec.types import CheckName, PropertyTitle
 from composer.spec.util import ensure_dir
@@ -47,10 +39,6 @@ class HarnessModule:
     def feature(self) -> CargoFeature:
         """The cargo feature that compiles this unit, and only this unit.
 
-        Every unit's module is declared behind ``#[cfg(feature = "<this>")]``.
-        A module that is not selected is never read by rustc and never appears
-        in its dep-info, so it cannot break or dirty another unit's build.
-
         The name is prefixed with ``unit_``. It shares a namespace with the
         project's own features. A module such as ``serde`` would otherwise select
         the project's feature.
@@ -63,12 +51,10 @@ class HarnessModule:
 
 
 class GeneratedHarness(BaseModel):
-    """A published harness: the module source, and the job it was checked under."""
+    """A published harness: the module source, and what the author said about it."""
 
     commentary: str
     harness: str
-    skipped: list[SkippedProperty] = Field(default_factory=list)
-    final_link: str | None = None
 
     def property_checks(self) -> list[tuple[PropertyTitle, list[CheckName]]]:
         """No property-to-rule map is part of this result."""
@@ -77,15 +63,6 @@ class GeneratedHarness(BaseModel):
     @property
     def artifact_text(self) -> str:
         return self.harness
-
-    @property
-    def output_link(self) -> str | None:
-        """The prover run's ``/output/`` link, rewritten from a ``/jobStatus/`` URL.
-
-        Drives the report's ``run_link``. ``None`` and a local result directory
-        pass through.
-        """
-        return _output_link(self.final_link)
 
 
 class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
@@ -110,34 +87,18 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
     def _artifact_dir(self) -> Path:
         return ensure_dir(Path(self._project_root) / self._package_dir / SPECS_DIR)
 
-    @override
-    def _job_info_payload(
-        self, summary: RunSummary, *, user_id: str, run_mode: str
-    ) -> dict[str, object]:
-        """Adds the prover-reported runtime to the shared manifest.
-
-        Same field the autoprove store records. A manifest of model tokens alone
-        cannot separate a run that spent its time in the prover from one that
-        spent it in the model.
-        """
-        return {
-            **super()._job_info_payload(summary, user_id=user_id, run_mode=run_mode),
-            "prover_usage": summary.prover_usage_summary(),
-        }
-
     def declare_modules(self, modules: list[HarnessModule]) -> tuple[Path, ...]:
         """Write ``specs/mod.rs``, declaring every unit's module behind its cargo feature.
 
         Returns the path it writes.
 
-        Called once, before any unit stages a draft. The file has to name every
-        unit. Each declaration is gated on :attr:`HarnessModule.feature`. A
-        module behind a disabled ``cfg`` is never compiled and never enters
-        rustc's dep-info, so it cannot break or rebuild another unit's build.
-        The module file itself is written when that unit's draft is staged.
-
-        Two units are never compiled together, so two ``impl Nondet for Foo``
-        in different modules do not collide (``E0119``).
+        Called once, before any unit stages a draft, so the file has to name
+        every unit. A module behind a disabled ``cfg`` is never read by rustc and
+        never enters its dep-info. So a unit that has not written its file yet
+        does not stop another unit from compiling, and one unit's draft cannot
+        break or rebuild another unit's build. Two units are never compiled
+        together, so two ``impl Nondet for Foo`` in different modules do not
+        collide (``E0119``).
 
         Module names are unique because slugs are: component analysis rejects
         sibling components whose slugs collide.
@@ -149,12 +110,8 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
         )
         mod_rs = target / "mod.rs"
         mod_rs.write_text(
-            "//! The rules. One module per unit.\n"
-            "//!\n"
-            "//! Each module is gated on its own cargo feature, so a build selects exactly one\n"
-            "//! unit's rules. A module behind a disabled `cfg` is never compiled and never\n"
-            "//! enters rustc's dep-info, so one unit's draft cannot break or dirty another's\n"
-            "//! build.\n"
+            "//! The rules. One module per unit, each gated on its own cargo feature, so a\n"
+            "//! build selects exactly one unit's rules.\n"
             "\n" + declarations
         )
         # Callers log this path.

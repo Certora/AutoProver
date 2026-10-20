@@ -11,14 +11,14 @@ import asyncio
 import dataclasses
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator, Mapping, override
+from typing import AsyncIterator, override
 
 from langchain_core.tools import BaseTool
 
-from graphcore.graph import LLM, tool_return, tool_state_update
+from graphcore.graph import tool_return, tool_state_update
 from graphcore.tools.schemas import (
     Command,
     WithAsyncDependencies,
@@ -35,15 +35,9 @@ from composer.prover.core import (
     CexHandler,
     ProverCallbacks,
     ProverOptions,
-    TrivialFanoutCexHandler,
     UnanalyzedCexHandler,
 )
-from composer.prover.ptypes import (
-    IncompleteCheck,
-    PropertyViolation,
-    RuleResult,
-    classify_violation,
-)
+from composer.prover.ptypes import RuleResult
 from composer.prover.conf import SelectRules
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.prover import (
@@ -62,19 +56,13 @@ from composer.spec.cvlr.manifest import ManifestCorrupt, ManifestMissing, rule_n
 from composer.spec.cvlr.scaffold import SPECS_DIR
 from composer.spec.cvlr.state import CvlrGenerationState
 from composer.spec.cvlr.tree import SharedTree, UnitEdits
-from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.ui.tool_display import tool_display
 
 _log = logging.getLogger(__name__)
 
 
 class BuildPermit:
-    """The run's build permit, held by one unit.
-
-    A submission holds it through the Prover's local rebuild and upload. Every
-    build of the crate writes the same ``.so``. The permit is released when
-    that upload finishes, before the cloud job finishes.
-    """
+    """The run's build permit, held by one unit (:func:`_stage_and_submit`)."""
 
     def __init__(self, sem: asyncio.Semaphore) -> None:
         self._sem = sem
@@ -95,14 +83,9 @@ class BuildPermit:
 class HarnessTarget:
     """Where a draft is staged so the crate compiles with it.
 
-    The harness is a module inside the crate. Staging writes the file the
-    scaffold already declared for :attr:`unit`. ``specs/mod.rs`` was written
-    once for the run
+    Staging writes the file ``specs/mod.rs`` declares for :attr:`unit`
     (:meth:`composer.spec.cvlr.harness.CvlrArtifactStore.declare_modules`).
-
-    Every unit shares ``tree`` and ``build_sem``. A build selects ``certora``
-    plus :attr:`~composer.spec.cvlr.harness.HarnessModule.feature`, so no other
-    unit's module is compiled.
+    Every unit shares ``tree`` and ``build_sem``.
     """
 
     session: CargoSession
@@ -113,9 +96,6 @@ class HarnessTarget:
     unit: HarnessModule
     #: The run's one working copy, shared by every unit.
     tree: SharedTree
-    #: Held across staging, the local cargo invocation, and, for a submission,
-    #: the Prover's rebuild and upload. Released before the cloud job. A
-    #: sibling's files are behind its own feature.
     build_sem: asyncio.Semaphore
 
     @property
@@ -133,11 +113,6 @@ class HarnessTarget:
 
     @property
     def module_path(self) -> Path:
-        """Absolute path of this unit's harness file.
-
-        The file :meth:`~composer.spec.cvlr.harness.CvlrArtifactStore.declare_modules`
-        declares as ``pub mod <unit>``. Staging writes the draft there.
-        """
         return self.package_root / SPECS_DIR / self.unit.artifact_file
 
     @asynccontextmanager
@@ -146,13 +121,8 @@ class HarnessTarget:
 
         Cargo already serializes concurrent builds on its build-directory lock.
         The permit is a queue the host can see, and it keeps several sandboxed
-        builds from sitting on grants.
-
-        A submission needs the permit for another reason. Every SBF build
-        writes the same ``.so``. The Prover's local phase rebuilds it and
-        uploads it. A sibling build in between would replace that file with one
-        built for the sibling's feature. :func:`_stage_and_submit` releases the
-        permit through the yielded :class:`BuildPermit` once the upload is done.
+        builds from sitting on grants. A submission holds it longer
+        (:func:`_stage_and_submit`).
         """
         permit = BuildPermit(self.build_sem)
         await permit.acquire()
@@ -162,11 +132,7 @@ class HarnessTarget:
             permit.release()
 
     async def stage(self, draft: str) -> None:
-        """Write ``draft`` into this unit's module.
-
-        Call it while holding :meth:`build_slot`. That permit keeps two units
-        out of the tree at once.
-        """
+        """Write ``draft`` into this unit's module. Call it while holding :meth:`build_slot`."""
         await self.tree.reconcile(
             self.unit.module,
             UnitEdits(module_path=self.module_path, draft=draft),
@@ -180,9 +146,6 @@ class _RunAccounting(ProverCallbacks):
     events records none of these. ``summary.format()``, the per-task link, and
     ``job_info.json``'s ``prover_usage`` read them. The same events are what
     the EVM ``_SpecCallbacks`` record.
-
-    Separate from :class:`_CaptureCallbacks` because a submission with no
-    analysis store still spends prover time.
     """
 
     def __init__(self) -> None:
@@ -191,11 +154,7 @@ class _RunAccounting(ProverCallbacks):
         self._upload_permit: BuildPermit | None = None
 
     def release_on_upload(self, permit: BuildPermit) -> None:
-        """Release ``permit`` when the Prover reports the job's link.
-
-        The link arrives after the local rebuild and upload. Until then a
-        sibling's build could replace the ``.so`` this job uploads.
-        """
+        """Release ``permit`` when the Prover reports the job's link, which is after the upload."""
         self._upload_permit = permit
 
     @override
@@ -224,108 +183,6 @@ class _RunAccounting(ProverCallbacks):
             self._started_mono = None
 
 
-class _CaptureCallbacks(_RunAccounting):
-    """Stores analyses of violated rules for the report.
-
-    The handler explains every violated rule. This callback records evidence.
-    An :class:`~composer.prover.ptypes.IncompleteCheck` is not evidence about
-    the program. Recording one would let a later pass treat the prover's limit
-    as a bug in the program.
-    """
-
-    def __init__(self, store: CexAnalysisStore) -> None:
-        super().__init__()
-        self._store = store
-        self._incomplete: dict[str, IncompleteCheck] = {}
-
-    @property
-    def incomplete(self) -> Mapping[str, IncompleteCheck]:
-        """Rules from the last run that stopped on an assertion the prover generated.
-
-        The counterexample does not survive into
-        :class:`~composer.prover.core.ProverReport`, which carries statuses
-        only, so the classification is kept here.
-        """
-        return self._incomplete
-
-    @override
-    async def on_prover_result(self, results: dict[str, RuleResult]) -> None:
-        # This run replaces analyses for the rules it covers. Clearing them
-        # before the handler writes new ones keeps a rule that failed earlier
-        # and passes now out of the report. This callback runs before the
-        # handler, so the records below are this run's.
-        await super().on_prover_result(results)
-        self._incomplete = {}
-        for result in results.values():
-            if result.status != "VIOLATED":
-                continue
-            match classify_violation(result.counterexample):
-                case IncompleteCheck() as stopped:
-                    self._incomplete[result.path.rule] = stopped
-                case PropertyViolation():
-                    pass
-        for rule_name in {r.path.rule for r in results.values()}:
-            try:
-                await self._store.forget_rule(rule_name)
-            except Exception:
-                _log.exception("cvlr: failed to clear stale cex analyses for %s", rule_name)
-
-    @override
-    async def on_analysis_complete(self, rule: RuleResult, explanation: str) -> None:
-        match classify_violation(rule.counterexample):
-            case IncompleteCheck(assertion=assertion):
-                _log.info(
-                    "cvlr: %s came back violated on an assertion the prover generated (%s), so it "
-                    "is not recorded as evidence about the program",
-                    rule.name,
-                    assertion,
-                )
-            case PropertyViolation():
-                # A capture failure must not fail the run. The verdict is already in hand.
-                try:
-                    await self._store.record(rule.path, explanation, rule.cex_dump)
-                except Exception:
-                    _log.exception("cvlr: failed to capture cex analysis for %s", rule.name)
-
-
-class AuthorModel:
-    """The model a counterexample analysis continues a conversation on.
-
-    The graph that owns the conversation binds it once that graph exists.
-    Analysis before then has no model to call.
-    """
-
-    def __init__(self) -> None:
-        self._llm: LLM | None = None
-
-    def bind(self, llm: LLM) -> None:
-        self._llm = llm
-
-    @property
-    def llm(self) -> LLM:
-        if self._llm is None:
-            raise RuntimeError("counterexample analysis ran before the author's graph was built")
-        return self._llm
-
-
-@dataclasses.dataclass(frozen=True)
-class CexAnalysis:
-    """Explains a violated rule and stores that explanation.
-
-    Built per unit. The handler is built per call: it reads the current
-    conversation and uses the bound model.
-    """
-
-    store: CexAnalysisStore
-    model: AuthorModel = dataclasses.field(default_factory=AuthorModel)
-
-    def handler(self, state: CvlrGenerationState) -> CexHandler:
-        return TrivialFanoutCexHandler(self.model.llm, state)
-
-    def callbacks(self) -> "_CaptureCallbacks":
-        return _CaptureCallbacks(self.store)
-
-
 @dataclasses.dataclass(frozen=True)
 class VerifyDeps:
     """What the prover gate needs beyond the draft."""
@@ -338,9 +195,6 @@ class VerifyDeps:
     submissions: Path
     prover_opts: ProverOptions
     stamper: ValidationStamper
-    #: ``None`` runs the prover with no analysis. Plumbing tests and any caller
-    #: with no LLM use that. A run that produces findings supplies this.
-    analysis: CexAnalysis | None = None
     #: One submission at a time per unit. A second concurrent run would build
     #: into the same workdir and race the staged module. The tool refuses it.
     #: A caller that made two calls wanted two answers.
@@ -387,22 +241,20 @@ class CargoCheck(
                 )
 
 
-def _submission_for(deps: VerifyDeps, rules: tuple[str, ...] | list[str]) -> Submission:
-    """The unit's submission, checking ``rules`` and compiling this unit's module.
+def _unit_submission(deps: VerifyDeps) -> Submission:
+    """The unit's submission, compiling this unit's module.
 
     :attr:`HarnessTarget.features` is ``certora`` plus this unit's feature, the
     same set ``cargo_check`` builds with. The submission's own default is only
     ``certora``, and ``specs/mod.rs`` gates this unit's module on its feature,
     so a build that kept the default would compile the staged file out.
-
-    A conf with no ``rule`` entry makes the cloud job end in FAILED, with no
-    report.
     """
-    return dataclasses.replace(
-        deps.submission,
-        rules=SelectRules(tuple(rules)),
-        features=deps.target.features,
-    )
+    return dataclasses.replace(deps.submission, features=deps.target.features)
+
+
+def _submission_for(deps: VerifyDeps, rules: Sequence[str]) -> Submission:
+    """The unit's submission, checking ``rules``."""
+    return dataclasses.replace(_unit_submission(deps), rules=SelectRules(tuple(rules)))
 
 
 def _unread(err: ManifestMissing | ManifestCorrupt) -> str:
@@ -420,54 +272,36 @@ def _unread(err: ManifestMissing | ManifestCorrupt) -> str:
     )
 
 
-def _submission_for_listed(submission: Submission, names: set[str]) -> Submission | str:
-    """``submission`` narrowed to ``names``, or a note that there is nothing to send.
-
-    Callers that already know which rules to check pass their own ``choose``.
-    This is the one used when they do not.
-    """
-    if not names:
-        return (
-            "The build listed no rules, so nothing was submitted. A rule is a `#[rule]` "
-            "function or a `cvlr_rules!` invocation."
-        )
-    return dataclasses.replace(submission, rules=SelectRules(tuple(names)))
-
-
 async def _stage_and_submit(
     deps: VerifyDeps,
-    state: CvlrGenerationState,
     draft: str,
-    submission: Submission,
     *,
     callbacks: _RunAccounting,
     cex: CexHandler,
     tool_call_id: str,
-    choose: Callable[[set[str]], Submission | str] | None = None,
+    choose: Callable[[set[str]], Submission | str],
 ) -> CvlrOutcome | str:
-    """Stage ``draft``, build it, and submit the submission ``choose`` returns.
+    """Stage ``draft``, build this unit, and submit what ``choose`` returns.
 
-    The rule names are in the ``.so`` this build writes. ``choose`` sees that
-    set and returns the submission to write, or a result that means nothing is
-    written. A missing or unreadable section is returned here, and no conf is
-    written.
+    ``choose`` sees the rule names in the ``.so`` this build wrote, and returns
+    the submission to write, or a message that means nothing is written. A
+    missing or unreadable section is returned here, and no conf is written.
 
-    ``state`` is the unit's graph state. The draft is the only input staged.
-
-    One build permit is held until the Prover has uploaded. ``run_submission``
-    rebuilds the crate into the shared target directory and uploads that
-    ``.so``. A sibling must not build between this unit's gate build and that
-    upload (:func:`composer.spec.cvlr.prover.prepare_submission`). The permit
-    is released when the job's link arrives, which is after the upload, or
-    when ``run_submission`` returns without a link. The same ``.so`` is not
-    read again: the permit makes the prover's rebuild the same rules.
+    Every SBF build of the crate writes the same ``.so``, and ``run_submission``
+    rebuilds it into the shared target directory and uploads it. A sibling's
+    build in between would replace it with one built for the sibling's feature
+    (:func:`composer.spec.cvlr.prover.prepare_submission`). So one build permit
+    is held from staging until the job's link arrives, which is after the
+    upload, or until ``run_submission`` returns without a link. Because the
+    Prover's rebuild happens under the same permit, it lists the same rules,
+    and the section is not read again.
 
     The cloud job itself is not covered. Files a sibling stages during it are
     behind that sibling's feature.
     """
     async with deps.target.build_slot() as permit:
         await deps.target.stage(draft)
-        build = await build_for_submission(deps.target.session, submission)
+        build = await build_for_submission(deps.target.session, _unit_submission(deps))
         if not isinstance(build.verdict, Built):
             return BuildRejected(build)
         artifact = build.verdict.manifest.artifact
@@ -479,14 +313,14 @@ async def _stage_and_submit(
             return _unread(err)
         except ManifestMissing as err:
             return _unread(err)
-        chosen = choose(names) if choose is not None else _submission_for_listed(submission, names)
+        chosen = choose(names)
         if not isinstance(chosen, Submission):
             return chosen
         prepared = Prepared(
             build, await write_submission(deps.target.session, chosen, into=deps.submissions)
         )
         callbacks.release_on_upload(permit)
-        outcome = await run_submission(
+        return await run_submission(
             deps.target.session,
             prepared,
             prover_opts=deps.prover_opts,
@@ -494,7 +328,6 @@ async def _stage_and_submit(
             cex=cex,
             tool_call_id=tool_call_id,
         )
-    return outcome
 
 
 @tool_display("Running the Solana Prover", "Prover")
@@ -526,38 +359,33 @@ class VerifyRules(
                 listed[:] = sorted(names)
                 if not names:
                     return (
-                        "The build listed no rules, so there is nothing to submit. A rule is a "
+                        "The build listed no rules, so nothing was submitted. A rule is a "
                         "`#[rule]` function or a `cvlr_rules!` invocation."
                     )
-                # The conf names the rules this build listed. A conf with no `rule`
-                # entry makes the cloud job end in FAILED, with no report. The
-                # section holds this unit's rules: the build enables only this
-                # unit's feature.
+                # A conf with no `rule` entry makes the cloud job end in FAILED, with no
+                # report. The section holds only this unit's rules: the build enables only
+                # this unit's feature.
                 return _submission_for(deps, listed)
 
             async with deps.lock:
-                analysis = deps.analysis
-                capture = analysis.callbacks() if analysis else None
                 outcome = await _stage_and_submit(
                     deps,
-                    self.state,
                     draft,
-                    dataclasses.replace(deps.submission, features=deps.target.features),
-                    callbacks=capture if capture is not None else _RunAccounting(),
-                    cex=analysis.handler(self.state) if analysis else UnanalyzedCexHandler(),
+                    callbacks=_RunAccounting(),
+                    cex=UnanalyzedCexHandler(),
                     tool_call_id=self.tool_call_id,
                     choose=choose,
                 )
             if isinstance(outcome, str):
                 return outcome
-            return self._report(outcome, deps, declared=tuple(listed))
+            return self._report(outcome, deps, declared=listed)
 
     def _report(
         self,
         outcome: CvlrOutcome,
         deps: VerifyDeps,
         *,
-        declared: tuple[str, ...] | list[str],
+        declared: Sequence[str],
     ) -> Command | str:
         match outcome:
             case BuildRejected(build=build):

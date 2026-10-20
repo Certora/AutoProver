@@ -14,7 +14,6 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from langgraph.store.memory import InMemoryStore
 
 from composer.cargo.manifest import Dependency, MalformedManifest, parse_manifest
 from composer.cargo import metadata
@@ -33,7 +32,6 @@ from composer.cargo.metadata import (
     parse_metadata,
 )
 from composer.prover import conf as prover_conf
-from composer.prover.ptypes import Counterexample, RulePath, RuleResult
 from composer.spec.cvlr import conf as cvlr_conf
 from composer.spec.cvlr.crates import Absent, CvlrSources
 from composer.spec.cvlr.reference import SOLANA
@@ -57,8 +55,7 @@ from composer.diagnostics.timing import (
 )
 from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.prover import Submission, write_submission
-from composer.spec.cvlr.verify import CexAnalysis, _CaptureCallbacks, _RunAccounting
-from composer.spec.source.cex_capture import CexAnalysisStore
+from composer.spec.cvlr.verify import _RunAccounting
 
 
 # --------------------------------------------------------------------------------------------
@@ -885,56 +882,3 @@ async def test_a_prover_run_is_accounted_for():
     assert summary.prover_total_calls == 1
     assert summary.phases[0].final_link == "https://prover.certora.com/output/1/2"
     assert summary.phases[0].prover_reported_ms == 4200
-
-
-@pytest.mark.asyncio
-async def test_capturing_evidence_does_not_replace_the_accounting():
-    """Capturing counterexamples still records the prover call.
-
-    ``_CaptureCallbacks`` overrides ``on_prover_result``, which is also where
-    the wall-clock tally is taken.
-    """
-    summary = RunSummary()
-    install_run_summary(summary)
-    callbacks = _CaptureCallbacks(CexAnalysisStore(store=InMemoryStore(), namespace=("t",)))
-
-    await callbacks.on_prover_run([])
-    await callbacks.on_prover_result({})
-
-    assert summary.prover_total_calls == 1
-
-
-@pytest.mark.asyncio
-async def test_an_incomplete_check_logs_the_provers_own_recommendation(caplog: pytest.LogCaptureFixture):
-    """The text after the first period is the prover's advice about the bound it hit."""
-    assertion = "Unwinding condition in a loop. Try increasing the unwinding bound."
-    rule = RuleResult(
-        path=RulePath("rule_bounded"),
-        counterexample=Counterexample(trace="trace", assertion=assertion),
-        status="VIOLATED",
-    )
-    store = CexAnalysisStore(store=InMemoryStore(), namespace=("t",))
-    callbacks = _CaptureCallbacks(store)
-
-    with caplog.at_level("INFO", logger="composer.spec.cvlr.verify"):
-        await callbacks.on_analysis_complete(rule, "the loop was too short")
-
-    assert assertion in caplog.text
-    assert await store.for_rule("rule_bounded") == []
-
-
-def test_counterexamples_are_explained_on_the_authors_bound_model():
-    """Counterexample analysis uses the model the author's graph bound.
-
-    There is no default. The handler is unavailable until that model is bound.
-    """
-    from langchain_core.language_models.fake_chat_models import FakeListChatModel
-
-    analysis = CexAnalysis(store=CexAnalysisStore(store=InMemoryStore(), namespace=("t",)))
-    state = {"messages": []}
-    with pytest.raises(RuntimeError, match="before the author's graph was built"):
-        analysis.handler(state)  # type: ignore[arg-type]
-
-    bound = FakeListChatModel(responses=["x"])
-    analysis.model.bind(bound)
-    assert analysis.handler(state).llm is bound  # type: ignore[arg-type, attr-defined]

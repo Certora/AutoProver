@@ -33,8 +33,8 @@ class ManifestCorrupt(Exception):
     """The ``.cvlr_rules`` section, or the ELF around it, could not be read.
 
     ``offset`` is the byte in the section where the bad record starts. It is
-    ``None`` when the file is not a readable ELF64 little-endian object, or
-    the section itself cannot be loaded.
+    ``None`` when the file is not a readable ELF, or the section itself cannot
+    be loaded.
     """
 
     def __init__(self, message: str, *, offset: int | None = None) -> None:
@@ -49,35 +49,21 @@ def rule_names_in_elf(so: Path) -> set[str]:
     :raises ManifestCorrupt: the file or the section cannot be read. The
         names that parsed before the bad record are not returned.
     """
-    try:
-        data = _section(so)
-    except (ManifestMissing, ManifestCorrupt):
-        raise
-    except (ELFError, OSError, ValueError) as exc:
-        raise ManifestCorrupt(f"{so} could not be read as an ELF") from exc
-    return _names(data)
+    return _names(_section(so))
 
 
 def _section(so: Path) -> bytes:
-    with so.open("rb") as stream:
-        ident = stream.read(16)
-        stream.seek(0)
-        # EI_CLASS 2 is 64-bit. EI_DATA 1 is little-endian. Anything else is
-        # not an SBF object, and a 32-bit parse of these headers is not a list
-        # of rules.
-        if len(ident) < 6 or ident[:4] != b"\x7fELF" or ident[4] != 2 or ident[5] != 1:
-            raise ManifestCorrupt(f"{so} is not an ELF64 little-endian file")
-        elf = ELFFile(stream)
-        found = [section for section in elf.iter_sections() if section.name == _SECTION]
-        if not found:
-            raise ManifestMissing(f"{so} has no {_SECTION} section")
-        if len(found) != 1:
-            raise ManifestCorrupt(f"{so} has more than one {_SECTION} section")
-        section = found[0]
-        # No file bytes. ``data()`` would invent zeros, and those are not records.
-        if section["sh_type"] == "SHT_NOBITS":
-            raise ManifestCorrupt(f"{so} has a {_SECTION} section with no file bytes")
-        return section.data()
+    try:
+        with so.open("rb") as stream:
+            found = [s for s in ELFFile(stream).iter_sections() if s.name == _SECTION]
+            if len(found) > 1:
+                raise ManifestCorrupt(f"{so} has more than one {_SECTION} section")
+            data = found[0].data() if found else None
+    except (ELFError, OSError, ValueError) as exc:
+        raise ManifestCorrupt(f"{so} could not be read as an ELF") from exc
+    if data is None:
+        raise ManifestMissing(f"{so} has no {_SECTION} section")
+    return data
 
 
 def _names(data: bytes) -> set[str]:
