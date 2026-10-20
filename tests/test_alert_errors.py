@@ -6,7 +6,7 @@ from prover_output_utility.models import JobStatus
 
 from composer.prover.cloud import CloudJobError
 from composer.prover.core import cloud_job_failure_message
-from composer.prover.results import OUT_OF_RESOURCES, ErrorAlert, error_alerts
+from composer.prover.results import OUT_OF_RESOURCES, SOLANA_ENCODING, ErrorAlert, error_alerts
 
 _LINK = "https://prover.certora.com/jobStatus/37632/9fc4c8ae6e1944dca697e568d679772f?anonymousKey=k"
 _HINT = (
@@ -83,6 +83,53 @@ def test_a_global_timeout_says_to_rerun_the_unfinished_rules():
         "Rerun the unfinished rules separately.\n"
         f"{_TIMEOUT}"
     )
+
+
+_ENCODING = (
+    "[3308] illegal dereference of an absolute address\n"
+    "rules: rule_custodian_cannot_delegate"
+)
+
+
+def test_an_encoding_failure_says_resubmitting_the_rules_fails():
+    text = cloud_job_failure_message(
+        CloudJobError(JobStatus.FAILED, _LINK, (ErrorAlert(SOLANA_ENCODING, _ENCODING),))
+    )
+    assert (
+        "The prover could not encode one or more rules. "
+        "Resubmitting this draft fails the same way until those rules or the program change."
+    ) in text
+    assert "internal error" not in text
+    assert _ENCODING in text
+
+
+def test_an_encoding_failure_alongside_a_timeout_is_still_an_encoding_failure():
+    text = cloud_job_failure_message(
+        CloudJobError(
+            JobStatus.FAILED,
+            _LINK,
+            (ErrorAlert(OUT_OF_RESOURCES, _TIMEOUT), ErrorAlert(SOLANA_ENCODING, _ENCODING)),
+        )
+    )
+    assert "could not encode" in text
+    assert "Rerun the unfinished rules separately." not in text
+    assert "internal error" not in text
+    assert _TIMEOUT in text
+    assert _ENCODING in text
+
+
+def test_a_crash_alongside_an_encoding_failure_is_an_internal_error():
+    text = cloud_job_failure_message(
+        CloudJobError(
+            JobStatus.FAILED,
+            _LINK,
+            (ErrorAlert(SOLANA_ENCODING, _ENCODING), ErrorAlert("General", _HINT)),
+        )
+    )
+    assert "Resubmitting this draft will fail the same way." in text
+    assert "could not encode" not in text
+    assert _ENCODING in text
+    assert _HINT in text
 
 
 def test_a_crash_alongside_a_timeout_is_an_internal_error():

@@ -813,12 +813,13 @@ P9.
 [upstream-defects.md](./upstream-defects.md) is a well-evidenced document that few upstream teams
 have been asked to read. P7 is CERT-10103, P8 is CERT-10061 (named in the Prover's own source), and
 L1 filed CERT-10183 and CERT-10184. P15's fix is in flight at
-[EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762). Encoding failures that today
-appear only in `Results.txt`, including the stake run's `[3308]` and `[3003]`, are reported as
-`Solana Encoding` alerts in
-[EVMVerifier#8765](https://github.com/Certora/EVMVerifier/pull/8765), open. The template defects (group T),
-the manual's examples (group M) and the rest of group P are not routed, and each is rediscovered by
-the next engagement until they are.
+[EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762). Encoding failures that on the
+stake run appeared only in `Results.txt`, including `[3308]` and `[3003]`, are `Solana Encoding`
+alerts as of
+[EVMVerifier#8765](https://github.com/Certora/EVMVerifier/pull/8765), merged. A job whose error
+alerts are only that type and `Out of Resources` is described as an encoding failure. The template
+defects (group T), the manual's examples (group M) and the rest of group P are not routed, and each
+is rediscovered by the next engagement until they are.
 
 **~~4. `mock_fn` cannot reach an inherent method.~~** — **worked around.** A `use` inside an
 `impl` block is not a method, so `mock_fn` reaches free functions only. The corpus's own answer is

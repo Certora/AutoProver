@@ -629,8 +629,8 @@ halts were the authors' own probe jobs of four and five rules.
   dereference of an absolute address` and `[3003] dereference of a register with unknown provenance`,
   on `rule_custodian_cannot_delegate`, `rule_lockup_does_not_block_delegate` and
   `rule_custodian_cannot_withdraw`. These reasons are only in the archive's `Results.txt`, not its
-  `alertReport.json`. A Prover change that also writes them as `Solana Encoding` alerts is in flight
-  at [EVMVerifier#8765](https://github.com/Certora/EVMVerifier/pull/8765). `Results.txt` stays.
+  `alertReport.json`. [EVMVerifier#8765](https://github.com/Certora/EVMVerifier/pull/8765) has
+  merged: a later Prover build writes them as `Solana Encoding` alerts, and `Results.txt` stays.
 - **The authors saw neither.** A FAILED job reached the author as its status and a link, so Lockup
   resubmitted rules of the same kind three times. A `FAILED` or `HALTED` job now includes the
   `ERROR` entries from `Reports/alertReport.json` in that text (`hint` when it is non-empty,
@@ -638,11 +638,12 @@ halts were the authors' own probe jobs of four and five rules.
   same way. For a global-timeout halt, an `Out of Resources` error, it says to rerun the unfinished
   rules separately. Verdicts for rules that finished before the halt are not included. The CVL
   author path has the same gap, so that is deferred as parity with CVL
-  ([cvlr-todo.md](./cvlr-todo.md) U32). On this Prover, `[3308]` / `[3003]` are still only in
-  `Results.txt`. [EVMVerifier#8765](https://github.com/Certora/EVMVerifier/pull/8765) puts the same
-  failures in the alert report, so the author text above will include the hint once that build is
-  running. The advice sentence will still call the job an internal error until the AutoProver
-  follow-up.
+  ([cvlr-todo.md](./cvlr-todo.md) U32). On this run, `[3308]` / `[3003]` were only in `Results.txt`.
+  [EVMVerifier#8765](https://github.com/Certora/EVMVerifier/pull/8765) has merged, so a later Prover
+  build writes them as `Solana Encoding` alerts and the author text includes the hint. When every
+  error alert is that type or `Out of Resources`, and at least one is the encoding alert, the advice
+  says the prover could not encode the rules and that resubmitting fails until those rules or the
+  program change. A `General` error alongside one is still an internal error.
 - **9 "Cannot overflow: inferred pointer" stops** (P12), 5 of them in Withdrawals. The authors bound
   once and moved on, as the prompt now says. `rule_probe_withdraw_bounded` is the bound failing,
   which matches the probes in P12.
@@ -694,9 +695,6 @@ after Authority Management, the other seven fail to apply.
 
 ### What it left for AutoProver
 
-- **Pointer-analysis failures on FAILED jobs**, above. Their text is only in `Results.txt` until
-  [EVMVerifier#8765](https://github.com/Certora/EVMVerifier/pull/8765) lands. The AutoProver change
-  that stops calling that alert an internal error is not started.
 - **Verdicts from a `HALTED` job.** Deferred: parity with the CVL author path (cvlr-todo U32).
 - U19's dangling fixture symlink does not exist on `main`, so this run did not exercise that fix.
 

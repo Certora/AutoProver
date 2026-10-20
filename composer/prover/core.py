@@ -50,6 +50,7 @@ from composer.prover.cloud import CloudJobError, CloudResultsUnavailable, cloud_
 from composer.prover.ptypes import RuleResult, RulePath, StatusCodes
 from composer.prover.results import (
     OUT_OF_RESOURCES,
+    SOLANA_ENCODING,
     ErrorAlert,
     external_functions,
     read_and_format_run_result,
@@ -734,17 +735,23 @@ async def declared_rules_list(
 def _failure_advice(alerts: tuple[ErrorAlert, ...]) -> str:
     """What to tell the author, given the ``ERROR`` entries on a job with no verdicts.
 
-    A job that only ran out of resources stopped on the global timeout. Any other
-    error is a prover crash, and the same draft hits it again.
+    A type other than a resource limit or a Solana encoding failure is a prover crash.
+    An encoding failure is the front end refusing those rules. Anything else is the
+    global timeout.
     """
-    if all(alert.type == OUT_OF_RESOURCES for alert in alerts):
+    if any(alert.type not in (OUT_OF_RESOURCES, SOLANA_ENCODING) for alert in alerts):
         return (
-            "The prover ran out of resources before finishing. "
-            "Rerun the unfinished rules separately."
+            "The prover reported an internal error. "
+            "Resubmitting this draft will fail the same way."
+        )
+    if any(alert.type == SOLANA_ENCODING for alert in alerts):
+        return (
+            "The prover could not encode one or more rules. "
+            "Resubmitting this draft fails the same way until those rules or the program change."
         )
     return (
-        "The prover reported an internal error. "
-        "Resubmitting this draft will fail the same way."
+        "The prover ran out of resources before finishing. "
+        "Rerun the unfinished rules separately."
     )
 
 

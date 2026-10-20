@@ -275,6 +275,8 @@ _EXTERNALS_ALERT = "The following functions are neither inlined nor summarized"
 
 #: ``type`` of the alert the prover writes when it hits the global timeout.
 OUT_OF_RESOURCES = "Out of Resources"
+#: ``type`` of the alert the prover writes when Solana rule encoding fails.
+SOLANA_ENCODING = "Solana Encoding"
 
 
 @dataclass(frozen=True)
