@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from composer.spec.types import Curtailed
+from composer.spec.types import ComponentName, Curtailed
 from composer.spec.source.report.collect import (
     Abandoned, EvidenceFetcher, ReportableResult, ReportComponentInput, VerdictFetcher, collect,
 )
@@ -58,6 +58,7 @@ async def build_report[R: ReportableResult](
     active_plugins: list[str] | None = None,
     build_environment: BuildEnvironment | None = None,
     deliverable_patch: str | None = None,
+    prover_confs: dict[ComponentName, str] | None = None,
 ) -> AutoProverReport:
     """Build and return the in-memory `AutoProverReport`. Persistence is the caller's job.
 
@@ -165,6 +166,7 @@ async def build_report[R: ReportableResult](
         source_edits=source_edits or [],
         build_environment=build_environment,
         deliverable_patch=deliverable_patch,
+        prover_confs=prover_confs or {},
         verification_artifacts=verification_artifacts or [],
         coverage=coverage,
         findings=synthesized.findings,

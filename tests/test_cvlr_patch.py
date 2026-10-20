@@ -104,14 +104,10 @@ def test_without_a_baseline_there_is_no_patch(tmp_path):
 
 @pytest.mark.asyncio
 async def test_the_formalizer_names_the_patch_it_wrote_for_the_report(tmp_path):
-    from types import SimpleNamespace
-
-    from composer.spec.cvlr.pipeline import CvlrFormalizer
-
     root = _project(tmp_path / "proj")
     snapshot(root)
     _run(root)
-    formalizer = CvlrFormalizer(None, None, deps=None, build=None)  # type: ignore[arg-type]
+    formalizer = _formalizer(root)
     assert formalizer.deliverable_patch() is None
 
     run = SimpleNamespace(source=SimpleNamespace(project_root=str(root)))
@@ -119,6 +115,20 @@ async def test_the_formalizer_names_the_patch_it_wrote_for_the_report(tmp_path):
 
     assert formalizer.deliverable_patch() == PATCH_PATH.as_posix()
     assert (root / PATCH_PATH).is_file()
+
+
+def _formalizer(root: Path):
+    """A formalizer whose ``deps`` hold only what :meth:`finalize` reads. The package is the root."""
+    from composer.spec.cvlr.env_paths import PathDialect
+    from composer.spec.cvlr.harness import CvlrArtifactStore
+    from composer.spec.cvlr.pipeline import CvlrFormalizer
+
+    deps = SimpleNamespace(
+        store=CvlrArtifactStore(root, Path(".")),
+        package_dir=Path("."),
+        preflight=SimpleNamespace(package="p", scaffold=SimpleNamespace(dialect=PathDialect())),
+    )
+    return CvlrFormalizer(None, None, deps=deps, build=None)  # type: ignore[arg-type]
 
 
 _CARGO = '[package]\nname = "p"\n'
@@ -251,7 +261,6 @@ async def test_the_report_names_the_component_patch_finalize_wrote(tmp_path):
     gets both, in its appendix record rather than ``source_edits``."""
     from composer.pipeline.ptypes import Curtailed, Delivered
     from composer.spec.cvlr.harness import GeneratedHarness
-    from composer.spec.cvlr.pipeline import CvlrFormalizer
     from composer.spec.source.munge.edit_store import AppliedEdit
 
     root = _component_project(tmp_path / "proj")
@@ -286,7 +295,7 @@ async def test_the_report_names_the_component_patch_finalize_wrote(tmp_path):
             result=Curtailed(Delivered(result=edited, deliverable=Path("cut.rs"))),
         ),
     ]
-    formalizer = CvlrFormalizer(None, None, deps=None, build=None)  # type: ignore[arg-type]
+    formalizer = _formalizer(root)
     await formalizer.finalize(outcomes, run)  # type: ignore[arg-type]
     records = await formalizer.source_edits(outcomes, run)  # type: ignore[arg-type]
 
@@ -303,3 +312,64 @@ async def test_the_report_names_the_component_patch_finalize_wrote(tmp_path):
     assert partials[0].patch_path == (COMPONENTS_DIR / "cut.patch").as_posix()
     assert (root / partials[0].patch_path).is_file()
     assert 'unit_vault = ["dep"]' in partials[0].cumulative_diff
+
+
+@pytest.mark.asyncio
+async def test_a_delivered_unit_gets_a_conf_and_the_summaries_it_names(tmp_path):
+    """The conf builds with ``cargo certora-sbf`` from the package directory, and the summaries
+    file it names is written into the project, so the harness patch carries it. A curtailed unit,
+    and a result cached before settings were recorded, get no conf; an old conf is removed."""
+    import json
+
+    from composer.pipeline.ptypes import Curtailed, Delivered
+    from composer.spec.cvlr.conf import PLATFORM_TOOLS_VERSION, OptimisticLoop, TunableConf
+    from composer.spec.cvlr.harness import CONFS_DIR, GeneratedHarness
+    from composer.spec.cvlr.scaffold import ENVS_DIR
+    from composer.spec.cvlr.tuning import SummaryDirective
+
+    root = _component_project(tmp_path / "proj")
+    snapshot(root)
+    _component_harness(root)
+    (root / CONFS_DIR).mkdir(parents=True)
+    (root / CONFS_DIR / "gone.conf").write_text("{}\n")
+    settings = TunableConf(loop_iter=4, optimistic_loop=OptimisticLoop(why="bounded by input"))
+    summary = SummaryDirective(pattern="^<p::E as Display>::fmt$", why="[3308]")
+    vault = GeneratedHarness(
+        commentary="", harness="", declared_rules=["rule_b", "rule_a"], summaries=[summary],
+        settings=settings,
+    )
+    outcomes = [
+        SimpleNamespace(
+            feat=SimpleNamespace(slug="vault", display_name="Vault & Fees"),
+            result=Delivered(result=vault, deliverable=Path("vault.rs")),
+        ),
+        SimpleNamespace(
+            feat=SimpleNamespace(slug="old", display_name="Old"),
+            result=Delivered(
+                result=GeneratedHarness(commentary="", harness=""), deliverable=Path("old.rs")
+            ),
+        ),
+        SimpleNamespace(
+            feat=SimpleNamespace(slug="cut", display_name="Cut"),
+            result=Curtailed(Delivered(result=vault, deliverable=Path("cut.rs"))),
+        ),
+    ]
+    formalizer = _formalizer(root)
+    run = SimpleNamespace(source=SimpleNamespace(project_root=str(root)))
+    await formalizer.finalize(outcomes, run)  # type: ignore[arg-type]
+
+    assert formalizer.deliverable_confs() == {"Vault & Fees": (CONFS_DIR / "vault.conf").as_posix()}
+    assert sorted(p.name for p in (root / CONFS_DIR).iterdir()) == ["vault.conf"]
+    conf = json.loads((root / CONFS_DIR / "vault.conf").read_text())
+    assert "build_script" not in conf
+    assert conf["cargo_features"] == ["certora", "unit_vault"]
+    assert conf["cargo_tools_version"] == PLATFORM_TOOLS_VERSION
+    assert conf["loop_iter"] == "4" and conf["optimistic_loop"] is True
+    assert conf["rule"] == ["rule_a", "rule_b"]
+    assert "&" not in conf["msg"]
+    (summaries,) = conf["solana_summaries"]
+    assert Path(summaries).parent == ENVS_DIR
+    assert summary.pattern in (root / summaries).read_text()
+    harness = formalizer.deliverable_patch()
+    assert harness is not None
+    assert summaries in (root / harness).read_text()

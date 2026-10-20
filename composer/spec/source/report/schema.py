@@ -445,6 +445,10 @@ class AutoProverReport(BaseModel):
     #: backend whose harness lives inside the program rather than beside it. ``None`` for every
     #: other backend, when the run changed nothing, and on reports written before schema 3.5.
     deliverable_patch: str | None = None
+    #: Component to a prover conf, relative to the project root, that checks that component's rules
+    #: again once ``deliverable_patch`` is applied. Empty for a backend whose confs need nothing
+    #: from the run, and on reports written before schema 3.7.
+    prover_confs: dict[ComponentName, str] = Field(default_factory=dict)
     #: Verification-supporting artifacts registered by plugin tools during
     #: formalization (Lean proofs et al.), written to disk by the artifact store.
     verification_artifacts: list[VerificationArtifactRecord] = Field(default_factory=list)

@@ -241,6 +241,12 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
         the program delivers it as that file."""
         return None
 
+    def deliverable_confs(self) -> dict[ComponentName, str]:
+        """Component to the prover conf, relative to the project root, that :meth:`finalize` wrote
+        for rerunning its rules. Default empty: a backend whose submissions need nothing from the
+        run to be repeated ships no conf."""
+        return {}
+
     async def finalize(self, outcomes: list[ComponentOutcome[FormT, U]], run: PipelineRun) -> None:
         """Emit any backend-specific run-level artifacts from the full outcome set (prover:
         components_to_prover_runs.json). Default: none."""
@@ -897,6 +903,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 active_plugins=plugin_manager.plugin_manifest,
                 build_environment=formalizer.build_environment(),
                 deliverable_patch=formalizer.deliverable_patch(),
+                prover_confs=formalizer.deliverable_confs(),
             )
         report = await run.runner(
             job=_report,

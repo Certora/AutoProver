@@ -59,12 +59,13 @@ from composer.pipeline.core import (
     ToolBinder,
 )
 from composer.pipeline.ptypes import BackendJob, Curtailed, Delivered, GaveUp
+from composer.prover.conf import Conf, InheritRules, SelectRules
 from composer.prover.core import ProverOptions
 from composer.sandbox.config import SandboxConfig
 from composer.spec.context import CvlrGeneration, WorkflowContext
 from composer.spec.cvlr.author import batch_cvlr_generation
 from composer.spec.cvlr.editor import EditingServices, ProgramEditing, program_editing
-from composer.spec.cvlr.conf import DEFAULT_FEATURE, HOST_RUST_TOOLCHAIN
+from composer.spec.cvlr.conf import DEFAULT_FEATURE, HOST_RUST_TOOLCHAIN, delivered_conf
 from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness, HarnessModule
 from composer.spec.cvlr.preflight import CvlrPreflight, gate_workspace, prepare_workspace
@@ -101,7 +102,7 @@ from composer.spec.source.report.schema import (
 from composer.spec.source.munge.vfs_diff import diff_against_baseline
 from composer.spec.source.report_prover import make_run_link_fetcher
 from composer.spec.source.report.schema import RuleName
-from composer.spec.types import PropertyFormulation
+from composer.spec.types import ComponentName, PropertyFormulation
 
 _log = logging.getLogger(__name__)
 
@@ -229,6 +230,8 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
     #: Harness-module name to the patch :meth:`finalize` wrote for that unit, relative to the
     #: project. Empty until then, and empty when no unit edited the program.
     component_patches: dict[str, Path] = dataclasses.field(default_factory=dict, init=False)
+    #: Component to the conf :meth:`finalize` wrote for it, relative to the project.
+    confs: dict[ComponentName, Path] = dataclasses.field(default_factory=dict, init=False)
 
     @override
     async def formalize(
@@ -380,14 +383,52 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
         run: PipelineRun,
     ) -> None:
         root = Path(run.source.project_root)
+        await asyncio.to_thread(self._write_confs, outcomes, root)
         self.patch = await asyncio.to_thread(write_patch, root)
         self.component_patches = await asyncio.to_thread(
             write_component_patches, root, _component_overlays(outcomes)
         )
 
+    def _write_confs(self, outcomes: list[_Outcome], root: Path) -> None:
+        """Write each delivered unit's conf, and the summaries file it names into the project.
+
+        The summaries file is otherwise only in the run's working tree. Written before the patches
+        are diffed, so both patches carry it.
+        """
+        confs: dict[HarnessModule, Conf] = {}
+        names: dict[HarnessModule, ComponentName] = {}
+        for outcome in outcomes:
+            harness = _delivered(outcome)
+            if harness is None or harness.settings is None:
+                continue
+            unit = HarnessModule(outcome.feat.slug)
+            TuningFiles(
+                envs_dir=root / self.deps.package_dir / ENVS_DIR,
+                dialect=self.deps.preflight.scaffold.dialect,
+                unit=unit.module,
+            ).write(tuple(harness.summaries))
+            confs[unit] = delivered_conf(
+                harness.settings,
+                features=(DEFAULT_FEATURE, unit.feature),
+                summaries=(ENVS_DIR / SUMMARIES.unit_composite(unit.module),),
+                rules=(
+                    SelectRules(tuple(harness.declared_rules))
+                    if harness.declared_rules
+                    else InheritRules()
+                ),
+                msg=f"{self.deps.preflight.package}: {outcome.feat.display_name}",
+            )
+            names[unit] = outcome.feat.display_name
+        written = self.deps.store.write_confs(confs)
+        self.confs = {names[unit]: path for unit, path in written.items()}
+
     @override
     def deliverable_patch(self) -> str | None:
         return self.patch.as_posix() if self.patch is not None else None
+
+    @override
+    def deliverable_confs(self) -> dict[ComponentName, str]:
+        return {name: path.as_posix() for name, path in self.confs.items()}
 
     @override
     def build_environment(self) -> BuildEnvironment:

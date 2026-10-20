@@ -29,7 +29,9 @@ from pydantic import BaseModel, Field
 from composer.authoring.state import SkippedProperty
 from composer.cargo.features import CargoFeature
 from composer.diagnostics.timing import RunSummary
+from composer.prover.conf import Conf, dump_conf
 from composer.spec.artifacts import ArtifactStore
+from composer.spec.cvlr.conf import TunableConf
 from composer.spec.cvlr.scaffold import SPECS_DIR
 from composer.spec.cvlr.state import PropertyRuleMapping, RuleSubject
 from composer.spec.cvlr.tuning import SummaryDirective
@@ -40,6 +42,8 @@ from composer.spec.util import ensure_dir
 #: Where the report and diagnostics go. The harness itself does *not* live here — see the module
 #: docstring — but the property maps, commentary and reports are ordinary deliverables.
 DELIVERABLE_DIR = Path("certora") / "cvlr"
+#: One prover conf per delivered unit, for rerunning its rules.
+CONFS_DIR = DELIVERABLE_DIR / "confs"
 INTERNAL_DIR = Path(".certora_internal") / "cvlr"
 
 
@@ -129,6 +133,9 @@ class GeneratedHarness(BaseModel):
     vfs: dict[str, str] = Field(default_factory=dict)
     #: Every rule the draft declares, as read from the draft rather than transcribed by the model.
     declared_rules: list[RuleName] = Field(default_factory=list)
+    #: The conf settings the published harness was checked under. ``None`` on a result cached
+    #: before they were recorded.
+    settings: TunableConf | None = None
     final_link: str | None = None
 
     def property_checks(self) -> list[tuple[PropertyTitle, list[CheckName]]]:
@@ -207,6 +214,29 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
             **super()._job_info_payload(summary, user_id=user_id, run_mode=run_mode),
             "prover_usage": summary.prover_usage_summary(),
         }
+
+    def write_confs(self, confs: dict[HarnessModule, Conf]) -> dict[HarnessModule, Path]:
+        """Write each unit's conf under :data:`CONFS_DIR`, and return the paths, project-relative.
+
+        A conf this call does not write is removed, so a resumed run does not keep one for a unit
+        it did not deliver.
+        """
+        directory = Path(self._project_root) / CONFS_DIR
+        written: dict[HarnessModule, Path] = {}
+        if confs:
+            directory.mkdir(parents=True, exist_ok=True)
+            for unit, conf in confs.items():
+                path = directory / f"{unit.module}.conf"
+                path.write_text(dump_conf(conf))
+                written[unit] = path.relative_to(self._project_root)
+        if directory.is_dir():
+            keep = {p.name for p in written.values()}
+            for stale in directory.glob("*.conf"):
+                if stale.name not in keep:
+                    stale.unlink()
+            if not any(directory.iterdir()):
+                directory.rmdir()
+        return written
 
     def declare_modules(self, modules: list[HarnessModule]) -> tuple[Path, ...]:
         """Write ``specs/mod.rs`` declaring every unit's module behind its own cargo feature.

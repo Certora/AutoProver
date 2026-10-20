@@ -78,6 +78,7 @@ class _Formalizer:
     async def curtailed_source_edits(self, _outcomes, _run): return []
     def build_environment(self): return None
     def deliverable_patch(self): return None
+    def deliverable_confs(self): return {}
 
 
 class _Staged(core.StagedFormalizer):

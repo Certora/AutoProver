@@ -855,6 +855,7 @@ async def batch_cvlr_generation(
         vfs=res_state["vfs"],
         expected_failures=res_state["expected_failures"],
         declared_rules=list(rule_names(draft)),
+        settings=res_state["prover_settings"],
         final_link=res_state.get("prover_link"),
     )
     if res_state["budget_curtailed"]:

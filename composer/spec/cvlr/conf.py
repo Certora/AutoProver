@@ -4,6 +4,7 @@ Every conf is built here, never read from the project. :data:`BASE_CONF` is fixe
 :class:`TunableConf` holds what the author may change, and :func:`tunable_conf` renders it onto
 the fixed part. :func:`solana_conf` adds one submission's
 keys: the build script, the message, the rule selection, and the summary files.
+:func:`delivered_conf` is the conf a run ships for each delivered unit.
 
 ``solana_inlining`` is left unset. ``cargo certora-sbf`` reads it from the package's
 ``[package.metadata.certora]`` and reports it through the build manifest. The prover applies that
@@ -176,3 +177,29 @@ def solana_conf(tunable: TunableConf, run: RunOverlay) -> Conf:
             conf["rule_sanity"] = "none"
             conf["coverage_info"] = "basic"
     return run.rules.apply_to(conf)
+
+
+def delivered_conf(
+    tunable: TunableConf,
+    *,
+    features: tuple[str, ...],
+    summaries: tuple[Path, ...],
+    rules: RuleSelection,
+    msg: str,
+) -> Conf:
+    """The conf a user runs to check one delivered unit's rules again, from the package directory.
+
+    It has no ``build_script``: the run's script reads a confined command beside it in the run's
+    work directory. Without one, ``certoraSolanaProver`` runs ``cargo certora-sbf`` in the nearest
+    ``Cargo.toml``'s directory, with ``cargo_features`` and ``cargo_tools_version``. That is also
+    why ``summaries`` are relative to the package directory and not to the project root.
+    """
+    conf: Conf = {
+        **tunable_conf(tunable),
+        "cargo_features": list(features),
+        "cargo_tools_version": PLATFORM_TOOLS_VERSION,
+        "msg": safe_msg(msg),
+    }
+    if summaries:
+        conf["solana_summaries"] = [s.as_posix() for s in summaries]
+    return rules.apply_to(conf)
