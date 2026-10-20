@@ -11,7 +11,7 @@ from langgraph.graph import MessagesState
 
 from composer.authoring.state import AuthoringExtra
 
-#: Stamped when every rule the draft declares verified. There is no separate
+#: Stamped when every rule the build listed verified. There is no separate
 #: stamp for ``cargo check``. A prover run builds first and reports the
 #: compiler's message without submitting when that fails
 #: (:class:`composer.spec.cvlr.prover.BuildRejected`).

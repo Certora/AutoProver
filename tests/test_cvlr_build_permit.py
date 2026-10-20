@@ -14,10 +14,13 @@ from types import SimpleNamespace
 
 import pytest
 
+from composer.cargo.sbf import Built, SbfRun
+from composer.cargo.session import CompileFailed
 from composer.diagnostics.timing import RunSummary, install_run_summary
 from composer.spec.cvlr import verify as verify_mod
 from composer.spec.cvlr.harness import HarnessModule
-from composer.spec.cvlr.prover import BuildRejected, Prepared, Submission
+from composer.spec.cvlr.manifest import ManifestCorrupt, ManifestMissing
+from composer.spec.cvlr.prover import BuildRejected, Submission
 from composer.spec.cvlr.tree import ProjectSource, SharedTree
 from composer.spec.cvlr.verify import BuildPermit, HarnessTarget, _RunAccounting
 
@@ -79,14 +82,26 @@ def _submit(deps: SimpleNamespace):
     )
 
 
+def _sbf(verdict) -> SbfRun:
+    return SbfRun(duration_ms=1, verdict=verdict, confined=True)
+
+
 @pytest.fixture(autouse=True)
 def _built(monkeypatch):
     install_run_summary(RunSummary())
 
-    async def prepared(*_args, **_kwargs):
-        return Prepared(build=None, conf_path=Path("/w/unit.conf"))  # type: ignore[arg-type]
+    async def build(*_args, **_kwargs):
+        return _sbf(Built(manifest=SimpleNamespace(artifact=Path("/w/prog.so"))))  # type: ignore[arg-type]
 
-    monkeypatch.setattr(verify_mod, "prepare_submission", prepared)
+    def names(_so):
+        return {"rule_a"}
+
+    async def write(*_args, **_kwargs):
+        return Path("/w/unit.conf")
+
+    monkeypatch.setattr(verify_mod, "build_for_submission", build)
+    monkeypatch.setattr(verify_mod, "rule_names_in_elf", names)
+    monkeypatch.setattr(verify_mod, "write_submission", write)
 
 
 async def test_the_permit_is_held_until_the_upload_and_not_through_the_cloud_job(
@@ -135,18 +150,78 @@ async def test_a_cli_failure_before_the_upload_frees_the_permit(tmp_path, monkey
 
 async def test_a_rejected_build_frees_the_permit_without_submitting(tmp_path, monkeypatch):
     sem = asyncio.Semaphore(1)
-    rejected = BuildRejected(build=None)  # type: ignore[arg-type]
+    failed = _sbf(CompileFailed(diagnostics="error[E0425]: cannot find", exit_code=1))
 
-    async def prepared(*_args, **_kwargs):
-        return rejected
+    async def build(*_args, **_kwargs):
+        return failed
+
+    async def write(*_args, **_kwargs):
+        pytest.fail("a rejected build must not write a conf")
 
     async def run_submission(*_args, **_kwargs):
         pytest.fail("a rejected build must not be submitted")
 
-    monkeypatch.setattr(verify_mod, "prepare_submission", prepared)
+    monkeypatch.setattr(verify_mod, "build_for_submission", build)
+    monkeypatch.setattr(verify_mod, "write_submission", write)
     monkeypatch.setattr(verify_mod, "run_submission", run_submission)
 
-    assert await _submit(_deps(tmp_path, sem)) == rejected
+    outcome = await _submit(_deps(tmp_path, sem))
+    assert isinstance(outcome, BuildRejected)
+    assert outcome.build is failed
+    assert not sem.locked()
+
+
+async def test_a_missing_rule_section_frees_the_permit_without_writing(tmp_path, monkeypatch):
+    sem = asyncio.Semaphore(1)
+
+    def names(_so):
+        raise ManifestMissing("no section")
+
+    async def write(*_args, **_kwargs):
+        pytest.fail("a missing section must not write a conf")
+
+    monkeypatch.setattr(verify_mod, "rule_names_in_elf", names)
+    monkeypatch.setattr(verify_mod, "write_submission", write)
+
+    outcome = await _submit(_deps(tmp_path, sem))
+    assert isinstance(outcome, str)
+    assert "no `.cvlr_rules` section" in outcome
+    assert not sem.locked()
+
+
+async def test_a_corrupt_rule_section_frees_the_permit_without_writing(tmp_path, monkeypatch):
+    sem = asyncio.Semaphore(1)
+
+    def names(_so):
+        raise ManifestCorrupt("bad record", offset=12)
+
+    async def write(*_args, **_kwargs):
+        pytest.fail("a corrupt section must not write a conf")
+
+    monkeypatch.setattr(verify_mod, "rule_names_in_elf", names)
+    monkeypatch.setattr(verify_mod, "write_submission", write)
+
+    outcome = await _submit(_deps(tmp_path, sem))
+    assert isinstance(outcome, str)
+    assert "offset 12" in outcome
+    assert not sem.locked()
+
+
+async def test_an_empty_rule_section_submits_nothing(tmp_path, monkeypatch):
+    sem = asyncio.Semaphore(1)
+
+    def names(_so):
+        return set()
+
+    async def write(*_args, **_kwargs):
+        pytest.fail("an empty listing must not write a conf")
+
+    monkeypatch.setattr(verify_mod, "rule_names_in_elf", names)
+    monkeypatch.setattr(verify_mod, "write_submission", write)
+
+    outcome = await _submit(_deps(tmp_path, sem))
+    assert isinstance(outcome, str)
+    assert "nothing was submitted" in outcome
     assert not sem.locked()
 
 

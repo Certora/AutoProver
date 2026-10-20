@@ -3,14 +3,15 @@
 * ``cargo_check`` compiles on the host target, confined, in seconds. It is not
   a required stamp. A prover run builds first and reports a compiler error
   without submitting (:class:`~composer.spec.cvlr.prover.BuildRejected`).
-* ``verify_rules`` builds for the chain, submits, and stamps the draft when
-  every rule it declares verified.
+* ``verify_rules`` builds for the chain, reads the rules from the ``.so``,
+  submits those, and stamps the draft when every one of them verified.
 """
 
 import asyncio
 import dataclasses
 import logging
 import time
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator, Mapping, override
@@ -28,6 +29,7 @@ from graphcore.tools.schemas import (
 from composer.authoring.state import ValidationStamper
 from composer.diagnostics.timing import get_run_summary
 from composer.cargo.features import CargoFeature
+from composer.cargo.sbf import Built
 from composer.cargo.session import CargoSession, CompileFailed, Compiled
 from composer.prover.core import (
     CexHandler,
@@ -48,13 +50,15 @@ from composer.spec.cvlr.prover import (
     BuildRejected,
     Checked,
     CvlrOutcome,
+    Prepared,
     Submission,
     SubmissionFailed,
-    prepare_submission,
+    build_for_submission,
     run_submission,
+    write_submission,
 )
 from composer.spec.cvlr.harness import HarnessModule
-from composer.spec.cvlr.rules import UnreadableRules, rule_names
+from composer.spec.cvlr.manifest import ManifestCorrupt, ManifestMissing, rule_names_in_elf
 from composer.spec.cvlr.scaffold import SPECS_DIR
 from composer.spec.cvlr.state import CvlrGenerationState
 from composer.spec.cvlr.tree import SharedTree, UnitEdits
@@ -372,14 +376,9 @@ class CargoCheck(
                 )
         match run.verdict:
             case Compiled():
-                try:
-                    declared = rule_names(draft)
-                except UnreadableRules as err:
-                    return tool_return(self.tool_call_id, str(err))
-                names = ", ".join(declared) if declared else "none"
                 return tool_return(
                     self.tool_call_id,
-                    f"Compiled in {run.duration_ms}ms. Rules declared: {names}.",
+                    f"Compiled in {run.duration_ms}ms.",
                 )
             case CompileFailed(diagnostics=diagnostics):
                 return tool_return(
@@ -406,6 +405,35 @@ def _submission_for(deps: VerifyDeps, rules: tuple[str, ...] | list[str]) -> Sub
     )
 
 
+def _unread(err: ManifestMissing | ManifestCorrupt) -> str:
+    """What the author is told when the built ``.so`` did not list its rules."""
+    if isinstance(err, ManifestMissing):
+        return (
+            "The .so has no `.cvlr_rules` section, so the rules were not listed. "
+            "Nothing was submitted."
+        )
+    if err.offset is None:
+        return "The `.cvlr_rules` section could not be read. Nothing was submitted."
+    return (
+        f"The `.cvlr_rules` section could not be read at offset {err.offset}. "
+        "Nothing was submitted."
+    )
+
+
+def _submission_for_listed(submission: Submission, names: set[str]) -> Submission | str:
+    """``submission`` narrowed to ``names``, or a note that there is nothing to send.
+
+    Callers that already know which rules to check pass their own ``choose``.
+    This is the one used when they do not.
+    """
+    if not names:
+        return (
+            "The build listed no rules, so nothing was submitted. A rule is a `#[rule]` "
+            "function or a `cvlr_rules!` invocation."
+        )
+    return dataclasses.replace(submission, rules=SelectRules(tuple(names)))
+
+
 async def _stage_and_submit(
     deps: VerifyDeps,
     state: CvlrGenerationState,
@@ -415,8 +443,14 @@ async def _stage_and_submit(
     callbacks: _RunAccounting,
     cex: CexHandler,
     tool_call_id: str,
-) -> CvlrOutcome:
-    """Stage ``draft``, build it, and submit it.
+    choose: Callable[[set[str]], Submission | str] | None = None,
+) -> CvlrOutcome | str:
+    """Stage ``draft``, build it, and submit the submission ``choose`` returns.
+
+    The rule names are in the ``.so`` this build writes. ``choose`` sees that
+    set and returns the submission to write, or a result that means nothing is
+    written. A missing or unreadable section is returned here, and no conf is
+    written.
 
     ``state`` is the unit's graph state. The draft is the only input staged.
 
@@ -425,18 +459,32 @@ async def _stage_and_submit(
     ``.so``. A sibling must not build between this unit's gate build and that
     upload (:func:`composer.spec.cvlr.prover.prepare_submission`). The permit
     is released when the job's link arrives, which is after the upload, or
-    when ``run_submission`` returns without a link.
+    when ``run_submission`` returns without a link. The same ``.so`` is not
+    read again: the permit makes the prover's rebuild the same rules.
 
     The cloud job itself is not covered. Files a sibling stages during it are
     behind that sibling's feature.
     """
     async with deps.target.build_slot() as permit:
         await deps.target.stage(draft)
-        prepared = await prepare_submission(
-            deps.target.session, submission, into=deps.submissions
+        build = await build_for_submission(deps.target.session, submission)
+        if not isinstance(build.verdict, Built):
+            return BuildRejected(build)
+        artifact = build.verdict.manifest.artifact
+        try:
+            names = rule_names_in_elf(artifact)
+        except ManifestCorrupt as err:
+            # The offset, not the section. A bad record's payload is not a log line.
+            _log.warning("could not read .cvlr_rules in %s at offset %s", artifact, err.offset)
+            return _unread(err)
+        except ManifestMissing as err:
+            return _unread(err)
+        chosen = choose(names) if choose is not None else _submission_for_listed(submission, names)
+        if not isinstance(chosen, Submission):
+            return chosen
+        prepared = Prepared(
+            build, await write_submission(deps.target.session, chosen, into=deps.submissions)
         )
-        if isinstance(prepared, BuildRejected):
-            return prepared
         callbacks.release_on_upload(permit)
         outcome = await run_submission(
             deps.target.session,
@@ -458,7 +506,7 @@ class VerifyRules(
     """Build the program with the harness and check its rules with the Certora Solana Prover.
 
     This takes minutes and spends prover time. Get ``cargo_check`` green first.
-    When every rule the draft declares verified, it stamps that draft.
+    When every rule the build listed verified, it stamps that draft.
     """
 
     @override
@@ -466,38 +514,43 @@ class VerifyRules(
         draft = self.state["curr_spec"]
         if draft is None:
             return "No harness written yet — put a draft first."
-        try:
-            declared = rule_names(draft)
-        except UnreadableRules as err:
-            return f"{err} Nothing was submitted."
-        if not declared:
-            return (
-                "Your draft declares no rules, so there is nothing to submit. A rule is a "
-                "`#[rule]` function or a `cvlr_rules!` invocation."
-            )
         with self.tool_deps() as deps:
             if deps.lock.locked():
                 return (
                     "A prover run for this unit is already in flight. Wait for it rather than "
                     "starting a second one."
                 )
+            listed: list[str] = []
+
+            def choose(names: set[str]) -> Submission | str:
+                listed[:] = sorted(names)
+                if not names:
+                    return (
+                        "The build listed no rules, so there is nothing to submit. A rule is a "
+                        "`#[rule]` function or a `cvlr_rules!` invocation."
+                    )
+                # The conf names the rules this build listed. A conf with no `rule`
+                # entry makes the cloud job end in FAILED, with no report. The
+                # section holds this unit's rules: the build enables only this
+                # unit's feature.
+                return _submission_for(deps, listed)
+
             async with deps.lock:
                 analysis = deps.analysis
                 capture = analysis.callbacks() if analysis else None
-                # Name the rules this draft declares. A conf with no `rule` entry
-                # makes the cloud job end in FAILED, with no report. Naming every
-                # rule in the artifact would also be wrong: the build compiles
-                # this unit's module, and the artifact declares every unit's rules.
                 outcome = await _stage_and_submit(
                     deps,
                     self.state,
                     draft,
-                    _submission_for(deps, declared),
+                    dataclasses.replace(deps.submission, features=deps.target.features),
                     callbacks=capture if capture is not None else _RunAccounting(),
                     cex=analysis.handler(self.state) if analysis else UnanalyzedCexHandler(),
                     tool_call_id=self.tool_call_id,
+                    choose=choose,
                 )
-            return self._report(outcome, deps, declared=declared)
+            if isinstance(outcome, str):
+                return outcome
+            return self._report(outcome, deps, declared=tuple(listed))
 
     def _report(
         self,
