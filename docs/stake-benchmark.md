@@ -589,8 +589,10 @@ for a slot, since units ran four at a time, and Prover jobs were most of the res
 1. **Machinery survival: yes, on SDK 3.** Preflight read the workspace and passed the confined
    compile gate in 4 seconds. The scaffold forwarded `certora` into `solana-stake-interface`, and 4
    of the 8 units' program edits reach into the interface crate.
-2. **Non-vacuity: not established.** Every rule passed its sanity check, but see *What to check
-   before trusting the conservation rules* below.
+2. **Non-vacuity.** Every rule passed its sanity check. The lamport-observation check is recorded
+   under *What to check before trusting the conservation rules*: the protocol-invariants harness
+   and Stake & Lamport Movement's `move_lamports` path both see a balance change, and the
+   Withdrawals harness does not.
 3. **The rubric:** each item has a verified property. Lamport conservation is
    `lamports_conserved_by_every_handler` (18 rules); `delegation.stake + rent_exempt_reserve <=
    lamports` is `live_stake_accounts_rent_exempt_and_delegation_lamport_backed` (17 rules);
@@ -598,14 +600,54 @@ for a slot, since units ran four at a time, and Prover jobs were most of the res
    `staker_reassignment_requires_staker_or_withdrawer_signature` and
    `withdrawer_reassignment_requires_withdrawer_signature`; lockup on `Withdraw` is
    `in_force_lockup_blocks_withdrawal_and_withdrawer_change`.
-4. **Seeded mutants: not run.**
+4. **Seeded mutants: both caught.** Checked on copies of this run's tree with that unit's patch
+   applied, one rule each, submitted to the cloud prover.
+
+   The Split mutant inverts the inactive-path rent check in `process_split`: the handler rejects a
+   split when either resulting balance is at or above the rent floor, and accepts one when both are
+   below it. `rule_split_leaves_both_accounts_backed`, the split case of
+   `live_stake_accounts_rent_exempt_and_delegation_lamport_backed`, is violated in 180 seconds. The
+   witness moves 15 lamports. The floor for a 200-byte account is 2,282,880. The source goes from
+   2,282,881 to 2,282,866 with no effective stake, and the assertion that the source stays backed
+   fails.
+   [Job](https://prover.certora.com/output/37632/2278fbf3a90c4954b6828663dbf53d9c?anonymousKey=9a68219c2ccee3864b735ce196933e29031da0cf).
+
+   The withdrawer mutant deletes `Authorized::check` for `StakeAuthorize::Withdrawer` inside
+   `Authorized::authorize`. The lockup gate stays. At `loop_iter` 2,
+   `rule_integrity_authorize` stops on the unwinding assertion in `collect_signers` — the harness's
+   account lists run to length 4 — and never reaches the signature assertion. At `loop_iter` 4 the
+   same rule is violated in 78 seconds: the staker is unchanged, the withdrawer changes, neither
+   authority signed, and `cvlr_assert!(by_withdrawer)` fails. That rule is one of the four that
+   state `withdrawer_reassignment_requires_withdrawer_signature`.
+   [Job](https://prover.certora.com/output/37632/7abdfe6dca0f415bb516b88da75eaa17?anonymousKey=5344c01fdf2fb7f8a723aeec3a6fa76e315814eb).
 
 **On the expert review's points.** Point 1 did not arise, as predicted: no unit rewrote around
 `Clock` or `Rent`. Point 2's bounds are there as integer properties:
 `warmup_cooldown_schedule_never_overstates_effective_stake`, `deactivation_epoch_set_at_most_once`
-and `delegate_never_grants_instant_effective_stake`. Point 3 is not graded here. The third run's main
-finding does not recur: `main` rejects a source equal to the destination in every two-account
-handler (`processor.rs:240`, `:502`, `:758`, `:934`), and the hoisted
+and `delegate_never_grants_instant_effective_stake`. Point 3 holds on the delivered rules: a
+rejection is `.unwrap()` and then an assertion of the condition a success must have met, with that
+condition left free. That is how `initialize` requires the program's owner and the stake-state
+length, how `delegate` and `deactivate` require a staker signature, how `merge`, `move_stake` and
+`move_lamports` refuse transient stake, and how
+`source_equal_to_destination_rejected_by_all_two_account_handlers` is stated — the key inequality
+is an assertion after `.unwrap()` in the merge, split, withdraw, move-stake and move-lamports
+rules. Split & Merge, which held 14 of the third run's 26 `is_err` assertions, has none.
+
+What still asserts `is_err()` is a property the contrapositive cannot state, plus a few rules that
+could have used it. `rule_initialize_writes_nothing_when_rejected` and its checked twin assume a
+bad owner or length and assert both the error and that nothing was written; the rejection half is
+already the contrapositive pair, and the "nothing written" half needs the error path.
+`rule_set_lockup_checked_new_custodian_must_cosign` asserts `signed || res.is_err()`. Four other
+lockup rules (`rule_set_lockup_in_force_requires_custodian` and its three siblings) keep the
+`Result` and assert `unchanged || signed`. The `check_*_minimum_delegation` and
+`validate_delegated_amount` assertions call those functions on a fixed refusing input, where
+`.unwrap()` would prune every path; each accepting boundary is a separate `is_ok()` assertion.
+`rule_activating_destination_is_mergeable` asserts `move_stake_new_states(...).is_err()` on one
+fixed activating destination. The four `rule_custodian_cannot_*` rules assume the custodian is the
+only signer and assert that the account is unchanged, without asserting an error.
+
+The third run's main finding does not recur: `main` rejects a source equal to the destination in
+every two-account handler (`processor.rs:240`, `:502`, `:758`, `:934`), and the hoisted
 `source_equal_to_destination_rejected_by_all_two_account_handlers` verifies.
 
 **The six skips.** Each names what blocked it, not merely that it was hard. The Prover treats the
@@ -677,12 +719,67 @@ positive controls, and all failed:
 If that were true in general, every post-equals-pre rule in this report would verify whatever the
 handler did, and conservation is exactly that shape.
 
-It is probably not general. The same unit had mocked `relocate_lamports` onto a recorder that
-moves nothing, and `get_stake_state` onto a stand-in that reads no bytes, both to get past
-timeouts and an overflow stop. That explains its lamport control, and possibly the others. But the
-claim has not been checked, and the conservation rules in the other units have not been shown to
-observe a write. **Before this run's conservation results are cited, one positive control per unit
-is owed:** a rule that asserts a balance *does* change, which must be violated.
+For lamports, the cause is local to this unit: it mocked `relocate_lamports` onto a recorder that
+moves nothing, and `get_stake_state` onto a stand-in that reads no bytes, both to get past timeouts
+and an overflow stop. The other units were checked on 2026-10-20, on copies of this run's tree with
+that unit's patch applied, and submitted to the cloud prover.
+
+On a handler that writes lamports, the control asserts that a balance changes. Verified, with the
+assertion reached, means a later read sees the write, and a sum-equality in that harness can be
+cited. Violated with the balance unchanged is the Withdrawals outcome above, and the equality
+cannot be cited. A second rule on the same call asserts that the two balances' sum changes.
+Violated, on a witness where one balance moved and the other took the difference, means the sum is
+conserved on a writing path. A handler that writes no lamports is a different case: a verified
+post-equals-pre rule already implies that "a balance changes" is violated, and that violation does
+not show that a write would be visible.
+
+**Protocol invariants**, the harness of `lamports_conserved_by_every_handler`. The control is a
+full withdraw of an uninitialized account with a positive balance: the amount is the whole balance,
+both balances are at most 2^60, the accounts are distinct, and the withdraw authority is the source
+and a signer. The published `rule_withdraw_full_closes_account` allows a zero starting balance, so
+it does not settle this.
+[Job](https://prover.certora.com/output/37632/0e45ebf2169040c789a4c831b3d8e440?anonymousKey=57cfdf0cdb8509319207076da9d569e990e270dc).
+
+- `rule_control_source_balance_changes` verified, and its reachability check verified. Static
+  analysis discharged it, with no solver query. Every successful call changes the source balance.
+- `rule_control_lamport_sum_changes` violated. The witness is source 1 and destination 0 before
+  the call, source 0 and destination 1 after, so the sum stays 1.
+
+The harness sees a positive-balance write, and the sum stays equal when the lamports move.
+`lamports_conserved_by_every_handler` in this harness may be cited. The same `AccountInfo` and the
+same unmocked `relocate_lamports` serve the harness's other handlers. This control is one withdraw
+of an uninitialized account; the other seventeen rules are the same harness on the other handlers.
+
+**Stake & Lamport Movement.** The control drives `move_lamports_after_shared_checks` on
+`MergeKind::Inactive`, keeping only the calls that return `Ok`, with a positive amount and both
+balances at most 2^60. `Rent::minimum_balance` stays the unconstrained summary.
+[Job](https://prover.certora.com/output/37632/ced8cf9a4dbc4fe48b06cceb7a2e8402?anonymousKey=6f9adaf06217ccb81e9c801479fcddbf8ae088a9).
+
+- `rule_control_source_balance_changes` verified, and its reachability check verified. One reached
+  path starts with both balances at 2^60 and moves 2^60 − 6656: the source ends at 6656 and the
+  destination at 2^61 − 6656.
+
+The lamport deltas in `rule_move_lamports_leaves_stake_state_untouched`, and the accepting-path
+deltas in `rule_move_lamports_accepts_oversized_account_data`, are about a write this harness sees,
+and an `Ok` path of a positive move exists. No rule in this unit drives `process_move_stake`'s
+`relocate_lamports`.
+
+**Withdrawals** was not re-run. Its `relocate_lamports` records the request and moves nothing, and
+the partial-withdraw control came back violated with both balances unchanged (source 7, destination
+4, amount 3). That unit's lamport results stay uncited.
+
+**Authority Management, Lockup Management, and Protocol Parameters / Queries** do not write
+lamports. The authorize rules and the set-lockup rules assert that the balances are unchanged, and
+`rule_min_delegation_query_mutates_no_account` asserts that sixteen accounts' lamports, data
+length, and owner are unchanged, with the call returning `Ok`. A rule asserting that a balance
+changes would be violated because those equalities hold. No job was spent on them.
+
+**Split & Merge, Delegation & Deactivation, and Account Initialization** do not read an account's
+lamports after a handler that moves them. Split and merge conservation is
+`rule_split_conserves_lamports` and `rule_merge_conserves_lamports_and_closes_source` in the
+protocol-invariants harness. Delegation reads the stake account's lamports before
+`process_delegate` and asserts `lamports >= delegation.stake`. Account Initialization assumes the
+balance equals the modelled reserve. A balance-change control does not apply to these three units.
 
 A component that edited the program is now one patch. The run writes
 `certora/cvlr/components/<module>.patch`, the harness plus that unit's edits, and `git apply` lays
