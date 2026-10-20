@@ -164,7 +164,7 @@ You will likely want to install the tool using the `--editable` flag. You'll als
 | `--cloud` | off | Run prover jobs in the Certora cloud instead of locally |
 | `--model` | `claude-opus-4-6` | Anthropic model to use |
 | `--tokens` | 10000 | Token budget for LLM responses |
-| `--thinking-tokens` | 2048 | Thinking token budget |
+| `--thinking-tokens` | 16384 | Thinking token budget (OpenAI models: `high` reasoning effort) |
 | `--rag-db` | `postgresql://rag_user:rag_password@localhost:5432/rag_db` | RAG database connection string |
 
 ### Example
