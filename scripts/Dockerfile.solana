@@ -16,14 +16,10 @@
 ARG BASE_IMAGE=autoprover-local:latest
 FROM --platform=linux/amd64 ${BASE_IMAGE} AS solana
 
-# Must agree with HOST_RUST_TOOLCHAIN in composer/spec/cvlr/conf.py, which every cargo command a CVLR
-# run makes uses in place of the target's own rust-toolchain.toml. The runtime user cannot install
-# another toolchain into this image. tests/test_cvlr_image.py fails the routine gate if they drift.
-ARG RUST_VERSION=1.90.0
-ARG CARGO_CERTORA_SBF_VERSION=0.3.5
-# Must agree with PLATFORM_TOOLS_VERSION in composer/spec/cvlr/conf.py, which is the version every
-# build uses. tests/test_cvlr_image.py fails the routine gate if the two drift.
-ARG SOLANA_TOOLS_VERSION=v1.53
+# No versions here. composer.scripts.solana_toolchain installs the ones the installed composer builds
+# with, which is also how AIAutoProver's cloud image installs them; `... solana_toolchain versions`
+# prints them.
+
 # Inherited from the base service's build args through the compose template; the channel is baked
 # into $BASE_IMAGE rather than chosen here. Declared so the build does not warn about it.
 ARG CERTORA_CLI_PACKAGE
@@ -47,58 +43,15 @@ ENV RUSTUP_HOME=/opt/autoprove/rustup \
     CERTORA_PLATFORM_TOOLS_ROOT=/opt/autoprove/solana \
     PATH=/opt/autoprove/cargo/bin:${PATH}
 
-# Three pieces, in the order a CVLR run reaches them:
-#
-#   * A host Rust toolchain. rustup, not a bare cargo: a target project's own rust-toolchain.toml
-#     pins the channel its build uses, and rustup resolves that during the *unconfined* warm step —
-#     under confinement RUSTUP_HOME is read-only and the download cannot happen.
-#   * `cargo certora-sbf` — Certora's build subcommand, which is what the slow tier runs and what
-#     the prover's build_script reruns (composer/cargo/sbf.py).
-#   * The platform-tools release that subcommand compiles with, unpacked at build time. This one is
-#     not an optimization: every build runs confined, and a confined build has no network and a
-#     read-only tools cache — so a version this image lacks cannot be fetched at run time, it is a
-#     rebuild. A project whose base conf pins a different `cargo_tools_version` is that case, and
-#     composer.cargo.sbf.PlatformToolsMissing names it.
-#
-# The shared cargo registry is deleted at the end: every confined build fetches into a private,
-# per-run CARGO_HOME under its own workdir (composer.sandbox.recipes.sandbox_cargo_home), and only
-# $CARGO_HOME/bin is granted read-only — so a warm shared registry would be a gigabyte nothing reads.
-RUN set -eux; \
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-      | sh -s -- -y --no-modify-path --profile minimal --default-toolchain "$RUST_VERSION"; \
-    cargo --version; \
-    cargo install --locked cargo-certora-sbf --version "$CARGO_CERTORA_SBF_VERSION"; \
-    cargo certora-sbf --no-build --no-rustup \
-        --platform-tools-root "$CERTORA_PLATFORM_TOOLS_ROOT" \
-        --tools-version "$SOLANA_TOOLS_VERSION"; \
-    test -d "$CERTORA_PLATFORM_TOOLS_ROOT/$SOLANA_TOOLS_VERSION"; \
-    rm -rf "$CARGO_HOME/registry" "$CARGO_HOME/git"
-
-# The `cvlr_api_kb` manifest, generated here from rustdoc over the CVLR crates
-# composer/spec/cvlr/reference.py pins, and ingested by the entrypoint's setup-db from the path
-# below. Only the manifest is kept: the nightly toolchain rustdoc JSON needs and the registry it
-# reads are removed in the same layer, so neither costs image size. The registry starts cold, so
-# composer.scripts.cvlr_api_docs fetches each generation's crates itself (`--fetch`). A failure here
-# fails the build: an image without the manifest would run with an empty API corpus and nothing to
-# say so. The nightly is pinned because the producer accepts exactly one rustdoc JSON
-# format_version, and a floating nightly would change it under the build.
-ARG RUST_NIGHTLY=nightly-2026-07-06
-RUN set -eux; \
-    rustup toolchain install "$RUST_NIGHTLY" --profile minimal; \
-    mkdir -p "$AUTOPROVE_HOME/rag"; \
-    python -m composer.scripts.cvlr_api_docs --chain solana --toolchain "$RUST_NIGHTLY" --fetch \
-        --output "$AUTOPROVE_HOME/rag/cvlr_api_kb.rag.json"; \
-    rustup toolchain uninstall "$RUST_NIGHTLY"; \
-    rm -rf "$CARGO_HOME/registry" "$CARGO_HOME/git"
-
-# An empty global git config, which a confined build with a git dependency cannot start without.
-# libgit2 reads it before it will open a cached repository at all, and under Landlock the open of a
-# path that was never granted fails with EACCES rather than ENOENT — so libgit2 does not degrade to
-# "no user config", it reports the repository as unopenable and cargo blames the network
-# (composer.sandbox.recipes.git_config_ro_paths). The policy grants this file only if it exists, and
-# every Anchor project needs it: composer.spec.cvlr.munge.ANCHOR_FORK patches anchor-lang to a git
-# repo.
-RUN touch $HOME/.gitconfig
+# The host Rust toolchain, `cargo certora-sbf`, and the platform-tools release, pre-unpacked: a
+# confined build has no network and a read-only tools cache. Then the `cvlr_api_kb` manifest, which
+# the entrypoint's setup-db ingests from the path below; the nightly that generates it is removed in
+# the same layer. Then an empty ~/.gitconfig, which a confined build with a git dependency cannot
+# start without. The module docstring has the reasons for each.
+RUN python -m composer.scripts.solana_toolchain toolchain
+RUN python -m composer.scripts.solana_toolchain api-manifest \
+        --output "$AUTOPROVE_HOME/rag/cvlr_api_kb.rag.json"
+RUN python -m composer.scripts.solana_toolchain gitconfig
 
 # No permissions pass over the three trees above, and that is the point rather than an omission:
 # `chmod` makes overlayfs copy a file up into the layer that runs it whether or not the mode

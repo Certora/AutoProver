@@ -45,6 +45,9 @@ _log = logging.getLogger(__name__)
 #: Certora's tool, not ``cargo-build-sbf``: it pins the platform-tools version
 #: and prints the build manifest.
 SBF_SUBCOMMAND = "certora-sbf"
+#: The release of that subcommand the Solana images install
+#: (:mod:`composer.scripts.solana_toolchain`).
+SBF_SUBCOMMAND_VERSION = "0.3.5"
 
 DEFAULT_BUILD_TIMEOUT_S: int = 1800  # 30 minutes
 

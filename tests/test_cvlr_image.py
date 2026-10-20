@@ -17,6 +17,16 @@ from pathlib import Path
 
 import pytest
 
+from composer.cargo.sbf import SBF_SUBCOMMAND_VERSION
+from composer.scripts.cvlr_api_docs import PINNED_NIGHTLY
+from composer.scripts.solana_toolchain import (
+    REQUIRED_ENV,
+    RemoveTree,
+    RequireDir,
+    Run,
+    api_manifest_steps,
+    toolchain_steps,
+)
 from composer.spec.cvlr.conf import HOST_RUST_TOOLCHAIN, PLATFORM_TOOLS_VERSION
 
 _SCRIPTS = Path(__file__).parent.parent / "scripts"
@@ -25,26 +35,37 @@ _SOLANA_DOCKERFILE = _SCRIPTS / "Dockerfile.solana"
 _ENTRYPOINT = _SCRIPTS / "autoprove-entrypoint.sh"
 
 
-def _arg(name: str) -> str:
-    """The default of a ``Dockerfile.solana`` ``ARG``, which must exist and must have one."""
-    match = re.search(
-        rf"^ARG {re.escape(name)}=(\S+)$", _SOLANA_DOCKERFILE.read_text(), re.MULTILINE
+def test_the_solana_image_states_no_version_of_its_own():
+    """The versions come from ``composer.scripts.solana_toolchain``, which reads them from the code
+    that uses them. A version ARG here would be a second source the cloud image does not share."""
+    text = _SOLANA_DOCKERFILE.read_text()
+    for name in ("RUST_VERSION", "CARGO_CERTORA_SBF_VERSION", "SOLANA_TOOLS_VERSION", "RUST_NIGHTLY"):
+        assert f"ARG {name}" not in text
+
+
+@pytest.mark.parametrize("step", ["toolchain", "api-manifest", "gitconfig"])
+def test_the_solana_image_runs_every_toolchain_step(step):
+    assert f"python -m composer.scripts.solana_toolchain {step}" in _SOLANA_DOCKERFILE.read_text()
+
+
+def test_the_solana_image_sets_what_the_toolchain_steps_and_the_sandbox_read():
+    env = re.search(r"^ENV (.*?)(?:\n\n|\Z)", _SOLANA_DOCKERFILE.read_text(), re.MULTILINE | re.DOTALL)
+    assert env is not None
+    for name in REQUIRED_ENV:
+        assert f"{name}=" in env[1]
+
+
+def test_the_toolchain_steps_install_the_versions_every_build_uses():
+    """A confined build cannot fetch platform tools or a toolchain: the image holds what a run can
+    use, and the runtime user cannot write the image's rustup home."""
+    steps = toolchain_steps(
+        {"CARGO_HOME": "/c", "CERTORA_PLATFORM_TOOLS_ROOT": "/t", "RUSTUP_HOME": "/r"}
     )
-    assert match is not None, f"{_SOLANA_DOCKERFILE} declares no `ARG {name}=<default>`"
-    return match[1]
-
-
-def test_the_image_bakes_the_tools_version_every_build_uses():
-    """A confined build cannot fetch platform tools — no network, and the cache is granted
-    read-only — so the version the image holds is the version a run can use. A version the image
-    does not hold fails every run."""
-    assert _arg("SOLANA_TOOLS_VERSION") == PLATFORM_TOOLS_VERSION
-
-
-def test_the_image_bakes_the_host_toolchain_every_cargo_command_uses():
-    """The runtime user cannot write the image's rustup home, so a toolchain the image lacks cannot
-    be installed when a run asks for it, and cargo does not start."""
-    assert _arg("RUST_VERSION") == HOST_RUST_TOOLCHAIN
+    commands = " ".join(" ".join(s.argv) for s in steps if isinstance(s, Run))
+    assert f"--default-toolchain {HOST_RUST_TOOLCHAIN}" in commands
+    assert f"--tools-version {PLATFORM_TOOLS_VERSION}" in commands
+    assert f"--version {SBF_SUBCOMMAND_VERSION}" in commands
+    assert RequireDir(Path("/t") / PLATFORM_TOOLS_VERSION) in steps
 
 
 def test_the_base_image_carries_no_rust_toolchain():
@@ -91,7 +112,7 @@ def _api_manifest_run() -> str:
     runs = [
         run
         for run in _run_instructions(_SOLANA_DOCKERFILE)
-        if "composer.scripts.cvlr_api_docs" in run
+        if "composer.scripts.solana_toolchain api-manifest" in run
     ]
     assert len(runs) == 1, f"{_SOLANA_DOCKERFILE} should generate the cvlr_api_kb manifest in one RUN"
     return runs[0]
@@ -126,27 +147,34 @@ def test_setup_db_can_leave_the_cvl_manual_alone():
     assert guard != -1 and "fi" not in entrypoint[guard:cvl].split()
 
 
+_MANIFEST_STEPS = api_manifest_steps({"CARGO_HOME": "/c"}, Path("/out.json"))
+_GENERATE = next(
+    s for s in _MANIFEST_STEPS
+    if isinstance(s, Run) and "composer.scripts.cvlr_api_docs" in s.argv
+)
+
+
 def test_the_api_manifest_step_discards_its_toolchain_and_registry():
     """Only the manifest is needed at run time. The nightly toolchain and the warmed registry have
     to go in the same ``RUN`` that made them, because a later layer that deletes them hides them
     without shrinking the image."""
-    run = _api_manifest_run()
-    assert 'rustup toolchain uninstall "$RUST_NIGHTLY"' in run
-    assert '"$CARGO_HOME/registry"' in run
+    assert Run(("rustup", "toolchain", "uninstall", PINNED_NIGHTLY)) in _MANIFEST_STEPS
+    assert RemoveTree(Path("/c/registry")) in _MANIFEST_STEPS
+    assert _MANIFEST_STEPS.index(_GENERATE) < _MANIFEST_STEPS.index(RemoveTree(Path("/c/registry")))
 
 
 def test_the_api_manifest_step_fetches_its_own_crates():
     """The registry is cold in a fresh layer, and the producer resolves offline unless told
     otherwise, so the step has to ask it to fetch rather than warm the registry by hand."""
-    assert "--fetch" in _api_manifest_run()
+    assert "--fetch" in _GENERATE.argv
 
 
 def test_the_api_manifest_is_generated_by_a_dated_nightly():
     """The producer accepts exactly one rustdoc JSON ``format_version``, so a floating nightly would
     break the image build the day the format moves. The toolchain installed, the one rustdoc runs
     under and the one removed must all be the pinned one."""
-    pin = re.search(r"^ARG RUST_NIGHTLY=(\S+)$", _SOLANA_DOCKERFILE.read_text(), re.MULTILINE)
-    assert pin is not None and re.fullmatch(r"nightly-\d{4}-\d{2}-\d{2}", pin.group(1))
-    run = _api_manifest_run()
-    assert 'rustup toolchain install "$RUST_NIGHTLY"' in run
-    assert '--toolchain "$RUST_NIGHTLY"' in run
+    assert re.fullmatch(r"nightly-\d{4}-\d{2}-\d{2}", PINNED_NIGHTLY)
+    assert Run(("rustup", "toolchain", "install", PINNED_NIGHTLY, "--profile", "minimal")) in (
+        _MANIFEST_STEPS
+    )
+    assert _GENERATE.argv[_GENERATE.argv.index("--toolchain") + 1] == PINNED_NIGHTLY

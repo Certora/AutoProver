@@ -99,6 +99,9 @@ _log = logging.getLogger(__name__)
 #: mismatch is refused loudly rather than half-parsed: a walk that silently skipped every item it
 #: no longer recognized would emit a thin corpus that looks like a successful build.
 FORMAT_VERSION = 60
+#: A dated nightly whose rustdoc emits :data:`FORMAT_VERSION`. The Solana images generate the
+#: manifest with it (:mod:`composer.scripts.solana_toolchain`); moving one means moving the other.
+PINNED_NIGHTLY = "nightly-2026-07-06"
 
 #: Item kinds worth an entry. Everything else rustdoc emits is structure rather than surface —
 #: ``impl`` and ``use`` are walked for what they tell us about other items, and ``module``,
