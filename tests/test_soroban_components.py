@@ -149,14 +149,14 @@ def test_interaction_union_discriminates_by_shape():
 
 def test_unit_resolves_functions_and_durability_tagged_storage():
     (deposits, withdrawals) = SOROBAN.units(SorobanContractInstance(0, _app()))
-    assert deposits.display_name == "Deposits" and deposits.slug == "Deposits"
+    assert deposits.display_name == "Deposits" and deposits.slug == "deposits"
     assert [f.name for f in withdrawals.functions] == ["withdraw"]
     assert [(e.key, e.durability) for e in deposits.storage_entries] == [
         ("Balance(Address)", "persistent"),
         ("Admin", "instance"),
     ]
     feature = deposits.feature_json()
-    assert feature["slug"] == "Deposits"
+    assert feature["slug"] == "deposits"
     functions = cast(list[dict[str, Any]], feature["functions"])
     storage = cast(list[dict[str, Any]], feature["storage_entries"])
     assert [f["name"] for f in functions] == ["initialize", "deposit"]
@@ -180,12 +180,15 @@ def test_duplicate_component_names_rejected():
     assert problem is not None and "Duplicate component names in Vault: Deposits" in problem
 
 
-def test_component_slug_collision_rejected():
+@pytest.mark.parametrize("name", ["Deposits!", "deposits", "DEPOSITS"])
+def test_component_slug_collision_rejected(name: str):
+    """Each differs from "Deposits" only in case or punctuation, so both would name one harness module."""
+
     def collide(raw):
-        _components(raw)[1]["name"] = "Deposits!"
+        _components(raw)[1]["name"] = name
 
     problem = _soroban_validate(_app(collide), VAULT_ID, None, None)
-    assert problem is not None and "filename slug" in problem
+    assert problem is not None and "Rust harness module" in problem
 
 
 def test_unknown_function_reference_rejected():

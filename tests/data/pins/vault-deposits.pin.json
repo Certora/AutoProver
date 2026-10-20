@@ -299,7 +299,7 @@
     ]
   },
   "properties": {
-    "Deposits": [
+    "deposits": [
       {
         "sort": "safety_property",
         "description": "If `deposit(amount)` succeeds, the vault's recorded `balance` after the call equals its balance before the call plus `amount` computed over exact integers \u2014 no double credit, truncation, or wrap \u2014 so the recorded balance never diverges from the lamports actually moved.",

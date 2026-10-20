@@ -75,7 +75,7 @@ def _fixture(tmp_path: pathlib.Path, **over: object) -> pathlib.Path:
         "version": PIN_VERSION,
         "target_commit": "22834f8",
         "analysis": ANALYSIS,
-        "properties": {"Pool_Initialization": PROPS},
+        "properties": {"pool_initialization": PROPS},
     }
     payload.update(over)
     p = tmp_path / "pin.json"
@@ -90,14 +90,14 @@ def test_a_fixture_round_trips_through_the_real_model(tmp_path: pathlib.Path) ->
     the units a replay formalizes against are the units the properties were written about.
     """
     analysis = SolanaApplication.model_validate(ANALYSIS)
-    props = {"Pool_Initialization": [PropertyFormulation.model_validate(p) for p in PROPS]}
+    props = {"pool_initialization": [PropertyFormulation.model_validate(p) for p in PROPS]}
     path = tmp_path / "out" / "pin.json"
 
     write_pinned_run(path, analysis, props, tmp_path)
     back = load_pinned_run(path, SolanaApplication)
 
     assert back.analysis == analysis, "the analysis must survive the round trip intact"
-    assert [p.title for p in back.properties["Pool_Initialization"]] == [
+    assert [p.title for p in back.properties["pool_initialization"]] == [
         "manager_must_sign", "supply_matches_reserve"
     ]
     assert back.total() == 2
@@ -141,7 +141,7 @@ def test_a_half_written_fixture_is_refused(tmp_path: pathlib.Path, missing: str)
 
 def test_an_empty_property_list_is_refused(tmp_path: pathlib.Path) -> None:
     """An empty list and an absent key mean the same thing to a run; only one may express it."""
-    path = _fixture(tmp_path, properties={"Pool_Initialization": []})
+    path = _fixture(tmp_path, properties={"pool_initialization": []})
 
     with pytest.raises(ValueError, match="drop the key instead"):
         load_pinned_run(path, SolanaApplication)
@@ -154,7 +154,7 @@ def test_no_components_pinned_is_refused(tmp_path: pathlib.Path) -> None:
 
 def test_a_malformed_property_is_refused_at_load(tmp_path: pathlib.Path) -> None:
     """Validation happens while reading, not when a unit reaches formalization an hour in."""
-    path = _fixture(tmp_path, properties={"Pool_Initialization": [{"title": "no_sort"}]})
+    path = _fixture(tmp_path, properties={"pool_initialization": [{"title": "no_sort"}]})
 
     with pytest.raises(Exception):
         load_pinned_run(path, SolanaApplication)
@@ -299,13 +299,13 @@ def test_every_pinned_component_answers_to_a_unit_of_its_own_analysis() -> None:
 
 
 def test_the_component_the_gate_should_pin_is_present() -> None:
-    """``Pool_Initialization`` is component 0 and the wrong default — the normative verification of
+    """``pool_initialization`` is component 0 and the wrong default — the normative verification of
     this program has no Initialize rule, and no successful Initialize exists in the Prover's model
-    with accounts unconstrained. ``Admin_Fee_Configuration`` covers ``set_fee``, which the
+    with accounts unconstrained. ``admin_fee_configuration`` covers ``set_fee``, which the
     normative verification does cover. See this directory's README."""
     from composer.pipeline.ecosystem import SOLANA
 
     pin = load_pinned_run(PIN_FILE, SOLANA.system_model)
 
-    assert "Admin_Fee_Configuration" in pin.properties
-    assert len(pin.properties["Admin_Fee_Configuration"]) == 23
+    assert "admin_fee_configuration" in pin.properties
+    assert len(pin.properties["admin_fee_configuration"]) == 23

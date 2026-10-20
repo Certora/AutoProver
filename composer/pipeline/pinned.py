@@ -22,12 +22,10 @@ Write one with ``--pin-to`` and read it back with ``--properties``. Components t
 dropped from the run, which is the other half of what makes this cheap: one component of ten.
 
 Properties are keyed by :attr:`~composer.spec.system_model.FeatureUnit.slug`, which is the unit's
-own identity and therefore the only key guaranteed to address exactly one unit. Note it is *not*
-quite the name on disk: the harness module and the artifact stem run the slug through
-:func:`~composer.spec.cvlr.harness.module_name`, which lowercases it, so a fixture says
-``Pool_Initialization`` where the file says ``pool_initialization``. The keys are machine-written by
-``--pin-to``, so nothing has to spell one by hand; keying on the lossy name instead would let two
-components collide onto one key.
+own identity and therefore the only key guaranteed to address exactly one unit. In a Rust
+ecosystem it is also the harness module's name (:func:`~composer.spec.util.slugify_rust_module`),
+so a fixture's ``pool_initialization`` is the unit whose harness is ``pool_initialization.rs``. The
+keys are machine-written by ``--pin-to``, so nothing has to spell one by hand.
 """
 
 import json

@@ -3114,7 +3114,7 @@
     ]
   },
   "properties": {
-    "Stake_Rebalancing": [
+    "stake_rebalancing": [
       {
         "sort": "safety_property",
         "description": "Every rebalancing handler (increase_validator_stake, increase_additional_validator_stake, decrease_validator_stake, decrease_validator_stake_with_reserve, decrease_additional_validator_stake) must revert unless the `staker` account it is given both equals `stake_pool.staker` and is a signer; otherwise anyone can move pool stake between the reserve, validators and transient accounts at will.",
@@ -3226,7 +3226,7 @@
         "title": "rebalance_cpi_amount_matches_recorded_delta"
       }
     ],
-    "Admin_Fee_Configuration": [
+    "admin_fee_configuration": [
       {
         "sort": "safety_property",
         "description": "process_set_manager must fail unless the `manager` account's key equals the pre-state stake_pool.manager and that account is a signer, AND the `new_manager` account is also a signer; otherwise anyone could seize the manager role and with it control of all fees, funding authorities and the fee-receiving token account.",
@@ -3343,7 +3343,7 @@
         "title": "fee_schedule_only_writable_by_set_fee_and_the_epoch_countdown"
       }
     ],
-    "Validator_List_Management": [
+    "validator_list_management": [
       {
         "sort": "safety_property",
         "description": "add_validator_to_pool, remove_validator_from_pool and set_preferred_validator must all abort unless the supplied staker account both equals stake_pool.staker and is a signer of the transaction; otherwise anyone could insert, deactivate or re-target validators in the pool's validator set.",
@@ -3480,7 +3480,7 @@
         "title": "set_preferred_validator_can_actually_set_a_preference"
       }
     ],
-    "Pool_Initialization": [
+    "pool_initialization": [
       {
         "sort": "safety_property",
         "description": "The `Initialize` handler must fail unless the `manager` account (account index 1) has `is_signer == true`; otherwise anyone could create a pool that names an arbitrary, non-consenting key as manager and thereby as the permanent fee/config authority.",
@@ -3607,7 +3607,7 @@
         "title": "handlers_bind_accounts_to_recorded_pool_fields"
       }
     ],
-    "Balance_Updates": [
+    "balance_updates": [
       {
         "sort": "safety_property",
         "description": "update_validator_list_balance may modify only the active_stake_lamports, transient_stake_lamports, last_update_epoch and status fields of validator-list entries in the index range [start_index, start_index + number_of_account_pairs); every entry outside that range, the vote_account_address / validator_seed_suffix / transient_seed_suffix of every entry, the list length and the list header must be unchanged, otherwise a permissionless caller could clobber other validators' recorded balances or rewrite the vote-account-to-stake-PDA mapping.",
@@ -3734,7 +3734,7 @@
         "title": "uvlb_merge_only_between_mergeable_states"
       }
     ],
-    "SOL_Deposits": [
+    "sol_deposits": [
       {
         "sort": "attack_vector",
         "description": "If stake_pool.sol_deposit_authority is Some(a) before the call, deposit_sol and deposit_sol_with_slippage may only succeed when the optional trailing sol_deposit_authority account is actually supplied, its key equals a, and it is a signer; otherwise anyone could deposit into a permissioned (private) pool and mint its pool tokens against the operator's policy.",
@@ -3821,7 +3821,7 @@
         "title": "private_pool_sol_deposit_is_reachable"
       }
     ],
-    "Stake_Deposits": [
+    "stake_deposits": [
       {
         "sort": "safety_property",
         "description": "process_deposit_stake (DepositStake and DepositStakeWithSlippage) must abort unless the stake_pool account is owned by the stake-pool program and has account_type StakePool, and the validator_list account is owned by the stake-pool program, has header account_type ValidatorList, and its key equals stake_pool.validator_list; otherwise an attacker can supply a look-alike pool or a fabricated validator list containing a forged Active entry and have the pool's accounting written into an account they control.",
@@ -3958,7 +3958,7 @@
         "title": "deposit_stake_source_must_not_already_be_pool_owned_stake"
       }
     ],
-    "Stake_Withdrawals": [
+    "stake_withdrawals": [
       {
         "sort": "safety_property",
         "description": "withdraw_stake and withdraw_stake_with_slippage must fail unless the passed token_program account key equals stake_pool.token_program_id and the passed pool_mint key equals stake_pool.pool_mint; otherwise an attacker supplies a look-alike token program (which is used verbatim as the CPI program id for burn/transfer_checked) or a foreign mint, so the pool-token burn is a no-op while the stake split still executes, yielding free stake.",
@@ -4095,7 +4095,7 @@
         "title": "preferred_withdraw_validator_unenforced_for_transient_tier"
       }
     ],
-    "SOL_Withdrawals": [
+    "sol_withdrawals": [
       {
         "sort": "safety_property",
         "description": "If stake_pool.sol_withdraw_authority is Some(k), then withdraw_sol / withdraw_sol_with_slippage may only succeed when the optional trailing account is supplied, its key equals k, and it is a signer; otherwise anyone could drain a private pool's reserve without the configured gatekeeper's consent.",
@@ -4187,7 +4187,7 @@
         "title": "pool_token_supply_decrement_requires_genuine_pool_token_burn_source"
       }
     ],
-    "Token_Metadata": [
+    "token_metadata": [
       {
         "sort": "safety_property",
         "description": "Neither CreateTokenMetadata nor UpdateTokenMetadata may succeed unless the account passed in the `manager` position is a transaction signer and its key equals the `manager` field of the supplied `stake_pool` account; otherwise any caller could rewrite the pool token's on-chain name/symbol/uri and deface or impersonate the pool token.",

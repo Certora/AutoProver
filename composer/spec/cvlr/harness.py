@@ -13,13 +13,9 @@ be visible from the program's own file
 (:func:`composer.spec.cvlr.scaffold._harness_files`).
 :class:`composer.pipeline.core.StagedFormalizer` declares every module before
 any unit writes.
-
-A component slug may contain characters Rust will not accept in a module path.
-:func:`module_name` derives the identifier once.
 """
 
 import dataclasses
-import re
 from pathlib import Path
 from typing import override
 
@@ -40,30 +36,12 @@ from composer.spec.util import ensure_dir
 DELIVERABLE_DIR = Path("certora") / "cvlr"
 INTERNAL_DIR = Path(".certora_internal") / "cvlr"
 
-
-def module_name(slug: str) -> str:
-    """A Rust module identifier for a component slug.
-
-    Rust accepts ``[A-Za-z_][A-Za-z0-9_]*``. A slug may contain ``-`` or start
-    with a digit. The result is lowercased and runs of separators collapse, so
-    the name satisfies ``non_snake_case``. A crate that denies that lint, or a
-    CI build with ``-D warnings``, would fail on a name chosen here. The
-    identifier is fixed from the slug. A draft cannot rename the module.
-    """
-    cleaned = "".join(c if c.isalnum() or c == "_" else "_" for c in slug).lower()
-    collapsed = re.sub(r"_+", "_", cleaned).strip("_")
-    if not collapsed:
-        return "spec"
-    return collapsed if collapsed[:1].isalpha() else f"spec_{collapsed}"
-
-
 @dataclasses.dataclass(frozen=True)
 class HarnessModule:
-    slug: str
-
-    @property
-    def module(self) -> str:
-        return module_name(self.slug)
+    #: The unit's slug. The Rust ecosystems produce it with
+    #: :func:`~composer.spec.util.slugify_rust_module`, so it is already a
+    #: ``snake_case`` module identifier, unique within the program.
+    module: str
 
     @property
     def stem(self) -> str:
@@ -78,7 +56,7 @@ class HarnessModule:
         in its dep-info, so it cannot break or dirty another unit's build.
 
         The name is prefixed with ``unit_``. It shares a namespace with the
-        project's own features. A slug such as ``serde`` would otherwise select
+        project's own features. A module such as ``serde`` would otherwise select
         the project's feature.
         """
         return CargoFeature(f"unit_{self.module}")
@@ -172,22 +150,9 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
         Two units are never compiled together, so two ``impl Nondet for Foo``
         in different modules do not collide (``E0119``).
 
-        Two slugs that reduce to one module name are refused. This is the only
-        place that sees every name at once. They would share a file, so one
-        harness would overwrite the other, both compile gates would pass, and
-        the report would claim two units for one body of work.
+        Module names are unique because slugs are: component analysis rejects
+        sibling components whose slugs collide.
         """
-        by_module: dict[str, list[str]] = {}
-        for module in modules:
-            by_module.setdefault(module.module, []).append(module.slug)
-        clashes = {name: slugs for name, slugs in by_module.items() if len(slugs) > 1}
-        if clashes:
-            detail = "; ".join(f"{sorted(s)} all become {name!r}" for name, s in clashes.items())
-            raise ValueError(
-                f"two or more components share a harness module name ({detail}). Module names are "
-                f"lowercased and separator-collapsed, so slugs differing only in case or "
-                f"punctuation collide; rename the components so they differ in more than that."
-            )
         target = self._artifact_dir()
         declarations = "".join(
             f'#[cfg(feature = "{m.feature}")]\npub mod {m.module};\n'

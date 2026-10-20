@@ -299,7 +299,7 @@
     ]
   },
   "properties": {
-    "Vault_Lifecycle_Initialization": [
+    "vault_lifecycle_initialization": [
       {
         "sort": "safety_property",
         "description": "After a successful `initialize`, `vault.authority` equals the key of the `authority` account that signed the instruction (and equals the account used as the second PDA seed), so a caller can never create a vault whose recorded owner is a key other than its own signer.",
@@ -346,7 +346,7 @@
         "title": "initialize_reachable_for_fresh_authority"
       }
     ],
-    "Deposits": [
+    "deposits": [
       {
         "sort": "safety_property",
         "description": "If `deposit(amount)` succeeds, the vault's recorded `balance` after the call equals its balance before the call plus `amount` computed over exact integers \u2014 no double credit, truncation, or wrap \u2014 so the recorded balance never diverges from the lamports actually moved.",
@@ -393,7 +393,7 @@
         "title": "deposit_reachable_for_non_authority_depositor"
       }
     ],
-    "Withdrawals_Fee_Sharing": [
+    "withdrawals_fee_sharing": [
       {
         "sort": "attack_vector",
         "description": "`withdraw` must revert unless the supplied `authority` account is a transaction signer and its key equals the `authority` field stored in the supplied `vault` account; if either check is missing, any caller can pass another user's vault (or a non-signing authority) and drain it.",

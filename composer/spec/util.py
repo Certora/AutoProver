@@ -30,6 +30,35 @@ def slugify_filename(name: str) -> str:
     return slug or "unnamed"
 
 
+#: Identifiers ``pub mod`` rejects through edition 2024: the strict keywords,
+#: ``try`` (reserved since 2018), and ``gen`` (reserved in 2024). Prefixing
+#: ``gen`` is still a legal name on an earlier edition. The check runs after
+#: lowercasing, so ``Self`` is covered by ``self``. Weak keywords (``union``,
+#: ``safe``, ``raw``) are legal module names and are absent here.
+_RUST_MODULE_KEYWORDS = frozenset(
+    {
+        "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "crate", "do", "dyn", "else",
+        "enum", "extern", "false", "final", "fn", "for", "gen", "if", "impl", "in", "let", "loop", "macro", "match",
+        "mod", "move", "mut", "override", "priv", "pub", "ref", "return", "self", "static", "struct", "super", "trait",
+        "true", "try", "type", "typeof", "unsafe", "unsized", "use", "virtual", "where", "while", "yield",
+    }
+)
+
+
+def slugify_rust_module(name: str) -> str:
+    """A slug that is also a ``snake_case`` Rust module identifier.
+
+    For the Rust ecosystems, whose CVLR harness is a module named after the
+    slug. Any run of characters outside ``[A-Za-z0-9]`` becomes one ``_``, and
+    the result is lowercased, so a crate that denies ``non_snake_case`` accepts
+    it. A leading digit or a keyword is prefixed with ``spec_``.
+    """
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_").lower() or "unnamed"
+    if slug[0].isalpha() and slug not in _RUST_MODULE_KEYWORDS:
+        return slug
+    return f"spec_{slug}"
+
+
 def ensure_dir(path: Path) -> Path:
     """``mkdir -p`` *path* (no-op if it already exists) and return it, so it can be
     used inline, e.g. ``ensure_dir(certora_dir / "specs") / spec_name``."""

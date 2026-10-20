@@ -67,7 +67,7 @@ from composer.spec.soroban.model import (
     SorobanContractInstance,
     StorageDurability,
 )
-from composer.spec.util import fs_forbidden_read, slugify_filename
+from composer.spec.util import fs_forbidden_read, slugify_filename, slugify_rust_module
 
 LanguageTag = Literal["solidity", "rust"]
 ChainTag = Literal["evm", "solana", "soroban"]
@@ -336,12 +336,13 @@ def _validate_program_components(prog: SolanaProgram) -> list[str]:
         if comp.name in seen:
             errors.append(f"Duplicate component names in {prog.name}: {comp.name}")
         seen.add(comp.name)
-        slug = slugify_filename(comp.name)
+        slug = slugify_rust_module(comp.name)
         if slug in slug_origin:
             errors.append(
                 f"Components {slug_origin[slug]!r} and {comp.name!r} in {prog.name} both reduce "
-                f"to the filename slug {slug!r} (punctuation and symbols are normalized to "
-                f"underscores); give them names that differ in more than that."
+                f"to the slug {slug!r}, which names their Rust harness module (case is dropped, "
+                f"punctuation and symbols become underscores, and a leading digit or a Rust keyword "
+                f"gets a 'spec_' prefix); give them names that differ in more than that."
             )
         else:
             slug_origin[slug] = comp.name
@@ -557,12 +558,13 @@ def _validate_contract_components(contract: SorobanContract) -> list[str]:
         if comp.name in seen:
             errors.append(f"Duplicate component names in {contract.name}: {comp.name}")
         seen.add(comp.name)
-        slug = slugify_filename(comp.name)
+        slug = slugify_rust_module(comp.name)
         if slug in slug_origin:
             errors.append(
                 f"Components {slug_origin[slug]!r} and {comp.name!r} in {contract.name} both "
-                f"reduce to the filename slug {slug!r} (punctuation and symbols are normalized to "
-                f"underscores); give them names that differ in more than that."
+                f"reduce to the slug {slug!r}, which names their Rust harness module (case is "
+                f"dropped, punctuation and symbols become underscores, and a leading digit or a Rust "
+                f"keyword gets a 'spec_' prefix); give them names that differ in more than that."
             )
         else:
             slug_origin[slug] = comp.name

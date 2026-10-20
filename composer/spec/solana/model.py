@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 
 from composer.spec.system_model import BaseApplication
 from composer.spec.types import ComponentName, ProgramName, RustIdentifier
-from composer.spec.util import slugify_filename
+from composer.spec.util import slugify_rust_module
 
 #: How an account is expected to be supplied to an instruction. Drives the "missing signer /
 #: owner check" and "account substitution" reasoning in the property prompt.
@@ -318,7 +318,7 @@ class SolanaComponentInstance:
     def slug(self) -> str:
         """Slug uniqueness within a program is guaranteed upstream (``_solana_validate`` rejects
         sibling components that slugify alike), so no disambiguation is needed here."""
-        return slugify_filename(self.component.name)
+        return slugify_rust_module(self.component.name)
 
     @property
     def unit_index(self) -> int:
@@ -360,9 +360,9 @@ def protocol_unit(main: SolanaProgramInstance) -> SolanaComponentInstance:
     extracted under, whose cache keys depend on it.
     """
     program = main.program
-    taken = {slugify_filename(c.name) for c in program.components}
+    taken = {slugify_rust_module(c.name) for c in program.components}
     name = PROTOCOL_UNIT_NAME
-    while slugify_filename(name) in taken:
+    while slugify_rust_module(name) in taken:
         name = ComponentName(f"{name} (shared)")
     component = ProgramComponent(
         name=name,
