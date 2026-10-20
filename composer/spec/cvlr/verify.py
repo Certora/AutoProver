@@ -8,7 +8,7 @@ reports the compiler error and submits nothing
 """
 
 import asyncio
-import dataclasses
+from dataclasses import dataclass, field, replace
 import logging
 import time
 from collections.abc import Callable, Sequence
@@ -79,7 +79,7 @@ class BuildPermit:
             self._sem.release()
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class HarnessTarget:
     """Where a draft is staged so the crate compiles with it.
 
@@ -181,7 +181,7 @@ class _RunAccounting(ProverCallbacks):
             self._started_mono = None
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class VerifyDeps:
     """What the prover gate needs beyond the draft."""
 
@@ -195,7 +195,7 @@ class VerifyDeps:
     stamper: ValidationStamper
     #: One submission at a time per unit. A second run would build into the
     #: same workdir and race the staged module, so the tool refuses it.
-    lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 @tool_display("Compiling the harness", "Compile")
@@ -246,11 +246,11 @@ def _unit_submission(deps: VerifyDeps) -> Submission:
     ``certora``, and ``specs/mod.rs`` gates this unit's module on its feature,
     so a build that kept the default would compile the staged file out.
     """
-    return dataclasses.replace(deps.submission, features=deps.target.features)
+    return replace(deps.submission, features=deps.target.features)
 
 
 def _submission_for(deps: VerifyDeps, rules: Sequence[str]) -> Submission:
-    return dataclasses.replace(_unit_submission(deps), rules=SelectRules(tuple(rules)))
+    return replace(_unit_submission(deps), rules=SelectRules(tuple(rules)))
 
 
 def _unread(err: ManifestMissing | ManifestCorrupt) -> str:

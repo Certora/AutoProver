@@ -7,7 +7,7 @@ program's own file reaches into ``specs``
 (:func:`composer.spec.cvlr.scaffold._harness_files`).
 """
 
-import dataclasses
+from dataclasses import dataclass
 from pathlib import Path
 from typing import override
 
@@ -22,7 +22,7 @@ from composer.spec.util import ensure_dir
 DELIVERABLE_DIR = Path("certora") / "cvlr"
 INTERNAL_DIR = Path(".certora_internal") / "cvlr"
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class HarnessModule:
     #: A ``snake_case`` module name, from
     #: :func:`~composer.spec.util.slugify_rust_module`. Unique within the program.
