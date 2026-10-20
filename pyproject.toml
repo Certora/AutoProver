@@ -48,6 +48,8 @@ dependencies = [
     "tqdm>=4.65.0",
     # keccak-256 for the editor's erc7201_slot tool (hashlib only has SHA-3).
     "pycryptodome>=3.19",
+    # `.cvlr_rules` section of a built program. The import name is `elftools`.
+    "pyelftools>=0.33",
     # the report renderer's `markdown` jinja filter (also in the ragbuild group).
     "markdown-it-py>=3.0",
     "anthropic>=0.18.0",
