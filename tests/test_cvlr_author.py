@@ -22,6 +22,7 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
+from langgraph.store.memory import InMemoryStore
 
 from composer.authoring.state import SkippedProperty, make_validation_stamper, spec_digest
 from composer.prover.conf import SelectRules
@@ -44,7 +45,8 @@ from composer.spec.cvlr.state import (
 from composer.spec.cvlr import author
 from composer.spec.cvlr import verify as verify_mod
 from composer.spec.cvlr.author_tools import unaccounted
-from composer.spec.cvlr.verify import _externals_note, _unverdicted, _wrongly_expected
+from composer.spec.cvlr.verify import CexAnalysis, _externals_note, _unverdicted, _wrongly_expected
+from composer.spec.source.cex_capture import CexAnalysisStore
 
 _DRAFT_NO_RULES = "//! Every property blocked; see the skips.\n"
 
@@ -345,6 +347,16 @@ def _built_so(path: Path, payload: bytes):
     return build
 
 
+def _unbound_analysis() -> CexAnalysis:
+    """Counterexample analysis whose model was never bound.
+
+    ``verify_rules`` builds the handler only once a conf is about to be
+    submitted. These runs stop before that. An unbound model fails if a
+    handler is built any earlier.
+    """
+    return CexAnalysis(store=CexAnalysisStore(store=InMemoryStore(), namespace=("t",)))
+
+
 @pytest.mark.asyncio
 async def test_the_submission_names_the_rules_the_build_listed(tmp_path, monkeypatch):
     """The conf's ``rule`` entry is the names in the ``.so``, not names parsed from the draft.
@@ -394,7 +406,7 @@ async def test_the_submission_names_the_rules_the_build_listed(tmp_path, monkeyp
         submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
         submissions=Path("/w/submissions"),
         prover_opts=None,
-        analysis=None,
+        analysis=_unbound_analysis(),
         stamper=None,
     )
     token = verify_mod.VerifyRules._dep_ctx.set(deps)
@@ -444,7 +456,7 @@ async def test_a_missing_rule_section_writes_no_conf(tmp_path, monkeypatch):
         submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
         submissions=Path("/w/submissions"),
         prover_opts=None,
-        analysis=None,
+        analysis=_unbound_analysis(),
         stamper=None,
     )
     token = verify_mod.VerifyRules._dep_ctx.set(deps)
@@ -483,7 +495,7 @@ async def test_a_corrupt_rule_section_writes_no_conf(tmp_path, monkeypatch, capl
         submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
         submissions=Path("/w/submissions"),
         prover_opts=None,
-        analysis=None,
+        analysis=_unbound_analysis(),
         stamper=None,
     )
     token = verify_mod.VerifyRules._dep_ctx.set(deps)
@@ -519,7 +531,7 @@ async def test_an_empty_rule_section_submits_nothing(tmp_path, monkeypatch):
         submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
         submissions=Path("/w/submissions"),
         prover_opts=None,
-        analysis=None,
+        analysis=_unbound_analysis(),
         stamper=None,
     )
     token = verify_mod.VerifyRules._dep_ctx.set(deps)

@@ -383,9 +383,7 @@ class VerifyDeps:
     submissions: Path
     prover_opts: ProverOptions
     stamper: ValidationStamper
-    #: ``None`` runs the prover with no analysis. Plumbing tests and any caller
-    #: with no LLM use that. A run that produces findings supplies this.
-    analysis: CexAnalysis | None = None
+    analysis: CexAnalysis
     #: One submission at a time per unit. A second concurrent run would build
     #: into the same workdir and race the staged module. The tool refuses it.
     #: A caller that made two calls wanted two answers.
@@ -555,9 +553,9 @@ async def _stage_and_submit(
     submission: Submission,
     *,
     callbacks: _RunAccounting,
-    cex: CexHandler | None,
     tool_call_id: str,
     choose: Callable[[set[str]], Submission | Command | str] | None = None,
+    analyze: bool = True,
 ) -> CvlrOutcome | Command | str:
     """Stage ``draft``, build it, and submit the submission ``choose`` returns.
 
@@ -565,6 +563,13 @@ async def _stage_and_submit(
     set and returns the submission to write, or a result that means nothing is
     written. A missing or unreadable section is returned here, and no conf is
     written.
+
+    When ``analyze`` is true, the counterexample handler is built from
+    ``deps.analysis`` after the conf is written, immediately before
+    :func:`run_submission`. Building it reads the author's model, so a run that
+    returns earlier never builds one. ``explain_vacuity`` passes false: that
+    job reads an unsat core, and a violated rule is rendered as its status and
+    dump.
 
     One build permit is held until the Prover has uploaded. ``run_submission``
     rebuilds the crate into the shared target directory and uploads that
@@ -607,7 +612,7 @@ async def _stage_and_submit(
             prepared,
             prover_opts=deps.prover_opts,
             callbacks=callbacks,
-            cex=cex,
+            cex=deps.analysis.handler(state) if analyze else None,
             tool_call_id=tool_call_id,
         )
     return outcome
@@ -667,15 +672,13 @@ class VerifyRules(
                 return _submission_for(deps, self.state, listed)
 
             async with deps.lock:
-                analysis = deps.analysis
-                capture = analysis.callbacks() if analysis else None
+                capture = deps.analysis.callbacks()
                 outcome = await _stage_and_submit(
                     deps,
                     self.state,
                     draft,
                     deps.submission,
-                    callbacks=capture if capture is not None else _RunAccounting(),
-                    cex=analysis.handler(self.state) if analysis else None,
+                    callbacks=capture,
                     tool_call_id=self.tool_call_id,
                     choose=choose,
                 )
@@ -684,7 +687,7 @@ class VerifyRules(
             return self._report(
                 outcome,
                 deps,
-                capture.incomplete if capture is not None else {},
+                capture.incomplete,
                 declared=tuple(listed),
             )
 
@@ -923,8 +926,8 @@ class ExplainVacuity(
                     draft,
                     submission,
                     callbacks=_DiagnosticAccounting(),
-                    cex=None,
                     tool_call_id=self.tool_call_id,
+                    analyze=False,
                     choose=choose,
                 )
             if not isinstance(outcome, (BuildRejected, SubmissionFailed, Checked)):

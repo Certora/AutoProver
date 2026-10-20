@@ -60,8 +60,8 @@ def _submit(deps: SimpleNamespace):
         "draft",
         Submission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
         callbacks=_RunAccounting(),
-        cex=None,
         tool_call_id="tc",
+        analyze=False,
     )
 
 
