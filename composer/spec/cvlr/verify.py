@@ -1,10 +1,10 @@
-"""The gate tools: a host compile, and the prover run that stamps the draft.
+"""The gate tools.
 
-* ``cargo_check`` compiles on the host target, confined, in seconds. It is not
-  a required stamp. A prover run builds first and reports a compiler error
-  without submitting (:class:`~composer.spec.cvlr.prover.BuildRejected`).
-* ``verify_rules`` builds for the chain, reads the rules from the ``.so``,
-  submits those, and stamps the draft when every one of them verified.
+``cargo_check`` compiles the draft on the host and is not a stamp.
+``verify_rules`` builds it for the chain, submits the rules the build listed,
+and stamps the draft when every one of them verified. A build that fails
+reports the compiler error and submits nothing
+(:class:`~composer.spec.cvlr.prover.BuildRejected`).
 """
 
 import asyncio
@@ -35,7 +35,6 @@ from composer.prover.core import (
     CexHandler,
     ProverCallbacks,
     ProverOptions,
-    UnanalyzedCexHandler,
 )
 from composer.prover.ptypes import RuleResult
 from composer.prover.conf import SelectRules
@@ -62,7 +61,7 @@ _log = logging.getLogger(__name__)
 
 
 class BuildPermit:
-    """The run's build permit, held by one unit (:func:`_stage_and_submit`)."""
+    """Held from staging until the prover reports the job link, or until the slot ends."""
 
     def __init__(self, sem: asyncio.Semaphore) -> None:
         self._sem = sem
@@ -73,7 +72,7 @@ class BuildPermit:
         self._held = True
 
     def release(self) -> None:
-        """Release the permit. Releasing one that is already released does nothing."""
+        """A second call does nothing."""
         if self._held:
             self._held = False
             self._sem.release()
@@ -94,7 +93,6 @@ class HarnessTarget:
     #: The module name the tree keys edits by, and the cargo feature that selects
     #: this unit.
     unit: HarnessModule
-    #: The run's one working copy, shared by every unit.
     tree: SharedTree
     build_sem: asyncio.Semaphore
 
@@ -119,9 +117,9 @@ class HarnessTarget:
     async def build_slot(self) -> AsyncIterator[BuildPermit]:
         """Serialize staging and the cargo invocation that follows it.
 
-        Cargo already serializes concurrent builds on its build-directory lock.
-        The permit is a queue the host can see, and it keeps several sandboxed
-        builds from sitting on grants. A submission holds it longer
+        Cargo's build-directory lock already serializes the builds. A build
+        waiting on that lock still holds its sandbox grants, so the permit
+        queues them here. A submission holds the permit longer
         (:func:`_stage_and_submit`).
         """
         permit = BuildPermit(self.build_sem)
@@ -142,10 +140,9 @@ class HarnessTarget:
 class _RunAccounting(ProverCallbacks):
     """Records the prover link, the prover's runtime, and the wall clock.
 
-    ``ProverCallbacks`` defaults do nothing. A backend that overrides only some
-    events records none of these. ``summary.format()``, the per-task link, and
-    ``job_info.json``'s ``prover_usage`` read them. The same events are what
-    the EVM ``_SpecCallbacks`` record.
+    ``ProverCallbacks`` defaults do nothing, so an event left on the base class
+    records nothing. ``summary.format()``, the per-task link, and
+    ``job_info.json``'s ``prover_usage`` read these records.
     """
 
     def __init__(self) -> None:
@@ -195,9 +192,8 @@ class VerifyDeps:
     submissions: Path
     prover_opts: ProverOptions
     stamper: ValidationStamper
-    #: One submission at a time per unit. A second concurrent run would build
-    #: into the same workdir and race the staged module. The tool refuses it.
-    #: A caller that made two calls wanted two answers.
+    #: One submission at a time per unit. A second run would build into the
+    #: same workdir and race the staged module, so the tool refuses it.
     lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
 
 
@@ -253,12 +249,10 @@ def _unit_submission(deps: VerifyDeps) -> Submission:
 
 
 def _submission_for(deps: VerifyDeps, rules: Sequence[str]) -> Submission:
-    """The unit's submission, checking ``rules``."""
     return dataclasses.replace(_unit_submission(deps), rules=SelectRules(tuple(rules)))
 
 
 def _unread(err: ManifestMissing | ManifestCorrupt) -> str:
-    """What the author is told when the built ``.so`` did not list its rules."""
     if isinstance(err, ManifestMissing):
         return (
             "The .so has no `.cvlr_rules` section, so the rules were not listed. "
@@ -277,27 +271,27 @@ async def _stage_and_submit(
     draft: str,
     *,
     callbacks: _RunAccounting,
-    cex: CexHandler,
+    cex: CexHandler | None,
     tool_call_id: str,
     choose: Callable[[set[str]], Submission | str],
 ) -> CvlrOutcome | str:
     """Stage ``draft``, build this unit, and submit what ``choose`` returns.
 
-    ``choose`` sees the rule names in the ``.so`` this build wrote, and returns
-    the submission to write, or a message that means nothing is written. A
-    missing or unreadable section is returned here, and no conf is written.
+    ``choose`` sees the rule names in the ``.so`` and returns the submission to
+    write, or a message. A message, or a missing or unreadable section, writes
+    no conf.
 
-    Every SBF build of the crate writes the same ``.so``, and ``run_submission``
+    Every SBF build of the crate writes the same ``.so``. ``run_submission``
     rebuilds it into the shared target directory and uploads it. A sibling's
-    build in between would replace it with one built for the sibling's feature
-    (:func:`composer.spec.cvlr.prover.prepare_submission`). So one build permit
-    is held from staging until the job's link arrives, which is after the
-    upload, or until ``run_submission`` returns without a link. Because the
-    Prover's rebuild happens under the same permit, it lists the same rules,
-    and the section is not read again.
+    build in between would replace that ``.so`` with one built for the
+    sibling's feature (:func:`composer.spec.cvlr.prover.prepare_submission`).
+    The build permit is held from staging until the job's link arrives, after
+    the upload, or until ``run_submission`` returns without a link. The
+    prover's rebuild happens under that permit, so it lists the same rules and
+    the section is not read again.
 
-    The cloud job itself is not covered. Files a sibling stages during it are
-    behind that sibling's feature.
+    The cloud job is not covered. A sibling that stages during it compiles
+    behind its own feature.
     """
     async with deps.target.build_slot() as permit:
         await deps.target.stage(draft)
@@ -372,7 +366,7 @@ class VerifyRules(
                     deps,
                     draft,
                     callbacks=_RunAccounting(),
-                    cex=UnanalyzedCexHandler(),
+                    cex=None,
                     tool_call_id=self.tool_call_id,
                     choose=choose,
                 )
@@ -389,9 +383,6 @@ class VerifyRules(
     ) -> Command | str:
         match outcome:
             case BuildRejected(build=build):
-                # Nothing was submitted. The message is the compiler's text from
-                # the verdict. Only a failed build has any. Both tiers report a
-                # failure as `CompileFailed`.
                 said = (
                     build.verdict.diagnostics
                     if isinstance(build.verdict, CompileFailed)
@@ -424,10 +415,9 @@ class VerifyRules(
 
 
 def gate_tools(deps: VerifyDeps) -> list[BaseTool]:
-    """The tools that compile a draft and submit it.
+    """``cargo_check`` builds ``deps.target``, the same target ``verify_rules`` submits.
 
-    ``cargo_check`` is bound to ``deps.target``, the target ``verify_rules``
-    submits. Neither tool edits the program.
+    Neither tool edits the program.
     """
     return [
         CargoCheck.bind(deps.target).as_tool("cargo_check"),
