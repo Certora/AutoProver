@@ -276,9 +276,6 @@ async def _stage_and_submit(
     write, or a message. A message, or a missing or unreadable section, writes
     no conf.
 
-    The submission carries no counterexample handler. A violated rule is
-    rendered as its status and its dump.
-
     Every SBF build of the crate writes the same ``.so``. ``run_submission``
     rebuilds it into the shared target directory and uploads it. A sibling's
     build in between would replace that ``.so`` with one built for the
@@ -317,7 +314,6 @@ async def _stage_and_submit(
             prepared,
             prover_opts=deps.prover_opts,
             callbacks=callbacks,
-            cex=None,
             tool_call_id=tool_call_id,
         )
 

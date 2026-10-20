@@ -30,7 +30,6 @@ from composer.cargo.sbf import (
 )
 from composer.cargo.session import CargoSession
 from composer.prover.core import (
-    CexHandler,
     ProverCallbacks,
     ProverOptions,
     ProverReport,
@@ -180,7 +179,6 @@ async def run_submission(
     prepared: Prepared,
     *,
     prover_opts: ProverOptions,
-    cex: CexHandler | None,
     callbacks: ProverCallbacks | None = None,
     tool_call_id: str = "cvlr-submit",
 ) -> CvlrOutcome:
@@ -188,6 +186,10 @@ async def run_submission(
 
     ``prover_opts.app`` must name the Solana CLI. Another app fails at the first
     conf key it does not recognize.
+
+    No counterexample handler is passed. This slice does not explain a
+    violated rule. The report is each rule's status, the prover's messages,
+    and its counterexample dump.
     """
     result = await run_prover(
         session.workdir,
@@ -195,7 +197,7 @@ async def run_submission(
         tool_call_id,
         prover_opts,
         callbacks if callbacks is not None else ProverCallbacks(),
-        cex,
+        None,
     )
     if isinstance(result, str):
         return SubmissionFailed(prepared.build, result)
@@ -208,7 +210,6 @@ async def submit(
     *,
     into: Path,
     prover_opts: ProverOptions,
-    cex: CexHandler | None,
     callbacks: ProverCallbacks | None = None,
     tool_call_id: str = "cvlr-submit",
 ) -> CvlrOutcome:
@@ -224,6 +225,5 @@ async def submit(
         prepared,
         prover_opts=prover_opts,
         callbacks=callbacks,
-        cex=cex,
         tool_call_id=tool_call_id,
     )
