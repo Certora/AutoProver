@@ -683,14 +683,17 @@ claim has not been checked, and the conservation rules in the other units have n
 observe a write. **Before this run's conservation results are cited, one positive control per unit
 is owed:** a rule that asserts a balance *does* change, which must be violated.
 
+A component that edited the program is now one patch. The run writes
+`certora/cvlr/components/<module>.patch`, the harness plus that unit's edits, and `git apply` lays
+it onto the project as shipped. `harness.patch` stays the rules-only diff. This run's output is the
+older pair: `harness.patch` applies to a clean `bed72d0` and does not build, because the harnesses
+call functions only the program edits expose (`process_authorize*` made public, a new
+`certora_entry`). The harness patch plus Authority Management's `cumulative_diff` built with
+`cargo certora-sbf --features "certora unit_authority_management"`. The unit diffs do not stack:
+after Authority Management, the other seven fail to apply.
+
 ### What it left for AutoProver
 
-- **The patch does not build on its own when the run edited the program.** `certora/cvlr/harness.patch`
-  applies to a clean `bed72d0`, but the harnesses call functions that only the program edits expose
-  (`process_authorize*` made public, a new `certora_entry`), and edits are per unit. The harness
-  patch plus one unit's `cumulative_diff` from the report's `source_edits` builds: checked for
-  Authority Management with `cargo certora-sbf --features "certora unit_authority_management"`.
-  Each unit's edits should be written as a patch beside the harness patch.
 - **Pointer-analysis failures on FAILED jobs**, above. Their text is only in `Results.txt` until
   [EVMVerifier#8765](https://github.com/Certora/EVMVerifier/pull/8765) lands. The AutoProver change
   that stops calling that alert an internal error is not started.

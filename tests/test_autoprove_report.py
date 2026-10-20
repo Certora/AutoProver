@@ -39,8 +39,9 @@ from composer.spec.source.report.grouping import (
 from composer.spec.source.report.render import render_html
 from composer.spec.source.report.schema import (
     AutoProverReport, ConfinedBuilds, CoverageReport, CurtailedComponent, CurtailedSkip, DraftedProperty, Finding, FindingProvenance, FormalizedProperty,
-    GaveUpComponent, GroupStatus, ImpactLevel, IssueContent, LikelihoodLevel, Outcome,
-    PropertyGroup, RuleVerdict, SeverityTier, SkippedClaim, UnconfinedBuilds,
+    AppliedEditRecord, GaveUpComponent, GroupStatus, ImpactLevel, IssueContent, LikelihoodLevel,
+    Outcome, PropertyGroup, RuleVerdict, SeverityTier, SkippedClaim, SourceEditRecord,
+    UnconfinedBuilds,
 )
 from composer.spec.source.report_prover import job_input, make_prover_fetcher, make_run_link_fetcher
 from composer.spec.source.report.collect import Abandoned, RuleEvidence
@@ -626,6 +627,23 @@ def _mini_report() -> AutoProverReport:
                             prover_links={"C": "https://prover.example/run/abc"},
                             properties=[p1, p2], rules=rules, groups=groups,
                             skipped=skipped, coverage=cov)
+
+
+def test_render_html_names_the_patch_that_applies_a_components_edits():
+    """A CVLR record carries the file to apply. An EVM record has none, and the diff is the record."""
+    edited = SourceEditRecord(
+        component="Vault",
+        applied_edits=[AppliedEditRecord(edit_id="e", executive_summary="s", why_sound="w")],
+        cumulative_diff="--- a/src/lib.rs\n",
+        patch_path="certora/cvlr/components/vault.patch",
+    )
+    named = render_html(_mini_report().model_copy(update={"source_edits": [edited]}))
+    assert "certora/cvlr/components/vault.patch" in named
+    plain = render_html(
+        _mini_report().model_copy(update={"source_edits": [edited.model_copy(update={"patch_path": None})]})
+    )
+    assert "certora/cvlr/components/vault.patch" not in plain
+    assert "Cumulative diff from on-disk source" in plain
 
 
 def test_render_html_says_nothing_about_builds_it_was_not_told_about():

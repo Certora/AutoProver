@@ -545,6 +545,11 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
   cumulative diff from the on-disk source follow.</p>
   {%- for se in source_edits %}
   <h3>{{ se.component }} ({{ se.applied_edits | length }} edit{{ "s" if se.applied_edits | length != 1 else "" }})</h3>
+  {%- if se.patch_path %}
+  <p>Apply <code>{{ se.patch_path }}</code> to the project as it was before the run, and build this
+  component. The patch contains the harness and these edits. Apply it on its own: a second
+  component's patch applies to that same clean project.</p>
+  {%- endif %}
   {%- for e in se.applied_edits %}
   <h4>Edit {{ loop.index }} — <span class="sort-tag">{{ e.edit_id }}</span></h4>
   <div class="md">{{ e.executive_summary | markdown }}</div>

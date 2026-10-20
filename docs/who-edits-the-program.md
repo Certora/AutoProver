@@ -1288,8 +1288,11 @@ who writes the gate and how the edit is stored.
   wrote. Code the edit keeps is wrapped, never retyped.
 * **An edit is text.** There are no records, no replay onto the pristine project, and no union of
   units' edits in one file.
-* **The report hands the user one patch per unit**, as EVM's `source_edits` does
-  (`SourceEditRecord.cumulative_diff`). Merging two units' patches to one file is the user's job.
+* **The report hands the user one patch per unit.** `cumulative_diff` is that unit's edits against
+  the project as the run left it, the same record EVM writes. The file a user applies is
+  `certora/cvlr/components/<module>.patch`: the harness plus those edits, against the project as
+  shipped. Two units' patches are not merged, and they are applied one at a time to that clean
+  project.
 
 That removed every piece of Rust reading the records needed — locating a function's signature and
 body, parsing `use` trees, recognizing a sibling's gate — along with the record vocabulary, its

@@ -227,6 +227,11 @@ class SourceEditRecord(BaseModel):
     component: ComponentName
     applied_edits: list[AppliedEditRecord]
     cumulative_diff: str
+    #: Project-relative path of a patch that applies this component's proved tree — the harness and
+    #: these edits — to the project as shipped. Set when the harness lives inside the program, where
+    #: ``cumulative_diff`` is the program edits alone and applies to the tree the run left behind.
+    #: ``None`` for every other backend, and on reports written before schema 3.6.
+    patch_path: str | None = None
 
 
 class VerificationArtifactRecord(BaseModel):
@@ -389,7 +394,7 @@ class HoistedClaim(BaseModel):
 
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
-    schema_version: Literal["3.0", "3.1", "3.2", "3.3", "3.4", "3.5"] = "3.5"
+    schema_version: Literal["3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6"] = "3.6"
     backend: ReportBackend = "prover"
     #: How much of the inferred property set the run pursued ("comprehensive" or
     #: "prioritized"). Absent on reports written before the mode existed, which are all

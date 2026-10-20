@@ -68,7 +68,7 @@ from composer.spec.cvlr.conf import DEFAULT_FEATURE, HOST_RUST_TOOLCHAIN
 from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness, HarnessModule
 from composer.spec.cvlr.preflight import CvlrPreflight, gate_workspace, prepare_workspace
-from composer.spec.cvlr.patch import snapshot, write_patch
+from composer.spec.cvlr.patch import snapshot, write_component_patches, write_patch
 from composer.spec.cvlr.prover import Submission
 from composer.spec.cvlr.scaffold import ENVS_DIR, SPECS_DIR, declare_unit_features
 from composer.spec.cvlr.tree import SharedTree
@@ -187,12 +187,33 @@ class SharedBuild:
     warm_failure: str | None = None
 
 
+def _component_overlays(
+    outcomes: list[ComponentOutcome[GeneratedHarness, SolanaComponentInstance]],
+) -> dict[str, dict[str, str]]:
+    """Harness-module name to the edited files of each delivered unit that edited the program.
+
+    A curtailed partial is left out with the same reason :meth:`CvlrFormalizer.source_edits` leaves
+    it out of the report: its verdicts are not claims about the edited code.
+    """
+    overlays: dict[str, dict[str, str]] = {}
+    for outcome in outcomes:
+        if not isinstance(outcome.result, Delivered):
+            continue
+        harness = outcome.result.result
+        if harness.applied_edits:
+            overlays[HarnessModule(outcome.feat.slug).module] = harness.vfs
+    return overlays
+
+
 @dataclasses.dataclass
 class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
     deps: CvlrDeps
     build: SharedBuild
     #: What :meth:`finalize` wrote, for the report to name.
     patch: Path | None = dataclasses.field(default=None, init=False)
+    #: Harness-module name to the patch :meth:`finalize` wrote for that unit, relative to the
+    #: project. Empty until then, and empty when no delivered unit edited the program.
+    component_patches: dict[str, Path] = dataclasses.field(default_factory=dict, init=False)
 
     @override
     async def formalize(
@@ -285,17 +306,18 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
         outcomes: list[ComponentOutcome[GeneratedHarness, SolanaComponentInstance]],
         run: PipelineRun,
     ) -> list[SourceEditRecord]:
-        """The edits each delivered unit's verdicts were earned against, as one patch per unit.
+        """The edits each delivered unit's verdicts were earned against, as one record per unit.
 
         Reported through the shared hook rather than a CVLR-specific one, because an edit to the
         program *is* a source edit and the report already has a vocabulary for that —
         ``SourceEditRecord``'s own docstring says its presence means "the component's outcomes are
         claims about the modified code, not the code as shipped". The same shape EVM reports.
 
-        Each unit's diff is its own overlay against the project, so it is a patch the user can apply
-        on its own, and it survives the working tree being deleted. Two units' patches to one file
-        are not merged: that is left to the user. The harness module is never in an overlay — it is
-        a new file and this unit's own deliverable, not a modification of the program.
+        Each unit's diff is its own overlay against the project as the run left it, harness already
+        in place, and it survives the working tree being deleted. Two units' overlays are not
+        merged. The harness module is never in an overlay — it is a new file and this unit's own
+        deliverable, not a modification of the program. The patch that applies to the project as
+        shipped is the one :meth:`finalize` wrote for the unit, named here by ``patch_path``.
         """
         records: list[SourceEditRecord] = []
         project = Path(run.source.project_root)
@@ -309,6 +331,8 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
             harness = outcome.result.result
             if not harness.applied_edits:
                 continue
+            stem = HarnessModule(outcome.feat.slug).module
+            patch = self.component_patches.get(stem)
             records.append(
                 SourceEditRecord(
                     component=outcome.feat.display_name,
@@ -318,6 +342,7 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
                     cumulative_diff=await asyncio.to_thread(
                         diff_against_baseline, harness.vfs, project
                     ),
+                    patch_path=None if patch is None else patch.as_posix(),
                 )
             )
         return records
@@ -327,7 +352,11 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
         self, outcomes: list[ComponentOutcome[GeneratedHarness, SolanaComponentInstance]],
         run: PipelineRun,
     ) -> None:
-        self.patch = await asyncio.to_thread(write_patch, Path(run.source.project_root))
+        root = Path(run.source.project_root)
+        self.patch = await asyncio.to_thread(write_patch, root)
+        self.component_patches = await asyncio.to_thread(
+            write_component_patches, root, _component_overlays(outcomes)
+        )
 
     @override
     def deliverable_patch(self) -> str | None:
