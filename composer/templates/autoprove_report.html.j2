@@ -513,6 +513,22 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
     {%- if c.link.href %} &middot; <a href="{{ c.link.href }}" target="_blank" rel="noopener">last {{ c.link.label }}</a>{% endif %}</p>
   {%- endif %}
   {%- if c.detail %}<p class="note muted">{{ c.detail }}</p>{% endif %}
+  {%- if c.source_edits %}
+  {%- set se = c.source_edits %}
+  <p class="note">The draft was written against {{ se.applied_edits | length }} edit{{ "s" if se.applied_edits | length != 1 else "" }} to the program.
+  {%- if se.patch_path %} <code>{{ se.patch_path }}</code> applies them and the harness wiring to the
+  project as it was before the run; rename the draft over its module to build it.{% endif %}</p>
+  <details>
+    <summary>Edits and cumulative diff</summary>
+    {%- for e in se.applied_edits %}
+    <h4>Edit {{ loop.index }} — <span class="sort-tag">{{ e.edit_id }}</span></h4>
+    <div class="md">{{ e.executive_summary | markdown }}</div>
+    <p class="md-label">Soundness argument</p>
+    <div class="md">{{ e.why_sound | markdown }}</div>
+    {%- endfor %}
+    <pre class="diff">{{ se.cumulative_diff | diff_html }}</pre>
+  </details>
+  {%- endif %}
   <details>
     <summary>Per-property breakdown ({{ c.rows | length }})</summary>
     <table class="rules">

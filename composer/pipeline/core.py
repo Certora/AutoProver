@@ -205,6 +205,14 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
         source. Default: none (foundry; prover runs without editing)."""
         return []
 
+    async def curtailed_source_edits(
+        self, outcomes: list[ComponentOutcome[FormT, U]], run: PipelineRun
+    ) -> list[SourceEditRecord]:
+        """The edits each budget-curtailed component's partial was drafted against, for its
+        appendix record. Kept apart from :meth:`source_edits`, whose records say the outcomes are
+        claims about the edited code. Default: none."""
+        return []
+
     @abstractmethod
     async def fetch_verdicts(self, formalized: Formalized[FormT]) -> dict[RuleName, Verdict]:
         """Per-unit outcomes for one delivered result. Prover: query ProverOutputUtility via
@@ -878,6 +886,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 contract_name=source.contract_name, backend=formalizer.backend_tag,
                 components=inputs, llm=run.env.llm_lite(), fetch_verdicts=formalizer.fetch_verdicts,
                 source_edits=await formalizer.source_edits(outcomes, run),
+                curtailed_source_edits=await formalizer.curtailed_source_edits(outcomes, run),
                 verification_artifacts=artifact_records,
                 # Findings only when the backend supplies evidence — skip the heavy model otherwise.
                 findings_llm=run.env.llm_heavy() if findings_evidence else None,

@@ -646,6 +646,23 @@ def test_render_html_names_the_patch_that_applies_a_components_edits():
     assert "Cumulative diff from on-disk source" in plain
 
 
+def test_render_html_names_the_patch_that_rebuilds_a_partial():
+    edits = SourceEditRecord(
+        component="D",
+        applied_edits=[AppliedEditRecord(edit_id="e", executive_summary="s", why_sound="w")],
+        cumulative_diff="--- a/src/lib.rs\n",
+        patch_path="certora/cvlr/components/d.patch",
+    )
+    cut = CurtailedComponent(component="D", artifact="src/certora/specs/d.rs.unverified")
+    plain = render_html(_mini_report().model_copy(update={"curtailed_components": [cut]}))
+    assert "certora/cvlr/components/d.patch" not in plain
+    edited = render_html(_mini_report().model_copy(
+        update={"curtailed_components": [cut.model_copy(update={"source_edits": edits})]}
+    ))
+    assert "certora/cvlr/components/d.patch" in edited
+    assert "Source modifications" not in edited
+
+
 def test_render_html_says_nothing_about_builds_it_was_not_told_about():
     """A report with no ``build_environment`` is either an EVM backend's — nothing of the project
     was compiled — or one written before the field existed. Neither is evidence of confinement, so
@@ -1024,6 +1041,30 @@ async def test_build_curtailed_is_appendixed_not_grouped(tmp_path):
     assert any("cut short by the run budget" in w for w in report.coverage.warnings)
     # The curtailed partial's stale run link stays out of the header map.
     assert "D" not in report.prover_links
+
+
+@pytest.mark.asyncio
+async def test_build_puts_a_partials_edits_in_its_appendix_record_only():
+    """A partial's edits rebuild the draft, but a ``source_edits`` entry would say its outcomes are
+    claims about the edited code."""
+    edits = SourceEditRecord(
+        component="D",
+        applied_edits=[AppliedEditRecord(edit_id="e", executive_summary="s", why_sound="w")],
+        cumulative_diff="--- a/src/lib.rs\n",
+        patch_path="certora/cvlr/components/d.patch",
+    )
+    report = await build.build_report(
+        contract_name="C",
+        backend="prover",
+        components=[_curtailed_input("D", [_prop("q", "d")], _gen({"q": ["rq"]}), link="Lq")],
+        llm=_StructuredStubModel(output=GroupingResult(groups=[])),
+        fetch_verdicts=_fetcher({}),
+        curtailed_source_edits=[edits],
+    )
+
+    (c,) = report.curtailed_components
+    assert c.source_edits == edits
+    assert report.source_edits == []
 
 
 @pytest.mark.asyncio

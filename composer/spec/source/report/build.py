@@ -48,6 +48,7 @@ async def build_report[R: ReportableResult](
     llm: BaseChatModel,
     fetch_verdicts: VerdictFetcher[R],
     source_edits: list[SourceEditRecord] | None = None,
+    curtailed_source_edits: list[SourceEditRecord] | None = None,
     verification_artifacts: list[VerificationArtifactRecord] | None = None,
     findings_llm: BaseChatModel | None = None,
     fetch_evidence: EvidenceFetcher | None = None,
@@ -67,6 +68,10 @@ async def build_report[R: ReportableResult](
     properties, rules, skipped, gave_up, curtailed, dropped = await collect(
         components, fetch_verdicts=fetch_verdicts
     )
+    partial_edits = {e.component: e for e in curtailed_source_edits or []}
+    curtailed = [
+        c.model_copy(update={"source_edits": partial_edits.get(c.component)}) for c in curtailed
+    ]
     rule_outcomes: dict[RuleRef, Outcome] = {r.ref: r.outcome for r in rules}
     props_by_key = {p.key: p for p in properties}
 

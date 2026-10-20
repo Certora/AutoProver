@@ -171,6 +171,11 @@ class CurtailedComponent(BaseModel):
     drafted: list[DraftedProperty] = Field(default_factory=list)
     skipped: list[CurtailedSkip] = Field(default_factory=list)
     unattempted: list[PropertyFormulation] = Field(default_factory=list)
+    #: The edits to the program the partial was drafted against, and the patch that rebuilds it.
+    #: Kept here rather than in the report's ``source_edits``, whose entries say the component's
+    #: outcomes are claims about the edited code; a partial makes no claims. ``None`` when the
+    #: partial edited nothing, and on reports written before schema 3.7.
+    source_edits: "SourceEditRecord | None" = None
 
 
 class PropertyGroup(BaseModel):
@@ -394,7 +399,7 @@ class HoistedClaim(BaseModel):
 
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
-    schema_version: Literal["3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6"] = "3.6"
+    schema_version: Literal["3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7"] = "3.7"
     backend: ReportBackend = "prover"
     #: How much of the inferred property set the run pursued ("comprehensive" or
     #: "prioritized"). Absent on reports written before the mode existed, which are all

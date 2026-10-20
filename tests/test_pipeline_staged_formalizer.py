@@ -75,6 +75,7 @@ class _Formalizer:
     async def fetch_verdicts(self, _inp): return {}
     async def finalize(self, _outcomes, _run): return None
     async def source_edits(self, _outcomes, _run): return []
+    async def curtailed_source_edits(self, _outcomes, _run): return []
     def build_environment(self): return None
     def deliverable_patch(self): return None
 

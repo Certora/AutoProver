@@ -40,7 +40,7 @@ import enum
 import logging
 import shutil
 import tempfile
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Sequence, override
@@ -187,20 +187,35 @@ class SharedBuild:
     warm_failure: str | None = None
 
 
-def _component_overlays(
-    outcomes: list[ComponentOutcome[GeneratedHarness, SolanaComponentInstance]],
-) -> dict[str, dict[str, str]]:
-    """Harness-module name to the edited files of each delivered unit that edited the program.
+type _Outcome = ComponentOutcome[GeneratedHarness, SolanaComponentInstance]
 
-    A curtailed partial is left out with the same reason :meth:`CvlrFormalizer.source_edits` leaves
-    it out of the report: its verdicts are not claims about the edited code.
+
+def _delivered(outcome: _Outcome) -> GeneratedHarness | None:
+    match outcome.result:
+        case Delivered(result=harness):
+            return harness
+        case _:
+            return None
+
+
+def _partial(outcome: _Outcome) -> GeneratedHarness | None:
+    match outcome.result:
+        case Curtailed(partial=Delivered(result=harness)):
+            return harness
+        case _:
+            return None
+
+
+def _component_overlays(outcomes: list[_Outcome]) -> dict[str, dict[str, str]]:
+    """Harness-module name to the edited files of each unit that edited the program.
+
+    A curtailed partial is included: its verdicts are not claims, but without its edits the draft
+    the run kept cannot be rebuilt.
     """
     overlays: dict[str, dict[str, str]] = {}
     for outcome in outcomes:
-        if not isinstance(outcome.result, Delivered):
-            continue
-        harness = outcome.result.result
-        if harness.applied_edits:
+        harness = _delivered(outcome) or _partial(outcome)
+        if harness is not None and harness.applied_edits:
             overlays[HarnessModule(outcome.feat.slug).module] = harness.vfs
     return overlays
 
@@ -212,7 +227,7 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
     #: What :meth:`finalize` wrote, for the report to name.
     patch: Path | None = dataclasses.field(default=None, init=False)
     #: Harness-module name to the patch :meth:`finalize` wrote for that unit, relative to the
-    #: project. Empty until then, and empty when no delivered unit edited the program.
+    #: project. Empty until then, and empty when no unit edited the program.
     component_patches: dict[str, Path] = dataclasses.field(default_factory=dict, init=False)
 
     @override
@@ -319,17 +334,29 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
         deliverable, not a modification of the program. The patch that applies to the project as
         shipped is the one :meth:`finalize` wrote for the unit, named here by ``patch_path``.
         """
+        # Delivered only. A curtailed partial's verdicts are unreliable by construction, and a
+        # SourceEditRecord here means "these outcomes are claims about the modified code" — which
+        # says nothing useful about outcomes that are not claims at all.
+        return await self._edit_records(outcomes, _delivered, Path(run.source.project_root))
+
+    @override
+    async def curtailed_source_edits(
+        self, outcomes: list[_Outcome], run: PipelineRun
+    ) -> list[SourceEditRecord]:
+        """The same records for the partials the budget cut short, so the kept draft can be rebuilt
+        from the deliverables."""
+        return await self._edit_records(outcomes, _partial, Path(run.source.project_root))
+
+    async def _edit_records(
+        self,
+        outcomes: list[_Outcome],
+        harness_of: Callable[[_Outcome], GeneratedHarness | None],
+        project: Path,
+    ) -> list[SourceEditRecord]:
         records: list[SourceEditRecord] = []
-        project = Path(run.source.project_root)
         for outcome in outcomes:
-            # Delivered only. A curtailed partial's edits are in its state, but its verdicts are
-            # unreliable by construction, and a SourceEditRecord means "these outcomes are claims
-            # about the modified code" — which says nothing useful about outcomes that are not
-            # claims at all.
-            if not isinstance(outcome.result, Delivered):
-                continue
-            harness = outcome.result.result
-            if not harness.applied_edits:
+            harness = harness_of(outcome)
+            if harness is None or not harness.applied_edits:
                 continue
             stem = HarnessModule(outcome.feat.slug).module
             patch = self.component_patches.get(stem)

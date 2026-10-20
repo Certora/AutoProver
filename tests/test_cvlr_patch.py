@@ -247,8 +247,8 @@ def test_a_component_patch_stem_is_a_module_name(tmp_path):
 @pytest.mark.asyncio
 async def test_the_report_names_the_component_patch_finalize_wrote(tmp_path):
     """``cumulative_diff`` stays the edits against the tree the run left. ``patch_path`` is the file
-    that applies to the project as shipped. A unit that edited nothing, and a curtailed one, get
-    neither."""
+    that applies to the project as shipped. A unit that edited nothing gets neither. A curtailed one
+    gets both, in its appendix record rather than ``source_edits``."""
     from composer.pipeline.ptypes import Curtailed, Delivered
     from composer.spec.cvlr.harness import GeneratedHarness
     from composer.spec.cvlr.pipeline import CvlrFormalizer
@@ -297,4 +297,9 @@ async def test_the_report_names_the_component_patch_finalize_wrote(tmp_path):
     assert 'unit_vault = ["dep"]' in records[0].cumulative_diff
     assert "mod certora" not in records[0].cumulative_diff
     assert not (root / COMPONENTS_DIR / "fees.patch").exists()
-    assert not (root / COMPONENTS_DIR / "cut.patch").exists()
+
+    partials = await formalizer.curtailed_source_edits(outcomes, run)  # type: ignore[arg-type]
+    assert [r.component for r in partials] == ["Cut"]
+    assert partials[0].patch_path == (COMPONENTS_DIR / "cut.patch").as_posix()
+    assert (root / partials[0].patch_path).is_file()
+    assert 'unit_vault = ["dep"]' in partials[0].cumulative_diff

@@ -205,6 +205,7 @@ class CurtailedView(TypedDict):
     link: LinkView
     detail: str | None
     rows: list[CurtailedRowView]
+    source_edits: SourceEditRecord | None
 
 
 class ReportTemplateParams(TypedDict):
@@ -406,6 +407,7 @@ def _curtailed_view(c: CurtailedComponent) -> CurtailedView:
         "link": _link_view(c.run_link),
         "detail": c.detail,
         "rows": rows,
+        "source_edits": c.source_edits,
     }
 
 

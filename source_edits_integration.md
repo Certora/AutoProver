@@ -33,6 +33,12 @@ component, on the project as it was before the run. Apply one component's file. 
 creates the harness files, so it does not apply on top of `certora/cvlr/harness.patch`
 or on top of another component's patch.
 
+A component the run budget cut short is not in `source_edits`: its partial makes no
+claims about any code. From schema 3.7 its `curtailed_components` entry carries the
+same record as `source_edits` when the partial edited the program. Its `patch_path`
+rebuilds the partial's tree, with the harness module left as the placeholder and the
+draft beside it as `<module>.rs.unverified`. Rename the draft over the module to build it.
+
 ## 1. `source_edits` in `report.json`
 
 `schema_version` moves to `"3.1"`. The change is purely additive — a `"3.0"`
