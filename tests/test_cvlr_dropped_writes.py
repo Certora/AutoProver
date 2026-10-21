@@ -185,7 +185,10 @@ async def test_which_writes_the_model_drops(project, capsys):
     }
     # `resize` is external by design (CERT-10184), so the job's alert report must name it. This is
     # also what shows the alert report was fetched with the results.
-    assert "solana_account_info::AccountInfo::resize" in report.external_functions, (
+    assert any(
+        "solana_account_info::AccountInfo::resize" in warning
+        for warning in report.external_functions
+    ), (
         f"external functions reported: {report.external_functions}. Report: {report.link}"
     )
 

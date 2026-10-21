@@ -148,9 +148,10 @@ class ProverReport:
     result_str: str
     link: str
     certora_run_stdout: str
-    #: Functions the Prover treated as external, from the job's alert report
-    #: (:func:`composer.prover.results.external_functions`). Empty when there were
-    #: none or the report was missing. The verdicts do not name them.
+    #: The Prover's own warnings about functions it treated as external, from the
+    #: job's alert report (:func:`composer.prover.results.external_functions`).
+    #: Empty when there were none or the report was missing. The verdicts do not
+    #: name them.
     external_functions: tuple[str, ...] = ()
     #: Rules that stopped on an assertion the prover generated, keyed by rule
     #: name. The counterexample is not kept. Empty when every violation is the

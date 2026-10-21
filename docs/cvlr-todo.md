@@ -733,7 +733,8 @@ function that *writes* state a rule asserts over, not only one whose result it r
     `composer.prover.results.external_functions` reads the `Summarization` alerts. `verify_rules`
     shows the list to the author after the verdicts, and it reaches the judge's briefing through
     state. It is not a gate: external is the starting layer's default for most platform code. The
-    alerts do not name their rule, so the list is the job's union.
+    alerts do not name their rule, so the same warning is repeated, and each
+    distinct warning is shown as the Prover wrote it.
     **TODO, report:** the run report has no place for a unit's assumptions. Munges reach it through
     `source_edits`, but summaries, `optimistic_loop` and the external list do not. Give it one
     channel for all of them, rather than a field per kind.

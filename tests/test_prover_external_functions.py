@@ -1,8 +1,8 @@
-"""The functions a Prover job treated as external, read from its alert report.
+"""The Prover's warnings about functions it treated as external, read from its alert report.
 
 An external call writes nothing but its return value, so these are the places the model can be
 unsound without any verdict saying so. The alert text is the Prover's own
-(`Reports/alertReport.json`, one `Summarization` alert per rule translated).
+(`Reports/alertReport.json`, one `Summarization` alert per rule translated) and is passed on whole.
 """
 
 import json
@@ -26,28 +26,24 @@ def _alert(names: str) -> dict[str, str]:
     return {"type": "Summarization", "severity": "WARNING", "message": f"{_PREFIX}[{names}]"}
 
 
-def test_names_are_the_union_across_alerts_sorted_and_deduplicated(tmp_path):
+def test_warnings_are_the_distinct_alert_texts_sorted(tmp_path):
+    both = _alert("solana_account_info::AccountInfo::resize, anchor_lang::system_program::transfer")
+    resize = _alert("solana_account_info::AccountInfo::resize")
     root = _write(tmp_path, [
-        _alert("solana_account_info::AccountInfo::resize, anchor_lang::system_program::transfer"),
-        _alert("solana_account_info::AccountInfo::resize"),
+        both,
+        resize,
+        resize,
         {"type": "Other", "severity": "INFO", "message": "unrelated [not_a_function]"},
     ])
-    assert external_functions(root) == (
-        "anchor_lang::system_program::transfer",
-        "solana_account_info::AccountInfo::resize",
-    )
+    assert external_functions(root) == tuple(sorted({both["message"], resize["message"]}))
 
 
-def test_a_generic_argument_list_is_not_split_on_its_own_commas(tmp_path):
+def test_a_warning_is_kept_whole(tmp_path):
     drop = "core::ptr::drop_in_place<core::result::Result<(),anchor_lang::error::Error>>"
-    root = _write(tmp_path, [_alert(f"{drop}, solana_account_info::AccountInfo::resize")])
-    assert external_functions(root) == (drop, "solana_account_info::AccountInfo::resize")
-
-
-def test_a_name_with_an_array_type_keeps_the_names_before_it(tmp_path):
-    drop = "core::ptr::drop_in_place<[solana_account_info::AccountInfo; 3]>"
-    root = _write(tmp_path, [_alert(f"anchor_lang::error::ErrorCode::name, {drop}")])
-    assert external_functions(root) == ("anchor_lang::error::ErrorCode::name", drop)
+    array = "core::ptr::drop_in_place<[solana_account_info::AccountInfo; 3]>"
+    message = _alert(f"anchor_lang::error::ErrorCode::name, {drop}, {array}")["message"]
+    root = _write(tmp_path, [{"type": "Summarization", "message": message}])
+    assert external_functions(root) == (message,)
 
 
 def test_no_report_means_nothing_to_say(tmp_path):

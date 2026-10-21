@@ -415,10 +415,10 @@ def _incomplete_note(incomplete: Mapping[str, IncompleteCheck]) -> str:
 def _externals_note(externals: Sequence[str]) -> str | None:
     """Text for the author about functions this run treated as external, or None.
 
-    Not a gate. The starting configuration leaves most platform code external,
-    and the author cannot add inlining directives. Where the program's own
-    code makes the call, the message tells the author how to bound the value
-    with a stand-in.
+    ``externals`` is the Prover's own warning text. Not a gate. The starting
+    configuration leaves most platform code external, and the author cannot add
+    inlining directives. Where the program's own code makes the call, the message
+    tells the author how to bound the value with a stand-in.
 
     Inlining that platform code is often worse. Stake activation loops once
     per epoch over a sysvar, in ``f64``, and the rule comes back vacuous on
@@ -426,10 +426,9 @@ def _externals_note(externals: Sequence[str]) -> str | None:
     """
     if not externals:
         return None
-    _log.info("prover treated %d function(s) as external: %s", len(externals), ", ".join(externals))
-    listed = "\n".join(f"  {name}" for name in externals)
+    _log.info("prover treated functions as external:\n%s", "\n".join(externals))
+    listed = "\n\n".join(externals)
     return (
-        "The prover treated these functions as external, neither analyzed nor summarized:\n"
         f"{listed}\n"
         "An external call returns an arbitrary value and writes nothing else, so any state it "
         "would change keeps its old value, and one that returns its result through memory may "

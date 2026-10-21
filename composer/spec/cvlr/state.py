@@ -199,8 +199,9 @@ class CvlrGenerationExtra(AuthoringExtra, VersionedHistory):
     #: Last write wins. ``adjust_prover_config`` writes the whole settings, and
     #: two writes in one graph step raise ``InvalidUpdateError`` on a plain field.
     prover_settings: Annotated[TunableConf, _latest_settings]
-    #: Functions the last prover run treated as external: neither analyzed nor
-    #: summarized, so their writes were dropped. Absent until a run has reported.
+    #: The last prover run's own warnings about functions it treated as external:
+    #: neither analyzed nor summarized, so their writes were dropped. Absent until
+    #: a run has reported.
     external_functions: NotRequired[tuple[str, ...]]
     expected_failures: Annotated[dict[CheckName, str], merge_expected_failures]
     #: Absent until a prover run has produced verdicts.
@@ -261,8 +262,8 @@ class HarnessAssumptions:
     #: The unit's prover settings. ``optimistic_loop`` assumes every loop finishes
     #: within ``loop_iter``, so the bound is part of the assumption.
     settings: TunableConf = TunableConf()
-    #: Functions the last prover run treated as external. A verdict that depends
-    #: on one of them depends on writes the model dropped.
+    #: The last prover run's own warnings about functions it treated as external.
+    #: A verdict that depends on one of them depends on writes the model dropped.
     external_functions: tuple[str, ...] = ()
     #: Rule name to the author's reason it should fail. The marking is state, not
     #: source. The judge weighs each one as a claim that the program is defective.
@@ -314,7 +315,7 @@ class HarnessAssumptions:
                 parts.append(self.diff)
         if self.external_functions:
             parts.append("Functions the last prover run treated as external:")
-            parts += [f"  {name}" for name in self.external_functions]
+            parts.extend(self.external_functions)
         return parts
 
 
