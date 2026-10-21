@@ -108,6 +108,11 @@ class ModelOptionsBase(ModelConfiguration, Protocol):
 
 _DEFAULT_TOKEN_COUNTS = 128_000
 
+# Thinking budget when none is given. Claude 4.6+ thinks adaptively and only checks
+# that a budget is set; the OpenAI-shaped providers map the number onto an effort
+# level, and this one maps to "high" (see ``composer.llm.provider.reasoning_effort``).
+_DEFAULT_THINKING_TOKENS = 16_384
+
 class _ModelOptionsCommon(Protocol):
     tokens: Annotated[int, Arg(
         help="Token budget for code generation (default: {default})",
@@ -115,7 +120,7 @@ class _ModelOptionsCommon(Protocol):
     )]
     thinking_tokens: Annotated[int, Arg(
         help="Token budget for thinking (default: {default})",
-        default=2048
+        default=_DEFAULT_THINKING_TOKENS
     )]
     memory_tool: Annotated[bool, Arg(
         help="Enable Anthropic's memory tool",
