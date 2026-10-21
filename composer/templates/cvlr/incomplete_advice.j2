@@ -1,0 +1,7 @@
+{%- if kind == "loop" -%}
+A loop needed more iterations than the bound unrolls. Constrain what determines the trip count, summarize the loop if it is not what your property is about, or skip the property and say what bound it needed.
+{%- elif kind == "overflow" -%}
+`Cannot overflow` is the sound-math pass failing to show that an expression it takes for a pointer stays below 2^64, almost always because a value the rule reads from an account (a balance, an amount) is free to sit just below u64::MAX. Bound the account-data values on that rule's path — `cvlr_assume!(x < 1 << 63)` is enough — and record each bound as an assumption. A property about the top of the range cannot take the bound: skip it and say so.
+{%- else -%}
+The prover's own message says what it needed.
+{%- endif -%}

@@ -96,6 +96,7 @@ from composer.spec.cvlr.vacuity import VacuityAnalyzer, core_finding
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.report_prover import fetch_unsat_cores
 from composer.spec.types import CheckName
+from composer.templates.loader import load_jinja_template
 from composer.ui.tool_display import tool_display
 
 _log = logging.getLogger(__name__)
@@ -377,38 +378,27 @@ class VerifyDeps:
     lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
 
 
-def _incomplete_advice(stopped: IncompleteCheck) -> str:
+def _author_text(template: str, /, **values: object) -> str:
+    return load_jinja_template(template, **values).rstrip("\n")
+
+
+def _incomplete_kind(stopped: IncompleteCheck) -> str:
     match stopped:
         case LoopUnwound():
-            return (
-                "A loop needed more iterations than the bound unrolls. Constrain what determines "
-                "the trip count, summarize the loop if it is not what your property is about, or "
-                "skip the property and say what bound it needed."
-            )
+            return "loop"
         case OverflowUnproven():
-            return (
-                "`Cannot overflow` is the sound-math pass failing to show that an expression it "
-                "takes for a pointer stays below 2^64, almost always because a value the rule reads "
-                "from an account (a balance, an amount) is free to sit just below u64::MAX. Bound "
-                "the account-data values on that rule's path — `cvlr_assume!(x < 1 << 63)` is "
-                "enough — and record each bound as an assumption. A property about the top of the "
-                "range cannot take the bound: skip it and say so."
-            )
+            return "overflow"
         case _:
-            return "The prover's own message says what it needed."
+            return "other"
 
 
 def _incomplete_note(incomplete: Mapping[str, IncompleteCheck]) -> str:
-    named = "\n".join(
-        f"  {name}: {stopped.assertion}" for name, stopped in sorted(incomplete.items())
-    )
-    advice = "\n".join(dict.fromkeys(_incomplete_advice(s) for _, s in sorted(incomplete.items())))
-    return (
-        "These rules stopped on an assertion the prover generated rather than one of yours, so "
-        f"they never reached their property:\n{named}\n"
-        f"Nothing here is a statement about the program. {advice}\n"
-        "Do not mark one of these with expect_rule_failure: that claims a real defect, and none "
-        "has been shown."
+    ordered = sorted(incomplete.items())
+    kinds = list(dict.fromkeys(_incomplete_kind(stopped) for _, stopped in ordered))
+    return _author_text(
+        "cvlr/incomplete_check.j2",
+        rules=[{"name": name, "assertion": stopped.assertion} for name, stopped in ordered],
+        advice="\n".join(_author_text("cvlr/incomplete_advice.j2", kind=kind) for kind in kinds),
     )
 
 
@@ -427,22 +417,7 @@ def _externals_note(externals: Sequence[str]) -> str | None:
     if not externals:
         return None
     _log.info("prover treated functions as external:\n%s", "\n".join(externals))
-    listed = "\n\n".join(externals)
-    return (
-        f"{listed}\n"
-        "An external call returns an arbitrary value and writes nothing else, so any state it "
-        "would change keeps its old value, and one that returns its result through memory may "
-        "never succeed, which leaves the code after it unreachable. None of this shows in a "
-        "verdict. You cannot add inlining directives.\n"
-        "If a rule's property depends on the value one of these computes, and the program's own "
-        "code makes the call, you can bound the value instead of losing it. Ask `code_editor` to "
-        "extract the call into a function of its own (an extraction), then to replace that "
-        "function with a stand-in you write (`mock_fn`) that returns `nondet()` values constrained "
-        "by what the real function guarantees, such as a result no larger than its input. Use "
-        "only bounds the real function provably keeps: a tighter one can pass a rule the program "
-        "fails. Name the stand-in in `rule_subjects`. Otherwise say so in the rule's commentary, "
-        "drive the program's own code below the call, or skip the property."
-    )
+    return _author_text("cvlr/external_functions.j2", warnings="\n\n".join(externals))
 
 
 def _unverdicted(declared: Sequence[str], status: Mapping[str, bool]) -> list[str]:
@@ -727,20 +702,14 @@ class VerifyRules(
         missed = unmatched(directives, symbols)
         if not missed:
             return None
-        lines = [
-            f"{len(missed)} of your {len(directives)} summary directive(s) match no symbol in this "
-            "build, so they had no effect:"
-        ]
-        for pattern in missed:
-            lines.append(f"  {pattern}")
-            for suggestion in nearest(pattern, symbols):
-                lines.append(f"      this build does define: {suggestion}")
-        lines.append(
-            "A symbol absent from the build is usually one the compiler inlined away, and no "
-            "spelling of it will match. Summarize a symbol that is there — the callee one level "
-            "out is the usual answer."
+        return _author_text(
+            "cvlr/inert_summaries.j2",
+            missed_count=len(missed),
+            total=len(directives),
+            missed=[
+                {"pattern": pattern, "suggestions": nearest(pattern, symbols)} for pattern in missed
+            ],
         )
-        return "\n".join(lines)
 
     def _report(
         self,
@@ -781,24 +750,14 @@ class VerifyRules(
                     lines.append(inert)
                 if surprising:
                     lines.append(
-                        "These rules are marked as expected failures but VERIFIED: "
-                        f"{', '.join(surprising)}. Either the defect is not there, or the rule does "
-                        "not test for it — resolve that before publishing."
+                        _author_text("cvlr/expected_verified.j2", names=", ".join(surprising))
                     )
                 if incomplete:
                     lines.append(_incomplete_note(incomplete))
                 if unverdicted:
-                    lines.append(
-                        f"No verdict came back for: {', '.join(unverdicted)}. The prover's report "
-                        "does not name them, so they have not been checked, and this draft cannot "
-                        "be stamped until they are. Run verify_rules again; if they are still "
-                        "missing, the run's link is where to look."
-                    )
+                    lines.append(_author_text("cvlr/no_verdict.j2", names=", ".join(unverdicted)))
                 if unexcused:
-                    lines.append(
-                        f"Not accounted for: {', '.join(unexcused)}. Fix the rule, or mark it "
-                        "with expect_rule_failure and say why the failure is real."
-                    )
+                    lines.append(_author_text("cvlr/unaccounted.j2", names=", ".join(unexcused)))
                 if (externals := _externals_note(report.external_functions)) is not None:
                     lines.append(externals)
                 last = LastVerdicts(
