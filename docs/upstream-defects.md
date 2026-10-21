@@ -1,11 +1,14 @@
 # Upstream defects found while building the CVLR backend
 
 Everything here was found by pointing the CVLR backend (`docs/cvlr-backend-plan.md`) at real Anchor
-programs, and every entry is reproducible. **Two have Prover tickets:** P7 is CERT-10103, with a fix
-in flight at [EVMVerifier#8673](https://github.com/Certora/EVMVerifier/pull/8673), and P8 is
-CERT-10061, which the Prover's own source names. Two more Prover bugs, CERT-10183 (float comparisons)
-and CERT-10184 (a memory-partitioning crash on `realloc`'s zero-fill), were filed from the
-starting-layer investigation in [cvlr-todo.md](./cvlr-todo.md) L1 and are recorded there, not here.
+programs, and every entry is reproducible. This document is the one record of which are routed.
+**Two have Prover tickets:** P7 is CERT-10103, fixed on the Prover's master branch by
+[EVMVerifier#8673](https://github.com/Certora/EVMVerifier/pull/8673), and P8 is CERT-10061, which the
+Prover's own source names. P15 has no ticket and is fixed on master by
+[EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762). Two more Prover bugs,
+CERT-10183 (float comparisons) and CERT-10184 (a memory-partitioning crash on `realloc`'s
+zero-fill), were filed from the starting-layer investigation in [cvlr-todo.md](./cvlr-todo.md) L1
+and are recorded there, not here. C1's fix is released as a commit and not yet published (below).
 The rest are not filed, and this document exists so that routing is a decision somebody makes rather than one I guess at, since the
 groups below belong in different places and one of them cannot be public.
 
@@ -16,8 +19,8 @@ maintained fork whose `Error` is unboxed. P4 does not block either, and the caus
 our own author prompt rather than the prover — see its correction. **P6 was downgraded too**: a
 direct probe on 2026-09-29 did not reproduce it, and the handler form it was observed in is
 unmeasured. **P7
-also blocks**, for any function that multiplies in `i128` — narrower, and already filed as CERT-10103
-with a fix in flight. **P8 blocks
+blocked any function that multiplies in `i128`** on a released Prover; it is fixed on master, which
+AutoProver runs during development. **P8 blocks
 nothing today and blocks a change we wanted**: two shipped flags that defeat each other, measured
 rather than argued, and named by a TODO in the prover's own source. **P9 blocks a whole shape of
 property** — anything that asserts a handler *succeeds* — and it is the uncomfortable one, because
@@ -29,8 +32,9 @@ takes for a pointer stays below `2^64`, and an expression it wrongly takes for a
 that check. Which expressions it takes depends on how the rule is laid out, so bounding the inputs
 clears it only sometimes. It costs coverage, never soundness; the author bounds once, then restates
 the property below the handler or skips it. **P13 is why a stand-in CPI cannot move lamports**, measured against a
-control group. **P15 crashes the Prover** on an SDK 3 `Clock::get()`; a crash fails the whole
-job, so every rule in it comes back with no verdict. A fix is in flight at
+control group. **P14 is the Prover's CPI substitution not recognizing SDK 3's `invoke`**; it
+matters only with `-solanaCpiAnalysis`, which AutoProver does not set. **P15 crashed the Prover** on
+an SDK 3 `Clock::get()`, failing the whole job; it is fixed on master by
 [EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762).
 
 **Group U — `prover_output_utility`.** The library the report stack reads verdicts through. One
@@ -46,10 +50,9 @@ template omits; the rest are worked around by not reproducing them.
 against every CVLR release, found by compiling them. Small, public, and cheap to fix in the
 `Certora/Documentation` repository.
 
-**Group C — the CVLR crates.** The published `cvlr-*` releases the reference set pins. One entry, and
-it is the odd one here: not a bug but a release-cadence gap, recorded because its effect is a hard
-refusal and because nothing in this repository can work around it. It is also the only entry that
-gets *worse* with time rather than staying put.
+**Group C — the CVLR crates.** The `cvlr-*` releases the reference set pins. One entry, and it is
+the odd one here: not a bug but a release-cadence gap. The port is done and released as a commit,
+which AutoProver reads directly; what is left is publishing it to crates.io.
 
 One note on naming, because it constrains how T2 is written up: this repository is public, so no
 client, project or repository names appear in it. T2 is about a canonical file that carries one, and
@@ -63,14 +66,15 @@ the write-up gives the line number rather than the name.
 | [P4](#p4) | `-solanaAggressiveGlobalDetection` does not fix the [3308] it is recommended for, and neither does any summary | minor — **not** blocking; see the correction |
 | [P5](#p5) | A [3308] in the generated vacuity check is reported as a clean `VERIFIED` when `rule_sanity` is off | **critical** |
 | [P6](#p6) | A summarized CPI havocs the caller's *deserialized* `Account<T>`, not just the account buffer | **not reproduced** by a direct probe; the handler form is unmeasured |
-| [P7](#p7) | A checked `i128` multiply is rejected outright — `__muloti4` is not modelled | **major** — fix in flight (CERT-10103) |
+| [P7](#p7) | A checked `i128` multiply is rejected outright — `__muloti4` is not modelled | **major** — fixed on the Prover's master branch (CERT-10103) |
 | [P8](#p8) | `-solanaTACSoundSignedMath` disables most of `-solanaTACMathInt`; together they turn a 7-minute green run into a 2-hour timeout | **major** — fixed on the Prover's master branch, not yet all released (CERT-10061) |
 | [P9](#p9) | Binding a handler's `Result` makes the rule vacuous, so an *acceptance* property is unstatable | **major** |
 | [P10](#p10) | The vacuity check's `satisfy` sits after the rule's drop glue, so a loop there makes a verified rule `SANITY_FAILED` | **major**, worked around |
 | [P11](#p11) | Without `-solanaTACSoundSignedMath`, a `u64` compared against a constant with the top bit set (`u64::MAX`, `1 << 63`) is modelled as comparing against a negative number | **critical** — unsound by default; `-solanaTACSoundSignedMath` fixes it, and AutoProver runs it on Prover master during development |
 | [P12](#p12) | Under `-solanaTACSoundSignedMath`, an expression the Prover wrongly takes for a pointer fails a "Cannot overflow" check it generated, depending on the rule's layout, so the rule never reaches its property | **major**, partly worked around in the prompt |
 | [P13](#p13) | An `AccountInfo` selected from a slice by key loses its provenance, so a stand-in `invoke` cannot move lamports | **major**, worked around in the prompt |
-| [P15](#p15) | An SDK 3 `Clock::get()` can crash the Prover: "TAC Clock::get expected to extract 5 TAC variables from call sol_get_clock_sysvar" | **major** — the job FAILS with no verdicts; fix in flight ([EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762)) |
+| [P14](#p14) | The CPI analysis matches only `solana_program`'s `invoke`, so on SDK 3 no CPI is substituted and nothing says so | minor — only with `-solanaCpiAnalysis`, which AutoProver does not set; not filed |
+| [P15](#p15) | An SDK 3 `Clock::get()` can crash the Prover: "TAC Clock::get expected to extract 5 TAC variables from call sol_get_clock_sysvar" | **major** — the job FAILS with no verdicts; fixed on the Prover's master branch ([EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762)) |
 | [U1](#u1) | `extract_job_id_from_url` cannot parse a Solana Prover job link | **major**, worked around |
 | [T1](#t1) | Tuning files are spelled for pre-2.2 `solana-program` paths | major |
 | [T2](#t2) | A canonical tuning file names one specific on-chain program | hygiene |
@@ -82,7 +86,7 @@ the write-up gives the line number rather than the name.
 | [T8](#t8) | A canonical summary is spelled for a `RawVec` symbol current toolchains no longer emit | major |
 | [M1](#m1) | The manual's `cvlr_rules!` example puts a trailing comma after `bases: [...]`, which the macro rejects | minor |
 | [M2](#m2) | The manual types `cvlr_deserialize_nondet_accounts()` as `[AccountInfo; 8]`; it returns 16 | minor |
-| [C1](#c1) | `cvlr-solana` is bound to `solana-program` 2.2, so no program on the current Solana SDK can be scaffolded at all | **blocking** for every SDK 3.x target |
+| [C1](#c1) | `cvlr-solana` is bound to `solana-program` 2.2, so no program on the current Solana SDK can be scaffolded at all | ported and released as a commit (0.6.0), which AutoProver reads; **not published** |
 
 ---
 
@@ -534,9 +538,9 @@ what the reproducer here uses.
 
 ### A checked `i128` multiply is rejected outright: `[7000] __muloti4 is not currently supported`
 
-**Filed as CERT-10103; a fix is in flight — [Certora/EVMVerifier#8673](https://github.com/Certora/EVMVerifier/pull/8673).**
-It is recorded here anyway, because the entry is what documents the *cost* of it, and because the
-second half — what an author does when a function cannot be executed at all — outlives the fix.
+**Filed as CERT-10103; fixed on the Prover's master branch by [Certora/EVMVerifier#8673](https://github.com/Certora/EVMVerifier/pull/8673).**
+A released Prover without the fix still rejects the multiply. The entry documents the *cost* of it,
+and the second half — what an author does when a function cannot be executed at all — outlives the fix.
 
 Rust lowers an overflow-aware 128-bit signed multiplication to the compiler-rt intrinsic
 `__muloti4` (the pair of a product and an overflow flag). The Solana Prover has no model for that
@@ -1037,11 +1041,41 @@ elements, which here are all clones of infos with known regions. Not yet filed.
 
 ---
 
+## P14
+
+### The CPI analysis matches only `solana_program`'s `invoke`, so on SDK 3 no CPI is substituted
+
+**Effect: with `-solanaCpiAnalysis` on, an SDK 3 program's token CPIs are neither mocked nor
+flagged.** The analysis replaces an SPL Token or Token-2022 CPI it can resolve with a
+`cvlr_spl_token` mock, and every other CPI with `assert(false)` ("Unresolved CPI call"). It finds the
+calls by exact demangled name: `solana_program::program::invoke` and
+`solana_program::program::invoke_signed` (EVMVerifier `src/main/kotlin/sbf/analysis/cpis/CpisAnalysis.kt`,
+`INVOKE_FUNCTION_NAME` and `INVOKE_SIGNED_FUNCTION_NAME`, compared with `==`).
+
+An SDK 3 program has no `solana_program`; it calls `solana_cpi::invoke` and
+`solana_cpi::invoke_signed`. The analysis finds no invokes, so it neither substitutes a mock nor
+asserts. A rule crossing a token CPI could pass while checking nothing about the transfer, and
+nothing reports it.
+
+**Why it is minor here.** AutoProver does not set `-solanaCpiAnalysis`: it is experimental and off
+by default, and one of its original developers says it never worked well
+([cvlr-todo.md](./cvlr-todo.md) L2). Without it a CPI is an opaque call whose writes are dropped, on
+either SDK (L1). `cvlr-spl-token`'s SDK 3 models are substituted only through this analysis, so
+until it is fixed they are unused on SDK 3.
+
+**What would resolve it**: recognize both spellings, in the names `CpisAnalysis.kt` compares calls
+against and in the `mockFor` names `CpisSubstitutionMap.kt` passes to `getCallInstructionToThis`.
+The mangled names the substitution map carries for the mocks are only metadata, so a new
+`cvlr-spl-token` release does not need a Prover change. A test needs an SDK 3 program that transfers
+tokens by CPI; the stake probe makes none. Not yet filed.
+
+---
+
 ## P15
 
 ### An SDK 3 `Clock::get()` can crash the Prover
 
-**A fix is in flight — [Certora/EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762).**
+**Fixed on the Prover's master branch by [Certora/EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762).**
 A points-to-dead `sol_get_clock_sysvar` has no memory-splitter entry, so `getTACVariables` returns
 nothing and the arity check throws `IllegalStateException`. `solanaSbfToTAC` catches only
 `SolanaError`, and one such call fails every rule in the job. The PR encodes a missing entry as
@@ -1075,9 +1109,9 @@ skipped and TAC encoding still walked.
 
 **What AutoProver does about it.** A `FAILED` job includes the alert's `hint`, which names the
 syscall and the call address, and the text says resubmitting the same draft will fail the same way.
-The job still fails until the Prover fix lands.
+A Prover build without the fix still fails this way.
 
-**What would resolve it**: [EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762), open.
+**Not yet re-measured** against a Prover master that includes the fix.
 
 ---
 
@@ -1326,9 +1360,22 @@ author-written ones.
 
 ### `cvlr-solana` is bound to `solana-program` 2.2, so a program on the current SDK cannot be scaffolded at all
 
-**Effect: every program on the Solana SDK 3.x line is refused before a single rule is authored.**
-Not a degraded run or a silent misconfiguration — [`_check_platform`](../composer/spec/cvlr/scaffold.py)
-returns `Blocked`, and a plan carrying one applies nothing.
+**Ported, released as a commit, not published.** `cvlr-solana` 0.6.0, on the split `solana-*` 3.x
+crates and with both program models, is release commit `f054348` on branch `eric/sdk3` of
+`Certora/cvlr-solana`. Its PR waits on the 0.5.1 release
+([cvlr-solana#22](https://github.com/Certora/cvlr-solana/pull/22), open). AutoProver's
+`SOLANA_V3` reference set reads it from that commit through a `[patch.crates-io]` entry
+([`reference.py`](../composer/spec/cvlr/reference.py)), so SDK 3 programs are scaffolded and run.
+On crates.io the newest release is still 0.5.0, and only the crates' one owner can publish
+([cvlr-sdk3-support.md](./cvlr-sdk3-support.md), *Publishing*). Reading a release from a commit is a
+ship blocker, [cvlr-todo.md](./cvlr-todo.md) U26.
+
+What follows is the gap as the published releases leave it.
+
+**Effect, with the published releases only: every program on the Solana SDK 3.x line is refused
+before a single rule is authored.** Not a degraded run or a silent misconfiguration —
+[`_check_platform`](../composer/spec/cvlr/scaffold.py) returns `Blocked`, and a plan carrying one
+applies nothing.
 
 `cvlr-solana` 0.5.0 declares its platform dependency as:
 
@@ -1339,7 +1386,7 @@ version = "2.2"
 
 Read from the registry checkout, not from the repository. **0.5.0 is the newest release on
 crates.io** (published 2026-01-16; 0.4.5 the same day, 0.4.4 before that in April 2025). So there is
-no CVLR line to move *to*.
+no published CVLR line to move *to*.
 
 The refusal, from a scaffold dry run against `solana-program/stake` at `main`:
 
@@ -1372,19 +1419,15 @@ respelling them — confirmed working here, twelve aliases in force on this targ
 directive is a text substitution. It cannot reconcile two incompatible `AccountInfo` types in one
 dependency graph, which is a compile-time fact about the crates.
 
-**Currently worked around by not using current code.** `docs/stake-benchmark.md` records the
-benchmark this blocked and the route taken: check out the last commit before the target moved to SDK
-3.0 — roughly a year and several hundred commits behind `main`. That works for a benchmark, where a
-snapshot is defensible if it is declared. It does not work for a client on code they are shipping,
-and it expires: the gap widens every time a maintained program bumps its SDK.
+The fix is a `cvlr-solana` release line per platform generation, which is how
+[`reference.py`](../composer/spec/cvlr/reference.py) models the world: `PlatformGeneration` exists
+because a chain crate implies a generation, and `scaffold.select_generation` picks the reference set
+whose platform the package links. Widening the existing pin would not have been enough: the identity
+of `AccountInfo` comes from the crate that defines it, so one release cannot satisfy both
+generations regardless of how the facade is pinned.
 
-Fix: a `cvlr-solana` release line per platform generation, which is how
-[`reference.py`](../composer/spec/cvlr/reference.py) already models the world —
-`PlatformGeneration` exists precisely because a chain crate implies a generation. Widening the
-existing pin is not enough on its own: the identity of `AccountInfo` comes from the crate that
-defines it, so one release cannot satisfy both generations regardless of how the facade is pinned.
-Until such a release exists, `ChainReference.platform` is documentation of a constraint rather than
-a choice anyone can make.
+**What would resolve it**: publishing 0.6.0 (and 0.5.1) to crates.io, after which the reference set
+drops the commits and nothing else changes.
 
 ---
 

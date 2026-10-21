@@ -1,41 +1,32 @@
 # CVLR backend — what is left to do
 
-A scannable index of open CVLR work. Each entry says what the thing is, why it matters, and where
-the argument lives. It deliberately does **not** repeat the reasoning: [§7.12 of the backend
-plan](./cvlr-backend-plan.md) holds the evidence, the measurements and the failed attempts, and an
-item here that matters to you should be read there before it is picked up.
+A scannable index of open CVLR work, and its one list: the backend plan's §7.12 points here. Each
+entry says what the thing is, why it matters, and where the argument lives. Finished work is
+removed; an entry that code, tests or another document cites keeps a short note saying where the
+work ended up.
 
-Two kinds of entry appear below. Most are the plan's own items, restated in one paragraph.
-**Unfiled** ones are not in the plan at all — they were noticed while doing other work and have no
-section anywhere else, so this document is their only record until someone gives them one.
+The U entries were noticed while doing other work and have no section anywhere else, so this
+document is their only record. The L entries are leads from the retired `certora-cvlr-kb` ledger.
+The numbered entries are the plan's own open items. Upstream defects are recorded, and their routing
+tracked, in [upstream-defects.md](./upstream-defects.md); entries here only point at them.
 
 If you want somewhere to start: **U12** is a silent-staleness hole in two shipped munge kinds, and
-the one with a decision in it rather than a task. **U2** decides whether the smoke gate protects
-anything at all, and
-**U7** is a silent-data-loss risk on the same path whose loud half **U4** was; that half is
-fixed now, and the fix cannot reach U7. **U8** is the same shape one layer up, in the artifact a
-reader actually keeps.
+the one with a decision in it rather than a task. **U7** is a silent-data-loss risk on the
+tree-view fetch: a partial download reads as a smaller run.
 
 ---
 
 ## Unfiled — no section anywhere else
 
-**~~U1. The judge round-cost test bills a real model call on every expensive CI run.~~** —
-**fixed.** [test_cvlr_judge_round_cost.py](../tests/test_cvlr_judge_round_cost.py) now carries a
-`measurement` mark alongside `expensive`, and the nightly sweep selects `expensive and not
-measurement`, so the number is paid for only when someone names the file. Of the three options
-recorded here, guarding it like its siblings would have been a lie — it needs neither cargo nor the
-platform tools, and skipping for their absence would have made CI's silence mean something it does
-not. Retiring it would have thrown away the ability to retake the measurement, which is the only
-thing that answers "did the gate regress on a real judge".
-
-**U2. The smoke gate does not run in CI, and nothing says whether that is intended.**
-The expensive CI job installs uv, JDK and solc. The Solana platform tools are a Certora-specific
-install it has no step for, so [test_cvlr_tape.py](../tests/test_cvlr_tape.py) and
-[test_cvlr_gate.py](../tests/test_cvlr_gate.py) both skip — silently, as a pass. The hour-long gate
-we built therefore fires only when somebody runs it by hand on a suitably equipped machine. Either
-the toolchain goes into that job and the expensive suite grows by about an hour, or CVLR is
-deliberately a local-only gate and that decision gets written down. At present it is neither.
+**U2. The CVLR gates do not run in CI, by choice.**
+[test_cvlr_tape.py](../tests/test_cvlr_tape.py), [test_cvlr_gate.py](../tests/test_cvlr_gate.py)
+and [test_cvlr_end_to_end.py](../tests/test_cvlr_end_to_end.py) are collected by the nightly
+`integration-tests.yml` and skip there, silently, as a pass: that job has no platform tools, no
+`run-confined` and no SolanaExamples checkout. They are developer gates, run by hand after changes to
+the build, the sandbox or the submission path ([README-solana.md](../README-solana.md), *Tests*).
+The toolchain is not to be added to that job. CI coverage of this path is to come from AutoProver
+end-to-end scenarios instead. One wrinkle: a machine without `cargo certora-sbf` fails the
+end-to-end test rather than skipping it.
 
 **U3. Re-recording the tape has no trigger, no owner and no budget line.**
 Tape lanes are keyed by `run_task` task id, so any deliberate change to the pipeline's *shape*
@@ -43,24 +34,6 @@ invalidates the tape, while a change to a prompt does not. A re-record costs rou
 hours ([scripts/record_cvlr_tape.sh](../scripts/record_cvlr_tape.sh)). Nothing says who decides that
 a re-record is due, or how you find out the tape is stale short of an hour-long failure in the
 middle of a run.
-
-**~~U4. A dropped prover-API connection has no retry, and it has already cost a unit.~~** —
-**fixed on master.** `fetch_sources_and_treeview_files` in
-[cloud.py](../composer/prover/cloud.py) was called without a bounded retry, and a transient `Remote
-end closed connection without response` lost an entire formalization unit during the first tape
-recording. [#223](https://github.com/Certora/AutoProver/pull/223) merged on 2026-09-17: three
-attempts with exponential backoff around the fetch of a job that has already polled `SUCCEEDED`,
-re-raising at once the four failures a second attempt cannot change. A duplicate written on this
-branch was closed in its favour, so a rebase picks the fix up rather than conflicting with it. One
-carried comment was not taken: each attempt still starts from an empty destination and re-downloads
-what already arrived, rather than resuming from the client library's completion markers.
-
-**~~U5. Landing this branch has no plan.~~** — **written.**
-[cvlr-landing-plan.md](./cvlr-landing-plan.md) breaks the branch into PRs that can be reviewed on
-their own, shared code first, with a coverage table that accounts for every changed file. What it
-leaves open are five decisions it cannot make on its own — the duplicate retry PR, whether the 5 MB
-tape belongs in the repository, when the graphcore pin moves, the order against the open findings
-PR, and whether any of wave 1 changes EVM behaviour.
 
 **U6. The Solana property corpus's inputs live in a repository that is being retired.**
 Where each piece of CVLR knowledge comes from is settled, and all of it is built here. The manual
@@ -79,94 +52,30 @@ remaining consumer, is the natural home (§11–§12.7 there).
 **U7. A partial tree-view fetch reports itself as complete.**
 POU's `fetch_job_treeview` downloads each output file in a thread pool and *swallows* per-file
 failures — it logs `Warning: Failed to fetch <name>` and then writes the completion marker anyway.
-So the connection drop U4 was about is the visible half of the problem: the same blip during the
-tree-view half produces no exception at all, just a results directory missing rules, which
-[read_and_format_run_result](../composer/prover/results.py) parses as a smaller run. U4's retry
-wraps this call and so cannot help — it fires on a raise, and the whole point here is that nothing
-raises. Nothing downstream can tell that from a job that genuinely had fewer rules. This is
+A dropped connection during the fetch raises, and `fetch_sources_and_treeview_files` in
+[cloud.py](../composer/prover/cloud.py) retries it. The same blip during the tree-view half raises
+nothing, and leaves a results directory missing rules, which
+[read_and_format_run_result](../composer/prover/results.py) parses as a smaller run. The retry
+cannot help: it fires on a raise. Nothing downstream can tell that from a job that genuinely had fewer rules. This is
 upstream code (`certora-prover-cli`), so the work is to confirm the reading against the installed
 version, decide
 whether a completeness check belongs on our side, and route it with the rest of
 [upstream-defects.md](./upstream-defects.md).
 
-**~~U8. A report whose grouping failed does not say so.~~** — **fixed 2026-10-16 (fffe1b42).**
-*The reason is the report's `grouping_fallback_reason` (schema 3.5), a report-level field rendered above the groups.*
-[build.py](../composer/spec/source/report/build.py) degrades to a single `general` bucket when the
-grouping LLM raises, when validation rejects the grouping, or when it covers no properties. It
-computes a `fallback_reason` describing which, logs it at warning, and puts it in no field of
-`AutoProverReport`. A single-group report is a shape a report can legitimately have, so the artifact
-is indistinguishable from one whose grouping worked — a run that flattens eighty-nine properties
-into `general` reads as a considered editorial choice. The same blindness is why a recurrence of the
-mis-encoding behind the reverted S2 (`1df970c8` on `eric/grouping-rescue`) would go unnoticed: the
-evidence for it was a log line on somebody's terminal, and the artifact that outlives the terminal
-says nothing. The work is to carry the reason onto the schema and render it, which is a
-`schema_version` bump, and to decide whether it belongs as a report-level field or as a mark on the
-fallback group itself. Kin to U7 — both are a degraded result that presents as a complete one.
+**~~U8. A report whose grouping failed does not say so.~~** — **fixed (fffe1b42).** The reason is
+the report's `grouping_fallback_reason` (schema 3.5), rendered above the groups.
 
-**~~U9. Should `optimistic_loop` be the default, as it is on the CVL side?~~** — **resolved: no.**
-*The escape hatch shipped; the default stays false. Settled 2026-09-21 on the normative stake-pool verification and two measurements, not on the survey. What is left over is **U10**.*
-[`conf.py`](../composer/spec/cvlr/conf.py)'s `ProverSettings` defaults `optimistic_loop` to false and
-argues it well: the Solana spec template says false, and a survey of 354 confs across fifteen Solana
-projects finds it true in exactly one. It assumes a loop's halt conditions rather than proving them,
-so it hides any violation reachable only after more iterations. The stated remedies, in order, are
-to constrain the loop, munge it, and only then raise `loop_iter` — which is why the default bound is
-2 rather than the template's 1. It is also deliberately outside the author's action space:
-`adjust_prover_config` moves the loop bound and the solver portfolio, both sound, and its docstring
-names `optimistic_loop` as one of the settings kept away precisely because it changes what a green
-verdict means.
+**~~U9. Should `optimistic_loop` be the default, as it is on the CVL side?~~** — **resolved: no;
+it is an escape hatch.** `adjust_prover_config` takes a `SetOptimisticLoop` edit with its reason
+(`OptimisticLoop` in [conf.py](../composer/spec/cvlr/conf.py)), and the bundle's loop ladder has it
+as the fourth rung: constrain the loop, munge it, raise `loop_iter`, and only then assume it
+terminates. The tool's charter says two of its settings are sound and this one is not. The default
+stays off. The EVM side sets it on every run ([source/prover.py](../composer/spec/source/prover.py)).
 
-The EVM side does the opposite without comment.
-[`source/prover.py`](../composer/spec/source/prover.py)'s `make_prover_config` sets
-`"optimistic_loop": True` on every run, unconditionally, alongside `rule_sanity: "basic"`. Nothing
-in either file acknowledges the other, so the divergence is currently a fact about two codebases
-rather than a decision anybody made.
-
-**What is new is that the ladder has a rung missing.** The vault run of 2026-09-18
-(`cvlr_d71e0ec8c99f`) hit *Unwinding condition in a loop* on all five Deposits rules, three times
-over, and the author's diagnosis — recorded in the harness it shipped — is that no finite bound
-discharges it: bound 2 reported "Loop Iteration 3", bound 3 reported "Loop Iteration 4", so the
-trip count is one the analysis cannot fix. The loop is in `system_instruction::transfer`'s own
-`Vec`/bincode construction, evaluated as an argument before the CPI and inlined into the handler,
-where no summary directive can name it. Constraining it is not available, munging it is not
-available, and raising the bound provably does not terminate. The unit ended up stating its balance
-properties over `vault_accounting::apply_deposit` instead, which cost it the handler entirely: what
-`deposit` passes on, how often, and to which account are all outside the proof it shipped.
-
-So the question is not only "default or last resort" but "what happens when every sound rung is
-exhausted". Three shapes, and the evidence does not yet pick one:
-
-* **Default true, as CVL does.** Cheapest to state, and it would have let today's Deposits rules
-  reach their own assertions. It also makes every Solana verdict quietly weaker than the corpus's
-  own practice, against a survey that is one-sided.
-* **A third editable key, reached after the existing ladder.** Keeps the default honest and gives
-  the author a rung it currently does not have. The cost is that `adjust_prover_config`'s promise —
-  *every setting here is sound* — stops being true, so the tool would need to distinguish the sound
-  edits from the one that invalidates more than the prover stamp, and the report would need to
-  carry that distinction to a reader.
-* **Neither: make the unwinding condition a first-class outcome.** The pipeline already classifies
-  it as prover-generated and excludes it from evidence. It could also be the trigger for a
-  `record_skip` naming the loop, which is the honest answer when no sound remedy exists and is what
-  the author effectively did by hand.
-
-**The survey is weaker than it reads, by this project's own standard.** The expert-written Solana
-specs were authored by a small group who hold strong and shared views about this setting; the CVL
-specs had other writers with different preferences, which is where the unconditional true on that
-side comes from. So the two numbers are not 354 decisions against one — they are a handful of
-opinions, replicated across the confs and projects each author touched, against a differently
-composed handful. [cvlr-knowledge-plan.md](./cvlr-knowledge-plan.md) §4.4 says to count this way:
-two repositories from one client are one vote, because a team's convention can appear twice and read
-as an industry idiom. The survey counted **confs**, two levels below that unit.
-
-That leaves nothing on either side that is evidence about the *decision* rather than about who made
-it, so the deciding evidence has to be produced. The cheapest form is the run we already know how to
-do: the vault pin re-entered with `optimistic_loop` true, against the same 30 properties, read for
-two things — whether the Deposits rules reach their own assertions, and whether any rule that
-verifies under it would have failed at a higher bound. Evidence so far in
-[cvlr-backend-plan.md](./cvlr-backend-plan.md) §7.6.2 and in `conf.py`'s own commentary.
-
-**Measured, 2026-09-21, and it reverses the expected answer.** One rule — the real `deposit`
-handler, `balance_post == balance_pre + amount` over `NativeInt` — submitted four times against the
-delivered `Deposits` harness, changing nothing but the conf:
+The measurement that decided it (2026-09-21): one rule, the real vault `deposit` handler,
+`balance_post == balance_pre + amount` over `NativeInt`, submitted against the delivered `Deposits`
+harness with only the conf changed
+([vault-deposits.pin.json](../tests/data/pins/vault-deposits.pin.json)):
 
 | conf | verdict |
 |---|---|
@@ -175,140 +84,31 @@ delivered `Deposits` harness, changing nothing but the conf:
 | `loop_iter 2`, `optimistic_loop` **on** | **VERIFIED** |
 | the same, with `cvlr_satisfy!(true)` in place of the assertion | VERIFIED — so the path is live and the proof above is not vacuous |
 
-The prediction this was run to test was the opposite: that the assumption would clear the unwinding
-condition and land on a rule whose post-state upstream defect P6 had havoced, turning a correctly
-excluded non-result into a counterexample against a correct program. It does not. The property is
-proved, and the reachability probe rules out the vacuity that would have explained it away.
+The loop is `system_instruction::transfer`'s own bincode/`Vec` construction, inlined into the
+handler where no summary or munge can name it. It terminates in reality, so assuming it does assumes
+something true; without the assumption the handler cannot be verified at all. The flag's defect is
+that it is **per submission, not per loop**: it also assumes away the program's own loops, which is
+the risk `conf.py`'s rationale describes.
 
-**What the two sound-looking arguments against it both miss is which loop this is.** The trace names
-it `unknown loop source code` inside `vault_program::deposit`: it is `system_instruction::transfer`'s
-own bincode/`Vec` construction, serializing a fixed-size payload. It terminates in reality and the
-analysis cannot fix the count — which is why no bound discharges it and why assuming it finishes is
-assuming something *true*. `conf.py`'s rationale ("hides any violation reachable only after more
-iterations") describes a risk that attaches to loops **in the program under verification**. This one
-is library plumbing no property here mentions, and without the assumption the handler cannot be
-verified at all: both runs of this component descended to `vault_accounting::apply_deposit` and gave
-up the handler, which is a real loss of coverage traded for nothing.
+So the remedy differs by case. For a loop the property is about (a list scan, an accumulation),
+`mock_fn` on its accessors is the remedy the bundle teaches, and it keeps the assumption local: the
+hand-written stake-pool verification mocks `BigVec::find` this way and sets `optimistic_loop` false
+everywhere. For a loop no mock can reach, like the vault's, the flag is the only remedy. On a re-run
+with the rung available, the author skipped the property rather than climb to it, so the rung's
+framing weighs on whether it is used.
 
-So the setting's defect is not that it is unsound in principle — it is that it is **per submission,
-not per loop**. There is no way to say "assume the serialization loop terminates, keep asserting the
-program's own". That is a good argument for it being an escape hatch rather than a default, which is
-what shipped, and a poor one for withholding it, which is what the code used to do.
-
-Two limits on this evidence, both real: it is one property on one target, and it says nothing about
-a program whose *own* loops bound its properties — which is the case the survey's authors are most
-likely to have had in mind, and the case the spl-stake-pool pin exists to reach.
-
-**Also measured: making the rung reachable is not enough.** Re-running the pinned `Deposits`
-component on the shipped code (1h 40m, $45), the author met the unwinding condition, worked the
-lower rungs — three `summarize_for_prover` directives, two `code_editor` requests for a substitutable
-boundary around the `invoke` — and when those were refused it **skipped rather than climbing the last
-rung**: `adjust_prover_config` was called zero times. Its harness header records the diagnosis the
-ladder asks for ("a measured result, not a guess: every rule that called the handler came back on the
-Prover's own *Unwinding condition in a loop* assertion") and then descends to the accounting core
-anyway. Given the probe above shows the rung would have worked, the gap is between what the ladder
-authorizes and what the author does with it — the fourth rung is framed by what it costs, and an
-author weighing that against a skip takes the skip.
-
-**What settles it: the normative verification of stake-pool solves this without the flag.**
-`Certora/solana-program-stake-pool-audit` is the hand-written verification of a program whose
-properties genuinely do quantify over a list — *"`add_validator_to_pool` must abort if any entry
-already in the list carries the same `vote_account_address`"* — and whose `BigVec::find` is a
-`while current != len` scan over exactly that list. It is the case `conf.py`'s rationale describes,
-and every conf there that sets the key says `"optimistic_loop": false`, with `loop_iter` at 1 and 2.
-What it does instead is mock the scan (`program/src/certora/mocks/big_vec.rs`): the predicate is
-evaluated on the first element for real, and for the rest —
-
-```rust
-// if second element exists, assume it does not satisfy the predicate
-cvlr::cvlr_assume!(!predicate(slice));
-```
-
-That is the per-loop granularity the flag lacks, built by hand: one scan, one assumption, written
-where a reviewer reads it. It also explains the survey rather than contradicting it — those authors
-set the key false because for the case that motivates it they had something better, which is a
-different fact from a house preference and a stronger one.
-
-**And this backend already teaches that technique.** The bundle's pointer-analysis section tells the
-author, for a variable-length collection, to *"ask the editor to `mock_fn` its accessors — the find /
-find_mut / retain methods, not the handler that calls them"* — the same three methods the stake-pool
-harness mocks.
-
-So the two cases separate cleanly, and the answer differs by case:
-
-* **A loop the property is about** — a list scan, an accumulation. `mock_fn` is the remedy, it is
-  already taught, and it keeps the assumption local and legible. `optimistic_loop` would be a blunt
-  substitute for a sharp tool, and applied to the whole submission rather than the loop.
-* **A loop no mock can reach** — the vault's, inlined into the handler from
-  `system_instruction::transfer` with no nameable symbol. Here the flag is the only remedy, and the
-  probe above shows it recovers a real proof of a real property.
-
-Which is an argument for the escape hatch and against the default, on both halves. No spl-stake-pool
-run is needed to close this; the artifact answers it.
-
-**What shipped: the third shape, the one that needed code.** `adjust_prover_config` takes a
-`SetOptimisticLoop` edit, so the author has the rung and the ladder in the bundle has a fourth step
-saying when it is the honest one. The tool's charter no longer claims every setting on it is sound;
-it says two are and one is not, and why the unsound one is there. **The default stays off**: a conf
-carries `optimistic_loop` only when the author set it, with its reason (`OptimisticLoop` in
-`conf.py`), and the survey argument went with the old boolean.
-
-**~~U10. There is no munge kind that puts a boundary around a CPI, and the author spends two editor
-rounds finding that out.~~** — **built.** The ninth kind is `swap_import`
-([munge.py](../composer/spec/cvlr/munge.py), [editor.py](../composer/spec/cvlr/editor.py),
+**~~U10. There is no munge kind that puts a boundary around a CPI.~~** — **built.** The kind is
+`swap_import` ([munge.py](../composer/spec/cvlr/munge.py),
 [test_cvlr_import_swap.py](../tests/test_cvlr_import_swap.py)), and
-[who-edits-the-program.md](./who-edits-the-program.md) §13 is the design record. What is left over
-is **U11**.
-
-The report this came from: on the vault re-run the author asked the code editor twice for a
-substitutable boundary around `vault_program::deposit`'s inline `invoke`, was refused both times,
-and recorded the reason in its own skip — *"Unstatable without a model of the System Program
-transfer CPI, and the program cannot be given one with the munge kinds available."* Two properties
-skipped, and the handler given up.
-
-**Both of the separated questions came back yes, and the corpus answered them, not a run.**
-
-*Can a munge name an inline `invoke` at all?* Not by its definition — that is `solana_program`'s,
-and LTO had left no symbol to summarize either. But the `use` line that puts the name in scope is
-the program's, and swapping it is an item-level edit with a compile gate behind it. `mock_fn`
-replaces a definition with a `use`; this replaces a `use` with a `use`.
-`solana-program-stake-pool-audit`'s `processor.rs` has written exactly that pair by hand for
-`solana_program::msg` since before this backend existed, so the kind was the fifth corpus idiom
-rather than an invention — it arrived late because the first four were all about *items*, and this
-one is about a call site's view of one.
-
-*Is a CPI stand-in sound enough to publish behind?* Yes, and the framing in the original report was
-wrong in a way worth recording. It assumed the stand-in would have to **claim** what the transfer
-did to two lamport balances. It does not: it returns `Ok(())` and claims nothing. The value is
-entirely in what stops happening — the Prover's unconstrained replacement havocs the *caller's*
-deserialized `Account<T>` (`upstream-defects.md` P6), and a stand-in removes that, so the handler's
-own bookkeeping becomes provable with real account validation and the real `Context`. That is the
-fidelity the shipped P6 remedy gives up by descending to the accounting core. Every CPI mock in the
-corpus works this way — `stake-pool`'s `create_stake_account` assumes a shape and returns `Ok(())`;
-the reference project's liquidity-layer stand-in reimplements the accounting it wants and nothing else — so the
-question of publishability was settled by practice before it was asked here.
-
-The line the author now has to draw, and which the prompts, the reviewer and the judge are all told
-to hold: a property about the program's recorded state is sound under a swap; a property about the
-lamports the CPI actually moved is **false** under one rather than unproven, and is a skip.
+[who-edits-the-program.md](./who-edits-the-program.md) §13 is the design record, including the
+report it came from.
 
 **~~U11. `swap_import` has never been used by an author on a real run.~~** — **run, 2026-09-21.**
-Thread `cvlr_e924521c4199` off [vault-deposits.pin.json](../tests/data/pins/vault-deposits.pin.json):
-1h36m, nine prover jobs, ~$118. **Seven of nine properties verified, three skipped, none faked** —
-including `deposit_credits_exactly_amount`, the property the 2026-09-18 run recorded as unstatable.
-[who-edits-the-program.md](./who-edits-the-program.md) §13.4 is the account.
-
-Every layer did its job, which is the part that could not be tested. The author reached the kind from
-the prompt *before* its first draft and described the effect it needed without naming the kind; the
-editor chose `swap_import` and argued it from the charter; the munge reviewer opened `lib.rs` and
-counted call sites instead of accepting the editor's scope claim; the judge blocked a draft of seven
-green rules on disclosure and was right to. The author also declined the one cheat available to it —
-`deposit(..).unwrap(); cvlr_satisfy!(true)` mapped to an acceptance property — and the judge recorded
-that it would have rejected the draft had it been there.
-
-Three things came out of it that are not about the kind, and each has its own home: the two stand-in
-constraints are now in the author prompt, the encoding defect the three skips share is **P9** in
-[upstream-defects.md](./upstream-defects.md), and the staleness hole the judge found is **U12**.
+Seven of nine properties verified, three skipped, none faked, on thread `cvlr_e924521c4199` off
+[vault-deposits.pin.json](../tests/data/pins/vault-deposits.pin.json).
+[who-edits-the-program.md](./who-edits-the-program.md) §13.4 is the account. What it found went to
+the author prompt (two stand-in constraints), to [upstream-defects.md](./upstream-defects.md) P9, and
+to **U12**.
 
 **U12. A munge that points at an author-written stand-in can have a justification that is no longer
 true, and nothing detects it.**
@@ -359,42 +159,11 @@ record. Cheap to settle, and it generalizes: any rule over two accounts of one t
 question.
 
 **~~U15. A project's summaries are rebuilt from the installed wheel's layers; its inlining is frozen
-at first scaffold. Both cannot be right.~~** — **resolved: the starting layers are AutoProver's.**
-*Settled 2026-09-22 on eric/cvlr-preflight and back-ported. Everything the scaffold writes under
-`src/certora/` is AutoProver's. The starting layers are no longer copied into a project, and the
-package layer is gone. Both families compose from the wheel's `envs/`, the scaffold rewrites a
+at first scaffold.~~** — **resolved: the starting layers are AutoProver's.** Everything the scaffold
+writes under `src/certora/` is AutoProver's. The starting layers are not copied into a project and
+there is no package layer. Both families compose from the wheel's `envs/`, the scaffold rewrites a
 package composite whenever it differs from what the starting layers compose to, and a unit's own
-directives go in its `_run` layer.*
-§7.4.1 states the scaffold's contract as *never overwrite* — nothing in a project is rewritten after
-the first run, which is why a re-run is a no-op and why the template's own `certora-setup.py`
-corrupting a manifest on second use is the failure it was written against. The inlining family obeys
-that: `_plan_envs` skips every file that exists, so `cvlr_inlining.txt` and the two canonical layers
-beside it keep whatever the first run wrote, and a later AutoProver carrying refreshed upstream
-tuning never reaches that project. Verified by adding a directive to the vendored
-`cvlr_inlining_core.txt` and re-running preflight against an already-scaffolded workspace:
-`applied: ()`, and the directive is in neither the project's copy of the layer nor the composite.
-The summaries family does not obey it. [tuning.py](../composer/spec/cvlr/tuning.py) recomposes a
-unit's summaries composite on every build, and `compose_env` reads the canonical layers from
-`ENV_DIR`, which is `Path(__file__).parent / "envs"` — the *wheel's* copy, not the project's. So a
-file inside the project is rebuilt from content the project does not own and cannot see, and two
-files in one `envs/` directory are two different vintages with nothing recording either.
-
-Which of the two is wrong depends on a question §7.4 does not answer: whether the canonical layers
-are the project's after setup or AutoProver's forever. If they are the project's, the summaries path
-should compose from the project's copies and the freeze is correct. If they are AutoProver's, the
-scaffold should refresh them and recompose when they drift, and *never overwrite* needs qualifying
-to mean *never overwrite what the project wrote*, which is what it is actually protecting. A third
-answer is that the canonical layers stop being copied into the project at all and only
-`_package.txt` lives in the repo — smallest surface, largest change to what a scaffolded project
-looks like.
-
-Two smaller things fall out of whichever answer wins. `cvlr_inlining_package.txt` is documented as
-the project's place to add a directive, and nothing ever folds it into the composite the build
-reports: the composite exists, so the scaffold skips it, and no inlining counterpart to `tuning.py`
-exists. And the package layer's header says the other layers are "maintained in `<repo>`", which is
-true of the repo and misleading about the copy on disk. The generated composite's `DO NOT EDIT`
-banner and its instruction to "recompose" — an action that exists only in the upstream template's
-justfile, never in AutoProver — were removed with P1.
+directives go in its `_run` layer ([tuning.py](../composer/spec/cvlr/tuning.py)).
 
 **U16. Timeout-cracker support, in place of the nonlinear solver portfolio.**
 *The portfolio was dropped on eric/cvlr-preflight on 2026-09-22 and back-ported.*
@@ -450,20 +219,10 @@ The fix is small and there are two halves worth separating: a periodic line on t
 how anyone answers this twice. Distinct from [[U17]], which is about the *reference set* a run used
 rather than what it spent.
 
-**~~U19. A dangling symlink in the target kills the run after extraction is paid for.~~** — **fixed 2026-10-16 (21b1a827).**
-*Fixed on this side, not upstream: graphcore's `global_exclude` takes a callable, and `SharedTree`'s now skips a symlink whose target is missing.*
-`SharedTree.materialize()` reaches `shutil.copytree(root, target, dirs_exist_ok=True, ignore=ignore)`
-in graphcore's `tools/vfs.py` with no `symlinks=True`, so a link whose target does not exist is
-dereferenced and raises `shutil.Error`. The stake program ships exactly that: a git-tracked
-`program/tests/fixtures/solana_stake_program.so -> ../../../target/deploy/...` that the project's own
-test build populates and a fresh clone leaves dangling.
-
-The cost is what makes it worth filing rather than shrugging at. Materialization is the first step of
-formalization, so the failure lands *after* the whole extraction phase has been billed and *before*
-any rule is authored — the most expensive possible moment for a one-word fix. `symlinks=True` copies
-the link as a link; skipping unresolvable links would also do. The call is in the graphcore submodule,
-so this is an upstream change rather than one this repo can make. Worked around on the benchmark by
-populating the link's target from an SBF build.
+**~~U19. A dangling symlink in the target kills the run after extraction is paid for.~~** —
+**fixed (21b1a827).** `SharedTree`'s `global_exclude` skips a symlink whose target is missing, as the
+stake program's `program/tests/fixtures/solana_stake_program.so` is in a fresh clone
+([test_cvlr_tree.py](../tests/test_cvlr_tree.py)).
 
 **U20. The CVL author's draft cache has the hole the CVLR one just had fixed.**
 `cache_put` refuses writes made under budget pressure, which is right for a result and backwards
@@ -476,51 +235,13 @@ It is one argument to add, but **do not add it on its own** — see [[U22]]. The
 curtailed run overwrite a better cached draft, and CVL is currently shielded from that only by
 having the hole. The guard against regressing and the opt-in belong in the same change.
 
-**~~U21. A run that delivered partials under budget pressure reports itself as a total failure.~~** — **fixed 2026-10-16 (3dae956b).**
-*Item 1 below is done (`n_partial`; `all_failed` counts a curtailed partial as output; the consoles print `RUN CURTAILED` and exit 0). Item 2, folding the three console summaries, is not.*
-The 2026-09-24 stake run printed `RUN FAILED: every component failed to generate or gave up` after
-four components had published 12 rules, documented dispositions for every property they held
-(Splitting & Merging covered 36 of 36), and established three soundness limits by measurement. The
-sentence is false, and it is load-bearing: it is what caused this document's first reading of that
-run to be wrong.
-
-The cause is one line in `CorePipelineResult.all_failed`
-(`composer/pipeline/ptypes.py`):
-
-```python
-return bool(self.outcomes) and self.n_delivered == 0
-```
-
-A `Curtailed` never counts toward `n_delivered`, even when it carries a substantial partial.
-`composer/pipeline/core.py` already draws the distinction the rollup throws away — it checks
-`o.result.partial is not None` when it writes the failure line — so the types are right and only the
-predicate is wrong. The exit code follows it, so this is not merely cosmetic.
-
-**Not a backend gap, and not a missing copy from CVL.** Both layers involved are shared: dispatch is
-`run_task` (`composer/io/multi_job.py`) reached through `TaskRunnerHost.runner`
-(`composer/pipeline/ptypes.py`), and the classification is `composer/pipeline/core.py`. CVL, CVLR and
-Foundry are equally affected and one fix serves all three. The judge-level `budget_pressure()` guard
-that CVL has, CVLR has too (`composer/spec/cvlr/author.py`) — nothing was missed there. If anything
-the debt runs the other way: CVLR's console unwraps a `Curtailed` to name the partial it wrote, and
-`console_foundry` / `console_autoprove` do not, so those two hide deliverables that exist on disk.
-
-**Worth fixing together**, since the three console modules are ~42 near-identical lines each and the
-false sentence is triplicated across them:
-
-1. `all_failed` should not treat a curtailed-with-partial as nothing.
-2. Fold the three console summaries into one, carrying CVLR's `Curtailed` unwrapping.
-
-**Explicitly not proposed: skipping dispatch under budget pressure.** Four units did start after the
-pool was exhausted and wrapped up in ~30 seconds each having authored nothing (63 properties skipped
-for budget exhaustion). That reads like waste but the cost is seconds, and the skips are an honest
-record of properties nobody got to. Gating the dispatcher on `budget_pressure()` would trade a true
-record for a smaller one; the misleading rollup was the whole of the harm.
-
-*(Two earlier versions of this entry were wrong. The first claimed the wrap-up order was deleting
-rules whose verdicts were merely outstanding — read from rule counts without reading the units'
-reports, which show the withdrawals were deliberate and measured. The second blamed the dispatcher
-for starting doomed units. The CVLR wrap-up text does carry an "any whose verdict you never saw"
-clause that CVL's and Foundry's do not, but nothing observed has been traced to it.)*
+**~~U21. A run that delivered partials under budget pressure reports itself as a total failure.~~**
+— **fixed (3dae956b).** `CorePipelineResult.all_failed` counts a curtailed partial as output
+(`n_partial`), and the consoles print `RUN CURTAILED` and exit 0. **Still open:** the three console
+summaries (`console_solana`, `console_foundry`, `console_autoprove`) are ~42 near-identical lines
+each and should be folded into one, carrying CVLR's unwrapping of a `Curtailed` to name the partial
+it wrote; the other two do not name it. Dispatch under budget pressure stays as it is: a unit started
+after the pool is spent costs seconds and records its properties as skipped.
 
 **U22. The draft carry-forward can overwrite a better draft with a worse one.** *(CVLR side fixed; CVL side open.)*
 `_remember_attempt` caches whatever `curr_spec` holds when the unit unwinds, with no comparison
@@ -614,14 +335,9 @@ repository. Once the release is on crates.io, drop the `GitCommit`s; the pins an
 stay. The SDK 3 line (`docs/cvlr-sdk3-support.md`, C1 and A5) uses the same mechanism and
 the same exit.
 
-**U27. The replay tape was recorded without the corpus and now replays with it.**
-The tape was recorded under `--rag-corpus none`, and seven of its turns call `cvlr_research`
-anyway: each got an unknown-tool result. Since `e8f807e0` the replay binds the shipping corpus, so
-those calls reach a real researcher, and the researcher runs inside the caller's `run_task` with no
-task id of its own. Its model calls would therefore be served from the author's and the judge's
-recorded turns, which moves everything after them out of order. Nobody has run the replay since. It
-needs a re-recording under the corpus, and before that the researcher needs its own lane, so that
-its turns are recorded and replayed apart from its caller's. Landing plan P9.
+**~~U27. The replay tape was recorded without the corpus and now replays with it.~~** —
+**re-recorded (5e856e39).** The vault tape was recorded with both corpora and the researcher bound,
+its sub-agents in lanes of their own ([cvlr-api-docs-plan.md](./cvlr-api-docs-plan.md) §8.2).
 
 **U28. Ship blocker: the core is read from a git commit, because its documented release is
 unpublished.** `cvlr` 0.6.1 on crates.io leaves 176 of the API corpus's items without prose. Every
@@ -670,9 +386,12 @@ their evidence are in the ledger files, and the soundness argument each one prop
 reading before starting. An investigation ends in an AutoProver change or a line saying why none is
 needed, never in a ledger answer.
 
-**L1. Is the starting layer sound?** *Investigated 2026-09-29 by reading the Prover
-(`EVMVerifier`, `origin/master` a852161573). Three items closed, three measured by a Prover run (below), one Prover bug
-(CERT-10183).*
+**L1. Is the starting layer sound?** *Closed. Investigated 2026-09-29 by reading the Prover
+(`EVMVerifier`, `origin/master` a852161573): three items closed, three measured by a Prover run
+(below), and two Prover bugs filed, CERT-10183 and CERT-10184. Still open from it, each marked
+below: a faithful model of a system transfer; a report channel for a unit's assumptions; an
+`inline_for_prover` tool; and two leads, the [3308] at address 1 and multi-field `#[type]`
+summaries.*
 
 **The finding every item turned on.** An opaque call, with or without a `#[type]` summary, is
 modelled as writing *nothing* except `r0` and the cells its summary names
@@ -768,9 +487,9 @@ function that *writes* state a rule asserts over, not only one whose result it r
   float support landed (`fea2e0b4f10`, 2025-09-05). **Reported as CERT-10183.** The `Rent` float path
   is the first place to look for impact (`e4b3d31a079972bb`).
 
-**L2. Solana analysis flags the field sets and `BASE_CONF` does not.** Prover runs are cheap, so try
-each against a known run and compare verdicts, [3308]s and timeouts.
-*Deferred (2026-09-29) until we have more experience with real specs; this applies to L3 too.*
+**L2. Solana analysis flags the field sets and `BASE_CONF` does not.** *Deferred until we have more
+experience with real specs, as is L3.* Prover runs are cheap, so try each against a known run and
+compare verdicts, [3308]s and timeouts.
 `-solanaAggressiveGlobalDetection` (every surveyed project, `2113326f62f1c94c`),
 `-solanaSlicerIter` (`ad3312b1f8f38d8a`),
 `-solanaTACPromoteOverflow` (`2dac056d3177d2f7`), `-solanaEntrypoint`, perhaps for non-Anchor
@@ -810,47 +529,19 @@ of *Blocked on upstream* and P1 say we depend on. See [upstream-defects.md](./up
 P9.
 
 **3. Most of the upstream defects are filed nowhere.**
-[upstream-defects.md](./upstream-defects.md) is a well-evidenced document that few upstream teams
-have been asked to read. P7 is CERT-10103, P8 is CERT-10061 (named in the Prover's own source), and
-L1 filed CERT-10183 and CERT-10184. P15's fix is in flight at
-[EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762). Encoding failures that on the
-stake run appeared only in `Results.txt`, including `[3308]` and `[3003]`, are `Solana Encoding`
-alerts as of
-[EVMVerifier#8765](https://github.com/Certora/EVMVerifier/pull/8765), merged. A job whose error
-alerts are only that type and `Out of Resources` is described as an encoding failure. The template
-defects (group T), the manual's examples (group M) and the rest of group P are not routed, and each
-is rediscovered by the next engagement until they are.
-
-**~~4. `mock_fn` cannot reach an inherent method.~~** — **worked around.** A `use` inside an
-`impl` block is not a method, so `mock_fn` reaches free functions only. The corpus's own answer is
-not to swap the method but to redirect the module that defines it, with `#[path]`, and that is the
-`ModuleRedirect` munge kind ([munge.py](../composer/spec/cvlr/munge.py)). It needs the cargo feature
-forwarded across crates when the module is a dependency's.
+Which defects are filed, and which are fixed, is kept in one place: the introduction and table of
+[upstream-defects.md](./upstream-defects.md). Routing the rest is the open work. Until each is
+routed, the next engagement rediscovers it.
 
 ---
 
 ## Ours, open
-
-**5. The rest of Phase 7 — user-facing documentation.**
-The Docker toolchain, the confinement assertion and the replay tape are all built and the plan's
-wording for this item is stale. What is genuinely left is documentation for people outside this
-project who want to run the backend.
 
 **6. Cross-unit learning: the measurement was never taken.**
 The deterministic half shipped — the authoring prompt's worked example is rendered against the
 analyzed program, so a unit reads its own handler and accounts. What it was built to enable was a
 measurement: do units still spend turns reaching the program, and is the gated probe half worth its
 serial submission? Nobody has looked.
-
-**~~9. A malformed finding draft is data loss rather than a retry.~~** — **fixed 2026-10-16 (7e0bcbbb).**
-*Three asks per draft; the rules still without one are the report's `findings_unwritten` (schema 3.5).*
-`_one` in [findings.py](../composer/spec/source/report/findings.py) catches every exception, logs a
-warning and drops the finding. Observed twice: the model omitted the required `FindingDraft.title`
-and two of three findings vanished, on a partly different rule set each run. A structured-output
-slip is the most recoverable failure there is, and this converts it into the silent deletion of a
-confirmed vulnerability write-up — worse because an empty findings list reads exactly like "no
-counterexamples". Wants a bounded re-ask, and a report that says how many drafts failed. This is
-shared report code reached through `composer/pipeline/core.py`, so it is not CVLR-specific.
 
 ---
 
@@ -860,16 +551,16 @@ shared report code reached through `composer/pipeline/core.py`, so it is not CVL
 two unit features ran zero rustc invocations. The SBF triple ought to behave identically and has not
 been shown to.
 
-**11. The disposability invariant end to end.** `rm -rf .cvlr_work`, resume, reach the same
-submission. Unit-tested, never done live, and the mechanism beneath it has changed since — which
-makes the end-to-end form the only check that has not been re-run.
+**11. The disposability invariant end to end.** The work directory is a temporary directory created
+for each run and deleted when it ends (`run_work_directory` in
+[pipeline.py](../composer/spec/cvlr/pipeline.py)), so every resumed run rebuilds it from the project
+and the checkpointed state. That makes any live resume the end-to-end check. It is unit-tested
+([test_cvlr_tree.py](../tests/test_cvlr_tree.py)), and no live resume has been read for it since the
+work directory became per-run.
 
-**12. Residue from the VFS migration.** Its task half is now **done**: the persistent materializer
-has landed on graphcore master and `pyproject.toml` pins it there, so this is no longer a private
-fork of a shared library. The listing cache is off over the tree. Two open questions remain, both
-answered only by a real run — materialization completeness before the prover globs the real
-filesystem, and non-UTF-8 files being outside the model. See
-[who-edits-the-program.md](./who-edits-the-program.md) §16.3.
+**12. Residue from the VFS migration.** Two open questions, both answered only by a real run:
+whether materialization is complete before the Prover globs the real filesystem, and non-UTF-8 files
+being outside the model. See [who-edits-the-program.md](./who-edits-the-program.md) §16.3.
 
 **13. Latency under contention.** One shared tree is predicted to win cold and lose warm. Neither
 half has been timed.
@@ -888,11 +579,5 @@ no Soroban entry.
 
 ## Documentation debt
 
-**~~17.~~** Done: the working-copy note is retired, and the wider corpus survey is
-[who-edits-the-program.md](./who-edits-the-program.md) §14.7.
-
-**18.** Several shipped changes have no section in the plan: the `composer/layout.py` path
-consolidation, `cvlr-spl-token` entering the reference set, and `preflight.select_package`.
-
-**~~19. The plan has two stale items.~~** — **corrected there.** §7.12 item 5 now says the tape
-exists (and needs re-recording, U27), and item 12 that the materializer has landed.
+**18.** Two shipped changes have no section in the plan: the `composer/layout.py` path consolidation,
+and `cvlr-spl-token` entering the reference set.
