@@ -564,7 +564,7 @@ async def cvlr_confinement() -> SandboxConfig:
     run of them compiled the target's ``build.rs`` and proc-macros unconfined while
     ``docs/cvlr-backend-plan.md`` §3 item 3 says production does not. Worse, that is the one
     configuration a gate must not have quietly: a policy exercised only in production is a policy
-    nobody has tested, and the two defects the first confined Anchor runs found (§7.12 item 4) were
+    nobody has tested, and the two defects the first confined Anchor runs found (§7.8.4) were
     both invisible to an unconfined gate.
 
     So this is :func:`composer.spec.cvlr.entry.build_confinement` — confined unless

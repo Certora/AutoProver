@@ -22,7 +22,7 @@ and for the same reason.
 
 The builds run confined, as production's do (``cvlr_confinement``) — every earlier run of this gate
 took ``SandboxConfig.from_env``'s ``none`` default and so compiled the target unsandboxed, which is
-the configuration §3 item 3 forbids and the one the two defects in §7.12 item 4 were hiding in.
+the configuration §3 item 3 forbids and the one the two defects in §7.8.4 were hiding in.
 
 Marked ``expensive``: real LLM spend, containers, and cloud prover jobs. Run with::
 

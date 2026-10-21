@@ -674,7 +674,7 @@ def test_render_html_says_nothing_about_builds_it_was_not_told_about():
 
 def test_render_html_marks_an_unconfined_run():
     """The whole point of the field: a result produced without confinement must not be mistaken for
-    a production one, and stderr on a machine nobody kept is not a record (§7.12 item 4)."""
+    a production one, and stderr on a machine nobody kept is not a record (§7.8.4)."""
     h = render_html(_mini_report().model_copy(update={"build_environment": UnconfinedBuilds()}))
     assert "<dt>Builds</dt>" in h
     assert "Unconfined builds:" in h

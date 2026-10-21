@@ -143,7 +143,7 @@ async def test_the_backend_opts_into_findings_and_reads_back_what_it_captured():
     ],
 )
 def test_the_report_records_how_the_builds_that_earned_its_verdicts_ran(sandbox, expected):
-    """``docs/cvlr-backend-plan.md`` §7.12 item 4: an unconfined run was marked on stderr and
+    """``docs/cvlr-backend-plan.md`` §7.8.4: an unconfined run was marked on stderr and
     nowhere in the deliverable, so a report read a week later could not be told from a production
     one. The backend answers this unconditionally — the base's ``None`` means "compiles nothing",
     and a reader who cannot distinguish that from "nobody recorded it" has no use for the field."""

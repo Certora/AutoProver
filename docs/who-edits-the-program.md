@@ -605,8 +605,7 @@ pub mod liquidity_layer;
 ```
 
 Nothing is aliased, so the resolution problem never arises: a different file is compiled in the
-module's place, carrying its own types and `impl` blocks. `docs/cvlr-backend-plan.md` §7.12 item 3
-has the evidence and the two instances it was read off.
+module's place, carrying its own types and `impl` blocks.
 
 ### 11.1 What the tool owns, and why
 
