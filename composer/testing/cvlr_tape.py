@@ -32,7 +32,7 @@ divergence rather than merely a symptom:
   for, in exchange for carrying the one divergence that is documented to exhaust a lane.
 * **The corpus is the shipping one.** ``--no-corpus`` is not passed, so the author gets
   the research sub-agent over ``cvlr_kb`` and ``cvlr_api_kb``, the only CVLR reference it has
-  (``docs/cvlr-api-docs-plan.md`` §8 step 7). A tape recorded under ``none`` smoke-tests an author
+  (``docs/cvlr-api-docs-plan.md`` §8.2). A tape recorded under ``none`` smoke-tests an author
   holding nothing but the baseline facts and the recipes, which is not a configuration anybody runs.
 
   That makes both corpora a prerequisite of the recording and of the replay alike, checked by

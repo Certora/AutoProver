@@ -551,7 +551,7 @@ def test_a_derive_is_written_as_a_derive_and_not_as_a_bang():
 # the definition path made a third of the corpus name a private module — 65 of 200 items, among
 # them `cvlr_deserialize_nondet_accounts` and the whole of `cvlr-log`'s surface — and an author
 # who wrote one got `error[E0603]: module `layout` is private`. Observed twice in the first half
-# hour of the corpus-only run (docs/cvlr-api-docs-plan.md §8 step 5).
+# hour of the corpus-only run (docs/cvlr-api-docs-plan.md §8.1).
 
 
 def test_a_path_through_a_private_module_is_not_writable():
