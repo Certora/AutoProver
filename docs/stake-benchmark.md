@@ -46,32 +46,14 @@ by hand is in scope, or is part of what is being measured. Those are different e
 
 ## The blocker: the CVLR line is behind the Solana SDK
 
-> **Resolved 2026-10-14.** AutoProver supports both platform generations, and the benchmark has
-> moved to stake `main`. See *Moving the benchmark to stake `main`* at the end of this document,
-> and `docs/cvlr-sdk3-support.md`.
+Stake `main` builds against the split `solana-*` 3.x crates, and when the benchmark started the
+newest `cvlr-solana` on crates.io (0.5.0) declared `solana-program = "2.2"`. `_check_platform`
+refused the pairing, since each generation has its own `AccountInfo` type, and the first three runs
+used the snapshot below. Every current Foundation program, `solana-program/token-wrap` included,
+hit the same refusal.
 
-`plan_scaffold` refuses current `main` outright:
-
-```
-BLOCKED Cargo.toml: this project builds solana-account-info 3.1.1, but the CVLR releases the
-reference set names are bound to solana-program 2.x (the last monolithic line) — and each
-generation has its own AccountInfo type, so the pairing does not compile rather than merely
-warning.
-```
-
-This is [`_check_platform`](../composer/spec/cvlr/scaffold.py) doing its job — one of the two cases
-`docs/cvlr-backend-plan.md` §7.4.1 records as wanting a human rather than a model, because it is a
-decision about how the project builds for everyone. A plan carrying a `Blocked` applies nothing.
-
-The block names two resolutions. **Only one of them exists.** `cvlr-solana` 0.5.0's own manifest
-declares `solana-program = "2.2"`, and 0.5.0 is the newest release on crates.io (2026-01-16), so
-"pin the CVLR line that matches 3.1.1" is not available.
-
-**This is not a stake-specific problem.** `solana-program/token-wrap`, the other live Foundation
-program shortlisted for this slot, pins `solana-account-info = "3.1.1"` and would produce the same
-refusal. The corpus never hit it because every project in it is on `solana-program` 2.x or 1.18.
-Pointing the backend at any current Foundation program is what surfaced it, and it will block the
-next one too.
+AutoProver now supports both generations (`docs/cvlr-sdk3-support.md`), and the benchmark runs on
+`main` (*Moving the benchmark to stake `main`*).
 
 ## The workaround, and what it costs
 
@@ -144,28 +126,21 @@ the *passing* rules may be passing for the wrong reason, and refused the launder
 *"summarising them would produce a green rule that checked nothing"*. That is P5's failure mode
 caught in the act, by the loop rather than by a human.
 
-**Three plumbing defects, which is what an unseen target is for.** Two are fixed; one is not.
+**Three plumbing defects, which is what an unseen target is for.** All three are fixed.
 
 1. **`cargo --package <name>` is ambiguous** when the program under verification is also a published
    crate that its own dev-dependencies pull back in. Fixed — the compile checks now name the package
    by manifest path.
 2. **A dangling symlink kills the run after extraction is paid for.** `program/tests/fixtures/*.so`
-   is a git-tracked symlink the project's own test build populates; `SharedTree.materialize()` calls
-   `shutil.copytree` without `symlinks=True`, dereferences it, and raises — at the first step of
-   formalization, with every extraction agent already billed. **Not fixed**; the call is in the
-   graphcore submodule. Worked around by populating the link's target.
+   is a git-tracked symlink the project's own test build populates; `SharedTree.materialize()`
+   dereferenced it and raised at the first step of formalization, with every extraction agent
+   already billed. Worked around for this run by populating the link's target; fixed since
+   (cvlr-todo U19).
 3. **Withholding a specialization had no control.** Fixed — see below.
 
-## Open, and not worked around
+## Withholding the stake model
 
-**The SDK 3.x gap.** *Closed 2026-10-14; see the last section.* A `cvlr-solana` release targeting the post-split platform generation unblocks
-every current Foundation program at once. Until there is one, this workaround is the only route and
-it expires as targets age out. This belongs with whoever owns CVLR releases.
-
-**The dangling-symlink crash** (item 2 above) is unfixed and will bite the next target that ships
-one. `symlinks=True` — or skipping links that do not resolve — is the fix, in graphcore.
-
-**`cvlr-solana-stake` is withheld from this target, and that now has a control.** The crate ships
+**`cvlr-solana-stake` is withheld from this target, and that has a control.** The crate ships
 572 lines implementing `process_withdraw`, `process_split`, `process_merge`, `process_authorize`,
 `process_delegate` and `process_deactivate` — a behavioral model of the exact instructions the
 benchmark asks the backend to specify. For any other target it is dependency modeling, which is what
@@ -254,8 +229,8 @@ under two.
 The pipeline kept dispatching queued units after the run pool was exhausted. Withdrawals, Stake &
 Lamport Movement, Deprecated Instructions and Protocol Parameter Queries each began, met the wrap-up
 order immediately and finished in about thirty seconds having authored nothing — **63 properties
-recorded as skipped for budget exhaustion without a line written**. The final report then counts
-them as failed components beside the four that did real work. Filed as [[U21]].
+recorded as skipped for budget exhaustion without a line written**. The final report then counted
+them as failed components beside the four that did real work (cvlr-todo U21, fixed since).
 
 ### What the surviving units published, and why the rule counts are low
 
@@ -288,7 +263,7 @@ cannot stand behind, is behaving correctly — that is P5's failure mode being a
 ### What the run actually established
 
 Not rule counts. The agents spent their prover budget on **diagnostics**, which is what
-[the previous run's judge](#open-and-not-worked-around) said a resumed run should do first, and the
+[the previous run's judge](#the-first-run-2026-09-23) said a resumed run should do first, and the
 answer came back.
 
 The standing hypothesis was that `Pubkey` equality on SBF (`sol_memcmp_`) was the unconstrained
@@ -351,9 +326,9 @@ container limit seen from the other side. `rule_diag_signer_set_membership` pinn
 
 The run ended with the cache holding its final drafts (1,609 lines, 12 rules), overwriting the 6,176
 lines seeded that morning. Those final drafts are the considered ones, so this is not damage — but
-the write is unconditional, so a run that achieves nothing and dies would degrade the cache the same
-way. Filed as [[U22]]. `ap-trail recover-drafts --draft largest` restored 6,463 lines and 158 rules
-from the checkpoints.
+the write was unconditional, so a run that achieves nothing and dies would degrade the cache the
+same way (cvlr-todo U22, fixed since on the CVLR side). `ap-trail recover-drafts --draft largest`
+restored 6,463 lines and 158 rules from the checkpoints.
 
 **What a resumed run should do first.** The vacuity is the live question, and the judge already
 named the experiment: add `clog!`s to the owner comparison so the counterexample is readable, and
@@ -461,8 +436,8 @@ a different trap.
 | | fix | where |
 |---|---|---|
 | 1 | Stop never-inlining the split `solana-*` crates, matching what Stake Pool runs on the same generation; teach the sysvar idiom | **done**: the blanket is back to `^solana_program::.*$`; recipe K3 |
-| 2 | Extract protocol-wide invariants once, across components (solvency, conservation, the stake math as bounds); steer the attack-vector category toward design consequences | property extraction prompts and pipeline |
-| 3 | Teach the unwrap-and-negate form for revert properties | CVLR authoring guidance |
+| 2 | Extract protocol-wide invariants once, across components (solvency, conservation, the stake math as bounds); steer the attack-vector category toward design consequences | **done**: `docs/cvlr-design-properties-plan.md` |
+| 3 | Teach the unwrap-and-negate form for revert properties | **done**: the CVLR author's prompt |
 
 **The point 1 fix, checked on the Prover.** A hand-written probe against the pristine snapshot,
 scaffolded with the corrected tuning files
