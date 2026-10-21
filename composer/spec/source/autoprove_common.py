@@ -10,7 +10,7 @@ from typing import cast, AsyncIterator, Protocol, Callable, Awaitable
 
 from composer.diagnostics.timing import RunSummary
 from composer.input.types import DEFAULT_RECURSION_LIMIT, ExtendedModelOptions, RAGDBOptions
-from composer.input.parsing import add_extra_context_args, add_protocol_args
+from composer.input.parsing import add_extra_context_args, add_property_set_args, add_protocol_args
 from composer.rag.db import PostgreSQLRAGDatabase
 from composer.pipeline.core import CorePipelineResult
 
@@ -62,6 +62,8 @@ class AutoProveArgs(ExtendedModelOptions, RAGDBOptions, Protocol):
     budget_total: float | None
     time_budget: float | None
     run_mode: str | None
+    predefined_properties: str | None
+    stop_after_properties: bool
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +91,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
     parser.add_argument("--interactive", action="store_true", help="Interactively refine the security properties after extraction")
     parser.add_argument("--threat-model", type=str, default=None, help="Path to a 'threat' model (text or pdf) with which to seed the property extraction process")
     add_extra_context_args(parser)
+    add_property_set_args(parser)
     parser.add_argument("--max-bug-rounds", type=int, default=3, help="Maximum number of bug-extraction rounds run per component during property analysis (default: 3)")
     # One budget, two spellings: the file shapes spend across phases, the scalar
     # sets the pool alone. argparse reports taking both, and renders the choice in

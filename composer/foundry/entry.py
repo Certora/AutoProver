@@ -23,7 +23,7 @@ from typing import Annotated, AsyncIterator, Awaitable, Callable, Protocol, cast
 
 from composer.core.user import get_uid
 from composer.diagnostics.timing import RunSummary
-from composer.input.parsing import Arg, add_extra_context_args, add_protocol_args
+from composer.input.parsing import Arg, add_extra_context_args, add_property_set_args, add_protocol_args
 from composer.input.types import DEFAULT_RECURSION_LIMIT, RAGDBOptions, ExtendedModelOptions
 from composer.io.multi_job import HandlerFactory
 from composer.io.thread_logging import RunDataLogger
@@ -77,6 +77,8 @@ class FoundryArgs(ExtendedModelOptions, FoundryRAGDBOptions, Protocol):
     budget_total: float | None
     time_budget: float | None
     extra_context: list[str] | None
+    predefined_properties: str | None
+    stop_after_properties: bool
 
     @property
     def threat_model(self) -> None:
@@ -149,6 +151,7 @@ def _build_parser() -> argparse.ArgumentParser:
     budget_group.add_argument("--budget-total", default=None, type=float, help="The run pool in USD as a bare number — the budget file's `total` with no per-phase caps. Omit both budget flags to run unbudgeted.")
     parser.add_argument("--time-budget", default=None, type=float, help="Total wall time to run the entire execution. Omit to run without in process limit")
     add_extra_context_args(parser)
+    add_property_set_args(parser)
     parser.set_defaults(threat_model=None)
     return parser
 

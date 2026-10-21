@@ -32,6 +32,7 @@ from composer.spec.service_host import ModelProvider
 from composer.spec.types import SourceIdentifier
 from composer.pipeline.ecosystem import Ecosystem
 from .core import PipelineBackend, run_pipeline
+from .property_set import PropertySet
 from .run_mode import RunMode
 from .plugins import applicable_plugin_manifest
 from .run_tags import AutoProveCacheTags, CACHE_ROOT_RECORD
@@ -243,6 +244,17 @@ class PipelineArgs(ExtendedModelOptions, Protocol):
         Time in floating point seconds that autoprover should run. None to run with unlimited, in process timeout
         """
 
+    @property
+    def predefined_properties(self) -> str | None:
+        """Path to a property set that replaces component analysis and property extraction
+        (see :mod:`composer.pipeline.property_set`), or None to infer them."""
+        ...
+
+    @property
+    def stop_after_properties(self) -> bool:
+        """End the run once the property set is written, before formalization."""
+        ...
+
 @dataclass
 class StagedPipeline:
     conns: IndexedConnections
@@ -283,8 +295,13 @@ async def cli_pipeline[P: enum.Enum, H, App: BaseApplication, Main, U: FeatureUn
     project_root = pathlib.Path(args.project_root).resolve()
     main_contract_path, contract_name = args.main_contract.split(":", 1)
 
-    # Resolve the budget up front so a malformed one fails before any services spin up.
+    # Resolve the budget and the property set up front so a malformed one fails before any
+    # services spin up.
     budget = resolve_budget(args.budget, args.budget_total)
+    predefined = (
+        PropertySet.load(pathlib.Path(args.predefined_properties))
+        if args.predefined_properties is not None else None
+    )
 
     full_contract_path = pathlib.Path(main_contract_path).resolve()
     if not full_contract_path.is_relative_to(project_root):
@@ -465,6 +482,8 @@ async def cli_pipeline[P: enum.Enum, H, App: BaseApplication, Main, U: FeatureUn
                     budget=budget,
                     time_budget_s=args.time_budget,
                     ecosystem=ecosystem,
+                    predefined=predefined,
+                    stop_after_properties=args.stop_after_properties,
                 )
 
             yield (StagedPipeline(
