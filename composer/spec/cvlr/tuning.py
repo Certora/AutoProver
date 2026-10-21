@@ -277,25 +277,31 @@ class TuningFiles:
             compose_env(SUMMARIES, unit_layer=layer, dialect=self.dialect)
         )
 
-    def missing(self) -> tuple[str, ...]:
-        """Tuning files that should be on disk and are not.
+    def ensure_composite(self) -> None:
+        """Create this unit's summaries composite when the conf's file is absent.
 
-        A summary written to a file the build does not read changes nothing.
-        The tool would report success and the next run would hit the same
-        [3308].
-
-        The package composites are the scaffold's. The build manifest declares
-        them, and inlining still reaches the prover that way. The unit
-        summaries composite is what this unit's conf names. :meth:`write`
-        creates it, so its absence means no build has staged yet.
+        A submission names the path before the unit has any directives. An
+        empty file is enough. :meth:`write` on a later build replaces it from
+        state. A file that is already there is left as it is, so constructing
+        the target again does not drop directives a build has written.
         """
-        package = tuple(
+        if not self.composite_path().is_file():
+            self.write(())
+
+    def missing(self) -> tuple[str, ...]:
+        """Package tuning files that should be on disk and are not.
+
+        A summary written where the build reads no tuning file changes nothing.
+        The tool would report success and the next run would hit the same
+        [3308]. These composites are the scaffold's, and the build manifest
+        declares them. The unit's own file is created with the target
+        (:meth:`ensure_composite`).
+        """
+        return tuple(
             family.composite
             for family in ENV_FAMILIES
             if not (self.envs_dir / family.composite).is_file()
         )
-        unit = () if self.composite_path().is_file() else (SUMMARIES.unit_composite(self.unit),)
-        return package + unit
 
 
 def merge_summaries(

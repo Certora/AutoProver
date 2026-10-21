@@ -79,7 +79,12 @@ from composer.spec.cvlr.prover import (
     write_submission,
 )
 from composer.spec.cvlr.harness import HarnessModule
-from composer.spec.cvlr.author_tools import AdjustProverConfig, SummarizeForProver, unaccounted
+from composer.spec.cvlr.author_tools import (
+    AdjustProverConfig,
+    SummarizeForProver,
+    stamp_under,
+    unaccounted,
+)
 from composer.spec.cvlr.state import (
     CvlrGenerationState,
     LastVerdicts,
@@ -147,6 +152,10 @@ class HarnessTarget:
     #: the Prover's rebuild and upload. Released before the cloud job. A
     #: sibling's files are behind its own feature.
     build_sem: asyncio.Semaphore
+
+    def __post_init__(self) -> None:
+        # The conf names this file, including when the unit has no summaries yet.
+        self.tuning.ensure_composite()
 
     @property
     def features(self) -> tuple[CargoFeature, ...]:
@@ -276,35 +285,13 @@ class _CaptureCallbacks(_RunAccounting):
     def __init__(self, store: CexAnalysisStore) -> None:
         super().__init__()
         self._store = store
-        self._incomplete: dict[str, IncompleteCheck] = {}
-
-    @property
-    def incomplete(self) -> Mapping[str, IncompleteCheck]:
-        """Rules from the last run that stopped on an assertion the prover generated.
-
-        The gate reports these separately from a rule whose own assertion
-        failed. The counterexample does not survive into
-        :class:`~composer.prover.core.ProverReport`, which carries statuses
-        only, so the classification is kept here.
-        """
-        return self._incomplete
 
     @override
     async def on_prover_result(self, results: dict[str, RuleResult]) -> None:
         # This run replaces analyses for the rules it covers. Clearing them
         # before the handler writes new ones keeps a rule that failed earlier
-        # and passes now out of the report. This callback runs before the
-        # handler, so the records below are this run's.
+        # and passes now out of the report.
         await super().on_prover_result(results)
-        self._incomplete = {}
-        for result in results.values():
-            if result.status != "VIOLATED":
-                continue
-            match classify_violation(result.counterexample):
-                case IncompleteCheck() as stopped:
-                    self._incomplete[result.path.rule] = stopped
-                case PropertyViolation():
-                    pass
         for rule_name in {r.path.rule for r in results.values()}:
             try:
                 await self._store.forget_rule(rule_name)
@@ -684,12 +671,7 @@ class VerifyRules(
                 )
             if not isinstance(outcome, (BuildRejected, SubmissionFailed, Checked)):
                 return outcome
-            return self._report(
-                outcome,
-                deps,
-                capture.incomplete,
-                declared=tuple(listed),
-            )
+            return self._report(outcome, deps, declared=tuple(listed))
 
     def _nothing_to_submit(self) -> Command | str:
         """The build listed no rules.
@@ -765,7 +747,6 @@ class VerifyRules(
         self,
         outcome: CvlrOutcome,
         deps: VerifyDeps,
-        incomplete: Mapping[str, IncompleteCheck],
         *,
         declared: Sequence[str],
     ) -> Command | str:
@@ -792,6 +773,7 @@ class VerifyRules(
                 return tool_return(self.tool_call_id, "\n\n".join(said))
             case Checked(build=build, report=report):
                 status = report.rule_status
+                incomplete = report.incomplete
                 unexcused = unaccounted(status, expected, incomplete)
                 unverdicted = _unverdicted(declared, status)
                 surprising = _wrongly_expected(status, expected)
@@ -827,21 +809,19 @@ class VerifyRules(
                     stamp=stamper(self.state, tuning_history(self.state)),
                     rules=tuple(sorted(declared)),
                 )
-                if unexcused or unverdicted:
-                    return tool_state_update(
-                        self.tool_call_id,
-                        "\n\n".join(lines),
-                        prover_link=report.link,
-                        external_functions=report.external_functions,
-                        last_verdicts=last,
-                    )
+                # A marking re-decides with this same predicate. The cleared stamp is what a
+                # withdrawn marking writes. A run that is not accounted for leaves the previous
+                # validations where they are.
+                earned = stamp_under(last, expected)
+                if earned == last.stamp:
+                    lines.append("Every rule is accounted for. This draft is stamped.")
                 return tool_state_update(
                     self.tool_call_id,
-                    "\n\n".join([*lines, "Every rule is accounted for. This draft is stamped."]),
+                    "\n\n".join(lines),
                     prover_link=report.link,
                     external_functions=report.external_functions,
                     last_verdicts=last,
-                    validations=last.stamp,
+                    **({"validations": earned} if earned == last.stamp else {}),
                 )
 
 

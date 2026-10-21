@@ -35,7 +35,7 @@ def _deps(tmp_path: Path, sem: asyncio.Semaphore) -> SimpleNamespace:
         module_path=tmp_path / "m.rs",
         package="p",
         package_root=tmp_path,
-        tuning=SimpleNamespace(),  # type: ignore[arg-type]
+        tuning=SimpleNamespace(ensure_composite=lambda: None),  # type: ignore[arg-type]
         unit=HarnessModule("a"),
         tree=SharedTree(pristine=tmp_path / "project", root=tmp_path / "build", source=ProjectSource(roots=())),
         build_sem=sem,

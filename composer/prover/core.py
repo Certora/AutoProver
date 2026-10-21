@@ -18,6 +18,8 @@ CEX analysis flow:
   shared across a rule's parametric instances) derive that view from
   ``all_results`` via ``group_failing``. The flat-fanout strategy
   doesn't, so the grouping stays off the handler interface.
+* Pass ``cex=None`` to report a violated rule without analysis. The status
+  and the counterexample dump are rendered directly.
 """
 
 import asyncio
@@ -25,7 +27,7 @@ import sys
 import tempfile
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Protocol, cast, override, Awaitable
 from abc import ABC, abstractmethod
@@ -47,7 +49,13 @@ from prover_output_utility import cloud_server_for_env
 
 from composer.prover.analysis import analyze_cex_raw
 from composer.prover.cloud import CloudJobError, CloudResultsUnavailable, cloud_results
-from composer.prover.ptypes import RuleResult, RulePath, StatusCodes
+from composer.prover.ptypes import (
+    IncompleteCheck,
+    RulePath,
+    RuleResult,
+    StatusCodes,
+    classify_violation,
+)
 from composer.prover.results import external_functions, read_and_format_run_result
 from composer.templates.loader import load_jinja_template
 from composer.certora_env import ProverApp
@@ -144,6 +152,10 @@ class ProverReport:
     #: (:func:`composer.prover.results.external_functions`). Empty when there were
     #: none or the report was missing. The verdicts do not name them.
     external_functions: tuple[str, ...] = ()
+    #: Rules that stopped on an assertion the prover generated, keyed by rule
+    #: name. The counterexample is not kept. Empty when every violation is the
+    #: rule's own assertion, or the run reported none.
+    incomplete: dict[str, IncompleteCheck] = field(default_factory=dict)
 
     @property
     def rule_status(self) -> dict[str, bool]:
@@ -477,6 +489,22 @@ def _report_without_analysis(results: list[RuleResult]) -> str:
     return "\n".join(lines)
 
 
+def _incomplete_checks(results: dict[str, RuleResult]) -> dict[str, IncompleteCheck]:
+    """Which violated rules stopped on an assertion the prover generated.
+
+    Keyed by rule name. The counterexample is not stored on the report, and
+    the gate tells these apart from a rule whose own assertion failed.
+    """
+    found: dict[str, IncompleteCheck] = {}
+    for result in results.values():
+        if result.status != "VIOLATED":
+            continue
+        kind = classify_violation(result.counterexample)
+        if isinstance(kind, IncompleteCheck):
+            found[result.path.rule] = kind
+    return found
+
+
 # Compatibility alias for the legacy name. New code should reach for
 # TrivialFanoutCexHandler directly; the agentic codegen handler lives
 # elsewhere.
@@ -722,6 +750,9 @@ async def run_prover(
 ) -> ProverReport | str:
     """Execute the Certora prover and return structured results.
 
+    ``cex`` analyzes a violated rule. None reports the status and the
+    counterexample dump, with no analysis.
+
     Returns:
         ProverReport — rule outcomes and the rendered report text
         str — error message
@@ -809,6 +840,7 @@ async def run_prover(
             if isinstance(parsed, str):
                 return f"Failed to parse prover results: {parsed}"
             externals = external_functions(emv_path)
+            incomplete = _incomplete_checks(parsed)
 
             # 9. Notify runtime + prover_result callbacks
             if runtime_ms is not None:
@@ -870,6 +902,7 @@ async def run_prover(
     return ProverReport(
         raw_rule_status=raw_rule_results,
         external_functions=externals,
+        incomplete=incomplete,
         result_str=result_str,
         link=run_result["link"],
         certora_run_stdout=stdout,

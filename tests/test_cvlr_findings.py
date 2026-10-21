@@ -20,6 +20,7 @@ from types import SimpleNamespace
 import pytest
 from langgraph.store.memory import InMemoryStore
 
+from composer.prover.core import _incomplete_checks
 from composer.prover.ptypes import LoopUnwound, OverflowUnproven, RulePath, RuleResult
 from composer.prover.results import SOLANA_TRACE, counterexample
 from composer.sandbox.config import SandboxConfig
@@ -162,26 +163,25 @@ def test_the_report_records_how_the_builds_that_earned_its_verdicts_ran(sandbox,
 # for one. These are what close that.
 
 
-@pytest.mark.asyncio
-async def test_the_gate_learns_which_rules_never_reached_their_property():
-    """``ProverReport`` carries statuses and no counterexamples, so the classification has to be
-    made where the results still have them — on the way past."""
-    callbacks = _CaptureCallbacks(_store())
+def test_the_gate_learns_which_rules_never_reached_their_property():
+    """Classification happens while the results still carry counterexamples.
+
+    The report keeps which rules stopped on an assertion the prover generated,
+    and drops the counterexample.
+    """
     results = {
         "loop": _violated("loop", _LOOP_BOUND),
         "real": _violated("real", _REAL_VIOLATION),
     }
-    await callbacks.on_prover_result(results)
+    incomplete = _incomplete_checks(results)
 
-    assert set(callbacks.incomplete) == {"loop"}
-    assert callbacks.incomplete["loop"].assertion.startswith("Unwinding condition in a loop")
+    assert set(incomplete) == {"loop"}
+    assert incomplete["loop"].assertion.startswith("Unwinding condition in a loop")
 
 
-@pytest.mark.asyncio
-async def test_a_run_where_nothing_stalled_reports_nothing_stalled():
-    callbacks = _CaptureCallbacks(_store())
-    await callbacks.on_prover_result({"real": _violated("real", _REAL_VIOLATION)})
-    assert callbacks.incomplete == {}
+def test_a_run_where_nothing_stalled_reports_nothing_stalled():
+    incomplete = _incomplete_checks({"real": _violated("real", _REAL_VIOLATION)})
+    assert incomplete == {}
 
 
 def test_an_incomplete_check_cannot_be_declared_an_expected_failure():

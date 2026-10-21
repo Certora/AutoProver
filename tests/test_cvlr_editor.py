@@ -91,7 +91,7 @@ async def _target(project: Path, verdict=None):
         module_path=root / _MARKER,
         package="p",
         package_root=root / "programs" / "p",
-        tuning=SimpleNamespace(write=lambda _summaries: None),  # type: ignore[arg-type]
+        tuning=SimpleNamespace(write=lambda _summaries: None, ensure_composite=lambda: None),  # type: ignore[arg-type]
         unit=HarnessModule("vault"),
         tree=tree,
         build_sem=asyncio.Semaphore(1),

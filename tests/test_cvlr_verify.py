@@ -11,7 +11,7 @@ import pytest
 from composer.authoring.state import make_validation_stamper, spec_digest
 from composer.cargo.session import CompileFailed
 from composer.prover.core import ProverReport
-from composer.prover.ptypes import RulePath
+from composer.prover.ptypes import LoopUnwound, RulePath
 from composer.spec.cvlr.conf import TunableConf
 from composer.spec.cvlr.prover import BuildRejected, Checked, SubmissionFailed
 from composer.spec.cvlr.state import PROVER_VALIDATION_KEY, tuning_history
@@ -48,12 +48,15 @@ def _deps():
     return SimpleNamespace(stamper=make_validation_stamper(PROVER_VALIDATION_KEY))
 
 
-def _report(*pairs: tuple[str, str]) -> ProverReport:
+def _report(
+    *pairs: tuple[str, str], incomplete: dict[str, LoopUnwound] | None = None
+) -> ProverReport:
     return ProverReport(
         raw_rule_status={RulePath(name): status for name, status in pairs},  # type: ignore[misc]
         result_str="rules",
         link=_LINK,
         certora_run_stdout="",
+        incomplete=incomplete or {},
     )
 
 
@@ -62,7 +65,6 @@ def test_every_declared_rule_verified_stamps_the_draft():
     out = tool._report(
         Checked(build=None, report=_report(("rule_a", "VERIFIED"), ("rule_b", "VERIFIED"))),  # type: ignore[arg-type]
         _deps(),  # type: ignore[arg-type]
-        {},
         declared=("rule_a", "rule_b"),
     )
 
@@ -77,7 +79,6 @@ def test_a_failing_rule_does_not_stamp():
     out = _tool()._report(
         Checked(build=None, report=_report(("rule_a", "VERIFIED"), ("rule_b", "VIOLATED"))),  # type: ignore[arg-type]
         _deps(),  # type: ignore[arg-type]
-        {},
         declared=("rule_a", "rule_b"),
     )
 
@@ -90,7 +91,6 @@ def test_a_missing_verdict_does_not_stamp():
     out = _tool()._report(
         Checked(build=None, report=_report(("rule_a", "VERIFIED"))),  # type: ignore[arg-type]
         _deps(),  # type: ignore[arg-type]
-        {},
         declared=("rule_a", "rule_b"),
     )
 
@@ -103,17 +103,37 @@ def test_a_rejected_build_reports_the_compiler_and_does_not_stamp():
         build=SimpleNamespace(verdict=CompileFailed(diagnostics="error[E0425]: cannot find", exit_code=1))  # type: ignore[arg-type]
     )
 
-    out = _tool()._report(rejected, _deps(), {}, declared=("rule_a",))  # type: ignore[arg-type]
+    out = _tool()._report(rejected, _deps(), declared=("rule_a",))  # type: ignore[arg-type]
 
     assert "E0425" in out.update["messages"][0].content
     assert "validations" not in out.update
+
+
+def test_a_rule_stopped_by_the_provers_own_assertion_is_reported_apart():
+    """A loop bound is the prover's limit, not a finding about the program."""
+    assertion = "Unwinding condition in a loop. Try increasing the unwinding bound."
+    out = _tool()._report(
+        Checked(
+            build=None,  # type: ignore[arg-type]
+            report=_report(
+                ("rule_a", "VERIFIED"),
+                ("rule_b", "VIOLATED"),
+                incomplete={"rule_b": LoopUnwound(assertion)},
+            ),
+        ),
+        _deps(),  # type: ignore[arg-type]
+        declared=("rule_a", "rule_b"),
+    )
+
+    assert "validations" not in out.update
+    assert f"rule_b: {assertion}" in out.update["messages"][0].content
+    assert out.update["last_verdicts"].incomplete == ["rule_b"]
 
 
 def test_a_submission_without_results_does_not_stamp():
     out = _tool()._report(
         SubmissionFailed(build=None, reason="the cloud job failed"),  # type: ignore[arg-type]
         _deps(),  # type: ignore[arg-type]
-        {},
         declared=("rule_a",),
     )
 

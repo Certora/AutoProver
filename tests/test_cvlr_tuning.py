@@ -78,6 +78,21 @@ def test_dropping_every_directive_removes_it_from_the_file(tuning: TuningFiles):
     assert _DISPLAY not in tuning.composite_path().read_text()
 
 
+def test_an_absent_unit_composite_is_not_a_missing_tuning_file(tuning: TuningFiles):
+    """A directive can be recorded before the first build. The target creates the file."""
+    assert not tuning.composite_path().is_file()
+    assert tuning.missing() == ()
+
+
+def test_ensuring_the_composite_leaves_an_existing_file(tuning: TuningFiles):
+    """Constructing the target again must not drop directives a build has written."""
+    tuning.ensure_composite()
+    path = tuning.composite_path()
+    path.write_text(path.read_text() + ";;; kept\n")
+    tuning.ensure_composite()
+    assert ";;; kept\n" in path.read_text()
+
+
 def test_two_units_do_not_see_each_others_directives(tmp_path: Path):
     envs = tmp_path / "envs"
     envs.mkdir()
