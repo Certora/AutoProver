@@ -14,8 +14,8 @@ G1, G2, G5, G6 and G7 are implemented. The probe below establishes that the comb
 |---|---|---|
 | G1 | A 1.18 reference set | **done** |
 | G2 | Telling 1.17 from 1.18 | **done**: 1.x keyed on major.minor |
-| G3 | Document `cvlr-solana` 0.4.x | **done**: 0.4.6, pinned by commit; [cvlr-solana#23](https://github.com/Certora/cvlr-solana/pull/23) in review |
-| G4 | Scope the API corpus to 1.18 | generation checked; **ingest pending** |
+| G3 | Document `cvlr-solana` 0.4.x | **done**: 0.4.6, pinned by its `v0.4` commit ([cvlr-solana#23](https://github.com/Certora/cvlr-solana/pull/23)) |
+| G4 | Scope the API corpus to 1.18 | **done**: generated and ingested locally |
 | G5 | Knowledge text: what the manual gets wrong on 1.18 | **done** |
 | G6 | Run the compile gate against the SBF target | **done** |
 | G7 | Tests | **done**, except the end-to-end, which waits on G6 |
@@ -115,8 +115,9 @@ bump with a changelog entry (`a5032ba`). The hand edits were the ones listed. Th
 `impl_nondet_mint!` now forwards doc attributes, so the two mint functions carry their own docs.
 CI's checks pass: `cargo doc -D warnings -D missing_docs` with all features (so `rt` builds),
 clippy and fmt. Pushed to `Certora/cvlr-solana` and opened as
-[#23](https://github.com/Certora/cvlr-solana/pull/23) into `v0.4`. `SOLANA_V1_18` pins `a5032ba`,
-and a crate declaring the set resolves and compiles it from GitHub.
+[#23](https://github.com/Certora/cvlr-solana/pull/23), squash-merged into `v0.4` as `b1988a4` (the
+same tree as `a5032ba`). `SOLANA_V1_18` pins `b1988a4`, and a crate declaring the set resolves and
+compiles it from GitHub.
 
 ### G4. Scope the API corpus to 1.18
 
@@ -130,8 +131,10 @@ problem, document it on the SBF target instead.
 
 **Checked** with `--crate-source` on the 0.4 checkout: the 1.18 probe builds on the host,
 `cvlr-solana 0.4.6` is its own surface (34 items) beside 0.5.1 (33) and 0.6.0 (32), the
-`--undocumented` report lists 0 of 380 items, and all 19 doc examples compile. **Pending:** the
-ingest (`scripts/populate_cvlr_rag.sh`) into the database the runs read.
+`--undocumented` report lists 0 of 380 items, and all 19 doc examples compile. Ingested
+into the local corpus: 399 sections (35 of them `cvlr-solana` 0.4.6), and a lookup filtered to the
+1.18 pins returns the 0.4.6 surface and its token summaries. The import ran from the project venv:
+the script's `uv run --isolated` spent 30 minutes downloading CUDA torch and was stopped.
 
 ### G5. Knowledge text: what the manual gets wrong on 1.18
 

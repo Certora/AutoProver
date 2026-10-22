@@ -486,7 +486,7 @@ SOLANA_V3 = replace(
 #: TODO(cvlr-todo U26): pin the crates.io release once it is published, and drop the commit.
 _CVLR_SOLANA_0_4_6 = GitCommit(
     repo="https://github.com/Certora/cvlr-solana.git",
-    rev="a5032ba27d45b1da024cd578b9cd9a3ac142ea54",
+    rev="b1988a4a8e6a6f8c56b35b5c980e5b2d2a4f01fc",
 )
 
 SOLANA_V1_18 = ChainReference(
