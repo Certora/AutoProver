@@ -479,14 +479,19 @@ SOLANA_V3 = replace(
     ),
 )
 
-#: ``cvlr-solana`` 0.4.5, the last release for ``solana-program`` 1.18 (branch ``v0.4``). It
-#: requires ``cvlr-*`` ``>=0.4, <1``, so it resolves onto the shared 0.6.1 core with one copy of
-#: each core crate.
+#: ``cvlr-solana`` 0.4.6, the release for ``solana-program`` 1.18 (branch ``v0.4``): 0.4.5 with
+#: the public API documented and the ``rt`` feature fixed. It requires ``cvlr-*`` ``>=0.4, <1``,
+#: so it resolves onto the shared 0.6.1 core with one copy of each core crate.
 #:
-#: TODO(cvlr-solana-1-18-support G3): pin a documented 0.4.6 commit. 0.4.5 has no doc comments.
+#: TODO(cvlr-todo U26): pin the crates.io release once it is published, and drop the commit.
+_CVLR_SOLANA_0_4_6 = GitCommit(
+    repo="https://github.com/Certora/cvlr-solana.git",
+    rev="a5032ba27d45b1da024cd578b9cd9a3ac142ea54",
+)
+
 SOLANA_V1_18 = ChainReference(
     core=_CORE,
-    chain_crate=CrateRelease("cvlr-solana", "0.4.5"),
+    chain_crate=CrateRelease("cvlr-solana", "0.4.6", _CVLR_SOLANA_0_4_6),
     # None. The 0.4 line has no stake model, and its token helpers are in the chain crate. It has
     # no SPL Token CPI model either: a token CPI reaches ``invoke_signed_unchecked``, which the
     # core summaries make opaque.

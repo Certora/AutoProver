@@ -185,11 +185,11 @@ def test_solana_has_one_reference_set_per_generation_newest_first():
 
 
 def test_the_1_18_line_shares_the_core_and_has_no_program_models():
-    """`cvlr-solana` 0.4.5 requires `cvlr-*` `>=0.4, <1`, so it resolves onto the one 0.6.1 core.
+    """`cvlr-solana` 0.4.x requires `cvlr-*` `>=0.4, <1`, so it resolves onto the one 0.6.1 core.
     The 0.4 line has no stake model and no separate token crate, so there is nothing to withhold."""
     v1 = ref.SOLANA_V1_18
     assert v1.core == ref.SOLANA_V2.core
-    assert (v1.chain_crate.name, v1.chain_crate.version) == ("cvlr-solana", "0.4.5")
+    assert (v1.chain_crate.name, v1.chain_crate.version) == ("cvlr-solana", "0.4.6")
     assert v1.models == ()
     assert {c.name for c in v1.scaffold_crates()} == {"cvlr", "cvlr-solana"}
     assert 'solana-program = "1.18"' in v1.cargo_dependencies()
