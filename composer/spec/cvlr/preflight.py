@@ -21,10 +21,11 @@ from pathlib import Path
 
 from composer.cargo.features import CargoFeature
 from composer.cargo.metadata import CargoUnavailable, CratePackage, Workspace
+from composer.cargo.sbf import PlatformToolsMissing, sbf_check
 from composer.cargo.session import CargoSession, CompileFailed, Compiled, WarmFailed
 from composer.sandbox.config import SandboxConfig
 from composer.sandbox.recipes import sandbox_cargo_home
-from composer.spec.cvlr.conf import DEFAULT_FEATURE, HOST_RUST_TOOLCHAIN
+from composer.spec.cvlr.conf import DEFAULT_FEATURE, HOST_RUST_TOOLCHAIN, PLATFORM_TOOLS_VERSION
 from composer.spec.cvlr.crates import CvlrSources, Divergence
 from composer.spec.cvlr.scaffold import (
     ScaffoldBlocked,
@@ -269,12 +270,19 @@ async def gate_workspace(
 ) -> None:
     """Check that the scaffolded project compiles with the harness in, or fail the run.
 
-    Host-target ``cargo check`` only. What this has to catch is a scaffold that does not compile.
-    The SBF build is a later gate, and running it here would cost more than the failure it would
-    be catching.
+    ``cargo check`` for the SBF target (:func:`~composer.cargo.sbf.sbf_check`), not the build.
+    What this has to catch is a scaffold that does not compile. The build is a later gate, and
+    running it here would cost more than the failure it would be catching.
     """
+    try:
+        check_with = sbf_check(PLATFORM_TOOLS_VERSION)
+    except PlatformToolsMissing as exc:
+        raise PreflightFailed(str(exc)) from exc
     session = CargoSession(
-        workdir=pre.workspace_root, sandbox=sandbox, toolchain=HOST_RUST_TOOLCHAIN
+        workdir=pre.workspace_root,
+        sandbox=sandbox,
+        toolchain=HOST_RUST_TOOLCHAIN,
+        check_with=check_with,
     )
     warmed = await session.warm()
     if isinstance(warmed, WarmFailed):

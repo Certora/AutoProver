@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Sequence, override
 
 
+from composer.cargo.sbf import sbf_check
 from composer.cargo.session import CargoSession, WarmFailed
 from composer.pipeline.core import (
     ComponentOutcome,
@@ -65,7 +66,12 @@ from composer.sandbox.config import SandboxConfig
 from composer.spec.context import CvlrGeneration, WorkflowContext
 from composer.spec.cvlr.author import batch_cvlr_generation
 from composer.spec.cvlr.editor import EditingServices, ProgramEditing, program_editing
-from composer.spec.cvlr.conf import DEFAULT_FEATURE, HOST_RUST_TOOLCHAIN, delivered_conf
+from composer.spec.cvlr.conf import (
+    DEFAULT_FEATURE,
+    HOST_RUST_TOOLCHAIN,
+    PLATFORM_TOOLS_VERSION,
+    delivered_conf,
+)
 from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness, HarnessModule
 from composer.spec.cvlr.preflight import CvlrPreflight, gate_workspace, prepare_workspace
@@ -508,7 +514,10 @@ class CvlrStagedFormalizer(StagedFormalizer[GeneratedHarness, SolanaComponentIns
         )
         await tree.materialize()
         session = CargoSession(
-            workdir=tree.root, sandbox=self.deps.sandbox, toolchain=HOST_RUST_TOOLCHAIN
+            workdir=tree.root,
+            sandbox=self.deps.sandbox,
+            toolchain=HOST_RUST_TOOLCHAIN,
+            check_with=sbf_check(PLATFORM_TOOLS_VERSION),
         )
         submissions = self.deps.work_dir / SUBMISSIONS_DIR
         submissions.mkdir(parents=True, exist_ok=True)

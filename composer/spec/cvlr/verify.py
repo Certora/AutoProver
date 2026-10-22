@@ -540,7 +540,7 @@ class CargoCheck(
     WithInjectedId,
     WithAsyncDependencies[Command | str, HarnessTarget],
 ):
-    """Compile the current draft against the program, on the host target.
+    """Compile the current draft against the program, for the chain's target, without building.
 
     Fast (seconds) and free — call it after every edit. It catches an unknown macro, a wrong
     signature or a misused derive, which is the class of mistake worth catching before paying for a

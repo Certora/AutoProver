@@ -6,7 +6,7 @@ and the scaffold refuses them. klend is one of them, and it is the third CVLR be
 (`docs/klend-benchmark.md`). This document plans a third generation, `solana-program` 1.18, on the
 `cvlr-solana` 0.4 line.
 
-G1, G2, G5 and G7 are implemented. The probe below establishes that the combination builds.
+G1, G2, G5, G6 and G7 are implemented. The probe below establishes that the combination builds.
 
 ## Where things stand
 
@@ -17,7 +17,7 @@ G1, G2, G5 and G7 are implemented. The probe below establishes that the combinat
 | G3 | Document `cvlr-solana` 0.4.x | planned |
 | G4 | Scope the API corpus to 1.18 | planned |
 | G5 | Knowledge text: what the manual gets wrong on 1.18 | **done** |
-| G6 | Run the compile gate against the SBF target | planned; decided |
+| G6 | Run the compile gate against the SBF target | **done** |
 | G7 | Tests | **done**, except the end-to-end, which waits on G6 |
 | — | `cvlr-spl-token` for 1.18 | **deferred**, see *Token CPIs* |
 | — | Moving the klend input to 1.18 | outside AutoProver, see *The input* |
@@ -153,19 +153,37 @@ built for and what the Prover analyzes. No single host toolchain works: 1.74.1 p
 lockfile cargo writes, and anything from 1.77 on breaks the layout (`docs/who-edits-the-program.md`
 §18.3).
 
-So check the target the Prover reads: `cargo check --target sbpf-solana-solana` with the
-platform-tools compiler. `cargo certora-sbf` already links it into rustup as `certora-solana`, so a
-`CargoSession` can select it the way it selects `HOST_RUST_TOOLCHAIN`, through
-`RUSTUP_TOOLCHAIN`.
+So check the target the Prover reads, with the compiler that builds it.
 
-- **Cost:** 2m08s cold on klend, against 25.6s for a host check (§18.3). Warm checks are what the
-  editor loop pays, and they should stay close to the host's. Measure that before switching.
-- **Scope:** the preflight gate (`preflight.py`) and the editor's submit gate (`pipeline.py`). The
-  workspace read (`cargo metadata`) and the warm step stay on the host.
-- **Sandbox:** the confined check needs the platform-tools root, which the SBF build is already
-  granted.
-- **Applies to every target**, not only 1.18. It also removes the class of failure where the host
-  compiles code the SBF build does not, or the reverse.
+**Implemented** as `composer.cargo.sbf.sbf_check`, a `CrossCheck` that a `CargoSession` runs in
+place of its host check (`check_with`). It runs the platform-tools `cargo` directly, with no rustup
+link, since confinement cannot write `RUSTUP_HOME`. It passes `--release --target
+sbpf-solana-solana`, and the environment `cargo certora-sbf --no-rustup` gives its own cargo:
+`RUSTC`, and `CC`, `AR`, `OBJDUMP` and `OBJCOPY` from the platform-tools LLVM. The session's
+`warm` now fetches with that cargo by default, because a confined check is offline. Preflight
+(`gate_workspace`) and the shared build tree (`pipeline.py`) use it, so the author's `cargo_check`
+and the pre-submission gate do too. A missing platform-tools release fails preflight by name. The
+workspace read (`cargo metadata`) and the `cargo certora-sbf` launcher stay on `HOST_RUST_TOOLCHAIN`.
+
+**Matching the build matters.** On the probe, measured by hand:
+
+| Check | klend |
+|---|---|
+| debug profile, no build environment, cold | 132s |
+| `--release` with the build's environment, cold | 28s (host check: 25.6s, §18.3) |
+| …after an edit to the program | 4.2s |
+| …with nothing changed | 0.3s |
+
+Without the build's environment, the build after a check recompiled 16 crates. `blake3`'s build
+script reruns when `CC` changes, and everything above it followed. With it, the build after a
+check recompiled nothing, and after an edit, only the program. In the debug profile the check
+shares no host units with the release build.
+
+Confined under the launcher sandbox, preflight's gate on a fresh 2.x workspace passes in 9.3s. The
+platform-tools root was already granted to builds.
+
+This **applies to every target**, not only 1.18. It also removes the class of failure where the
+host compiles code the SBF build does not, or the reverse.
 
 ### G7. Tests
 

@@ -111,7 +111,8 @@ PLATFORM_TOOLS_VERSION = "v1.53"
 #: The host Rust toolchain every cargo command of a CVLR run uses, whatever the target's
 #: ``rust-toolchain.toml`` pins. The pin is for the project's own builds: host checks and Anza's SBF
 #: toolchain. The program this backend verifies is compiled by the platform tools' rustc whatever the
-#: pin says, so the host toolchain only runs ``cargo metadata``, ``cargo check`` and build scripts.
+#: pin says, and so is its ``cargo check`` (:func:`~composer.cargo.sbf.sbf_check`). The host
+#: toolchain only runs ``cargo metadata`` and the cargo that launches ``cargo certora-sbf``.
 #: Following the pin instead fails in the Solana image: the runtime user cannot write the image's
 #: rustup home, so a toolchain the image lacks cannot be installed, and cargo does not start.
 #: ``scripts/Dockerfile.solana`` installs this one.
