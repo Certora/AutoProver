@@ -31,8 +31,10 @@ from composer.cargo.features import CargoFeature
 #: examples are never the verification target.
 _LIB_CRATE_TYPES = frozenset({"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"})
 
-#: On a cold cache this resolves (and may download) the whole dependency graph.
-METADATA_TIMEOUT_S = 300
+#: On a cold cache this resolves (and may download) the whole dependency graph, so it gets as long
+#: as a cold ``cargo fetch`` (:data:`composer.cargo.session.WARM_TIMEOUT_S`). A confined run reads
+#: into a fresh per-run ``CARGO_HOME``, so every run's first read is cold: klend's took 435s.
+METADATA_TIMEOUT_S = 900
 
 
 class CargoUnavailable(RuntimeError):
