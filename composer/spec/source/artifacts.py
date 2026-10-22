@@ -77,13 +77,16 @@ class ProverArtifactStore(ArtifactStore[ComponentSpec, GeneratedCVL]):
         self._written: dict[Path, str] = {}
 
     def _write_deliverable(self, path: Path, content: str) -> None:
-        """Write ``content`` to ``path`` (creating parents), replacing whatever is already there: a file
-        this run has not written is a leftover of an earlier run in the same project dir. The deliverable
-        is materialized from many buffers (and, across the run, many components) into one tree, so a
-        path this run already wrote with DIFFERENT content means two sources disagree on it: logged as an
-        error, and the later write wins."""
+        """Write ``content`` to ``path`` (creating parents), replacing whatever is already there. A file
+        this run has not written is a leftover of an earlier run in the same project dir: replaced, with a
+        warning. The deliverable is materialized from many buffers (and, across the run, many components)
+        into one tree, so a path this run already wrote with DIFFERENT content means two sources disagree
+        on it: logged as an error, and the later write wins."""
         prior = self._written.get(path)
-        if prior is not None and prior != content:
+        if prior is None:
+            if path.exists():
+                _log.warning("deliverable %s already exists from before this run; replacing it", path)
+        elif prior != content:
             _log.error(
                 "deliverable %s written twice in this run with different content — two sources disagree on it",
                 path,

@@ -746,8 +746,8 @@ def test_artifact_store_writes_per_buffer_specs_confs_and_quarantine(tmp_path):
 
 
 def test_artifact_store_replaces_a_previous_runs_deliverable(tmp_path, caplog):
-    """A re-run in the same project dir finds the earlier run's specs/confs on disk: they are
-    replaced, silently — that is not a conflict within this run."""
+    """A re-run in the same project dir finds the earlier run's specs/confs on disk: each is
+    replaced with a warning, not an error — that is not a conflict within this run."""
     spec = ComponentSpec("myslug")
     specs = tmp_path / "certora" / "specs" / "myslug"
     confs = tmp_path / "certora" / "confs" / "myslug"
@@ -763,11 +763,13 @@ def test_artifact_store_replaces_a_previous_runs_deliverable(tmp_path, caplog):
         spec_files={"base": "rule r { assert true; }\n"},
         entrypoint_specs=["base"],
     )
-    with caplog.at_level("ERROR", logger="composer.spec.source.artifacts"):
+    with caplog.at_level("WARNING", logger="composer.spec.source.artifacts"):
         store.write_artifact(spec, art)
     assert (specs / "base.spec").read_text() == "rule r { assert true; }\n"
     assert "Vault" in (confs / "verify_base.conf").read_text()
-    assert not caplog.records
+    assert sorted(
+        (r.levelname, pathlib.Path(r.args[0]).name) for r in caplog.records  # type: ignore[index]
+    ) == [("WARNING", "base.spec"), ("WARNING", "verify_base.conf")]
 
 
 def test_artifact_store_logs_a_conflicting_rewrite_within_the_run(tmp_path, caplog):
