@@ -47,8 +47,9 @@ reference set pins the crates.io version and names the commit, and the scaffold 
 
 - **2.x:** `cvlr-solana` 0.5.1 is pinned to `2e53877` now.
 - **SDK 3:** A1 pins 0.6.0 to `f054348` the same way.
-- **`cvlr`:** not pinned this way. Patching the core would mean patching all twelve of its crates,
-  or a build gets two copies of each. Nothing AutoProver runs needs 0.6.2.
+- **`cvlr`:** 0.6.1, from `c2df10a` on `main`, where the API is documented and the version is still
+  0.6.1. All thirteen core crates are patched together, or a build gets two copies of each
+  (`cvlr-todo.md` U28).
 
 **Fetching works before the PRs merge.** Cargo, starting from an empty cargo home, resolves
 `cvlr-solana` 0.5.1 from GitHub at `2e53877`; the pushed branch makes the commit reachable.

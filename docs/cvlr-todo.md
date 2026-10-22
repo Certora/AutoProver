@@ -624,9 +624,10 @@ its turns are recorded and replayed apart from its caller's. Landing plan P9.
 unpublished.** `cvlr` 0.6.1 on crates.io leaves 176 of the API corpus's items without prose. Every
 item is documented on `Certora/cvlr`'s main branch, which is still version 0.6.1, so the reference
 set ([reference.py](../composer/spec/cvlr/reference.py)) reads the whole core workspace from that
-commit (`465a022`), by the same mechanism as U26. All twelve crates are patched together, because
+commit (`c2df10a`), by the same mechanism as U26. All thirteen crates are patched together, because
 `cvlr-solana` depends on the sub-crates directly and a lone `cvlr` patch would put two copies of each
-in the graph. Built from the pins, the corpus has 0 of 346 items without prose (2026-10-14). Once a
+in the graph. One of them, `cvlr-rule-manifest`, is not on crates.io at any version. Built from the
+pins, the corpus has 0 of 354 items without prose (2026-10-22). Once a
 documented release is on crates.io, pin it and drop the commit, then rebuild the corpus and check the
 producer's `--undocumented` report is still empty. `reference.py`'s docstring should also say that a
 bump means an API corpus rebuild; today nothing connects the two.

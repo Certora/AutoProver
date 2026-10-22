@@ -303,17 +303,18 @@ class ChainReference:
         return commit_patches(self.crates())
 
 
-#: ``cvlr`` 0.6.1, pinned to the ``.cvlr_rules`` head of Certora/cvlr#53
-#: (``eric/rule-manifest``). That commit is not on main. Its workspace version is still 0.6.1,
-#: and cargo applies the patch only when the commit's version meets ``=0.6.1``, so the
-#: requirement stays. ``cvlr-rule-manifest`` is in that checkout and is not on crates.io.
-#: ``cvlr-log`` and ``cvlr-macros`` take it by path, so it is not one of the patch entries.
+#: ``cvlr`` 0.6.1, pinned to the main-branch commit that merged Certora/cvlr#53 (``.cvlr_rules``).
+#: Its workspace version is still 0.6.1, and cargo applies the patch only when the commit's version
+#: meets ``=0.6.1``, so the requirement stays. ``cvlr-rule-manifest`` is in that checkout and is
+#: not on crates.io at any version. ``cvlr-log`` and ``cvlr-macros`` take it by path, but it is
+#: still a patch entry, because a crate that names every crate of the graph (the API corpus's
+#: example check) finds it nowhere else.
 #:
 #: TODO(cvlr-todo U28): pin the crates.io release once a documented one is published, and drop the
 #: commit.
 _CVLR_0_6_1_DOCUMENTED = GitCommit(
     repo="https://github.com/Certora/cvlr.git",
-    rev="e04c471f9b35e96ca6a6212e2bd4263fee6ab4e9",
+    rev="c2df10a91bf08d3c66ca3c0ca28b15f4a19409d0",
 )
 
 #: The core line, shared by every chain. ``cvlr-spec`` (``cvlr_spec!``, ``cvlr_rules!``,
@@ -335,6 +336,7 @@ _CORE = CrateRelease(
         "cvlr-macros",
         "cvlr-mathint",
         "cvlr-nondet",
+        "cvlr-rule-manifest",
         "cvlr-spec",
     ),
 )

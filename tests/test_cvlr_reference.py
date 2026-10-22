@@ -157,7 +157,7 @@ def test_the_whole_core_is_read_from_the_core_s_commit():
         assert {p.name for p in patches} == {
             "cvlr", "cvlr-asserts", "cvlr-decimal", "cvlr-derive", "cvlr-early-panic",
             "cvlr-fixed", "cvlr-hook", "cvlr-log", "cvlr-macros", "cvlr-mathint", "cvlr-nondet",
-            "cvlr-spec",
+            "cvlr-rule-manifest", "cvlr-spec",
         }
         assert {(p.version, p.commit) for p in patches} == {
             (reference.core.version, reference.core.unpublished)
