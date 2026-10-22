@@ -208,6 +208,7 @@ async def test_one_review_round_emits_one_verdict(langgraph_db, tmp_path, capsys
             None,
             "vault",
             "cvlr 0.6.1, cvlr-solana 0.5.0",
+            (),
             editing,
         )
         # Inside a task scope, as the authoring loop calls it: that is what installs the IO handler

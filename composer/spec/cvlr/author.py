@@ -313,6 +313,8 @@ class CvlrVersionParams(TypedDict):
     prompt is where that is said out loud."""
 
     cvlr_versions: str
+    #: :attr:`~composer.spec.cvlr.reference.ChainReference.caveats` of the run's generation.
+    caveats: list[str]
 
 
 class CvlrAuthorSystemParams(CvlrVersionParams):
@@ -361,6 +363,7 @@ def build_feedback_thunk(
     component: SolanaComponentInstance | None,
     program: str,
     cvlr_versions: str,
+    caveats: Sequence[str],
     editing: ProgramEditing,
 ) -> ContextualFeedbackThunk[Rebuttal, JudgeContext]:
     """The CVLR feedback judge.
@@ -427,7 +430,7 @@ def build_feedback_thunk(
         ctx=judge_ctx,
         host=EditingJudgeHost(env, editing),
         apply_system=lambda b: _JudgeSystemTemplate.bind(
-            {"cvlr_versions": cvlr_versions}
+            {"cvlr_versions": cvlr_versions, "caveats": list(caveats)}
         ).render_to(b.with_sys_prompt_template),
         apply_prompt=apply_prompt,
         input_parts=input_parts,
@@ -649,6 +652,7 @@ async def batch_cvlr_generation(
     program: str,
     module: str,
     cvlr_versions: str,
+    caveats: Sequence[str],
     target: HarnessTarget,
     verify: VerifyDeps,
     editing: ProgramEditing,
@@ -685,7 +689,7 @@ async def batch_cvlr_generation(
     judge_ctx = ctx.child(CVLR_JUDGE_KEY)
     feedback_deps = FeedbackDependencies(
         thunk=build_feedback_thunk(
-            judge_ctx, env, props, component, program, cvlr_versions, editing
+            judge_ctx, env, props, component, program, cvlr_versions, caveats, editing
         ),
         stamper=make_validation_stamper(FEEDBACK),
         editing=editing,
@@ -699,6 +703,7 @@ async def batch_cvlr_generation(
             {
                 "module": module,
                 "cvlr_versions": cvlr_versions,
+                "caveats": list(caveats),
                 "example": (
                     worked_example(component, props, read_surface(target.package_root))
                     if component

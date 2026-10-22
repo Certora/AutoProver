@@ -22,7 +22,7 @@ from composer.spec.cvlr.tuning import (
     compose_env,
     starting_env,
 )
-from composer.spec.cvlr.reference import SOLANA_V2, SOLANA_V3, SOROBAN, PathAlias
+from composer.spec.cvlr.reference import SOLANA_V1_18, SOLANA_V2, SOLANA_V3, SOROBAN, PathAlias
 
 #: Every crate the post-split Solana platform layer is spread across, as a target resolves them.
 SPLIT_CRATES = (
@@ -91,7 +91,7 @@ def split() -> PathDialect:
 @pytest.fixture
 def monolithic() -> PathDialect:
     """The dialect a 1.18 target gets, where the canonical paths are already the right ones."""
-    return dialect_for(_workspace("solana-program"), SOLANA_V2)
+    return dialect_for(_workspace("solana-program"), SOLANA_V1_18)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -494,3 +494,36 @@ def test_the_sdk3_dialect_reaches_the_sysvar_reads_and_cpi_the_program_calls() -
     v3 = PathDialect(SOLANA_V3.platform.path_aliases)
     assert not calls & reached(starting_env("cvlr_inlining_core.txt"))
     assert calls <= reached(starting_env("cvlr_inlining_core.txt", v3))
+
+
+#: The 1.18 counterpart: a crate on the monolith whose one rule calls each platform function the
+#: tuning files address.
+V1_18_SYMBOLS_FIXTURE = Path(__file__).parent / "data" / "solana_1_18_sbf_symbols.txt"
+
+
+def test_the_starting_files_address_1_18_symbols_as_spelled(monolithic: PathDialect) -> None:
+    """1.18 has no aliases because the starting files are written in its spelling. Every platform
+    function the binary links is matched by a directive that names it, and not only by a blanket:
+    a blanket alone would mean the specific directive no longer names a real symbol. The `fmt`
+    impls are the exception, and are meant to be."""
+    import re
+
+    symbols = [
+        line.strip()
+        for line in V1_18_SYMBOLS_FIXTURE.read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    blankets = {r"^solana_program::.*$", r"^.*::fmt$"}
+    patterns = [
+        pattern
+        for name in ("cvlr_inlining_core.txt", "cvlr_summaries_core.txt")
+        for line in starting_env(name, monolithic).splitlines()
+        if (s := line.strip()) and not s.startswith((";", "#[type("))
+        if (pattern := re.sub(r"^#\[inline(?:\(never\))?\]\s*", "", s).strip()) not in blankets
+    ]
+    assert monolithic.aliases == ()
+    unnamed = [s for s in symbols if not any(re.search(p, s) for p in patterns)]
+    assert unnamed == [
+        "<solana_program::program_error::ProgramError as core::fmt::Debug>::fmt",
+        "<solana_program::pubkey::PubkeyError as core::fmt::Debug>::fmt",
+    ]

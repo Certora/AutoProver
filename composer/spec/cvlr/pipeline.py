@@ -155,6 +155,9 @@ class CvlrDeps:
     #: ``cvlr 0.6.1, cvlr-solana 0.5.0, …`` — stated in the prompt, so a reader of a transcript can
     #: tell which release the advice in it was about.
     versions: str
+    #: What the manual gets wrong for this run's generation
+    #: (:attr:`~composer.spec.cvlr.reference.ChainReference.caveats`).
+    caveats: tuple[str, ...]
     #: Where each violated rule's analysis lands, for the report to reshape into findings.
     cex_analysis: CexAnalysisStore
     #: The source tools every unit's agents read the program through, and the store their edits
@@ -298,6 +301,7 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
             program=self.deps.preflight.package,
             module=identity.module,
             cvlr_versions=self.deps.versions,
+            caveats=self.deps.caveats,
             target=target,
             verify=verify,
             editing=self.deps.editing,
@@ -635,6 +639,7 @@ class CvlrBackend:
             preflight=preflight,
             package_dir=preflight.package_dir,
             versions=versions,
+            caveats=self.reference.caveats,
             cex_analysis=self.cex_analysis,
             editing=program_editing(
                 self.editing,

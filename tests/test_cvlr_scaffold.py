@@ -38,7 +38,7 @@ from composer.spec.cvlr.scaffold import (
     plan_scaffold,
 )
 from composer.spec.cvlr.tuning import ENV_FAMILIES, INLINING, SUMMARIES
-from composer.spec.cvlr.reference import SOLANA_V2, SOLANA_V3, SOROBAN, generations
+from composer.spec.cvlr.reference import SOLANA_V1_18, SOLANA_V2, SOLANA_V3, SOROBAN, generations
 from composer.sandbox.config import SandboxConfig
 
 PROGRAM = """\
@@ -1103,7 +1103,8 @@ def test_a_project_reading_the_crate_from_elsewhere_is_refused(tmp_path):
         ("solana-account-info", "3.1.1", "solana-* 3.x"),
         ("solana-account-info", "2.3.0", "solana-program 2.x"),
         ("solana-program", "2.2.1", "solana-program 2.x"),
-        ("solana-program", "1.18.26", None),
+        ("solana-program", "1.18.26", "solana-program 1.18"),
+        ("solana-program", "1.17.18", None),
     ],
 )
 def test_a_project_is_set_up_with_the_generation_it_is_on(
@@ -1130,3 +1131,23 @@ def test_an_sdk3_project_scaffolds_on_its_generation_and_is_refused_by_the_other
     assert not plan_scaffold(workspace, package, SOLANA_V3).blocked
     refused = plan_scaffold(workspace, package, SOLANA_V2).blocked
     assert any("solana-account-info 3.1.1" in b.problem for b in refused)
+
+
+def test_a_1_17_project_is_refused_by_the_1_18_generation(tmp_path):
+    """Before 2.0 a minor release is a generation: `cvlr-solana` 0.4's `^1.18` cannot resolve
+    against a `~1.17` target, and the refusal has to say that rather than leave it to cargo."""
+    workspace, package = _project(
+        tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE, platform="1.17.18"
+    )
+    (blocked,) = plan_scaffold(workspace, package, SOLANA_V1_18).blocked
+    assert "solana-program 1.17.18" in blocked.problem
+    assert blocked.resolution == "move the project to solana-program 1.18"
+
+
+def test_a_1_18_project_scaffolds_without_program_models(tmp_path):
+    workspace, package = _project(
+        tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE, platform="1.18.26"
+    )
+    plan = plan_scaffold(workspace, package, SOLANA_V1_18)
+    assert not plan.blocked
+    assert not any("cvlr-spl-token" in str(c) or "cvlr-solana-stake" in str(c) for c in plan.changes)

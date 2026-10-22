@@ -122,10 +122,11 @@ the probe, are in `docs/cvlr-solana-1-18-support.md`. In short, the benchmark ne
 Whether the platform move is in scope for AutoProver, or a precondition given to it, makes these
 different experiments, like stake's bincode question. **Decided: a precondition.**
 
-**The 1.18 line has no SPL Token model.** Token CPIs go through `invoke_signed_unchecked`, which the
-core summaries make opaque. Every property in the answer key is about klend's own accounting, so
-that does not affect parity. Generated properties about token balances cannot be proved, and are
-triaged with the other properties outside the answer key.
+**The 1.18 line has no SPL Token CPI mocks.** A token CPI left alone reaches
+`invoke_signed_unchecked`, which the core summaries make opaque. Every property in the answer key is
+about klend's own accounting, so that does not affect parity. A generated property about token
+balances needs a munge that calls `cvlr-solana` 0.4's own token summaries in place of the CPI, and
+it is triaged with the other properties outside the answer key.
 
 ## Grading it
 

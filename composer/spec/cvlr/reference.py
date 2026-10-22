@@ -228,6 +228,10 @@ class ChainReference:
     #: answer key for.
     companions: tuple[CrateRelease, ...] = ()
     unpublished: tuple[UnpublishedCapability, ...] = ()
+    #: What an author on this generation must be told because the CVLR manual says otherwise. The
+    #: manual is written for the newest line, so this is empty there and grows on older ones.
+    #: Stated in the author's and the judge's system prompts.
+    caveats: tuple[str, ...] = ()
     #: Program models this run will not offer the project, by crate name. Empty for every ordinary
     #: run; :meth:`withholding` is what sets it, and :class:`ProgramModel` is what bounds it.
     #:
@@ -364,8 +368,8 @@ SOLANA_V2 = ChainReference(
         label="solana-program 2.x",
         sdk_crates=(CrateRequirement("solana-program", "2.2"),),
         # ``solana-account-info`` first: it defines ``AccountInfo`` and exists on both 2.x and 3.x.
-        # ``solana-program`` is the fallback for 1.18, which predates the split and defines the
-        # type inside the monolith.
+        # ``solana-program`` is the fallback for 1.x, which predates the split and defines the
+        # type inside the monolith, so a 1.x target reads as off this generation, not as on none.
         witnesses=(
             CrateRequirement("solana-account-info", "2.3"),
             CrateRequirement("solana-program", "2.2"),
@@ -475,6 +479,40 @@ SOLANA_V3 = replace(
     ),
 )
 
+#: ``cvlr-solana`` 0.4.5, the last release for ``solana-program`` 1.18 (branch ``v0.4``). It
+#: requires ``cvlr-*`` ``>=0.4, <1``, so it resolves onto the shared 0.6.1 core with one copy of
+#: each core crate.
+#:
+#: TODO(cvlr-solana-1-18-support G3): pin a documented 0.4.6 commit. 0.4.5 has no doc comments.
+SOLANA_V1_18 = ChainReference(
+    core=_CORE,
+    chain_crate=CrateRelease("cvlr-solana", "0.4.5"),
+    # None. The 0.4 line has no stake model, and its token helpers are in the chain crate. It has
+    # no SPL Token CPI model either: a token CPI reaches ``invoke_signed_unchecked``, which the
+    # core summaries make opaque.
+    models=(),
+    forks=(ANCHOR_FORK, FIXED_FORK),
+    caveats=(
+        "This build is on `cvlr-solana` 0.4, the line for `solana-program` 1.18. The CVLR manual "
+        "is written for 0.5 and later. Where it names `cvlr_spl_token` or `cvlr_solana_stake`, "
+        "those crates do not exist on this line, and nothing substitutes token CPIs "
+        "automatically.",
+        "A token CPI here reaches `invoke_signed_unchecked`, which the prover treats as opaque: "
+        "it moves no balance and returns an arbitrary result. When a property needs the transfer "
+        "itself, have the stand-in for the program's token call (the `swap_import` route) call "
+        "the matching summary in `cvlr_solana::token` — `spl_token_transfer`, "
+        "`spl_token_2022_transfer`, `spl_mint_to`, `spl_burn` or `spl_close_account`. Each one "
+        "moves the amounts in the token accounts' data, and the `spl_token_account_get_amount` "
+        "and `spl_mint_get_supply` helpers read them back.",
+    ),
+    platform=PlatformGeneration(
+        label="solana-program 1.18",
+        sdk_crates=(CrateRequirement("solana-program", "1.18"),),
+        witnesses=(CrateRequirement("solana-program", "1.18"),),
+        # No aliases: the monolith's spelling is the one the starting tuning files use.
+    ),
+)
+
 SOROBAN = ChainReference(
     core=_CORE,
     chain_crate=CrateRelease("cvlr-soroban", "0.4.0"),
@@ -500,7 +538,7 @@ SOROBAN = ChainReference(
 #: generation's ``AccountInfo``, so a target is set up with the generation it is on
 #: (:func:`composer.spec.cvlr.scaffold.select_generation`).
 REFERENCE_SET: dict[str, tuple[ChainReference, ...]] = {
-    "solana": (SOLANA_V3, SOLANA_V2),
+    "solana": (SOLANA_V3, SOLANA_V2, SOLANA_V1_18),
     "soroban": (SOROBAN,),
 }
 

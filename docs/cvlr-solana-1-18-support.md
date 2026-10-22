@@ -6,19 +6,19 @@ and the scaffold refuses them. klend is one of them, and it is the third CVLR be
 (`docs/klend-benchmark.md`). This document plans a third generation, `solana-program` 1.18, on the
 `cvlr-solana` 0.4 line.
 
-Nothing here is implemented yet. The probe below establishes that the combination builds.
+G1, G2, G5 and G7 are implemented. The probe below establishes that the combination builds.
 
 ## Where things stand
 
 | | What | State |
 |---|---|---|
-| G1 | A 1.18 reference set | planned |
-| G2 | Telling 1.17 from 1.18 | planned; decided: key 1.x on major.minor |
+| G1 | A 1.18 reference set | **done** |
+| G2 | Telling 1.17 from 1.18 | **done**: 1.x keyed on major.minor |
 | G3 | Document `cvlr-solana` 0.4.x | planned |
 | G4 | Scope the API corpus to 1.18 | planned |
-| G5 | Knowledge text: no token model on 1.18 | planned |
+| G5 | Knowledge text: what the manual gets wrong on 1.18 | **done** |
 | G6 | Run the compile gate against the SBF target | planned; decided |
-| G7 | Tests | planned |
+| G7 | Tests | **done**, except the end-to-end, which waits on G6 |
 | — | `cvlr-spl-token` for 1.18 | **deferred**, see *Token CPIs* |
 | — | Moving the klend input to 1.18 | outside AutoProver, see *The input* |
 
@@ -71,6 +71,9 @@ A third `ChainReference` in `composer/spec/cvlr/reference.py`, `SOLANA_V1_18`:
 
 `REFERENCE_SET["solana"]` becomes `(SOLANA_V3, SOLANA_V2, SOLANA_V1_18)`, newest first.
 
+Checked on the host (rustc 1.90.0): a crate declaring exactly `SOLANA_V1_18.cargo_dependencies()`
+with its commit patches resolves one copy of each `cvlr` crate and compiles in 17s.
+
 ### G2. Telling 1.17 from 1.18
 
 `scaffold._generation` keys a version on its major component, so 1.17 and 1.18 would look like one
@@ -79,7 +82,8 @@ generation. A 1.17 target would be selected for the 1.18 set. Cargo would then f
 
 **Decided:** key a 1.x version on major.minor. Before 2.0, Solana's minor releases behaved as
 breaking ones, and the probe's `ahash` pin is an example. A 1.17 target is then refused at
-preflight with *move the project to solana-program 1.18*. 2.x and 3.x keep the major-only key: the
+preflight, with a message listing the three supported generations, `solana-program 1.18` among
+them. 2.x and 3.x keep the major-only key: the
 2.x witness `solana-account-info` is `2.2.1` under the `solana-program` 2.2 that every 2.x target
 links, so a stricter key would refuse them.
 
@@ -116,16 +120,26 @@ the `--undocumented` report, and republish (`scripts/populate_cvlr_rag.sh`).
 The probe crate builds against `solana-program` 1.18 on the host toolchain. If it meets G6's
 problem, document it on the SBF target instead.
 
-### G5. Knowledge text: no token model on 1.18
+### G5. Knowledge text: what the manual gets wrong on 1.18
 
 The manual (`cvlr_kb`) targets `cvlr-solana` ≥ 0.5, and it sends authors to `cvlr_spl_token` for
 token CPIs. On 1.18 that crate does not exist. An author following the manual writes an import the
 compile gate rejects, and spends attempts on it.
 
-Say so where the run's generation reaches the author. 1.18 has no token model, and a token CPI
-goes through `invoke_signed_unchecked`, which the core summaries make opaque: no balance moves and
-the result is arbitrary. Properties about the program's own accounting are unaffected. Properties
-about token balances cannot be proved on this generation. The manual itself stays
+**What 1.18 does have.** 0.4.5's `cvlr_solana::token` has the balance-moving summaries the 0.5
+line moved into `cvlr-spl-token`: `spl_token_transfer`, `spl_token_2022_transfer`, `spl_mint_to`,
+`spl_burn` and `spl_close_account`, with `spl_token_account_get_amount` and `spl_mint_get_supply` to
+read balances back. They take `AccountInfo`s, not an `Instruction`. What 1.18 lacks is
+`cvlr-spl-token`'s CPI mocks: the `cvlr_invoke_*` functions the Prover substitutes for `invoke` and
+`invoke_signed` by instruction discriminant. So a token CPI left alone reaches
+`invoke_signed_unchecked`, which the core summaries make opaque: no balance moves and the result is
+arbitrary. A property that needs the transfer is still provable, through the author prompt's
+existing `swap_import` route: the stand-in for the program's token call calls the summary.
+
+**Implemented** as `ChainReference.caveats`, text a generation carries because the manual says
+otherwise. `CvlrDeps` takes it from the run's reference set, and `cvlr_research.j2` renders it,
+under *Where the manual is wrong for this build*, in both the author's and the judge's system
+prompts. It is empty on 2.x and SDK 3, so their prompts are unchanged. The manual itself stays
 single-generation, as A6 decided.
 
 ### G6. Run the compile gate against the SBF target
@@ -155,19 +169,33 @@ platform-tools compiler. `cargo certora-sbf` already links it into rustup as `ce
 
 ### G7. Tests
 
-- `select_generation` picks `SOLANA_V1_18` for a 1.18 workspace, and refuses a 1.17 one with the
-  1.18 resolution (G2). Existing 2.x and SDK 3 selections are unchanged.
-- `SOLANA_V1_18.cargo_dependencies()` resolves and builds, the same check the other sets have.
-- Tuning paths on 1.18 are unaliased. A small symbol fixture from the probe build, like
-  `tests/data/stake_sdk3_sbf_symbols.txt`, checks that the core summaries' and inlining files'
-  `solana_program::` patterns match 1.18 symbols.
+Done:
+
+- `select_generation` picks `SOLANA_V1_18` for a 1.18 workspace and none for a 1.17 one. Preflight
+  refuses 1.17 naming all three generations. The scaffold refuses a 1.17 project on the 1.18 set
+  with *move the project to solana-program 1.18*. Existing 2.x and SDK 3 selections are unchanged
+  (`test_cvlr_scaffold.py`, `test_cvlr_entry.py`).
+- The 1.18 set shares the core, declares only `cvlr` and `cvlr-solana`, has no aliases, and refuses
+  `withholding` (`test_cvlr_reference.py`).
+- The caveats reach both system prompts on 1.18 and neither on the other lines
+  (`test_cvlr_knowledge.py`).
+- `tests/data/solana_1_18_sbf_symbols.txt`: 21 platform symbols from the probe build, with a
+  second rule calling each platform function the tuning files address. Every one is matched by a
+  directive that names it, not only by a blanket, except two `Debug::fmt` impls
+  (`test_cvlr_env_paths.py`).
+
+There is no fast test that the set resolves. The other sets have none either. Their resolution is
+exercised by the API-docs probe crates, which is G4.
+
+Open:
+
 - An expensive end-to-end on a 1.18 target, after G6: scaffold, compile gate, build, one rule
   submitted.
 
 ## Token CPIs: `cvlr-spl-token` for 1.18 is deferred
 
-The 0.4 line has no SPL Token CPI model. The mocks were added after 0.4.5 and then moved into
-`cvlr-spl-token`, which exists only from 0.5.
+The 0.4 line has no SPL Token CPI mocks. They were added after 0.4.5 and then moved into
+`cvlr-spl-token`, which exists only from 0.5. It does have the balance-moving summaries (G5).
 
 **klend's benchmark does not need it.** Every property in the published answer key
 (`docs/klend-benchmark.md`) is about klend's own accounting: reserve liquidity against the
@@ -175,9 +203,11 @@ collateral supply, obligation deposits, borrows and LTV, and liquidation amounts
 token account balance. With token CPIs opaque (G5), those properties are stated and proved the same
 way.
 
-**What it would cost a run:** generated properties about token movements ("a deposit moves exactly
-`amount` into the vault") cannot be proved. They are outside the answer key, so they are triaged,
-not scored. They spend authoring attempts, but they do not fail the run.
+**What it would cost a run:** a generated property about a token movement ("a deposit moves
+exactly `amount` into the vault") needs a munge: a `swap_import` stand-in for the program's token
+call that calls the `cvlr_solana::token` summary. On 0.5 the Prover substitutes the mock itself.
+That is one editor round per call site, not a property that cannot be proved. These properties are
+outside the answer key, so they are triaged, not scored.
 
 **Revisit if** the first klend run spends a significant part of its budget on token-balance
 properties. The port looks small: about 120 lines of CPI mocks on `cvlr-solana`'s token module,
