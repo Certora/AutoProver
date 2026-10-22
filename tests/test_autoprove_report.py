@@ -17,6 +17,7 @@ import pytest
 from pydantic import ValidationError as PydanticValidationError
 from prover_output_utility.models import NodeStatus
 from prover_output_utility import ProverOutputAPI
+from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models import BaseChatModel
 from langchain_core.outputs import ChatResult
 from langchain_core.runnables import Runnable, RunnableLambda
@@ -848,6 +849,24 @@ async def test_grouping_retries_once_with_the_rejection_appended():
     # The retry carries the rejection, and still stands alone as one request.
     assert "A previous attempt was rejected" in llm.calls[1]
     assert "A previous attempt was rejected" not in llm.calls[0]
+
+
+@pytest.mark.asyncio
+async def test_grouping_retries_a_reply_the_output_parser_rejects():
+    # `method="json_schema"` parses the reply text, so a non-conforming reply surfaces as
+    # OutputParserException rather than a bare pydantic ValidationError.
+    good = GroupingResult(groups=[PropertyGroupDraft(
+        slug="g", title="G", description="d", members=[("C", "p1")])])
+    llm = _FlakyStructuredModel(
+        output=good, failures=[OutputParserException("bad grouping")], calls=[])
+
+    result = await grouping.call_grouping_llm(
+        llm=llm, contract_name="C", properties=[_fp("C", "p1", [])],
+    )
+
+    assert [g.slug for g in result.groups] == ["g"]
+    assert len(llm.calls) == 2
+    assert "bad grouping" in llm.calls[1]
 
 
 @pytest.mark.asyncio
