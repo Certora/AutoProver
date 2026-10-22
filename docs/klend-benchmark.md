@@ -103,32 +103,29 @@ AutoProver supports two platform generations, `solana-program` 2.x and the split
 `solana-program` witness on the wrong major version, and the scaffold refuses the project with
 *move the project to solana-program 2.2*. That is the right refusal, and it is not doable for klend.
 
-The nearest CVLR line is `cvlr-solana` 0.4.x, which requires `solana-program ^1.18`. So the
-benchmark needs both of these:
+The nearest CVLR line is `cvlr-solana` 0.4.x, which requires `solana-program ^1.18`. A probe
+build established that this works: klend moved to 1.18, with `cvlr-solana` 0.4.5 on the shared
+`cvlr` 0.6.1 core and the Anchor and `fixed` forks, builds with platform tools v1.53. The plan, and
+the probe, are in `docs/cvlr-solana-1-18-support.md`. In short, the benchmark needs:
 
-1. **A 1.18 reference set in `composer/spec/cvlr/reference.py`.** This means `cvlr` 0.4 and
-   `cvlr-solana` 0.4.x, from the `v0.4` maintenance branch. It needs its own path-alias table and
-   an API-docs corpus for that generation (A1, A6 in `docs/cvlr-sdk3-support.md`). The manual
-   (`cvlr_kb`) targets cvlr ≥ 0.6, so its examples will not match the APIs the run can call. That
-   cost should be measured, not assumed away.
-2. **A 1.17 → 1.18 bump of the input.** It is a build-infrastructure change, not spec authoring.
-   The recommendation is to apply it by hand as a separate, labelled change to the input, and to
-   report that AutoProver was given it.
+1. **A 1.18 generation in AutoProver** (G1–G5, G7 there).
+2. **A compile gate that can compile klend** (G6). No host toolchain can: from rustc 1.77 on, the
+   `farms` dependency's account-size assertions fail on x86_64's `u128` alignment, and klend's own
+   1.74.1 predates the lockfile format current cargo writes. The gate moves to the SBF target.
+3. **A 1.17 → 1.18 move of the input.** A 1.17 program cannot be built with v1.53 at all
+   (`solana-frozen-abi` 1.17 pins an `ahash` that current rustc rejects). This is a
+   build-infrastructure change, not spec authoring. It is applied by hand as one labelled commit,
+   and the results report that AutoProver was given it. The same commit takes out of the workspace
+   a member that is not part of the program and depends on a git repository the public cannot
+   read.
 
-Decide this before the run, like stake's bincode question. Whether the platform move is in scope
-for AutoProver, or is a precondition given to it, makes these different experiments.
+Whether the platform move is in scope for AutoProver, or a precondition given to it, makes these
+different experiments, like stake's bincode question. **Decided: a precondition.**
 
-The Anchor and `fixed` forks are not a blocker: `composer/spec/cvlr/forks.py` already maps Anchor
-0.29.0 and `fixed` to their Certora branches.
-
-### Toolchain questions to settle on the first build
-
-- **Host checks.** `HOST_RUST_TOOLCHAIN` (1.90.0) cannot `cargo check` klend. The `farms`
-  dependency's size assertions break on the u128 alignment change in rustc 1.77
-  (`docs/who-edits-the-program.md` §18.3).
-- **SBF builds.** A klend checkout on the same pins builds only with the solana 1.17.34 release:
-  `ahash` gates on the removed `stdsimd` feature. AutoProver runs on platform tools v1.53. Whether
-  the input, after the 1.18 bump, builds there has not been tried.
+**The 1.18 line has no SPL Token model.** Token CPIs go through `invoke_signed_unchecked`, which the
+core summaries make opaque. Every property in the answer key is about klend's own accounting, so
+that does not affect parity. Generated properties about token balances cannot be proved, and are
+triaged with the other properties outside the answer key.
 
 ## Grading it
 

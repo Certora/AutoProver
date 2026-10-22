@@ -1,0 +1,198 @@
+# Supporting `solana-program` 1.18
+
+The CVLR backend supports two Solana platform generations, `solana-program` 2.x and the split
+`solana-*` 3.x crates (`docs/cvlr-sdk3-support.md`). Programs written before 2.0 are on neither,
+and the scaffold refuses them. klend is one of them, and it is the third CVLR benchmark
+(`docs/klend-benchmark.md`). This document plans a third generation, `solana-program` 1.18, on the
+`cvlr-solana` 0.4 line.
+
+Nothing here is implemented yet. The probe below establishes that the combination builds.
+
+## Where things stand
+
+| | What | State |
+|---|---|---|
+| G1 | A 1.18 reference set | planned |
+| G2 | Telling 1.17 from 1.18 | planned; decided: key 1.x on major.minor |
+| G3 | Document `cvlr-solana` 0.4.x | planned |
+| G4 | Scope the API corpus to 1.18 | planned |
+| G5 | Knowledge text: no token model on 1.18 | planned |
+| G6 | Run the compile gate against the SBF target | planned; decided |
+| G7 | Tests | planned |
+| — | `cvlr-spl-token` for 1.18 | **deferred**, see *Token CPIs* |
+| — | Moving the klend input to 1.18 | outside AutoProver, see *The input* |
+
+Order: G1, G2, G5 and G7 together, then G6, then G3 and G4.
+
+## What the probe established
+
+The probe was a scratch copy of the klend benchmark input (program version 1.23.0), built step by
+step with platform tools v1.53, the release AutoProver uses (`PLATFORM_TOOLS_VERSION`), and
+`cargo certora-sbf`.
+
+| Step | Result |
+|---|---|
+| Input as it is | Cargo cannot load the workspace. A member outside the program depends on a git repository the public cannot read |
+| …with that member out of the workspace | `ahash` 0.7.6 and 0.8.5 fail: `unknown feature stdsimd`, removed from rustc |
+| …with `cargo update ahash` | Refused. `solana-frozen-abi` 1.17.18 requires `ahash =0.8.5`. **A 1.17 program cannot be built with v1.53 at all** |
+| Workspace `solana-*` moved from `~1.17.18` to `~1.18` (resolves 1.18.26, `ahash` 0.7.8 and 0.8.12) | **Builds**, 1m09s |
+| Plus `cvlr` 0.6.1 (the documented commit `465a022`), `cvlr-solana` **0.4.5**, Anchor fork `certora-v0.29.0`, `fixed` fork `certora-v1.23.1`, and a one-rule harness | **Builds**, 50s |
+| Host `cargo check -F certora`, rustc 1.90.0 (`HOST_RUST_TOOLCHAIN`) | Fails in `farms`, a dependency: see G6 |
+| Host `cargo check`, rustc 1.74.1 (klend's pin) | Cannot read the lockfile. Cargo 1.89 rewrote it to version 4 |
+| `cargo check -F certora --target sbpf-solana-solana`, platform-tools v1.53 rustc and cargo | **Passes**, 2m08s cold |
+
+**`cvlr-solana` 0.4.5 runs on the 0.6.1 core.** Its `cvlr-*` requirements are `>=0.4.0, <1`, so the
+graph resolves one copy of each core crate, the patched 0.6.1. The three generations share one
+core, as 2.x and SDK 3 already do, and the core's API documentation and the parametric-rule layer
+(`cvlr-spec`) come with it.
+
+**0.4.5 is the end of the 1.18 line.** `cvlr-solana` 0.4.5 (January 2026, branch `v0.4` at
+`c814f76`, tag `v0.4.5`) requires `solana-program ^1.18`. 0.5.0 is the next release, and 0.4.5 is
+its ancestor.
+
+## AutoProver changes
+
+### G1. A 1.18 reference set
+
+A third `ChainReference` in `composer/spec/cvlr/reference.py`, `SOLANA_V1_18`:
+
+- `core=_CORE`, the shared `cvlr` 0.6.1.
+- `chain_crate=CrateRelease("cvlr-solana", "0.4.5")` from crates.io, until G3 replaces it with a
+  documented commit.
+- **No `models`.** The 0.4 line has no stake model, and its token helpers are in the chain crate
+  itself. `withholding("cvlr-solana-stake")` refuses on this set, which is correct: it has nothing
+  to withhold.
+- `forks=(ANCHOR_FORK, FIXED_FORK)`. Both already cover klend's Anchor 0.29.0 and `fixed` 1.23.1.
+- `platform`: label `solana-program 1.18`, `sdk_crates` and `witnesses` both
+  `CrateRequirement("solana-program", "1.18")`.
+- **No `path_aliases`.** 1.18 is the monolith, whose spelling is the canonical one the starting
+  tuning files use. That includes `solana_program::program::invoke_signed_unchecked`, which the
+  core summaries already list.
+
+`REFERENCE_SET["solana"]` becomes `(SOLANA_V3, SOLANA_V2, SOLANA_V1_18)`, newest first.
+
+### G2. Telling 1.17 from 1.18
+
+`scaffold._generation` keys a version on its major component, so 1.17 and 1.18 would look like one
+generation. A 1.17 target would be selected for the 1.18 set. Cargo would then fail to resolve
+`cvlr-solana`'s `^1.18` against the target's `~1.17.18`, with an error naming neither generation.
+
+**Decided:** key a 1.x version on major.minor. Before 2.0, Solana's minor releases behaved as
+breaking ones, and the probe's `ahash` pin is an example. A 1.17 target is then refused at
+preflight with *move the project to solana-program 1.18*. 2.x and 3.x keep the major-only key: the
+2.x witness `solana-account-info` is `2.2.1` under the `solana-program` 2.2 that every 2.x target
+links, so a stricter key would refuse them.
+
+### G3. Document `cvlr-solana` 0.4.x
+
+The published 0.4.5 has no doc comments, so its API corpus entries would be signatures only. That
+is the crate authors call most. The 2.x and SDK 3 lines were documented in `Certora/cvlr-solana`
+`d69566c` (#21).
+
+**The port is mostly mechanical.** The chain crate's API differs between 0.4.5 and 0.5.0 by six
+lines in `token.rs`. Applying the `cvlr-solana` part of `d69566c` (11 files, ~290 lines) to 0.4.5
+applies seven of nine source files cleanly. By hand:
+
+- `cvlr-solana/Cargo.toml`: keep 0.4.5's dependencies (`solana-program 1.18`, `spl-token 4`,
+  `spl-token-2022 3`). Take 0.5.1's `rt` feature fix too.
+- `token.rs`: 0.4.5 does not export `impl_nondet_mint!`, and it instantiates
+  `cvlr_nondet_token_mint` and `cvlr_nondet_token_2022_mint`, which 0.5 dropped. Those two
+  functions need their own docs. The exported macro's docs do not apply.
+- Three cross-references to `cvlr-spl-token` (in `lib.rs`, `token.rs` and `macros.rs`) name a
+  crate the 0.4 line does not have.
+- The CI docs check, from the same commit.
+
+Release it on `v0.4` as 0.4.6, and pin its release commit in `SOLANA_V1_18` with a `GitCommit`
+until it is published. That is how 0.5.1 and 0.6.0 are read (A5 in `docs/cvlr-sdk3-support.md`).
+Publishing needs the crates.io owner, as for those.
+
+### G4. Scope the API corpus to 1.18
+
+`composer/scripts/cvlr_api_docs.py` documents every generation in `REFERENCE_SET`, each in its own
+probe crate, and the API tools already filter to the run's pins (A6). Once G1 and G3 are in:
+regenerate, check that `cvlr-solana` 0.4.6 appears as its own surface beside 0.5.1 and 0.6.0, read
+the `--undocumented` report, and republish (`scripts/populate_cvlr_rag.sh`).
+
+The probe crate builds against `solana-program` 1.18 on the host toolchain. If it meets G6's
+problem, document it on the SBF target instead.
+
+### G5. Knowledge text: no token model on 1.18
+
+The manual (`cvlr_kb`) targets `cvlr-solana` ≥ 0.5, and it sends authors to `cvlr_spl_token` for
+token CPIs. On 1.18 that crate does not exist. An author following the manual writes an import the
+compile gate rejects, and spends attempts on it.
+
+Say so where the run's generation reaches the author. 1.18 has no token model, and a token CPI
+goes through `invoke_signed_unchecked`, which the core summaries make opaque: no balance moves and
+the result is arbitrary. Properties about the program's own accounting are unaffected. Properties
+about token balances cannot be proved on this generation. The manual itself stays
+single-generation, as A6 decided.
+
+### G6. Run the compile gate against the SBF target
+
+**Decided.** It is needed for klend whatever the SDK.
+
+`HOST_RUST_TOOLCHAIN` (1.90.0) cannot `cargo check` klend. `farms` asserts its account sizes with
+`static_assertions` and `bytemuck`'s `derive(Pod)` padding check, and rustc 1.77 raised `u128`
+alignment to 16 on x86_64. The same structs have alignment 8 on SBF, which is what the program is
+built for and what the Prover analyzes. No single host toolchain works: 1.74.1 predates the
+lockfile cargo writes, and anything from 1.77 on breaks the layout (`docs/who-edits-the-program.md`
+§18.3).
+
+So check the target the Prover reads: `cargo check --target sbpf-solana-solana` with the
+platform-tools compiler. `cargo certora-sbf` already links it into rustup as `certora-solana`, so a
+`CargoSession` can select it the way it selects `HOST_RUST_TOOLCHAIN`, through
+`RUSTUP_TOOLCHAIN`.
+
+- **Cost:** 2m08s cold on klend, against 25.6s for a host check (§18.3). Warm checks are what the
+  editor loop pays, and they should stay close to the host's. Measure that before switching.
+- **Scope:** the preflight gate (`preflight.py`) and the editor's submit gate (`pipeline.py`). The
+  workspace read (`cargo metadata`) and the warm step stay on the host.
+- **Sandbox:** the confined check needs the platform-tools root, which the SBF build is already
+  granted.
+- **Applies to every target**, not only 1.18. It also removes the class of failure where the host
+  compiles code the SBF build does not, or the reverse.
+
+### G7. Tests
+
+- `select_generation` picks `SOLANA_V1_18` for a 1.18 workspace, and refuses a 1.17 one with the
+  1.18 resolution (G2). Existing 2.x and SDK 3 selections are unchanged.
+- `SOLANA_V1_18.cargo_dependencies()` resolves and builds, the same check the other sets have.
+- Tuning paths on 1.18 are unaliased. A small symbol fixture from the probe build, like
+  `tests/data/stake_sdk3_sbf_symbols.txt`, checks that the core summaries' and inlining files'
+  `solana_program::` patterns match 1.18 symbols.
+- An expensive end-to-end on a 1.18 target, after G6: scaffold, compile gate, build, one rule
+  submitted.
+
+## Token CPIs: `cvlr-spl-token` for 1.18 is deferred
+
+The 0.4 line has no SPL Token CPI model. The mocks were added after 0.4.5 and then moved into
+`cvlr-spl-token`, which exists only from 0.5.
+
+**klend's benchmark does not need it.** Every property in the published answer key
+(`docs/klend-benchmark.md`) is about klend's own accounting: reserve liquidity against the
+collateral supply, obligation deposits, borrows and LTV, and liquidation amounts. None reads a
+token account balance. With token CPIs opaque (G5), those properties are stated and proved the same
+way.
+
+**What it would cost a run:** generated properties about token movements ("a deposit moves exactly
+`amount` into the vault") cannot be proved. They are outside the answer key, so they are triaged,
+not scored. They spend authoring attempts, but they do not fail the run.
+
+**Revisit if** the first klend run spends a significant part of its budget on token-balance
+properties. The port looks small: about 120 lines of CPI mocks on `cvlr-solana`'s token module,
+which differs by six lines between 0.4.5 and 0.5.0. But it is a new crate on the 0.4 line, and its
+CPI substitution would need checking on 1.18.
+
+## The input
+
+Outside AutoProver, but a precondition for the klend run, and to be reported with its results. On
+the benchmark input, one labelled build-infrastructure commit:
+
+- Take the member that needs the unreadable git repository out of the workspace. It is not part of
+  the program.
+- Move workspace `solana-*` from `~1.17.18` to `~1.18`, and re-resolve the lockfile, which brings
+  `ahash` 0.7.8 and 0.8.12.
+
+The lockfile comes out as version 4, which klend's own pinned cargo (1.74.1) cannot read. AutoProver
+never runs that cargo, so this only affects people building the input by hand.
