@@ -1,0 +1,169 @@
+# Benchmarking the backend against klend's hand-written spec
+
+A third benchmark for the CVLR backend, to answer a question the other two cannot: on a large
+production program, how close does a generated spec get to one that experts wrote by hand?
+
+The vault tutorial (`docs/autoprover-benchmark-2026-10-02.md`) has a hand-written spec, but it is small,
+and it is the shape the corpus is made of. Stake (`docs/stake-benchmark.md`) was chosen to be distant
+from the corpus, and it has no hand-written spec. klend has both size and a hand-written spec. The
+measure is **parity**: does AutoProver state the properties the experts stated, prove them, and need
+the same abstractions to do it?
+
+**This is a public document.** It states only what Kamino and Certora have published about the
+verification. Every fact about the hand-written spec below comes from the public sources listed at
+the end. The checkout, the input commit, and any comparison against parts of the spec that have not
+been published are kept in private notes, not here.
+
+## The program
+
+klend (Kamino Lend, [`Kamino-Finance/klend`](https://github.com/Kamino-Finance/klend)): an Anchor 0.29
+lending program with 63 instructions and ~36k lines of program source. It has reserves with cToken
+collateral, multi-asset obligations, liquidation and auto-deleverage, elevation groups, a withdraw
+queue, borrow orders, and fixed-term borrowing with rollover. It is the largest target the backend
+has been pointed at.
+
+Its arithmetic is the main difficulty. Values are `Fraction`, a 128-bit fixed-point type from the
+`fixed` crate. The interesting properties, solvency and share value, are nonlinear in it.
+
+## The answer key
+
+Certora formally verified Kamino Lend with the Certora Prover. Kamino lists the verification on its
+[Formal Verification](https://kamino.com/docs/security/formal-verification) page and publishes the
+[report](https://github.com/Kamino-Finance/audits/blob/main/kamino_lend_certora.pdf) (February 2025,
+scope `programs/klend/src/*` at commit `5af6cfc`). The report states ten properties, each with its
+rules, statuses and assumptions:
+
+| | property |
+|---|---|
+| P-01 | A healthy account cannot become unhealthy by user operation |
+| P-02 | An account with no collateral must have no borrows |
+| P-03 | A healthy user cannot lose collateral |
+| P-04 | Vault solvency: deposited and withdrawn liquidity cover a reserve's collateral shares |
+| P-05 | Reserve solvency: a reserve's total assets cover its collateral shares |
+| P-06 | The supply/collateral ratio decreases only on liquidation of bad debt (`socialize_loss`) |
+| P-07 | Liquidations of healthy positions must revert |
+| P-08 | Integrity of the flow of funds in liquidation |
+| P-09 | Liquidation reduces LTV |
+| P-10 | Liquidation is profitable |
+
+P-01 to P-05 are inductive invariants. Each has a base case (for example `init_obligation`) and one
+step rule per operation, so a single property appears as many rules.
+
+The report also states the abstractions the verification needed. These are what the abstraction
+grade below compares against:
+
+- **`Fraction` approximated** by a narrower fixed-point type (`FixedU64<14>` in place of the
+  128-bit, 60-fractional-bit original), for tractability, while still catching rounding errors.
+- **Loops unrolled twice.** Obligations are bounded to two deposits and one borrow, and account
+  vectors to size 2.
+- **`calculate_liquidation` replaced** by one that returns arbitrary values (an over-approximation).
+  The elevation-group debt trackers and `post_deposit_obligation_invariants` are replaced with
+  empty functions. Asset-tier lookups return empty.
+
+The report lists findings Kamino **acknowledged** rather than fixed. A generated counterexample at
+one of those sites is a correct result, not a fixture bug.
+
+**The answer key is older than the input.** The report covers code from February 2025, and the
+input (below) is from mid-2026. Features added since then (borrow orders, the withdraw queue,
+rollover) were reviewed in Certora's later
+[audit reports](https://github.com/Kamino-Finance/audits), but those reports publish no formal
+properties. In this document, those features are graded only as *properties outside the answer key*.
+
+## The input
+
+The input is unmodified klend: a development snapshot at program version 1.23.0, between public
+releases 1.23.0 and 1.24.0. It is on `solana-program ~1.17.18`, Anchor 0.29 from crates.io, and
+`fixed` 1.23.1, with Rust 1.74.1 per `rust-toolchain.toml`. It contains no verification code. Any
+munge, mock or build change the Prover needs is AutoProver's to make.
+
+**The design document** (`docs/klend-protocol.md` in the benchmark checkout, ~144 KB) is built only
+from Kamino's own documentation. It has 15 pages of kamino.com/docs: borrowing concepts,
+liquidations, fees and the interest-rate model, fixed rates and rollover, borrow orders, the
+withdrawal queue and withdrawal caps, the reserve, risk and market parameter references, and the
+glossary. It also has the repository's own `docs/liquidations.md`.
+
+**The documentation must contain nothing from the verification, or the measurement is void.** The
+following are excluded:
+
+- kamino.com's *Formal Verification* page. It restates the proved invariants, the answer key's
+  headline properties.
+- kamino.com's *Security Audits* page.
+- The published reports, and Certora's
+  [blog post](https://www.certora.com/blog/securing-kamino-lending) on the verification.
+- An earlier klend design document used by the Crucible runs. It is of unknown authorship.
+
+The web pages were fetched on 2026-10-22, and the code is older than that. A generated property
+about a feature the code does not have yet is a documentation-skew artifact, not an authoring
+error.
+
+## The blocker: klend is on a generation AutoProver does not support
+
+AutoProver supports two platform generations, `solana-program` 2.x and the split 3.x crates
+(`docs/cvlr-sdk3-support.md`). klend links `solana-program` 1.17. `select_generation` finds the
+`solana-program` witness on the wrong major version, and the scaffold refuses the project with
+*move the project to solana-program 2.2*. That is the right refusal, and it is not doable for klend.
+
+The nearest CVLR line is `cvlr-solana` 0.4.x, which requires `solana-program ^1.18`. So the
+benchmark needs both of these:
+
+1. **A 1.18 reference set in `composer/spec/cvlr/reference.py`.** This means `cvlr` 0.4 and
+   `cvlr-solana` 0.4.x, from the `v0.4` maintenance branch. It needs its own path-alias table and
+   an API-docs corpus for that generation (A1, A6 in `docs/cvlr-sdk3-support.md`). The manual
+   (`cvlr_kb`) targets cvlr ≥ 0.6, so its examples will not match the APIs the run can call. That
+   cost should be measured, not assumed away.
+2. **A 1.17 → 1.18 bump of the input.** It is a build-infrastructure change, not spec authoring.
+   The recommendation is to apply it by hand as a separate, labelled change to the input, and to
+   report that AutoProver was given it.
+
+Decide this before the run, like stake's bincode question. Whether the platform move is in scope
+for AutoProver, or is a precondition given to it, makes these different experiments.
+
+The Anchor and `fixed` forks are not a blocker: `composer/spec/cvlr/forks.py` already maps Anchor
+0.29.0 and `fixed` to their Certora branches.
+
+### Toolchain questions to settle on the first build
+
+- **Host checks.** `HOST_RUST_TOOLCHAIN` (1.90.0) cannot `cargo check` klend. The `farms`
+  dependency's size assertions break on the u128 alignment change in rustc 1.77
+  (`docs/who-edits-the-program.md` §18.3).
+- **SBF builds.** A klend checkout on the same pins builds only with the solana 1.17.34 release:
+  `ahash` gates on the removed `stdsimd` feature. AutoProver runs on platform tools v1.53. Whether
+  the input, after the 1.18 bump, builds there has not been tried.
+
+## Grading it
+
+Decided before the run, so the result stays falsifiable:
+
+1. **Property coverage** against P-01 to P-10, scored per *property*, not per rule. The inductive
+   properties expand into one rule per operation, so rule counts would let either spec win on
+   bookkeeping. Each property gets one grade: **matched**, **weaker** (same intent, narrower: fewer
+   operations, extra assumptions), **stronger**, or **absent**.
+2. **Verdict agreement** on matched properties. The report records each one as verified, some
+   after a fix. A generated counterexample on a matched property is a fixture or munge defect, a
+   regression since February 2025, or an acknowledged finding. Triage says which.
+3. **Non-vacuity.** Rules must clear `rule_sanity`. An abstraction whose contract is never checked
+   counts against the generated spec, even if every rule over it passes.
+4. **Abstractions.** Did the run find the seams the report names: narrowing or replacing
+   `Fraction`, over-approximating `calculate_liquidation`, and bounding obligations and loops? Of
+   everything here, this is the most informative measurement. It is stake's "does it find the
+   bincode seam unprompted" question, on a target with a published answer.
+5. **Properties outside the answer key**, including everything about the features added since
+   February 2025. Triage each as real, vacuous, or wrong. They are neither credited nor penalized
+   automatically. A real one with no counterpart in the answer key is the best result this
+   benchmark can produce.
+6. **Cost and wall-clock**, reported with the phase breakdown, as for stake.
+
+The Crucible runs on klend (2026-08) are not a baseline. They used a different snapshot, a
+different backend and a different design document.
+
+## Public sources
+
+- Kamino, [Formal Verification](https://kamino.com/docs/security/formal-verification) and
+  [Security Audits](https://kamino.com/docs/security/audits).
+- Certora, [Kamino Lending Security Assessment & Formal Verification Report](https://github.com/Kamino-Finance/audits/blob/main/kamino_lend_certora.pdf)
+  (February 2025; also at [certora.com](https://certora.com/reports/kamino-lending-security-report)).
+- Certora's later klend audit reports, `kamino_lend_certora_1.13.0.pdf` through `_1.17.0.pdf` in
+  [`Kamino-Finance/audits`](https://github.com/Kamino-Finance/audits).
+- Certora, [Securing Kamino Lending](https://www.certora.com/blog/securing-kamino-lending)
+  (March 2025).
+- klend's `security.txt` (`programs/klend/src/lib.rs`), which lists Certora among the auditors.
