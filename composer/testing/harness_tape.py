@@ -207,6 +207,7 @@ def install_fake_llm(fake: Any) -> None:
     import composer.workflow.services as services
 
     from composer.llm.provider import ProviderServiceBase, CacheLevel
+    from composer.llm.pricing import PriceTier
 
     class _FakeService(ProviderServiceBase):
         """The real anthropic memory tool (backed by the harness's Postgres
@@ -225,6 +226,12 @@ def install_fake_llm(fake: Any) -> None:
         # Taped messages carry no token usage, so `current_prompt_tokens` reads 0 all run and this
         # is never reached. It exists because a summarizing graph has to be given a budget.
         max_prompt_tokens : int = 500_000
+
+        # Taped calls are free: a zero price, rather than no price, so a taped run may
+        # still carry a budget.
+        @staticmethod
+        def price_provider(input_tokens: int) -> PriceTier | None:
+            return PriceTier(0.0, 0.0, 0.0, 0.0, 0.0)
 
         def builder_for(self, *, cache_level: CacheLevel = CacheLevel.NONE, disable_thinking: bool = False) -> Any:
             return _current_fake()
