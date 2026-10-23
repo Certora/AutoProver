@@ -35,7 +35,11 @@ the property below the handler or skips it. **P13 is why a stand-in CPI cannot m
 control group. **P14 is the Prover's CPI substitution not recognizing SDK 3's `invoke`**; it
 matters only with `-solanaCpiAnalysis`, which AutoProver does not set. **P15 crashed the Prover** on
 an SDK 3 `Clock::get()`, failing the whole job; it is fixed on master by
-[EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762).
+[EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762). **P16 to P19 came out of one
+large lending program's run**, where every failed job was one of them. P16 is the general form of
+P15's escape: any internal error while encoding one rule fails the job. P17, a 32 KB heap counted
+over allocation sites, caused most of those failures, and an existing option fixes it once you know
+to pass it. P18 and P19 are the allocator on a current toolchain.
 
 **Group U — `prover_output_utility`.** The library the report stack reads verdicts through. One
 entry, and unlike the others it was corrupting our own output rather than merely obstructing us;
@@ -75,6 +79,10 @@ the write-up gives the line number rather than the name.
 | [P13](#p13) | An `AccountInfo` selected from a slice by key loses its provenance, so a stand-in `invoke` cannot move lamports | **major**, worked around in the prompt |
 | [P14](#p14) | The CPI analysis matches only `solana_program`'s `invoke`, so on SDK 3 no CPI is substituted and nothing says so | minor — only with `-solanaCpiAnalysis`, which AutoProver does not set; not filed |
 | [P15](#p15) | An SDK 3 `Clock::get()` can crash the Prover: "TAC Clock::get expected to extract 5 TAC variables from call sol_get_clock_sysvar" | **major** — the job FAILS with no verdicts; fixed on the Prover's master branch ([EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762)) |
+| [P16](#p16) | An internal error while encoding one rule (`TACTranslationError`, `PointerDomainError`) escapes the per-rule `catch` and fails every rule in the job | **major** — all 10 failed jobs of a 56-job run; not filed |
+| [P17](#p17) | The TAC heap is a 32 KB bump allocator over allocation *sites*; exhausting it is a crash with no hint, though `-solanaHeapSize` fixes it | **major** — 8 of those 10; reproduced and fixed by the option; not filed |
+| [P18](#p18) | `sol_alloc_free_` crashes the points-to analysis: "TODO(5): support sol_alloc_free" | **major** — 2 of those 10; trigger not pinned; not filed |
+| [P19](#p19) | The allocator recognizer misses `__rustc::__rust_realloc` and `__rustc::__rust_alloc_zeroed` | major — the suspected path to P18; not filed |
 | [U1](#u1) | `extract_job_id_from_url` cannot parse a Solana Prover job link | **major**, worked around |
 | [T1](#t1) | Tuning files are spelled for pre-2.2 `solana-program` paths | major |
 | [T2](#t2) | A canonical tuning file names one specific on-chain program | hygiene |
@@ -84,6 +92,7 @@ the write-up gives the line number rather than the name.
 | [T6](#t6) | `[workspace.dependencies]` pins CVLR by hand | minor |
 | [T7](#t7) | Nothing points a new project at the Anchor fork it needs | **major** |
 | [T8](#t8) | A canonical summary is spelled for a `RawVec` symbol current toolchains no longer emit | major |
+| [T9](#t9) | The allocator directives are spelled for shim names current toolchains no longer emit (`__rustc::`) | major |
 | [M1](#m1) | The manual's `cvlr_rules!` example puts a trailing comma after `bases: [...]`, which the macro rejects | minor |
 | [M2](#m2) | The manual types `cvlr_deserialize_nondet_accounts()` as `[AccountInfo; 8]`; it returns 16 | minor |
 | [C1](#c1) | `cvlr-solana` is bound to `solana-program` 2.2, so no program on the current Solana SDK can be scaffolded at all | ported and released as a commit (0.6.0), which AutoProver reads; **not published** |
@@ -1115,6 +1124,133 @@ A Prover build without the fix still fails this way.
 
 ---
 
+## P16
+
+### An internal error while encoding one rule fails every rule in the job
+
+`solanaSbfToTAC` (`sbf/SolanaEntryPoint.kt:148`) encodes each rule inside
+`try { … } catch (e: SolanaError)`, so a rule that fails to encode becomes that rule's
+`RuleEncodingException` and the others go on. But the translator's own failures are not
+`SolanaError`s. `TACTranslationError` (`sbf/tac/SbfCFGToTAC.kt:51`) and `PointerDomainError`
+(`sbf/domains/memory/PointerDomain.kt:118`) both extend `SolanaInternalError`, which is a
+`CertoraInternalException`. They pass the per-rule `catch`, end the whole run, and the cloud job ends
+`FAILED`.
+
+**Effect: one rule's encoding failure throws away every verdict in the job.** On a ~36k-line Anchor
+lending program (2026-10-22, Prover `master`), all 10 of a run's 56 cloud jobs that failed did so
+this way: 8 with P17's heap overflow and 2 with P18's `sol_alloc_free`. Each carried a whole unit's
+rules, 11 to 22 of them, and the authoring agent got no verdict for any. It had to guess which rule
+was at fault, because the alert names none. In the reproduction under P17, the rules that do not
+overflow encode and run normally once the overflow is gone, and the per-rule errors that remain
+(`[3001]`, `[6000]`) are reported per rule, as they should be.
+
+P15 was the same escape through the same `catch`, and its fix encoded that one case instead of
+catching the class.
+
+**Fix:** catch `SolanaInternalError` in the per-rule loop too, and report it as that rule's
+`RuleEncodingException`, keeping the internal-error alert. The other rules then keep their verdicts.
+
+---
+
+## P17
+
+### The TAC heap is a 32 KB bump allocator over allocation *sites*, and running out of it is a crash with no hint
+
+`SbfCFGToTAC` gives each rule a `TACBumpAllocator` (`sbf/tac/SbfCFGToTAC.kt:121`,
+`sbf/tac/TACAllocators.kt:48`) over `[SBF_HEAP_START, SBF_HEAP_START + -solanaHeapSize)`. Every
+allocation call in the rule's inlined program gets fresh addresses at translation time, and nothing
+is ever returned. So it counts allocation *sites* across every inlined path, not live bytes. An
+allocation whose size the analysis cannot read is charged `-solanaTACHeapAllocSize`, 512 bytes.
+`alloc::fmt::format::format_inner`, behind every `msg!` with arguments, is always one of those. When
+the total passes the bound, `next()` throws `TACTranslationError("TACHeapAllocator ran out of memory
+of 32768 bytes!")`, and P16 turns that into a failed job.
+
+The default, 32768, is described in the option's help as "the actual SBF runtime constraint". But the
+quantity being bounded is not the runtime heap: a handler with 64 formatted log messages on 64
+different paths runs only one of those paths, and drops each string after logging it. Here it costs
+32 KB.
+
+**Effect, and the fix to verify it.** On the lending program above, 8 of 10 failed jobs were this:
+6 in one unit (21 properties, reserve administration) and 2 in another (12, fees). One of the
+crashed jobs had 18 `format_inner` allocations of unknown size, 9 KB of the 32 KB. The job's own
+uploaded sources, rebuilt and resubmitted on 2026-10-23:
+
+| job | prover args | result |
+|---|---|---|
+| `400485abc6c440aca1ed1cbef6ea8b75` | as the run submitted them | `FAILED`, `TACHeapAllocator ran out of memory of 32768 bytes!` |
+| `0ec2cec8d7b045419a70e60e97da3855` | the same plus `-solanaHeapSize 262144` | `SUCCEEDED` in 3.5 minutes: 16 verified, 7 violated, 7 per-rule errors |
+
+`-solanaHeapSize` exists (since Prover 8.12, EVMVerifier `8254cff534c`), but nothing points at it. The
+stack has the same kind of bound, and running out of it is a per-rule `SolanaError` (code 6000,
+`sbf/support/Errors.kt:292`) whose help names the option and the size to pass.
+
+**Fix:** report heap exhaustion the way stack exhaustion is reported: a `SolanaError` with a code,
+the size the rule needed, and "increase it with `-solanaHeapSize N`". That alone turns a lost job
+into one actionable rule error. Consider also a much larger default, since the bound is on
+translation-time sites rather than on what the program can hold live, and a larger heap only widens
+the address range allocations are drawn from.
+
+**What AutoProver does about it.** Nothing yet. The obvious change is `-solanaHeapSize` in the
+backend's default prover args (`composer/spec/cvlr/conf.py`).
+
+---
+
+## P18
+
+### `sol_alloc_free_` crashes the points-to analysis
+
+`PointerDomain`'s syscall handling (`sbf/domains/memory/PointerDomain.kt:5088`) has
+`SOL_ALLOC_FREE -> throw PointerDomainError("TODO(5): support sol_alloc_free")`. A program reaches
+that syscall whenever an allocation goes through Rust's System allocator instead of a modelled
+allocator call. On SBF, `__rustc::__rdl_alloc`, `__rdl_alloc_zeroed`, `__rdl_dealloc` and
+`__rdl_realloc` are `sol_alloc_free_(size, 0)` and its variants. With `no-entrypoint`, which a
+verification build enables, the program defines no `#[global_allocator]`, so those are the
+allocator.
+
+**Effect: the job ends `FAILED`** (P16). On the lending program above, 2 of the 56 jobs, in two
+units, ended:
+
+```
+PointerDomain error: TODO(5): support sol_alloc_free
+```
+
+The alert names no function. The likeliest path is P19: a `__rustc::__rust_realloc` call the Prover
+does not recognize as an allocation is inlined, through `__rdl_realloc`, down to the syscall. That
+is not confirmed. The crashing jobs (`4a053e6282c74296b3a75d41902a0815`,
+`f0d5e1cda0bb49cd9dd5d5c47baa7002`) carry their sources, and rebuilding one the way P17's was
+rebuilt would show the call.
+
+**Fix:** model the syscall: `free_addr == 0` allocates `size` bytes on the heap, and anything else is
+a no-op free, which is what the allocator call it stands behind already gets. Short of that, raise a
+per-rule `SolanaError` naming the caller, so that P16's fix is not the only thing standing between it
+and a lost job.
+
+---
+
+## P19
+
+### The allocator recognizer misses `__rustc::__rust_realloc` and `__rustc::__rust_alloc_zeroed`
+
+rustc 1.89, which platform-tools v1.53 ships, emits the allocator shims under a `__rustc::` path:
+`__rustc::__rust_alloc`, `__rustc::__rust_dealloc`, `__rustc::__rust_realloc`, and behind them
+`__rustc::__rdl_*` (P18). `isAllocFn` (`sbf/cfg/SbfInstruction.kt:563`) accepts `__rust_alloc`,
+`__rust_alloc_zeroed` and `__rustc::__rust_alloc`, and `isDeallocFn` accepts `__rust_dealloc` and
+`__rustc::__rust_dealloc`. Nothing accepts `__rustc::__rust_alloc_zeroed`, and nothing accepts
+`realloc` under any name.
+
+**Effect.** A call to an unrecognized shim is an ordinary call. Unless a tuning file never-inlines
+it, the analysis inlines it and walks into the System allocator, which ends at P18's syscall. In a
+v1.53 build of the lending program, `__rustc::__rust_realloc` is called from
+`alloc::raw_vec::finish_grow` (Vec growth). The canonical tuning files never-inline `^<?alloc::.*$`,
+which covers that caller, so the stock configuration is protected on that path. A program, or a
+tuning edit, that reaches the shim another way is not. The stale tuning patterns are T9.
+
+**Fix:** recognize `__rustc::__rust_alloc_zeroed` as an allocation, and give realloc a model:
+allocate the new size, as `isAllocFn` already does for a fresh allocation. Matching the `__rustc::`
+prefix generally, rather than name by name, would keep the next rename from breaking it again.
+
+---
+
 ## U1
 
 ### `extract_job_id_from_url` cannot parse a Solana Prover job link
@@ -1353,6 +1489,33 @@ it, since older toolchains still emit the old name. More usefully, a way to *rep
 binds to no symbol would have caught this the first time it went stale — `composer/cargo/symbols.py`
 exists here for exactly that reason and could be pointed at the canonical files, not just at
 author-written ones.
+
+---
+
+## T9
+
+### The allocator directives are spelled for shim names current toolchains no longer emit
+
+`cvlr_inlining_core.txt` never-inlines the allocator shims by their old names:
+
+```
+#[inline(never)] ^__rust_alloc$
+#[inline(never)] ^__rust_dealloc$
+#[inline(never)] ^__rust_alloc_zeroed$
+#[inline(never)] ^__rg_alloc$
+#[inline(never)] ^__rg_dealloc$
+#[inline(never)] ^__rg_oom$
+```
+
+A program built with platform-tools v1.53 (rustc 1.89) defines `__rustc::__rust_alloc`,
+`__rustc::__rust_dealloc`, `__rustc::__rust_realloc`, `__rustc::__rg_oom` and the `__rustc::__rdl_*`
+functions behind them. None of the six patterns matches any of them, silently, as T8's does not. The
+Prover's own recognizer catches two of these by name (P19), so most of the gap is covered by that.
+But no directive covers `__rustc::__rust_realloc`, in a block headed "Rust memory allocation
+functions".
+
+Fix: match the prefix too, `^(__rustc::)?__rust_alloc$` and so on, and add `__rust_realloc`, which
+the file never had. The same `composer/cargo/symbols.py` check T8 suggests would have caught it.
 
 ---
 
