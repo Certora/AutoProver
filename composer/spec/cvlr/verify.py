@@ -166,12 +166,27 @@ class VerifyDeps:
 
     target: HarnessTarget
     submission: Submission
-    #: The directory :func:`composer.spec.cvlr.prover.prepare_submission` writes into.
+    #: The directory :func:`composer.spec.cvlr.prover.write_submission` writes into.
     #: Outside the tree. The confined build can write the tree, so the conf and
     #: the build script must not live there.
     submission_dir: Path
     prover_opts: ProverOptions
     stamper: ValidationStamper
+
+    @property
+    def unit_submission(self) -> Submission:
+        """The unit's submission, compiling this unit's module.
+
+        :attr:`HarnessTarget.features` is ``certora`` plus this unit's feature, the
+        same set ``cargo_check`` builds with. The submission's own default is only
+        ``certora``, and ``specs/mod.rs`` gates this unit's module on its feature,
+        so a build that kept the default would compile the staged file out.
+        """
+        return replace(self.submission, features=self.target.features)
+
+    def submission_for(self, rules: Sequence[str]) -> Submission:
+        """The unit's submission, checking ``rules``."""
+        return replace(self.unit_submission, rules=SelectRules(tuple(rules)))
 
 
 @tool_display("Compiling the harness", "Compile")
@@ -212,21 +227,6 @@ class CargoCheck(
                     self.tool_call_id,
                     f"Does not compile:\n{diagnostics}",
                 )
-
-
-def _unit_submission(deps: VerifyDeps) -> Submission:
-    """The unit's submission, compiling this unit's module.
-
-    :attr:`HarnessTarget.features` is ``certora`` plus this unit's feature, the
-    same set ``cargo_check`` builds with. The submission's own default is only
-    ``certora``, and ``specs/mod.rs`` gates this unit's module on its feature,
-    so a build that kept the default would compile the staged file out.
-    """
-    return replace(deps.submission, features=deps.target.features)
-
-
-def _submission_for(deps: VerifyDeps, rules: Sequence[str]) -> Submission:
-    return replace(_unit_submission(deps), rules=SelectRules(tuple(rules)))
 
 
 def _unread(err: ManifestMissing | ManifestCorrupt) -> str:
@@ -296,7 +296,7 @@ async def _stage_and_submit(
     """
     async with deps.target.build_slot() as permit:
         await permit.stage(draft)
-        build = await build_for_submission(deps.target.session, _unit_submission(deps))
+        build = await build_for_submission(deps.target.session, deps.unit_submission)
         if not isinstance(build.verdict, Built):
             return BuildRejected(build)
         artifact = build.verdict.manifest.artifact
@@ -355,7 +355,7 @@ class VerifyRules(
                 # A conf with no `rule` entry makes the cloud job end in FAILED, with no
                 # report. The section holds only this unit's rules: the build enables only
                 # this unit's feature.
-                return _submission_for(deps, listed)
+                return deps.submission_for(listed)
 
             outcome = await _stage_and_submit(
                 deps,
