@@ -9,7 +9,8 @@ Prover's own source names. P15 and P16 have no tickets and are fixed on master b
 [EVMVerifier#8771](https://github.com/Certora/EVMVerifier/pull/8771). Two more Prover bugs,
 CERT-10183 (float comparisons) and CERT-10184 (a memory-partitioning crash on `realloc`'s
 zero-fill), were filed from the starting-layer investigation in [cvlr-todo.md](./cvlr-todo.md) L1
-and are recorded there, not here. C1's fix is released as a commit and not yet published (below).
+and are recorded there, not here. P17, P18 and P19 are open as [EVMVerifier#8773](https://github.com/Certora/EVMVerifier/pull/8773), [EVMVerifier#8776](https://github.com/Certora/EVMVerifier/pull/8776) and
+[EVMVerifier#8777](https://github.com/Certora/EVMVerifier/pull/8777). C1's fix is released as a commit and not yet published (below).
 The rest are not filed, and this document exists so that routing is a decision somebody makes rather than one I guess at, since the
 groups below belong in different places and one of them cannot be public.
 
@@ -41,7 +42,8 @@ large lending program's run**, where every failed job was one of them. P16 is th
 P15's escape: any internal error while encoding one rule failed the job; it is fixed on master by
 [EVMVerifier#8771](https://github.com/Certora/EVMVerifier/pull/8771). P17, a 32 KB heap counted
 over allocation sites, caused most of those failures, and an existing option fixes it once you know
-to pass it; with P16 fixed, what is left of it is the error message. P18 and P19 are the allocator on a current toolchain.
+to pass it; with P16 fixed, what is left of it is the error message. P18 and P19 are the allocator on a current toolchain. P17 to P19 are open as [EVMVerifier#8773](https://github.com/Certora/EVMVerifier/pull/8773),
+[EVMVerifier#8776](https://github.com/Certora/EVMVerifier/pull/8776) and [EVMVerifier#8777](https://github.com/Certora/EVMVerifier/pull/8777).
 
 **Group U — `prover_output_utility`.** The library the report stack reads verdicts through. One
 entry, and unlike the others it was corrupting our own output rather than merely obstructing us;
@@ -82,9 +84,9 @@ the write-up gives the line number rather than the name.
 | [P14](#p14) | The CPI analysis matches only `solana_program`'s `invoke`, so on SDK 3 no CPI is substituted and nothing says so | minor — only with `-solanaCpiAnalysis`, which AutoProver does not set; not filed |
 | [P15](#p15) | An SDK 3 `Clock::get()` can crash the Prover: "TAC Clock::get expected to extract 5 TAC variables from call sol_get_clock_sysvar" | **major** — the job FAILS with no verdicts; fixed on the Prover's master branch ([EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762)) |
 | [P16](#p16) | An internal error while encoding one rule (`TACTranslationError`, `PointerDomainError`) escapes the per-rule `catch` and fails every rule in the job | **major** — all 10 failed jobs of a 56-job run; fixed on the Prover's master branch ([EVMVerifier#8771](https://github.com/Certora/EVMVerifier/pull/8771)) |
-| [P17](#p17) | Running out of the TAC heap does not say that `-solanaHeapSize` raises it, and the option's help calls the bound the runtime heap | minor now that P16 is fixed (8 of those 10 failed jobs were this); the option fixes it, reproduced; not filed |
-| [P18](#p18) | `sol_alloc_free_` crashes the points-to analysis: "TODO(5): support sol_alloc_free" | **major** — 2 of those 10; trigger not pinned; not filed |
-| [P19](#p19) | The allocator recognizer misses `__rustc::__rust_realloc` and `__rustc::__rust_alloc_zeroed` | major — the suspected path to P18; not filed |
+| [P17](#p17) | Running out of the TAC heap does not say that `-solanaHeapSize` raises it, and the option's help calls the bound the runtime heap | minor now that P16 is fixed (8 of those 10 failed jobs were this); the option fixes it, reproduced; open ([EVMVerifier#8773](https://github.com/Certora/EVMVerifier/pull/8773)) |
+| [P18](#p18) | `sol_alloc_free_` crashes the points-to analysis: "TODO(5): support sol_alloc_free" | **major** — 2 of those 10; trigger not pinned; open ([EVMVerifier#8776](https://github.com/Certora/EVMVerifier/pull/8776)) |
+| [P19](#p19) | The allocator recognizer misses `__rustc::__rust_realloc` and `__rustc::__rust_alloc_zeroed` | major — the suspected path to P18; open ([EVMVerifier#8777](https://github.com/Certora/EVMVerifier/pull/8777)) |
 | [U1](#u1) | `extract_job_id_from_url` cannot parse a Solana Prover job link | **major**, worked around |
 | [T1](#t1) | Tuning files are spelled for pre-2.2 `solana-program` paths | major |
 | [T2](#t2) | A canonical tuning file names one specific on-chain program | hygiene |
@@ -1162,6 +1164,11 @@ catching the class.
 
 ### Running out of the TAC heap does not say that `-solanaHeapSize` raises it
 
+**Open as [Certora/EVMVerifier#8773](https://github.com/Certora/EVMVerifier/pull/8773)**, as proposed
+below: a coded `SolanaError` (6001) naming the bound, the total reached and `-solanaHeapSize N`, and
+reworded help. It also fixes two edge cases in the allocator's bound check: a huge size could wrap
+the free pointer, and an allocation that exactly filled the bound was refused.
+
 **What is left after P16.** Before P16's fix a heap overflow failed the whole job, and that was
 P16's defect. Now it fails one rule, and this entry is about what that rule's error says.
 
@@ -1209,6 +1216,12 @@ this is fixed.
 
 ### `sol_alloc_free_` crashes the points-to analysis
 
+**Open as [Certora/EVMVerifier#8776](https://github.com/Certora/EVMVerifier/pull/8776)**, with the
+model proposed below: `free_addr == 0` allocates on the heap, a pointer or a nonzero number is a
+no-op free returning 0. A call whose `free_addr` the analysis cannot decide gets a per-rule error
+(3311) naming the inlined source frames, rather than a guess. The two crashing jobs were not rerun
+against it, so the trigger is still not pinned.
+
 `PointerDomain`'s syscall handling (`sbf/domains/memory/PointerDomain.kt:5088`) has
 `SOL_ALLOC_FREE -> throw PointerDomainError("TODO(5): support sol_alloc_free")`. A program reaches
 that syscall whenever an allocation goes through Rust's System allocator instead of a modelled
@@ -1240,6 +1253,12 @@ asking for a Prover bug report.
 ## P19
 
 ### The allocator recognizer misses `__rustc::__rust_realloc` and `__rustc::__rust_alloc_zeroed`
+
+**Open as [Certora/EVMVerifier#8777](https://github.com/Certora/EVMVerifier/pull/8777)**, stacked on
+#8776. The recognizers strip a leading `__rustc::`, as proposed below. Realloc gets a stronger
+model than the one proposed: it is expanded right after inlining into an allocation of the new size
+plus a `sol_memcpy_` of the first `min(old_size, new_size)` bytes, so a `Vec`'s elements stay known
+after it grows. Plain allocation would have made them unknown.
 
 rustc 1.89, which platform-tools v1.53 ships, emits the allocator shims under a `__rustc::` path:
 `__rustc::__rust_alloc`, `__rustc::__rust_dealloc`, `__rustc::__rust_realloc`, and behind them
