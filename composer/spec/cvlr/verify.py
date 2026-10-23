@@ -8,7 +8,7 @@ reports the compiler error and submits nothing
 """
 
 import asyncio
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 import logging
 import time
 from collections.abc import Callable, Sequence
@@ -193,9 +193,6 @@ class VerifyDeps:
     submissions: Path
     prover_opts: ProverOptions
     stamper: ValidationStamper
-    #: One submission at a time per unit. A second run would build into the
-    #: same workdir and race the staged module, so the tool refuses it.
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 @tool_display("Compiling the harness", "Compile")
@@ -367,11 +364,6 @@ class VerifyRules(
         if draft is None:
             return "No harness written yet — put a draft first."
         with self.tool_deps() as deps:
-            if deps.lock.locked():
-                return (
-                    "A prover run for this unit is already in flight. Wait for it rather than "
-                    "starting a second one."
-                )
             listed: list[str] = []
 
             def choose(names: set[str]) -> Submission | str:
@@ -386,14 +378,13 @@ class VerifyRules(
                 # this unit's feature.
                 return _submission_for(deps, listed)
 
-            async with deps.lock:
-                outcome = await _stage_and_submit(
-                    deps,
-                    draft,
-                    callbacks=_RunAccounting(),
-                    tool_call_id=self.tool_call_id,
-                    choose=choose,
-                )
+            outcome = await _stage_and_submit(
+                deps,
+                draft,
+                callbacks=_RunAccounting(),
+                tool_call_id=self.tool_call_id,
+                choose=choose,
+            )
             if isinstance(outcome, str):
                 return outcome
             return self._report(outcome, deps, declared=listed)
@@ -423,7 +414,7 @@ class VerifyRules(
                 )
             case Checked(report=report):
                 status = report.rule_status
-                not_verified = [name for name in declared if status.get(name) is not True]
+                not_verified = [name for name in declared if not status.get(name, False)]
                 if not_verified:
                     return tool_state_update(
                         self.tool_call_id,
