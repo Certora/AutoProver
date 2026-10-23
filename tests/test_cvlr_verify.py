@@ -32,6 +32,7 @@ from composer.spec.cvlr.verify import (
     BuildPermit,
     HarnessTarget,
     RuleStatusReport,
+    StagedUnit,
     VerifyDeps,
     gate_tools,
 )
@@ -105,8 +106,9 @@ def gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Gate:
         )
     )
 
-    async def stage(_self, _draft):
+    async def stage(self, _draft):
         assert g.sem.locked(), "staged outside the build permit"
+        return StagedUnit(self, g.deps.target)
 
     async def build(_session, _submission):
         return g.build
@@ -222,7 +224,7 @@ async def test_the_permit_is_held_until_the_upload_and_not_through_the_cloud_job
     uploaded, cloud_done = asyncio.Event(), asyncio.Event()
     held_during_local_phase: list[bool] = []
 
-    async def run_submission(_session, _prepared, *, callbacks, **_kwargs):
+    async def run_submission(_prepared, *, callbacks, **_kwargs):
         held_during_local_phase.append(gate.sem.locked())
         await callbacks.on_prover_link(_LINK)
         uploaded.set()
@@ -274,3 +276,13 @@ async def test_the_status_report_leaves_out_the_counterexample(tmp_path: Path):
     )
     text = await RuleStatusReport().analyze([violated], "tc", None, tmp_path)  # type: ignore[arg-type]
     assert text == "rule_b: VIOLATED"
+
+
+async def test_a_released_permit_does_not_build(tmp_path: Path):
+    """What staging returned keeps no build alive past the permit."""
+    target = _target(tmp_path)
+    async with target.build_slot() as permit:
+        staged = StagedUnit(permit, target)
+        permit.release()
+        with pytest.raises(RuntimeError):
+            await staged.check()
