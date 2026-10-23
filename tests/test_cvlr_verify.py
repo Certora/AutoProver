@@ -21,14 +21,20 @@ from composer.cargo.session import CompileFailed
 from composer.diagnostics.timing import RunSummary, install_run_summary
 from composer.prover.conf import SelectRules
 from composer.prover.core import ProverReport
-from composer.prover.ptypes import RulePath
+from composer.prover.ptypes import Counterexample, RulePath, RuleResult
 from composer.spec.cvlr import verify as verify_mod
 from composer.spec.cvlr.harness import HarnessModule
 from composer.spec.cvlr.manifest import ManifestCorrupt, ManifestMissing
 from composer.spec.cvlr.prover import Checked, Submission, SubmissionFailed
 from composer.spec.cvlr.state import PROVER_VALIDATION_KEY
 from composer.spec.cvlr.tree import ProjectSource, SharedTree
-from composer.spec.cvlr.verify import BuildPermit, HarnessTarget, VerifyDeps, gate_tools
+from composer.spec.cvlr.verify import (
+    BuildPermit,
+    HarnessTarget,
+    RuleStatusReport,
+    VerifyDeps,
+    gate_tools,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -257,3 +263,14 @@ async def test_a_released_permit_does_not_stage(tmp_path: Path):
         permit.release()
         with pytest.raises(RuntimeError):
             await permit.stage("// draft\n")
+
+
+async def test_the_status_report_leaves_out_the_counterexample(tmp_path: Path):
+    """A dump per violated rule would flood the author's context."""
+    violated = RuleResult(
+        path=RulePath(rule="rule_b"),
+        counterexample=Counterexample(trace="<the-whole-trace/>"),
+        status="VIOLATED",
+    )
+    text = await RuleStatusReport().analyze([violated], "tc", None, tmp_path)  # type: ignore[arg-type]
+    assert text == "rule_b: VIOLATED"
