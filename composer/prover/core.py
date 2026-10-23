@@ -25,7 +25,7 @@ import sys
 import tempfile
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Protocol, cast, override, Awaitable
 from abc import ABC, abstractmethod
@@ -48,8 +48,20 @@ from prover_output_utility import cloud_server_for_env
 from composer.prover.analysis import analyze_cex_raw
 from composer.certora_env import ProverApp
 from composer.prover.cloud import CloudJobError, cloud_results
-from composer.prover.ptypes import RuleResult, RulePath, StatusCodes
-from composer.prover.results import read_and_format_run_result
+from composer.prover.ptypes import (
+    GeneratedAssertion,
+    PropertyViolation,
+    RulePath,
+    RuleResult,
+    StatusCodes,
+    classify_violation,
+)
+from composer.prover.results import (
+    ExternalWarnings,
+    UnreadableAlertReport,
+    external_functions,
+    read_and_format_run_result,
+)
 from composer.templates.loader import load_jinja_template
 from composer.prover.prover_protocol import ProverResult
 
@@ -139,15 +151,28 @@ class ProverReport:
     result_str: str
     link: str
     certora_run_stdout: str
+    #: The Prover's own warnings about functions it treated as external, from the
+    #: job's alert report (:func:`composer.prover.results.external_functions`).
+    #: :class:`UnreadableAlertReport` means the report was present and could not
+    #: be read, which is not an empty list. The verdicts do not name them.
+    external_functions: ExternalWarnings | UnreadableAlertReport = field(default_factory=ExternalWarnings)
+    #: Rules that stopped on an assertion the prover generated, keyed by rule
+    #: name. The counterexample is not kept. Empty when every violation is the
+    #: rule's own assertion, or the run reported none.
+    incomplete: dict[str, GeneratedAssertion] = field(default_factory=dict)
+
+    def rule_outcomes(self) -> dict[str, StatusCodes]:
+        """One status per rule. A non-``VERIFIED`` instance is kept over a later ``VERIFIED`` one."""
+        found: dict[str, StatusCodes] = {}
+        for path, code in self.raw_rule_status.items():
+            if path.rule in found and found[path.rule] != "VERIFIED":
+                continue
+            found[path.rule] = code
+        return found
 
     @property
     def rule_status(self) -> dict[str, bool]:
-        to_ret = {}
-        for (k, v) in self.raw_rule_status.items():
-            if k.rule in to_ret and not to_ret[k.rule]:
-                continue
-            to_ret[k.rule] = v == "VERIFIED"
-        return to_ret
+        return {name: code == "VERIFIED" for name, code in self.rule_outcomes().items()}
 
     @property
     def all_verified(self) -> bool:
@@ -690,13 +715,32 @@ async def declared_rules_list(
         all_rules = f.read()
     return [s for r in all_rules.split() if (s := r.strip()) and s != "envfreeFuncsStaticCheck"]
 
+
+def _incomplete_checks(results: dict[str, RuleResult]) -> dict[str, GeneratedAssertion]:
+    """Which violated rules stopped on an assertion the prover generated.
+
+    Keyed by rule name. The counterexample is not stored on the report, and
+    the gate tells these apart from a rule whose own assertion failed.
+    """
+    found: dict[str, GeneratedAssertion] = {}
+    for result in results.values():
+        if result.status != "VIOLATED":
+            continue
+        match classify_violation(result.counterexample):
+            case PropertyViolation():
+                continue
+            case generated:
+                found[result.path.rule] = generated
+    return found
+
+
 async def run_prover(
     folder: Path,
     args: list[str],
     tool_call_id: str,
     prover_opts: ProverOptions,
     callbacks: ProverCallbacks,
-    cex: CexHandler
+    cex: CexHandler,
 ) -> ProverReport | str:
     """Execute the Certora prover and return structured results.
 
@@ -786,6 +830,8 @@ async def run_prover(
 
             if isinstance(parsed, str):
                 return f"Failed to parse prover results: {parsed}"
+            externals = external_functions(emv_path)
+            incomplete = _incomplete_checks(parsed)
 
             # 9. Notify runtime + prover_result callbacks
             if runtime_ms is not None:
@@ -827,6 +873,8 @@ async def run_prover(
 
     return ProverReport(
         raw_rule_status=raw_rule_results,
+        external_functions=externals,
+        incomplete=incomplete,
         result_str=result_str,
         link=run_result["link"],
         certora_run_stdout=stdout,

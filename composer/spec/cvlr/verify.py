@@ -2,7 +2,8 @@
 
 ``cargo_check`` compiles the draft on the host and is not a stamp.
 ``verify_rules`` builds it for the chain, submits the rules the build listed,
-and stamps the draft when every one of them verified. A build that fails
+and stamps the draft when every one of them is accounted for. A rule marked
+as an expected failure is left out of that check. A build that fails
 reports the compiler error and submits nothing
 (:class:`~composer.spec.cvlr.prover.BuildRejected`).
 """
@@ -38,7 +39,8 @@ from composer.prover.core import (
     ProverOptions,
 )
 from composer.prover.accounting import RunAccounting
-from composer.prover.ptypes import RuleResult
+from composer.prover.ptypes import GeneratedAssertion, LoopUnwound, OverflowUnproven, RuleResult, StatusCodes
+from composer.prover.results import ExternalWarnings, UnreadableAlertReport
 from composer.prover.conf import SelectRules
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.prover import (
@@ -52,13 +54,24 @@ from composer.spec.cvlr.prover import (
     run_submission,
     write_submission,
 )
-from composer.spec.cvlr.author_tools import AdjustProverConfig, SummarizeForProver
+from composer.spec.cvlr.author_tools import (
+    AdjustProverConfig,
+    SummarizeForProver,
+    stamp_under,
+    unaccounted,
+)
 from composer.spec.cvlr.harness import HarnessModule
 from composer.spec.cvlr.manifest import ManifestCorrupt, ManifestMissing, rule_names_in_elf
 from composer.spec.cvlr.scaffold import SPECS_DIR
-from composer.spec.cvlr.state import CvlrGenerationState, tuning_history
+from composer.spec.cvlr.state import (
+    PROVER_VALIDATION_KEY,
+    CvlrGenerationState,
+    LastVerdicts,
+    tuning_history,
+)
 from composer.spec.cvlr.tree import SharedTree, UnitEdits
 from composer.spec.cvlr.tuning import SummaryDirective, TuningFiles
+from composer.spec.types import CheckName
 from composer.templates.loader import load_jinja_template
 from composer.ui.tool_display import tool_display
 
@@ -253,6 +266,52 @@ def _author_text(template: str, /, **values: object) -> str:
     return load_jinja_template(template, **values).rstrip("\n")
 
 
+def _incomplete_kind(stopped: GeneratedAssertion) -> str:
+    match stopped:
+        case LoopUnwound():
+            return "loop"
+        case OverflowUnproven():
+            return "overflow"
+
+
+def _incomplete_note(incomplete: Mapping[str, GeneratedAssertion]) -> str:
+    ordered = sorted(incomplete.items())
+    kinds = list(dict.fromkeys(_incomplete_kind(stopped) for _, stopped in ordered))
+    return _author_text(
+        "cvlr/incomplete_check.j2",
+        rules=[{"name": name, "assertion": stopped.assertion} for name, stopped in ordered],
+        advice="\n".join(_author_text("cvlr/incomplete_advice.j2", kind=kind) for kind in kinds),
+    )
+
+
+def _externals_note(externals: Sequence[str]) -> str | None:
+    """Text for the author about functions this run treated as external, or None.
+
+    ``externals`` is the Prover's own warning text. Not a gate. The starting
+    configuration leaves most platform code external, and the author cannot add
+    inlining directives.
+    """
+    if not externals:
+        return None
+    _log.info("prover treated functions as external:\n%s", "\n".join(externals))
+    return _author_text("cvlr/external_functions.j2", warnings="\n\n".join(externals))
+
+
+def _unverdicted(declared: Sequence[str], status: Mapping[str, StatusCodes]) -> list[str]:
+    """Rules the build listed that the report gave no verdict for.
+
+    The verdict roll-up only sees rules the report names. A missing rule would
+    otherwise leave "every rule is accounted for" true.
+    """
+    return sorted(set(declared) - status.keys())
+
+
+def _wrongly_expected(
+    status: Mapping[str, StatusCodes], expected_failures: Mapping[CheckName, str]
+) -> list[str]:
+    return sorted(name for name in expected_failures if status.get(name) == "VERIFIED")
+
+
 @tool_display("Compiling the harness", "Compile")
 class CargoCheck(
     WithInjectedState[CvlrGenerationState],
@@ -390,7 +449,11 @@ class VerifyRules(
     """Build the program with the harness and check its rules with the Certora Solana Prover.
 
     This takes minutes and spends prover time. Get ``cargo_check`` green first.
-    When every rule the build listed verified, it stamps that draft.
+    When every rule the build listed is accounted for, it stamps that draft.
+
+    A failing rule is not always a bad rule. If it exposes a real defect, mark
+    it with ``expect_rule_failure`` and say why. Marked rules are excluded from
+    this gate, so a run can finish with a real violation still in it.
     """
 
     @override
@@ -468,6 +531,8 @@ class VerifyRules(
         *,
         declared: Sequence[str],
     ) -> Command | str:
+        stamper = deps.stamper
+        expected = self.state["expected_failures"]
         match outcome:
             case BuildRejected(build=build):
                 said = (
@@ -485,22 +550,78 @@ class VerifyRules(
                     said.append(inert)
                 return tool_return(self.tool_call_id, "\n\n".join(said))
             case Checked(build=build, report=report):
-                status = report.rule_status
-                not_verified = [name for name in declared if not status.get(name, False)]
+                status = report.rule_outcomes()
+                incomplete = report.incomplete
+                unexcused = unaccounted(status, expected, incomplete)
+                property_failures = [
+                    name
+                    for name in unexcused
+                    if status[name] == "VIOLATED" and name not in incomplete
+                ]
+                unfinished = [
+                    name
+                    for name in unexcused
+                    if name not in property_failures and name not in incomplete
+                ]
+                unverdicted = _unverdicted(declared, status)
+                surprising = _wrongly_expected(status, expected)
                 lines = [report.result_str]
                 if (inert := await self._inert_summaries(build)) is not None:
                     lines.append(inert)
-                if not_verified:
-                    lines.append(f"Not verified: {', '.join(not_verified)}.")
-                    return tool_state_update(
-                        self.tool_call_id, "\n\n".join(lines), prover_link=report.link
+                if surprising:
+                    lines.append(
+                        _author_text("cvlr/expected_verified.j2", names=", ".join(surprising))
                     )
-                lines.append("Every declared rule verified. This draft is stamped.")
+                if incomplete:
+                    lines.append(_incomplete_note(incomplete))
+                if unverdicted:
+                    lines.append(_author_text("cvlr/no_verdict.j2", names=", ".join(unverdicted)))
+                if property_failures:
+                    lines.append(
+                        _author_text("cvlr/unaccounted.j2", names=", ".join(property_failures))
+                    )
+                if unfinished:
+                    lines.append(
+                        _author_text("cvlr/no_property_verdict.j2", names=", ".join(unfinished))
+                    )
+                match report.external_functions:
+                    case UnreadableAlertReport():
+                        lines.append(
+                            "The alert report could not be read, so the functions this run "
+                            "treated as external are unknown."
+                        )
+                        recorded_externals = None
+                    case ExternalWarnings(messages=messages):
+                        if (note := _externals_note(messages)) is not None:
+                            lines.append(note)
+                        recorded_externals = messages
+                last = LastVerdicts(
+                    status=status,
+                    incomplete=sorted(incomplete),
+                    unverdicted=unverdicted,
+                    stamp=stamper(self.state, tuning_history(self.state)),
+                )
+                # A marking re-decides with this same predicate. The cleared stamp is what a
+                # withdrawn marking writes. A run that is not accounted for clears a stamp of
+                # this same draft, and leaves a stamp of a different draft where it is.
+                earned = stamp_under(last, expected)
+                validations = {}
+                if earned == last.stamp:
+                    lines.append("Every rule is accounted for. This draft is stamped.")
+                    validations = {"validations": earned}
+                elif (
+                    self.state["validations"].get(PROVER_VALIDATION_KEY)
+                    == last.stamp[PROVER_VALIDATION_KEY]
+                ):
+                    lines.append("This run is not accounted for, so the prover stamp is withdrawn.")
+                    validations = {"validations": earned}
                 return tool_state_update(
                     self.tool_call_id,
                     "\n\n".join(lines),
                     prover_link=report.link,
-                    validations=deps.stamper(self.state, tuning_history(self.state)),
+                    external_functions=recorded_externals,
+                    last_verdicts=last,
+                    **validations,
                 )
 
 

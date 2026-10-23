@@ -94,40 +94,55 @@ class PropertyViolation:
 
 @dataclass(frozen=True)
 class IncompleteCheck:
-    """The prover reported an assertion *it* generated, not the rule's.
+    """An assertion the prover generated for itself.
 
-    The check did not finish, so nothing about the program follows from it — an unwound loop bound
-    is the prover saying it stopped, not the program misbehaving. Still worth showing an author,
-    who can raise the bound or constrain the loop; not worth writing up as a finding.
-    ``assertion`` is the prover's own message, which carries its own recommendation.
+    The check did not finish, so nothing about the program follows from it. Show
+    it to the author. Do not record it as a finding. ``assertion`` is the
+    prover's message. The subclass names which kind it was.
     """
 
     assertion: str
 
 
-type ViolationKind = PropertyViolation | IncompleteCheck
+@dataclass(frozen=True)
+class LoopUnwound(IncompleteCheck):
+    """A loop needed more iterations than the bound unrolls: the prover stopped, the program did
+    not misbehave. The author can bound what sets the trip count, or raise the bound."""
 
-#: Assertions the prover generates for itself when an analysis bound is reached rather than a
-#: property broken, matched by prefix — the tail carries advice that changes between versions.
+
+@dataclass(frozen=True)
+class OverflowUnproven(IncompleteCheck):
+    """The sound-signed-math pass could not show that an expression it treats as a pointer stays below ``2^64``.
+
+    With ``-solanaTACSoundSignedMath``, the prover treats pointer arithmetic,
+    byte-map indexes, and inferred pointers as unable to exceed 64 bits, then
+    asserts that. The assertion fails when the expression uses a value read
+    from account data that the rule left free near ``u64::MAX``. Bounding that
+    input gets past it.
+    """
+
+
+type GeneratedAssertion = LoopUnwound | OverflowUnproven
+
+type ViolationKind = PropertyViolation | GeneratedAssertion
+
+#: Assertions the prover generates for itself, matched by prefix. The tail
+#: carries advice that changes between versions.
 #:
-#: The list fails safe: an assertion it does not recognize is treated as the rule's own, so a stale
-#: entry costs a spuriously reported finding and can never suppress a real one.
-#:
-#: ``Cannot overflow`` is the Solana Prover's sound-signed-math pass. Under
-#: ``-solanaTACSoundSignedMath`` it annotates pointer arithmetic it believes cannot exceed 64 bits
-#: and then asserts that belief (``sbf/tac/TACModSimplifier.kt``, ``removeNoOverflow``); the
-#: assertion fails where a pointer is computed from a value the analysis could not pin down,
-#: typically an account's ``data_len`` that no rule bounded. An author can act on it — pin the
-#: length, or fall back to ``-solanaTACOptimisticOverflowOptimization`` — but a findings synthesizer
-#: handed it writes the prover's limitation up as a defect in the program under verification.
-_GENERATED_ASSERTIONS = ("Unwinding condition in a loop", "Cannot overflow")
+#: An unrecognized assertion is treated as the rule's own. A stale entry can
+#: report a finding that is not one, and cannot hide a real one.
+_GENERATED_ASSERTIONS: tuple[tuple[str, type[GeneratedAssertion]], ...] = (
+    ("Unwinding condition in a loop", LoopUnwound),
+    ("Cannot overflow", OverflowUnproven),
+)
 
 
 def classify_violation(cex: Counterexample | None) -> ViolationKind:
     """Whether a violated rule found a bug or ran into the prover's own limits."""
     if cex is not None and cex.assertion is not None:
-        if cex.assertion.startswith(_GENERATED_ASSERTIONS):
-            return IncompleteCheck(cex.assertion)
+        for prefix, kind in _GENERATED_ASSERTIONS:
+            if cex.assertion.startswith(prefix):
+                return kind(cex.assertion)
     return PropertyViolation()
 
 
