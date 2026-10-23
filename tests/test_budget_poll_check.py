@@ -19,8 +19,8 @@ from composer.diagnostics.timing import RunSummary, install_run_summary
 from composer.spec.source.prover import _SpecCallbacks
 
 
-def _callbacks(summary: RunSummary) -> _SpecCallbacks:
-    return _SpecCallbacks(lambda _e: None, "toolu_test", summary, {})
+def _callbacks() -> _SpecCallbacks:
+    return _SpecCallbacks(lambda _e: None, "toolu_test", {})
 
 
 def _summary_started_ago(seconds: float) -> RunSummary:
@@ -37,14 +37,14 @@ def test_poll_raises_once_the_time_budget_is_spent() -> None:
     summary = _summary_started_ago(7_300)
     install_run_summary(summary)
     with time_budget(7_200), pytest.raises(BudgetExceeded, match="Time budget"):
-        asyncio.run(_callbacks(summary).on_cloud_poll("RUNNING", "Cloud job 0059382f: RUNNING"))
+        asyncio.run(_callbacks().on_cloud_poll("RUNNING", "Cloud job 0059382f: RUNNING"))
 
 
 def test_poll_is_quiet_while_inside_the_budget() -> None:
     summary = _summary_started_ago(60)
     install_run_summary(summary)
     with time_budget(7_200):
-        asyncio.run(_callbacks(summary).on_cloud_poll("RUNNING", "Cloud job 0059382f: RUNNING"))
+        asyncio.run(_callbacks().on_cloud_poll("RUNNING", "Cloud job 0059382f: RUNNING"))
 
 
 def test_the_helper_raises_once_the_budget_is_spent() -> None:

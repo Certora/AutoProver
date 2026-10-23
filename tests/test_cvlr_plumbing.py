@@ -48,8 +48,14 @@ from composer.cargo.sbf import (
     write_build_script,
 )
 from composer.cargo.session import CargoSession, CompileFailed
+from composer.diagnostics.timing import (
+    RunSummary,
+    install_run_summary,
+    set_current_task_id,
+)
 from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.prover import Submission, write_submission
+from composer.prover.accounting import RunAccounting
 
 
 # --------------------------------------------------------------------------------------------
@@ -848,3 +854,27 @@ def test_a_failed_compile_carries_the_compilers_own_words():
     failed = CompileFailed(diagnostics="error[E0599]: no method named `cvlr_assert`", exit_code=101)
     assert not isinstance(failed, Built)
     assert "E0599" in failed.diagnostics
+
+
+@pytest.mark.asyncio
+async def test_a_prover_run_is_accounted_for():
+    """Link, runtime, and wall clock are recorded from the prover callbacks."""
+    summary = RunSummary()
+    install_run_summary(summary)
+    callbacks = RunAccounting()
+
+    # The link and the runtime land on the active task's phase record.
+    with set_current_task_id("verify-deposits"):
+        await callbacks.on_prover_run(["certoraSolanaProver", "run.conf"])
+        await callbacks.on_prover_link("https://prover.certora.com/output/1/2")
+        await callbacks.on_prover_runtime(4200)
+        await callbacks.on_prover_result({})
+    summary.record_phase(
+        task_id="verify-deposits", label="deposits", phase="formalization",
+        wall_s=90.0, queue_wait_s=0.0,
+    )
+
+    assert summary.prover_usage_summary()["total_ms"] == 4200
+    assert summary.prover_total_calls == 1
+    assert summary.phases[0].final_link == "https://prover.certora.com/output/1/2"
+    assert summary.phases[0].prover_reported_ms == 4200

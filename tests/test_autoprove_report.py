@@ -47,7 +47,6 @@ from composer.spec.source.report_prover import make_prover_fetcher
 from composer.spec.source.report.collect import RuleEvidence
 from composer.spec.source.report.findings import FindingDraft, build_findings
 from composer.spec.source.cex_capture import CexAnalysisStore
-from composer.diagnostics.timing import RunSummary
 
 
 # ---------------------------------------------------------------------------
@@ -1208,9 +1207,8 @@ def _capture(events: list | None = None):
     from langgraph.store.memory import InMemoryStore
     from composer.spec.source.prover import _SpecCallbacks
     store = CexAnalysisStore(store=InMemoryStore(), namespace=("cex_analyses", "t"))
-    summary = SimpleNamespace(add_prover_call=lambda _elapsed: None)
-    cb = _SpecCallbacks((events if events is not None else []).append, "tc1",
-                        cast(RunSummary, summary), {}, analysis_store=store)
+    cb = _SpecCallbacks((events if events is not None else []).append, "tc1", {},
+                        analysis_store=store)
     return store, cb
 
 
@@ -1236,6 +1234,30 @@ async def test_spec_callbacks_captures_cex_analysis():
         ("withdraw", "root cause: CEI", "<counterexample><cex/></counterexample>")]
     assert await store.for_rule("no_reentrancy for withdraw") == []   # not the pretty-printed form
     assert any(e.get("type") == "rule_analysis" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_spec_callbacks_account_for_the_run_and_still_emit_its_events():
+    """The accounting and the stream events are separate classes in one ``super()`` chain. Each
+    event has to reach both."""
+    from composer.diagnostics.timing import RunSummary, install_run_summary, set_current_task_id
+
+    summary = RunSummary()
+    install_run_summary(summary)
+    events: list = []
+    _, cb = _capture(events)
+    with set_current_task_id("t"):
+        await cb.on_prover_run(["certoraRun"])
+        await cb.on_prover_link("https://prover.certora.com/output/1/2")
+        await cb.on_prover_runtime(4200)
+        await cb.on_prover_result({})
+    summary.record_phase(task_id="t", label="t", phase="formalization", wall_s=1.0, queue_wait_s=0.0)
+
+    assert [e["type"] for e in events] == ["prover_run", "prover_link", "prover_result"]
+    assert events[0]["config"] == {}
+    assert summary.prover_total_calls == 1
+    assert summary.phases[0].final_link == "https://prover.certora.com/output/1/2"
+    assert summary.phases[0].prover_reported_ms == 4200
 
 
 @pytest.mark.asyncio
