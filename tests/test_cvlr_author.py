@@ -406,7 +406,7 @@ async def test_the_submission_names_the_rules_the_build_listed(tmp_path, monkeyp
         # What the run started from. The state below carries different settings, which is what a
         # settings edit would have produced and what the submission must actually use.
         submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
-        submissions=Path("/w/submissions"),
+        submission_dir=Path("/w/submissions"),
         prover_opts=None,
         analysis=_unbound_analysis(),
         stamper=None,
@@ -453,7 +453,7 @@ async def test_a_missing_rule_section_writes_no_conf(tmp_path, monkeypatch):
     deps = SimpleNamespace(
         target=SimpleNamespace(session=None, build_slot=_stubbed_slot),
         submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
-        submissions=Path("/w/submissions"),
+        submission_dir=Path("/w/submissions"),
         prover_opts=None,
         analysis=_unbound_analysis(),
         stamper=None,
@@ -490,7 +490,7 @@ async def test_a_corrupt_rule_section_writes_no_conf(tmp_path, monkeypatch, capl
     deps = SimpleNamespace(
         target=SimpleNamespace(session=None, build_slot=_stubbed_slot),
         submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
-        submissions=Path("/w/submissions"),
+        submission_dir=Path("/w/submissions"),
         prover_opts=None,
         analysis=_unbound_analysis(),
         stamper=None,
@@ -523,7 +523,7 @@ async def test_an_empty_rule_section_submits_nothing(tmp_path, monkeypatch):
     deps = SimpleNamespace(
         target=SimpleNamespace(session=None, build_slot=_stubbed_slot),
         submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
-        submissions=Path("/w/submissions"),
+        submission_dir=Path("/w/submissions"),
         prover_opts=None,
         analysis=_unbound_analysis(),
         stamper=None,

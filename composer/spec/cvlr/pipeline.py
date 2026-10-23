@@ -178,7 +178,7 @@ class SharedBuild:
     #: :meth:`composer.spec.cvlr.verify.HarnessTarget.build_slot`.
     build_sem: asyncio.Semaphore
     #: Where submissions are written; see :data:`SUBMISSIONS_DIR`.
-    submissions: Path
+    submission_dir: Path
     warm_failure: str | None = None
 
 
@@ -238,7 +238,7 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
                     self.deps.package_dir / ENVS_DIR / SUMMARIES.unit_composite(identity.module),
                 ),
             ),
-            submissions=self.build.submissions,
+            submission_dir=self.build.submission_dir,
             prover_opts=self.deps.prover_opts,
             stamper=prover_stamper(),
             analysis=CexAnalysis(store=self.deps.cex_analysis),
@@ -391,8 +391,8 @@ class CvlrStagedFormalizer(StagedFormalizer[GeneratedHarness, SolanaComponentIns
         session = CargoSession(
             workdir=tree.root, sandbox=self.deps.sandbox, toolchain=HOST_RUST_TOOLCHAIN
         )
-        submissions = self.deps.work_dir / SUBMISSIONS_DIR
-        submissions.mkdir(parents=True, exist_ok=True)
+        submission_dir = self.deps.work_dir / SUBMISSIONS_DIR
+        submission_dir.mkdir(parents=True, exist_ok=True)
         warmed = await session.warm()
         failure = (
             f"could not fetch the dependency graph for {tree.root} "
@@ -406,7 +406,7 @@ class CvlrStagedFormalizer(StagedFormalizer[GeneratedHarness, SolanaComponentIns
             # One permit for the run. Cargo would serialize concurrent builds against this
             # `target/` on its own lock anyway; the permit is the queue the host can see.
             build_sem=asyncio.Semaphore(1),
-            submissions=submissions,
+            submission_dir=submission_dir,
             warm_failure=failure,
         )
         return CvlrFormalizer(GeneratedHarness, "prover", self.deps, build)

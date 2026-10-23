@@ -53,7 +53,7 @@ def _target(tmp_path: Path, sem: asyncio.Semaphore) -> HarnessTarget:
 def _deps(tmp_path: Path, sem: asyncio.Semaphore) -> SimpleNamespace:
     return SimpleNamespace(
         target=_target(tmp_path, sem),
-        submissions=tmp_path / "submissions",
+        submission_dir=tmp_path / "submissions",
         prover_opts=None,
     )
 

@@ -216,7 +216,7 @@ def _deps(analyzer: _FakeAnalyzer, results: _FakeResults) -> verify_mod.VacuityD
     verify = SimpleNamespace(
         target=SimpleNamespace(session=None, build_slot=_stubbed_slot),
         submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit_x", msg="m"),
-        submissions=Path("/w/submissions"),
+        submission_dir=Path("/w/submissions"),
         prover_opts=None,
     )
     return verify_mod.VacuityDeps(verify, analyzer, lambda: results)  # type: ignore[arg-type]
