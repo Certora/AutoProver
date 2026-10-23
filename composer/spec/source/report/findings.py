@@ -15,6 +15,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import Field
 
+from composer.llm.structured import with_structured_output
 from composer.spec.gen_types import TypedTemplate
 from composer.templates.loader import load_jinja_template
 from composer.spec.source.report.collect import EvidenceFetcher, RuleEvidence
@@ -116,7 +117,7 @@ async def build_findings(
     group_by_key: dict[PropertyKey, PropertyGroup] = {k: g for g in groups for k in g.members}
 
     system = _FINDINGS_SYSTEM.bind({}).render_to(load_jinja_template)
-    bound = llm.with_structured_output(FindingDraft)
+    bound = with_structured_output(llm, FindingDraft)
 
     async def _one(rule: RuleVerdict) -> Finding | None:
         try:
