@@ -39,7 +39,7 @@ an SDK 3 `Clock::get()`, failing the whole job; it is fixed on master by
 large lending program's run**, where every failed job was one of them. P16 is the general form of
 P15's escape: any internal error while encoding one rule fails the job. P17, a 32 KB heap counted
 over allocation sites, caused most of those failures, and an existing option fixes it once you know
-to pass it. P18 and P19 are the allocator on a current toolchain.
+to pass it; after P16 what is left of it is the error message. P18 and P19 are the allocator on a current toolchain.
 
 **Group U — `prover_output_utility`.** The library the report stack reads verdicts through. One
 entry, and unlike the others it was corrupting our own output rather than merely obstructing us;
@@ -80,7 +80,7 @@ the write-up gives the line number rather than the name.
 | [P14](#p14) | The CPI analysis matches only `solana_program`'s `invoke`, so on SDK 3 no CPI is substituted and nothing says so | minor — only with `-solanaCpiAnalysis`, which AutoProver does not set; not filed |
 | [P15](#p15) | An SDK 3 `Clock::get()` can crash the Prover: "TAC Clock::get expected to extract 5 TAC variables from call sol_get_clock_sysvar" | **major** — the job FAILS with no verdicts; fixed on the Prover's master branch ([EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762)) |
 | [P16](#p16) | An internal error while encoding one rule (`TACTranslationError`, `PointerDomainError`) escapes the per-rule `catch` and fails every rule in the job | **major** — all 10 failed jobs of a 56-job run; not filed |
-| [P17](#p17) | The TAC heap is a 32 KB bump allocator over allocation *sites*; exhausting it is a crash with no hint, though `-solanaHeapSize` fixes it | **major** — 8 of those 10; reproduced and fixed by the option; not filed |
+| [P17](#p17) | Running out of the TAC heap does not say that `-solanaHeapSize` raises it, and the option's help calls the bound the runtime heap | minor once P16 is fixed (8 of those 10 failed jobs were this); the option fixes it, reproduced; not filed |
 | [P18](#p18) | `sol_alloc_free_` crashes the points-to analysis: "TODO(5): support sol_alloc_free" | **major** — 2 of those 10; trigger not pinned; not filed |
 | [P19](#p19) | The allocator recognizer misses `__rustc::__rust_realloc` and `__rustc::__rust_alloc_zeroed` | major — the suspected path to P18; not filed |
 | [U1](#u1) | `extract_job_id_from_url` cannot parse a Solana Prover job link | **major**, worked around |
@@ -1154,44 +1154,48 @@ catching the class.
 
 ## P17
 
-### The TAC heap is a 32 KB bump allocator over allocation *sites*, and running out of it is a crash with no hint
+### Running out of the TAC heap does not say that `-solanaHeapSize` raises it
 
-`SbfCFGToTAC` gives each rule a `TACBumpAllocator` (`sbf/tac/SbfCFGToTAC.kt:121`,
-`sbf/tac/TACAllocators.kt:48`) over `[SBF_HEAP_START, SBF_HEAP_START + -solanaHeapSize)`. Every
-allocation call in the rule's inlined program gets fresh addresses at translation time, and nothing
-is ever returned. So it counts allocation *sites* across every inlined path, not live bytes. An
-allocation whose size the analysis cannot read is charged `-solanaTACHeapAllocSize`, 512 bytes.
-`alloc::fmt::format::format_inner`, behind every `msg!` with arguments, is always one of those. When
-the total passes the bound, `next()` throws `TACTranslationError("TACHeapAllocator ran out of memory
-of 32768 bytes!")`, and P16 turns that into a failed job.
+**Applies once P16 is fixed.** Until then a heap overflow fails the whole job, and that is P16's
+defect. With P16 fixed, it fails one rule, and this entry is about what that rule's error says.
 
-The default, 32768, is described in the option's help as "the actual SBF runtime constraint". But the
-quantity being bounded is not the runtime heap: a handler with 64 formatted log messages on 64
-different paths runs only one of those paths, and drops each string after logging it. Here it costs
-32 KB.
+The heap is a per-rule `TACBumpAllocator` (`sbf/tac/SbfCFGToTAC.kt:121`,
+`sbf/tac/TACAllocators.kt:48`). Every allocation site in the rule's inlined program gets fresh
+addresses at translation time, and nothing is freed. An allocation whose size the analysis cannot
+read is charged `-solanaTACHeapAllocSize`, 512 bytes, which every `msg!` with arguments is. When
+the total passes `-solanaHeapSize` (default 32768), `next()` throws:
 
-**Effect, and the fix to verify it.** On the lending program above, 8 of 10 failed jobs were this:
-6 in one unit (21 properties, reserve administration) and 2 in another (12, fees). One of the
-crashed jobs had 18 `format_inner` allocations of unknown size, 9 KB of the 32 KB. The job's own
-uploaded sources, rebuilt and resubmitted on 2026-10-23:
+```
+TACTranslationError("TACHeapAllocator ran out of memory of 32768 bytes!")
+```
+
+Nothing in it names the option, or how much the rule needed, so the reader cannot tell this is a
+setting rather than a fault in the program or the rule. The option's own help makes it worse: it
+calls 32 KB "the actual SBF runtime constraint", which reads as "your program uses too much memory".
+It is not that. The bound is on translation-time allocation sites, and a program well inside its
+runtime heap can exceed it.
+
+**The option does fix it.** On a ~36k-line Anchor lending program (2026-10-22, Prover `master`), 8
+cloud jobs failed this way. One of them, rebuilt from its own uploaded sources and resubmitted on
+2026-10-23:
 
 | job | prover args | result |
 |---|---|---|
 | `400485abc6c440aca1ed1cbef6ea8b75` | as the run submitted them | `FAILED`, `TACHeapAllocator ran out of memory of 32768 bytes!` |
 | `0ec2cec8d7b045419a70e60e97da3855` | the same plus `-solanaHeapSize 262144` | `SUCCEEDED` in 3.5 minutes: 16 verified, 7 violated, 7 per-rule errors |
 
-`-solanaHeapSize` exists (since Prover 8.12, EVMVerifier `8254cff534c`), but nothing points at it. The
-stack has the same kind of bound, and running out of it is a per-rule `SolanaError` (code 6000,
-`sbf/support/Errors.kt:292`) whose help names the option and the size to pass.
+**Fix: report it the way stack exhaustion is reported.** Running out of stack is a `SolanaError`
+with code 6000 (`smashedStackUserInfo`, `sbf/support/Errors.kt:292`), whose help names
+`-solanaStackSize` and a size, `nearestPowerOfTwo(current + overflow)`. For the heap, throw a
+`SolanaError` with its own code from `TACBumpAllocator.next()`. It should give the bound, the total
+reached at the failing allocation, and "increase it with `-solanaHeapSize N`". The total at failure
+is a lower bound on what the rule needs, since translation stops there, so `N` should be at least
+the next power of two above it, and the message should say so. Reword the option's help to say what
+the bound counts: allocation sites in the translated rule, not the runtime heap.
 
-**Fix:** report heap exhaustion the way stack exhaustion is reported: a `SolanaError` with a code,
-the size the rule needed, and "increase it with `-solanaHeapSize N`". That alone turns a lost job
-into one actionable rule error. Consider also a much larger default, since the bound is on
-translation-time sites rather than on what the program can hold live, and a larger heap only widens
-the address range allocations are drawn from.
-
-**What AutoProver does about it.** Nothing yet. The obvious change is `-solanaHeapSize` in the
-backend's default prover args (`composer/spec/cvlr/conf.py`).
+**What AutoProver does about it.** Nothing yet. AutoProver can pass `-solanaHeapSize` in the
+backend's default prover args (`composer/spec/cvlr/conf.py`), which avoids the error whether or not
+this is fixed.
 
 ---
 
