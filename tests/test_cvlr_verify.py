@@ -10,8 +10,8 @@ import pytest
 
 from composer.authoring.state import make_validation_stamper, spec_digest
 from composer.cargo.session import CompileFailed
-from composer.prover.core import ProverReport
-from composer.prover.ptypes import LoopUnwound, RulePath
+from composer.prover.core import ProverReport, _report_without_analysis
+from composer.prover.ptypes import Counterexample, LoopUnwound, RulePath, RuleResult
 from composer.spec.cvlr.conf import TunableConf
 from composer.spec.cvlr.prover import BuildRejected, Checked, SubmissionFailed
 from composer.spec.cvlr.state import PROVER_VALIDATION_KEY, tuning_history
@@ -146,3 +146,13 @@ async def test_no_draft_is_not_submitted():
     out = await _tool(None).run()
 
     assert out == "No harness written yet — put a draft first."
+
+
+def test_a_report_without_analysis_leaves_out_the_counterexample():
+    """A dump per violated rule would flood the context of whoever reads the report."""
+    violated = RuleResult(
+        path=RulePath(rule="rule_b"),
+        counterexample=Counterexample(trace="<the-whole-trace/>"),
+        status="VIOLATED",
+    )
+    assert _report_without_analysis([violated]) == "rule_b: VIOLATED"

@@ -495,8 +495,7 @@ async def _stage_and_submit(
     ``deps.analysis`` after the conf is written, immediately before
     :func:`run_submission`. Building it reads the author's model, so a run that
     returns earlier never builds one. ``explain_vacuity`` passes false: that
-    job reads an unsat core, and a violated rule is rendered as its status and
-    dump.
+    job reads an unsat core, and a violated rule is rendered as its status.
 
     One build permit is held until the Prover has uploaded. ``run_submission``
     rebuilds the crate into the shared target directory and uploads that

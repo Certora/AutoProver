@@ -474,7 +474,10 @@ class TrivialFanoutCexHandler(CexHandler):
 
 
 def _report_without_analysis(results: list[RuleResult]) -> str:
-    """Each rule's status, the prover's messages, and its counterexample dump.
+    """Each rule's status and the prover's messages.
+
+    Not the counterexample: a dump per violated rule would flood the context of
+    whoever reads the report. A person reads it through the run's link.
 
     ``flat_rule_feedback.j2`` prints "Analyzing the counterexample yielded no
     results" for a violated rule that has no explanation. That sentence would
@@ -485,8 +488,6 @@ def _report_without_analysis(results: list[RuleResult]) -> str:
         lines.append(f"{r.name}: {r.status}")
         for message in r.error_messages or ():
             lines.append(f"  {message}")
-        if r.cex_dump:
-            lines.append(f"  {r.cex_dump}")
     return "\n".join(lines)
 
 
@@ -852,8 +853,8 @@ async def run_prover(
 
             # 10. Render a violated run while the report directory is alive. A
             # handler reads source from it and owns the per-rule events and
-            # any records it stores. With no handler the status and the dump
-            # are already on the results. ``emv_path`` is that directory;
+            # any records it stores. With no handler the status is already
+            # on the results. ``emv_path`` is that directory;
             # a handler that reads source narrows to
             # ``emv_path / "inputs" / ".certora_sources"``.
             if any(r.status == "VIOLATED" for r in all_results):
