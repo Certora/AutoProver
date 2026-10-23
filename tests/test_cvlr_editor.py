@@ -173,6 +173,16 @@ def test_the_editor_never_writes_a_dependency_or_the_authors_files(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_a_released_permit_does_not_stage(tmp_path: Path):
+    """A submission releases its permit at upload. A sibling may be building by then."""
+    target = await _target(_project(tmp_path))
+    async with target.build_slot() as permit:
+        permit.release()
+        with pytest.raises(RuntimeError):
+            await permit.stage("// draft\n")
+
+
+@pytest.mark.asyncio
 async def test_submitting_without_an_approval_is_refused(tmp_path: Path):
     root = _project(tmp_path)
     answer = await _run(

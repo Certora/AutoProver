@@ -110,19 +110,49 @@ class BuildPermit:
     that upload finishes, before the cloud job finishes.
     """
 
-    def __init__(self, sem: asyncio.Semaphore) -> None:
-        self._sem = sem
+    def __init__(self, target: "HarnessTarget") -> None:
+        self._target = target
         self._held = False
 
     async def acquire(self) -> None:
-        await self._sem.acquire()
+        await self._target.build_sem.acquire()
         self._held = True
 
     def release(self) -> None:
         """Release the permit. Releasing one that is already released does nothing."""
         if self._held:
             self._held = False
-            self._sem.release()
+            self._target.build_sem.release()
+
+    async def stage(
+        self,
+        draft: str,
+        summaries: Sequence[SummaryDirective] = (),
+        overlay: Mapping[str, str] = {},
+    ) -> None:
+        """Make the tree match the unit's state.
+
+        The draft, the summaries, and the source overlay are all inputs to the
+        build. Each is taken from already-merged state, so two concurrent calls
+        cannot each write their own view.
+
+        The summaries file is rewritten from ``summaries`` even when that is
+        empty. The composite the conf names has to exist, and a directive
+        dropped from state has to leave the file. The overlay replaces the
+        unit's edited files
+        (:meth:`composer.spec.cvlr.tree.SharedTree.reconcile`).
+
+        Staging needs the permit held. It keeps two units out of the tree at
+        once, and keeps a sibling's edits out of this build.
+        """
+        if not self._held:
+            raise RuntimeError("staging needs a held build permit")
+        target = self._target
+        target.tuning.write(tuple(summaries))
+        await target.tree.reconcile(
+            target.unit.module,
+            UnitEdits(module_path=target.module_path, draft=draft, overlay=overlay),
+        )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -185,39 +215,12 @@ class HarnessTarget:
         built for the sibling's feature. :func:`_stage_and_submit` releases the
         permit through the yielded :class:`BuildPermit` once the upload is done.
         """
-        permit = BuildPermit(self.build_sem)
+        permit = BuildPermit(self)
         await permit.acquire()
         try:
             yield permit
         finally:
             permit.release()
-
-    async def stage(
-        self,
-        draft: str,
-        summaries: Sequence[SummaryDirective] = (),
-        overlay: Mapping[str, str] = {},
-    ) -> None:
-        """Make the tree match this unit's state.
-
-        The draft, the summaries, and the source overlay are all inputs to the
-        build. Each is taken from already-merged state, so two concurrent calls
-        cannot each write their own view.
-
-        The summaries file is rewritten from ``summaries`` even when that is
-        empty. The composite the conf names has to exist, and a directive
-        dropped from state has to leave the file. The overlay replaces this
-        unit's edited files
-        (:meth:`composer.spec.cvlr.tree.SharedTree.reconcile`).
-
-        Call it while holding :meth:`build_slot`. That permit keeps two units
-        out of the tree at once, and keeps a sibling's edits out of this build.
-        """
-        self.tuning.write(tuple(summaries))
-        await self.tree.reconcile(
-            self.unit.module,
-            UnitEdits(module_path=self.module_path, draft=draft, overlay=overlay),
-        )
 
 
 class _RunAccounting(ProverCallbacks):
@@ -456,8 +459,8 @@ class CargoCheck(
         if draft is None:
             return "No harness written yet — put a draft first."
         with self.tool_deps() as target:
-            async with target.build_slot():
-                await target.stage(draft, self.state["summaries"], self.state["vfs"])
+            async with target.build_slot() as permit:
+                await permit.stage(draft, self.state["summaries"], self.state["vfs"])
                 run = await target.session.check(
                     manifest_dir=target.package_dir, features=target.features
                 )
@@ -540,7 +543,7 @@ async def _stage_and_submit(
     behind that sibling's feature.
     """
     async with deps.target.build_slot() as permit:
-        await deps.target.stage(draft, state["summaries"], state["vfs"])
+        await permit.stage(draft, state["summaries"], state["vfs"])
         build = await build_for_submission(deps.target.session, submission)
         if not isinstance(build.verdict, Built):
             return BuildRejected(build)

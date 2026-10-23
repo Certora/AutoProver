@@ -242,8 +242,8 @@ async def gate_edits(
     Nothing needs undoing afterwards. The tree is derived from state, so whichever unit stages next
     replaces this overlay, and an edit the author never commits is simply never staged again.
     """
-    async with target.build_slot():
-        await target.stage(draft, summaries, overlay)
+    async with target.build_slot() as permit:
+        await permit.stage(draft, summaries, overlay)
         run = await target.session.check(
             manifest_dir=target.package_dir, features=target.features
         )

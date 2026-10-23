@@ -29,8 +29,16 @@ pytestmark = pytest.mark.asyncio
 _LINK = "https://prover.certora.com/jobStatus/1/abc"
 
 
-def _deps(tmp_path: Path, sem: asyncio.Semaphore) -> SimpleNamespace:
-    target = HarnessTarget(
+@pytest.fixture(autouse=True)
+def _no_staging(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def stage(*_args):
+        return None
+
+    monkeypatch.setattr(BuildPermit, "stage", stage)
+
+
+def _target(tmp_path: Path, sem: asyncio.Semaphore) -> HarnessTarget:
+    return HarnessTarget(
         session=SimpleNamespace(workdir=tmp_path),  # type: ignore[arg-type]
         module_path=tmp_path / "m.rs",
         package="p",
@@ -41,13 +49,10 @@ def _deps(tmp_path: Path, sem: asyncio.Semaphore) -> SimpleNamespace:
         build_sem=sem,
     )
 
-    async def stage(*_args):
-        return None
 
+def _deps(tmp_path: Path, sem: asyncio.Semaphore) -> SimpleNamespace:
     return SimpleNamespace(
-        target=SimpleNamespace(
-            session=target.session, stage=stage, build_slot=target.build_slot
-        ),
+        target=_target(tmp_path, sem),
         submissions=tmp_path / "submissions",
         prover_opts=None,
     )
@@ -190,11 +195,11 @@ async def test_a_corrupt_manifest_frees_the_permit_without_writing_the_conf(tmp_
     assert not sem.locked()
 
 
-async def test_releasing_a_permit_twice_releases_it_once():
+async def test_releasing_a_permit_twice_releases_it_once(tmp_path: Path):
     """The link releases it, and so does the end of the slot. A second release must not hand a
     second unit the permit while a third already holds it."""
     sem = asyncio.Semaphore(1)
-    permit = BuildPermit(sem)
+    permit = BuildPermit(_target(tmp_path, sem))
     await permit.acquire()
     permit.release()
     permit.release()

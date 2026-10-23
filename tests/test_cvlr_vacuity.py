@@ -169,6 +169,10 @@ async def _stubbed_stage(draft, summaries=(), overlay={}) -> None:
     return None
 
 
+def _stubbed_slot() -> contextlib.nullcontext[SimpleNamespace]:
+    return contextlib.nullcontext(SimpleNamespace(stage=_stubbed_stage))
+
+
 def _patch_listed(monkeypatch, tmp_path: Path, names: set[str]) -> list[CvlrSubmission]:
     """A chain build whose ``.cvlr_rules`` section lists ``names``. Returns what was written."""
     payload = record(0, b"CV1") + b"".join(record(1, name.encode()) for name in sorted(names))
@@ -210,7 +214,7 @@ class _FakeAnalyzer:
 
 def _deps(analyzer: _FakeAnalyzer, results: _FakeResults) -> verify_mod.VacuityDeps:
     verify = SimpleNamespace(
-        target=SimpleNamespace(session=None, stage=_stubbed_stage, build_slot=contextlib.nullcontext),
+        target=SimpleNamespace(session=None, build_slot=_stubbed_slot),
         submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit_x", msg="m"),
         submissions=Path("/w/submissions"),
         prover_opts=None,
