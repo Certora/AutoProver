@@ -10,7 +10,6 @@ reports the compiler error and submits nothing
 import asyncio
 from dataclasses import dataclass, replace
 import logging
-import time
 from collections.abc import Callable, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -27,16 +26,15 @@ from graphcore.tools.schemas import (
 )
 
 from composer.authoring.state import ValidationStamper
-from composer.diagnostics.timing import get_run_summary
 from composer.cargo.features import CargoFeature
 from composer.cargo.sbf import Built
 from composer.cargo.session import CargoSession, CompileFailed, Compiled
 from composer.prover.core import (
     CexHandler,
     CexProgressCallbacks,
-    ProverCallbacks,
     ProverOptions,
 )
+from composer.prover.accounting import RunAccounting
 from composer.prover.ptypes import RuleResult
 from composer.prover.conf import SelectRules
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
@@ -144,17 +142,11 @@ class HarnessTarget:
             permit.release()
 
 
-class _RunAccounting(ProverCallbacks):
-    """Records the prover link, the prover's runtime, and the wall clock.
-
-    ``ProverCallbacks`` defaults do nothing, so an event left on the base class
-    records nothing. ``summary.format()``, the per-task link, and
-    ``job_info.json``'s ``prover_usage`` read these records.
-    """
+class _RunAccounting(RunAccounting):
+    """Accounts for the run, and releases the build permit once the upload is done."""
 
     def __init__(self) -> None:
         super().__init__()
-        self._started_mono: float | None = None
         self._upload_permit: BuildPermit | None = None
 
     def release_on_upload(self, permit: BuildPermit) -> None:
@@ -162,29 +154,10 @@ class _RunAccounting(ProverCallbacks):
         self._upload_permit = permit
 
     @override
-    async def on_prover_run(self, args: list[str]) -> None:
-        self._started_mono = time.perf_counter()
-
-    @override
     async def on_prover_link(self, link: str) -> None:
         if self._upload_permit is not None:
             self._upload_permit.release()
-        get_run_summary().record_prover_link(link)
-
-    @override
-    async def on_prover_runtime(self, ms: int) -> None:
-        """The prover's start-to-end time, without queue wait.
-
-        The wall clock in :meth:`on_prover_result` includes time spent waiting
-        in the queue.
-        """
-        get_run_summary().record_prover_runtime(ms)
-
-    @override
-    async def on_prover_result(self, results: dict[str, RuleResult]) -> None:
-        if self._started_mono is not None:
-            get_run_summary().add_prover_call(time.perf_counter() - self._started_mono)
-            self._started_mono = None
+        await super().on_prover_link(link)
 
 
 @dataclass(frozen=True)
