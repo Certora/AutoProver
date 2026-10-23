@@ -7,6 +7,7 @@ submission adds, the argument vector a build is given, and the build script hand
 checked-in file. It is ``expensive``.
 """
 
+import asyncio
 import json
 import stat
 import subprocess
@@ -14,6 +15,7 @@ import sys
 import time
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from langgraph.store.memory import InMemoryStore
@@ -58,7 +60,8 @@ from composer.diagnostics.timing import (
 )
 from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.prover import Submission, write_submission
-from composer.spec.cvlr.verify import CexAnalysis, _CaptureCallbacks, _RunAccounting
+from composer.prover.accounting import RunAccounting
+from composer.spec.cvlr.verify import BuildPermit, CexAnalysis, _CaptureCallbacks
 from composer.spec.source.cex_capture import CexAnalysisStore
 
 
@@ -924,7 +927,7 @@ async def test_a_prover_run_is_accounted_for():
     """
     summary = RunSummary()
     install_run_summary(summary)
-    callbacks = _RunAccounting()
+    callbacks = RunAccounting()
 
     # The link and the runtime land on the active task's phase record.
     with set_current_task_id("verify-deposits"):
@@ -952,7 +955,8 @@ async def test_capturing_evidence_does_not_replace_the_accounting():
     """
     summary = RunSummary()
     install_run_summary(summary)
-    callbacks = _CaptureCallbacks(CexAnalysisStore(store=InMemoryStore(), namespace=("t",)))
+    idle = BuildPermit(SimpleNamespace(build_sem=asyncio.Semaphore(1)))  # type: ignore[arg-type]
+    callbacks = _CaptureCallbacks(CexAnalysisStore(store=InMemoryStore(), namespace=("t",)), idle)
 
     await callbacks.on_prover_run([])
     await callbacks.on_prover_result({})

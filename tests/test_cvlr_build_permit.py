@@ -65,7 +65,7 @@ def _submit(deps: SimpleNamespace):
         {"summaries": [], "vfs": {}},  # type: ignore[arg-type]
         "draft",
         Submission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
-        callbacks=_RunAccounting(),
+        accounting=_RunAccounting,
         tool_call_id="tc",
         analyze=False,
     )

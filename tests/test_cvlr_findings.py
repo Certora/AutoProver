@@ -15,6 +15,7 @@ bug in the code under verification.
 
 import json
 from pathlib import Path
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -27,10 +28,15 @@ from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.pipeline import CvlrFormalizer
 from composer.spec.source.report.schema import ConfinedBuilds, UnconfinedBuilds
 from composer.spec.cvlr.author_tools import unaccounted
-from composer.spec.cvlr.verify import _CaptureCallbacks, _incomplete_note
+from composer.spec.cvlr.verify import BuildPermit, _CaptureCallbacks, _incomplete_note
 from composer.spec.source.cex_capture import CexAnalysisStore
 
 FIXTURES = Path(__file__).parent / "data" / "solana_cex"
+
+
+def _idle_permit() -> BuildPermit:
+    """A permit nothing acquired. These callbacks never see a link, so it is never released."""
+    return BuildPermit(SimpleNamespace(build_sem=asyncio.Semaphore(1)))  # type: ignore[arg-type]
 
 
 def _store() -> CexAnalysisStore:
@@ -54,7 +60,7 @@ _LOOP_BOUND = FIXTURES / "loop_unwinding" / "Reports" / "treeView" / "rule_outpu
 async def test_a_property_violation_is_kept_as_evidence():
     store = _store()
     rule = _violated("rule_withdraw_fee_collector_vault_aliasing", _REAL_VIOLATION)
-    await _CaptureCallbacks(store).on_analysis_complete(rule, "the collector aliases the vault")
+    await _CaptureCallbacks(store, _idle_permit()).on_analysis_complete(rule, "the collector aliases the vault")
 
     records = await store.for_rule("rule_withdraw_fee_collector_vault_aliasing")
     assert [r.analysis for r in records] == ["the collector aliases the vault"]
@@ -72,7 +78,7 @@ async def test_a_loop_bound_the_prover_could_not_discharge_is_not_kept_as_eviden
     program."""
     store = _store()
     rule = _violated("rule_deposit_credits_exactly_the_amount", _LOOP_BOUND)
-    await _CaptureCallbacks(store).on_analysis_complete(rule, "the loop needs a higher bound")
+    await _CaptureCallbacks(store, _idle_permit()).on_analysis_complete(rule, "the loop needs a higher bound")
 
     assert await store.for_rule("rule_deposit_credits_exactly_the_amount") == []
 
@@ -93,7 +99,7 @@ async def test_the_author_is_still_told_about_a_bound_it_could_raise():
 
     store = _store()
     rule = _violated("rule_deposit_credits_exactly_the_amount", _LOOP_BOUND)
-    await _Recording(store).on_analysis_complete(rule, "raise loop_iter to 3")
+    await _Recording(store, _idle_permit()).on_analysis_complete(rule, "raise loop_iter to 3")
     assert handled == ["raise loop_iter to 3"]
     assert await store.for_rule("rule_deposit_credits_exactly_the_amount") == []
 
@@ -104,7 +110,7 @@ async def test_a_fresh_run_supersedes_what_an_earlier_iteration_captured():
     as a current failure. The clear fires on ``on_prover_result``, which the runner calls before the
     handler analyzes anything."""
     store = _store()
-    callbacks = _CaptureCallbacks(store)
+    callbacks = _CaptureCallbacks(store, _idle_permit())
     rule = _violated("rule_withdraw_fee_collector_vault_aliasing", _REAL_VIOLATION)
     await callbacks.on_analysis_complete(rule, "first pass")
     assert await store.for_rule("rule_withdraw_fee_collector_vault_aliasing")
@@ -124,7 +130,7 @@ async def test_the_backend_opts_into_findings_and_reads_back_what_it_captured():
     indistinguishable, from the report's side, from one that captured nothing."""
     store = _store()
     rule = _violated("rule_withdraw_fee_collector_vault_aliasing", _REAL_VIOLATION)
-    await _CaptureCallbacks(store).on_analysis_complete(rule, "the collector aliases the vault")
+    await _CaptureCallbacks(store, _idle_permit()).on_analysis_complete(rule, "the collector aliases the vault")
 
     formalizer = CvlrFormalizer(
         object, "prover", SimpleNamespace(cex_analysis=store), SimpleNamespace()

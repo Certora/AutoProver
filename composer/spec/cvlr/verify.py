@@ -256,28 +256,22 @@ class HarnessTarget:
 
 
 class _RunAccounting(RunAccounting):
-    """Accounts for the run, and releases the build permit once the upload is done.
+    """Accounts for the run, and releases ``permit`` when the Prover reports the job's link.
+
+    The link arrives after the local rebuild and upload. Until then a sibling's
+    build could replace the ``.so`` this job uploads.
 
     Separate from :class:`_CaptureCallbacks` because a submission with no
     analysis store still spends prover time.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, permit: BuildPermit) -> None:
         super().__init__()
-        self._upload_permit: BuildPermit | None = None
-
-    def release_on_upload(self, permit: BuildPermit) -> None:
-        """Release ``permit`` when the Prover reports the job's link.
-
-        The link arrives after the local rebuild and upload. Until then a
-        sibling's build could replace the ``.so`` this job uploads.
-        """
-        self._upload_permit = permit
+        self._permit = permit
 
     @override
     async def on_prover_link(self, link: str) -> None:
-        if self._upload_permit is not None:
-            self._upload_permit.release()
+        self._permit.release()
         await super().on_prover_link(link)
 
 
@@ -290,8 +284,8 @@ class _CaptureCallbacks(_RunAccounting):
     would let a later pass treat the prover's limit as a bug in the program.
     """
 
-    def __init__(self, store: CexAnalysisStore) -> None:
-        super().__init__()
+    def __init__(self, store: CexAnalysisStore, permit: BuildPermit) -> None:
+        super().__init__(permit)
         self._store = store
 
     @override
@@ -362,8 +356,8 @@ class CexAnalysis:
     def handler(self, state: CvlrGenerationState) -> CexHandler:
         return TrivialFanoutCexHandler(self.model.llm, state)
 
-    def callbacks(self) -> "_CaptureCallbacks":
-        return _CaptureCallbacks(self.store)
+    def callbacks(self, permit: BuildPermit) -> "_CaptureCallbacks":
+        return _CaptureCallbacks(self.store, permit)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -511,7 +505,7 @@ async def _stage_and_submit(
     draft: str,
     submission: Submission,
     *,
-    callbacks: _RunAccounting,
+    accounting: Callable[[BuildPermit], _RunAccounting],
     tool_call_id: str,
     choose: Callable[[set[str]], Submission | Command | str] | None = None,
     analyze: bool = True,
@@ -562,11 +556,10 @@ async def _stage_and_submit(
         if not isinstance(chosen, Submission):
             return chosen
         prepared = await staged.prepare(build, chosen, into=deps.submission_dir)
-        callbacks.release_on_upload(permit)
         outcome = await run_submission(
             prepared,
             prover_opts=deps.prover_opts,
-            callbacks=callbacks,
+            callbacks=accounting(permit),
             cex=deps.analysis.handler(state) if analyze else None,
             tool_call_id=tool_call_id,
         )
@@ -621,13 +614,12 @@ class VerifyRules(
                 # unit's feature.
                 return deps.submission_for(self.state, listed)
 
-            capture = deps.analysis.callbacks()
             outcome = await _stage_and_submit(
                 deps,
                 self.state,
                 draft,
                 deps.submission,
-                callbacks=capture,
+                accounting=deps.analysis.callbacks,
                 tool_call_id=self.tool_call_id,
                 choose=choose,
             )
@@ -845,7 +837,7 @@ class ExplainVacuity(
                 self.state,
                 draft,
                 submission,
-                callbacks=_DiagnosticAccounting(),
+                accounting=_DiagnosticAccounting,
                 tool_call_id=self.tool_call_id,
                 analyze=False,
                 choose=choose,
