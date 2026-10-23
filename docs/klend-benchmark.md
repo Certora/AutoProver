@@ -179,11 +179,11 @@ That is P-04 to P-06 territory, but unverified, so it is not graded.
 - **Units were slow and expensive.** The four that ran first took 3.75 to 6 hours and $55 to $126
   each, against under an hour per unit on the vault tutorial. Prover jobs on klend often ran 20
   minutes or more.
-- **The Prover crashed on 10 of 56 jobs.** Nearly all were `TAC translation error: TACHeapAllocator
-  ran out of memory of 32768 bytes`, across several units: klend's handlers allocate more than the
-  Prover's modelled heap. One was `PointerDomain error: TODO(5): support sol_alloc_free`. Both are
-  internal Prover errors, reported to the author with the alert text, and each cost the author
-  rounds routing around a code path rather than specifying it.
+- **The Prover crashed on 10 of 56 jobs**, each failing every rule the job carried. Eight were
+  `TAC translation error: TACHeapAllocator ran out of memory of 32768 bytes` (two units), and two
+  were `PointerDomain error: TODO(5): support sol_alloc_free` (two others). Both are internal
+  Prover errors, reported to the author with the alert text, and each cost the author rounds
+  routing around a code path rather than specifying it. What they are is below.
 - **The queue is first-in, first-out, four at a time.** Formalization starts units in component
   order (the protocol-wide unit first) and starts the next only when one finishes. The answer-key
   units were seventh to tenth. They started after the pool was spent and ended at once, about $1
@@ -200,15 +200,73 @@ dependencies dominate) and took 435s, over the 300s limit preflight then had; th
 900s. A confined run reads into a fresh per-run cargo home, so each run pays this download two or
 three times at start-up.
 
-**Next.**
+### What the failures turned out to be (2026-10-23)
 
-1. Find whether the Prover's modelled heap can be raised, and report both crashes. Every unit gets
-   cheaper if the heap crash goes.
-2. Resume the run (same cache namespace, so analysis and extraction are not paid again) with a
-   larger budget. Getting the answer-key units (obligation lifecycle, collateral, borrowing,
-   liquidations) authored before the budget is spent needs the run to be told their order, which it
-   cannot be yet. From what the first units cost, each needs $60 to $120.
-3. Then grade against P-01 to P-10 as below.
+Investigated in the Prover's source, and recorded as upstream defects P16 to P19 and T9
+(`docs/upstream-defects.md`).
+
+- **The heap crash is a translation-time limit, not program memory.** The Prover gives each rule a
+  32 KB bump allocator over allocation *sites* in the inlined program, frees nothing, and charges
+  512 bytes for an allocation of unknown size. Every `msg!` or `xmsg!` with arguments is one of
+  those, and klend's program has 435 logging calls, many of them formatted. One crashed job's sources, rebuilt and resubmitted, failed
+  as submitted and succeeded with `-solanaHeapSize 262144`, in 3.5 minutes (P17).
+- **One rule's crash failed the whole job.** The translator's internal errors escape the per-rule
+  error handling, so a single overflowing rule discarded every verdict in its unit (P16). That,
+  more than the crash itself, is what made each failure expensive.
+- **`sol_alloc_free` is the allocator on a current toolchain.** rustc 1.89 renames the allocator
+  shims under `__rustc::`, the Prover does not recognize the realloc one, and AutoProver's starting
+  inlining file matches none of them. The exact trigger is not pinned (P18, P19, T9).
+- **With the heap fixed, the next walls are visible.** The resubmitted job's rules ran: 16 verified,
+  7 violated (3 of them loop-unwinding checks at `loop_iter` 2), and 7 per-rule errors. Six of those
+  are `[3001] access to an indeterminate stack location` in the `uint` crate under `Fraction`'s
+  wide-integer arithmetic, and one asks for `-solanaStackSize 16384`.
+- **The long jobs are probably AutoProver's own limits.** The submitted conf carries
+  `global_timeout` 1500 and `smt_timeout` 6000, which the Prover turns into a 25-to-30-minute
+  ceiling. Not yet investigated.
+
+### What to try in AutoProver before the next run
+
+Each of these is a change to AutoProver, not to the input, so the benchmark stays a measurement of
+what AutoProver does with klend as published.
+
+1. **Pass `-solanaHeapSize`** (262144 measured) in the backend's default prover args
+   (`composer/spec/cvlr/conf.py`). It widens only the address range allocations are drawn from, so
+   it costs no soundness, and it removed the crash outright.
+2. **Fix the allocator directives** in `cvlr_inlining_core.txt`: accept the `__rustc::` prefix and
+   add `__rust_realloc` (T9). This keeps the analysis out of the System allocator, the likely path
+   to the `sol_alloc_free` crash.
+3. **Find out what the long jobs are.** Read the timed-out jobs' outputs for which rules hit the
+   ceiling and why. Then decide whether the ceiling should move, whether those rules should be
+   split, or whether the author should be told to restate them, before raising any limit.
+4. **Consider `-solanaStackSize 16384` as the default**, after checking it does not slow the vault
+   and stake fixtures, since raising it changes the stack model for every target.
+5. **Let a run order, or budget, its authoring units.** Formalization is first-in first-out, four at
+   a time, and the pool is shared, so whatever comes first takes the budget. Either a per-unit share
+   of the pool or an order the run can be given would put the money where the measurement is. For
+   this benchmark the answer-key units would go first. That is a choice about where to spend, not a
+   hint about what to find, so it does not touch what is measured.
+6. **Isolate the rule when a job fails as a whole.** Until P16 is fixed, a `FAILED` translation
+   tells the author nothing about which rule caused it. AutoProver could resubmit the unit's rules
+   split in halves to find it, which is cheap in Prover time and saves authoring rounds spent
+   guessing.
+7. **Make logging free for the Prover where the author asks.** A verification-only edit that makes
+   the program's logging macros expand to nothing removes every formatting allocation along with
+   the strings it builds. With the heap raised it is no longer needed to avoid the crash, but it
+   shrinks what the Prover translates, and it is a munge the editor can already make. Worth a
+   recipe if the heap change alone leaves translation slow.
+8. **Share the dependency cache between runs.** Every confined run downloads about 1.5 GB of
+   klend's dependencies two or three times, roughly 7 minutes each time, into a fresh cargo home.
+   A read-only shared registry and git cache, with the per-run home for writes, would keep the
+   isolation and drop most of that.
+
+**Not on this list: the `Fraction` abstraction.** The `[3001]` errors are in exactly the arithmetic
+the published report approximates with `FixedU64<14>`. Telling AutoProver to do that would hand it
+the answer to grading criterion 4, whether it finds the seams the report names. If the next run
+stalls on `[3001]`, that is the measurement, and it gets reported as one.
+
+**Then:** resume run 1 (same cache namespace, so analysis and extraction are not paid again) with a
+larger budget and the answer-key units first, and grade against P-01 to P-10 as below. From what
+the first units cost, each needs $60 to $120, less if the heap crash was most of it.
 
 ## Grading it
 
