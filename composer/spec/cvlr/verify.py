@@ -274,9 +274,6 @@ def _unread(err: ManifestMissing | ManifestCorrupt) -> str:
 class RuleStatusReport(CexHandler):
     """Each rule's status and the prover's messages.
 
-    Not the counterexample: a dump per violated rule would flood the author's
-    context. A person reads it through the run's link.
-
     ``flat_rule_feedback.j2`` says the analysis found nothing when a violated
     rule has no explanation. That sentence would describe an analysis that ran.
     """
