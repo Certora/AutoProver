@@ -96,7 +96,7 @@ async def test_deleting_the_tree_and_reconciling_reproduces_it(tmp_path: Path):
     rebuild and never correctness, which is what makes a cache replay — where there is no tree at
     all — a resume rather than a fresh start."""
     tree = await _tree(tmp_path)
-    edits = _edits(tree, "vault", "// draft\n", _early_panic_overlay("unit_vault"))
+    edits = _edits(tree, "vault", "// draft\n", _early_panic_overlay("certora_unit_vault"))
     await tree.reconcile("vault", edits)
     before = (tree.root / _RESERVE).read_text()
 
@@ -114,7 +114,8 @@ async def test_an_edit_dropped_from_state_leaves_the_file(tmp_path: Path):
     """A reverted edit or a rewound checkpoint must not leave a change on disk that nothing in state
     knows about. A path the overlay stops serving is restored from the project."""
     tree = await _tree(tmp_path)
-    await tree.reconcile("vault", _edits(tree, "vault", "//\n", _early_panic_overlay("unit_vault")))
+    overlay = _early_panic_overlay("certora_unit_vault")
+    await tree.reconcile("vault", _edits(tree, "vault", "//\n", overlay))
     assert "early_panic" in (tree.root / _RESERVE).read_text()
 
     await tree.reconcile("vault", _edits(tree, "vault", "//\n"))
@@ -127,7 +128,8 @@ async def test_a_new_run_starts_from_the_project(tmp_path: Path):
     which a resumed run rederives from state, and not its build output and cargo home, which a
     dependency's build script can write to and which a later run must not inherit."""
     tree = await _tree(tmp_path)
-    await tree.reconcile("vault", _edits(tree, "vault", "// draft\n", _early_panic_overlay("unit_vault")))
+    overlay = _early_panic_overlay("certora_unit_vault")
+    await tree.reconcile("vault", _edits(tree, "vault", "// draft\n", overlay))
     built = tree.root / "target" / "debug" / "x.rlib"
     cached = tree.root / SANDBOX_CARGO_DIR / "registry" / "src" / "anchor" / "lib.rs"
     for leftover in (built, cached):
@@ -182,7 +184,7 @@ async def test_re_reconciling_the_same_state_writes_nothing(tmp_path: Path):
     and costs a rebuild. This is what keeps a unit's next gate from recompiling what nothing
     changed."""
     tree = await _tree(tmp_path)
-    edits = _edits(tree, "vault", "// draft\n", _early_panic_overlay("unit_vault"))
+    edits = _edits(tree, "vault", "// draft\n", _early_panic_overlay("certora_unit_vault"))
     await tree.reconcile("vault", edits)
     before = _mtimes(tree, _RESERVE, f"{_SPECS}/vault.rs")
 
@@ -195,7 +197,8 @@ async def test_no_scratch_file_is_left_behind(tmp_path: Path):
     """Derived files are replaced atomically, because the agents' source tools read the tree without
     the build permit. A leftover scratch file would also be collected as a source and uploaded."""
     tree = await _tree(tmp_path)
-    await tree.reconcile("vault", _edits(tree, "vault", "//\n", _early_panic_overlay("unit_vault")))
+    overlay = _early_panic_overlay("certora_unit_vault")
+    await tree.reconcile("vault", _edits(tree, "vault", "//\n", overlay))
     assert sorted(p.name for p in (tree.root / "programs" / "p" / "src").iterdir()) == [
         "certora",
         "reserve.rs",
@@ -212,19 +215,19 @@ async def test_staging_swaps_one_units_edits_in_and_a_siblings_out(tmp_path: Pat
     """Two units' copies of one file have no union, and need none: every build holds the permit from
     staging to upload, so the tree only ever has to hold the building unit's copy."""
     tree = await _tree(tmp_path)
-    await tree.reconcile("a", _edits(tree, "a", "//a\n", _early_panic_overlay("unit_a")))
-    assert '"unit_a"' in (tree.root / _RESERVE).read_text()
+    await tree.reconcile("a", _edits(tree, "a", "//a\n", _early_panic_overlay("certora_unit_a")))
+    assert '"certora_unit_a"' in (tree.root / _RESERVE).read_text()
 
-    await tree.reconcile("b", _edits(tree, "b", "//b\n", _early_panic_overlay("unit_b")))
+    await tree.reconcile("b", _edits(tree, "b", "//b\n", _early_panic_overlay("certora_unit_b")))
     text = (tree.root / _RESERVE).read_text()
-    assert '"unit_b"' in text
-    assert '"unit_a"' not in text
+    assert '"certora_unit_b"' in text
+    assert '"certora_unit_a"' not in text
 
 
 @pytest.mark.asyncio
 async def test_a_sibling_that_edited_nothing_builds_the_project_as_shipped(tmp_path: Path):
     tree = await _tree(tmp_path)
-    await tree.reconcile("a", _edits(tree, "a", "//a\n", _early_panic_overlay("unit_a")))
+    await tree.reconcile("a", _edits(tree, "a", "//a\n", _early_panic_overlay("certora_unit_a")))
     await tree.reconcile("b", _edits(tree, "b", "//b\n"))
     assert (tree.root / _RESERVE).read_text() == _SOURCE
 
@@ -234,10 +237,10 @@ async def test_a_swap_back_writes_the_same_bytes(tmp_path: Path):
     """Swapping costs a rebuild of the program crate, and only that: the unit's file comes back
     byte for byte, so its next build sees exactly the source of its last one."""
     tree = await _tree(tmp_path)
-    a = _edits(tree, "a", "//a\n", _early_panic_overlay("unit_a"))
+    a = _edits(tree, "a", "//a\n", _early_panic_overlay("certora_unit_a"))
     await tree.reconcile("a", a)
     first = (tree.root / _RESERVE).read_bytes()
-    await tree.reconcile("b", _edits(tree, "b", "//b\n", _early_panic_overlay("unit_b")))
+    await tree.reconcile("b", _edits(tree, "b", "//b\n", _early_panic_overlay("certora_unit_b")))
     await tree.reconcile("a", a)
     assert (tree.root / _RESERVE).read_bytes() == first
 
@@ -318,7 +321,7 @@ async def test_an_edited_crlf_file_is_written_once(tmp_path: Path):
     (project / _RESERVE).write_bytes(_SOURCE.replace("\n", "\r\n").encode())
     tree = SharedTree(pristine=project, root=tmp_path / "work" / "build", source=_SOURCE_DIRS)
     await tree.materialize()
-    edits = _edits(tree, "a", "//\n", _early_panic_overlay("unit_a"))
+    edits = _edits(tree, "a", "//\n", _early_panic_overlay("certora_unit_a"))
     await tree.reconcile("a", edits)
     before = _mtimes(tree, _RESERVE)
 
@@ -343,15 +346,16 @@ def test_every_unit_module_is_gated_on_its_own_feature(tmp_path: Path):
 
 
 def test_a_units_feature_is_declared_and_empty(tmp_path: Path):
-    """Declared, or `--features unit_x` fails with "Package does not contain this feature". Empty,
-    or the dependencies' resolved feature set varies per unit and every unit builds its own
-    dependency graph again — which is the entire cost the shared tree removes."""
+    """Declared, or `--features certora_unit_x` fails with "Package does not contain this
+    feature". Empty, or the dependencies' resolved feature set varies per unit and every unit
+    builds its own dependency graph again — which is the entire cost the shared tree removes."""
     manifest = tmp_path / "Cargo.toml"
     manifest.write_text('[package]\nname = "p"\n\n[features]\ncertora = ["dep:cvlr"]\n')
 
-    assert declare_unit_features(manifest, ["unit_a", "unit_b"]) == ("unit_a", "unit_b")
+    features = ["certora_unit_a", "certora_unit_b"]
+    assert declare_unit_features(manifest, features) == tuple(features)
     text = manifest.read_text()
-    assert "unit_a = []" in text and "unit_b = []" in text
+    assert "certora_unit_a = []" in text and "certora_unit_b = []" in text
     assert 'certora = ["dep:cvlr"]' in text
 
 
@@ -360,17 +364,17 @@ def test_declaring_a_feature_twice_changes_nothing(tmp_path: Path):
     written twice."""
     manifest = tmp_path / "Cargo.toml"
     manifest.write_text('[package]\nname = "p"\n\n[features]\ncertora = []\n')
-    declare_unit_features(manifest, ["unit_a"])
+    declare_unit_features(manifest, ["certora_unit_a"])
     once = manifest.read_text()
-    assert declare_unit_features(manifest, ["unit_a"]) == ()
+    assert declare_unit_features(manifest, ["certora_unit_a"]) == ()
     assert manifest.read_text() == once
 
 
 def test_a_manifest_with_no_features_table_gets_one(tmp_path: Path):
     manifest = tmp_path / "Cargo.toml"
     manifest.write_text('[package]\nname = "p"\n')
-    declare_unit_features(manifest, ["unit_a"])
-    assert tomllib.loads(manifest.read_text())["features"] == {"unit_a": []}
+    declare_unit_features(manifest, ["certora_unit_a"])
+    assert tomllib.loads(manifest.read_text())["features"] == {"certora_unit_a": []}
 
 
 # ---------------------------------------------------------------------------------------------

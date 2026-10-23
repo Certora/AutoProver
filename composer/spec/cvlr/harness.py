@@ -34,11 +34,11 @@ class HarnessModule:
     def feature(self) -> CargoFeature:
         """The cargo feature that compiles this unit, and only this unit.
 
-        The name is prefixed with ``unit_``. It shares a namespace with the
+        The name is prefixed with ``certora_unit_``. It shares a namespace with the
         project's own features. A module such as ``serde`` would otherwise select
         the project's feature.
         """
-        return CargoFeature(f"unit_{self.module}")
+        return CargoFeature(f"certora_unit_{self.module}")
 
     @property
     def artifact_file(self) -> str:

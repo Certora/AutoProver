@@ -144,7 +144,7 @@ async def test_the_conf_names_the_section_and_selects_the_units_feature(gate: _G
 
     [submission] = gate.written
     assert submission.rules == SelectRules(("rule_balance_conserved", "rule_only_authority_withdraws"))
-    assert submission.features == ("certora", "unit_deposits")
+    assert submission.features == ("certora", "certora_unit_deposits")
 
 
 @pytest.mark.parametrize(
