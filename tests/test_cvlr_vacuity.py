@@ -213,11 +213,13 @@ class _FakeAnalyzer:
 
 
 def _deps(analyzer: _FakeAnalyzer, results: _FakeResults) -> verify_mod.VacuityDeps:
-    verify = SimpleNamespace(
-        target=SimpleNamespace(session=None, build_slot=_stubbed_slot),
+    verify = verify_mod.VerifyDeps(
+        target=SimpleNamespace(session=None, build_slot=_stubbed_slot),  # type: ignore[arg-type]
         submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit_x", msg="m"),
         submission_dir=Path("/w/submissions"),
-        prover_opts=None,
+        prover_opts=None,  # type: ignore[arg-type]
+        stamper=None,  # type: ignore[arg-type]
+        analysis=None,  # type: ignore[arg-type]
     )
     return verify_mod.VacuityDeps(verify, analyzer, lambda: results)  # type: ignore[arg-type]
 

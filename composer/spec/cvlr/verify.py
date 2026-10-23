@@ -346,6 +346,17 @@ class VerifyDeps:
     stamper: ValidationStamper
     analysis: CexAnalysis
 
+    def submission_for(self, state: CvlrGenerationState, rules: Sequence[str]) -> Submission:
+        """The unit's submission, checking ``rules`` under the current prover settings.
+
+        The settings come from state. A submission built from the run's starting
+        copy would send the old settings while ``version_history`` recorded the
+        new ones.
+        """
+        return dataclasses.replace(
+            self.submission, rules=SelectRules(tuple(rules)), settings=state["prover_settings"]
+        )
+
 
 def _author_text(template: str, /, **values: object) -> str:
     return load_jinja_template(template, **values).rstrip("\n")
@@ -445,20 +456,6 @@ class CargoCheck(
                     self.tool_call_id,
                     f"Does not compile:\n{diagnostics}",
                 )
-
-
-def _submission_for(
-    deps: VerifyDeps, state: CvlrGenerationState, rules: Sequence[str]
-) -> Submission:
-    """The unit's submission, checking ``rules`` under the current prover settings.
-
-    The settings come from state. A submission built from the run's starting
-    copy would send the old settings while ``version_history`` recorded the
-    new ones.
-    """
-    return dataclasses.replace(
-        deps.submission, rules=SelectRules(tuple(rules)), settings=state["prover_settings"]
-    )
 
 
 def _unread(err: ManifestMissing | ManifestCorrupt) -> str:
@@ -594,7 +591,7 @@ class VerifyRules(
                 # entry makes the cloud job end in FAILED, with no report. The
                 # section holds this unit's rules: the build enables only this
                 # unit's feature.
-                return _submission_for(deps, self.state, listed)
+                return deps.submission_for(self.state, listed)
 
             capture = deps.analysis.callbacks()
             outcome = await _stage_and_submit(
@@ -801,7 +798,7 @@ class ExplainVacuity(
         with self.tool_deps() as deps:
             verify = deps.verify
             submission = dataclasses.replace(
-                _submission_for(verify, self.state, (self.rule,)),
+                verify.submission_for(self.state, (self.rule,)),
                 purpose=CollectUnsatCore(),
                 # Its own conf file: the unit's is part of the deliverable.
                 stem=f"{verify.submission.stem}_unsat_core",

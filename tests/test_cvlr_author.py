@@ -398,8 +398,8 @@ async def test_the_submission_names_the_rules_the_build_listed(tmp_path, monkeyp
     monkeypatch.setattr(verify_mod, "write_submission", write)
     monkeypatch.setattr(verify_mod, "run_submission", run)
 
-    deps = SimpleNamespace(
-        target=SimpleNamespace(
+    deps = verify_mod.VerifyDeps(
+        target=SimpleNamespace(  # type: ignore[arg-type]
             session=None,
             build_slot=_stubbed_slot,
         ),
@@ -407,9 +407,9 @@ async def test_the_submission_names_the_rules_the_build_listed(tmp_path, monkeyp
         # settings edit would have produced and what the submission must actually use.
         submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
         submission_dir=Path("/w/submissions"),
-        prover_opts=None,
+        prover_opts=None,  # type: ignore[arg-type]
         analysis=_unbound_analysis(),
-        stamper=None,
+        stamper=None,  # type: ignore[arg-type]
     )
     token = verify_mod.VerifyRules._dep_ctx.set(deps)
     try:
