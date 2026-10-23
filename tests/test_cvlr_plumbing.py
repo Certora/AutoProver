@@ -55,7 +55,7 @@ from composer.diagnostics.timing import (
 )
 from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.prover import Submission, write_submission
-from composer.spec.cvlr.verify import _RunAccounting
+from composer.prover.accounting import RunAccounting
 
 
 # --------------------------------------------------------------------------------------------
@@ -861,7 +861,7 @@ async def test_a_prover_run_is_accounted_for():
     """Link, runtime, and wall clock are recorded from the prover callbacks."""
     summary = RunSummary()
     install_run_summary(summary)
-    callbacks = _RunAccounting()
+    callbacks = RunAccounting()
 
     # The link and the runtime land on the active task's phase record.
     with set_current_task_id("verify-deposits"):

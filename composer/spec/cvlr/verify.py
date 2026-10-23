@@ -177,20 +177,16 @@ class HarnessTarget:
 
 
 class _RunAccounting(RunAccounting):
-    """Accounts for the run, and releases the build permit once the upload is done."""
+    """Accounts for the run, and releases ``permit`` when the Prover reports the
+    job's link, which is after the upload."""
 
-    def __init__(self) -> None:
+    def __init__(self, permit: BuildPermit) -> None:
         super().__init__()
-        self._upload_permit: BuildPermit | None = None
-
-    def release_on_upload(self, permit: BuildPermit) -> None:
-        """Release ``permit`` when the Prover reports the job's link, which is after the upload."""
-        self._upload_permit = permit
+        self._permit = permit
 
     @override
     async def on_prover_link(self, link: str) -> None:
-        if self._upload_permit is not None:
-            self._upload_permit.release()
+        self._permit.release()
         await super().on_prover_link(link)
 
 
@@ -305,7 +301,6 @@ async def _stage_and_submit(
     deps: VerifyDeps,
     draft: str,
     *,
-    callbacks: _RunAccounting,
     tool_call_id: str,
     choose: Callable[[set[str]], Submission | str],
 ) -> CvlrOutcome | str:
@@ -345,12 +340,11 @@ async def _stage_and_submit(
         if not isinstance(chosen, Submission):
             return chosen
         prepared = await staged.prepare(build, chosen, into=deps.submission_dir)
-        callbacks.release_on_upload(permit)
         return await run_submission(
             prepared,
             prover_opts=deps.prover_opts,
             cex=RuleStatusReport(),
-            callbacks=callbacks,
+            callbacks=_RunAccounting(permit),
             tool_call_id=tool_call_id,
         )
 
@@ -390,7 +384,6 @@ class VerifyRules(
             outcome = await _stage_and_submit(
                 deps,
                 draft,
-                callbacks=_RunAccounting(),
                 tool_call_id=self.tool_call_id,
                 choose=choose,
             )
