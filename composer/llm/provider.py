@@ -106,6 +106,12 @@ class ModelProvider(Protocol):
     def provider(self) -> ProviderService: ...
 
     @property
+    def price_provider(self) -> PriceProvider:
+        """This model's pricing curve. It answers ``None`` when no price is known,
+        which prices every call at $0."""
+        ...
+
+    @property
     def max_prompt_tokens(self) -> int:
         """Prompt-token threshold at which a workflow should compact its history, derived from this
         model's context window. Handed to graphcore alongside the model itself, since graphcore

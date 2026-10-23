@@ -24,7 +24,9 @@ authors = [
 
 dependencies = [
     "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@9f4e9fca49e370dace2c9cdfdb58aa87d59f1a30",
-    "aiohttp>=3.13",
+    # >=3.14.4: GHSA-2g87-pp6c-29x5, GHSA-5wr8-gcqf-gqf3, GHSA-9xw5-w5jj-pvcg,
+    # GHSA-cq5v-8q36-5273 and the other aiohttp advisories fixed in 3.14.0-3.14.4.
+    "aiohttp>=3.14.4",
     "attrs>=26.1",
     "Jinja2>=3.1",
     "langgraph-checkpoint-postgres>=3.0",
@@ -40,7 +42,8 @@ dependencies = [
     "websockets",
     "chromadb>=0.4.0",
     "langgraph-prebuilt==1.0.8",
-    "langchain_core<1.3.3",
+    # >=1.2.28: GHSA-926x-3r5x-gfhw. The <1.3.3 cap is deliberate and kept.
+    "langchain_core>=1.2.28,<1.3.3",
     "certora-prover-cli>=0.2.5",
     # certora_autosetup runtime deps (merged in from the AutoSetup repo).
     # einops is provided by the [ml] extra; certora-prover-cli (above) ships the
@@ -64,7 +67,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ml = ["sentence-transformers>=5.1", "einops"] # save CI
+ml = ["sentence-transformers>=5.6.0", "einops"] # save CI; >=5.6.0: GHSA-jhr6-gm9c-rqjv
 # Optional S3-backed cache for certora_autosetup (SaaS mode).
 s3 = ["s3fs>=2023.1.0"]
 
@@ -89,11 +92,11 @@ cpu = ["torch"]
 cuda = ["torch"]
 
 [dependency-groups]
-test = ["pytest>=9.0", "pytest-asyncio>=1.3", "testcontainers>=4.0", "pytest-xdist", "hypothesis"]
+test = ["pytest>=9.0.3","pytest-asyncio>=1.3", "testcontainers>=4.0", "pytest-xdist", "hypothesis"]
 ci = ["pyright"]
 ragbuild = [
     # duplicated! no way to prevent this, says only language where this nonsense is required
-    "sentence-transformers>=5.1",
+    "sentence-transformers>=5.6.0",  # GHSA-jhr6-gm9c-rqjv
     "einops",
     "spacy==3.8.7",
     "beautifulsoup4==4.13.5",
@@ -147,6 +150,29 @@ conflicts = [
         { extra = "certora-cli-beta-mirror" },
     ],
 ]
+# Security floors for transitive dependencies, each the lowest release that
+# fixes the advisories named next to it. They only steer this project's lock.
+constraint-dependencies = [
+    "anyio>=4.14.2",              # GHSA-82r6-8w77-94w6, GHSA-5p39-cfhj-2xmp
+    "cryptography>=50.0.0",       # GHSA-g6cj-pr64-35w5
+    "fsspec>=2026.6.0",           # GHSA-27vj-qcqg-25rc
+    "idna>=3.15",                 # GHSA-65pc-fj4g-8rjx
+    "langgraph-sdk>=0.3.15",      # GHSA-w39p-vh2g-g8g5
+    "langsmith>=0.8.18",          # GHSA-3644-q5cj-c5c7, GHSA-f4xh-w4cj-qxq8, GHSA-rr7j-v2q5-chgv
+    "multidict>=6.9.1",           # GHSA-54p9-h82j-f925
+    "oauthlib>=4.0.0",            # GHSA-hj66-6f7g-4r5v, GHSA-xpv3-w29h-x7cv
+    "pydantic-settings>=2.14.2",  # GHSA-4xgf-cpjx-pc3j
+    "setuptools>=83.0.0",         # GHSA-h35f-9h28-mq5c
+    "soupsieve>=2.9.0",           # GHSA-2wc2-fm75-p42x, GHSA-836r-79rf-4m37, GHSA-gjv8-xp57-g29c, GHSA-j934-xhv5-fg8f
+    "torch>=2.13.0",              # GHSA-rrmf-rvhw-rf47
+    "transformers>=5.10.1",       # GHSA-fgcw-684q-jj6r, GHSA-x9r9-c232-4q39, GHSA-xrqw-3rrv-vx5w (5.10.0 is yanked)
+    "urllib3>=2.8.0",             # GHSA-8988-9cw3-xx77, GHSA-gh4c-6fx4-qh6g, GHSA-mf9v-mfxr-j63j, GHSA-qccp-gfcp-xxvc, GHSA-vxq7-64xx-v4gw
+    # urllib3-future (via certora-cloud -> niquests) installs a .pth hook that
+    # replaces site-packages/urllib3 with its own copy at interpreter startup, so
+    # its code is what `import urllib3` runs. 2.25.900 backports the fixes for
+    # GHSA-8988-9cw3-xx77 and GHSA-gh4c-6fx4-qh6g.
+    "urllib3-future>=2.25.900",
+]
 
 [tool.uv.sources]
 graphcore = { path = "./graphcore", editable = true }
@@ -158,7 +184,7 @@ echoprover = { path = "rust/example-app", editable = true }
 run-confined = { path = "rust/run-confined" }
 torch = [
     { index = "pytorch-cpu", extra = "cpu" },
-    { index = "pytorch-cu128", extra = "cuda" },
+    { index = "pytorch-cu130", extra = "cuda" },
 ]
 
 [[tool.uv.index]]
@@ -167,8 +193,9 @@ url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
+# cu130: the cu128 index stops at torch 2.11, below the torch>=2.13.0 security floor above.
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
 [tool.pytest.ini_options]

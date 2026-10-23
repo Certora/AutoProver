@@ -16,8 +16,10 @@ from composer.pipeline.cli import (
     BUDGET_PHASES,
     parse_budget_file,
     parse_budget_scalar,
+    reject_unpriced_budget,
     resolve_budget,
 )
+from composer.llm.pricing import price_provider_for
 
 
 def test_scalar_matches_a_pool_only_budget_file(tmp_path: pathlib.Path) -> None:
@@ -73,3 +75,23 @@ def test_foundry_parser_rejects_both_budget_flags(
             ["proj", "src/C.sol:C", "--budget", str(path), "--budget-total", "25"]
         )
     assert "not allowed with argument --budget" in capsys.readouterr().err
+
+
+def test_budget_on_an_unpriced_model_is_rejected() -> None:
+    """An unpriced model's calls cost $0, so a budget over it could never trip."""
+    with pytest.raises(ValueError, match="gpt-5.3"):
+        reject_unpriced_budget(parse_budget_scalar(25.0), {
+            "gpt-5.3": price_provider_for("gpt-5.3"),
+            "gpt-5.5": price_provider_for("gpt-5.5"),
+        })
+
+
+def test_budget_on_priced_models_is_accepted() -> None:
+    reject_unpriced_budget(parse_budget_scalar(25.0), {
+        "gpt-5.5": price_provider_for("gpt-5.5"),
+        "gpt-5.4-mini": price_provider_for("gpt-5.4-mini"),
+    })
+
+
+def test_unbudgeted_run_may_use_an_unpriced_model() -> None:
+    reject_unpriced_budget(None, {"gpt-5.3": price_provider_for("gpt-5.3")})

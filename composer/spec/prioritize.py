@@ -32,6 +32,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from pydantic import BaseModel, Field
 
 from composer.input.files import Document
+from composer.llm.structured import with_structured_output
 from composer.llm.types import CacheLevel
 from composer.spec.types import ComponentName, PropertyFormulation, PropertyKey, PropertyTitle
 from composer.templates.loader import load_jinja_template
@@ -245,7 +246,7 @@ async def rank_properties(
         {"type": "text", "text": user},
         *(d.to_dict(CacheLevel.SHORT) for d in docs),
     ]
-    bound = llm.with_structured_output(PropertyRanking)
+    bound = with_structured_output(llm, PropertyRanking)
 
     messages: list[BaseMessage] = [SystemMessage(system), HumanMessage(content=content)]
     problem: str | None = None

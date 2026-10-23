@@ -8,6 +8,7 @@ from graphcore.utils import ainvoke
 from pydantic import BaseModel, Field
 
 from composer.core.state import AIComposerState
+from composer.llm.structured import with_structured_output
 from composer.templates.loader import load_jinja_template
 
 class ResumeCommentary(BaseModel):
@@ -22,7 +23,7 @@ class ResumeCommentary(BaseModel):
 
 async def create_resume_commentary(state: AIComposerState, llm: BaseChatModel) -> ResumeCommentary:
     llm = llm.model_copy(update={"thinking": None})
-    bound = llm.with_structured_output(ResumeCommentary)
+    bound = with_structured_output(llm, ResumeCommentary)
     messages = state["messages"].copy()
 
     last = messages[-1]

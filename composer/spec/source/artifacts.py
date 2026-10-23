@@ -25,20 +25,6 @@ from composer.spec.source.prover import prover_config_overlay
 from composer.spec.util import ensure_dir
 
 
-def _write_checked(path: Path, content: str) -> None:
-    """Write ``content`` to ``path`` (creating parents). If ``path`` already holds DIFFERENT content,
-    raise: the deliverable is materialized from many buffers (and, across the run, many components) into
-    one tree, so an overwrite that changes content means two sources disagree on a file — a bug, never a
-    silent clobber. Identical re-writes are idempotent no-ops."""
-    if path.exists():
-        if path.read_text() != content:
-            raise AssertionError(
-                f"deliverable overwrite of {path} with different content — two sources disagree on it"
-            )
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
-
 _log = logging.getLogger(__name__)
 
 
@@ -87,6 +73,27 @@ class ProverArtifactStore(ArtifactStore[ComponentSpec, GeneratedCVL]):
             report_dir=AP_REPORT_DIR
         )
         self._main_contract = main_contract
+        # Every deliverable file this run has written -> the content it wrote.
+        self._written: dict[Path, str] = {}
+
+    def _write_deliverable(self, path: Path, content: str) -> None:
+        """Write ``content`` to ``path`` (creating parents), replacing whatever is already there. A file
+        this run has not written is a leftover of an earlier run in the same project dir: replaced, with a
+        warning. The deliverable is materialized from many buffers (and, across the run, many components)
+        into one tree, so a path this run already wrote with DIFFERENT content means two sources disagree
+        on it: logged as an error, and the later write wins."""
+        prior = self._written.get(path)
+        if prior is None:
+            if path.exists():
+                _log.warning("deliverable %s already exists from before this run; replacing it", path)
+        elif prior != content:
+            _log.error(
+                "deliverable %s written twice in this run with different content — two sources disagree on it",
+                path,
+            )
+        self._written[path] = content
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
 
     @override
     def _artifact_dir(self) -> Path:
@@ -97,7 +104,7 @@ class ProverArtifactStore(ArtifactStore[ComponentSpec, GeneratedCVL]):
         specs_root = under_project(self._project_root, i.specs_dir)
         # Every spec -- entrypoints and the shared specs they import -- as its own file.
         for name, cvl in artifact.spec_files.items():
-            _write_checked(under_project(self._project_root, i.buffer_spec_rel(name)), cvl)
+            self._write_deliverable(under_project(self._project_root, i.buffer_spec_rel(name)), cvl)
         if artifact.config is not None:
             confs_root = ensure_dir(self._deliverable_dir() / "confs" / i.slug)
             # A runnable .conf for each entrypoint (shared specs are imported, not run directly).
@@ -107,7 +114,7 @@ class ProverArtifactStore(ArtifactStore[ComponentSpec, GeneratedCVL]):
                     main_contract=self._main_contract,
                     verify_target=f"{self._main_contract}:{i.buffer_spec_rel(name)}",
                 )
-                _write_checked(confs_root / f"verify_{name}.conf", dump_conf(conf))
+                self._write_deliverable(confs_root / f"verify_{name}.conf", dump_conf(conf))
         else:
             _log.warning("no base config for %s; skipping conf dump", i.stem)
         self._write_commentary(i.stem, artifact.commentary)
@@ -126,7 +133,7 @@ class ProverArtifactStore(ArtifactStore[ComponentSpec, GeneratedCVL]):
         ``.spec.unverified`` name, no conf. Returns the component's spec directory."""
         specs_root = under_project(self._project_root, i.specs_dir)
         for name, cvl in artifact.spec_files.items():
-            _write_checked(
+            self._write_deliverable(
                 under_project(self._project_root, i.buffer_spec_rel(name) + QUARANTINE_SUFFIX), cvl
             )
         return specs_root.relative_to(self._project_root)

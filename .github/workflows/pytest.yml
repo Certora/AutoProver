@@ -40,8 +40,10 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             rust/target
-          key: cargo-pytest-${{ hashFiles('rust/Cargo.lock') }}
-          restore-keys: cargo-pytest-
+          # The crates link against libpython, so a build is only reusable on the same
+          # interpreter version.
+          key: cargo-pytest-${{ hashFiles('.python-version') }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: cargo-pytest-${{ hashFiles('.python-version') }}-
 
       - name: sync-deps
         run: |
