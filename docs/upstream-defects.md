@@ -4,8 +4,9 @@ Everything here was found by pointing the CVLR backend (`docs/cvlr-backend-plan.
 programs, and every entry is reproducible. This document is the one record of which are routed.
 **Two have Prover tickets:** P7 is CERT-10103, fixed on the Prover's master branch by
 [EVMVerifier#8673](https://github.com/Certora/EVMVerifier/pull/8673), and P8 is CERT-10061, which the
-Prover's own source names. P15 has no ticket and is fixed on master by
-[EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762). Two more Prover bugs,
+Prover's own source names. P15 and P16 have no tickets and are fixed on master by
+[EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762) and
+[EVMVerifier#8771](https://github.com/Certora/EVMVerifier/pull/8771). Two more Prover bugs,
 CERT-10183 (float comparisons) and CERT-10184 (a memory-partitioning crash on `realloc`'s
 zero-fill), were filed from the starting-layer investigation in [cvlr-todo.md](./cvlr-todo.md) L1
 and are recorded there, not here. C1's fix is released as a commit and not yet published (below).
@@ -37,9 +38,10 @@ matters only with `-solanaCpiAnalysis`, which AutoProver does not set. **P15 cra
 an SDK 3 `Clock::get()`, failing the whole job; it is fixed on master by
 [EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762). **P16 to P19 came out of one
 large lending program's run**, where every failed job was one of them. P16 is the general form of
-P15's escape: any internal error while encoding one rule fails the job. P17, a 32 KB heap counted
+P15's escape: any internal error while encoding one rule failed the job; it is fixed on master by
+[EVMVerifier#8771](https://github.com/Certora/EVMVerifier/pull/8771). P17, a 32 KB heap counted
 over allocation sites, caused most of those failures, and an existing option fixes it once you know
-to pass it; after P16 what is left of it is the error message. P18 and P19 are the allocator on a current toolchain.
+to pass it; with P16 fixed, what is left of it is the error message. P18 and P19 are the allocator on a current toolchain.
 
 **Group U — `prover_output_utility`.** The library the report stack reads verdicts through. One
 entry, and unlike the others it was corrupting our own output rather than merely obstructing us;
@@ -79,8 +81,8 @@ the write-up gives the line number rather than the name.
 | [P13](#p13) | An `AccountInfo` selected from a slice by key loses its provenance, so a stand-in `invoke` cannot move lamports | **major**, worked around in the prompt |
 | [P14](#p14) | The CPI analysis matches only `solana_program`'s `invoke`, so on SDK 3 no CPI is substituted and nothing says so | minor — only with `-solanaCpiAnalysis`, which AutoProver does not set; not filed |
 | [P15](#p15) | An SDK 3 `Clock::get()` can crash the Prover: "TAC Clock::get expected to extract 5 TAC variables from call sol_get_clock_sysvar" | **major** — the job FAILS with no verdicts; fixed on the Prover's master branch ([EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762)) |
-| [P16](#p16) | An internal error while encoding one rule (`TACTranslationError`, `PointerDomainError`) escapes the per-rule `catch` and fails every rule in the job | **major** — all 10 failed jobs of a 56-job run; not filed |
-| [P17](#p17) | Running out of the TAC heap does not say that `-solanaHeapSize` raises it, and the option's help calls the bound the runtime heap | minor once P16 is fixed (8 of those 10 failed jobs were this); the option fixes it, reproduced; not filed |
+| [P16](#p16) | An internal error while encoding one rule (`TACTranslationError`, `PointerDomainError`) escapes the per-rule `catch` and fails every rule in the job | **major** — all 10 failed jobs of a 56-job run; fixed on the Prover's master branch ([EVMVerifier#8771](https://github.com/Certora/EVMVerifier/pull/8771)) |
+| [P17](#p17) | Running out of the TAC heap does not say that `-solanaHeapSize` raises it, and the option's help calls the bound the runtime heap | minor now that P16 is fixed (8 of those 10 failed jobs were this); the option fixes it, reproduced; not filed |
 | [P18](#p18) | `sol_alloc_free_` crashes the points-to analysis: "TODO(5): support sol_alloc_free" | **major** — 2 of those 10; trigger not pinned; not filed |
 | [P19](#p19) | The allocator recognizer misses `__rustc::__rust_realloc` and `__rustc::__rust_alloc_zeroed` | major — the suspected path to P18; not filed |
 | [U1](#u1) | `extract_job_id_from_url` cannot parse a Solana Prover job link | **major**, worked around |
@@ -1128,6 +1130,10 @@ A Prover build without the fix still fails this way.
 
 ### An internal error while encoding one rule fails every rule in the job
 
+**Fixed on the Prover's master branch by [Certora/EVMVerifier#8771](https://github.com/Certora/EVMVerifier/pull/8771)**,
+as proposed below: the per-rule loop also catches `SolanaInternalError`, reports it as that rule's
+error with an alert naming the rule, and the other rules keep their verdicts.
+
 `solanaSbfToTAC` (`sbf/SolanaEntryPoint.kt:148`) encodes each rule inside
 `try { … } catch (e: SolanaError)`, so a rule that fails to encode becomes that rule's
 `RuleEncodingException` and the others go on. But the translator's own failures are not
@@ -1156,8 +1162,8 @@ catching the class.
 
 ### Running out of the TAC heap does not say that `-solanaHeapSize` raises it
 
-**Applies once P16 is fixed.** Until then a heap overflow fails the whole job, and that is P16's
-defect. With P16 fixed, it fails one rule, and this entry is about what that rule's error says.
+**What is left after P16.** Before P16's fix a heap overflow failed the whole job, and that was
+P16's defect. Now it fails one rule, and this entry is about what that rule's error says.
 
 The heap is a per-rule `TACBumpAllocator` (`sbf/tac/SbfCFGToTAC.kt:121`,
 `sbf/tac/TACAllocators.kt:48`). Every allocation site in the rule's inlined program gets fresh
@@ -1211,8 +1217,8 @@ allocator call. On SBF, `__rustc::__rdl_alloc`, `__rdl_alloc_zeroed`, `__rdl_dea
 verification build enables, the program defines no `#[global_allocator]`, so those are the
 allocator.
 
-**Effect: the job ends `FAILED`** (P16). On the lending program above, 2 of the 56 jobs, in two
-units, ended:
+**Effect: before P16's fix, the job ended `FAILED`; now the rule that reaches it ends in an
+internal error.** On the lending program above, 2 of the 56 jobs, in two units, ended:
 
 ```
 PointerDomain error: TODO(5): support sol_alloc_free
@@ -1226,8 +1232,8 @@ rebuilt would show the call.
 
 **Fix:** model the syscall: `free_addr == 0` allocates `size` bytes on the heap, and anything else is
 a no-op free, which is what the allocator call it stands behind already gets. Short of that, raise a
-per-rule `SolanaError` naming the caller, so that P16's fix is not the only thing standing between it
-and a lost job.
+`SolanaError` naming the caller, so the rule's error says which call to summarize instead of
+asking for a Prover bug report.
 
 ---
 

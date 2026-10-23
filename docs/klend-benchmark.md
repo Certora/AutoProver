@@ -212,7 +212,8 @@ Investigated in the Prover's source, and recorded as upstream defects P16 to P19
   as submitted and succeeded with `-solanaHeapSize 262144`, in 3.5 minutes (P17).
 - **One rule's crash failed the whole job.** The translator's internal errors escape the per-rule
   error handling, so a single overflowing rule discarded every verdict in its unit (P16). That,
-  more than the crash itself, is what made each failure expensive.
+  more than the crash itself, is what made each failure expensive. Fixed on the Prover's master
+  branch, which AutoProver's jobs run, by [EVMVerifier#8771](https://github.com/Certora/EVMVerifier/pull/8771).
 - **`sol_alloc_free` is the allocator on a current toolchain.** rustc 1.89 renames the allocator
   shims under `__rustc::`, the Prover does not recognize the realloc one, and AutoProver's starting
   inlining file matches none of them. The exact trigger is not pinned (P18, P19, T9).
@@ -245,11 +246,7 @@ what AutoProver does with klend as published.
    of the pool or an order the run can be given would put the money where the measurement is. For
    this benchmark the answer-key units would go first. That is a choice about where to spend, not a
    hint about what to find, so it does not touch what is measured.
-6. **Isolate the rule when a job fails as a whole.** Until P16 is fixed, a `FAILED` translation
-   tells the author nothing about which rule caused it. AutoProver could resubmit the unit's rules
-   split in halves to find it, which is cheap in Prover time and saves authoring rounds spent
-   guessing.
-7. **Make logging free for the Prover where the author asks.** A verification-only edit that makes
+6. **Make logging free for the Prover where the author asks.** A verification-only edit that makes
    the program's logging macros expand to nothing removes every formatting allocation along with
    the strings it builds. With the heap raised it is no longer needed to avoid the crash, but it
    shrinks what the Prover translates, and it is a munge the editor can already make. Worth a
