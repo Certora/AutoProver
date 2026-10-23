@@ -477,12 +477,9 @@ submission helpers (`submission_for`) are `VerifyDeps` methods. `rule_names_in_e
 but an ELF64 little-endian object, and a `.cvlr_rules` section with no file bytes.
 
 **A follow-up the review asked for: choosing which rules to run.** `verify_rules` always submits
-every rule the build lists. The reviewer still strongly prefers that the tool take a selection, and
-agreed it can come in a later PR. Nothing on the branch does this yet; P3b3's `explain_vacuity`
-reruns one rule, but only as a diagnostic that stamps nothing. The open question is the stamp: it
-requires every listed rule verified on one draft, so a partial run either stamps nothing or has to
-combine with the previous run's verdicts for the same stamp, which is what P3b2's `LastVerdicts`
-records.
+every rule the build lists, and the reviewer prefers that it take a selection. Postponed; see
+[cvlr-todo.md](./cvlr-todo.md) U32, which also says what a selection needs from the stamp and the
+conf.
 
 **What P3b1 carries from #258's review.** `_stage_and_submit` (`cvlr/verify.py`) implements it,
 tested by `tests/test_cvlr_verify.py`. Two submissions of one crate share its target

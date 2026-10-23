@@ -664,6 +664,10 @@ another) needs `verify_rules` to take a rule list, and two things fixed with it:
   selective run would leave it naming only its own subset. Give each run its own stem, and write
   the deliverable conf with the full rule list separately.
 
+#267's review asked for it: the reviewer strongly prefers that `verify_rules` take a selection, and
+agreed it can come in a later PR. Postponed on 2026-10-23 until after P3b2, which is already larger
+than planned.
+
 ---
 
 ## Leads from the certora-cvlr-kb ledger
