@@ -131,7 +131,6 @@ async def test_which_writes_the_model_drops(project, capsys):
         conf = {**json.loads(prepared.conf_path.read_text()), "optimistic_loop": True}
         prepared.conf_path.write_text(dump_conf(conf))
         outcome = await run_submission(
-            session,
             prepared,
             prover_opts=make_prover_options(cloud=True, app="solana"),
             cex=None,

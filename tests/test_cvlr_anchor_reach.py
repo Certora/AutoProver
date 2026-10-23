@@ -138,7 +138,6 @@ async def test_a_rule_that_reaches_an_anchor_program_can_be_analyzed(project, ca
         conf = {**json.loads(prepared.conf_path.read_text()), "rule_sanity": "none"}
         prepared.conf_path.write_text(dump_conf(conf))
         outcome = await run_submission(
-            session,
             prepared,
             prover_opts=make_prover_options(cloud=True, app="solana"),
             cex=None,

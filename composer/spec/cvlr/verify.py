@@ -41,7 +41,7 @@ from graphcore.tools.schemas import (
 from composer.authoring.state import ValidationStamper
 from composer.cargo.features import CargoFeature
 from composer.cargo.sbf import Built, SbfRun
-from composer.cargo.session import CargoSession, CompileFailed, Compiled
+from composer.cargo.session import CargoSession, CompileFailed, CompileRun, Compiled
 from composer.cargo.symbols import SymbolsUnavailable, defined_functions, nearest, unmatched
 from composer.prover.cloud import results_api
 from composer.prover.core import (
@@ -127,8 +127,8 @@ class BuildPermit:
         draft: str,
         summaries: Sequence[SummaryDirective] = (),
         overlay: Mapping[str, str] = {},
-    ) -> None:
-        """Make the tree match the unit's state.
+    ) -> "StagedUnit":
+        """Make the tree match the unit's state, and return what builds it.
 
         The draft, the summaries, and the source overlay are all inputs to the
         build. Each is taken from already-merged state, so two concurrent calls
@@ -143,14 +143,48 @@ class BuildPermit:
         Staging needs the permit held. It keeps two units out of the tree at
         once, and keeps a sibling's edits out of this build.
         """
-        if not self._held:
-            raise RuntimeError("staging needs a held build permit")
+        self.require_held()
         target = self._target
         target.tuning.write(tuple(summaries))
         await target.tree.reconcile(
             target.unit.module,
             UnitEdits(module_path=target.module_path, draft=draft, overlay=overlay),
         )
+        return StagedUnit(self, target)
+
+    def require_held(self) -> None:
+        if not self._held:
+            raise RuntimeError("the build permit is not held")
+
+
+class StagedUnit:
+    """A unit's state in the tree, under the permit that staged it.
+
+    Every build of it goes through here, so none runs before staging or after
+    the permit is released, and all of them run in the target's session.
+    """
+
+    def __init__(self, permit: BuildPermit, target: "HarnessTarget") -> None:
+        self._permit = permit
+        self._target = target
+
+    async def check(self) -> CompileRun:
+        """Compile on the host target."""
+        self._permit.require_held()
+        target = self._target
+        return await target.session.check(
+            manifest_dir=target.package_dir, features=target.features
+        )
+
+    async def build_for_submission(self, submission: Submission) -> SbfRun:
+        self._permit.require_held()
+        return await build_for_submission(self._target.session, submission)
+
+    async def prepare(self, build: SbfRun, submission: Submission, *, into: Path) -> Prepared:
+        """Write the conf that verifies ``build``, bound to the session that built it."""
+        self._permit.require_held()
+        session = self._target.session
+        return Prepared(session, build, await write_submission(session, submission, into=into))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -441,10 +475,8 @@ class CargoCheck(
             return "No harness written yet — put a draft first."
         with self.tool_deps() as target:
             async with target.build_slot() as permit:
-                await permit.stage(draft, self.state["summaries"], self.state["vfs"])
-                run = await target.session.check(
-                    manifest_dir=target.package_dir, features=target.features
-                )
+                staged = await permit.stage(draft, self.state["summaries"], self.state["vfs"])
+                run = await staged.check()
         match run.verdict:
             case Compiled():
                 return tool_return(
@@ -509,8 +541,8 @@ async def _stage_and_submit(
     behind that sibling's feature.
     """
     async with deps.target.build_slot() as permit:
-        await permit.stage(draft, state["summaries"], state["vfs"])
-        build = await build_for_submission(deps.target.session, submission)
+        staged = await permit.stage(draft, state["summaries"], state["vfs"])
+        build = await staged.build_for_submission(submission)
         if not isinstance(build.verdict, Built):
             return BuildRejected(build)
         artifact = build.verdict.manifest.artifact
@@ -529,12 +561,9 @@ async def _stage_and_submit(
         )
         if not isinstance(chosen, Submission):
             return chosen
-        prepared = Prepared(
-            build, await write_submission(deps.target.session, chosen, into=deps.submission_dir)
-        )
+        prepared = await staged.prepare(build, chosen, into=deps.submission_dir)
         callbacks.release_on_upload(permit)
         outcome = await run_submission(
-            deps.target.session,
             prepared,
             prover_opts=deps.prover_opts,
             callbacks=callbacks,

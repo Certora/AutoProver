@@ -283,8 +283,7 @@ async def test_raising_the_loop_bound_is_what_turns_the_rule_green(project, tmp_
     for arm, conf_path in confs.items():
         recorders[arm] = _Recorded()
         outcome = await run_submission(
-            session,
-            Prepared(build, conf_path),
+            Prepared(session, build, conf_path),
             prover_opts=make_prover_options(cloud=True, app="solana"),
             cex=recorders[arm],
             tool_call_id=f"loop-bound-{arm}",

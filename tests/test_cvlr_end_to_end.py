@@ -158,7 +158,6 @@ async def test_the_examples_project_verifies_exactly_as_its_authors_expect(
     }
     prepared.conf_path.write_text(dump_conf(conf))
     outcome = await run_submission(
-        session,
         prepared,
         prover_opts=make_prover_options(cloud=True, app="solana"),
         cex=None,

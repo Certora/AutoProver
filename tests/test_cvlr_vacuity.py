@@ -165,8 +165,12 @@ def _state(draft: str = _DRAFT) -> dict:
     }
 
 
-async def _stubbed_stage(draft, summaries=(), overlay={}) -> None:
-    return None
+async def _stubbed_stage(draft, summaries=(), overlay={}) -> verify_mod.StagedUnit:
+    # Builds go through the module's build and write functions, which each test replaces.
+    return verify_mod.StagedUnit(
+        SimpleNamespace(require_held=lambda: None),  # type: ignore[arg-type]
+        SimpleNamespace(session=None),  # type: ignore[arg-type]
+    )
 
 
 def _stubbed_slot() -> contextlib.nullcontext[SimpleNamespace]:
@@ -263,7 +267,7 @@ async def test_the_probe_checks_one_rule_in_a_conf_of_its_own(tmp_path, monkeypa
     unit's conf ships with the deliverable, and a diagnostic run must not overwrite it."""
     written = _patch_listed(monkeypatch, tmp_path, {"rule_backed"})
 
-    async def fake_run(session, prepared, **kwargs):
+    async def fake_run(prepared, **kwargs):
         return _checked({"rule_backed": "VERIFIED"})
 
     monkeypatch.setattr(verify_mod, "run_submission", fake_run)
@@ -282,7 +286,7 @@ async def test_the_probe_checks_one_rule_in_a_conf_of_its_own(tmp_path, monkeypa
 async def test_the_answer_leads_with_whether_the_assertion_is_in_the_core(tmp_path, monkeypatch):
     _patch_listed(monkeypatch, tmp_path, {"rule_backed"})
 
-    async def fake_run(session, prepared, **kwargs):
+    async def fake_run(prepared, **kwargs):
         return _checked({"rule_backed": "VERIFIED"})
 
     monkeypatch.setattr(verify_mod, "run_submission", fake_run)
@@ -306,7 +310,7 @@ async def test_a_rule_that_does_not_verify_without_the_check_has_no_core_to_read
 
     _patch_listed(monkeypatch, tmp_path, {"rule_backed"})
 
-    async def fake_run(session, prepared, **kwargs):
+    async def fake_run(prepared, **kwargs):
         return _checked({"rule_backed": "VIOLATED"})
 
     monkeypatch.setattr(verify_mod, "run_submission", fake_run)

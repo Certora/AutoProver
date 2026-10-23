@@ -22,7 +22,7 @@ from composer.spec.cvlr.harness import HarnessModule
 from composer.spec.cvlr.manifest import ManifestCorrupt, ManifestMissing
 from composer.spec.cvlr.prover import Submission
 from composer.spec.cvlr.tree import ProjectSource, SharedTree
-from composer.spec.cvlr.verify import BuildPermit, HarnessTarget, _RunAccounting
+from composer.spec.cvlr.verify import BuildPermit, HarnessTarget, StagedUnit, _RunAccounting
 
 pytestmark = pytest.mark.asyncio
 
@@ -31,8 +31,9 @@ _LINK = "https://prover.certora.com/jobStatus/1/abc"
 
 @pytest.fixture(autouse=True)
 def _no_staging(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def stage(*_args):
-        return None
+    async def stage(self, *_args):
+        # Builds go through the module's build and write functions, which each test replaces.
+        return StagedUnit(self, SimpleNamespace(session=None))  # type: ignore[arg-type]
 
     monkeypatch.setattr(BuildPermit, "stage", stage)
 
@@ -99,7 +100,7 @@ async def test_the_permit_is_held_until_the_upload_and_not_through_the_cloud_job
     uploaded, cloud_done = asyncio.Event(), asyncio.Event()
     held_during_local_phase: list[bool] = []
 
-    async def run_submission(_session, _prepared, *, callbacks, **_kwargs):
+    async def run_submission(_prepared, *, callbacks, **_kwargs):
         held_during_local_phase.append(sem.locked())
         await callbacks.on_prover_link(_LINK)
         uploaded.set()

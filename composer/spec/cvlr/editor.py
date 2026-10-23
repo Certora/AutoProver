@@ -243,10 +243,8 @@ async def gate_edits(
     replaces this overlay, and an edit the author never commits is simply never staged again.
     """
     async with target.build_slot() as permit:
-        await permit.stage(draft, summaries, overlay)
-        run = await target.session.check(
-            manifest_dir=target.package_dir, features=target.features
-        )
+        staged = await permit.stage(draft, summaries, overlay)
+        run = await staged.check()
         if isinstance(run.verdict, CompileFailed):
             return DoesNotCompile(run.verdict.diagnostics)
         assert isinstance(run.verdict, Compiled)

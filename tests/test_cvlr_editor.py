@@ -183,6 +183,19 @@ async def test_a_released_permit_does_not_stage(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_a_released_permit_does_not_build(tmp_path: Path):
+    """What staging returned keeps no build alive past the permit."""
+    from composer.spec.cvlr.verify import StagedUnit
+
+    target = await _target(_project(tmp_path))
+    async with target.build_slot() as permit:
+        staged = StagedUnit(permit, target)
+        permit.release()
+        with pytest.raises(RuntimeError):
+            await staged.check()
+
+
+@pytest.mark.asyncio
 async def test_submitting_without_an_approval_is_refused(tmp_path: Path):
     root = _project(tmp_path)
     answer = await _run(

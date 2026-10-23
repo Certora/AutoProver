@@ -309,8 +309,12 @@ class _StopProbe(Exception):
     """Cuts the tool off once the submission is captured; no prover is involved."""
 
 
-async def _stubbed_stage(draft, summaries=(), overlay={}) -> None:
-    return None
+async def _stubbed_stage(draft, summaries=(), overlay={}) -> verify_mod.StagedUnit:
+    # Builds go through the module's build and write functions, which each test replaces.
+    return verify_mod.StagedUnit(
+        SimpleNamespace(require_held=lambda: None),  # type: ignore[arg-type]
+        SimpleNamespace(session=None),  # type: ignore[arg-type]
+    )
 
 
 def _stubbed_slot() -> contextlib.nullcontext[SimpleNamespace]:
