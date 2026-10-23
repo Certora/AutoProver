@@ -75,10 +75,8 @@ class _Gate:
         return self.deps.target.build_sem
 
 
-@pytest.fixture
-def gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Gate:
-    install_run_summary(RunSummary())
-    target = HarnessTarget(
+def _target(tmp_path: Path) -> HarnessTarget:
+    return HarnessTarget(
         session=SimpleNamespace(workdir=tmp_path),  # type: ignore[arg-type]
         package="p",
         package_root=tmp_path,
@@ -86,9 +84,14 @@ def gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Gate:
         tree=SharedTree(pristine=tmp_path / "project", root=tmp_path / "build", source=ProjectSource(roots=())),
         build_sem=asyncio.Semaphore(1),
     )
+
+
+@pytest.fixture
+def gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Gate:
+    install_run_summary(RunSummary())
     g = _Gate(
         VerifyDeps(
-            target=target,
+            target=_target(tmp_path),
             submission=Submission(manifest_path=Path("p/Cargo.toml"), stem="unit", msg="m"),
             submissions=tmp_path / "submissions",
             prover_opts=None,  # type: ignore[arg-type]
@@ -114,7 +117,7 @@ def gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Gate:
     async def run_submission(*_args, **_kwargs):
         return g.outcome
 
-    monkeypatch.setattr(HarnessTarget, "stage", stage)
+    monkeypatch.setattr(BuildPermit, "stage", stage)
     monkeypatch.setattr(verify_mod, "build_for_submission", build)
     monkeypatch.setattr(verify_mod, "rule_names_in_elf", names)
     monkeypatch.setattr(verify_mod, "write_submission", write)
@@ -236,12 +239,21 @@ async def test_the_permit_is_held_until_the_upload_and_not_through_the_cloud_job
     assert not gate.sem.locked()
 
 
-async def test_releasing_a_permit_twice_releases_it_once():
+async def test_releasing_a_permit_twice_releases_it_once(tmp_path: Path):
     """Releasing twice must not leave an extra permit for another unit to take."""
-    sem = asyncio.Semaphore(1)
-    permit = BuildPermit(sem)
+    target = _target(tmp_path)
+    sem = target.build_sem
+    permit = BuildPermit(target)
     await permit.acquire()
     permit.release()
     permit.release()
     await sem.acquire()
     assert sem.locked(), "the semaphore was over-released"
+
+
+async def test_a_released_permit_does_not_stage(tmp_path: Path):
+    """A submission releases its permit at upload. A sibling may be building by then."""
+    async with _target(tmp_path).build_slot() as permit:
+        permit.release()
+        with pytest.raises(RuntimeError):
+            await permit.stage("// draft\n")

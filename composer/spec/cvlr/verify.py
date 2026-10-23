@@ -62,21 +62,34 @@ _log = logging.getLogger(__name__)
 
 
 class BuildPermit:
-    """Held from staging until the prover reports the job link, or until the slot ends."""
+    """Held from staging until the prover reports the job link, or until the slot ends.
 
-    def __init__(self, sem: asyncio.Semaphore) -> None:
-        self._sem = sem
+    Staging goes through the permit, so no draft is staged without it.
+    """
+
+    def __init__(self, target: "HarnessTarget") -> None:
+        self._target = target
         self._held = False
 
     async def acquire(self) -> None:
-        await self._sem.acquire()
+        await self._target.build_sem.acquire()
         self._held = True
 
     def release(self) -> None:
         """A second call does nothing."""
         if self._held:
             self._held = False
-            self._sem.release()
+            self._target.build_sem.release()
+
+    async def stage(self, draft: str) -> None:
+        """Write ``draft`` into the unit's module."""
+        if not self._held:
+            raise RuntimeError("staging needs a held build permit")
+        target = self._target
+        await target.tree.reconcile(
+            target.unit.module,
+            UnitEdits(module_path=target.module_path, draft=draft),
+        )
 
 
 @dataclass(frozen=True)
@@ -123,19 +136,12 @@ class HarnessTarget:
         queues them here. A submission holds the permit longer
         (:func:`_stage_and_submit`).
         """
-        permit = BuildPermit(self.build_sem)
+        permit = BuildPermit(self)
         await permit.acquire()
         try:
             yield permit
         finally:
             permit.release()
-
-    async def stage(self, draft: str) -> None:
-        """Write ``draft`` into this unit's module. Call it while holding :meth:`build_slot`."""
-        await self.tree.reconcile(
-            self.unit.module,
-            UnitEdits(module_path=self.module_path, draft=draft),
-        )
 
 
 class _RunAccounting(ProverCallbacks):
@@ -217,8 +223,8 @@ class CargoCheck(
         if draft is None:
             return "No harness written yet — put a draft first."
         with self.tool_deps() as target:
-            async with target.build_slot():
-                await target.stage(draft)
+            async with target.build_slot() as permit:
+                await permit.stage(draft)
                 run = await target.session.check(
                     manifest_dir=target.package_dir, features=target.features
                 )
@@ -316,7 +322,7 @@ async def _stage_and_submit(
     behind its own feature.
     """
     async with deps.target.build_slot() as permit:
-        await deps.target.stage(draft)
+        await permit.stage(draft)
         build = await build_for_submission(deps.target.session, _unit_submission(deps))
         if not isinstance(build.verdict, Built):
             return BuildRejected(build)
