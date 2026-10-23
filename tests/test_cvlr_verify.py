@@ -93,7 +93,7 @@ def gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Gate:
         VerifyDeps(
             target=_target(tmp_path),
             submission=Submission(manifest_path=Path("p/Cargo.toml"), stem="unit", msg="m"),
-            submissions=tmp_path / "submissions",
+            submission_dir=tmp_path / "submissions",
             prover_opts=None,  # type: ignore[arg-type]
             stamper=make_validation_stamper(PROVER_VALIDATION_KEY),
         )

@@ -169,7 +169,7 @@ class VerifyDeps:
     #: The directory :func:`composer.spec.cvlr.prover.prepare_submission` writes into.
     #: Outside the tree. The confined build can write the tree, so the conf and
     #: the build script must not live there.
-    submissions: Path
+    submission_dir: Path
     prover_opts: ProverOptions
     stamper: ValidationStamper
 
@@ -312,7 +312,7 @@ async def _stage_and_submit(
         if not isinstance(chosen, Submission):
             return chosen
         prepared = Prepared(
-            build, await write_submission(deps.target.session, chosen, into=deps.submissions)
+            build, await write_submission(deps.target.session, chosen, into=deps.submission_dir)
         )
         callbacks.release_on_upload(permit)
         return await run_submission(
