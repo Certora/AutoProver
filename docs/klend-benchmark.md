@@ -96,7 +96,7 @@ The web pages were fetched on 2026-10-22, and the code is older than that. A gen
 about a feature the code does not have yet is a documentation-skew artifact, not an authoring
 error.
 
-## The blocker: klend is on a generation AutoProver does not support
+## Platform support: klend needed a generation AutoProver did not have
 
 AutoProver supports two platform generations, `solana-program` 2.x and the split 3.x crates
 (`docs/cvlr-sdk3-support.md`). klend links `solana-program` 1.17. `select_generation` finds the
@@ -106,12 +106,13 @@ AutoProver supports two platform generations, `solana-program` 2.x and the split
 The nearest CVLR line is `cvlr-solana` 0.4.x, which requires `solana-program ^1.18`. A probe
 build established that this works: klend moved to 1.18, with `cvlr-solana` 0.4.5 on the shared
 `cvlr` 0.6.1 core and the Anchor and `fixed` forks, builds with platform tools v1.53. The plan, and
-the probe, are in `docs/cvlr-solana-1-18-support.md`. In short, the benchmark needs:
+the probe, are in `docs/cvlr-solana-1-18-support.md`. All three of what the benchmark needed are now
+in place:
 
-1. **A 1.18 generation in AutoProver** (G1–G5, G7 there).
+1. **A 1.18 generation in AutoProver** (G1–G5, G7 there), on `cvlr-solana` 0.4.6.
 2. **A compile gate that can compile klend** (G6). No host toolchain can: from rustc 1.77 on, the
    `farms` dependency's account-size assertions fail on x86_64's `u128` alignment, and klend's own
-   1.74.1 predates the lockfile format current cargo writes. The gate moves to the SBF target.
+   1.74.1 predates the lockfile format current cargo writes. The gate now checks the SBF target.
 3. **A 1.17 → 1.18 move of the input.** A 1.17 program cannot be built with v1.53 at all
    (`solana-frozen-abi` 1.17 pins an `ahash` that current rustc rejects). This is a
    build-infrastructure change, not spec authoring. It is applied by hand as one labelled commit,
@@ -127,6 +128,87 @@ different experiments, like stake's bincode question. **Decided: a precondition.
 about klend's own accounting, so that does not affect parity. A generated property about token
 balances needs a munge that calls `cvlr-solana` 0.4's own token summaries in place of the CPI, and
 it is triaged with the other properties outside the answer key.
+
+## Run 1 (2026-10-22): the budget ran out before the answer key's ground
+
+**Not gradable for parity.** No unit that covers P-01 to P-10 was authored. What the run did
+produce, and why it stopped there, is below; the grading in the next section waits for a run that
+reaches those units.
+
+**Configuration.** `console-solana` on the input above (with the 1.18 precondition commit), the
+design document as `system_doc`, a $600 run budget (`--budget-total 600`, no per-phase caps), a
+cache namespace so the run can be resumed, and the defaults otherwise: 4 concurrent agents,
+confined builds, both CVLR corpora.
+
+**What it cost.** 8h49m wall clock. The run's own accounting reached the $600 limit; the per-call
+log lines price to about $537, so they read about 10% low here.
+
+| Phase | Wall clock | Spend (from the logs) |
+|---|---|---|
+| Start-up: two cold `cargo metadata` reads | ~10 min | — |
+| System analysis | 20m | $7 |
+| Property extraction, 13 components | ~2h | $145 |
+| Property hoisting | 7m | (in extraction) |
+| Formalization, 14 units | ~6.5h | ~$385 |
+
+Analysis split the program into 13 components: market and reserve administration, fees, reserve
+liquidity, refresh and oracle pricing, obligation lifecycle, collateral, borrowing, liquidations,
+flash loans, fixed-rate orders and rollover, the withdrawal queue, and obligation self-service.
+Extraction stated 196 properties. Hoisting moved 138 of them into a protocol-wide unit as 36
+properties, 17 of them new. Preflight selected the 1.18 generation, scaffolded both forks, and
+passed the SBF compile gate in 27s.
+
+**What it produced.**
+
+| Unit | Properties | Outcome | Rules |
+|---|---|---|---|
+| Protocol & Referral Fees | 12 | delivered | 15 |
+| Reserve Admin & Lifecycle | 21 | delivered | 22 |
+| Market Admin & Configuration | 15 | partial, unverified | 22 |
+| Protocol invariants | 36 | partial, unverified | 16 |
+| Reserve Liquidity Deposits & Withdrawals | 11 | partial, unverified | 4 |
+| Reserve Refresh / Oracle Pricing | 9 | partial, unverified | 2 |
+| The other 8 units, among them obligation lifecycle, collateral, borrowing and liquidations | 92 | started after the budget was spent | 0 |
+
+The nearest the run came to the answer key is the protocol-wide unit's partial harness: deposit and
+redeem accounting, exchange-rate preservation across fee withdrawals, flash-loan supply neutrality.
+That is P-04 to P-06 territory, but unverified, so it is not graded.
+
+**Why the budget ran out.**
+
+- **Units were slow and expensive.** The four that ran first took 3.75 to 6 hours and $55 to $126
+  each, against under an hour per unit on the vault tutorial. Prover jobs on klend often ran 20
+  minutes or more.
+- **The Prover crashed on 10 of 56 jobs.** Nearly all were `TAC translation error: TACHeapAllocator
+  ran out of memory of 32768 bytes`, across several units: klend's handlers allocate more than the
+  Prover's modelled heap. One was `PointerDomain error: TODO(5): support sol_alloc_free`. Both are
+  internal Prover errors, reported to the author with the alert text, and each cost the author
+  rounds routing around a code path rather than specifying it.
+- **The queue is first-in, first-out, four at a time.** Formalization starts units in component
+  order (the protocol-wide unit first) and starts the next only when one finishes. The answer-key
+  units were seventh to tenth. They started after the pool was spent and ended at once, about $1
+  each. A per-unit share of the budget, or an order the run can be given, would have spent the
+  money where the measurement is.
+
+**Also seen.** The Prover reported Anchor's account validation (`AccountLoader::try_accounts`,
+`Signer::try_accounts`, `Sysvar::from_account_info`) as neither inlined nor summarized, so treated as
+external. A rule that passes over a handler does not, by that, cover klend's account checks, and
+grading a handler-level property has to say whether its answer depends on them.
+
+**Infrastructure this run needed.** Cold `cargo metadata` of klend downloads about 1.5 GB (git
+dependencies dominate) and took 435s, over the 300s limit preflight then had; the limit is now
+900s. A confined run reads into a fresh per-run cargo home, so each run pays this download two or
+three times at start-up.
+
+**Next.**
+
+1. Find whether the Prover's modelled heap can be raised, and report both crashes. Every unit gets
+   cheaper if the heap crash goes.
+2. Resume the run (same cache namespace, so analysis and extraction are not paid again) with a
+   larger budget. Getting the answer-key units (obligation lifecycle, collateral, borrowing,
+   liquidations) authored before the budget is spent needs the run to be told their order, which it
+   cannot be yet. From what the first units cost, each needs $60 to $120.
+3. Then grade against P-01 to P-10 as below.
 
 ## Grading it
 
