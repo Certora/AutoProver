@@ -15,7 +15,6 @@ import asyncio
 import dataclasses
 import logging
 import subprocess
-import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import (
@@ -40,7 +39,6 @@ from graphcore.tools.schemas import (
 )
 
 from composer.authoring.state import ValidationStamper
-from composer.diagnostics.timing import get_run_summary
 from composer.cargo.features import CargoFeature
 from composer.cargo.sbf import Built, SbfRun
 from composer.cargo.session import CargoSession, CompileFailed, Compiled
@@ -48,7 +46,6 @@ from composer.cargo.symbols import SymbolsUnavailable, defined_functions, neares
 from composer.prover.cloud import results_api
 from composer.prover.core import (
     CexHandler,
-    ProverCallbacks,
     ProverOptions,
     TrivialFanoutCexHandler,
 )
@@ -60,6 +57,7 @@ from composer.prover.ptypes import (
     RuleResult,
     classify_violation,
 )
+from composer.prover.accounting import RunAccounting
 from composer.prover.conf import SelectRules
 from composer.spec.cvlr.conf import (
     DEFAULT_FEATURE,
@@ -223,13 +221,8 @@ class HarnessTarget:
             permit.release()
 
 
-class _RunAccounting(ProverCallbacks):
-    """Records the prover link, the prover's runtime, and the wall clock.
-
-    ``ProverCallbacks`` defaults do nothing. A backend that overrides only some
-    events records none of these. ``summary.format()``, the per-task link, and
-    ``job_info.json``'s ``prover_usage`` read them. The same events are what
-    the EVM ``_SpecCallbacks`` record.
+class _RunAccounting(RunAccounting):
+    """Accounts for the run, and releases the build permit once the upload is done.
 
     Separate from :class:`_CaptureCallbacks` because a submission with no
     analysis store still spends prover time.
@@ -237,7 +230,6 @@ class _RunAccounting(ProverCallbacks):
 
     def __init__(self) -> None:
         super().__init__()
-        self._started_mono: float | None = None
         self._upload_permit: BuildPermit | None = None
 
     def release_on_upload(self, permit: BuildPermit) -> None:
@@ -249,32 +241,10 @@ class _RunAccounting(ProverCallbacks):
         self._upload_permit = permit
 
     @override
-    async def on_prover_run(self, args: list[str]) -> None:
-        self._started_mono = time.perf_counter()
-
-    @override
     async def on_prover_link(self, link: str) -> None:
         if self._upload_permit is not None:
             self._upload_permit.release()
-        self._record_link(link)
-
-    def _record_link(self, link: str) -> None:
-        get_run_summary().record_prover_link(link)
-
-    @override
-    async def on_prover_runtime(self, ms: int) -> None:
-        """The prover's start-to-end time, without queue wait.
-
-        The wall clock in :meth:`on_prover_result` includes time spent waiting
-        in the queue.
-        """
-        get_run_summary().record_prover_runtime(ms)
-
-    @override
-    async def on_prover_result(self, results: dict[str, RuleResult]) -> None:
-        if self._started_mono is not None:
-            get_run_summary().add_prover_call(time.perf_counter() - self._started_mono)
-            self._started_mono = None
+        await super().on_prover_link(link)
 
 
 class _CaptureCallbacks(_RunAccounting):
