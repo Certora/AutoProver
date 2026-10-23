@@ -12,6 +12,7 @@ from typing import Dict, Any, Optional, List
 
 from certora_autosetup.utils.config_manager import convert_solc_version_to_certora_format
 from certora_autosetup.utils.logger import logger
+from certora_autosetup.utils.paths import relativize_packages
 from certora_autosetup.utils.types import ContractHandle
 
 
@@ -161,7 +162,8 @@ class BuildSystemConfig(ABC):
         project_root: Optional[Path] = None
     ) -> List[str]:
         """
-        Convert absolute package paths to relative paths.
+        Convert absolute package paths inside the project root to relative paths
+        (see ``relativize_packages``).
 
         Args:
             packages: List of packages in format "name=path"
@@ -170,20 +172,4 @@ class BuildSystemConfig(ABC):
         Returns:
             List of packages with relative paths
         """
-        if project_root is None:
-            project_root = Path.cwd()
-
-        result = []
-        for package in packages:
-            if "=" in package:
-                name, path = package.split("=", 1)
-                try:
-                    relative_path = Path(path).relative_to(project_root)
-                    result.append(f"{name}={relative_path}")
-                except ValueError:
-                    # Path is outside project root, use absolute path as fallback
-                    result.append(package)
-            else:
-                result.append(package)
-
-        return result
+        return relativize_packages(packages, project_root if project_root is not None else Path.cwd())

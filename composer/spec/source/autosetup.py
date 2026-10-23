@@ -22,6 +22,7 @@ from graphcore.utils import NormalizedTokenUsage
 from composer.io.context import emit_custom_event
 # Locators for autosetup's on-disk usage files (certora_autosetup owns that layout).
 from certora_autosetup.utils.paths import (
+    relativize_packages,
     resolve_autosetup_llm_usage_file,
     resolve_autosetup_prover_usage_file,
 )
@@ -39,6 +40,17 @@ class SetupFailure(BaseModel):
     stderr: str | None = Field(default=None)
 
 type SetupResult = SetupSuccess | SetupFailure
+
+def project_relative_packages(prover_config: dict, project_root: Path) -> dict:
+    """``prover_config`` with its absolute ``packages`` paths inside ``project_root`` made
+    relative (see ``relativize_packages``)."""
+    packages = prover_config.get("packages")
+    if not packages:
+        return prover_config
+    relative = relativize_packages(packages, project_root)
+    if relative != packages:
+        _logger.warning("AutoSetup conf had absolute package paths inside the project; made them relative: %s", relative)
+    return {**prover_config, "packages": relative}
 
 class AutoSetupComplete(TypedDict):
     type: Literal["auto_setup_complete"]
@@ -206,7 +218,9 @@ async def run_autosetup(
     udts = json.loads((project_root / ".certora_internal" / "all_user_defined_types.json").read_text())
 
     return SetupSuccess(
-        prover_config=json.loads((project_root / data["contract_to_config"][main_contract]).read_text()),
+        prover_config=project_relative_packages(
+            json.loads((project_root / data["contract_to_config"][main_contract]).read_text()), project_root
+        ),
         summaries_path=str(resolved_summary_path.relative_to(certora_dir)),
         user_types=udts,
     )

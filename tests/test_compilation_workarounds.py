@@ -1416,8 +1416,8 @@ def test_packages_come_from_the_nested_build_config_dir(tmp_path: Path, monkeypa
 
     keys = {p.split("=", 1)[0] for p in packages}
     assert "@pkg/" in keys, "nested foundry.toml remapping must reach the packages list"
-    # Paths are absolute against the build config dir, so they stay valid from the run root.
-    assert f"@pkg/={project / 'node_modules/@pkg/artifacts/src'}/" in packages
+    # Paths are resolved against the build config dir and expressed relative to the run root.
+    assert "@pkg/=sub/node_modules/@pkg/artifacts/src" in packages
 
 
 def test_the_rebuild_keeps_the_other_projects_scoped(tmp_path: Path, monkeypatch) -> None:
@@ -1436,7 +1436,7 @@ def test_the_rebuild_keeps_the_other_projects_scoped(tmp_path: Path, monkeypatch
     manager = CompilationWorkaroundManager(project_root=tmp_path, build_config_dir=app)
     packages = manager._build_packages_from_remapping_sources()
 
-    assert f"other/:@pkg/contracts/={other / 'node_modules/@pkg/contracts'}/" in packages
+    assert "other/:@pkg/contracts/=other/node_modules/@pkg/contracts" in packages
 
 
 def test_build_config_dir_defaults_to_project_root(tmp_path: Path, monkeypatch) -> None:
@@ -1447,7 +1447,19 @@ def test_build_config_dir_defaults_to_project_root(tmp_path: Path, monkeypatch) 
     manager = CompilationWorkaroundManager(project_root=tmp_path)
 
     assert manager.build_config_dir == tmp_path
-    assert f"@oz/={tmp_path / 'lib/oz'}/" in manager._build_packages_from_remapping_sources()
+    assert "@oz/=lib/oz" in manager._build_packages_from_remapping_sources()
+
+
+def test_packages_outside_the_run_root_stay_absolute(tmp_path: Path, monkeypatch) -> None:
+    # A copy of the run root must still see a package that lives above it, so its path stays absolute.
+    _no_forge(monkeypatch)
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "foundry.toml").write_text('[profile.default]\nremappings = ["@ext/=../shared/ext/"]\n')
+
+    manager = CompilationWorkaroundManager(project_root=project)
+
+    assert f"@ext/={project / '../shared/ext'}/" in manager._build_packages_from_remapping_sources()
 
 
 # =============================================================================
@@ -1635,7 +1647,7 @@ def test_file_missing_in_installed_package_is_named_when_giving_up(
     # message must say that rebuilding cannot help rather than only "nothing changed".
     (tmp_path / "node_modules" / "@vault" / "core").mkdir(parents=True)
     (tmp_path / "remappings.txt").write_text("@vault/=node_modules/@vault/core/\n")
-    packages = [f"@vault/={tmp_path / 'node_modules/@vault/core'}/"]
+    packages = ["@vault/=node_modules/@vault/core"]
     manager = CompilationWorkaroundManager(project_root=tmp_path)
     logged: list[tuple[str, str]] = []
     monkeypatch.setattr(manager, "log", lambda msg, level="INFO": logged.append((msg, level)))
@@ -1667,7 +1679,7 @@ def test_missing_package_target_is_retried_once_the_rebuild_finds_it(
     project.mkdir()
     (tmp_path / "node_modules" / "@vault" / "core").mkdir(parents=True)
     (project / "remappings.txt").write_text("@vault/=node_modules/@vault/core/\n")
-    packages = [f"@vault/={project / 'node_modules/@vault/core'}/"]
+    packages = ["@vault/=smart-contracts/node_modules/@vault/core"]
     manager = CompilationWorkaroundManager(project_root=tmp_path, build_config_dir=project)
     logged: list[tuple[str, str]] = []
     monkeypatch.setattr(manager, "log", lambda msg, level="INFO": logged.append((msg, level)))
@@ -1687,7 +1699,7 @@ def test_missing_package_target_is_retried_once_the_rebuild_finds_it(
     assert manager.last_import_diagnostics == []
     assert success is True
     assert fake_run.calls == 2
-    assert updated["packages"] == [f"@vault/={tmp_path / 'node_modules/@vault/core'}/"]
+    assert updated["packages"] == ["@vault/=node_modules/@vault/core"]
 
 
 def test_import_diagnostics_do_not_survive_into_an_unrelated_failure(
@@ -1700,7 +1712,7 @@ def test_import_diagnostics_do_not_survive_into_an_unrelated_failure(
     project.mkdir()
     (tmp_path / "node_modules" / "@vault" / "core").mkdir(parents=True)
     (project / "remappings.txt").write_text("@vault/=node_modules/@vault/core/\n")
-    packages = [f"@vault/={project / 'node_modules/@vault/core'}/"]
+    packages = ["@vault/=smart-contracts/node_modules/@vault/core"]
     manager = CompilationWorkaroundManager(project_root=tmp_path, build_config_dir=project)
     logged: list[tuple[str, str]] = []
     monkeypatch.setattr(manager, "log", lambda msg, level="INFO": logged.append((msg, level)))
