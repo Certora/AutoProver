@@ -50,7 +50,8 @@ class GeneratedHarness(BaseModel):
     harness: str
 
     def property_checks(self) -> list[tuple[PropertyTitle, list[CheckName]]]:
-        """No property-to-rule map is part of this result."""
+        # A placeholder until property authoring is implemented: nothing yet records which of
+        # the harness's rules demonstrate which property.
         return []
 
     @property
