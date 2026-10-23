@@ -236,7 +236,7 @@ async def test_the_retry_shows_the_model_what_it_produced():
             return bad if len(seen) == 1 else good
 
     class _LLM:
-        def with_structured_output(self, _ty): return _Bound()
+        def with_structured_output(self, _ty, **_kwargs): return _Bound()
 
     out = await prioritize.rank_properties(
         llm=_LLM(), contract_name="Vault", candidates=cands,  # type: ignore[arg-type]

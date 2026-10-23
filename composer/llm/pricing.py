@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Callable
+import re
 
 @dataclass(frozen=True)
 class PriceTier:
@@ -16,8 +17,9 @@ class PriceTier:
     Cache writes come in two rates: ``cache_write`` is the 5-minute
     ephemeral rate and ``cache_write_1h`` is the 1-hour ephemeral rate
     (~2× base input on Anthropic). Which one applies depends on the
-    conversation's cache TTL. OpenAI has no separate cache-write rate,
-    so both fields carry the same value there."""
+    conversation's cache TTL. OpenAI has a single cache-write rate
+    (1.25× input from gpt-5.6 on, none before it), so both fields
+    carry the same value there."""
     input: float
     output: float
     cache_read: float
@@ -25,56 +27,76 @@ class PriceTier:
     cache_write_1h: float
 
 
-@dataclass(frozen=True)
-class ModelPricing:
-    """Pricing entry for one model family. ``long`` is the
-    long-context tier (used when input token count exceeds the
-    threshold) and applies only to OpenAI models that publish a
-    separate >272K-input rate; Anthropic models keep ``long = None``
-    and bill everything at ``short`` rates."""
-    short: PriceTier
-    long: PriceTier | None = None
-
-
-# OpenAI's published >272K input-token threshold for long-context
-# pricing. Once an individual call's input crosses this, the long
-# tier applies *for the full session* per OpenAI's terms; we
-# approximate that by switching on a per-message basis (a session
-# that drifts above 272K will mostly stay there).
+# OpenAI's published threshold for long-context pricing: a call whose
+# input exceeds 272K tokens bills at the long tier.
 _OPENAI_LONG_CONTEXT_THRESHOLD = 272_000
 
 
-# Pricing tables transcribed from Anthropic + OpenAI rate cards.
-# Sources should be re-checked when new model families ship or 
-# their costs update.
+@dataclass(frozen=True)
+class ModelPricing:
+    """Pricing entry for one model family. ``long`` is the
+    long-context tier, used when a call's input token count exceeds
+    ``long_threshold``. Models billed at one rate across their whole
+    window keep ``long = None``."""
+    short: PriceTier
+    long: PriceTier | None = None
+    long_threshold: int = _OPENAI_LONG_CONTEXT_THRESHOLD
+
+
+# Pricing tables transcribed from the Anthropic and OpenAI rate cards
+# (platform.claude.com/docs/en/about-claude/pricing,
+# developers.openai.com/api/docs/pricing), last checked 2026-10-19.
+# Re-check when new model families ship or their costs update.
+#
+# The table keeps the two latest models of each family (Opus, Sonnet,
+# Sol, Luna, ...) plus any model the code names as a default. A model
+# not listed prices at $0, and a budgeted run on it is refused.
+#
 _PRICING: list[tuple[str, ModelPricing]] = [
-    ("claude-fable-5", ModelPricing(short=PriceTier(10.00, 50.00, 1.00, 12.50, 20.0))),
-
-    # claude-opus-5 and claude-opus-4.5 / 4.6 / 4.7 / 4.8 share a rate card;
-    # older 4 / 4.1 are pricier. Matching by prefix-of-prefix so
-    # "claude-opus-4-7" and "claude-opus-4-7-20260301" both hit the right entry.
-    ("claude-opus-5",   ModelPricing(short=PriceTier(5.00, 25.00, 0.50, 6.25, 10.0))),
-
     # ---- Anthropic ----
-    # claude-opus-4.5 / 4.6 / 4.7 share a rate card; older 4 / 4.1
-    # are pricier. Matching by prefix-of-prefix so "claude-opus-4-7"
-    # and "claude-opus-4-7-20260301" both hit the right entry.
-    ("claude-opus-4-8", ModelPricing(short=PriceTier(5.00, 25.00, 0.50, 6.25, 10.00))),
-    ("claude-opus-4-7", ModelPricing(short=PriceTier(5.00, 25.00, 0.50, 6.25, 10.00))),
-    ("claude-opus-4-6", ModelPricing(short=PriceTier(5.00, 25.00, 0.50, 6.25, 10.00))),
-    ("claude-opus-4-5", ModelPricing(short=PriceTier(5.00, 25.00, 0.50, 6.25, 10.00))),
-    # o7 to retired models, they went to a datacenter upstate
-    # ("claude-opus-4-1", ModelPricing(short=PriceTier(15.00, 75.00, 1.50, 18.75, 30.00))),
-    # ("claude-opus-4",   ModelPricing(short=PriceTier(15.00, 75.00, 1.50, 18.75, 30.00))),
+    # Fable 5.1 reads its cache at 0.025× input; Opus 5.5 and Sonnet 5.5
+    # at 0.05×; everything else at the standard 0.1×.
+    ("claude-fable-5-1", ModelPricing(short=PriceTier(10.00, 50.00, 0.25, 12.50, 20.00))),
+    ("claude-fable-5",   ModelPricing(short=PriceTier(10.00, 50.00, 1.00, 12.50, 20.00))),
 
-    ("claude-sonnet-5",   ModelPricing(short=PriceTier(3.00, 15.00, 0.30, 3.75, 6.00))),
+    ("claude-opus-5-5", ModelPricing(short=PriceTier(4.00, 20.00, 0.20, 5.00, 8.00))),
+    ("claude-opus-5",   ModelPricing(short=PriceTier(5.00, 25.00, 0.50, 6.25, 10.00))),
 
-    ("claude-sonnet-4-6", ModelPricing(short=PriceTier(3.00, 15.00, 0.30, 3.75, 6.00))),
-    ("claude-sonnet-4-5", ModelPricing(short=PriceTier(3.00, 15.00, 0.30, 3.75, 6.00))),
-    # ("claude-sonnet-4",   ModelPricing(short=PriceTier(3.00, 15.00, 0.30, 3.75, 6.00))),
+    ("claude-sonnet-5-5", ModelPricing(short=PriceTier(2.00, 10.00, 0.10, 2.50, 4.00))),
+    ("claude-sonnet-5",   ModelPricing(short=PriceTier(2.00, 10.00, 0.20, 2.50, 4.00))),
 
+    # Haiku 5.5 is the one Claude model priced by prompt length: over
+    # 100K input tokens (cache reads and writes included) a call pays 5×.
+    ("claude-haiku-5-5", ModelPricing(
+        short=PriceTier(0.10, 0.50, 0.01, 0.125, 0.20),
+        long=PriceTier(0.50, 2.50, 0.05, 0.625, 1.00),
+        long_threshold=100_000,
+    )),
     ("claude-haiku-4-5", ModelPricing(short=PriceTier(1.00, 5.00, 0.10, 1.25, 2.00))),
 
+    # ---- OpenAI ----
+    # Short (≤272K input) and long (>272K) tiers where the rate card
+    # publishes both; the rest bill everything at the short rate.
+    # From gpt-5.6 on, cache writes cost 1.25× input. Before it there
+    # is no cache-write charge, so cache_write is the plain input rate.
+    # Pro variants don't publish a cached-input discount (cache_read =
+    # input).
+    ("gpt-6.1-sol", ModelPricing(
+        short=PriceTier(2.00, 10.00, 0.10, 2.50, 2.50),
+        long=PriceTier(4.00, 15.00, 0.20, 5.00, 5.00),
+    )),
+    ("gpt-6-astra", ModelPricing(
+        short=PriceTier(10.00, 50.00, 1.00, 12.50, 12.50),
+        long=PriceTier(20.00, 75.00, 2.00, 25.00, 25.00),
+    )),
+    ("gpt-6-sol", ModelPricing(
+        short=PriceTier(2.00, 10.00, 0.20, 2.50, 2.50),
+        long=PriceTier(4.00, 15.00, 0.40, 5.00, 5.00),
+    )),
+    ("gpt-6-luna", ModelPricing(
+        short=PriceTier(0.10, 0.50, 0.01, 0.125, 0.125),
+        long=PriceTier(0.20, 0.75, 0.02, 0.25, 0.25),
+    )),
     ("gpt-5.6-terra", ModelPricing(
         short=PriceTier(2.00, 12.00, 0.20, 2.50, 2.50),
         long=PriceTier(4.00, 18.00, 0.40, 5.00, 5.00),
@@ -83,17 +105,6 @@ _PRICING: list[tuple[str, ModelPricing]] = [
         short=PriceTier(0.20, 1.20, 0.02, 0.25, 0.25),
         long=PriceTier(0.40, 1.80, 0.04, 0.50, 0.50),
     )),
-    ("gpt-5.6", ModelPricing(
-        short=PriceTier(5.00, 30.00, 0.50, 6.25, 6.25),
-        long=PriceTier(10.00, 45.00, 1.00, 12.50, 12.50),
-    )),
-
-    # ---- OpenAI ----
-    # gpt-5.5 / 5.4 publish short (≤272K input) and long (>272K) tiers.
-    # Pro variants don't publish a cached-in discount (cache_read =
-    # base input). Mini/nano don't publish a long tier; we use short
-    # for everything on those. OpenAI has no separate cache-write rate,
-    # so cache_write_1h mirrors cache_write on every OpenAI entry.
     ("gpt-5.5-pro", ModelPricing(
         short=PriceTier(30.00, 180.00, 30.00, 30.00, 30.00),
         long=PriceTier(60.00, 270.00, 60.00, 60.00, 60.00),
@@ -115,23 +126,35 @@ _PRICING: list[tuple[str, ModelPricing]] = [
 ]
 
 
+# A dated snapshot suffix: ``-20251001`` (Anthropic) or ``-2026-04-01`` (OpenAI).
+_DATE_SUFFIX = re.compile(r"-(\d{8}|\d{4}-\d{2}-\d{2})")
+
+
+def _matches(model: str, name: str) -> bool:
+    """Whether ``model`` is the entry ``name`` itself or a dated snapshot of
+    it (``claude-haiku-4-5-20251001``). Any other suffix is a different model
+    and does not match: ``claude-opus-5-5`` is not ``claude-opus-5``."""
+    if not model.startswith(name):
+        return False
+    rest = model[len(name):]
+    return rest == "" or _DATE_SUFFIX.fullmatch(rest) is not None
+
+
 def price_per_mtok(model: str | None, input_tokens: int) -> PriceTier | None:
     """Look up per-MTok pricing by model name and call size. Returns
     ``None`` for models with no table entry (cost contribution becomes
     zero — better than guessing).
 
-    Matched by prefix on the lowercased model name so dated revisions
-    (``claude-opus-4-7-20260301``, ``gpt-5.5-2026-...``) collapse into
-    the same family entry. Table is searched in order, so list more
-    specific prefixes (``gpt-5.5-pro``) before less specific
-    (``gpt-5.5``). For OpenAI models with a long tier, ``input_tokens``
-    chooses short vs. long; Anthropic always uses the short tier."""
+    Matched on the lowercased model name so dated snapshots
+    (``claude-haiku-4-5-20251001``, ``gpt-5.5-2026-...``) collapse into
+    their model's entry. For models with a long tier,
+    ``input_tokens`` chooses short vs. long."""
     if model is None:
         return None
     m = model.lower()
-    for prefix, pricing in _PRICING:
-        if m.startswith(prefix):
-            if pricing.long is not None and input_tokens > _OPENAI_LONG_CONTEXT_THRESHOLD:
+    for name, pricing in _PRICING:
+        if _matches(m, name):
+            if pricing.long is not None and input_tokens > pricing.long_threshold:
                 return pricing.long
             return pricing.short
     return None
@@ -139,7 +162,7 @@ def price_per_mtok(model: str | None, input_tokens: int) -> PriceTier | None:
 
 # A model's pricing curve as a function of a single call's input-token count:
 # ``price_per_mtok`` with the model name curried away. The remaining argument
-# picks the short/long context tier (OpenAI); Anthropic ignores it.
+# picks the short/long context tier for models that have one.
 type PriceProvider = Callable[[int], PriceTier | None]
 
 

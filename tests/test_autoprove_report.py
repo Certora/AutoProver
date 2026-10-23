@@ -17,6 +17,7 @@ import pytest
 from pydantic import ValidationError as PydanticValidationError
 from prover_output_utility.models import NodeStatus
 from prover_output_utility import ProverOutputAPI
+from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models import BaseChatModel
 from langchain_core.outputs import ChatResult
 from langchain_core.runnables import Runnable, RunnableLambda
@@ -744,6 +745,50 @@ def test_artifact_store_writes_per_buffer_specs_confs_and_quarantine(tmp_path):
     assert (specs / "helpers.spec.unverified").is_file()
 
 
+def test_artifact_store_replaces_a_previous_runs_deliverable(tmp_path, caplog):
+    """A re-run in the same project dir finds the earlier run's specs/confs on disk: each is
+    replaced with a warning, not an error — that is not a conflict within this run."""
+    spec = ComponentSpec("myslug")
+    specs = tmp_path / "certora" / "specs" / "myslug"
+    confs = tmp_path / "certora" / "confs" / "myslug"
+    specs.mkdir(parents=True)
+    confs.mkdir(parents=True)
+    (specs / "base.spec").write_text("rule old { assert false; }\n")
+    (confs / "verify_base.conf").write_text("{}")
+
+    store = ProverArtifactStore(str(tmp_path), "Vault")
+    art = GeneratedCVL(
+        commentary="",
+        config={"files": ["src/Vault.sol"]},
+        spec_files={"base": "rule r { assert true; }\n"},
+        entrypoint_specs=["base"],
+    )
+    with caplog.at_level("WARNING", logger="composer.spec.source.artifacts"):
+        store.write_artifact(spec, art)
+    assert (specs / "base.spec").read_text() == "rule r { assert true; }\n"
+    assert "Vault" in (confs / "verify_base.conf").read_text()
+    assert sorted(
+        (r.levelname, pathlib.Path(r.args[0]).name) for r in caplog.records  # type: ignore[index]
+    ) == [("WARNING", "base.spec"), ("WARNING", "verify_base.conf")]
+
+
+def test_artifact_store_logs_a_conflicting_rewrite_within_the_run(tmp_path, caplog):
+    """The same path written twice in one run with different content is logged as an error, not
+    raised, and the later content wins; an identical rewrite is not logged."""
+    store = ProverArtifactStore(str(tmp_path), "Vault")
+    spec = ComponentSpec("myslug")
+    first = GeneratedCVL(commentary="", spec_files={"base": "rule a { assert true; }\n"})
+    second = GeneratedCVL(commentary="", spec_files={"base": "rule b { assert true; }\n"})
+    with caplog.at_level("ERROR", logger="composer.spec.source.artifacts"):
+        store.write_artifact(spec, first)
+        store.write_artifact(spec, first)
+        assert not caplog.records
+        store.write_artifact(spec, second)
+    assert len(caplog.records) == 1
+    assert "two sources disagree" in caplog.records[0].getMessage()
+    assert (tmp_path / "certora" / "specs" / "myslug" / "base.spec").read_text() == "rule b { assert true; }\n"
+
+
 def test_artifact_store_write_report_round_trips(tmp_path):
     report = _mini_report()
     ProverArtifactStore(str(tmp_path), "Counter").write_report(report)
@@ -847,6 +892,24 @@ async def test_grouping_retries_once_with_the_rejection_appended():
     # The retry carries the rejection, and still stands alone as one request.
     assert "A previous attempt was rejected" in llm.calls[1]
     assert "A previous attempt was rejected" not in llm.calls[0]
+
+
+@pytest.mark.asyncio
+async def test_grouping_retries_a_reply_the_output_parser_rejects():
+    # `method="json_schema"` parses the reply text, so a non-conforming reply surfaces as
+    # OutputParserException rather than a bare pydantic ValidationError.
+    good = GroupingResult(groups=[PropertyGroupDraft(
+        slug="g", title="G", description="d", members=[("C", "p1")])])
+    llm = _FlakyStructuredModel(
+        output=good, failures=[OutputParserException("bad grouping")], calls=[])
+
+    result = await grouping.call_grouping_llm(
+        llm=llm, contract_name="C", properties=[_fp("C", "p1", [])],
+    )
+
+    assert [g.slug for g in result.groups] == ["g"]
+    assert len(llm.calls) == 2
+    assert "bad grouping" in llm.calls[1]
 
 
 @pytest.mark.asyncio
