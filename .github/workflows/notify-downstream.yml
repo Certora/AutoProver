@@ -1,0 +1,44 @@
+name: notify-downstream
+
+# After each push to master, sends the `autoprover-merged` event, with the new
+# commit, to each repository that pins AutoProver by commit. Each of them runs
+# its own workflow on that event to move its pin.
+#
+# Repository settings name the targets and the credential, and the job is
+# skipped until all of them are set:
+#   vars.DOWNSTREAM_REPOS      the repository names, separated by spaces or new lines
+#   vars.BUMP_APP_CLIENT_ID    a GitHub App installed on those repositories
+#   secrets.BUMP_APP_PRIVATE_KEY  its private key
+# A pull request from a fork never runs this workflow: it runs on push only.
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    if: vars.DOWNSTREAM_REPOS != '' && vars.BUMP_APP_CLIENT_ID != ''
+    steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token
+        with:
+          client-id: ${{ vars.BUMP_APP_CLIENT_ID }}
+          private-key: ${{ secrets.BUMP_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ vars.DOWNSTREAM_REPOS }}
+
+      - name: Send autoprover-merged
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPOS: ${{ vars.DOWNSTREAM_REPOS }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          for repo in $REPOS; do
+            gh api "repos/$OWNER/$repo/dispatches" \
+              -f event_type=autoprover-merged \
+              -f "client_payload[sha]=$GITHUB_SHA"
+            echo "Sent autoprover-merged to $repo"
+          done
