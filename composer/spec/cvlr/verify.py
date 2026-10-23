@@ -372,10 +372,6 @@ class VerifyDeps:
     prover_opts: ProverOptions
     stamper: ValidationStamper
     analysis: CexAnalysis
-    #: One submission at a time per unit. A second concurrent run would build
-    #: into the same workdir and race the staged module. The tool refuses it.
-    #: A caller that made two calls wanted two answers.
-    lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
 
 
 def _author_text(template: str, /, **values: object) -> str:
@@ -615,11 +611,6 @@ class VerifyRules(
         if draft is None:
             return "No harness written yet — put a draft first."
         with self.tool_deps() as deps:
-            if deps.lock.locked():
-                return (
-                    "A prover run for this unit is already in flight. Wait for it rather than "
-                    "starting a second one."
-                )
             listed: list[str] = []
 
             def choose(names: set[str]) -> Submission | Command | str:
@@ -632,17 +623,16 @@ class VerifyRules(
                 # unit's feature.
                 return _submission_for(deps, self.state, listed)
 
-            async with deps.lock:
-                capture = deps.analysis.callbacks()
-                outcome = await _stage_and_submit(
-                    deps,
-                    self.state,
-                    draft,
-                    deps.submission,
-                    callbacks=capture,
-                    tool_call_id=self.tool_call_id,
-                    choose=choose,
-                )
+            capture = deps.analysis.callbacks()
+            outcome = await _stage_and_submit(
+                deps,
+                self.state,
+                draft,
+                deps.submission,
+                callbacks=capture,
+                tool_call_id=self.tool_call_id,
+                choose=choose,
+            )
             if not isinstance(outcome, (BuildRejected, SubmissionFailed, Checked)):
                 return outcome
             return self._report(outcome, deps, declared=tuple(listed))
@@ -837,37 +827,31 @@ class ExplainVacuity(
             return "No harness written yet — put a draft first."
         with self.tool_deps() as deps:
             verify = deps.verify
-            if verify.lock.locked():
-                return (
-                    "A prover run for this unit is already in flight. Wait for it rather than "
-                    "starting a second one."
-                )
-            async with verify.lock:
-                submission = dataclasses.replace(
-                    _submission_for(verify, self.state, (self.rule,)),
-                    purpose=CollectUnsatCore(),
-                    # Its own conf file: the unit's is part of the deliverable.
-                    stem=f"{verify.submission.stem}_unsat_core",
-                )
+            submission = dataclasses.replace(
+                _submission_for(verify, self.state, (self.rule,)),
+                purpose=CollectUnsatCore(),
+                # Its own conf file: the unit's is part of the deliverable.
+                stem=f"{verify.submission.stem}_unsat_core",
+            )
 
-                def choose(names: set[str]) -> Submission | str:
-                    # The `.so` just built, not a list stored from an earlier run.
-                    # A draft edited since that run is not judged against its names.
-                    if self.rule not in names:
-                        listed = ", ".join(sorted(names)) or "none"
-                        return f"The build listed no rule `{self.rule}`. It listed: {listed}."
-                    return submission
+            def choose(names: set[str]) -> Submission | str:
+                # The `.so` just built, not a list stored from an earlier run.
+                # A draft edited since that run is not judged against its names.
+                if self.rule not in names:
+                    listed = ", ".join(sorted(names)) or "none"
+                    return f"The build listed no rule `{self.rule}`. It listed: {listed}."
+                return submission
 
-                outcome = await _stage_and_submit(
-                    verify,
-                    self.state,
-                    draft,
-                    submission,
-                    callbacks=_DiagnosticAccounting(),
-                    tool_call_id=self.tool_call_id,
-                    analyze=False,
-                    choose=choose,
-                )
+            outcome = await _stage_and_submit(
+                verify,
+                self.state,
+                draft,
+                submission,
+                callbacks=_DiagnosticAccounting(),
+                tool_call_id=self.tool_call_id,
+                analyze=False,
+                choose=choose,
+            )
             if not isinstance(outcome, (BuildRejected, SubmissionFailed, Checked)):
                 assert isinstance(outcome, str)
                 return outcome

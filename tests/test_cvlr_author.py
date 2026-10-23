@@ -395,7 +395,6 @@ async def test_the_submission_names_the_rules_the_build_listed(tmp_path, monkeyp
     monkeypatch.setattr(verify_mod, "run_submission", run)
 
     deps = SimpleNamespace(
-        lock=asyncio.Lock(),
         target=SimpleNamespace(
             session=None,
             stage=_stubbed_stage,
@@ -451,7 +450,6 @@ async def test_a_missing_rule_section_writes_no_conf(tmp_path, monkeypatch):
     monkeypatch.setattr(verify_mod, "write_submission", write)
 
     deps = SimpleNamespace(
-        lock=asyncio.Lock(),
         target=SimpleNamespace(session=None, stage=_stubbed_stage, build_slot=contextlib.nullcontext),
         submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
         submissions=Path("/w/submissions"),
@@ -490,7 +488,6 @@ async def test_a_corrupt_rule_section_writes_no_conf(tmp_path, monkeypatch, capl
     monkeypatch.setattr(verify_mod, "write_submission", write)
 
     deps = SimpleNamespace(
-        lock=asyncio.Lock(),
         target=SimpleNamespace(session=None, stage=_stubbed_stage, build_slot=contextlib.nullcontext),
         submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
         submissions=Path("/w/submissions"),
@@ -526,7 +523,6 @@ async def test_an_empty_rule_section_submits_nothing(tmp_path, monkeypatch):
     monkeypatch.setattr(verify_mod, "write_submission", write)
 
     deps = SimpleNamespace(
-        lock=asyncio.Lock(),
         target=SimpleNamespace(session=None, stage=_stubbed_stage, build_slot=contextlib.nullcontext),
         submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
         submissions=Path("/w/submissions"),

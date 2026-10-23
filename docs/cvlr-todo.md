@@ -648,6 +648,22 @@ beside `solana.html`: its diagnostics and timeout chapters are on-topic and its 
 not. And vector search missed *Parametric Rules & Macros* for "one rule covering every instruction",
 which keyword search found. Neither has been looked at since the corpus became the manual alone.
 
+**U32. `verify_rules` cannot select rules, so parallel runs cannot split a unit.** Two
+`verify_rules` calls for one unit can run at once — the build permit, not a per-unit lock, keeps
+their staging and builds apart — but each submits every rule the build listed, so a second call
+duplicates the first. Letting the author name a subset (say A, B, C in one run and X, Y, Z in
+another) needs `verify_rules` to take a rule list, and two things fixed with it:
+
+* **Verdicts are not merged across runs.** Each `Checked` result replaces `last_verdicts`, and the
+  stamp needs every declared rule verdicted. Two partial runs never stamp, and the later drops the
+  earlier's verdicts. Merge per draft, keyed by the digest `LastVerdicts.stamp` already holds.
+* **Concurrent runs share one conf and build script.** Both are named by `Submission.stem`, which
+  is fixed per unit (`<stem>` for `verify_rules`, `<stem>_unsat_core` for `explain_vacuity`), so
+  the second run overwrites the first's files. That is harmless today — the permit is held until
+  upload and both files are read before it — but the unit's conf is part of the deliverable, so a
+  selective run would leave it naming only its own subset. Give each run its own stem, and write
+  the deliverable conf with the full rule list separately.
+
 ---
 
 ## Leads from the certora-cvlr-kb ledger

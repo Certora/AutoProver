@@ -4,7 +4,6 @@ The CVLR counterpart of the CVL sanity analyzer (`sanity_analyzer`). No LLM, no 
 the submission, the results API and the analyst are all stubbed at the seams the tool calls.
 """
 
-import asyncio
 import contextlib
 from pathlib import Path
 from types import SimpleNamespace
@@ -211,7 +210,6 @@ class _FakeAnalyzer:
 
 def _deps(analyzer: _FakeAnalyzer, results: _FakeResults) -> verify_mod.VacuityDeps:
     verify = SimpleNamespace(
-        lock=asyncio.Lock(),
         target=SimpleNamespace(session=None, stage=_stubbed_stage, build_slot=contextlib.nullcontext),
         submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit_x", msg="m"),
         submissions=Path("/w/submissions"),
