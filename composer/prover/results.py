@@ -259,6 +259,55 @@ def flatten_tree_view(
         r.children, lambda c: flatten_tree_view(context, c, effective_path, shape, r.nodeType)
     )
 
+#: Where a job's alert report lives, relative to its results directory.
+ALERT_REPORT = Path("Reports") / "alertReport.json"
+
+_EXTERNALS_ALERT = "The following functions are neither inlined nor summarized"
+
+
+@dataclass(frozen=True)
+class ExternalWarnings:
+    """Warnings read from an alert report. Empty when the report is absent or names none."""
+
+    messages: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class UnreadableAlertReport:
+    """The alert report is present and is not a JSON list of alerts."""
+
+
+def external_functions(results_root: Path) -> ExternalWarnings | UnreadableAlertReport:
+    """The Prover's warnings about functions it treated as external, deduplicated.
+
+    Read from the alert report. Each warning is the Prover's own text. The alerts
+    do not name their rule, so the same warning is repeated. An external call
+    writes nothing but its return value, and no verdict says so.
+
+    An absent report is :class:`ExternalWarnings` with no messages. A report that
+    is not a JSON list is :class:`UnreadableAlertReport`: that is not an empty list.
+    """
+    path = results_root / ALERT_REPORT
+    try:
+        text = path.read_text()
+    except FileNotFoundError:
+        return ExternalWarnings()
+    except OSError:
+        return UnreadableAlertReport()
+    try:
+        alerts = json.loads(text)
+    except ValueError:
+        return UnreadableAlertReport()
+    if not isinstance(alerts, list):
+        return UnreadableAlertReport()
+    found: set[str] = set()
+    for alert in alerts:
+        message = alert.get("message") if isinstance(alert, dict) else None
+        if isinstance(message, str) and _EXTERNALS_ALERT in message:
+            found.add(message)
+    return ExternalWarnings(tuple(sorted(found)))
+
+
 class NoTreeViewResultError(RuntimeError):
     def __init__(self, where: Path):
         super().__init__(f"No tree views found in {where}")
