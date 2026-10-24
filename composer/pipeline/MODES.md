@@ -21,6 +21,23 @@ installed separately. This package only declares the mode and the hook.
 | ranking, formalization, `build_report` | yes | **no** |
 | `RunModeImpl.run`, then `write_report` | no | **yes** |
 
+### Project build
+
+For the prover backend, the driver does **not** build the project in an
+external mode. Only AutoSetup installs dependencies, picks the solc versions
+and writes the compilation config. AutoSetup runs inside
+`prepare_formalization`, and an external mode skips that step. The backend's
+`preflight` does none of this. So the mode gets the project as checked out:
+a conf whose imports need installed dependencies, or a solc version that is
+not on the machine, does not compile.
+
+The build part of AutoSetup is dependency setup, solc selection and the
+compilation config. To close this gap, move that part out of
+`prepare_formalization`. Put it in `ProverBackend.preflight`, or in a separate
+step that external modes also run. AutoSetup runs as one subprocess today, so this needs a build-only entry
+point in `certora_autosetup`. Until that exists, a mode implementation must
+prepare the build itself or report the confs that did not compile.
+
 The extraction cache keys do not include the run mode. An external-mode run
 at a commit that a `comprehensive` run already saw replays the inference at no
 cost. The reverse is also true.

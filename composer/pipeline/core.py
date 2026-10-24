@@ -577,8 +577,13 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
         )
 
     # An external mode works on the project's own verification artifacts, so the backend's
-    # pre-formalization setup (AutoSetup, summaries) is never started: nothing the mode reads
-    # comes from it, and it is the most expensive step of the front half.
+    # pre-formalization setup (AutoSetup, summaries) is never started: it is the most
+    # expensive step of the front half, and its specs and summaries are not what the mode
+    # measures. For the prover backend this also skips the project build, because AutoSetup
+    # is the only step that installs dependencies, picks solc versions and writes the
+    # compilation config, and ``preflight`` does none of it. The mode therefore runs on the
+    # project as checked out, and a conf that needs that build does not compile. See
+    # MODES.md, "Project build".
     if mode_impl is not None:
         extracted = await _extract()
         return await _hand_off_to_mode(
