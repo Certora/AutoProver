@@ -263,8 +263,9 @@ def main():
 
     Autosetup.ensure_git_config_files()
     autosetup._load_signature_database_to_scope()
-    autosetup.generate_dummy_erc20_files()
 
+    # The build-only path compiles the project as the user wrote it, so it runs before the
+    # DummyERC20Impl mock is copied into certora/mocks and added to the scene.
     if args.build_only:
         try:
             build = autosetup.build(main_contract_handle)
@@ -275,6 +276,7 @@ def main():
         print(f"Build settings written to: {args.build_only}")
         sys.exit(0)
 
+    autosetup.generate_dummy_erc20_files()
     result = autosetup.run(main_contract_handle, skip_warmup=args.skip_warmup)
 
     # Persist this run's token usage to the per-run reports dir (zero-row on a

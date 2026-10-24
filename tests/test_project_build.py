@@ -106,6 +106,51 @@ def test_the_build_only_flag_takes_an_output_path():
     assert create_parser().parse_args(["--main-contract", "src/V.sol:V"]).build_only is None
 
 
+def test_build_only_leaves_the_certora_mocks_untouched(tmp_path, monkeypatch):
+    """``--build-only`` compiles the project's own scene: it neither writes the DummyERC20Impl
+    mock into certora/mocks nor adds it to the contracts it builds."""
+    import certora_autosetup.autosetup.cli as cli_mod
+    from certora_autosetup.autosetup.types import ProjectBuildResult
+
+    vault = ContractHandle(source_file="src/Vault.sol", contract_name="Vault")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "Vault.sol").write_text("pragma solidity ^0.8.0;\ncontract Vault {}\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli_mod, "init_cache_fs", lambda: None)
+    monkeypatch.setattr(cli_mod, "find_build_config_dir", lambda *_a: tmp_path)
+    monkeypatch.setattr(cli_mod, "resolve_contract_handles", lambda handles, *_a, **_kw: handles)
+    monkeypatch.setattr(cli_mod, "auto_detect_contracts", lambda *_a, **_kw: [vault])
+    monkeypatch.setattr(
+        cli_mod, "swap_library_main_contract",
+        lambda *, main_contract_handle, contract_handles, **_kw: (main_contract_handle, contract_handles, None),
+    )
+    monkeypatch.setattr(cli_mod, "with_harnessed_library", lambda _root, _main, extra, **_kw: extra)
+    monkeypatch.setattr(Autosetup, "ensure_git_config_files", staticmethod(lambda: None))
+    monkeypatch.setattr(Autosetup, "_load_signature_database_to_scope", lambda self: None)
+    built_scenes: list[list[ContractHandle]] = []
+
+    def fake_build(self, main):
+        built_scenes.append(list(self.contract_handles))
+        return ProjectBuildResult(
+            compilation_config={"solc": "solc8.28"}, solc_versions=["solc8.28"],
+            import_patcher_applied=False, contracts=["src/Vault.sol:Vault"],
+        )
+
+    monkeypatch.setattr(Autosetup, "build", fake_build)
+    out = tmp_path / "build.json"
+    monkeypatch.setattr(sys, "argv", [
+        "certora_autosetup", "--main-contract", "src/Vault.sol:Vault", "--build-only", str(out),
+    ])
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli_mod.main()
+
+    assert exit_info.value.code == 0
+    assert json.loads(out.read_text())["solc_versions"] == ["solc8.28"]
+    assert not (tmp_path / "certora" / "mocks").exists()
+    assert built_scenes == [[vault]]
+
+
 # ---------------------------------------------------------------------------
 # composer: run_autosetup_build
 # ---------------------------------------------------------------------------
