@@ -57,6 +57,44 @@ class AutosetupConfig:
 
 
 @dataclass
+class ProjectBuildResult:
+    """Output of :meth:`Autosetup.build`: the compilation settings under which certoraRun
+    compiles the project's scene.
+
+    ``compilation_config`` holds only build keys (``solc`` or ``compiler_map``, ``packages``,
+    the via-ir / optimizer / evm-version keys and their per-contract maps), never ``files`` or
+    ``verify``, so a caller can lay it under a conf of its own."""
+
+    compilation_config: dict[str, Any]
+    #: Every solc the settings name, in the form the conf spells it (``solc8.28`` or
+    #: ``solc-0.8.28``), sorted and without duplicates.
+    solc_versions: list[str]
+    #: True when the import patcher rewrote project sources to make the scene compile.
+    import_patcher_applied: bool
+    #: The contracts of the compiled scene, as ``path:Name``.
+    contracts: list[str]
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "compilation_config": self.compilation_config,
+            "solc_versions": self.solc_versions,
+            "import_patcher_applied": self.import_patcher_applied,
+            "contracts": self.contracts,
+        }
+
+
+def solc_versions_of(config: dict[str, Any]) -> list[str]:
+    """The solc names a conf's compilation settings select: the scalar ``solc`` and every value
+    of ``compiler_map``."""
+    names: set[str] = set()
+    if isinstance(solc := config.get("solc"), str) and solc:
+        names.add(solc)
+    if isinstance(cmap := config.get("compiler_map"), dict):
+        names.update(v for v in cmap.values() if isinstance(v, str) and v)
+    return sorted(names)
+
+
+@dataclass
 class AutosetupResult:
     """Complete output from the autosetup phase.
 

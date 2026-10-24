@@ -3,6 +3,8 @@ CLI entry point for standalone autosetup (certora-autosetup).
 
 Runs the autosetup phase only — no checker generation or verification.
 Outputs AutosetupResult to .certora_internal/autosetup_result.json.
+With ``--build-only PATH`` it stops once the project compiles and writes the compilation
+settings (a ``ProjectBuildResult``) to PATH instead.
 """
 
 import json
@@ -19,7 +21,7 @@ from certora_autosetup.harnesser.swap import swap_library_main_contract, with_ha
 from certora_autosetup.cache.content_cache import ContentCache
 from certora_autosetup.reporting.reporter import Reporter
 from certora_autosetup.setup.sanity_rule_generator import SanityRuleGenerator
-from certora_autosetup.setup.setup_prover import SetupProver
+from certora_autosetup.setup.setup_prover import CompilationAnalysisError, SetupProver
 from certora_autosetup.setup.signature_manager import SignatureManager
 from certora_autosetup.utils.cloud_runner import CloudProverRunner
 from certora_autosetup.utils.constants import (
@@ -262,6 +264,16 @@ def main():
     Autosetup.ensure_git_config_files()
     autosetup._load_signature_database_to_scope()
     autosetup.generate_dummy_erc20_files()
+
+    if args.build_only:
+        try:
+            build = autosetup.build(main_contract_handle)
+        except CompilationAnalysisError as e:
+            logger.log(f"Build failed: {e}", "ERROR", "Autosetup")
+            sys.exit(1)
+        Path(args.build_only).write_text(json.dumps(build.to_json(), indent=2))
+        print(f"Build settings written to: {args.build_only}")
+        sys.exit(0)
 
     result = autosetup.run(main_contract_handle, skip_warmup=args.skip_warmup)
 
