@@ -1374,6 +1374,7 @@ def test_older_reports_still_load_and_render(version):
     h = render_html(old)
     assert "Formalization gaps" in h
     assert "Rule feedback" not in h and "Spec coverage" not in h and "Unclaimed" not in h
+    assert "Property coverage" not in h
 
 
 def test_render_html_shows_rule_feedback_inside_the_gaps_section():
@@ -1404,3 +1405,25 @@ def test_render_html_shows_conf_coverage_and_scores():
     assert "certora/confs/c-evaluate-completion.conf" in h
     assert "withdraw(uint256)" in h
     assert ">Complete<" in h
+
+
+def test_render_html_shows_property_coverage_in_the_group():
+    h = render_html(_evaluate_report())
+    group = h.index('id="deposit-openness"')
+    table = h.index("<h3>Property coverage</h3>")
+    gaps = h.index("<h2>Formalization gaps</h2>")
+    # Inside the group's section, after its rule table.
+    assert group < table < gaps
+    assert "<section" not in h[group + 1:table]
+    section = h[table:gaps]
+    assert 'class="badge badge-warn">Partially covered<' in section
+    assert "only the single-step case is checked" in section
+    assert 'class="badge badge-bad">Uncovered<' in section
+    assert "no rule bounds the supply" in section
+    # Only the property the evaluator added carries the tag.
+    assert section.count("added by evaluator") == 1
+    assert section.index("supply never exceeds the cap") < section.index("added by evaluator")
+
+
+def test_render_html_without_property_coverage_has_no_coverage_table():
+    assert "Property coverage" not in render_html(_mini_report())

@@ -2,7 +2,8 @@
 
 Single self-contained page (inline CSS, no external assets): a header with outcome counts, one
 section per high-level `PropertyGroup` (status badge + description + a rule table whose per-rule
-descriptions are the in-group property claims that pull each rule in), a formalization-gaps section
+descriptions are the in-group property claims that pull each rule in, then a property-coverage
+table when the properties carry coverage judgements), a formalization-gaps section
 (declined properties, components that gave up, review remarks on rules, and rules no property
 claims), a spec-coverage section (per-spec conf coverage and coverage scores, when present), an
 appendix for components the run budget cut
@@ -31,7 +32,7 @@ from collections.abc import Sequence
 from composer.spec.gen_types import TypedTemplate
 from composer.templates.loader import load_jinja_template
 from composer.spec.source.report.schema import (
-    AutoProverReport, ComponentName, ConfCoverage, CoverageReport, CurtailedComponent,
+    AutoProverReport, ComponentName, ConfCoverage, CoverageReport, CoverageStatus, CurtailedComponent,
     FeedbackSeverity, Finding, FormalizedProperty, GaveUpComponent, GroupStatus, Outcome,
     PropertyGroup, PropertyKey, ReportBackend, RuleFeedback, RuleRef, RuleVerdict, SkippedClaim,
     SourceEditRecord, SpecCoverageScore,
@@ -59,6 +60,13 @@ _SEVERITY_KIND: dict[str, str] = {
     "medium": "warn",
     "low": "info",
     "informational": "muted",
+}
+
+# Property coverage status -> (badge label, CSS badge kind).
+_COVERAGE_BADGE: dict[CoverageStatus, tuple[str, str]] = {
+    "covered": ("Covered", "ok"),
+    "partial": ("Partially covered", "warn"),
+    "uncovered": ("Uncovered", "bad"),
 }
 
 # Rule-feedback severity -> CSS badge kind.
@@ -165,6 +173,15 @@ class RowView(TypedDict):
     message: str | None
 
 
+class PropertyCoverageView(TypedDict):
+    """One member property's coverage judgement, for a report that carries them."""
+    description: str
+    label: str
+    kind: str
+    reason: str
+    added_by_evaluator: bool
+
+
 class GroupView(TypedDict):
     slug: str
     title: str
@@ -175,6 +192,9 @@ class GroupView(TypedDict):
     #: True when any member property's component was verified against edited source; renders
     #: the "edited source" badge linking to the source-modifications appendix.
     edited: bool
+    #: Coverage judgements of the group's properties, in member order. Empty unless some member
+    #: carries one (an evaluate run), so the table is absent from every other report.
+    coverage: list[PropertyCoverageView]
 
 
 class FindingView(TypedDict):
@@ -377,6 +397,23 @@ def _group_view(
         "kind": _GROUP_KIND[group.status],
         "rows": rows,
         "edited": any(component in edited_components for component, _ in group.members),
+        "coverage": [
+            _property_coverage_view(p)
+            for k in group.members
+            if (p := props_by_key.get(k)) is not None and p.coverage is not None
+        ],
+    }
+
+
+def _property_coverage_view(p: FormalizedProperty) -> PropertyCoverageView:
+    assert p.coverage is not None
+    label, kind = _COVERAGE_BADGE[p.coverage.status]
+    return {
+        "description": p.description,
+        "label": label,
+        "kind": kind,
+        "reason": p.coverage.reason,
+        "added_by_evaluator": p.coverage.added_by_evaluator,
     }
 
 

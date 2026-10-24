@@ -414,6 +414,21 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
       {%- endfor %}
     </tbody>
   </table>
+  {%- if g.coverage %}
+  <h3>Property coverage</h3>
+  <table class="rules">
+    <thead><tr><th>Property</th><th>Coverage</th><th>Reason</th></tr></thead>
+    <tbody>
+      {%- for c in g.coverage %}
+      <tr>
+        <td>{{ c.description }}{% if c.added_by_evaluator %} <span class="sort-tag">added by evaluator</span>{% endif %}</td>
+        <td class="col-status"><span class="badge badge-{{ c.kind }}">{{ c.label }}</span></td>
+        <td>{{ c.reason }}</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+  {%- endif %}
 </section>
 {%- endfor %}
 
