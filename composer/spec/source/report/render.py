@@ -3,7 +3,9 @@
 Single self-contained page (inline CSS, no external assets): a header with outcome counts, one
 section per high-level `PropertyGroup` (status badge + description + a rule table whose per-rule
 descriptions are the in-group property claims that pull each rule in), a formalization-gaps section
-(declined properties + components that gave up), an appendix for components the run budget cut
+(declined properties, components that gave up, review remarks on rules, and rules no property
+claims), a spec-coverage section (per-spec conf coverage and coverage scores, when present), an
+appendix for components the run budget cut
 short (counts-first summary per component, collapsed per-property breakdown), and a coverage
 footer. The HTML is built by
 ``autoprove_report.html.j2``; this module only assembles the render context — no markup here. The
@@ -29,9 +31,10 @@ from collections.abc import Sequence
 from composer.spec.gen_types import TypedTemplate
 from composer.templates.loader import load_jinja_template
 from composer.spec.source.report.schema import (
-    AutoProverReport, ComponentName, CoverageReport, CurtailedComponent, Finding,
-    FormalizedProperty, GaveUpComponent, GroupStatus, Outcome, PropertyGroup, PropertyKey,
-    ReportBackend, RuleRef, RuleVerdict, SkippedClaim, SourceEditRecord,
+    AutoProverReport, ComponentName, ConfCoverage, CoverageReport, CurtailedComponent,
+    FeedbackSeverity, Finding, FormalizedProperty, GaveUpComponent, GroupStatus, Outcome,
+    PropertyGroup, PropertyKey, ReportBackend, RuleFeedback, RuleRef, RuleVerdict, SkippedClaim,
+    SourceEditRecord, SpecCoverageScore,
 )
 
 
@@ -56,6 +59,13 @@ _SEVERITY_KIND: dict[str, str] = {
     "medium": "warn",
     "low": "info",
     "informational": "muted",
+}
+
+# Rule-feedback severity -> CSS badge kind.
+_FEEDBACK_KIND: dict[FeedbackSeverity, str] = {
+    "error": "bad",
+    "warning": "warn",
+    "info": "info",
 }
 
 # Per-backend human labels: the data carries the neutral `Outcome`; these turn it into the words an
@@ -206,6 +216,35 @@ class CurtailedView(TypedDict):
     rows: list[CurtailedRowView]
 
 
+class FeedbackView(TypedDict):
+    rule: str
+    spec_file: str | None
+    conf: str | None
+    severity: str
+    severity_kind: str
+    kind: str
+    explanation: str
+    suggested_fix: str | None
+
+
+class ConfCoverageView(TypedDict):
+    spec: str
+    confs: list[str]
+    #: "Complete" / "Incomplete" badge.
+    label: str
+    status_kind: str
+    rules_unchecked: list[str]
+    #: ``(rule, excluded methods)`` pairs, in rule order.
+    methods_excluded: list[tuple[str, list[str]]]
+    completion_conf: str | None
+
+
+class ScoreView(TypedDict):
+    name: str
+    score: str
+    views: list[tuple[str, str]]
+
+
 class ReportTemplateParams(TypedDict):
     """The full, typed context of ``autoprove_report.html.j2``."""
     contract_name: str
@@ -220,6 +259,12 @@ class ReportTemplateParams(TypedDict):
     groups: list[GroupView]
     skipped: list[SkippedClaim]
     gave_up: list[GaveUpComponent]
+    #: Review remarks on rules, rendered inside the formalization-gaps section.
+    rule_feedback: list[FeedbackView]
+    #: Rules no property maps to. Only a report that keeps them (an evaluate run) has any.
+    orphan_rules: list[RowView]
+    conf_coverage: list[ConfCoverageView]
+    coverage_scores: list[ScoreView]
     curtailed: list[CurtailedView]
     source_edits: list[SourceEditRecord]
 
@@ -401,6 +446,56 @@ def _curtailed_view(c: CurtailedComponent) -> CurtailedView:
     }
 
 
+def _feedback_view(f: RuleFeedback) -> FeedbackView:
+    return {
+        "rule": f.rule,
+        "spec_file": f.spec_file,
+        "conf": f.conf,
+        "severity": f.severity,
+        "severity_kind": _FEEDBACK_KIND.get(f.severity, "muted"),
+        "kind": f.kind,
+        "explanation": f.explanation,
+        "suggested_fix": f.suggested_fix,
+    }
+
+
+def _orphan_rows(report: AutoProverReport, unit_labels: dict[Outcome, str]) -> list[RowView]:
+    """Rows for the rules no property maps to, in the report's rule order."""
+    referenced = {ref for p in report.properties for ref in p.rule_refs}
+    return [
+        {
+            "name": r.name,
+            "label": unit_labels[r.outcome],
+            "kind": _OUTCOME_KIND[r.outcome],
+            "line": r.line,
+            "link": _link_view(r.prover_link),
+            "descriptions": [r.spec_file],
+            "message": r.message,
+        }
+        for r in report.rules if r.ref not in referenced
+    ]
+
+
+def _conf_coverage_view(c: ConfCoverage) -> ConfCoverageView:
+    return {
+        "spec": c.spec,
+        "confs": c.confs,
+        "label": "Complete" if c.complete else "Incomplete",
+        "status_kind": "ok" if c.complete else "warn",
+        "rules_unchecked": list(c.rules_unchecked_before_completion),
+        "methods_excluded": sorted((r, ms) for r, ms in c.methods_excluded.items()),
+        "completion_conf": c.completion_conf,
+    }
+
+
+def _score_view(s: SpecCoverageScore) -> ScoreView:
+    return {
+        "name": s.name,
+        "score": f"{s.score:.2f}",
+        "views": [(k, f"{v:.2f}") for k, v in sorted(s.views.items())],
+    }
+
+
 def _build_context(report: AutoProverReport) -> ReportTemplateParams:
     props_by_key = {p.key: p for p in report.properties}
     rules_by_ref = {r.ref: r for r in report.rules}
@@ -427,6 +522,10 @@ def _build_context(report: AutoProverReport) -> ReportTemplateParams:
         ],
         "skipped": report.skipped,
         "gave_up": report.gave_up_components,
+        "rule_feedback": [_feedback_view(f) for f in report.rule_feedback],
+        "orphan_rules": _orphan_rows(report, unit_labels),
+        "conf_coverage": [_conf_coverage_view(c) for c in report.conf_coverage],
+        "coverage_scores": [_score_view(sc) for sc in report.coverage_scores],
         "curtailed": [_curtailed_view(c) for c in report.curtailed_components],
         "source_edits": report.source_edits,
     }

@@ -417,7 +417,7 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
 </section>
 {%- endfor %}
 
-{%- if skipped or gave_up %}
+{%- if skipped or gave_up or rule_feedback or orphan_rules %}
 <section class="gaps">
   <h2>Formalization gaps</h2>
   {%- if skipped %}
@@ -443,6 +443,89 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
     {%- for p in gc.properties %}<li><span class="sort-tag">{{ p.sort }}</span> {{ p.description }}</li>{% endfor %}
   </ul>
   {%- endfor %}
+  {%- endif %}
+  {%- if rule_feedback %}
+  <h3>Rule feedback ({{ rule_feedback | length }})</h3>
+  <table class="rules">
+    <thead><tr><th>{{ terms.unit_cap }}</th><th>Severity</th><th>Problem</th><th>Suggested fix</th></tr></thead>
+    <tbody>
+      {%- for f in rule_feedback %}
+      <tr>
+        <td class="col-name">{{ f.rule }}{% if f.spec_file %}<span class="muted"> in {{ f.spec_file }}</span>{% endif %}
+          {%- if f.conf %}<div class="muted">conf <code class="unit">{{ f.conf }}</code></div>{% endif %}</td>
+        <td class="col-status"><span class="badge badge-{{ f.severity_kind }}">{{ f.severity }}</span></td>
+        <td><span class="sort-tag">{{ f.kind }}</span> {{ f.explanation }}</td>
+        <td>{% if f.suggested_fix %}{{ f.suggested_fix }}{% else %}<span class="muted">—</span>{% endif %}</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+  {%- endif %}
+  {%- if orphan_rules %}
+  <h3>Unclaimed {{ terms.unit_plural }} ({{ orphan_rules | length }})</h3>
+  <p class="note">No inferred property maps to these.</p>
+  <table class="rules">
+    <thead><tr><th>{{ terms.unit_cap }}</th><th>Status</th><th>Spec</th>{% if has_links %}<th></th>{% endif %}</tr></thead>
+    <tbody>
+      {%- for row in orphan_rules %}
+      <tr>
+        <td class="col-name">{{ row.name }}{% if row.line is not none %}<span class="muted">:{{ row.line }}</span>{% endif %}</td>
+        <td class="col-status"><span class="badge badge-{{ row.kind }}">{{ row.label }}</span></td>
+        <td>{% for d in row.descriptions %}<code class="unit">{{ d }}</code>{% endfor %}
+          {%- if row.message %}<div class="finding">{{ row.message }}</div>{%- endif %}</td>
+        {%- if has_links %}
+        <td class="col-link">
+          {%- if row.link.href %}<a href="{{ row.link.href }}" target="_blank" rel="noopener">{{ row.link.label }}</a>
+          {%- else %}<span class="muted">{{ row.link.label }}</span>{% endif %}
+        </td>
+        {%- endif %}
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+  {%- endif %}
+</section>
+{%- endif %}
+
+{%- if conf_coverage or coverage_scores %}
+<section class="gaps" id="spec-coverage">
+  <h2>Spec coverage</h2>
+  {%- if coverage_scores %}
+  <h3>Coverage scores</h3>
+  <table class="rules">
+    <thead><tr><th>Score</th><th>Value</th><th>Breakdown</th></tr></thead>
+    <tbody>
+      {%- for sc in coverage_scores %}
+      <tr>
+        <td>{{ sc.name }}</td>
+        <td><strong>{{ sc.score }}</strong></td>
+        <td>{% for v in sc.views %}{{ v[0] }}: {{ v[1] }}{% if not loop.last %}, {% endif %}{% endfor %}
+          {%- if not sc.views %}<span class="muted">—</span>{% endif %}</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+  {%- endif %}
+  {%- if conf_coverage %}
+  <h3>Conf coverage ({{ conf_coverage | length }} spec{{ "s" if conf_coverage | length != 1 else "" }})</h3>
+  <table class="rules">
+    <thead><tr><th>Spec</th><th>Status</th><th>Confs</th><th>Unchecked before completion</th></tr></thead>
+    <tbody>
+      {%- for c in conf_coverage %}
+      <tr>
+        <td><code class="unit">{{ c.spec }}</code></td>
+        <td class="col-status"><span class="badge badge-{{ c.status_kind }}">{{ c.label }}</span></td>
+        <td>{% for conf in c.confs %}<code class="unit">{{ conf }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+          {%- if c.completion_conf %}<div class="muted">completed by <code class="unit">{{ c.completion_conf }}</code></div>{% endif %}</td>
+        <td>
+          {%- if c.rules_unchecked %}{{ terms.unit_plural }}: {% for r in c.rules_unchecked %}<code class="unit">{{ r }}</code>{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
+          {%- for m in c.methods_excluded %}<div><code class="unit">{{ m[0] }}</code> without {% for meth in m[1] %}<code class="unit">{{ meth }}</code>{% if not loop.last %}, {% endif %}{% endfor %}</div>{% endfor %}
+          {%- if not c.rules_unchecked and not c.methods_excluded %}<span class="muted">—</span>{% endif %}
+        </td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
   {%- endif %}
 </section>
 {%- endif %}

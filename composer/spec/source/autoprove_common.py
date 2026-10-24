@@ -102,7 +102,9 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
         help="How much of the inferred property set to pursue. 'comprehensive' (the default) "
              "formalizes every property of every component. 'prioritized' ranks them all, then "
              "spends the run on the highest-contribution property and the properties it rests "
-             "on. Also settable as AUTOPROVER_RUN_MODE; this flag wins.",
+             "on. 'evaluate' infers the properties, formalizes none, and hands them to an "
+             "installed mode implementation that measures the project's own specs against them. "
+             "Also settable as AUTOPROVER_RUN_MODE; this flag wins.",
     )
 
     args = cast(AutoProveArgs, parser.parse_args())

@@ -98,8 +98,9 @@ class PluginPhaseRunner[P: enum.Enum, U: FeatureUnit]:
 PLUGIN_ENTRY_POINT_GROUP = "certora.autoprove.plugins"
 
 
-def _applies(scope: PluginScope[Any], unit_type: type) -> bool:
-    """Whether a plugin declaring ``scope`` applies to a run over ``unit_type``."""
+def applies_to(scope: PluginScope[Any], unit_type: type) -> bool:
+    """Whether a plugin (or an external run mode) declaring ``scope`` applies to a run over
+    ``unit_type``."""
     match scope:
         case AnyEcosystem():
             return True
@@ -130,7 +131,7 @@ def applicable_plugin_manifest[U: FeatureUnit](unit_type: type[U]) -> list[str]:
     every per-component cache key, so an installed-but-inapplicable plugin (a Solana plugin during
     an EVM run) must not perturb those keys."""
     return sorted(
-        name for name, loader in _declared_loaders() if _applies(loader.scope, unit_type)
+        name for name, loader in _declared_loaders() if applies_to(loader.scope, unit_type)
     )
 
 
@@ -201,10 +202,10 @@ async def load_plugins[P: enum.Enum, U: FeatureUnit](
     never acquires its resources during this run."""
     loaders: dict[str, PipelinePluginLoader[U]] = {}
     for name, loader in _declared_loaders():
-        if not _applies(loader.scope, unit_type):
+        if not applies_to(loader.scope, unit_type):
             continue
         # The one cast in this design. Entry points are resolved dynamically, so nothing static
-        # survives to here; the `_applies` check above is the runtime evidence that this loader's
+        # survives to here; the `applies_to` check above is the runtime evidence that this loader's
         # hooks accept `unit_type`. Everything downstream of this line is honestly typed.
         loaders[name] = cast(PipelinePluginLoader[U], loader)
     async with AsyncExitStack() as stack:
