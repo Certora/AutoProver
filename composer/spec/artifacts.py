@@ -154,6 +154,13 @@ class ArtifactStore[I: ArtifactIdentifier, FormT: FormalResult](ABC):
         _log.info("prioritization: wrote %s", out)
         return out
 
+    def write_property_set(self, property_set: BaseModel) -> Path:
+        """The run's analyzed model + per-component properties → ``{report}/property_set.json``."""
+        out = self._report_dir() / "property_set.json"
+        out.write_text(property_set.model_dump_json(indent=2) + "\n")
+        _log.info("wrote property set %s", out)
+        return out
+
 
     # -- shared run-level ---------------------------------------------------
 
