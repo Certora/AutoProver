@@ -261,11 +261,11 @@ def main():
     # After creating autosetup, fix setup_prover's get_build_system_config_dict reference
     setup_prover.get_build_system_config_dict = autosetup.get_build_system_config_dict
 
-    Autosetup.ensure_git_config_files()
     autosetup._load_signature_database_to_scope()
 
     # The build-only path compiles the project as the user wrote it, so it runs before the
-    # DummyERC20Impl mock is copied into certora/mocks and added to the scene.
+    # DummyERC20Impl mock is copied into certora/mocks and added to the scene, and before the
+    # repository's .gitignore and .gitattributes gain the lines for AutoSetup's own outputs.
     if args.build_only:
         try:
             build = autosetup.build(main_contract_handle)
@@ -276,6 +276,7 @@ def main():
         print(f"Build settings written to: {args.build_only}")
         sys.exit(0)
 
+    Autosetup.ensure_git_config_files()
     autosetup.generate_dummy_erc20_files()
     result = autosetup.run(main_contract_handle, skip_warmup=args.skip_warmup)
 
