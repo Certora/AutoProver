@@ -272,14 +272,30 @@ def run_wget_or_curl(url: str, cookie_map: Dict[str, str], outpath: str, retry_o
 
 _OUTPUT_URL_RE = re.compile(r"https://(?:prover|vaas-dev|vaas-stg)\.certora\.com/output/(?:\d+/)?([0-9A-Fa-f]+)/?")
 
+# App report link: /orgs/ORG/jobs/UUID[/report]. The UUID is the job id, written with or without
+# dashes; the job API takes it as 32 lowercase hex characters.
+_APP_REPORT_URL_RE = re.compile(
+    r"https://[\w-]+\.certora\.com/orgs/[^/]+/jobs/"
+    r"([0-9A-Fa-f]{8}-?[0-9A-Fa-f]{4}-?[0-9A-Fa-f]{4}-?[0-9A-Fa-f]{4}-?[0-9A-Fa-f]{12})(?:/report)?/?"
+)
+
 
 def to_outputs_url(url: str) -> str:
-    """Map a /output/[USER/]JOB job URL to /v1/domain/jobs/JOB/f/outputs, keeping the query."""
+    """Map a job URL to /v1/domain/jobs/JOB/f/outputs on the same host, keeping the query.
+
+    Accepts /output/[USER/]JOB links and /orgs/ORG/jobs/UUID[/report] app links.
+    """
     parsed = urlparse(url)
-    match = _OUTPUT_URL_RE.fullmatch(urlunparse(parsed._replace(query="", fragment="")))
-    if match is None:
-        raise ValueError(f"Not a Certora job URL: {url}")
-    return urlunparse(parsed._replace(path=f"/v1/domain/jobs/{match[1]}/f/outputs"))
+    bare_url = urlunparse(parsed._replace(query="", fragment=""))
+    match = _OUTPUT_URL_RE.fullmatch(bare_url)
+    if match is not None:
+        job_id = match[1]
+    else:
+        app_match = _APP_REPORT_URL_RE.fullmatch(bare_url)
+        if app_match is None:
+            raise ValueError(f"Not a Certora job URL: {url}")
+        job_id = app_match[1].replace("-", "").lower()
+    return urlunparse(parsed._replace(path=f"/v1/domain/jobs/{job_id}/f/outputs"))
 
 
 def download_with_auth(url: str, output_path: str, convert_to_zip_output: bool = False, auth_cookies: Optional[Dict[str, str]] = None) -> int:
@@ -292,7 +308,7 @@ def download_with_auth(url: str, output_path: str, convert_to_zip_output: bool =
     Args:
         url: URL to download (should be on https://prover.certora.com/...)
         output_path: Output file path (str or Path)
-        convert_to_zip_output: If True, convert the /output job URL to its /f/outputs archive URL
+        convert_to_zip_output: If True, convert the job URL (/output/ or app report link) to its /f/outputs archive URL
         auth_cookies: Optional pre-fetched auth cookies to reuse (avoids concurrent auth calls)
 
     Returns:
@@ -336,7 +352,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Fetch authenticated Certora content using certora-login.")
     ap.add_argument("url", help="URL to fetch (should be on https://prover.certora.com/...)")
     ap.add_argument("output", nargs="?", default="output.html", help="Output file (default output.html)")
-    ap.add_argument("--zip-output", action="store_true", help="Convert the /output job URL to its /f/outputs archive URL")
+    ap.add_argument("--zip-output", action="store_true", help="Convert the job URL (/output/ or app report link) to its /f/outputs archive URL")
     args = ap.parse_args()
 
     try:

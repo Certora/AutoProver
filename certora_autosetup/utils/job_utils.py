@@ -8,6 +8,7 @@ import re
 import shutil
 import tarfile
 import threading
+import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -31,10 +32,15 @@ _DEFAULT_EXCLUDE_EXTENSIONS: tuple[str, ...] = (".html",)
 
 COMPONENT = "JobUtils"
 
-# Match Certora job URLs across all subdomains (prover, vaas-dev, vaas-stg, future vaas-*).
-# Supports both /output/NUMBER/HASH (canonical) and /output/HASH (hash-only) shapes.
+# A job id is 32 hex characters. App links write it as a UUID, with or without dashes.
+_JOB_UUID_PATTERN = r"[A-Fa-f0-9]{8}-?[A-Fa-f0-9]{4}-?[A-Fa-f0-9]{4}-?[A-Fa-f0-9]{4}-?[A-Fa-f0-9]{12}"
+
+# Match Certora job URLs across all subdomains (prover, app, vaas-dev, vaas-stg, future vaas-*).
+# Supports both /output/NUMBER/HASH (canonical) and /output/HASH (hash-only) shapes, and the app
+# report link /orgs/ORG/jobs/UUID[/report] that certora-cli prints when the server sends one.
 CERTORA_JOB_URL_RE = re.compile(
-    r"https://[\w-]+\.certora\.com/output/(?:\d+/)?[A-Fa-f0-9]+"
+    r"https://[\w-]+\.certora\.com/"
+    rf"(?:output/(?:\d+/)?[A-Fa-f0-9]+|orgs/[^/\s?#]+/jobs/{_JOB_UUID_PATTERN}(?:/report)?)"
 )
 
 
@@ -50,11 +56,16 @@ def extract_job_id_from_url(url: str) -> str:
     Returns:
         - "{NUMBER}_{HASH}" for /output/NUMBER/HASH URLs (canonical)
         - "{HASH}"          for /output/HASH URLs (hash-only)
+        - "{HASH}"          for /orgs/ORG/jobs/UUID[/report] app links, where HASH is the UUID
+                            without dashes, in lowercase (the id the job API takes)
     Raises:
-        ValueError if the URL has no /output/ segment or no segment after it.
+        ValueError if the URL is neither an app link nor has a segment after /output/.
     """
     parsed = urlparse(url)
     path_parts = parsed.path.split("/")
+    app_job_hash = _app_link_job_hash(path_parts)
+    if app_job_hash is not None:
+        return app_job_hash
     output_idx = -1  # sentinel; reads of output_idx below are reached only when index() succeeded
     try:
         output_idx = path_parts.index("output")
@@ -63,12 +74,29 @@ def extract_job_id_from_url(url: str) -> str:
         first = ""
     if not first:
         raise ValueError(
-            f"Invalid Certora URL format: {url}. Expected: https://<host>.certora.com/output/[NUMBER/]HASH"
+            f"Invalid Certora URL format: {url}. Expected: https://<host>.certora.com/output/[NUMBER/]HASH "
+            "or https://<host>.certora.com/orgs/ORG/jobs/UUID[/report]"
         )
     # If the segment after /output/ is all digits, treat it as NUMBER and grab HASH next.
     if first.isdigit() and len(path_parts) > output_idx + 2 and path_parts[output_idx + 2]:
         return f"{first}_{path_parts[output_idx + 2]}"
     return first
+
+
+def _app_link_job_hash(path_parts: List[str]) -> Optional[str]:
+    """Return the job HASH of an /orgs/ORG/jobs/UUID[/report] path, or None for any other path.
+
+    The org slug does not identify the job, so it is dropped. ``uuid.UUID`` accepts the id with or
+    without dashes and rejects anything else, so it both validates and normalizes the segment.
+    """
+    if len(path_parts) < 5 or path_parts[1] != "orgs" or path_parts[3] != "jobs":
+        return None
+    if path_parts[5:] not in ([], [""], ["report"], ["report", ""]):
+        return None
+    try:
+        return uuid.UUID(path_parts[4]).hex
+    except ValueError:
+        return None
 
 
 def extract_job_hash_from_url(url: str) -> str:
