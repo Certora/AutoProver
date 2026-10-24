@@ -275,15 +275,20 @@ _OUTPUT_URL_RE = re.compile(r"https://(?:prover|vaas-dev|vaas-stg)\.certora\.com
 # App report link: /orgs/ORG/jobs/UUID[/report]. The UUID is the job id, written with or without
 # dashes; the job API takes it as 32 lowercase hex characters.
 _APP_REPORT_URL_RE = re.compile(
-    r"https://[\w-]+\.certora\.com/orgs/[^/]+/jobs/"
+    r"https://(?:app|prover|vaas-dev|vaas-stg)\.certora\.com/orgs/[^/]+/jobs/"
     r"([0-9A-Fa-f]{8}-?[0-9A-Fa-f]{4}-?[0-9A-Fa-f]{4}-?[0-9A-Fa-f]{4}-?[0-9A-Fa-f]{12})(?:/report)?/?"
 )
 
 
-def to_outputs_url(url: str) -> str:
-    """Map a job URL to /v1/domain/jobs/JOB/f/outputs on the same host, keeping the query.
+# The web app host does not serve the job API, so an app link's outputs come from the Prover host.
+_JOB_API_HOST_BY_APP_HOST = {"app.certora.com": "prover.certora.com"}
 
-    Accepts /output/[USER/]JOB links and /orgs/ORG/jobs/UUID[/report] app links.
+
+def to_outputs_url(url: str) -> str:
+    """Map a job URL to /v1/domain/jobs/JOB/f/outputs on its Prover host, keeping the query.
+
+    Accepts /output/[USER/]JOB links and /orgs/ORG/jobs/UUID[/report] app links. A link on
+    app.certora.com maps to prover.certora.com, and any other host is kept.
     """
     parsed = urlparse(url)
     bare_url = urlunparse(parsed._replace(query="", fragment=""))
@@ -295,7 +300,8 @@ def to_outputs_url(url: str) -> str:
         if app_match is None:
             raise ValueError(f"Not a Certora job URL: {url}")
         job_id = app_match[1].replace("-", "").lower()
-    return urlunparse(parsed._replace(path=f"/v1/domain/jobs/{job_id}/f/outputs"))
+    host = _JOB_API_HOST_BY_APP_HOST.get(parsed.netloc, parsed.netloc)
+    return urlunparse(parsed._replace(netloc=host, path=f"/v1/domain/jobs/{job_id}/f/outputs"))
 
 
 def download_with_auth(url: str, output_path: str, convert_to_zip_output: bool = False, auth_cookies: Optional[Dict[str, str]] = None) -> int:

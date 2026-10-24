@@ -91,8 +91,18 @@ def test_text_without_job_link_yields_none() -> None:
 
 def test_outputs_url_from_app_link() -> None:
     assert to_outputs_url(f"{APP_LINK}?anonymousKey=k") == (
-        f"https://app.certora.com/v1/domain/jobs/{JOB_HASH}/f/outputs?anonymousKey=k"
+        f"https://prover.certora.com/v1/domain/jobs/{JOB_HASH}/f/outputs?anonymousKey=k"
     )
+
+
+def test_outputs_url_keeps_a_prover_host_app_link() -> None:
+    link = f"https://vaas-stg.certora.com/orgs/some-org/jobs/{JOB_HASH}/report"
+    assert to_outputs_url(link) == f"https://vaas-stg.certora.com/v1/domain/jobs/{JOB_HASH}/f/outputs"
+
+
+def test_outputs_url_rejects_unknown_hosts() -> None:
+    with pytest.raises(ValueError):
+        to_outputs_url(f"https://other.certora.com/orgs/some-org/jobs/{JOB_HASH}/report")
 
 
 def test_outputs_url_from_legacy_link() -> None:
